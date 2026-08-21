@@ -3672,10 +3672,51 @@ fn run(cli: Cli) -> Result<()> {
                             "vault '{vault_name}' exists; pass --force to overwrite it with the backup"
                         );
                     }
+                    // **ROADMAP O69.** Hold the vault EXCLUSIVELY across the
+                    // destroy-and-copy, or refuse. Without this, a restore
+                    // beneath a running `serve-http` succeeded at exit 0 and
+                    // destroyed the vault: `remove_dir_all` unlinks the
+                    // database while the server keeps its handles on the
+                    // unlinked inodes, so it serves and WRITES a file that no
+                    // longer has a name, and the manifest it later anchors
+                    // describes a database that is not there. The rollback
+                    // detector then fires — correctly — on evidence the
+                    // restore manufactured, and the vault is unopenable for
+                    // good: `possible tampering`, exit 2, on every later open.
+                    //
+                    // The lock is HELD ACROSS the whole operation rather than
+                    // probed and released, because a probe-then-act leaves a
+                    // window in which a server opens the vault between the
+                    // two. While this connection holds it, another opener
+                    // gets SQLITE_BUSY; once the directory is unlinked the
+                    // lock refers to a dead inode, which is harmless because
+                    // by then there is nothing left to protect.
+                    let _hold = if dst.exists() {
+                        Some(undercroft_store::hold_vault_exclusively(&dst).map_err(|e| {
+                            anyhow::anyhow!(
+                                concat!(
+                                    "vault '{}' is in use by another process — refusing to ",
+                                    "restore over it.
+
+Restoring beneath a running server DESTROYS ",
+                                    "the vault: the server keeps writing to the database file this ",
+                                    "would unlink, and the vault becomes unopenable. Stop the server, ",
+                                    "then retry.
+
+SQLite reported: {}"
+                                ),
+                                vault_name,
+                                e
+                            )
+                        })?)
+                    } else {
+                        None
+                    };
                     if dst.exists() {
                         std::fs::remove_dir_all(&dst)?;
                     }
                     copy_dir(&src, &dst)?;
+                    drop(_hold);
                     println!("Restored {} -> vault '{}'", name, vault_name);
                 }
             }

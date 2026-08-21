@@ -560,6 +560,40 @@ check "the verdict counts rotations" 0 "records 2 key rotation(s)"   -- \
 echo "== Backups & repair =="
 check "backup create"             0 "Backup created"                 -- "$BIN" backup create
 check "backup list"               0 "default-"                       -- "$BIN" backup list
+# ROADMAP O69. `backup restore` used to unlink a vault directory without ever
+# asking who held it. Beneath a running `serve-http` that succeeded at EXIT 0
+# and destroyed the vault: the server kept its handles on the unlinked inodes,
+# wrote into a file with no name, and the vault was unopenable afterwards
+# (`possible tampering`, exit 2, on every later open). The restore now takes an
+# EXCLUSIVE hold across the destroy-and-copy, or refuses.
+#
+# Driven through the CLI, with a real holder: a background process keeps the
+# vault open while the restore runs. Without the holder arm this proves
+# nothing, and without the SECOND arm the guard is indistinguishable from one
+# that always refuses — which would make restore useless rather than safe.
+BK_NAME="$("$BIN" backup list | head -1)"
+"$BIN" serve-http --port 18899 >/dev/null 2>&1 &
+E2E_HOLDER=$!
+sleep 2
+if kill -0 "$E2E_HOLDER" 2>/dev/null; then
+  check "restore refuses while the vault is held" 1 "in use by another process" -- \
+    "$BIN" backup restore "$BK_NAME" --force
+  check "the refusal says what would happen"      1 "DESTROYS the vault"         -- \
+    "$BIN" backup restore "$BK_NAME" --force
+  check "the held vault is untouched"             0 "hmac failures:   0"         -- \
+    "$BIN" verify
+  kill "$E2E_HOLDER" 2>/dev/null || true
+  wait "$E2E_HOLDER" 2>/dev/null || true
+  sleep 1
+  check "restore succeeds once nothing holds it"  0 "Restored"                   -- \
+    "$BIN" backup restore "$BK_NAME" --force
+  check "the restored vault verifies"             0 "hmac failures:   0"         -- \
+    "$BIN" verify
+else
+  echo "FAIL  restore-under-holder: the holder process did not start, so the"
+  echo "      refusal arm would have passed against nothing"
+  FAIL=$((FAIL+1))
+fi
 check "repair passes"             0 "integrity: ok"                  -- "$BIN" repair
 check "hooks prints settings"     0 "PreCompact"                     -- "$BIN" hooks claude-code
 

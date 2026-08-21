@@ -377,6 +377,67 @@ pub fn check_declaration(name: &str, raw: &str) -> Result<Option<String>, String
 /// **never trimmed** — it is opaque payload, and trimming would change the
 /// KEY, silently making every existing vault underivable. That distinction is
 /// doctrine in `CLAUDE.md`, earned by this variable's sibling.
+/// A live EXCLUSIVE hold on one vault's database. Dropping it releases.
+///
+/// Opaque on purpose: the caller needs to keep it alive across an operation,
+/// not to touch the connection. That also keeps `rusqlite` out of the CLI's
+/// dependency list, where a database driver has no business being — this
+/// crate owns SQLite and the lock is SQLite's.
+pub struct VaultHold(
+    // Never read, and that is the point: the VALUE is the lock this
+    // connection holds, and the lock lives exactly as long as the connection
+    // does. Reading it would be meaningless; dropping it is the whole API.
+    #[allow(dead_code)] rusqlite::Connection,
+);
+
+/// Take an exclusive hold on `dir`'s vault database, or say who has it.
+///
+/// **ROADMAP O69.** `backup restore` unlinks a vault directory and copies a
+/// backup over it. Run beneath a live `serve-http` that succeeded at exit 0
+/// and DESTROYED the vault: the server keeps its handles on the unlinked
+/// inodes, so it serves and writes a database with no name, and the manifest
+/// it later anchors describes a file that is not there. The rollback detector
+/// then fires — correctly — on evidence the restore manufactured, and the
+/// vault is unopenable afterwards (`possible tampering`, exit 2).
+///
+/// **Why an exclusive lock detects a holder at all**, given the store runs
+/// WAL precisely so readers and writers do not block each other: an open
+/// connection keeps the `-shm` index mapped and holds a slot in it, and
+/// `locking_mode=EXCLUSIVE` cannot take the file while another connection
+/// does. Measured on a real vault rather than assumed:
+///
+/// * no server running — acquires;
+/// * an **idle** `serve-http` holding the vault — busy, `database is locked`.
+///   Idle is the case that matters: no transaction is open and it is still
+///   detected;
+/// * after that server is **SIGKILLed**, with stale `-shm` and `-wal` left on
+///   disk — acquires.
+///
+/// The third case is why the caller needs no override flag. The standing
+/// objection to refusing is a false positive stranding an operator during an
+/// incident, and it does not occur: SQLite's locks belong to the PROCESS, so
+/// a crashed server releases them and leaves only files. The refusal fires
+/// when someone genuinely holds the vault, which is exactly when a
+/// destructive restore must not proceed.
+pub fn hold_vault_exclusively(dir: &std::path::Path) -> Result<VaultHold, StoreError> {
+    let db = dir.join("palace.db");
+    if !db.exists() {
+        // Opening would CREATE it, which for a directory about to be replaced
+        // is noise; and a vault with no database has no holder to find.
+        return Err(StoreError::Invalid(format!(
+            "vault directory {} has no palace.db",
+            dir.display()
+        )));
+    }
+    let conn = rusqlite::Connection::open(&db)?;
+    // Fail fast. An operator waiting on a silent command is worse off than
+    // one told immediately what holds the vault.
+    let _ = conn.busy_timeout(std::time::Duration::from_millis(500));
+    let _ = conn.pragma_update(None, "locking_mode", "EXCLUSIVE");
+    conn.execute_batch("BEGIN EXCLUSIVE")?;
+    Ok(VaultHold(conn))
+}
+
 pub fn resolve_passphrase(env: Option<&str>) -> Result<Option<String>, StoreError> {
     let Some(v) = env else { return Ok(None) };
     if v.trim().is_empty() {
@@ -8821,6 +8882,72 @@ mod tests {
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", level).unwrap();
         (dir, PalaceStore::open(vault).unwrap())
+    }
+
+    /// ROADMAP O69. The hold must refuse while someone has the vault open,
+    /// and must succeed the moment they let go.
+    ///
+    /// Both arms are load-bearing. Without the first, `backup restore` unlinks
+    /// a database a live server is still writing to and the vault ends
+    /// unopenable — measured, at exit 0, before this existed. Without the
+    /// second, the guard is indistinguishable from one that always refuses,
+    /// which would make restore useless rather than safe.
+    #[test]
+    fn an_exclusive_hold_refuses_while_the_vault_is_open_and_grants_once_it_is_not() {
+        let (dir, store) = store(SecurityLevel::HmacOnly);
+        let vault_dir = dir.path().join("vaults/test");
+        assert!(
+            vault_dir.join("palace.db").exists(),
+            "premise: the vault has a database to hold"
+        );
+
+        // A live holder — exactly what `serve-http` is, from the file's point
+        // of view. SQLite locks are per-connection, so an open store in this
+        // same process is a faithful stand-in for another process.
+        let held = hold_vault_exclusively(&vault_dir);
+        assert!(
+            held.is_err(),
+            "a vault held by an open store must refuse an exclusive hold"
+        );
+
+        // Let go, and it must grant — otherwise the guard has simply broken
+        // restore for everyone.
+        drop(store);
+        let granted = hold_vault_exclusively(&vault_dir);
+        assert!(
+            granted.is_ok(),
+            "with no holder the exclusive hold must be granted: {:?}",
+            granted.err()
+        );
+
+        // And the hold is real: while it is alive, the next one is refused.
+        // This is what makes holding it ACROSS the destroy-and-copy close the
+        // window a probe-then-act would leave open.
+        let second = hold_vault_exclusively(&vault_dir);
+        assert!(
+            second.is_err(),
+            "a live hold must exclude the next one, or holding it across the \
+             operation protects nothing"
+        );
+        drop(granted);
+        assert!(
+            hold_vault_exclusively(&vault_dir).is_ok(),
+            "dropping the hold must release it"
+        );
+    }
+
+    /// A vault directory with no database has no holder to find, and opening
+    /// one would CREATE the file — noise for a directory about to be replaced.
+    #[test]
+    fn an_exclusive_hold_on_a_vault_with_no_database_is_refused_not_created() {
+        let dir = TempDir::new().unwrap();
+        let empty = dir.path().join("vaults/absent");
+        std::fs::create_dir_all(&empty).unwrap();
+        assert!(hold_vault_exclusively(&empty).is_err());
+        assert!(
+            !empty.join("palace.db").exists(),
+            "the probe must not have created the database it went looking for"
+        );
     }
 
     /// Build a hit with a known room and score — enough for the pure

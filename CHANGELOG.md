@@ -49,6 +49,57 @@ anchor"). And I used a `rest_body_lacks` helper that did not exist; it does
 now, with a premise arm, because an empty response lacks every substring and a
 bare absence check would pass on a failed request.
 
+### `backup restore` destroyed the vault it restored, at exit 0 (M30, O69)
+
+**Fixed, not filed.** `restore` unlinks a vault directory and copies a backup
+over it, and never asked who held it. Run beneath a live `serve-http` it
+succeeded at **exit 0** and destroyed the vault: the server kept its handles on
+the unlinked database, served and WROTE a file with no name, acknowledged
+those writes `{"created":true}`, and every later open reported
+`possible tampering` at exit 2. The rollback detector was right — the restore
+manufactured the evidence.
+
+It now takes an EXCLUSIVE hold across the destroy-and-copy, or refuses with a
+message that says what would have happened.
+
+**"Document only" was rejected.** The behaviour was not unsupported, it was
+silently destructive at a success exit code, and documentation does not make
+an exit-0 honest.
+
+**The stated cost of refusing did not materialise, and that is what decided
+it.** The objection was a false refusal stranding an operator mid-incident.
+Measured three ways on a real vault: no server → acquires; **idle**
+`serve-http` holding it → busy (the case that matters — no transaction open,
+still detected); server **SIGKILLed** with stale `-wal`/`-shm` → acquires.
+SQLite's locks belong to the process, so a crash leaves files that hold
+nothing. Hence **no override flag** — it would exist only to let someone
+re-create the defect.
+
+The hold is kept across the whole operation rather than probed and released,
+because probe-then-act leaves a window for a server to open the vault between
+the two.
+
+A third option — an exclusive lock as *serialisation* — was drafted and
+rejected on inspection: you cannot hold a SQLite lock on a file you are about
+to unlink.
+
+**Gates:** two unit tests (refuses while held, grants once dropped, excludes a
+second hold, releases on drop; and an absent database is refused rather than
+CREATED by the probe) and five e2e arms driving the real CLI against a real
+background server — including that restore still SUCCEEDS with no holder,
+without which the guard is indistinguishable from one that always refuses. The
+e2e fails loudly if the holder never starts. e2e 383 → **388**.
+
+`UPGRADING.md` carries the exit-code change, and states that `config check`
+cannot detect it — this is a command's behaviour, not a declaration.
+
+One thing this unit got wrong on the way: the first implementation put the
+helper in the CLI, which does not compile. `rusqlite` is a DEV-dependency
+there — grepping the manifest for the string without reading the section it
+sat under, which is "read what is adjacent to the anchor" applied to a
+Cargo.toml. It lives in `undercroft-store`, which owns SQLite, behind an
+opaque `VaultHold` so a database driver stays out of the CLI's dependencies.
+
 ### re-verifying the one filing nobody had checked, and finding a live defect under it (M29)
 
 Every filing this branch took turned out to be wrong about something — O65

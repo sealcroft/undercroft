@@ -67,6 +67,40 @@ so rather than implying it checked them.
 
 ## 1.2.0 (unreleased)
 
+### `undercroft backup restore` now REFUSES while the vault is in use (exit 1)
+
+**Who is affected:** any script or runbook that restores a backup without
+first stopping `serve-http` or `serve-mcp` on that vault.
+
+It used to succeed at exit 0. It also **destroyed the vault**. `restore`
+unlinks the vault directory and copies the backup over it; a running server
+keeps its file handles on the unlinked database, so it goes on serving and
+WRITING a file that no longer has a name, and the manifest it later anchors
+describes a database that is not there. The rollback detector then fires —
+correctly — on evidence the restore manufactured, and every later open reports
+`vault manifest failed integrity verification — possible tampering` at exit 2.
+Writes the server acknowledged with `{"created":true}` in that window are gone.
+
+So a pipeline that "worked" was silently producing an unopenable vault. It now
+takes an exclusive hold across the destroy-and-copy, or refuses:
+
+```
+Error: vault 'x' is in use by another process — refusing to restore over it.
+```
+
+**The fix:** stop the server, run the restore, start it again. There is no
+override flag, deliberately. The obvious worry is a false refusal stranding an
+operator mid-incident, and it was measured and does not happen: SQLite's locks
+belong to the PROCESS, so a server killed with SIGKILL leaves stale `-wal` and
+`-shm` files that hold nothing, and the restore proceeds normally. The refusal
+fires only while something genuinely has the vault open — which is exactly
+when a restore must not run.
+
+**Detectable before you upgrade?** No, and that is worth stating plainly:
+this is a behaviour change on a command, not a declaration, so
+`undercroft config check` cannot see it. Grep your runbooks and cron entries
+for `backup restore` and confirm each one stops the server first.
+
 ### `undercroft-orchestrator instance-list` now exits 2 on an unopenable credential blob
 
 **Who is affected:** any script that runs `instance-list` and checks its exit

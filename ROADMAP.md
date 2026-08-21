@@ -3485,7 +3485,7 @@ citation with the argument. The existing `every_cli_capability_is_reachable_or_r
 already enforces that a non-`Unruled` row carries a reason of substance, so a
 ruling cannot land as a shrug.
 
-### O69 — `backup restore` against a live server DESTROYS the vault, today, on the shipped CLI
+### O69 — CLOSED 2026-08-21: `backup restore` takes an exclusive hold, or refuses
 
 **Measured 2026-08-21, not reasoned about.** This was filed inside O68 as a
 blocker on a `/v1` route that does not exist yet. That was the wrong place and
@@ -3545,10 +3545,51 @@ It trades a CERTAIN silent unrecoverable failure against a POSSIBLE false
 refusal on an incident path. That is a product judgement about which failure
 to own, and the doctrine does not settle it.
 
-**Gate, whichever is chosen:** an e2e arm that starts a server, restores
-beneath it, and asserts the chosen behaviour — a refusal that names the
-holder, or (under "document only") that the destructive outcome is at least
-reported rather than exiting 0. The reproduction above is the test.
+**RULED AND FIXED: refuse while held.** "Document only" was rejected — the
+behaviour was not merely unsupported, it was silently destructive *at exit 0*,
+and documentation does not make an exit-0 honest.
+
+**The stated cost of refusing did not materialise, and that decided it.** The
+standing objection was a false positive stranding an operator mid-incident.
+Measured on a real vault, three ways:
+
+| condition | exclusive hold |
+|---|---|
+| no server running | acquired |
+| **idle** `serve-http` holding the vault | busy — `database is locked` |
+| server **SIGKILLed**, stale `-wal`/`-shm` on disk | acquired |
+
+The second is the case that matters (the server holds no transaction and is
+still detected) and the third is why there is **no override flag**: SQLite's
+locks belong to the PROCESS, so a crashed server leaves files that hold
+nothing. An override would exist only to let an operator re-create the defect.
+
+**The lock is HELD ACROSS the destroy-and-copy**, not probed and released — a
+probe-then-act leaves a window in which a server opens the vault between the
+two. Once the directory is unlinked the hold refers to a dead inode, which is
+harmless: there is nothing left to protect.
+
+**Why it lives in `undercroft-store`.** The first attempt put it in the CLI,
+which fails to compile: `rusqlite` is a DEV-dependency there. Grepping the
+manifest for the string and not reading the section it sat under is the
+"read what is adjacent to the anchor" lesson, on a Cargo.toml. The store owns
+SQLite and the lock is SQLite's; `VaultHold` is opaque so a database driver
+stays out of the CLI's dependency list.
+
+**Gates.** Two unit tests — the hold refuses while a store is open, grants
+once dropped, excludes a second hold while alive, and releases on drop; and a
+vault directory with no database is refused rather than having one CREATED by
+the probe. Five e2e arms drive it through the real CLI against a real
+background server (383 → 388 checks), including the arm that matters most:
+restore still SUCCEEDS once nothing holds the vault, without which the guard
+would be indistinguishable from one that always refuses. The e2e also fails
+loudly if the holder process does not start, so the refusal arm cannot pass
+against nothing.
+
+`UPGRADING.md` carries it: a script that restored without stopping the server
+now gets exit 1 where it used to get exit 0 — and used to get a destroyed
+vault. Stated there is that `config check` cannot detect this, because it is a
+command's behaviour rather than a declaration.
 
 ### O68 — nineteen ruled gaps need a release, and `restore` needs a protocol before it can have one
 
