@@ -38,13 +38,21 @@ the same bearer, for programmatic (non-MCP) callers and for orchestration
 platforms that use one **vault per tenant**. One palace per process stays
 the model — tenancy is vaults, not palaces.
 
-**All 36 routes**, counted against `route()` in
-`crates/undercroft-cli/src/tenant.rs` rather than remembered — and the count
-is GATED now (ROADMAP O45), because "rather than remembered" was exactly what
+**All 37 routes**, counted against `route()` in
+`crates/undercroft-cli/src/tenant.rs` rather than remembered — and the LIST is
+GATED now (ROADMAP O45), because "rather than remembered" was exactly what
 happened: this list said 35 and omitted
 `POST /v1/vaults/{id}/verify-forgetting` from the day O14 added it, while
 `docs/AGENTS.md` §10 carried it correctly. One route added, two route
-references, one updated. It also listed 18 of them until 2026-08-05,
+references, one updated.
+
+**And this number said 36 while the list beside it held 37**, from M17 until
+2026-08-21 — `POST …/repair` was added to the list and not to the sentence
+above it. The O45 gate compares the two references to `route()` as SETS in
+both directions, deliberately, *because a count passes when one route is
+swapped for another* — so it was green over a wrong count, correctly and by
+design. A number in prose next to a gated list is the un-gated part of a
+gated claim, and it is the part that rots. It also listed 18 of them until 2026-08-05,
 omitting the whole operator plane
 (trust, admission review, retention, forgetting) plus the golden-values
 tier. Everything under *operator plane* is deliberately absent from MCP:

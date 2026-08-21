@@ -123,11 +123,11 @@ enum Command {
         id: String,
         /// One of: verify, repair, anchor, supersessions, admission,
         /// admission-rule, trust, trust-set, retention, retention-set,
-        /// retention-sweep, forget, verify-forgetting
+        /// retention-sweep, forget, verify-forgetting, authority
         op: String,
         /// JSON body for the operations that take one (rulings, trust and
-        /// retention assignment, forget, and the attestation document
-        /// verify-forgetting checks)
+        /// retention assignment, forget, the authority declaration, and the
+        /// attestation document verify-forgetting checks)
         #[arg(long)]
         body: Option<String>,
     },

@@ -896,9 +896,17 @@ because nothing stated them:
   on `/v1`, exit 2 on the CLI — never reaches the tool layer at all: the
   server fails to start instead. Defensible (a tamper verdict is not a
   per-call condition) and previously unwritten.
-- **`/v1` has no KG *write* routes** except `POST …/kg/authority`. The KG is
-  written by the CLI, by MCP (`undercroft_kg_add`) and by import; the REST
-  surface browses it. That is a present-tense boundary, not a future item.
+- **`/v1` has no DIRECT KG *write* routes** except `POST …/kg/authority`.
+  Facts are written directly by the CLI, by MCP (`undercroft_kg_add`) and by
+  import; the REST surface browses them. That is a present-tense boundary,
+  not a future item — and it is the ruling behind `KgAction::Add`,
+  `Invalidate` and `Supersede` being recorded `Absence::Boundary` in
+  `parity.rs::SURFACE_ABSENCES`.
+  **"Direct" is load-bearing**: `POST …/refine` distils drawer text into
+  facts, so this plane does CREATE them — through an extractor whose output
+  carries an attributed identity inside the fact's HMAC, never by taking a
+  caller-supplied subject/predicate/object. The boundary is about who may
+  ASSERT a fact, not about whether facts can appear.
 
 Write tools (marked **W**) are refused when the server runs `--read-only`.
 There are 12 of them, and the list is not maintained by hand: the code is

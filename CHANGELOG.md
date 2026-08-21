@@ -7,6 +7,149 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### every surface absence is ruled, eight fleet-unreachable capabilities are reachable, and the house page is gated (M26)
+
+The three rulings that were waiting on the maintainer, taken and implemented.
+
+**O66 — CLOSED. `SURFACE_ABSENCES` holds no `Unruled` row.** All 21 remaining
+rows were ruled, and all 21 came back `Drift`: **`/v1` carries the full
+agent-facing memory surface**, all three backup operations reach it, and the
+four singletons are gaps rather than boundaries — `kg receipts` and
+`verify-forgetting` being present on `/v1` and absent from MCP, which is the
+INVERSE of the operator-only shape, so that argument never explained them.
+Inventory: **34 Boundary, 22 Drift, 7 Structural, 0 Unruled.**
+
+The scheduling was deliberately separated from the ruling and is filed as
+**O68**. That separation was accepted with an objection attached — a `Drift`
+row with nowhere to point is `Unruled` wearing a different variant — so the
+objection became a gate rather than a note: **a `Drift` row must now name a
+target**, which the variant's own doc has always required. Counterfactual
+executed: strip the target from one row and the gate names it.
+
+**O67 — CLOSED.** The ops-parity universe is DERIVED from `tenant.rs`'s
+dispatch instead of a hand-written literal, and the partition is three-way —
+ops-reachable / deliberately-absent / data-plane — with the third list derived
+by ASKING `data_subpath_ok` rather than restating it. Measured **11 / 7 / 14,
+0 unclassified** over 28 subpaths.
+
+Eight capabilities were reachable from NEITHER plane. Seven were the tenant's
+own reads and joined the data plane: `taxonomy`, `kg/stats`, `kg/entities`,
+`kg/query`, `kg/timeline`, `kg/receipts`, `kg/canonical/{key}`. Checked before
+widening rather than assumed — **a fact cannot come from a quarantined
+drawer**, because `refine` reads through `recent()` and refuses when scoped to
+the reserved wing, so this is not a door around admission control.
+
+The eighth was **`kg/authority`**, and it is the one that mattered: an
+`OPERATOR_ONLY` capability with no operator door in a fleet, so the
+golden-values tier was drivable from nowhere. It is on `OPS_ROUTES` now.
+Counterfactual executed: remove it and the gate names it — the defect that was
+live for as long as the literal existed.
+
+Also closed, in a direction nothing checked: an `OPS_ROUTES` row naming a
+subpath the engine no longer dispatches now fails, instead of relaying a 404
+while reading as a live capability. Two premise arms, because a broken
+extractor agrees with any inventory. `tests/e2e-orchestrator.sh` 113 → **123**.
+
+**O65 — the gate is built; the page edit is pending an explicit go**, being a
+different repository and a public site. `tests/house-figures.sh` runs as its
+own CI job — **the only check in the tree that needs the internet**, which is
+why it is not a preflight, and it treats an unreachable page as a FAILURE
+rather than a skip.
+
+**Building it found two claims the filing never asked about.** O65 was scoped
+to *figures*, so it found figures; the same page announces a release in two
+places and both had been two releases stale since 1.1.0:
+
+| claim | page | truth |
+|---|---|---|
+| tests | 656 | **765** |
+| benchmark | `99.4%` as `LongMemEval R@5` | the `+MiniLM` column; shipped default **95.0** |
+| banner | `Undercroft 1.0 is out` | **v1.1.1** |
+| badge | `Shipping · v1.0.0` | **v1.1.1** |
+
+**A scoping phrase in a filed question decides what the answer can contain.**
+The tree writes that rule down for GATES (O29, and O32 came from widening its
+sibling sweep) and had never applied it to its own FILINGS.
+
+### M6 left five published claims saying the opposite, and three filings were wrong about the tree (M25)
+
+**M6's own drift, and it is mine.** M6 ruled that wing and room names travel
+on every security level, rewrote two e2e gates to pin it, and updated
+`website/src/observability.md:250` and `docs/AGENTS.md`. It left **five**
+published claims stating the reversed contract — including **twice in the
+same file, 54 lines apart**, and twice on the landing page, which is a product
+promise that contradicted the shipped binary:
+
+* `website/src/observability.md` — "Sealed vaults expose only aggregate
+  counts"; pings carry "(for hmac-only vaults) wing/room"; "Sealed vaults
+  stream aggregate counts only (wing/room names suppressed server-side)"
+* `website/landing/index.html` — "sealed vaults stream aggregate counts with
+  wing names suppressed"; "Sealed vaults stream aggregate totals with names
+  suppressed server-side"
+
+A sixth was a comment in `undercroft-orchestrator`: the route-class label
+justified itself as *"exactly what the engine's own telemetry suppresses for
+sealed vaults"*. The DECISION there is right and was never resting on that
+premise — the reason is cardinality, the same rule that keeps tenants off
+every series in that crate — so the reason is corrected and the code is not.
+
+This is definition-of-done item 4 missed inside the unit whose entire argument
+is that a claim must be true on every surface that states it. What made it
+easy: the surfaces disagree in WORDING, not in a token — "suppressed",
+"aggregate counts only", "(for hmac-only vaults)" — so no scan for the
+sentence that was fixed finds the four that were not.
+
+**Three filings were wrong about the tree, and each was re-verified rather
+than restated.**
+
+* **O65** reported the house page's `99.4%` headline as GONE, on a live
+  fetch. It is still there: the value and its `%` are split across a nested
+  `<span>`, so a search for `99.4%` returns zero **on the page that publishes
+  it** — and zero is indistinguishable from absent. The trap was written down
+  in the sweep material before the mistake was made. The figure is also still
+  unqualified as to CONFIGURATION: 99.4 is the `+MiniLM` column, the shipped
+  hash default measures 95.0, and this project's own landing page says so.
+* **O67**'s premise — *"roughly half are DATA-plane reads … that the ops
+  plane correctly does not carry because the `/t/*` data plane does"* — is
+  measured wrong. `data_subpath_ok` admits seven whole shapes; of the eleven
+  unexamined subpaths **three** are data-plane reachable and **eight are
+  reachable from neither plane**, `kg/authority` among them — an
+  `OPERATOR_ONLY` capability with no operator door in a fleet. The false
+  sentence was an argument for NOT acting, which is where an unverified
+  premise costs most, because nothing downstream tests it.
+* **O66** filed `kg add|invalidate|supersede` as `Unruled` on the reading
+  that `docs/AGENTS.md` ruled the FAMILY and not each capability. A family
+  boundary that names its one exception has decided every member. They are
+  `Absence::Boundary` now, carrying the provenance argument the doc implies.
+  `Unruled` is for what nobody has decided, not for what nobody looked up.
+  Rulings: 31/7/1/24 → **34 Boundary, 7 Structural, 1 Drift, 21 Unruled**.
+  `docs/AGENTS.md` gained the word "direct" in the same pass, because
+  `POST …/refine` does create facts on this plane — through an attributed
+  extractor, which is the distinction the boundary actually draws.
+
+**And a stale count the gate was built not to see.** `docs/remote-server.md`
+said *"All 36 routes, counted against `route()` … rather than remembered"*
+while `route()` dispatches **37** — `POST …/repair` (M17) was added to the
+list and not to the sentence above it. O45's gate compares the two references
+to the dispatch as SETS in both directions, deliberately, *because a count
+passes when one route is swapped for another* — so it was green over a wrong
+count, correctly and by design.
+
+Fixed, and **the count is now gated separately** in the `prose figures`
+preflight against `route()`'s own arm count, with a reader that fails when it
+matches no sentence. Counterfactual executed: restored to 36, the preflight
+prints `publishes 36 routes; tenant.rs dispatches 37` and exits 1.
+
+The generalisation is in `CLAUDE.md`: **a number in prose beside a gated list
+is the un-gated part of a gated claim.** When a gate deliberately measures
+something other than a count, ask what the count is doing while nobody
+watches it.
+
+**Not done, deliberately.** The remaining 21 `Unruled` rows (O66), the
+third-category decision (O67) and the house-page choice (O65) are product
+rulings the maintainer holds. Inventing them is what `Absence::Unruled`
+exists to prevent.
+
 ### four live instructions pointing at finished work, and a gate of mine that could pass on nothing (M24)
 
 Reading the governance files end to end — after admitting they had only been
@@ -315,7 +458,9 @@ anchor is derivable from source; a prose name is not) and on
 `(anchor, absent_from)`, because the ruling differs per surface —
 `Command::Repair` is a boundary on MCP and a drift on `/v1`.
 
-Rulings: **31 Boundary, 7 Structural, 1 Drift, 24 Unruled.**
+Rulings as this unit shipped them: **31 Boundary, 7 Structural, 1 Drift, 24
+Unruled** — **34 / 7 / 1 / 21** by the end of this release, three `Unruled`
+rows having turned out to be already ruled (see the kg-write entry below).
 
 `Absence::Unruled` is the load-bearing choice. Two dozen absences are PRODUCT
 decisions neither the code nor the doctrine settles. The alternative was

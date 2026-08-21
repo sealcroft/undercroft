@@ -137,6 +137,30 @@ code_is  "tokenless is 401"        401 -- -X POST -d '{"query":"x"}' "$O/t/searc
 code_is  "vault root not routable" 404 -- -X DELETE "${AUTH_ACME[@]}" "$O/t/"
 code_is  "unknown subpath is 404"  404 -- -X POST "${AUTH_ACME[@]}" -d '{}' "$O/t/frobnicate"
 
+# ROADMAP O67. Eight of the engine's 28 per-vault subpaths were reachable from
+# NEITHER plane — not the ops plane, not here — so a tenant asking for their
+# own taxonomy or their own distilled facts got a bare "unknown route", which
+# reads as a capability the product does not have. These are the tenant's own
+# vault; `drawers` and `search` two blocks up already return its content.
+code_is  "taxonomy reaches the tenant"      200 -- "${AUTH_ACME[@]}" "$O/t/taxonomy"
+body_has "taxonomy names the tenant's wing" 'eng' -- "${AUTH_ACME[@]}" "$O/t/taxonomy"
+code_is  "kg/stats reaches the tenant"      200 -- "${AUTH_ACME[@]}" "$O/t/kg/stats"
+code_is  "kg/query reaches the tenant"      200 -- "${AUTH_ACME[@]}" "$O/t/kg/query?entity=nobody"
+code_is  "kg/entities reaches the tenant"   200 -- "${AUTH_ACME[@]}" "$O/t/kg/entities"
+code_is  "kg/timeline reaches the tenant"   200 -- "${AUTH_ACME[@]}" "$O/t/kg/timeline?entity=nobody"
+code_is  "kg/receipts reaches the tenant"   200 -- "${AUTH_ACME[@]}" "$O/t/kg/receipts"
+# And the one that must NOT: `kg/authority` is a WRITE and is in the engine's
+# OPERATOR_ONLY — promotion closes the previous canonical holder's window, so
+# a tenant token must never carry it. It went to the ops plane instead, and
+# the refusal must SAY that rather than 404ing as though it did not exist.
+code_is  "kg/authority refused on the data plane" 404 -- -X POST "${AUTH_ACME[@]}" \
+  -d '{"triple_id":"x","authority_class":"golden"}' "$O/t/kg/authority"
+body_has "kg/authority names the ops plane" 'operator route' -- -X POST "${AUTH_ACME[@]}" \
+  -d '{"triple_id":"x","authority_class":"golden"}' "$O/t/kg/authority"
+# The quarantine fence still applies to every widened route.
+code_is  "fence still covers kg/query" 404 -- "${AUTH_ACME[@]}" \
+  "$O/t/kg/query?entity=quarantine-pending"
+
 echo "== Cross-tenant isolation through the proxy =="
 GX_SEARCH="$(curl -s -X POST "${AUTH_GLOBEX[@]}" -d '{"query":"flux capacitor power"}' "$O/t/search")"
 grep -qF 'gigawatts' <<<"$GX_SEARCH" \

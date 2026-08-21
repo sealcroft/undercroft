@@ -1293,6 +1293,17 @@ Consequences that are binding, not advisory:
   routes, counted against `route()` … rather than remembered". Both are
   gated now, as SETS in both directions rather than counts, because a count
   passes when one route is swapped for another.
+  **The count is gated too, SEPARATELY, and the gap between those two
+  sentences was real for as long as only the first existed.** Comparing sets
+  is the right choice and its cost is that the SENTENCE introducing the list
+  — *"All N routes, counted against `route()` … rather than remembered"* — is
+  not part of what the set comparison examines. It said 36 while the list
+  under it held 37, from M17 (which added `POST …/repair` to the list and not
+  to the sentence) until 2026-08-21, and the gate was green throughout,
+  correctly. Generalise it: **a number in prose beside a gated list is the
+  un-gated part of a gated claim, and it is the part that rots** — when a
+  gate deliberately measures something other than a count, ask what the count
+  is doing while nobody watches it.
   **A full-name scan of any reference in this repo UNDERCOUNTS, and the
   undercount reads as a documentation gap.** Every reference here groups
   families into one row and abbreviates the siblings to a suffix —
@@ -1441,7 +1452,7 @@ docker compose run --rm test          # cargo unit + integration tests (765 run,
                                       # default-members and never in this count)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
 docker compose run --rm e2e           # e2e UI/UX suite against the release binary (379 checks)
-docker compose run --rm orchestrator-e2e  # two engines + orchestrator (113 checks)
+docker compose run --rm orchestrator-e2e  # two engines + orchestrator (123 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (43 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
@@ -1790,7 +1801,19 @@ CI runs `cargo fmt --all --check` + `cargo clippy --all-targets -- -D warnings`
 (no `--workspace`, so the excluded onnx crate is fmt'd but not clippy'd in CI).
 **Eight compose suites run as a `fail-fast: false` MATRIX** — eight since
 `arch-check` joined (M14), and `tls-pins` is host-side and gets its own job
-rather than a matrix leg, so CI runs NINE jobs of which the matrix is one.
+rather than a matrix leg, so CI runs TEN jobs of which the matrix is one.
+The tenth is **`house-figures`** (ROADMAP O65), and it is the ONLY check in
+the tree that needs the INTERNET — which is exactly why it is a CI job and
+not a `tests/battery.sh` preflight: the preflights run on every local battery
+and a network arm there fails for anyone working offline. It reads the house
+page's `<div class="n">` tiles and compares them to the tree, and it treats
+an unreachable page as a FAILURE rather than a skip, because an unreachable
+page and an accurate one must not produce the same verdict — this file's
+oldest lesson, and the reason the check exists at all is that the same figure
+sat stale for eleven days with nothing able to notice. Consequence, stated
+rather than discovered: it can go red on a pull request that touched nothing,
+because the house page is state this repo does not own. That is the signal,
+not a defect in the gate.
 This sentence said "one job each" while also saying the matrix is one job,
 which cannot both be true: a matrix expands to one check RUN per leg under a
 single job id, which is why adding a leg does not move `verdict`'s `needs:`

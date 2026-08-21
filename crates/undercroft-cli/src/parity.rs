@@ -454,59 +454,118 @@ pub const SURFACE_ABSENCES: &[(&str, &str, Absence, &str)] = &[
     // missing the word for the bad case cannot record the bad case.
 
     // ---- Unruled: measured, and the decision is the maintainer's ----------
-    // Every row below is a capability reachable from the CLI and from MCP but
+    // Each row below is a capability reachable from the CLI and from MCP but
     // NOT from `/v1`. That is the classic two-of-three shape, and whether the
     // remote plane should carry the agent-facing memory surface is a PRODUCT
     // decision rather than one the code or the doctrine settles. Filed as
     // ROADMAP O66 — and `Unruled` is deliberately not a quiet `Boundary`.
-    ("Command::Dedup", "v1", Absence::Unruled,
-     "corpus-wide duplicate collapse; --apply DESTROYS rows, so its absence may well be right, but the tree does not say so (ROADMAP O66)"),
-    ("Command::WakeUp", "v1", Absence::Unruled,
-     "session-context load — one of the two surfaces whose whole job is loading context at session start (ROADMAP O66)"),
-    ("Command::Closets", "v1", Absence::Unruled,
-     "per-wing content index; one of the reads wake-up depends on, and absent from the remote plane with it (ROADMAP O66)"),
-    ("Command::Hallways", "v1", Absence::Unruled,
-     "entity co-occurrence within a wing — a derived read the remote plane cannot ask for (ROADMAP O66)"),
-    ("DiaryAction::Write", "v1", Absence::Unruled,
-     "agent diary write — a second write path into the vault that /v1 does not carry (ROADMAP O66)"),
-    ("DiaryAction::Read", "v1", Absence::Unruled,
-     "agent diary read. The diary is per-agent working memory; whether a remote client should reach another agent's is undecided (ROADMAP O66)"),
-    ("DiaryAction::Agents", "v1", Absence::Unruled,
-     "list diary agents; it enumerates who has written, which is metadata about the writers rather than about the corpus (ROADMAP O66)"),
-    ("TunnelAction::Create", "v1", Absence::Unruled,
-     "cross-wing tunnel creation; the label is agent-written free text the screen covers (ROADMAP O66)"),
-    ("TunnelAction::List", "v1", Absence::Unruled,
-     "list tunnels — the read half of a link graph whose write half is equally absent (ROADMAP O66)"),
-    ("TunnelAction::Follow", "v1", Absence::Unruled,
-     "follow a tunnel to read the drawers it links; a content-returning read, so it is a read-audit door too (ROADMAP O66)"),
-    ("TunnelAction::Delete", "v1", Absence::Unruled,
-     "delete a tunnel; destructive on the link graph though not on drawers (ROADMAP O66)"),
-    ("TunnelAction::Traverse", "v1", Absence::Unruled,
-     "traverse the tunnel graph from a wing, returning reachable wings rather than content (ROADMAP O66)"),
-    ("KgAction::Add", "v1", Absence::Unruled,
-     "add one fact. /v1 has NO kg write route except authority — docs/AGENTS.md states that as a present-tense boundary, but for the FAMILY rather than per capability (ROADMAP O66)"),
-    ("KgAction::Invalidate", "v1", Absence::Unruled,
-     "invalidate a fact — a kg write, and /v1 carries no kg write route except authority (ROADMAP O66)"),
-    ("KgAction::Supersede", "v1", Absence::Unruled,
-     "supersede a fact, which closes the previous holder's window; a kg write /v1 does not carry (ROADMAP O66)"),
-    ("KgAction::Rel", "mcp+v1", Absence::Unruled,
-     "query facts by predicate. CLI-only, and the only kg READ shape neither agent surface has (ROADMAP O66)"),
-    ("KgAction::Receipts", "mcp", Absence::Unruled,
-     "verify kg fact receipts. It is on CLI and /v1 and not MCP, which is the inverse of the operator-only shape and so is not explained by it (ROADMAP O66)"),
-    ("Command::VerifyForgetting", "mcp", Absence::Unruled,
-     "check a caller-supplied erasure attestation. On CLI and /v1, absent from MCP (ROADMAP O66)"),
-    ("DrawerAction::CheckDup", "v1", Absence::Unruled,
-     "duplicate oracle before a save. /v1 carries dedup_threshold on the save body, which is a different capability: per-save, one drawer (ROADMAP O66)"),
-    ("DrawerAction::DeleteBySource", "v1", Absence::Unruled,
-     "delete every drawer mined from one source file (ROADMAP O66)"),
-    ("IndexAction::Status", "mcp+v1", Absence::Unruled,
-     "remote-index mirror status. A pure read, unlike Push which is egress — so Push's boundary does not cover it (ROADMAP O66)"),
-    ("BackupAction::Create", "v1", Absence::Unruled,
-     "a fleet operator whose only door is /v1 has no snapshot path at all and must reach the engine host's filesystem. backup create is also the one caller that gates archiving on the verify verdict (ROADMAP O66)"),
-    ("BackupAction::List", "v1", Absence::Unruled,
-     "opens no vault, so a route would be trivial — which is what makes the absence read as forgotten rather than fenced (ROADMAP O66)"),
-    ("BackupAction::Restore", "v1", Absence::Unruled,
-     "the most destructive operation in the tree. Its absence from an operator plane may be exactly right; nothing says so (ROADMAP O66)"),
+    //
+    // **The kg WRITE family interrupts this block and is NOT Unruled**, for
+    // the reason given at its own comment: a document already ruled it in the
+    // present tense, and the first pass recorded it as undecided anyway.
+    // Before adding a row here, check whether some surface has already said
+    // so — `Unruled` is for what nobody has decided, not for what nobody
+    // looked up.
+    // **RULED 2026-08-21 (ROADMAP O66): `/v1` carries the agent-facing
+    // memory surface.** The maintainer was given three readings — full agent
+    // surface, operator-and-search plane, or reads-yes-writes-no — and took
+    // the first. So every row below is a GAP, not a boundary, and
+    // `docs/remote-server.md`'s "for programmatic (non-MCP) callers" is kept
+    // as written because the ruling makes it true rather than aspirational.
+    //
+    // **Target: O68**, which is the scheduling decision, deliberately not a
+    // version. Ruling that something is a gap and deciding when it is closed
+    // are two questions; this file records the first and O68 holds the
+    // second. A `Drift` row MUST name a target — the variant's own doc says
+    // "with a target" — and `every_cli_capability_is_reachable_or_ruled_absent`
+    // enforces it, so a gap cannot become `Unruled` wearing a different
+    // variant by having nowhere to go.
+    ("Command::Dedup", "v1", Absence::Drift,
+     "corpus-wide duplicate collapse. A remote client can pass dedup_threshold per save but cannot collapse a corpus it already wrote (target O68)"),
+    ("Command::WakeUp", "v1", Absence::Drift,
+     "session-context load — one of the two surfaces whose whole job is loading context at session start, and the remote plane cannot do it (target O68)"),
+    ("Command::Closets", "v1", Absence::Drift,
+     "per-wing content index; one of the reads wake-up depends on, and absent from the remote plane with it (target O68)"),
+    ("Command::Hallways", "v1", Absence::Drift,
+     "entity co-occurrence within a wing — a derived read the remote plane cannot ask for (target O68)"),
+    ("DiaryAction::Write", "v1", Absence::Drift,
+     "agent diary write. A write path, so the route must state Screen::Apply at the choke point like every other (target O68)"),
+    ("DiaryAction::Read", "v1", Absence::Drift,
+     "agent diary read — per-agent working memory, and a content-returning read, so it owes a ReadOp door (target O68)"),
+    ("DiaryAction::Agents", "v1", Absence::Drift,
+     "list diary agents; it enumerates who has written, which is metadata about the writers rather than about the corpus (target O68)"),
+    ("TunnelAction::Create", "v1", Absence::Drift,
+     "cross-wing tunnel creation. A write, and the label is agent-written free text already carried by admission::SCREENED_FIELDS (target O68)"),
+    ("TunnelAction::List", "v1", Absence::Drift,
+     "list tunnels — the read half of a link graph whose write half is equally absent (target O68)"),
+    ("TunnelAction::Follow", "v1", Absence::Drift,
+     "follow a tunnel to read the drawers it links; a content-returning read, so it is a read-audit door too (target O68)"),
+    ("TunnelAction::Delete", "v1", Absence::Drift,
+     "delete a tunnel; destructive on the link graph though not on drawers, so it is a write for the read-only gate (target O68)"),
+    ("TunnelAction::Traverse", "v1", Absence::Drift,
+     "traverse the tunnel graph from a wing, returning reachable wings rather than content (target O68)"),
+    // ---- The kg WRITE family: already ruled, by a document, in the present
+    // tense. `docs/AGENTS.md` says "/v1 has no DIRECT KG *write* routes
+    // except POST …/kg/authority … That is a present-tense boundary, not a
+    // future item." These three left `Unruled` on the reading that it ruled
+    // the FAMILY and not each capability — but a family boundary that names
+    // its one exception has decided every member, and treating a written
+    // ruling as undecided pushes a settled question back to the maintainer.
+    //
+    // The argument the doc states, restated as what would go wrong: a fact
+    // carries the EXTRACTOR IDENTITY inside its HMAC (canonical extension
+    // 0x1d), and the authority tier promotes facts into the one answer
+    // `lookup_canonical` returns. A caller-supplied subject/predicate/object
+    // over REST mints a fact attributable to a bearer rather than to a named
+    // extractor, under a plane whose token reaches every route. `refine` is
+    // the deliberate contrast and the reason "direct" is in the rule: it
+    // CREATES facts on this plane, from drawer text, through an extractor
+    // whose identity is recorded and HMAC-covered.
+    ("KgAction::Add", "v1", Absence::Boundary,
+     "a REST-asserted fact would carry a bearer as its provenance instead of a named extractor, and the extractor identity is inside the fact's HMAC; refine creates facts here and is attributable, which is the distinction (docs/AGENTS.md)"),
+    ("KgAction::Invalidate", "v1", Absence::Boundary,
+     "invalidating is asserting a fact is wrong, and it is audited against the asserter; the same provenance argument as Add, and /v1 carries no direct kg write except authority (docs/AGENTS.md)"),
+    ("KgAction::Supersede", "v1", Absence::Boundary,
+     "superseding CLOSES the previous holder's window, so a bearer could make its own fact the one answer lookup_canonical returns — which is why authority promotion is operator-only in the first place (docs/AGENTS.md)"),
+    // **RULED 2026-08-21 (ROADMAP O66), the four singletons.** Both READS
+    // (`kg rel`, `index status`) are gaps on the same reasoning as the block
+    // above: a read belongs on the surfaces that read. Both VERIFICATION
+    // reads (`kg receipts`, `verify-forgetting`) are gaps too — the shape
+    // that made them look like boundaries is the INVERSE of the operator-only
+    // one (present on `/v1`, absent from MCP), and the operator-only argument
+    // therefore never applied to them.
+    ("KgAction::Rel", "mcp+v1", Absence::Drift,
+     "query facts by predicate — the only kg READ shape neither agent surface has, and it is not composable from the entity-shaped kg_query they do have (target O68)"),
+    ("KgAction::Receipts", "mcp", Absence::Drift,
+     "per-fact receipt verdicts. MCP's undercroft_verify already reports the aggregate KG-receipt leg, so an agent learns THAT a citation is forged and cannot learn WHICH (target O68)"),
+    ("Command::VerifyForgetting", "mcp", Absence::Drift,
+     "check a caller-supplied erasure attestation against this vault. Present on /v1 and absent from MCP, which is the inverse of the operator-only shape, so that reasoning never explained it (target O68)"),
+    ("DrawerAction::CheckDup", "v1", Absence::Drift,
+     "duplicate oracle before a save. /v1's dedup_threshold on the save body is a different capability — per-save and one drawer, and it cannot answer before writing (target O68)"),
+    ("DrawerAction::DeleteBySource", "v1", Absence::Drift,
+     "delete every drawer mined from one source file; the remote plane can delete by id only, so undoing one mined document means N calls (target O68)"),
+    ("IndexAction::Status", "mcp+v1", Absence::Drift,
+     "remote-index mirror status. A pure read, unlike Push which is egress — so Push's boundary does not cover it (target O68)"),
+    // **RULED 2026-08-21 (ROADMAP O66): all three backup operations reach
+    // `/v1`.** The maintainer took the full-parity option over keeping the
+    // destructive half on the engine host. Two consequences are recorded
+    // here because the ruling does not remove them, it schedules them:
+    //
+    // * These are PALACE-scoped filesystem operations on the palace root —
+    //   `list` opens no vault at all — so they do not fit `/v1/vaults/{id}/`
+    //   and need a new path family (`/v1/backups`). That is a shape decision
+    //   the route work owes, not a reason to leave them out.
+    // * `restore` calls `remove_dir_all` on a live vault directory. On Linux
+    //   that succeeds with a server holding an open SQLite handle, leaving
+    //   the process serving unlinked inodes and writing them back. A route
+    //   MUST close the handle first; O68 carries that as a blocker rather
+    //   than a detail.
+    ("BackupAction::Create", "v1", Absence::Drift,
+     "a fleet operator whose only door is /v1 has no snapshot path and must reach the engine host's filesystem; create is also the one caller that gates archiving on the verify verdict (target O68)"),
+    ("BackupAction::List", "v1", Absence::Drift,
+     "opens no vault, so a route is trivial — which is exactly what made the absence read as forgotten rather than fenced (target O68)"),
+    ("BackupAction::Restore", "v1", Absence::Drift,
+     "the most destructive operation in the tree, and ruled reachable. Blocked on a handle-close protocol: remove_dir_all under an open SQLite handle leaves a server serving unlinked inodes (target O68)"),
 ];
 
 /// CLI operations reachable from all three engine surfaces. The other half of
@@ -1370,6 +1429,30 @@ mod tests {
                     reason.contains("ROADMAP"),
                     "{anchor} ({surface}): an Unruled row must cite the entry the \
                      decision is filed under"
+                );
+            }
+            // **A `Drift` row must name a TARGET**, because the variant's own
+            // doc says "with a target" and without one a gap is `Unruled`
+            // wearing a different variant — decided in name, parked in fact,
+            // and no longer visible to the reader who was told these are the
+            // undecided ones. The target may be a ROADMAP id or a version;
+            // what it may not be is absent.
+            //
+            // This arm arrived when 21 rows were ruled `Drift` in one pass
+            // (ROADMAP O66) with their scheduling deliberately deferred to a
+            // separate entry. Deferring the schedule is legitimate; leaving
+            // the row with nowhere to point is what this prevents.
+            if *kind == Absence::Drift {
+                let has_target = reason.contains("target ")
+                    || reason.contains("ROADMAP")
+                    || reason.contains("1.")
+                    || reason.contains("2.");
+                assert!(
+                    has_target,
+                    "{anchor} ({surface}): a Drift row names a gap and must say \
+                     where it is scheduled — a target release or the entry that \
+                     holds the scheduling decision. Without one it is Unruled \
+                     under another name"
                 );
             }
         }

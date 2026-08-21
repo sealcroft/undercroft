@@ -1116,7 +1116,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**94** of the **109** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**96** of the **111** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -2398,12 +2398,17 @@ precedent, because an anchor is derivable from source and a prose name is not,
 and on `(anchor, absent_from)` because the ruling genuinely differs per surface
 — `Command::Repair` is a boundary on MCP and a drift on `/v1`.
 
-**Rulings: 31 Boundary, 7 Structural, 1 Drift, 24 Unruled.**
+**Rulings as this unit shipped them: 31 Boundary, 7 Structural, 1 Drift, 24
+Unruled.** The tree now reads **34 / 7 / 1 / 21** — later in this same
+release, three of M16's `Unruled` rows (the kg WRITE family) were found to
+have been ruled all along by `docs/AGENTS.md` and became `Boundary`. Both
+figures are stated because M16's own reasoning is only readable against what
+M16 measured; **O66** carries what moved and why.
 
 **`Absence::Unruled` is the load-bearing decision of this unit.** Roughly two
 dozen absences are PRODUCT decisions that neither the code nor the doctrine
 settles — whether the remote plane should carry the agent-facing memory surface
-(diary, tunnels, closets, hallways, wake-up, the kg write family). The
+(diary, tunnels, closets, hallways, wake-up). The
 alternative was inventing thirty-odd reasons, and **an inventory whose reasons
 were guessed reads as ruled while being fiction — strictly worse than no
 inventory, because it stops the next reader looking.** `Unruled` says nobody has
@@ -2970,6 +2975,60 @@ clone could see them. That is O37, committed one commit after quoting O37. The
 handover is where state lives; the ROADMAP is where FINDINGS live, and a
 governance unit is not exempt from the rule it is about.
 
+### M25 — CLOSED 2026-08-21: M6 left five surfaces saying the opposite, and three filings were wrong about the tree
+
+**M6's own drift, and it is mine.** M6 ruled that wing and room names travel
+on every security level and updated two surfaces. **Five published claims
+still stated the reversed contract** — twice in `website/src/observability.md`
+(54 lines apart, so the file contradicted itself), twice on
+`website/landing/index.html`, which is a product promise that disagreed with
+the shipped binary, and once in `website/src/observability.md`'s event list
+("(for hmac-only vaults) wing/room"). A sixth was an orchestrator comment
+justifying a correct decision with the now-false premise; the reason is
+cardinality and always was, so the reason moved and the code did not.
+
+**Why a sweep missed them.** The surfaces disagree in WORDING, not in a
+shared token — "suppressed", "aggregate counts only", "(for hmac-only
+vaults)". A search for the sentence that WAS fixed finds none of the four
+that were not. This is the "a search cannot verify its own blind spot" rule
+applied to a doc claim rather than a name: the question has to be the
+CONTRACT, not the phrasing.
+
+**Three filings re-verified and corrected** — the "verify the filing, not
+just the fix" rule, run on filings this branch itself wrote:
+
+* **O65** called the house page's `99.4%` GONE on a live fetch. It is
+  present; the `%` sits in a nested `<span>`, so a `99.4%` search returns
+  zero on the page that publishes it. The sweep material had written that
+  trap down in advance. Half the row is therefore still open, and it is the
+  half that matters: the figure names its benchmark and not its
+  CONFIGURATION.
+* **O67**'s premise that "roughly half are DATA-plane reads" is measured
+  wrong — 3 of 11, with **8 reachable from neither plane**, including
+  `kg/authority`, an `OPERATOR_ONLY` capability with no operator door in a
+  fleet. That premise was an argument for not acting, which is the most
+  expensive place for an unverified one.
+* **O66**'s kg WRITE family was `Unruled` while `docs/AGENTS.md` had ruled it
+  in the present tense. Now `Absence::Boundary` (34/7/1/21).
+
+**And a stale count the gate was designed not to see.**
+`docs/remote-server.md` said "All 36 routes" while `route()` dispatches 37 —
+`repair` (M17) was added to the list and not the sentence. O45's gate
+compares SETS in both directions **because a count passes when one route is
+swapped for another**, so it was green over a wrong count, correctly.
+
+**Gate:** the `prose figures` preflight now checks that count against
+`route()`'s arm count, with a no-match failure so a reworded sentence cannot
+silence it. Counterfactual executed — restored to 36, it prints
+`publishes 36 routes; tenant.rs dispatches 37` and exits 1. Doctrine added to
+`CLAUDE.md`: **a number in prose beside a gated list is the un-gated part of
+a gated claim.**
+
+**Deliberately not done.** The 21 remaining `Unruled` rows, O67's
+third-category decision and O65's house-page choice are product rulings the
+maintainer holds. Inventing them is exactly what `Absence::Unruled` exists to
+prevent, and doing it here would have made this entry the defect it is about.
+
 ---
 
 ## Open — releasable work, filed and not yet scheduled
@@ -3058,7 +3117,57 @@ so it has no vault-scoped context, and saying more about WHY a bearer failed
 is exactly what an unauthenticated caller must not learn. Those two pull in
 opposite directions and the resolution is a ruling, not a refactor.
 
-### O67 — the ops-parity gate counts against a hand-written universe, and it names 16 of 28
+### O67 — CLOSED 2026-08-21: the universe is derived, the partition is three-way, and eight unreachable capabilities are reachable
+
+**Ruled by the maintainer**: widen the data plane, and put `kg/authority` on
+the ops plane. Implemented, gated, counterfactualled, and exercised end to end.
+
+**What shipped.**
+
+* **`data_subpath_ok` gained seven whole shapes** — `taxonomy`, `kg/stats`,
+  `kg/entities`, `kg/query`, `kg/timeline`, `kg/receipts`,
+  `kg/canonical/{key}`. Verified before widening rather than assumed: a fact
+  cannot come from a quarantined drawer, because `refine` reads through
+  `recent()` (which excludes the reserved wing) and refuses outright when
+  scoped to it — so this is not a door around admission control. The
+  `request_names_reserved_wing` fence still covers every widened route, pinned
+  by an e2e arm.
+* **`kg/authority` went to `OPS_ROUTES`.** It is in the engine's
+  `OPERATOR_ONLY`, so it belongs on an operator plane and nowhere else — and
+  it was on **neither**, which made the golden-values tier drivable from no
+  door at all in a fleet.
+* **The universe is DERIVED from `tenant.rs`'s dispatch**, read out of the
+  engine's source, which is the only route two crates that deliberately do not
+  link have. Measured: 28 subpaths, against the 17 the literal named.
+* **The partition is three-way** — ops-reachable / deliberately-absent /
+  data-plane — and the third list is derived by ASKING `data_subpath_ok`
+  rather than restating it, so the two cannot disagree. Measured: 11 / 7 / 14,
+  **0 unclassified**. The four rows in two parts (`drawers`, `search`,
+  `export`, `import`) are absent from the OPS plane and present on the DATA
+  plane, which is the intended relationship; the gate therefore forbids
+  `ops ∧ data`, not any overlap.
+* **A direction nothing checked**: a row in `OPS_ROUTES` naming a subpath the
+  engine no longer dispatches now fails, instead of relaying a 404 while
+  reading as a live capability.
+
+**Two premise arms**, because a broken extractor agrees with any inventory:
+the dispatch reader must find more than twenty subpaths, and the data-plane
+partition must be non-empty — without the second, a broken `data_subpath_ok`
+reclassifies every tenant read as unexamined and the gate reports exactly what
+a fully-classified tree reports.
+
+**Counterfactual executed**: remove `kg/authority` from `OPS_ROUTES` and the
+gate names it and fails. That is the defect that was live for as long as the
+hand-written literal existed, and which this gate could not see.
+
+**Verified through the surface**: `tests/e2e-orchestrator.sh` gained ten
+checks (113 → 123) driving all seven widened reads with a tenant token,
+asserting `kg/authority` is refused on the data plane **and that the refusal
+names the ops plane** rather than 404ing as though the capability did not
+exist, and re-pinning the quarantine fence on a widened route.
+
+**The original filing follows, including the premise of its own that was
+measured wrong.** ↓
 
 Round-four **#33**, re-verified 2026-08-20 and MEASURED rather than restated.
 
@@ -3071,7 +3180,12 @@ direction — so the gate whose whole job is to force every capability into
 reachable or recorded-as-absent stays green over one nobody classified."*
 
 **Measured**: `tenant.rs`'s dispatch defines **28** distinct per-vault
-subpaths; the literal names **16**. Twelve are examined by nothing.
+subpaths; the literal names **17**. Eleven are examined by nothing.
+(Filed as 16/12 on 2026-08-20 and re-counted 2026-08-21: the entry was one
+behind its OWN fix, having been written before `repair` was added to the
+literal three paragraphs above. A count in prose beside the thing it counts
+goes stale at the speed of the next edit — which is this file's own rule,
+missed on the entry that exists to close a counting gap.)
 
 **And it happened during this very session, which is the evidence the entry
 needed.** M17 added `POST /v1/vaults/{id}/repair` and put it in `OPS_ROUTES`.
@@ -3083,44 +3197,157 @@ restated, not the fix.
 **Why this is filed rather than closed, and it is a DESIGN question rather than
 effort.** The obvious fix — derive `engine_ops` from `tenant.rs`'s route table,
 using the cross-crate source-reading idiom `the_orchestrator_and_the_engine_agree_on_every_orch_variable`
-already uses — makes the gate demand a ruling for all 28. But roughly half are
-DATA-plane reads (`search`, `drawers/{id}`, `taxonomy`, `stats`, `kg/query`,
-`kg/entities`, …) that the ops plane correctly does not carry because the `/t/*`
-data plane does. Recording each as "deliberately absent from the ops plane"
-would be true and useless, and would bury the four entries that mean something.
+already uses — makes the gate demand a ruling for all 28. Some are DATA-plane
+reads that the ops plane correctly does not carry because the `/t/*` data
+plane does; recording each as "deliberately absent from the ops plane" would
+be true and useless, and would bury the entries that mean something.
+
+**But that sentence was written from taste and it is measured WRONG, which
+changes what this entry is asking for** (2026-08-21). It read *"roughly half
+are DATA-plane reads (`search`, `drawers/{id}`, `taxonomy`, `stats`,
+`kg/query`, `kg/entities`, …)"*. `data_subpath_ok` admits a closed vocabulary
+of **seven whole shapes** — `drawers`, `drawers/{id}`, `search`, `stats`,
+`stats/history`, `export`, `import` — and nothing else. So of the eleven
+subpaths no inventory examines, **three** are data-plane reachable
+(`stats`, `stats/history`, `drawers/{id}`) and **eight are reachable from
+NEITHER plane**:
+
+`taxonomy`, `kg/stats`, `kg/entities`, `kg/query`, `kg/timeline`,
+`kg/receipts`, `kg/canonical/{key}`, `kg/authority`.
+
+A tenant asking for their own taxonomy gets a bare `"unknown route"` — not
+even the *"operator route: not reachable with a tenant token"* message, since
+`ops_route_ok` is false for them too. That is precisely the failure
+`data_subpath_ok`'s own neighbouring comment describes: *"a bare 'unknown
+route' made an operator capability that exists one plane over look like a
+capability the product does not have."*
+
+**`kg/authority` is the sharp one.** It is in the engine's `OPERATOR_ONLY`,
+so it is an operator capability by the tree's own classification — and in a
+fleet it is reachable from nowhere at all. The golden-values tier cannot be
+driven through the only door a fleet operator has. That is a capability gap
+this gate exists to surface and could not, and it is the concrete evidence
+the entry was filed without.
+
+**The lesson, and it is the reason the correction is written out rather than
+silently applied:** the false sentence was an ARGUMENT FOR NOT ACTING —
+"recording each would be true and useless" — and an argument for not acting
+is exactly where an unverified premise costs the most, because nothing
+downstream ever tests it. It listed `taxonomy` and `kg/query` as data-plane
+reads from plausibility; reading `data_subpath_ok` takes one minute and says
+otherwise.
 
 So the fix needs a THIRD category — reached-via-the-data-plane — and that is a
 classification decision, not a refactor. Inventing it unasked is exactly what
-M16 refused to do for its own twenty-four rows.
+M16 refused to do for its own unruled rows.
 
 **Shape of the fix.** Derive the universe from `tenant.rs`. Partition it three
-ways: ops-reachable, deliberately-absent-from-ops, and data-plane (which
-`data_subpath_ok` ALREADY defines, so that third list may be derivable too
-rather than hand-written — worth checking before writing one). **Gate:** the
-existing test, with the literal replaced by the derived set and a premise arm
-requiring it to find more than twenty subpaths, so a broken extractor cannot
-silently shrink the universe to nothing.
+ways: ops-reachable, deliberately-absent-from-ops, and data-plane — and the
+third list IS derivable, from `data_subpath_ok`, which is checked rather than
+assumed now. That closes 3 of the 11. **The remaining 8 are the actual
+question**, and they are not a classification chore:
 
-### O66 — twenty-four surface absences are measured and unruled
+* **A — widen `data_subpath_ok`.** If `taxonomy` and the kg READS belong to
+  the tenant, add them; the third category then derives cleanly and only
+  `kg/authority` needs its own ruling. This treats the eight as the defect
+  the gate was built to find, which is what they look like. It is a
+  security-boundary change to a closed allowlist that has already been
+  exploited once (the `drawers/../admission` traversal its comment records),
+  so it is a maintainer decision, not a refactor.
+* **B — rule the eight as absent from both planes.** Honest, cheap, and
+  records "unreachable" for capabilities a tenant plausibly should have.
+* **C — a fourth verdict**, reachable-from-neither, which makes the gap
+  countable without deciding it. Weakest: it is `Unruled` under another name,
+  and this entry already has that.
+
+`kg/authority` needs an answer under any of them, since it is an
+`OPERATOR_ONLY` capability with no operator door in a fleet.
+
+**Gate:** the existing test, with the literal replaced by the derived set and
+a premise arm requiring it to find more than twenty subpaths, so a broken
+extractor cannot silently shrink the universe to nothing. Add a second premise
+arm asserting the data-plane list is non-empty, or a broken `data_subpath_ok`
+extractor reclassifies every data read as unexamined and the gate reports the
+same thing a clean tree reports.
+
+### O66 — CLOSED 2026-08-21: every surface absence is ruled; `SURFACE_ABSENCES` holds no `Unruled` row
+
+**All 21 remaining rows were ruled by the maintainer on 2026-08-21, and all 21
+came back `Drift`.** The inventory is now 34 `Boundary`, 22 `Drift`, 7
+`Structural`, **0 `Unruled`** — gate-verified in both directions.
+
+The three questions and their answers:
+
+1. **The agent-facing memory surface (14 rows).** Ruled: **`/v1` carries the
+   full agent surface.** Three readings were put — full surface,
+   operator-and-search plane, or reads-yes-writes-no — and the first was
+   taken. `docs/remote-server.md`'s *"for programmatic (non-MCP) callers and
+   for orchestration platforms"* therefore stands as written; the ruling makes
+   it true rather than aspirational, and it did not need narrowing.
+2. **The backup family (3 rows).** Ruled: **all three reach `/v1`**, including
+   `restore`, over the option of keeping the destructive half on the engine
+   host. Two consequences are carried into O68 rather than waved away: they
+   are palace-scoped filesystem operations that do not fit `/v1/vaults/{id}/`
+   and need a new path family, and `restore` calls `remove_dir_all` on a live
+   vault directory, which under an open SQLite handle leaves a server serving
+   unlinked inodes on Linux. That is a blocker on the route, not a caveat.
+3. **The four singletons.** All ruled `Drift`. `kg rel` is a read shape not
+   composable from the entity-shaped `kg_query` the agent surface has;
+   `index status` is a pure read that `index push`'s egress boundary does not
+   cover; and `kg receipts` / `verify-forgetting` are present on `/v1` and
+   absent from MCP, which is the **inverse** of the operator-only shape — so
+   the operator-only argument never explained them.
+
+**The scheduling is deliberately NOT here.** Ruling that something is a gap
+and deciding when it closes are two questions, and the maintainer took the
+option that separates them. **O68** holds the second. A `Drift` row now MUST
+name a target — the variant's own doc has always said *"with a target"* — and
+`every_cli_capability_is_reachable_or_ruled_absent` enforces it, so a gap
+cannot become `Unruled` under a different variant by having nowhere to point.
+That gate arm was added with these rulings, because the risk it closes was
+raised as an objection to the option chosen and taking the option does not
+make the objection go away; it makes it something to gate.
+
+Counterfactual executed: strip the target from one row and the gate names it.
+
+**The original filing follows, kept because it is the record of what was
+undecided and of the evidence each ruling was made against.** ↓
 
 Filed by **M16**, which built the inventory that makes them visible and
 countable. Every row below is carried in `SURFACE_ABSENCES` as
 `Absence::Unruled` with a citation to this entry, and the gate REQUIRES that
 citation — so these cannot quietly become boundaries by being forgotten.
 
+**Three rows left this entry on 2026-08-21 without needing a ruling, and how
+they got in is the lesson.** `kg add|invalidate|supersede` were filed here
+because `docs/AGENTS.md`'s boundary was read as covering the FAMILY rather
+than each capability. Read again, it does not leave room for that: *"`/v1`
+has no DIRECT KG write routes except `POST …/kg/authority` … That is a
+present-tense boundary, not a future item."* A family boundary that names its
+one exception has decided every member. They are `Absence::Boundary` now,
+carrying the provenance argument the doc implies — a REST-asserted fact would
+be attributable to a bearer rather than to the named extractor whose identity
+sits inside the fact's HMAC. **`Unruled` is for what nobody has decided, not
+for what nobody looked up**, and asking the maintainer to re-decide something
+a document already settled is the cost of the difference. The doc gained the
+word "direct" in the same pass, because `POST …/refine` does create facts on
+this plane.
+
 **What needs deciding, in three groups.**
 
-**1. The agent-facing memory surface on `/v1` (17 rows).** `dedup`, `wake-up`,
+**1. The agent-facing memory surface on `/v1` (14 rows).** `dedup`, `wake-up`,
 `closets`, `hallways`, `diary write|read|agents`, `tunnel
-create|list|follow|delete|traverse`, `kg add|invalidate|supersede`,
-`drawer check-dup`, `drawer delete-by-source`. All are on CLI **and** MCP and
+create|list|follow|delete|traverse`, `drawer check-dup`,
+`drawer delete-by-source`. All are on CLI **and** MCP and
 absent from `/v1` — the classic two-of-three shape. The question is one
-question, not seventeen: **does the remote plane carry the agent-facing memory
+question, not fourteen: **does the remote plane carry the agent-facing memory
 surface, or is `/v1` deliberately the operator-and-search plane?** Either answer
-is defensible and the tree states neither. Note `docs/AGENTS.md` already
-carries a present-tense boundary for the kg WRITE family — *"`/v1` has no KG
-write routes except `POST …/kg/authority`"* — which settles three of these if
-it is meant as a rule rather than a description.
+is defensible and the tree states neither — and the one document that speaks
+to the plane's PURPOSE cuts toward carrying it: `docs/remote-server.md` calls
+`/v1` a surface *"for programmatic (non-MCP) callers and for orchestration
+platforms"*, which reads as drift rather than boundary. If the answer is that
+`/v1` is the operator-and-search plane, that sentence has to be narrowed in
+the same unit, or the document keeps promising what the plane refuses.
 
 **2. The backup family on `/v1` (3 rows).** `backup create|list|restore`. A
 fleet operator whose only door is `/v1` has no snapshot path and must reach the
@@ -3135,7 +3362,11 @@ as forgotten rather than fenced.
 `index status` (a pure READ, so `index push`'s egress boundary does not cover
 it); `kg receipts` (on CLI and `/v1`, absent from MCP — the INVERSE of the
 operator-only shape, so that reasoning does not explain it); and
-`verify-forgetting` (same inverse shape).
+`verify-forgetting` (same inverse shape). For the last two, `docs/AGENTS.md`
+frames `kg/receipts`' `ok` field as *"the field a scripted operator
+classifies a 200 on"* — an operator framing that would make the MCP absence a
+boundary if it is meant as one. It is evidence, not a ruling: unlike the kg
+WRITE family above, no sentence anywhere says these are absent by design.
 
 **Also recorded here because the M16 gate cannot reach them.** Its universe is
 derived from `main.rs`, so it is both-directional over the CLI axis only. These
@@ -3152,18 +3383,138 @@ citation with the argument. The existing `every_cli_capability_is_reachable_or_r
 already enforces that a non-`Unruled` row carries a reason of substance, so a
 ruling cannot land as a shrug.
 
-### O65 — the house page publishes a test count that is stale by 105
+### O68 — seventeen ruled gaps need a release, and `restore` needs a protocol before it can have one
+
+**Created by O66's rulings on 2026-08-21**, and it exists because the
+maintainer took the option that separates *is this a gap* from *when does it
+close*. Every row below is `Absence::Drift` in `SURFACE_ABSENCES` with
+`target O68`, so none of them is undecided — what is undecided is the release.
+
+**The 17 `/v1` routes** (14 agent-facing + 3 backup) and **5 MCP additions**
+(`kg rel`, `index status`, `kg receipts`, `verify-forgetting`, and `kg rel`'s
+`/v1` half). Counted from the inventory, not remembered: 22 `Drift` rows.
+
+**What each route owes, from the doctrine rather than invented here:**
+
+* A **`ReadOp` door** for every content-returning read (`wake-up`, `closets`,
+  `hallways`, `diary read`, `tunnel follow`), because `Read::Returned` is a
+  required witness — O50/O51's whole point is that a read that returns
+  verbatim content and records nothing is an exfiltration path.
+* **`Screen::Apply`** for every write (`diary write`, `tunnel create/delete`,
+  `delete-by-source`, `dedup --apply`), stated at the choke point. `tunnel
+  create`'s label is already in `admission::SCREENED_FIELDS` (O29), so the
+  screen exists; the route must reach it.
+* A **`mutates` classification**, which is automatic — the read-only gate
+  fails closed, so a new route is refused on a read-only server until someone
+  names it. That is the correct default and needs no work.
+* A row in `docs/AGENTS.md` §10 **and** `docs/remote-server.md`, since O45
+  gates both as sets in both directions, plus the route COUNT now gated
+  separately.
+* An e2e arm per route, per the definition of done.
+
+**The blocker, and it is real rather than a caveat.** `backup restore` calls
+`std::fs::remove_dir_all` on a live vault directory. On Linux that SUCCEEDS
+while a server holds an open SQLite handle, leaving the process serving
+unlinked inodes and writing them back over a restored vault — silent
+divergence between what the operator restored and what the engine serves. A
+route must close the handle first, or refuse while the vault is served. **Do
+not ship `POST …/backups/{name}/restore` without that protocol**; the ruling
+made the capability reachable, it did not make the hazard go away.
+
+Two smaller shape decisions the work owes: `backup list`/`create` are
+PALACE-scoped (list opens no vault at all), so they need a new
+`/v1/backups` family rather than a per-vault path; and `restore` currently
+derives the vault name by splitting the backup directory name on `-20`, the
+timestamp prefix, which is fragile enough that a route should not inherit it.
+
+**Gate:** the existing `every_cli_capability_is_reachable_or_ruled_absent`
+flips each row from `Drift` to `SURFACE_COMPLETE` as its route lands, and
+fails in both directions — so this entry cannot be declared done while a row
+still says `Drift`, and a row cannot be quietly moved without a route.
+
+### O65 — the house page publishes FOUR stale claims; the gate is built and the page edit is pending
+
+**Ruled 2026-08-21**: keep the figures, fix the values, qualify the benchmark.
+The gate that makes the ruling hold is BUILT and running
+(`tests/house-figures.sh`, wired as its own CI job). **The page edit itself is
+not made** — it is a different repository and a public site, so it waits on an
+explicit go.
+
+**Building the gate found two more claims this entry never asked about, and
+that is the entry's most useful finding.** O65 was scoped to *figures*, so it
+found figures. The same page announces a RELEASE in two places, and both had
+been two releases stale since 1.1.0 shipped on 2026-08-18:
+
+| claim | page says | truth |
+|---|---|---|
+| test count | `656` | **765** |
+| benchmark | `99.4%` labelled `LongMemEval R@5` | the `+MiniLM` column; shipped default is **95.0** |
+| release banner | `Undercroft 1.0 is out` | **v1.1.1** |
+| shipping badge | `Shipping · v1.0.0` | **v1.1.1** |
+| MCP tools | `34` | 34 — correct, and gated now so it cannot go stale silently |
+
+**A scoping phrase in a filed question decides what the answer can contain.**
+This project already writes that rule down for GATES — it is O29's lesson, and
+O32 was found by widening O29's own sibling sweep — and had never applied it to
+its own FILINGS. A filing is a question, and the version claims were outside
+the one this entry asked.
+
+**The gate.** `tests/house-figures.sh`: reads the `<div class="n">` ELEMENT and
+normalises, never the rendered value string (the `%` lives in a nested `<span>`,
+which is how a 2026-08-20 check concluded the benchmark figure had been
+removed); compares the test count and MCP-tool count to the tree; requires a
+benchmark tile to NAME its configuration without policing which number;
+compares both version claims to the latest PUBLISHED RELEASE via the public
+API, not to the workspace version, because the tree carries the next version
+during release prep. **Unreachable is a FAILURE, not a skip** — both premise
+arms executed against an invalid host and a page with no tiles.
+
+**It is a CI job rather than a preflight**, and that is the one design decision
+here: it is the only check in the tree needing the internet, and a network arm
+in `tests/battery.sh`'s preflights would fail for anyone working offline. The
+consequence is stated rather than discovered — it can go red on a pull request
+that touched nothing, because the house page is state this repo does not own.
+That is the signal. The alternative was eleven days.
+
+**Still open**: the page edit, and the sub-decision the ruling did not settle —
+whether the benchmark tile becomes `95.0` / `LongMemEval R@5 · hash, zero
+model` (the shipped default, matching this project's own landing page) or
+stays `99.4` / `LongMemEval R@5 · +MiniLM`. The gate passes either.
+
+**The original filing follows.** ↓
 
 Round-four **#42**, never filed, and it is **still true and now worse**. The
 house page at `sealcroft.com` serves `<div class="n">656</div> tests passing`;
-the tree runs **761**. The gap has WIDENED since round four measured it at
-656-vs-689.
+the tree runs **765**. The gap has WIDENED since round four measured it at
+656-vs-689. It is quoted here without a fixed delta on purpose: the heading
+said *"stale by 105"* for one day and was wrong the next, because the
+subtrahend moves every unit.
 
-**Verified live on 2026-08-20**, not inferred: fetched, and the tile read 656.
-The other half of the row — *"an unqualified 99.4% headline"* — is GONE; the
-only percentages the live page carries are CSS gradient stops. So half this
-row closed at some point without being recorded, which is its own small
-lesson.
+**The 2026-08-20 verification of the OTHER half was wrong, and the way it was
+wrong is the entry's most useful content.** It said: *"an unqualified 99.4%
+headline — is GONE; the only percentages the live page carries are CSS
+gradient stops."* Re-fetched 2026-08-21, the page serves:
+
+```html
+<div class="n">99.4<span style="font-size:.9rem">%</span></div>
+<div class="l">LongMemEval R@5</div>
+```
+
+The value and its `%` are split across a nested `<span>`, so a search for the
+string `99.4%` returns zero **on the page that publishes it** — and returning
+zero is indistinguishable from the figure being gone. This trap was written
+down before the mistake was made: `.handover/SWEEP4_FIX_PLAN.md` says *"The
+scraper MUST NOT match `99.4%` … Match the `<div class="n">` element and
+normalise."* A negative result is a claim about the method, not about the
+page.
+
+**And the substance did not close either.** The tile now carries a label
+(`LongMemEval R@5`) but still no CONFIGURATION: 99.4% is the `+MiniLM`
+column, and the zero-model hash embedder that actually ships measures
+**95.0%** — which is why this project's own landing page renders
+`95.0% (hash, zero model)`. The house's headline is 4.4 points above the
+product's own page and depends on an optional model download. That is the
+half of #42 that matters most and it is fully open.
 
 **Why nothing catches it.** The page lives in `sealcroft/sealcroft.github.io`,
 a different repository, so no gate here can reach it — and the `published
@@ -3180,7 +3531,18 @@ engine — or the two repositories gain a shared source for them, which means a
 published artifact one can read and the other consumes. **Gate:** whichever is
 chosen, a check in this repo that fails when the house page's published
 figures disagree with the tree, or the figures are gone and there is nothing
-to check.
+to check. That scraper must match the `<div class="n">` ELEMENT and normalise
+its text, never the rendered value string, and must fail when it finds no
+tiles at all — the premise-probe rule, on the reader that has already
+produced one false verdict here.
+
+**If the benchmark tile stays, it names its configuration**, matching what
+every in-repo surface already does: `95.0` labelled `LongMemEval R@5 · hash,
+zero model` (the shipped default), or `99.4` labelled `LongMemEval R@5 ·
++MiniLM`. Recommend the former — the house's headline must not be stronger
+than the product's own page, and must not depend on an optional model
+download. Its cost is stated rather than buried: the org's most visible
+number drops 4.4 points.
 
 **This is the O37 shape, and O37 is the entry this file calls "the most severe
 process failure".** Round four's D9 found the house site serving cleartext,

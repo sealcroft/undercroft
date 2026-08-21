@@ -1525,6 +1525,30 @@ if [ "$V1_FAIL" -ne 0 ]; then
 fi
 echo "ok    both /v1 route references match the dispatch exactly ($V1_N routes)"
 
+# The route COUNT in prose, which the set comparison above deliberately does
+# not check — "a count passes when one route is swapped for another" is why it
+# compares sets, and the cost of that correct choice is that the sentence
+# introducing the list is un-gated. It said 36 while the list beside it held
+# 37, from M17 (which added `POST …/repair` to the list and not to the
+# sentence) until 2026-08-21. A number in prose next to a gated list is the
+# un-gated part of a gated claim.
+V1_DOC_N=$(sed -nE 's/.*\*\*All ([0-9]+) routes\*\*.*/\1/p' docs/remote-server.md | head -1)
+if [ -z "$V1_DOC_N" ]; then
+  echo "FAIL  docs/remote-server.md: no '**All N routes**' sentence found."
+  echo "      Either it was reworded (update this reader) or deleted — a"
+  echo "      reader that matches nothing checks nothing."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+if [ "$V1_DOC_N" != "$V1_N" ]; then
+  echo "FAIL  docs/remote-server.md publishes $V1_DOC_N routes; tenant.rs dispatches $V1_N"
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    the published /v1 route count ($V1_DOC_N) is the dispatch's own"
+
 fi  # end of the host-side preflight block (`--no-preflight` skips it)
 
 if [ "$PREFLIGHT_ONLY" -eq 1 ]; then

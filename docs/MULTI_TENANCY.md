@@ -423,8 +423,8 @@ sequenceDiagram
 | `POST/GET /admin/tenants`, `DELETE /admin/tenants/{id}` | admin | tenant lifecycle: pick instance (least-loaded default) → create engine vault → record mapping → **return the token once** |
 | `GET /admin/tenants/{id}/stats` | admin | metadata-only stats relay (counts, sizes, chain head) via the stored engine creds — content stays behind the tenant's own token |
 | `POST /admin/tenants/{id}/migrate` | admin | live migration (below) |
-| `GET`/`POST /admin/tenants/{id}/ops/<subpath>` | admin | the **operator plane**: attested forgetting **and the verification of what it mints**, retention policy + sweep, wing trust, admission review, verify, anchor tightening, supersession receipts — forwarded to the tenant's engine over a closed vocabulary (`OPS_ROUTES` in `proxy.rs`). Deliberately admin-only: a tenant token must not rule on the admission queue that screened its own writes, nor assign the trust its wings are floored by. `POST …/ops/verify-forgetting` arrived in 1.1.0 (O14) and closes the half `forget` had been missing: a fleet could produce a right-to-erasure receipt through this plane and had no door anywhere to verify one |
-| `ANY /t/<subpath>` | data | tenant-token-routed proxy onto `/v1/vaults/{vault}/<subpath>` |
+| `GET`/`POST /admin/tenants/{id}/ops/<subpath>` | admin | the **operator plane**: attested forgetting **and the verification of what it mints**, retention policy + sweep, wing trust, admission review, verify, anchor tightening, supersession receipts — forwarded to the tenant's engine over a closed vocabulary (`OPS_ROUTES` in `proxy.rs`). Deliberately admin-only: a tenant token must not rule on the admission queue that screened its own writes, nor assign the trust its wings are floored by. `POST …/ops/verify-forgetting` arrived in 1.1.0 (O14) and closes the half `forget` had been missing: a fleet could produce a right-to-erasure receipt through this plane and had no door anywhere to verify one. `POST …/ops/authority` arrived in 1.2.0 (O67) for the same reason one capability over: the golden-values tier is `OPERATOR_ONLY` on the engine, so the data plane correctly refuses it — and it was on no ops route either, which left it drivable from **no door at all** in a fleet |
+| `ANY /t/<subpath>` | data | tenant-token-routed proxy onto `/v1/vaults/{vault}/<subpath>`, over a closed allowlist of whole shapes (`data_subpath_ok`): drawers, one drawer, search, stats, stats/history, export, import — and, since 1.2.0 (O67), the tenant's own `taxonomy` and knowledge-graph READS (`kg/stats`, `kg/entities`, `kg/query`, `kg/timeline`, `kg/receipts`, `kg/canonical/{key}`). Those seven were reachable from NEITHER plane and answered a bare `unknown route`, which reads as a capability the product does not have |
 
 The admin plane sits behind `UNDERCROFT_ORCH_ADMIN_TOKEN`; every auth
 failure is a uniform 401. The CLI (`instance-add`, `tenant-create`,
@@ -523,7 +523,7 @@ before the flip leaves the source authoritative and removes the partial
 copy. The import half is admission-screened like any other write — a
 migration used to be a re-admission of the whole corpus past the screen,
 because every export line carries a `vector` and a caller-supplied vector
-reached the raw writer (§4). The e2e suite (`tests/e2e-orchestrator.sh`, 113 checks,
+reached the raw writer (§4). The e2e suite (`tests/e2e-orchestrator.sh`, 123 checks,
 `docker compose run --rm orchestrator-e2e`) exercises the whole story
 against two live engine instances, including the source engine provably
 losing the vault after migration and a read replica converging on the

@@ -160,10 +160,35 @@ jobs:
       # ROADMAP M13.
       - run: bash tests/battery.sh --no-preflight tls-pins
 
+  house-figures:
+    name: House page figures match the tree
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # ROADMAP O65. The house page publishes figures about THIS engine from a
+      # repository with no CI that nothing here reads, so the drift is
+      # invisible on both sides: round four filed "656 tests" against a tree
+      # running 689, and eleven days later it was 765. Its sibling — the house
+      # serving cleartext — went the same way and is what O37 calls "the most
+      # severe process failure".
+      #
+      # **This is the only check in the tree that needs the INTERNET**, which
+      # is why it is a CI job rather than a `tests/battery.sh` preflight: the
+      # preflights run on every local battery and a network arm there would
+      # fail for anyone working offline. Unreachable is a FAILURE inside the
+      # script, never a skip — an unreachable page and an accurate one must
+      # not produce the same verdict.
+      #
+      # It can therefore go red on a pull request that touched nothing: the
+      # house page is state this repo does not own. That is the point. A red
+      # tick naming a stale published figure is the signal; the alternative is
+      # the eleven days.
+      - run: bash tests/house-figures.sh
+
   verdict:
     name: CI verdict
     runs-on: ubuntu-latest
-    needs: [preflight, lint, audit, trivy-fs, suites, site, trivy-image, tls-pins]
+    needs: [preflight, lint, audit, trivy-fs, suites, site, trivy-image, tls-pins, house-figures]
     if: always()
     steps:
       - name: Every job must have passed
@@ -179,8 +204,8 @@ jobs:
           # to `needs:`) is unreachable from here, because a workflow cannot
           # enumerate its own jobs; `tests/battery.sh`'s CI-inventory preflight
           # reads the file and closes it.
-          if [ "$n" -lt 8 ]; then
-            echo "the verdict covers only $n job(s) and must cover 8 —"
+          if [ "$n" -lt 9 ]; then
+            echo "the verdict covers only $n job(s) and must cover 9 —"
             echo "someone narrowed needs:, which is how a green tick stops meaning anything"
             exit 1
           fi
