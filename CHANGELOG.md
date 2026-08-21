@@ -49,6 +49,49 @@ anchor"). And I used a `rest_body_lacks` helper that did not exist; it does
 now, with a premise arm, because an empty response lacks every substring and a
 bare absence check would pass on a failed request.
 
+### re-verifying the one filing nobody had checked, and finding a live defect under it (M29)
+
+Every filing this branch took turned out to be wrong about something — O65
+called a live figure gone, O67's premise was measured false, O66 had three
+rows already ruled by a document. **O68 was the only one nobody had checked.**
+
+**Three arithmetic errors, all in one paragraph.** It said "17 `/v1` routes …
+5 MCP additions … 22 `Drift` rows". Measured against the inventory: the rows
+partition 17 `v1` / 2 `mcp` / 2 `mcp+v1`, so `/v1` owes **19** and MCP owes
+**4** — the old figures forgot that an `mcp+v1` row needs a route on each
+surface, and counted a `/v1` item inside the MCP total. And "22" **counted a
+comment**: the extractor matched `Absence::Drift` anywhere in the block and
+one match was prose. The real total is **21**.
+
+**Two stale comments M26 left in `parity.rs`** — the file whose entire job is
+stopping drift. One asserted in bold that `Absence::Drift` "has no instances
+today", which M26 made false by creating 21. The other still headed the block
+"Unruled: measured, and the decision is the maintainer's" above **zero**
+`Unruled` rows. Both are corrected in place rather than silently retitled,
+because a comment asserting a count, in this file, is the lesson.
+
+**And the blocker O68 described turned out to be a live defect on the shipped
+CLI, filed as O69.** It was recorded as "leaves a server serving unlinked
+inodes" — asserted, never tested. Tested: `backup restore --force` against a
+running `serve-http` succeeds at **exit 0**, the server keeps serving the
+unlinked database while disk holds the restored one, a later write is
+acknowledged `{"created":true}` into a file that no longer exists, and the
+vault ends **permanently unopenable** — `possible tampering`, exit 2, on both
+`vault list` and `verify`. That is reachable today with no `/v1` involved, so
+it needed its own entry rather than a line inside a filing about future
+routes.
+
+One correction inside the correction: a first reading of that run reported
+`verify` exiting 0 on the broken vault. That was a shell pipeline masking the
+exit code — the third such slip this session — not a defect. Unpiped, both
+commands exit 2 and the doctrine holds.
+
+O69 carries three options and records that one of them, an exclusive lock,
+does not survive inspection: you cannot hold a SQLite lock on a file you are
+about to unlink. It is left OPEN because it trades a certain silent
+unrecoverable failure against a possible false refusal on an incident path,
+which is a product judgement the doctrine does not settle.
+
 ### two open questions closed by measuring instead of asking (M28)
 
 Both were left as decisions for the maintainer. Both had answers in the code

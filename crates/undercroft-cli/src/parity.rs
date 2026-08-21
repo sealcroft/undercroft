@@ -446,14 +446,27 @@ pub const SURFACE_ABSENCES: &[(&str, &str, Absence, &str)] = &[
     // it CARRIED a `Drift` row here for `/v1` until M17 closed it by adding
     // `POST /v1/vaults/{id}/repair`. The row is gone because the absence is.
     //
-    // **`Absence::Drift` therefore has no instances today, and that is a
-    // result rather than dead vocabulary.** It means every absence on this
-    // axis is now either argued, structural, or openly unruled — nothing is
-    // a gap someone has simply not got to. The variant stays because the
+    // **`Absence::Drift` had no instances when M16 wrote this inventory, and
+    // that was reported here as a result.** It is no longer true: M26 ruled
+    // all 21 remaining `Unruled` rows and every one came back `Drift`, so the
+    // variant is now the largest single verdict on this axis after
+    // `Boundary`. The sentence stood for a day and was found by re-verifying
+    // the filing that quoted it — a comment asserting a COUNT, in the file
+    // whose whole job is to stop counts being asserted.
+    //
+    // What survives of the original point: the variant exists because the
     // doctrine's sentence is *"a boundary or a drift"*, and a vocabulary
-    // missing the word for the bad case cannot record the bad case.
+    // missing the word for the bad case cannot record the bad case. It is
+    // now carrying that weight rather than sitting unused.
 
-    // ---- Unruled: measured, and the decision is the maintainer's ----------
+    // ---- RULED 2026-08-21 (M26): all of these came back `Drift` -----------
+    // This block was headed "Unruled: measured, and the decision is the
+    // maintainer's" until every row in it was ruled, and the header outlived
+    // the state by one commit — there are now ZERO `Unruled` rows in this
+    // file. Kept as a lesson rather than silently retitled: a section header
+    // is a claim about what is under it, and it goes stale the moment the
+    // rows do.
+    //
     // Each row below is a capability reachable from the CLI and from MCP but
     // NOT from `/v1`. That is the classic two-of-three shape, and whether the
     // remote plane should carry the agent-facing memory surface is a PRODUCT

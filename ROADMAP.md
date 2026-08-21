@@ -1116,7 +1116,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**96** of the **111** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**97** of the **112** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -3485,16 +3485,101 @@ citation with the argument. The existing `every_cli_capability_is_reachable_or_r
 already enforces that a non-`Unruled` row carries a reason of substance, so a
 ruling cannot land as a shrug.
 
-### O68 — seventeen ruled gaps need a release, and `restore` needs a protocol before it can have one
+### O69 — `backup restore` against a live server DESTROYS the vault, today, on the shipped CLI
+
+**Measured 2026-08-21, not reasoned about.** This was filed inside O68 as a
+blocker on a `/v1` route that does not exist yet. That was the wrong place and
+the wrong severity: it is reachable now, from the shipped CLI, with no `/v1`
+involved.
+
+**What was run.** An hmac-only vault with one drawer (`ALPHA`), backed up.
+`serve-http` started on it. A second drawer (`BETA`) written through the
+server. Then `undercroft backup restore <name> --force` from another process,
+while the server ran.
+
+**What happened, in order:**
+
+1. `restore` **succeeded** — `Restored … -> vault 'rr'`, exit 0, no warning.
+2. The server kept serving the **unlinked** database: `records: 2`, and a
+   search still returned `BETA`. On disk the vault held 1 record. The two
+   disagreed and nothing said so.
+3. A further write through the server was acknowledged `{"created":true}` and
+   landed in the unlinked database — a success reported for a write that no
+   longer had a file.
+4. The vault then became **permanently unopenable**: `vault manifest failed
+   integrity verification — possible tampering`, **exit 2**, on `vault list`
+   AND `verify`. The server's post-restore writes were gone on restart.
+
+**Mechanism.** `BackupAction::Restore` does `remove_dir_all(&dst)` then
+`copy_dir(&src, &dst)` and never asks whether anyone holds the vault. A
+running server's SQLite handles keep pointing at the unlinked inodes while the
+restored files occupy the path, so the manifest it later anchors describes a
+database that is no longer there. The rollback detector then fires — correctly
+— on evidence the restore manufactured.
+
+**Exit codes are RIGHT and that is worth recording**, because a first reading
+of this run said otherwise: `verify` and `vault list` both exit 2 on the
+broken vault. The earlier "exit 0" was a shell pipeline masking the code, not
+a defect.
+
+**The decision, and why it is not mine to take.** Three options were drafted
+and one does not survive inspection:
+
+* **Refuse while held** — probe for a live holder (exclusive open, or a hot
+  `-wal`) and exit rather than proceed. Costs the ability to restore without
+  stopping the server, which during an incident is arguably the correct
+  constraint. Detection is a heuristic: a stale `-wal` from a crashed process
+  could refuse a legitimate restore, and that false positive lands on the one
+  path an operator reaches for under pressure.
+* **Document only** — state in `UPGRADING.md` and the runbook that the server
+  must be down; gate nothing. No false positives. But the present behaviour is
+  not "unsupported", it is silently destructive **with a success exit code**,
+  and documentation does not make an exit-0 honest.
+* **Exclusive lock — REJECTED on inspection.** You cannot hold a SQLite lock
+  on a file you are about to unlink: the lock lives in the file,
+  `remove_dir_all` removes it, and the copied database has no lock while the
+  server's handle is unaffected. It would serialise two restores and do
+  nothing about the actual failure. Recorded because it looked plausible.
+
+It trades a CERTAIN silent unrecoverable failure against a POSSIBLE false
+refusal on an incident path. That is a product judgement about which failure
+to own, and the doctrine does not settle it.
+
+**Gate, whichever is chosen:** an e2e arm that starts a server, restores
+beneath it, and asserts the chosen behaviour — a refusal that names the
+holder, or (under "document only") that the destructive outcome is at least
+reported rather than exiting 0. The reproduction above is the test.
+
+### O68 — nineteen ruled gaps need a release, and `restore` needs a protocol before it can have one
 
 **Created by O66's rulings on 2026-08-21**, and it exists because the
 maintainer took the option that separates *is this a gap* from *when does it
 close*. Every row below is `Absence::Drift` in `SURFACE_ABSENCES` with
 `target O68`, so none of them is undecided — what is undecided is the release.
 
-**The 17 `/v1` routes** (14 agent-facing + 3 backup) and **5 MCP additions**
-(`kg rel`, `index status`, `kg receipts`, `verify-forgetting`, and `kg rel`'s
-`/v1` half). Counted from the inventory, not remembered: 22 `Drift` rows.
+**19 `/v1` routes and 4 MCP tools**, over **21** `Drift` rows.
+
+**This paragraph said "17 `/v1` routes … 5 MCP additions … 22 `Drift` rows"
+and all three figures were wrong** — corrected 2026-08-21 by re-verifying the
+filing against the inventory, which is the fourth filing on this branch to
+turn out wrong about the tree. The rows partition by `absent_from`:
+
+| absent from | rows | needs |
+|---|---|---|
+| `v1` | 17 | a `/v1` route (14 agent-facing + 3 backup) |
+| `mcp` | 2 | an MCP tool (`kg receipts`, `verify-forgetting`) |
+| `mcp+v1` | 2 | **both** (`kg rel`, `index status`) |
+
+So `/v1` owes 17 + 2 = **19** and MCP owes 2 + 2 = **4**. The old figures
+undercounted `/v1` by forgetting that an `mcp+v1` row needs a route on each
+surface, and overcounted MCP by listing `kg rel`'s `/v1` half — a `/v1` item —
+inside the MCP total.
+
+**And "22" counted a COMMENT.** The extractor matched the string
+`Absence::Drift` anywhere in the block, and one match was a sentence in prose
+asserting that the variant had no instances. Two errors from one careless
+count: a wrong total, and a stale claim left standing because nothing read it.
+The real total is 21.
 
 **What each route owes, from the doctrine rather than invented here:**
 
@@ -3514,14 +3599,18 @@ close*. Every row below is `Absence::Drift` in `SURFACE_ABSENCES` with
   separately.
 * An e2e arm per route, per the definition of done.
 
-**The blocker, and it is real rather than a caveat.** `backup restore` calls
-`std::fs::remove_dir_all` on a live vault directory. On Linux that SUCCEEDS
-while a server holds an open SQLite handle, leaving the process serving
-unlinked inodes and writing them back over a restored vault — silent
-divergence between what the operator restored and what the engine serves. A
-route must close the handle first, or refuse while the vault is served. **Do
-not ship `POST …/backups/{name}/restore` without that protocol**; the ruling
-made the capability reachable, it did not make the hazard go away.
+**The blocker is REAL and is filed as O69, because it is not a blocker on
+this entry's routes — it is a live defect on the shipped CLI.** `backup
+restore` calls `remove_dir_all` on a live vault directory and never asks who
+holds it. Measured against a running `serve-http`: the restore succeeds at
+exit 0, the server keeps serving the unlinked database, a later write is
+acknowledged `{"created":true}` into a file that no longer exists, and the
+vault ends **permanently unopenable** at exit 2. This entry originally
+described that as "leaves a server serving unlinked inodes", which understated
+it and put it in the wrong place. **Do not ship
+`POST …/backups/{name}/restore` until O69 is settled**; the ruling made the
+capability reachable, it did not make the hazard go away, and the hazard turns
+out to predate the route.
 
 Two smaller shape decisions the work owes: `backup list`/`create` are
 PALACE-scoped (list opens no vault at all), so they need a new
