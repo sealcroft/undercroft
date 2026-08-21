@@ -3534,7 +3534,7 @@ flips each row from `Drift` to `SURFACE_COMPLETE` as its route lands, and
 fails in both directions — so this entry cannot be declared done while a row
 still says `Drift`, and a row cannot be quietly moved without a route.
 
-### O65 — the house page publishes FOUR stale claims; the gate is built and the page edit is pending
+### O65 — CLOSED 2026-08-21: the house page is correct, gated, and now a governance surface
 
 **Ruled 2026-08-21**: keep the figures, fix the values, qualify the benchmark.
 The gate that makes the ruling hold is BUILT and running
@@ -3598,10 +3598,39 @@ state, so it is a rule with exactly one instance and no history to test it
 against. That is the caveat this file requires be stated rather than implied.
 It belongs here, beside the gate it is about, until a second such gate exists.
 
-**Still open**: the page edit, and the sub-decision the ruling did not settle —
-whether the benchmark tile becomes `95.0` / `LongMemEval R@5 · hash, zero
-model` (the shipped default, matching this project's own landing page) or
-stays `99.4` / `LongMemEval R@5 · +MiniLM`. The gate passes either.
+**CLOSED 2026-08-21.** The page was fixed and live-verified: `767 tests`,
+`34 MCP tools`, `99.4% LongMemEval R@5 · +MiniLM` (the maintainer took the
+qualified-headline option over dropping to the shipped 95.0), banner and badge
+both at `v1.1.1`.
+
+**Then it went stale twice in one session** — M27 and M28 each added a test —
+and each time its CI job went red until a commit in the other repository fixed
+it. That is the gate working, and it is also a recurring cost that lands on
+every unit adding a test.
+
+**Dropping the volatile tile was proposed and REJECTED.** The recommendation
+here was to keep `34 MCP tools`, the benchmark and `0 bytes phoned home` and
+drop `tests passing`, since it is the only figure that moves often. The
+maintainer's ruling: *the house page is important, it should not be stale at
+all, and updating it is part of the updates always.* So the friction is
+accepted deliberately and the answer is to make the obligation CHEAP rather
+than to remove it:
+
+* `tests/house-figures.sh --update` patches the derivable tiles (test count,
+  MCP tools) and pushes, then waits for Pages and re-checks the **live** page
+  — a commit is not a deploy. It uses the caller's `gh` auth and is **never
+  run by CI**: a gate that can rewrite what it measures cannot fail, and CI
+  holding a write credential for a second repository is a far larger blast
+  radius than a stale number.
+* It deliberately does NOT patch the benchmark tile — which configuration the
+  house publishes is a product decision, not a number this tree computes —
+  nor the two release claims, which follow the published tag.
+* `CLAUDE.md` now names the house page in the definition of done and in the
+  release flow, so it is a governance surface with the standing of CHANGELOG
+  rather than something remembered.
+
+Verified in both directions before shipping: a deliberately staled copy fails
+the gate, the patched output passes it, and only the two derivable tiles move.
 
 **The original filing follows.** ↓
 

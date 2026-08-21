@@ -16,7 +16,19 @@
 # would fail for anyone working offline. It runs in CI, where the network is a
 # given. See the premise rule below for what it does when it cannot reach the
 # page — it does NOT pass.
+#
+# **`--update` writes.** Everything above describes the CHECK, which is what
+# CI runs and which touches nothing. `--update` is the operator half: it
+# patches the tiles that moved and pushes to the house repository, using the
+# CALLER's `gh` auth. It is deliberately never run by CI — a gate that can
+# rewrite the thing it measures cannot fail, and CI holding a write
+# credential for a second repository is a much larger blast radius than a
+# stale number. The check runs everywhere; the write runs when a person asks.
 set -u
+
+UPDATE=0
+[ "${1:-}" = "--update" ] && UPDATE=1
+HOUSE_REPO="${HOUSE_REPO:-sealcroft/sealcroft.github.io}"
 
 PAGE="${HOUSE_PAGE_URL:-https://sealcroft.com/}"
 PASS=0
@@ -165,8 +177,67 @@ fi
 
 echo ""
 echo "house-figures results: $PASS passed, $FAIL failed"
+
+if [ "$FAIL" -ne 0 ] && [ "$UPDATE" -eq 1 ]; then
+  echo ""
+  echo "== --update: patching the house page =="
+  command -v gh >/dev/null 2>&1 || { echo "FAIL  gh is not installed"; exit 1; }
+  src=$(gh api "repos/$HOUSE_REPO/contents/index.html" --jq '.content' 2>/dev/null | base64 -d)
+  sha=$(gh api "repos/$HOUSE_REPO/contents/index.html" --jq '.sha' 2>/dev/null)
+  if [ -z "$src" ] || [ -z "$sha" ]; then
+    echo "FAIL  could not read $HOUSE_REPO/index.html — is gh authenticated?"
+    exit 1
+  fi
+  # Only the tiles this script KNOWS how to derive. The benchmark headline is
+  # deliberately not patched: which configuration the house publishes is a
+  # product decision, not a number this tree can compute, and a script that
+  # silently rewrote it would be making that decision on its own.
+  patched="$src"
+  changed=0
+  for pair in "tests passing|$TRUE_TESTS" "MCP tools|$TRUE_MCP"; do
+    label="${pair%%|*}"; want="${pair#*|}"
+    cur=$(printf '%s' "$patched" \
+      | grep -oE "<div class=\"n\">[0-9]+</div><div class=\"l\">$label</div>" | head -1)
+    [ -z "$cur" ] && continue
+    new="<div class=\"n\">$want</div><div class=\"l\">$label</div>"
+    if [ "$cur" != "$new" ]; then
+      patched="${patched//$cur/$new}"
+      echo "  $label: $(printf '%s' "$cur" | grep -oE '>[0-9]+<' | tr -d '><') -> $want"
+      changed=$((changed + 1))
+    fi
+  done
+  if [ "$changed" -eq 0 ]; then
+    echo "FAIL  nothing this script can derive was stale — the remaining"
+    echo "      failure needs a human (the benchmark tile, or the release"
+    echo "      claims, which follow the published tag rather than this tree)"
+    exit 1
+  fi
+  printf '%s' "$patched" | base64 -w0 > /tmp/house.b64
+  gh api -X PUT "repos/$HOUSE_REPO/contents/index.html" \
+    -f message="published figures: $changed tile(s) refreshed from sealcroft/undercroft
+
+Pushed by tests/house-figures.sh --update. The figures are gated from that
+repository (its own CI job), so this page going stale turns that repo's CI
+red rather than sitting unnoticed." \
+    -f content="@/tmp/house.b64" -f sha="$sha" --jq '.commit.sha' >/dev/null || {
+      echo "FAIL  push to $HOUSE_REPO rejected"; exit 1; }
+  rm -f /tmp/house.b64
+  echo "  pushed. waiting for Pages, then re-checking the LIVE page —"
+  echo "  a commit is not a deploy, and this script verifies the deploy."
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    sleep 20
+    if bash "$0" >/dev/null 2>&1; then
+      echo "  live and correct after $((i * 20))s"
+      exit 0
+    fi
+  done
+  echo "FAIL  page still not serving the new figures after 200s"
+  exit 1
+fi
+
 if [ "$FAIL" -ne 0 ]; then
   echo "HOUSE FIGURES FAILED"
+  [ "$UPDATE" -eq 0 ] && echo "  (run 'bash tests/house-figures.sh --update' to patch the derivable tiles)"
   exit 1
 fi
 echo "HOUSE FIGURES OK"

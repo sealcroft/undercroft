@@ -2542,10 +2542,31 @@ had and was still bypassable on the surface most deployments use.
    drifts in behaviour. That half is yours.
 4. **Every governance surface updated in the same unit**: CHANGELOG, CLAUDE.md,
    ROADMAP, **the three `.handover/` files** (ignored by git, governance
-   nonetheless — see session-end hygiene), and whichever of docs/AGENTS.md,
-   docs/THREAT_MODEL.md, README, architecture/index.html, website/ carry the
-   claim you changed. A claim lives on every surface that states it, and an
-   UNCOMMITTED surface is the one nobody notices going stale.
+   nonetheless — see session-end hygiene), **the HOUSE PAGE at
+   `sealcroft.com` when a figure it publishes moves**, and whichever of
+   docs/AGENTS.md, docs/THREAT_MODEL.md, README, architecture/index.html,
+   website/ carry the claim you changed. A claim lives on every surface that
+   states it, and an UNCOMMITTED surface is the one nobody notices going
+   stale.
+   **The house page is the surface this rule keeps failing on, because it is
+   in ANOTHER REPOSITORY** (`sealcroft/sealcroft.github.io`, no CI of its
+   own) and so is invisible to every in-repo gate and to `git status`. It
+   published `656 tests` against a tree running 689, went unfixed for eleven
+   days, and had widened to 765 before anything noticed — its sibling defect,
+   the house serving cleartext, is what ROADMAP O37 calls "the most severe
+   process failure". **It is not optional and not a nice-to-have: it moves
+   with the unit that moves the number, exactly like CHANGELOG does.**
+   It publishes FOUR figures and only one of them moves often — the test
+   count, on nearly every unit that adds a test. The other three (MCP tools,
+   the benchmark headline, `0 bytes phoned home`) move rarely or never.
+   Dropping the volatile tile to remove that friction was PROPOSED and
+   REJECTED by the maintainer: the page is the org's front door, and a front
+   door that is quietly wrong is worse than one that costs a commit to keep
+   right.
+   **Do it with `bash tests/house-figures.sh --update`**, which reads the
+   truth from this tree, patches only the tiles that moved, and pushes. Run
+   it in the same unit, then verify the LIVE page rather than the commit —
+   Pages takes a minute or two, and `--update` waits for it.
 5. **The full Docker battery** at the final tree, with raw exit codes:
    `test`, `lint`, `obs-config`, `arch-check`, `e2e`, `orchestrator-e2e`,
    `e2e-telemetry`, `backends-e2e`, `site`, `tls-pins`. `cargo build -p <crate>` does **not** compile
@@ -2853,7 +2874,13 @@ unwritten because a half-correct verdict is worse than a known-wrong one.
   fact about the tag, and the tag does not exist yet) → PR → CI green →
   explicit maintainer approval → merge → tag `vX.Y.Z` → `gh release
   create` (the tag also fires release.yml: binaries + GHCR image) →
-  post-merge CI green → Pages live-verified. Version bumps touch
+  post-merge CI green → Pages live-verified → **the HOUSE PAGE
+  (`sealcroft.com`, a different repo) refreshed and live-verified**, which is
+  `bash tests/house-figures.sh --update` for the derivable tiles and a hand
+  edit for the two release claims, since those follow the published TAG
+  rather than this tree and so can only move after it exists. Its CI job goes
+  red until they do, which is the intended order rather than a nuisance.
+  Version bumps touch
   workspace `Cargo.toml` + `Cargo.lock` (via a Docker `cargo update
   --workspace` — battery images COPY source and never update the host
   lock), `.claude-plugin/plugin.json`, CHANGELOG, ROADMAP, `CLAUDE.md`'s
