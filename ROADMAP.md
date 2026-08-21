@@ -3212,11 +3212,61 @@ a scripted operator classifies a 200 on never needed the expensive half.
 — additive, default response unchanged, 13× cheaper for the poller that O67
 made possible by putting this route on the tenant plane.
 
-**Residual, stated:** `taxonomy` remains unpaged. It is not a regression and
-not the worst thing on that plane, but a caller still cannot bound it. Paging
-it is filed with O68's route work rather than done here, because changing a
-shipped response shape is a contract question and this unit had no ruling for
-it.
+**`taxonomy` stays UNPAGED — settled by measurement, not deferred** (2026-08-21).
+It was filed above as a residual for O68; that was premature, and the evidence
+says leave it alone.
+
+* **It is not an outlier.** Of the `/v1` reads, `list_drawers`, `kg_entities`
+  and `history` take `limit`/`offset`; `taxonomy`, `kg_receipts`, `kg_query`
+  and `supersessions` do not. The unpaged four are the whole-set-verdict
+  shapes. Paging taxonomy alone would make it inconsistent with its three
+  siblings, including `supersessions`, which this tree calls the drawer-level
+  analogue of `kg/receipts`.
+* **Growth is measured, not extrapolated from a neighbouring domain** — the
+  error M27 records. Four scales through a live `serve-http`:
+
+  | rooms | drawers | bytes | ms | B/room |
+  |---|---|---|---|---|
+  | 1,000 | 2,000 | 32,037 | 4.3 | 32.0 |
+  | 4,000 | 8,000 | 128,037 | 8.7 | 32.0 |
+  | 12,000 | 24,000 | 384,037 | 21.8 | 32.0 |
+  | 24,000 | 48,000 | 768,037 | 37.4 | 32.0 |
+
+  Exactly 32.0 B/room across a 24× range, so this extrapolation is safe in a
+  way the earlier one was not.
+* **`export` is on the same plane and is ~340× heavier** at equal corpus.
+  Paging taxonomy while `export` streams the whole vault next door would be
+  bounding the wrong thing.
+* **It is O(wings) queries, not per-row**: `taxonomy()` loops `rooms(&wing)`
+  over wings, so it is not the unindexed-inner-scan shape that made a `verify`
+  leg O(N) on 2026-08-10.
+
+Residual kept honestly: a caller still cannot bound the response, and at
+24,000 rooms it is 768 KB. If a deployment ever wants that bounded, the
+additive shape is `?limit=`/`?offset=` matching `list_drawers`, and it should
+land across all four unpaged routes at once rather than one of them.
+
+**The cost instrument is NOT wired into the battery, and the gate is
+STRUCTURAL instead — also settled by measurement.** The obvious enforcement is
+a ratio assertion. Measured over nine runs at 2,000 facts the full:tamper
+ratio is **12.8–14.1×**, and under four-way CPU contention it *tightens* to
+13.3–13.9× because both halves scale together — so the ratio is
+load-invariant where absolute milliseconds are not (those moved ~20%).
+
+That would make a sound gate at scale. It does not survive at a size a unit
+test can afford: at 100/200/300/500 facts the integrity half runs in
+0.1–0.3 ms and the ratio reads 8.0 / 16.0 / 17.0 / 13.0 — timer resolution,
+not signal. A battery runs each test once, and once over a noisy measurement
+is not a measurement.
+
+So the property is pinned structurally by
+`the_cheap_receipt_door_reads_no_drawers`: corrupt every cited drawer, and the
+cheap door must still answer while the full walk cannot. Deterministic,
+machine-independent, and it fails for the RIGHT REASON if a drawer read is
+ever added to the cheap path — where a timing gate would report only "slower".
+Counterfactual executed: smuggle a `get` into the loop and the gate names it.
+Cost measurement stays in `undercroft-bench receiptscale`, on demand, like
+every other instrument here.
 
 **The original filing follows, including the premise of its own that was
 measured wrong.** ↓

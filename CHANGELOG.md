@@ -49,9 +49,38 @@ anchor"). And I used a `rest_body_lacks` helper that did not exist; it does
 now, with a premise arm, because an empty response lacks every substring and a
 bare absence check would pass on a failed request.
 
-**Residual:** `taxonomy` is still unpaged. Not a regression, not the heaviest
-thing on that plane, but a caller cannot bound it. Filed with O68 rather than
-changed here — a shipped response shape is a contract question.
+### two open questions closed by measuring instead of asking (M28)
+
+Both were left as decisions for the maintainer. Both had answers in the code
+and the instruments, and asking would have pushed the grounding work across
+the desk.
+
+**`taxonomy` stays UNPAGED.** It is not an outlier — `taxonomy`,
+`kg_receipts`, `kg_query` and `supersessions` are all unpaged on `/v1`, while
+`list_drawers`, `kg_entities` and `history` page; the unpaged four are the
+whole-set-verdict shapes. Growth measured at four scales through a live
+server: **exactly 32.0 bytes/room** from 1,000 to 24,000 rooms, 768 KB and
+37 ms at the top. `export` sits on the same data plane and is ~340× heavier at
+equal corpus, so paging taxonomy would bound the wrong thing. And it is
+O(wings) queries, not the per-row inner scan that made a `verify` leg O(N) in
+August. Residual kept: a caller still cannot bound it, and if that ever
+matters the additive `?limit=`/`?offset=` should land across all four unpaged
+routes at once.
+
+**`receiptscale` stays an on-demand instrument; the property is gated
+STRUCTURALLY.** A ratio gate is sound at scale — 12.8–14.1× over nine runs at
+2,000 facts, *tightening* to 13.3–13.9× under four-way CPU contention, since
+both halves scale together while absolute milliseconds moved ~20%. It is not
+sound at unit-test size: at 100–500 facts the integrity half runs 0.1–0.3 ms
+and the ratio reads 8.0 / 16.0 / 17.0 / 13.0, which is timer resolution. A
+battery runs each test once, and once over a noisy measurement is not a
+measurement.
+
+So `the_cheap_receipt_door_reads_no_drawers` pins the actual property instead:
+corrupt every cited drawer, and the cheap door must still answer while the
+full walk cannot. Deterministic, machine-independent, and it fails for the
+right reason when a drawer read is added to the cheap path — where a timing
+gate would say only "slower". Counterfactual executed.
 
 ### every surface absence is ruled, eight fleet-unreachable capabilities are reachable, and the house page is gated (M26)
 

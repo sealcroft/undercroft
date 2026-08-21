@@ -4722,6 +4722,85 @@ mod tests {
     /// same vault verifies clean before the forgery and fails after, and the
     /// failure is attributed to the receipts leg specifically rather than to
     /// any of the other five.
+    /// ROADMAP O67. **The cheap door must read NO DRAWERS**, proved
+    /// structurally rather than by timing.
+    ///
+    /// The obvious gate is a ratio — assert the integrity half is N times
+    /// cheaper. Measured, that is the wrong instrument. The ratio is stable
+    /// at scale (12.8–14.1x over nine runs at 2,000 facts, and it TIGHTENS
+    /// to 13.3–13.9x under CPU contention because both halves scale
+    /// together), but at a size a unit test can afford — 100 to 500 facts —
+    /// the integrity half runs in 0.1–0.3 ms and the "ratio" swings 8x to
+    /// 17x on timer resolution alone. A gate there would be measuring
+    /// rounding, and `CLAUDE.md` is explicit that a battery runs each test
+    /// once, which for a noisy measurement is not a measurement.
+    ///
+    /// So this asserts the PROPERTY the optimisation rests on instead: make
+    /// every cited drawer unreadable, and the cheap door must still answer
+    /// while the full walk cannot. Deterministic, machine-independent, and it
+    /// fails for the right reason if someone ever adds a drawer read to the
+    /// cheap path — which a timing gate would report only as "slower".
+    ///
+    /// Cost measurement stays in `undercroft-bench receiptscale`, on demand,
+    /// like every other instrument in this tree.
+    #[test]
+    fn the_cheap_receipt_door_reads_no_drawers() {
+        let (dir, mut s) = store(SecurityLevel::Sealed);
+        let src = src_drawer("source words the cheap door must never need");
+        let src_id = src.id.clone();
+        s.upsert(&src).unwrap();
+        s.kg_add_receipted(
+            "a",
+            "rel",
+            "b",
+            None,
+            None,
+            0.8,
+            (&src_id, &src.content),
+            None,
+        )
+        .unwrap();
+        // PREMISE: intact, both doors agree and the walk really reads it.
+        assert_eq!(s.kg_verify_receipts().unwrap().len(), 1);
+        assert!(!s.kg_any_receipt_forged().unwrap());
+        drop(s);
+
+        // Corrupt the DRAWER's sealed content — not the receipt. Any path
+        // that fetches the cited drawer now fails its record HMAC; a path
+        // that does not fetch it is unaffected. That is the whole test.
+        let db = rusqlite::Connection::open(dir.path().join("vaults/kg-test/palace.db")).unwrap();
+        let n = db
+            .execute("UPDATE drawers SET content = X'00112233'", [])
+            .unwrap();
+        assert_eq!(n, 1, "premise: the corruption must have hit the drawer row");
+        drop(db);
+
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let s2 = PalaceStore::open(mgr.unlock("kg-test").unwrap()).unwrap();
+
+        // The cheap door answers, because it never goes near the drawer.
+        assert!(
+            !s2.kg_any_receipt_forged().unwrap(),
+            "the integrity door must answer from receipt tags alone — a drawer \
+             it cannot read must not be able to stop it, or it is not the cheap \
+             path it claims to be"
+        );
+
+        // COUNTERFACTUAL, and the half that makes the assertion above mean
+        // something: the full walk DOES touch that drawer, so on this same
+        // vault it must not come back with a clean per-fact verdict. If both
+        // doors behaved identically here, the test above would pass on an
+        // implementation that reads every drawer.
+        let full = s2.kg_verify_receipts();
+        let full_is_clean = matches!(&full, Ok(rows)
+            if rows.len() == 1 && rows[0].verdict == ReceiptVerdict::Verified);
+        assert!(
+            !full_is_clean,
+            "premise: the full walk must be affected by an unreadable cited \
+             drawer, or this vault does not distinguish the two paths at all"
+        );
+    }
+
     /// ROADMAP O67. The cheap integrity door must agree with the expensive
     /// walk on the ONE thing it claims to answer, and must not be fooled by
     /// the two states it deliberately does not report.
