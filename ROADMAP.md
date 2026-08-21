@@ -1116,7 +1116,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**93** of the **108** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**94** of the **109** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -2303,7 +2303,7 @@ no entry relying on absorbed text.** The gate got stricter and nothing broke,
 which is the outcome that deserves saying out loud rather than quietly.
 
 **A count in prose, inside the closure written about a count in prose.** O47's
-body said the gate "examines **47 of 60**". Measured, 93 of 108 — stale by
+body said the gate "examines **47 of 60**". Measured, 94 of 109 — stale by
 thirty-one entries. Both halves are GATED now by the `prose figures`
 preflight (two rows: the entries examined, and the level-3 headings that
 exist for it to have skipped). It caught its own arrival twice — once when the
@@ -2905,6 +2905,70 @@ entry a unit touched — but not its other ~6,000 lines. `AUDIT_CONTINUATION.md`
 it. `SESSION_START.md`'s first ~200 lines of 1,527. `NEXT_SESSION.md` and
 `UPGRADING.md` by grep only. The gap was real and it cost the three items
 above.
+
+### M24 — CLOSED 2026-08-21: four live instructions pointing at finished work, and a gate of mine that could pass on nothing
+
+**Raised by the maintainer**, asking whether the doctrine, the tasks and the
+ROADMAP had been read in detail *including the code*. M23 recorded what the
+honest answer had already cost. This is what actually reading them found.
+
+Four governance files read END TO END, every candidate put to an adversarial
+verifier told to default to refuted and to treat a dated or struck-through
+statement as correct-as-written. **48 candidates, 6 survived.**
+
+**Five in `.handover/NEXT_SESSION.md`, three of them LIVE INSTRUCTIONS.**
+
+* **§2 is titled "State — verified, not remembered" and holds a 2026-08-12
+  SNAPSHOT** — eight suites, five preflights, 711 cargo tests, 325 e2e, 12
+  crates, 79 variables, against a tree running ten, twelve, 765, 379, 13 and
+  81. It read as current because nothing said otherwise and §1's table beside
+  it IS maintained. An unmarked stale section and a maintained one must not
+  look alike — §1a's own rule, one file over.
+* **§4 closes *"What is left is one click in the GitHub web UI"***. True on
+  2026-08-13; O62–O67 were filed on this branch and O7, O23 and the 2.0.0 item
+  were open throughout.
+* ***"Pick the next unit by rank from `SWEEP4_SYNTHESIS.md`"*** — nothing left
+  to rank, and ranking work out of a GITIGNORED file is O37 in one sentence.
+* ***"Nothing in the repository runs that verifier … Run it in a container
+  until O10 lands"*** — every clause false since 2026-08-12, and a live
+  imperative pointing at the file §7 of the same document forbids trusting.
+* ***"By rank, Unit 1 is next: … `ok()` has five terms"*** — closed
+  2026-08-11. Counted: `ok()` has SIX terms. It stood as the standing "do this
+  next" for ten days after the work shipped.
+
+**One in tracked `UPGRADING.md`, and it is the one that could mislead a
+deployment.** *"FOUR entries are the exception"*, closing *"everything else in
+this section is a misconfiguration caught at start-up, and for those, `config
+check` exiting 0 … means none of them affect you."* Classified all sixteen
+1.1.0 entries: **eight** are start-up refusals and **eight** are not. The four
+missing are the ones a script notices — a cleartext engine URL refused at
+REGISTRATION, `instance-remove`'s exit code, an attestation refusal, and usage
+errors exiting 1 rather than 2 **on every command**. A reader who ran `config
+check`, saw 0 and trusted that sentence would have concluded those four could
+not affect them.
+
+**A weakness of mine, and it is the one that matters.** M18's e2e arm ran
+`"$BIN" --read-only stats >/dev/null 2>&1 || true` before comparing the vault
+byte for byte. Had that flag ever stopped PARSING, both commands would fail
+instantly, touch nothing, and the comparison would pass **having tested
+nothing** — `|| true` doing the swallowing. That is *"a counterfactual that
+fails to apply still prints a pass"*, written two units after quoting the rule.
+The arm asserts the flag runs before the comparison is believed.
+
+**One lead REFUTED by measurement, recorded because a false alarm costs the
+next reader as much as a miss.** The cross-check flagged that M18's global
+`--read-only` might collide with `serve-*`'s own flag and hand an operator a
+WRITABLE server. Measured on a real vault: no flag → writable, `serve-http
+--read-only` → read-only, `--read-only serve-http` → read-only. They compose.
+The first probe said the flag did not parse at all — the STALE BINARY hazard,
+caught by a freshness probe before anything was concluded from it.
+
+**And this entry exists because its own absence was the same defect.** The
+fixes shipped in `bd4e447` with the findings recorded in the commit message and
+in `.handover/`, which is gitignored — so four of the six lived nowhere a fresh
+clone could see them. That is O37, committed one commit after quoting O37. The
+handover is where state lives; the ROADMAP is where FINDINGS live, and a
+governance unit is not exempt from the rule it is about.
 
 ---
 

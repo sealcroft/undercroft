@@ -7,6 +7,35 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### four live instructions pointing at finished work, and a gate of mine that could pass on nothing (M24)
+
+Reading the governance files end to end — after admitting they had only been
+grepped. 48 candidates, **6 survived** adversarial refutation.
+
+Five in `.handover/NEXT_SESSION.md`, three of them live instructions: a
+2026-08-12 state snapshot titled "verified, not remembered" beside a
+maintained table with nothing distinguishing them; "what is left is one click
+in the GitHub web UI" (O62–O67 say otherwise); "pick the next unit by rank from
+`SWEEP4_SYNTHESIS.md`" (nothing left, and it is gitignored); "nothing in the
+repository runs that verifier… until O10 lands" (closed 2026-08-12, tracked,
+preflighted); and "Unit 1 is next… `ok()` has five terms" (closed 2026-08-11,
+and `ok()` has six).
+
+**One in `UPGRADING.md`, and it is the one that could mislead a deployment.**
+"FOUR entries are the exception", closing "everything else… is a
+misconfiguration caught at start-up, and for those, `config check` exiting 0
+means none of them affect you." Classified all sixteen 1.1.0 entries: **eight**
+are start-up refusals, **eight** are not. The four missing are the ones a
+script notices — including **usage errors exiting 1 rather than 2 on every
+command**.
+
+**Reported as mine:** M18's e2e arm ran the command under `|| true` before
+comparing the vault byte for byte, so had the flag ever stopped parsing the
+comparison would have passed having tested nothing. It asserts the flag runs
+first now. And one lead was **refuted by measurement** — the global
+`--read-only` composes correctly with `serve-*`'s own flag; the probe that said
+otherwise was reading a stale binary.
+
 ### M18 introduced the defect M20 was fixing, and three units owed UPGRADING entries (M23)
 
 Raised by the maintainer, asking whether the doctrine and the ROADMAP had been
