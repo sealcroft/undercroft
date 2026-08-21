@@ -1271,7 +1271,18 @@ rm -f "$RO_VAULT/vault.json.next"
 # as above, driven through the binary a responder actually types.
 printf '{"half-written":' > "$RO_VAULT/vault.json.next"
 CLI_RO_BEFORE="$(cd "$RO_VAULT" && md5sum palace.db vault.json vault.json.next | sort)"
-"$BIN" --read-only stats >/dev/null 2>&1 || true
+# PREMISE, and it is the reason this is not two bare `|| true` lines. If the
+# global `--read-only` ever stopped PARSING, both commands would fail
+# instantly, touch nothing, and the byte-comparison below would pass having
+# tested nothing — "a counterfactual that fails to apply still prints a pass",
+# with `|| true` doing the swallowing. The flag must WORK for the comparison
+# to mean anything, so assert that first.
+if "$BIN" --read-only stats >/dev/null 2>&1; then
+  echo "ok    premise: the global --read-only flag parses and runs"; PASS=$((PASS+1))
+else
+  echo "FAIL  premise: --read-only was rejected, so the arm below tests nothing"
+  "$BIN" --read-only stats 2>&1 | head -2 | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
 "$BIN" --read-only vault list >/dev/null 2>&1 || true
 CLI_RO_AFTER="$(cd "$RO_VAULT" && md5sum palace.db vault.json vault.json.next 2>&1 | sort)"
 if [ "$CLI_RO_BEFORE" = "$CLI_RO_AFTER" ]; then

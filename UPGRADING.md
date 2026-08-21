@@ -363,11 +363,21 @@ What they can do is stop a **misconfigured** deployment at start-up, which is
 why every one is listed here and detectable in advance by
 `undercroft config check`.
 
-**FOUR entries are the exception to both sentences above, and they are
+**EIGHT entries are the exception to both sentences above, and they are
 called out here rather than left to be discovered inside them.** Each changes
 what a **running, correctly-configured** deployment returns, so none is a
 start-up refusal and `config check` can see none of them — there is no
 declaration that fails to parse.
+
+**This said FOUR until 2026-08-21, and the closing sentence below it — *"everything
+else in this section is a misconfiguration caught at start-up"* — was therefore
+false about four entries.** Counted rather than recalled: the section holds
+SIXTEEN entries; eight are start-up refusals a bad declaration triggers, and
+eight are not. The four that were missing are the last four bullets below, and
+they are the ones a script notices: two change an EXIT CODE, and one of those
+changes it on **every command**. A reader who ran `config check`, saw exit 0,
+and trusted the closing sentence would have concluded those four could not
+affect them.
 
 * *"`/metrics` carries no vault-labelled series when assertions are
   declared"* — a scrape that parsed those gauges will find them absent. Still
@@ -387,6 +397,18 @@ declaration that fails to parse.
   `UNDERCROFT_ADMISSION=quarantine`, a save whose wing or room name trips the
   detector now quarantines even when its text is clean; and `taxonomy`,
   `list_wings` and `PalaceStats.wings` no longer include the reserved wing.
+
+* *"A cleartext engine URL is refused at registration"* — the refusal happens
+  when `instance-add` runs, not at start-up, so a fleet whose config is
+  perfectly valid still sees a registration it used to accept rejected.
+* *"`instance-remove` of an unknown name exits non-zero"* — an idempotent
+  teardown script that removed the same instance twice used to see 0.
+* *"A forgetting attestation carrying a signature but no sender is refused"* —
+  a client presenting that document sees a refusal where it saw a verdict.
+* *"Usage errors now exit 1 rather than 2"* — **on every command**. A wrapper
+  that treated 2 as this project's integrity verdict was reading a typo as a
+  tamper alarm; correcting that changes what every mistyped invocation
+  returns.
 
 Everything else in this section is a misconfiguration caught at start-up, and
 for those, `config check` exiting 0 against your environment means none of
