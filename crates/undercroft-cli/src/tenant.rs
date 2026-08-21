@@ -1518,7 +1518,38 @@ impl Tenancy {
     /// on would not have added up to the list beside it.
     fn kg_receipts(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
         self.assert_or_401(id, req, now)?;
+        let integrity_only = matches!(
+            query_param(req, "integrity_only").as_deref(),
+            Some("1" | "true")
+        );
         let store = self.store_for(id)?;
+        // **The cheap door, added because this route is now reachable with a
+        // TENANT token** (ROADMAP O67) and monitoring is its most frequent
+        // caller. `ok` is `tampered == 0`, and `Tampered` is decided by one
+        // HMAC over the receipt canonical — it reads no drawer. The full walk
+        // additionally decrypts every cited drawer to separate verified /
+        // source_changed / dangling, which no integrity decision reads.
+        //
+        // Measured by `undercroft-bench receiptscale` on a sealed vault:
+        // 8.6 us/fact for the full walk against 0.7 us/fact for this, so a
+        // poller asking "is this graph sound" stops paying a corpus decrypt
+        // per poll. Both are linear; this is a constant-factor fix and is
+        // described as one rather than as a fix for an unbounded route.
+        //
+        // ADDITIVE: absent the parameter the response is byte-identical to
+        // what shipped, which is what keeps 1.2.0 a MINOR.
+        if integrity_only {
+            let forged = store.kg_any_receipt_forged().map_err(store_err)?;
+            return Ok((
+                200,
+                Body::Json(json!({
+                    "ok": !forged,
+                    // Named so nobody reads this as the full verdict set: it
+                    // answers one question and says which.
+                    "checked": "receipt_tags",
+                })),
+            ));
+        }
         let receipts = store.kg_verify_receipts().map_err(store_err)?;
         let mut summary = serde_json::Map::new();
         for verdict in [

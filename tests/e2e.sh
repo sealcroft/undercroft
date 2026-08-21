@@ -1518,6 +1518,23 @@ rest_code() { # <name> <expected-code> -- <curl args...>
   if [ "$code" = "$want" ]; then echo "ok    $name"; PASS=$((PASS+1))
   else echo "FAIL  $name — code $code (wanted $want)"; FAIL=$((FAIL+1)); fi
 }
+rest_body_lacks() { # <name> <forbidden-substr> -- <curl args...>
+  # The negative half of `rest_body`. It carries a PREMISE: an empty body
+  # lacks every substring, so a request that failed outright would "pass" a
+  # bare absence check — the "a checker that cannot run reports the same
+  # thing as a clean tree" trap, in assertion form.
+  local name="$1" sub="$2"; shift 2; [ "$1" = "--" ] && shift
+  local out; out="$(curl -s "$@" 2>&1)"
+  if [ -z "$out" ]; then
+    echo "FAIL  $name — empty response; an absence proved nothing"
+    FAIL=$((FAIL+1))
+  elif grep -qF "$sub" <<<"$out"; then
+    echo "FAIL  $name — present but must not be: $sub"
+    echo "$out" | sed 's/^/      /'; FAIL=$((FAIL+1))
+  else
+    echo "ok    $name"; PASS=$((PASS+1))
+  fi
+}
 
 # ROADMAP M3, and it must be the FIRST request that touches this vault.
 # `store_for` opens it, that open fast-forwards the anchor, and until this
@@ -1648,6 +1665,26 @@ rest_body "kg receipts summary complete" '"unreceipted"' -- \
 # `ok`. Its self-described analogue `/supersessions` gained the field and
 # this one did not, in the same file.
 rest_body "kg receipts carries a verdict" '"ok":true' -- \
+  "$API/vaults/acme/kg/receipts" -H "X-Vault-Assertion: $(sign acme)"
+# ROADMAP O67 — the cheap integrity door. `ok` is `tampered == 0`, and a
+# forged receipt is decided by one HMAC over the receipt canonical, reading no
+# drawer; the full walk additionally decrypts every cited source to separate
+# verified / source_changed / dangling, which no integrity decision reads.
+# Measured by `undercroft-bench receiptscale`: 8.6 us/fact against 0.7.
+# It matters because O67 made this route reachable with a TENANT token, and
+# monitoring is its most frequent caller.
+rest_body "kg receipts integrity_only answers ok" '"ok":true' -- \
+  "$API/vaults/acme/kg/receipts?integrity_only=1" -H "X-Vault-Assertion: $(sign acme)"
+rest_body "kg receipts integrity_only names what it checked" '"checked":"receipt_tags"' -- \
+  "$API/vaults/acme/kg/receipts?integrity_only=1" -H "X-Vault-Assertion: $(sign acme)"
+# It must NOT smuggle the expensive payload back: a caller that asked for the
+# cheap door and got the full list would pay the corpus scan anyway, which is
+# the whole defect wearing a query parameter.
+rest_body_lacks "kg receipts integrity_only omits the walk" '"receipts"' -- \
+  "$API/vaults/acme/kg/receipts?integrity_only=1" -H "X-Vault-Assertion: $(sign acme)"
+# ADDITIVE: without the parameter the response is what shipped, so 1.2.0
+# stays MINOR. Asserted rather than assumed.
+rest_body "kg receipts default still carries the full walk" '"receipts"' -- \
   "$API/vaults/acme/kg/receipts" -H "X-Vault-Assertion: $(sign acme)"
 # The verify route reports the sixth leg too, so a caller can see WHY a
 # vault failed rather than only that it did.

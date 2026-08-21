@@ -7,6 +7,52 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### a corpus test I had not run, an estimate wrong by 400×, and the cheap half of a receipt walk (M27)
+
+**Asked whether a real-corpus test had been run: it had not.** That is
+definition-of-done item 6, and skipping it is what this entry is about.
+
+Run: 3,482 real sealed drawers, five wings, 3,020 rooms, through a live
+`serve-http`, timing every route O67 put on the tenant data plane. `taxonomy`
+is the largest at **102 KB** and is unpaged. The instinct was that O67 had put
+a new unbounded cost class on the tenant plane. **Measured, wrong**: `export`
+was already there and returns **19 MB in 341 ms** — a full-corpus decrypt on
+the same token, 188× heavier. No new cost class.
+
+**`kg/receipts` was not tested by that run**, and answered in 4 ms because the
+graph was empty. Its cost was then estimated from an HTTP `GET /drawers/{id}`
+at ~3.5 ms/fact — a request round-trip used as the price of an in-process row
+read. **Wrong by ~400×.** Measured with a new instrument: 8.6 µs/fact for the
+full walk, 0.7 µs/fact for the integrity half; 8,000 facts is **69 ms**, not
+28 seconds. It is a constant-factor optimisation and is described as one.
+
+**`undercroft-bench receiptscale`** — deterministic, no dataset, no LLM, with
+a premise arm that fails on an empty graph. It exists because `refine` and the
+bench are the only producers of receipted facts in the tree, so the route's
+cost could not previously be exercised by any test at any scale; a 1-drawer
+e2e was its whole coverage.
+
+**`?integrity_only=1` on `GET /v1/…/kg/receipts`.** A forged receipt is one
+HMAC over `receipt_canonical` and reads no drawer; the drawer decrypt only
+separates `verified`/`source_changed`/`dangling`, which no integrity decision
+reads. Since `ok` is `tampered == 0`, the field a scripted operator classifies
+a 200 on never needed the expensive half. Additive — the default response is
+byte-identical, which keeps this MINOR. Tested both ways: the cheap door
+catches a forged tag and stays silent on a legitimately edited source, because
+a false alarm is how operators learn to ignore alarms.
+
+**Two defects of mine while writing it.** Inserting the new test split a
+`#[test]` from the function below it, silently making
+`a_forged_fact_receipt_fails_the_vault_verdict` dead code — the trap
+`CLAUDE.md` documents in as many words ("read what is ADJACENT to the
+anchor"). And I used a `rest_body_lacks` helper that did not exist; it does
+now, with a premise arm, because an empty response lacks every substring and a
+bare absence check would pass on a failed request.
+
+**Residual:** `taxonomy` is still unpaged. Not a regression, not the heaviest
+thing on that plane, but a caller cannot bound it. Filed with O68 rather than
+changed here — a shipped response shape is a contract question.
+
 ### every surface absence is ruled, eight fleet-unreachable capabilities are reachable, and the house page is gated (M26)
 
 The three rulings that were waiting on the maintainer, taken and implemented.

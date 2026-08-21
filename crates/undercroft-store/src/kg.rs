@@ -2195,6 +2195,56 @@ impl PalaceStore {
     /// import whose source drawer is absent), and `verify_supersessions` —
     /// the same walk one level down — had always selected on the link for
     /// exactly this reason.
+    /// **Is any fact's receipt FORGED** — the integrity half of
+    /// [`kg_verify_receipts`], without the corpus-sized half.
+    ///
+    /// ROADMAP O67. The full walk decides two different things per fact, and
+    /// they cost three orders of magnitude apart. Whether a receipt was
+    /// forged is one HMAC over `receipt_canonical(id, drawer, fp)` and reads
+    /// **no drawer**. Whether the cited source has since CHANGED requires
+    /// fetching that drawer, which on a sealed vault is a decrypt plus a
+    /// record-HMAC verify — and it is the only reason the walk is O(corpus).
+    ///
+    /// `ok` on `/v1 …/kg/receipts` is `tampered == 0`, and `Tampered` is
+    /// decided entirely by the tag. So the field a scripted operator
+    /// classifies a 200 on never needed the expensive half. This is that
+    /// answer, and nothing else.
+    ///
+    /// Deliberately a BOOL rather than a per-fact list: a caller that wants
+    /// to know WHICH fact is forged is asking a forensic question and can pay
+    /// for the full walk. A caller asking "is this vault's graph sound" is
+    /// asking a monitoring question, and monitoring must not cost a corpus
+    /// scan per poll.
+    ///
+    /// Note what this deliberately does NOT report: `Dangling` (the cited
+    /// drawer is gone) and `SourceChanged` (it was edited). Both need the
+    /// drawer. Neither is a forged receipt — they are true statements about a
+    /// vault whose contents moved — and neither sets `ok` false today, so
+    /// omitting them changes no verdict.
+    pub fn kg_any_receipt_forged(&self) -> Result<bool, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, source_drawer_id, source_fp, receipt_tag
+             FROM kg_triples
+             WHERE receipt_tag IS NOT NULL AND source_drawer_id IS NOT NULL
+               AND source_fp IS NOT NULL
+             ORDER BY seq",
+        )?;
+        type Row = (String, String, Vec<u8>, Vec<u8>);
+        let rows: Vec<Row> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+            .collect::<Result<_, _>>()?;
+        for (id, did, fp, tag) in rows {
+            if self
+                .vault
+                .verify_tag(&receipt_canonical(&id, &did, &fp), &tag)
+                .is_err()
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     pub fn kg_verify_receipts(&self) -> Result<Vec<ReceiptStatus>, StoreError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, source_drawer_id, source_fp, receipt_tag
@@ -4672,6 +4722,82 @@ mod tests {
     /// same vault verifies clean before the forgery and fails after, and the
     /// failure is attributed to the receipts leg specifically rather than to
     /// any of the other five.
+    /// ROADMAP O67. The cheap integrity door must agree with the expensive
+    /// walk on the ONE thing it claims to answer, and must not be fooled by
+    /// the two states it deliberately does not report.
+    ///
+    /// Both directions matter. If it under-reports, a forged citation passes
+    /// a monitoring poll — the defect O67's own route already had once, when
+    /// `ok` existed and nothing read it. If it OVER-reports, an ordinary
+    /// edited source becomes a tamper alarm, which is the false-positive that
+    /// makes operators stop reading alarms.
+    #[test]
+    fn the_cheap_receipt_door_agrees_with_the_full_walk() {
+        let (dir, mut s) = store(SecurityLevel::Sealed);
+        let src = src_drawer("source words for the receipt");
+        let src_id = src.id.clone();
+        s.upsert(&src).unwrap();
+        s.kg_add_receipted(
+            "a",
+            "rel",
+            "b",
+            None,
+            None,
+            0.8,
+            (&src_id, &src.content),
+            None,
+        )
+        .unwrap();
+
+        // PREMISE: the graph is non-empty, or every assertion below passes
+        // over nothing — which is exactly how this route came to be measured
+        // at 4 ms against an empty graph and called fast.
+        assert_eq!(
+            s.kg_verify_receipts().unwrap().len(),
+            1,
+            "premise: the walk must have a receipted fact to judge"
+        );
+        assert!(
+            !s.kg_any_receipt_forged().unwrap(),
+            "intact: nothing forged"
+        );
+
+        // A source that was legitimately EDITED is `SourceChanged`, not a
+        // forgery: the receipt still binds what it bound. The cheap door must
+        // stay quiet, or it manufactures alarms out of ordinary edits.
+        let mut edited = src.clone();
+        edited.content = "source words for the receipt, revised".into();
+        s.upsert(&edited).unwrap();
+        let walk = s.kg_verify_receipts().unwrap();
+        assert_eq!(
+            walk[0].verdict,
+            ReceiptVerdict::SourceChanged,
+            "premise: an edited source is SourceChanged"
+        );
+        assert!(
+            !s.kg_any_receipt_forged().unwrap(),
+            "an edited source is not a forged receipt — reporting it as one is a false alarm"
+        );
+        drop(s);
+
+        // Now the real forgery, and the cheap door must catch it.
+        let db = rusqlite::Connection::open(dir.path().join("vaults/kg-test/palace.db")).unwrap();
+        db.execute(
+            "UPDATE kg_triples SET receipt_tag = X'0011' WHERE receipt_tag IS NOT NULL",
+            [],
+        )
+        .unwrap();
+        drop(db);
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let s2 = PalaceStore::open(mgr.unlock("kg-test").unwrap()).unwrap();
+        assert!(
+            s2.kg_any_receipt_forged().unwrap(),
+            "a forged receipt tag must be caught by the cheap door too"
+        );
+        // And it agrees with the expensive walk, which is the whole contract.
+        assert_eq!(s2.verify().unwrap().tampered_receipts(), 1);
+    }
+
     #[test]
     fn a_forged_fact_receipt_fails_the_vault_verdict() {
         let (dir, mut s) = store(SecurityLevel::Sealed);

@@ -3166,6 +3166,58 @@ asserting `kg/authority` is refused on the data plane **and that the refusal
 names the ops plane** rather than 404ing as though the capability did not
 exist, and re-pinning the quarantine fence on a widened route.
 
+**The corpus test found what the battery could not, and corrected me by
+400×** (2026-08-21, after the maintainer asked whether one had been run —
+it had not, which is a definition-of-done item 6 miss).
+
+Driving 3,482 real sealed drawers across five wings through a live
+`serve-http`, every widened route was timed. `taxonomy` is the largest at
+**102 KB** and is unpaged — O(rooms), 3,020 rooms here, and a caller cannot
+bound it the way `drawers?limit=` can. The instinct was that this put a new
+unbounded cost class on the tenant plane. **Measured, that is wrong**:
+`export` was already on that plane before this change and returned **19 MB in
+341 ms**, a full-corpus decrypt reachable with the same tenant token. It
+dominates everything O67 added by 188×. No new cost class was introduced.
+
+**`kg/receipts` was NOT tested by that run and nearly shipped as if it were.**
+It answered in 4 ms because the graph was empty — the empty-set answer, not a
+measurement. Its cost was then ESTIMATED at ~3.5 ms per fact from an HTTP
+`GET /drawers/{id}`, giving "35 s per 10,000 facts". That estimate used a
+request round-trip as the price of an in-process row read, which is a category
+error, and it was **wrong by roughly 400×**. Measured properly:
+
+| facts | full walk | tamper-only | full µs/fact | tamper µs/fact |
+|---|---|---|---|---|
+| 500 | 4.0 ms | 0.3 ms | 8.1 | 0.6 |
+| 2,000 | 16.6 ms | 1.3 ms | 8.3 | 0.6 |
+| 8,000 | 69.0 ms | 5.3 ms | 8.6 | 0.7 |
+
+So it is a **constant-factor optimisation, not an unbounded route**, and
+saying otherwise would have put a false severity into this file. *A wrong
+measurement dressed in a reason is the most expensive kind of wrong* — this
+file's own words about O38, earned again.
+
+**What shipped from it.** `undercroft-bench receiptscale`: deterministic, no
+dataset, no LLM, with a premise arm that FAILS on an empty graph — the exact
+way the route was mismeasured. It exists because `refine` and this harness are
+the only producers of receipted facts in the tree, so before it the route's
+cost could not be exercised by any test at any scale and a 1-drawer e2e was
+its entire coverage.
+
+And the split it makes visible: a **forged** receipt is one HMAC over
+`receipt_canonical` and reads no drawer; the drawer decrypt only separates
+`verified`/`source_changed`/`dangling`. `ok` is `tampered == 0`, so the field
+a scripted operator classifies a 200 on never needed the expensive half.
+`kg_any_receipt_forged()` is that answer and `?integrity_only=1` is the door
+— additive, default response unchanged, 13× cheaper for the poller that O67
+made possible by putting this route on the tenant plane.
+
+**Residual, stated:** `taxonomy` remains unpaged. It is not a regression and
+not the worst thing on that plane, but a caller still cannot bound it. Paging
+it is filed with O68's route work rather than done here, because changing a
+shipped response shape is a contract question and this unit had no ruling for
+it.
+
 **The original filing follows, including the premise of its own that was
 measured wrong.** ↓
 

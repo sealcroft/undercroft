@@ -95,7 +95,10 @@ GET    /v1/vaults/{id}/kg/entities      ?limit=&offset=              paged entit
 GET    /v1/vaults/{id}/kg/query         ?entity=&direction=&as_of=   facts about one entity
 GET    /v1/vaults/{id}/kg/timeline      ?entity=                     temporal fact timeline
 GET    /v1/vaults/{id}/kg/receipts      receipt verdicts per fact
-                                         (verified|source_changed|dangling|tampered)
+                                         (verified|source_changed|dangling|tampered);
+                                         ?integrity_only=1 answers {ok, checked}
+                                         alone — one HMAC per fact and no
+                                         drawer reads (8.6 us/fact -> 0.7)
 GET    /v1/vaults/{id}/kg/canonical/{key}   the one active approved fact
 POST   /v1/vaults/{id}/kg/authority     declare authority_class / review_state
 GET    /v1/vaults/{id}/supersessions    drawer supersession links + verdicts
