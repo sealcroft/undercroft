@@ -3476,6 +3476,26 @@ consequence is stated rather than discovered — it can go red on a pull request
 that touched nothing, because the house page is state this repo does not own.
 That is the signal. The alternative was eleven days.
 
+**Its first CI run was RED, and the cause was my ordering rather than the
+gate.** The branch carrying the gate was pushed at 11:47, the job read the
+house page at **11:47:42**, and the page fix landed at **11:48:12** — thirty
+seconds later. The job was racing my own deploy and reported the state that
+was true when it looked. Re-run against the corrected page: green, tree
+untouched.
+
+The rule that follows, and it generalises to any gate on state this repo does
+not own: **fix the external state FIRST, verify it, and land the gate after.**
+A gate introduced ahead of the fix has a first run that is guaranteed to be a
+false alarm, and a false alarm on a gate's debut is how people learn to
+re-run it without reading it — which is the failure this gate exists to
+prevent, one level up.
+
+Not written into `CLAUDE.md` deliberately: applied backwards it reclassifies
+nothing, because this is the **only** gate in the tree that reads external
+state, so it is a rule with exactly one instance and no history to test it
+against. That is the caveat this file requires be stated rather than implied.
+It belongs here, beside the gate it is about, until a second such gate exists.
+
 **Still open**: the page edit, and the sub-decision the ruling did not settle —
 whether the benchmark tile becomes `95.0` / `LongMemEval R@5 · hash, zero
 model` (the shipped default, matching this project's own landing page) or
