@@ -49,6 +49,43 @@ anchor"). And I used a `rest_body_lacks` helper that did not exist; it does
 now, with a premise arm, because an empty response lacks every substring and a
 bare absence check would pass on a failed request.
 
+### `backup restore` restored the wrong vault name, and said it had worked (M31, O69)
+
+**Found by the e2e arm written for M30, and found by luck of the clock.**
+
+`restore` recovered which vault a backup belonged to by splitting the backup
+directory at the RIGHTMOST `-20`. For `default-2026-08-21T18-19-28-204777797Z`
+that lands inside the NANOSECONDS, so the vault name came out as
+`default-2026-08-21T18-19-28`. The restore then targeted a vault that does not
+exist: it took no exclusive hold, removed nothing, created a junk directory,
+and printed `Restored … -> vault 'default-2026-08-21T18-19-28'`. The real vault
+was untouched and the operator was told it had been restored.
+
+It fires whenever the sub-second field begins with `20` — about 1% of restores
+— and **always** for a vault whose own name contains `-20`: `proj-2024`,
+`q1-2025`, anything dated.
+
+**Fixed by reading the id from the backup's own `vault.json`.** The manifest
+is the authority on which vault a backup is; reconstructing it from a
+directory name is ambiguous in two directions at once, because the timestamp
+contains the same separator the vault name may.
+
+**This was FILED and not tested.** O68 recorded the `-20` split as "fragile
+enough that a route should not inherit it" — a stylistic worry about a future
+route, when it was a live data-loss bug on the shipped CLI. The M30 arm caught
+it only because that battery happened to run at `204777797` nanoseconds; the
+run an hour earlier passed. The arm is now pinned with a `proj-2024` vault so
+it fails deterministically instead of one run in a hundred.
+
+**A harness defect found with it.** `check()` and both `rest_body` helpers
+passed caller substrings to `grep` without `--`, so a needle beginning with
+`-` was parsed as an OPTION: asserting on `-> vault 'x'` made grep die with
+"invalid option" and the arm reported "output missing" over output containing
+that string exactly. The assertion was right and the harness was wrong, which
+is the worse way round. Guarded, with the reason recorded above `check()`.
+
+e2e 388 -> **390**.
+
 ### `backup restore` destroyed the vault it restored, at exit 0 (M30, O69)
 
 **Fixed, not filed.** `restore` unlinks a vault directory and copies a backup

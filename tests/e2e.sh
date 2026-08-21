@@ -15,6 +15,11 @@ unset UNDERCROFT_PASSPHRASE 2>/dev/null || true
 PASS=0
 FAIL=0
 
+# Every grep below passes `--` before a caller-supplied needle. Without it a
+# substring starting with "-" is parsed as an OPTION: asserting on
+# "-> vault 'x'" made grep die with "invalid option" and the arm reported
+# "output missing" over output that contained it exactly. The assertion was
+# right and the harness was wrong, which is the worst way round.
 check() { # check <name> <expected-exit> <expected-substring> -- cmd...
   local name="$1" want_code="$2" want_sub="$3"; shift 3
   [ "$1" = "--" ] && shift
@@ -24,7 +29,7 @@ check() { # check <name> <expected-exit> <expected-substring> -- cmd...
     echo "FAIL  $name — exit $code (wanted $want_code)"; echo "$out" | sed 's/^/      /'
     FAIL=$((FAIL+1)); return
   fi
-  if [ -n "$want_sub" ] && ! grep -qF "$want_sub" <<<"$out"; then
+  if [ -n "$want_sub" ] && ! grep -qF -- "$want_sub" <<<"$out"; then
     echo "FAIL  $name — output missing: $want_sub"; echo "$out" | sed 's/^/      /'
     FAIL=$((FAIL+1)); return
   fi
@@ -571,7 +576,31 @@ check "backup list"               0 "default-"                       -- "$BIN" b
 # vault open while the restore runs. Without the holder arm this proves
 # nothing, and without the SECOND arm the guard is indistinguishable from one
 # that always refuses — which would make restore useless rather than safe.
-BK_NAME="$("$BIN" backup list | head -1)"
+# ROADMAP O69, and this arm exists because the one below FOUND the defect by
+# accident. `restore` used to recover the vault name by splitting the backup
+# directory at the rightmost "-20" — which lands inside the NANOSECONDS for a
+# stamp like `-204777797Z`, and inside the vault's OWN name for anything like
+# `proj-2024`. The restore then targeted a vault that does not exist, took no
+# exclusive hold, removed nothing, created a junk directory, and reported
+# success. The name now comes from the backup's manifest.
+#
+# Pinned with a vault whose name CONTAINS the separator, so it fails 100% of
+# the time rather than ~1% of the time on an unlucky clock.
+"$BIN" vault create proj-2024 >/dev/null 2>&1
+"$BIN" remember "the -20 vault name must survive a round trip" --vault proj-2024 >/dev/null 2>&1
+"$BIN" backup create --vault proj-2024 >/dev/null 2>&1
+BK_2024="$("$BIN" backup list | grep '^proj-2024-' | head -1)"
+if [ -n "$BK_2024" ]; then
+  check "restore resolves a vault name containing -20" 0 "-> vault 'proj-2024'" -- \
+    "$BIN" backup restore "$BK_2024" --force
+  check "and creates no stray vault"                  1 "not found"            -- \
+    "$BIN" vault status "proj-2024-2026"
+else
+  echo "FAIL  the -20 backup was not created, so its restore arm proves nothing"
+  FAIL=$((FAIL+1))
+fi
+
+BK_NAME="$("$BIN" backup list | grep '^default-' | head -1)"
 "$BIN" serve-http --port 18899 >/dev/null 2>&1 &
 E2E_HOLDER=$!
 sleep 2
@@ -1462,7 +1491,7 @@ MCP_OUT="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n' \
   | "$BIN" serve-mcp 2>/dev/null)"
 mcp_check() {
   local name="$1" sub="$2"
-  if grep -qF "$sub" <<<"$MCP_OUT"; then
+  if grep -qF -- "$sub" <<<"$MCP_OUT"; then
     echo "ok    $name"; PASS=$((PASS+1))
   else
     echo "FAIL  $name — missing: $sub"; echo "$MCP_OUT" | sed 's/^/      /'; FAIL=$((FAIL+1))
@@ -1543,7 +1572,7 @@ sign() { UNDERCROFT_ASSERTION_SECRET="$SECRET" "$BIN" assert-header "$1"; }
 rest_body() { # <name> <expected-substr> -- <curl args...>
   local name="$1" sub="$2"; shift 2; [ "$1" = "--" ] && shift
   local out; out="$(curl -s "$@" 2>&1)"
-  if grep -qF "$sub" <<<"$out"; then echo "ok    $name"; PASS=$((PASS+1))
+  if grep -qF -- "$sub" <<<"$out"; then echo "ok    $name"; PASS=$((PASS+1))
   else echo "FAIL  $name — missing: $sub"; echo "$out" | sed 's/^/      /'; FAIL=$((FAIL+1)); fi
 }
 rest_code() { # <name> <expected-code> -- <curl args...>
@@ -1562,7 +1591,7 @@ rest_body_lacks() { # <name> <forbidden-substr> -- <curl args...>
   if [ -z "$out" ]; then
     echo "FAIL  $name — empty response; an absence proved nothing"
     FAIL=$((FAIL+1))
-  elif grep -qF "$sub" <<<"$out"; then
+  elif grep -qF -- "$sub" <<<"$out"; then
     echo "FAIL  $name — present but must not be: $sub"
     echo "$out" | sed 's/^/      /'; FAIL=$((FAIL+1))
   else

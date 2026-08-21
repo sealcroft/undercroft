@@ -212,16 +212,20 @@ if [ "$FAIL" -ne 0 ] && [ "$UPDATE" -eq 1 ]; then
     echo "      claims, which follow the published tag rather than this tree)"
     exit 1
   fi
-  printf '%s' "$patched" | base64 -w0 > /tmp/house.b64
+  # `-f` sends a literal string; it does NOT read a file, so `-f content=@path`
+  # uploads the path itself and GitHub answers 422 "content is not valid
+  # Base64". It did, the first time this ran for real — the patch logic and
+  # the no-op path had both been tested, and the PUSH had not.
+  b64=$(printf '%s' "$patched" | base64 -w0)
   gh api -X PUT "repos/$HOUSE_REPO/contents/index.html" \
     -f message="published figures: $changed tile(s) refreshed from sealcroft/undercroft
 
 Pushed by tests/house-figures.sh --update. The figures are gated from that
 repository (its own CI job), so this page going stale turns that repo's CI
 red rather than sitting unnoticed." \
-    -f content="@/tmp/house.b64" -f sha="$sha" --jq '.commit.sha' >/dev/null || {
+    -f content="$b64" -f sha="$sha" --jq '.commit.sha' >/dev/null || {
       echo "FAIL  push to $HOUSE_REPO rejected"; exit 1; }
-  rm -f /tmp/house.b64
+
   echo "  pushed. waiting for Pages, then re-checking the LIVE page —"
   echo "  a commit is not a deploy, and this script verifies the deploy."
   for i in 1 2 3 4 5 6 7 8 9 10; do

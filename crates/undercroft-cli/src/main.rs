@@ -3665,7 +3665,26 @@ fn run(cli: Cli) -> Result<()> {
                     if !src.join("vault.json").exists() {
                         bail!("no backup named {name}");
                     }
-                    let vault_name = name.rsplitn(2, "-20").last().unwrap_or(name).to_string();
+                    // **The vault name comes from the backup's OWN manifest,
+                    // never from parsing its directory name** (ROADMAP O69).
+                    //
+                    // It used to be `name.rsplitn(2, "-20").last()`, which
+                    // splits at the RIGHTMOST "-20" in the directory name.
+                    // For `default-2026-08-21T18-19-28-204777797Z` that is
+                    // inside the NANOSECONDS, so the vault name came out as
+                    // `default-2026-08-21T18-19-28`: the restore then targeted
+                    // a vault that does not exist, took no exclusive hold,
+                    // removed nothing, and created a junk directory — while
+                    // reporting success. The real vault was never restored and
+                    // the operator was told it had been.
+                    //
+                    // It fired whenever the sub-second field began with "20"
+                    // (~1% of restores) and ALWAYS for any vault whose own
+                    // name contains "-20", such as `proj-2024`. Caught by the
+                    // e2e arm added for the exclusive hold, which happened to
+                    // run at such a timestamp — luck, not coverage, which is
+                    // why the arm below now pins the shape instead.
+                    let vault_name = read_backup_vault_id(&src)?;
                     let dst = root.join("vaults").join(&vault_name);
                     if dst.exists() && !force {
                         bail!(
@@ -4030,6 +4049,33 @@ fn collect_transcripts(path: &Path) -> Result<Vec<PathBuf>> {
     }
     out.sort();
     Ok(out)
+}
+
+/// The vault id a backup belongs to, read from the manifest INSIDE it.
+///
+/// ROADMAP O69. A backup directory is named `<vault>-<timestamp>`, and
+/// recovering `<vault>` by string-splitting that name is ambiguous in two
+/// ways at once: the timestamp contains the same separator the vault name
+/// does, and a vault name may itself contain it. `vault.json` states the id
+/// outright, so it is read rather than reconstructed — the manifest is the
+/// authority on which vault this is, exactly as it is for everything else.
+fn read_backup_vault_id(src: &Path) -> Result<String> {
+    let raw = std::fs::read_to_string(src.join("vault.json"))
+        .with_context(|| format!("reading {}", src.join("vault.json").display()))?;
+    let v: serde_json::Value = serde_json::from_str(&raw)
+        .with_context(|| format!("parsing {}", src.join("vault.json").display()))?;
+    let id = v
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    if id.is_empty() {
+        bail!(
+            "backup at {} has no vault id in its manifest",
+            src.display()
+        );
+    }
+    undercroft_core::validate_name(id, "vault")?;
+    Ok(id.to_string())
 }
 
 fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
