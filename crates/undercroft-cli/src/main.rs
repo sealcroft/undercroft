@@ -1812,6 +1812,10 @@ fn run(cli: Cli) -> Result<()> {
             VaultAction::List => {
                 let mgr = manager(&cli)?;
                 let vaults = mgr.list()?;
+                // Vaults whose own stored evidence contradicts itself.
+                // Collected rather than raised inline so the listing
+                // completes, then raised so the exit code is true (M23).
+                let mut integrity: Vec<String> = Vec::new();
                 if vaults.is_empty() {
                     println!("No vaults. Run: undercroft init");
                 }
@@ -1835,6 +1839,19 @@ fn run(cli: Cli) -> Result<()> {
                         // the other vaults, which is what propagating here
                         // would do. Named, and the walk continues.
                         Err(e) => {
+                            // **The verdict outlives the loop** (ROADMAP
+                            // M23). Continuing here is right — a listing must
+                            // list, and one bad vault must not hide the rest
+                            // — but M18 shipped ONLY that half, so an
+                            // integrity failure was printed and then swallowed
+                            // and `vault list` exited 0. That is round-four
+                            // #30 verbatim, which M20 had just fixed in the
+                            // orchestrator: I applied "a listing must list"
+                            // and not "the verdict must still be true", in
+                            // the same session that wrote the second rule.
+                            if integrity_verdict(&e) {
+                                integrity.push(name.clone());
+                            }
                             println!("{name:<20} unavailable: {e}");
                             continue;
                         }
@@ -1845,6 +1862,12 @@ fn run(cli: Cli) -> Result<()> {
                         store.vault().level().to_string(),
                         store.count()?
                     );
+                }
+                if !integrity.is_empty() {
+                    anyhow::bail!(undercroft_store::StoreError::Integrity(format!(
+                        "vault(s) whose stored evidence contradicts itself: {}",
+                        integrity.join(", ")
+                    )));
                 }
             }
             VaultAction::Status { name } => {

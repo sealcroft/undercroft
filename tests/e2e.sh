@@ -575,6 +575,50 @@ if [ "$code" -eq 2 ] && grep -q "VERIFY FAILED" <<<"$out"; then
 else
   echo "FAIL  tamper detection — exit $code"; echo "$out" | sed 's/^/      /'; FAIL=$((FAIL+1))
 fi
+# ── a LISTING must list, and its verdict must still be true (M23) ───────────
+# M18 routed `vault list` through the posture and, for a vault that will not
+# open, printed `unavailable:` and CONTINUED — right about the listing, and
+# it was the whole story, so an integrity failure was swallowed and the
+# command exited 0. That is round-four #30 verbatim, which M20 had just fixed
+# in the orchestrator: "a listing must list" applied without "the verdict must
+# still be true", in the session that wrote the second rule.
+#
+# It needs a vault that will not OPEN, which is not the same damage as the
+# lines above: forging `added_by` breaks a RECORD's HMAC, and `verify` catches
+# that while the vault still opens perfectly. The first version of this arm
+# reused `work` for convenience and read exit 0 — the test reporting that its
+# own premise was wrong, which is the only reason this distinction is written
+# down here. A tampered MANIFEST is what refuses at the door.
+"$BIN" vault create doomed >/dev/null 2>&1
+DOOMED="$UNDERCROFT_HOME/vaults/doomed/vault.json"
+# Flip one hex digit of the manifest MAC. The manifest is PRETTY-PRINTED, so
+# the first version of this line matched `"id":"doomed"` with no space and
+# silently changed nothing — the listing then showed `doomed` opening fine and
+# the arm read exit 0. A tamper with no premise assertion is a test of nothing,
+# which is this suite's own oldest rule turned on itself.
+perl -0777 -pi -e 's/("manifest_mac_hex": ")([0-9a-f])/$1 . ($2 eq "0" ? "1" : "0")/e' "$DOOMED"
+if "$BIN" vault status doomed >/dev/null 2>&1; then
+  echo "FAIL  premise: the manifest tamper did not take — doomed still opens"
+  FAIL=$((FAIL+1))
+else
+  echo "ok    premise: the tampered manifest refuses to open"; PASS=$((PASS+1))
+fi
+VL_OUT="$("$BIN" vault list 2>&1)"; VL_CODE=$?
+if [ "$VL_CODE" -eq 2 ]; then
+  echo "ok    vault list exits 2 when a vault will not open"; PASS=$((PASS+1))
+else
+  echo "FAIL  vault list exits 2 when a vault will not open — exit $VL_CODE"
+  echo "$VL_OUT" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+# ...and the OTHER vaults are still listed. Both halves, because either alone
+# is a different command: propagating would hide the fleet, swallowing would
+# hide the verdict.
+if grep -q 'default' <<<"$VL_OUT"; then
+  echo "ok    and it still lists the vaults that DO open"; PASS=$((PASS+1))
+else
+  echo "FAIL  and it still lists the vaults that DO open"; echo "$VL_OUT" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+rm -rf "$UNDERCROFT_HOME/vaults/doomed"
 # **The same verdict where a MACHINE can see it, on MCP.** The tool built
 # text ending `VERIFY FAILED` and returned it inside `"isError": false` —
 # the one machine-readable field in an MCP tool result — so an agent keying

@@ -1116,7 +1116,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**92** of the **107** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**93** of the **108** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -2303,7 +2303,7 @@ no entry relying on absorbed text.** The gate got stricter and nothing broke,
 which is the outcome that deserves saying out loud rather than quietly.
 
 **A count in prose, inside the closure written about a count in prose.** O47's
-body said the gate "examines **47 of 60**". Measured, 92 of 107 — stale by
+body said the gate "examines **47 of 60**". Measured, 93 of 108 — stale by
 thirty-one entries. Both halves are GATED now by the `prose figures`
 preflight (two rows: the entries examined, and the level-3 headings that
 exist for it to have skipped). It caught its own arrival twice — once when the
@@ -2839,6 +2839,72 @@ Corrected by querying the live registry through the anonymous pull-token flow
 that entry's own gate uses, rather than by reasoning about buildx. O57 recorded
 this sub-claim as corrected while the row it names still said three — a closure
 claiming a fix it had not made.
+
+### M23 — CLOSED 2026-08-21: M18 introduced the defect M20 was fixing, and three units owed `UPGRADING.md` entries
+
+**Raised by the maintainer**, asking whether the doctrine, the tasks and the
+ROADMAP had been read in detail *including the code*. They had not been, and
+this entry is what the honest answer cost.
+
+**M18 introduced round-four `#30` in the CLI while M20 was closing it in the
+control plane.** M18 routed `vault list` through the posture and, for a vault
+that would not open, printed `unavailable:` and CONTINUED. That is right about
+the listing — one damaged vault must not hide the fleet — and it was the whole
+story, so the error never escaped `run()`, `integrity_verdict` never
+classified it, and **`vault list` exited 0 over a vault whose manifest fails
+its own MAC.**
+
+I applied *"a listing must list"* without *"the verdict must still be true"*,
+in the same session that wrote the second rule, one command over. Fixed with
+M20's shape: collect during the walk, raise after it, let the existing
+`integrity_verdict` hook classify.
+
+**No gate caught it, and `.handover/AUDIT_CONTINUATION.md` §1j predicted
+exactly that**: *"Both were found by looking at the machine, not by any check.
+**The gates in this tree are strong on mechanical drift and blind to
+consequences.**"* Ten green suites across three commits. §1j also records this
+as the session's own recurring pattern — *"two fixes that created the next
+defect"* — and this is the third instance, committed by someone who had not
+read the paragraph naming the first two.
+
+**The e2e arm's first version tested nothing, and the suite said so.** It
+reused the already-tampered `work` vault, which is damaged in a way that breaks
+a RECORD's HMAC — `verify` catches that and the vault still opens perfectly.
+The arm read exit 0 against a fixed tree. The second version tampered the
+manifest but matched `"id":"doomed"` while the manifest is PRETTY-PRINTED, so
+it changed nothing and the listing showed `doomed` opening fine. Both were
+caught by running it; neither would have been caught by reading it. §1j's third
+method note is this rule verbatim — *"an e2e arm belongs on data that actually
+exercises the case … on a fixture it would have passed against a number I
+chose"* — and it now carries a premise arm asserting the tampered manifest
+really does refuse to open.
+
+**Three units owed `UPGRADING.md` entries and none had one.** The doctrine is
+unqualified: *"anything that can stop a running deployment gets an
+`UPGRADING.md` entry in the same unit, with symptom, cause and fix."* M3 and M6
+have theirs; M20, M21 and M23 did not.
+
+* **M20** — `instance-list` exits **2** where it exited 0. A compliance cron
+  keyed on exit 0 starts failing, which is the check working, and nothing said
+  so.
+* **M21** — the `unlabeled` exclusion count can only go DOWN, and only on
+  vaults with quarantined drawers or a declared trust floor. A threshold tuned
+  to the old number moves.
+* **M23** — `vault list` both stops aborting at the first bad vault AND starts
+  exiting 2. The pair is the point: a caller sees MORE lines than before, never
+  fewer, and a non-zero code where it used to get one only sometimes.
+
+Each entry states which exit code means what, because the two are now
+load-bearing on both commands: **1 is a run failure, 2 is an integrity
+verdict.**
+
+**What was actually read, stated rather than implied.** `CLAUDE.md` in full
+(it is injected). `ROADMAP.md`'s `## 1.2.0`, the dependency map, and every
+entry a unit touched — but not its other ~6,000 lines. `AUDIT_CONTINUATION.md`
+§1a and its structure; **§1j not until now**, though the session prompt named
+it. `SESSION_START.md`'s first ~200 lines of 1,527. `NEXT_SESSION.md` and
+`UPGRADING.md` by grep only. The gap was real and it cost the three items
+above.
 
 ---
 

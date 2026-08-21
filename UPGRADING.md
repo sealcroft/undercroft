@@ -67,6 +67,57 @@ so rather than implying it checked them.
 
 ## 1.2.0 (unreleased)
 
+### `undercroft-orchestrator instance-list` now exits 2 on an unopenable credential blob
+
+**Who is affected:** any script that runs `instance-list` and checks its exit
+code — a health cron, a compliance job, a CI step.
+
+It used to exit **0** whenever a tenant's sealed credential blob would not open
+under `UNDERCROFT_ORCH_KEY`. The row printed `refused=…` and the command
+reported success, so a wrong or rotated key, or a tampered blob, read as a
+healthy fleet. That is the control plane's own tamper verdict, and
+`state.rs` calls it "a tamper verdict or a wrong key, never a transient
+condition".
+
+It now exits **2** — this project's integrity code, on every command — while
+still listing every instance, so nothing is hidden either way.
+
+**Action:** if a script treats a non-zero `instance-list` as an outage, teach
+it the difference. **Exit 1 is a run failure** (a bad CA pin, a missing
+database); **exit 2 is an integrity verdict** and should page someone. If you
+see exit 2 immediately after rotating `UNDERCROFT_ORCH_KEY`, the blobs were
+sealed under the old key — that is the check working.
+
+### The `unlabeled` exclusion count on a search response excludes what the search already excluded
+
+**Who is affected:** anyone reading `unlabeled` from a `kind`-filtered search
+on any surface, or alerting on it.
+
+It counted every drawer with no declared `kind` in the wing/room scope — including
+drawers in the reserved review wing and in wings below the trust floor, which
+the search had already removed **before** candidates were drawn. So it reported
+rows the kind filter never saw as rows the kind filter passed over.
+
+The number can only go DOWN, and only on vaults that have quarantined drawers
+or a declared trust floor. On every other vault it is unchanged.
+
+**Action:** none, unless you have a threshold tuned to the old number.
+
+### `undercroft vault list` now exits 2 when a vault will not open
+
+**Who is affected:** any script that runs `vault list` and checks its exit code.
+
+Two changes land together and the pair is the point. It used to ABORT at the
+first vault that would not open, so one damaged vault hid every vault after it
+in the listing. It now lists them all, names the one it could not open
+(`<name>  unavailable: …`), and exits **2** if that failure was an integrity
+verdict — a manifest that fails its own MAC, or a database a manifest describes
+that is not there.
+
+**Action:** as above — exit 1 is a run failure, exit 2 should page someone. A
+script that treated any non-zero as fatal keeps working; one that parsed the
+listing now sees more lines than before, never fewer.
+
 ### The embeddings-TLS recipe pins a readable path
 
 **Who is affected:** anyone following the served-embedder recipe in

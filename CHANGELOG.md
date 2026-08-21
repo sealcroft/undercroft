@@ -7,6 +7,36 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### M18 introduced the defect M20 was fixing, and three units owed UPGRADING entries (M23)
+
+Raised by the maintainer, asking whether the doctrine and the ROADMAP had been
+read in detail *including the code*. They had not been, and this is what the
+honest answer cost.
+
+**M18 introduced round-four `#30` in the CLI while M20 was closing it in the
+control plane.** M18 routed `vault list` through the posture and, for a vault
+that would not open, printed `unavailable:` and continued — right about the
+listing, and the whole story, so the error never escaped `run()` and
+`vault list` **exited 0** over a vault whose manifest fails its own MAC. "A
+listing must list" applied without "the verdict must still be true", one
+command over, in the session that wrote the second rule. Fixed with M20's
+shape: collect during the walk, raise after it.
+
+No gate caught it across three commits and ten green suites — and
+`AUDIT_CONTINUATION.md` §1j says why, in a paragraph I had not read: *"the
+gates in this tree are strong on mechanical drift and blind to consequences."*
+
+The e2e arm's first two versions tested nothing and the suite said so: one
+reused a vault damaged in a way that breaks a record HMAC but still opens, the
+other matched an unspaced key against a pretty-printed manifest. It carries a
+premise arm now.
+
+**Three units owed `UPGRADING.md` entries and none had one** — M20
+(`instance-list` exits 2 where it exited 0), M21 (the `unlabeled` count can
+only go down), and M23 (`vault list` stops aborting at the first bad vault and
+starts exiting 2). Each states which code means what, because both commands now
+rely on the distinction: **1 is a run failure, 2 is an integrity verdict.**
+
 ### the last three round-four rows (M21, M22)
 
 **`#51` — the honest-exclusion count ran under a different policy than the
