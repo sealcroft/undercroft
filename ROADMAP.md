@@ -1116,7 +1116,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**104** of the **119** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**105** of the **120** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -3058,7 +3058,39 @@ paragraphs contains. Detecting "this closed entry contains an open item" needs
 a semantic reading, which this file has repeatedly refused to fake with a
 scanner (O33, O47). The mechanism here is a heading, not a gate.
 
-### O70 — the obvious way to use a search hit is the worst one, and nothing says so
+### O70 — CLOSED 2026-08-23: the assembly recipe is written, with the price of skipping it
+
+**CLOSED.** `docs/AGENTS.md` gained **§7.2 "Assembling the block — which
+fields, and what leaving them out costs"**, sited immediately after §7.1 so
+the shape of the block and its contents are read together (§7.1's operational
+tail became §7.3, which it always was). It carries all three arms with their
+deltas and p-values, the recipe field by field, and two things this entry did
+not ask for and the data demanded.
+
+**First: hand-picking `content_date` is not the recipe, and saying so was
+necessary.** The middle arm — `content` plus `content_date` — *regresses*
+multi-hop by 7.8 points against `content` alone (64.5% -> 56.7%, p=0.0036).
+A date beside every line helps a question about *when* and crowds a question
+about *what connects two sessions*. Documenting "add `content_date`" as the
+lesson would have published a real regression as advice. The section leads to
+the third arm instead — pass the hit as the engine returned it — which
+recovers most of it, scores best overall, and does not go stale when a field
+is added.
+
+**Second: the surface matters and the filing was `/v1`-shaped.** MCP's
+`undercroft_search` already renders the wing/room, the drawer's date and how
+long ago, the other recorded days, the resolved in-text dates and the four
+evidence channels, so an agent on MCP has the good shape by default and the
+mistake there is stripping it. The measured failure belongs to a caller
+assembling its own block out of the JSON. Verified by reading `mcp.rs`'s
+render, not assumed from symmetry.
+
+Verified live rather than from the source: a search against a running engine
+returns exactly **twenty** fields, which is the number this entry asserted.
+Gated by the new `measured retrieval claims carry their configuration`
+preflight (see O71's closure for its arms). **The API affordance is NOT
+built** — it was the optional half here, it is a MINOR addition, and it stays
+unbuilt and unfiled-as-done rather than quietly dropped.
 
 **Measured on 1,540 questions, 2026-08-22.** A hit carries twenty fields.
 An integrator who does the obvious thing — concatenate `content` from each hit
@@ -3095,7 +3127,55 @@ must pin that the existing response shape is byte-identical without it.
 
 ---
 
-### O71 — `room_cap=1` is a measured, free improvement that appears in no document
+### O71 — CLOSED 2026-08-23: `room_cap`'s effect is documented, and reconciled with the older opposite result
+
+**CLOSED.** `docs/AGENTS.md` §6 gained **"`room_cap` — what the knob does,
+measured"**, carrying the three-row table, the config it was taken under, the
+reason `room_cap=2` does nothing, and a reproducible three-call demonstration
+that was executed rather than described: on a live 876-drawer vault the
+default returns 9 distinct rooms with one room holding two slots, `room_cap=1`
+returns 10 distinct rooms with the doubled room giving one up, and
+`room_cap=2` is identical to the default because the cap never binds. The
+default is unchanged, and the section says why changing it would be MAJOR.
+
+**This entry's premise was wrong and the correction is the valuable part.**
+It says the effect "is documented nowhere". It is documented — as **harmful** —
+in three tracked places: `docs/LABELS.md`, `docs/CONSULTATION_REVIEW.md` and
+`architecture/index.html`, whose retrieval-stack diagram renders the string
+*"room_cap=2 measured -5.6 pp"*. Publishing "+8.2, no category regresses"
+beside that, with no reconciliation, would have put the manual in direct
+contradiction with the architecture page on the same published site.
+
+They are not the same measurement. The older one is **LongMemEval**,
+**`room_cap=2`**, scoring **answer accuracy** (75.6% -> 70.0%, every category
+down); the new one is **LoCoMo**, **`room_cap=1`**, scoring **evidence
+recall**. Different dataset, different cap, different question — exactly the
+"two protocols' numbers must never be placed side by side" rule O75 states,
+landing on a pair nobody had noticed was a pair. The section carries that
+reconciliation explicitly, and both agree on one thing: a cap of **two** is
+not the setting that helps.
+
+**Gate built:** a thirteenth host-side preflight, `measured retrieval claims
+carry their configuration`, requiring both sections to name their dataset,
+embedder, scope and metric, and requiring the reconciliation to stand. It
+deliberately does **not** check the values: their source is a run under
+`docs/research/`, gitignored by the O75 ruling, so a gate that pretended to
+recompute them would be reading a file a fresh clone does not have. Four arms
+executed against the real file — intact passes, embedder stripped fails,
+reconciliation removed fails, §7.2 excised fails — plus an internal
+calibration probe.
+
+**Two residuals, stated rather than absorbed.** The `-5.6pp` figure on those
+three surfaces is itself unqualified — it names neither its benchmark nor its
+metric, which is the defect the `prose figures` preflight exists to catch, and
+`docs/LABELS.md` and `docs/CONSULTATION_REVIEW.md` both cite "ROADMAP's failed
+table" for rows that **no longer exist in this file**. Neither was touched:
+qualifying the architecture diagram means editing a governed SVG and
+regenerating the PDFs and inlined copies, and `LABELS.md` classes `room_cap`
+as a *score modifier* whose measured loss is evidence for its central rule —
+while the code puts the cap in the page cut, not the scoring. Whether that
+classification still holds is a doctrine question, and doctrine here gets the
+same scrutiny as code. **Filed as O77**, not fixed in passing.
 
 **Measured, deterministic A/B on one vault, 2026-08-23.** With the same
 corpus, the same page size and no other change:
@@ -3306,6 +3386,58 @@ model, and any claim of "near-perfect recall" should be read against it.
 
 **Gate:** if a future change claims to close this, it must be measured on
 these 15 by id, not on an aggregate that can absorb them.
+
+---
+
+### O77 — the older `room_cap` result is unqualified on three surfaces, and two of them cite a table that is gone
+
+**Found while closing O71, 2026-08-23, and deliberately not fixed there.**
+`docs/LABELS.md`, `docs/CONSULTATION_REVIEW.md` and `architecture/index.html`
+(via the governed `diagrams/retrieval-stack.svg`, which renders the string
+*"room_cap=2 measured -5.6 pp"*) all state that figure with **no benchmark, no
+cap value and no metric named**. It is LongMemEval, `room_cap=2`, answer
+accuracy, 75.6% -> 70.0%. O71 has now published `room_cap=1` at +8.2 points of
+LoCoMo *evidence recall* in `docs/AGENTS.md`, with an explicit reconciliation —
+but that reconciliation is **one-directional**: a reader who meets the bare
+-5.6pp first has nothing telling them the two measure different things.
+
+An unqualified retrieval figure is precisely the defect the `prose figures`
+preflight exists to catch, and these three predate it.
+
+**The citation underneath is dead, which is worse than stale.** `LABELS.md` and
+`CONSULTATION_REVIEW.md` both send the reader to "ROADMAP's failed table" for
+the full rows. **No such table is in this file** — entries leave when they
+close, which is the documented behaviour rather than a defect. But the primary
+source is `brainstorming/DATA_FIDELITY_PLAN.md`, which is **untracked**, so a
+published claim's only provenance is a file no clone carries and no gate can
+read. That is the O37 shape (a real finding living only in an ignored file) on
+a number three published surfaces repeat.
+
+**And there is a taxonomy question under it that is doctrine, not tidying.**
+`LABELS.md` files `room_cap` among *score modifiers* and cites its loss as
+evidence for its central rule — *"A label may decide who competes. It may never
+adjust how they score."* The code disagrees: `diversify_by_room` runs in the
+**page cut**, after every score is final (`undercroft-store/src/lib.rs`, the
+`opts.room_cap` match), so the cap decides *who competes for the page* and
+touches no score. If the classification is wrong then the rule's evidence list
+is wrong, and by this project's own standard a doctrine claim gets the same
+scrutiny as code — including being applied backwards over the other two losses
+it cites (RRF fusion, per-query channel rescaling).
+
+**Options, none chosen.** (a) Qualify the figure in place on all three
+surfaces — cheapest, closes the contradiction, leaves the taxonomy open. Note
+it means editing a **governed** SVG and re-running `architecture/build.sh` to
+regenerate the PDFs and the inlined copies, so it is not a text edit.
+(b) (a) plus move the primary measurement into a tracked location so the number
+has provenance a clone can read. (c) (b) plus rule on whether a selection-stage
+cap is a "score modifier" at all, and re-word the rule if it is not.
+
+**Gate:** wherever the -5.6pp figure appears it must name its benchmark, its
+cap value and its metric — the same requirement the new `measured retrieval
+claims carry their configuration` preflight already enforces on
+`docs/AGENTS.md`, which is where it should be extended rather than duplicated.
+If (c) is taken, the two other cited losses get re-read in the same unit or the
+rule is left resting on one re-classified example.
 
 ---
 

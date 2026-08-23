@@ -1685,7 +1685,7 @@ own teardown was the place it had not been applied. Gated by the
 `destructive compose scope` preflight, which requires every compose teardown
 in `tests/` to name the project it destroys; `tests/tls-pins.sh`'s two scoped
 teardowns are the accepted shape. Logs land in `.battery/` (gitignored).
-**`bash tests/battery.sh --preflight-only` runs the twelve host-side preflights
+**`bash tests/battery.sh --preflight-only` runs the thirteen host-side preflights
 and no suite**, which is what CI invokes. (This sentence said "seven" while
 the tree ran eight, and nothing could say so — and then "ten" while the tree
 ran eleven, which the gate caught inside the very unit that caused it.
@@ -1710,7 +1710,7 @@ code — including the post-run comparison of each suite's MEASURED check count
 against the figure `CLAUDE.md` publishes for it. That comparison needs a RUN
 and therefore cannot be a preflight, so until M13 it ran nowhere on a pull
 request and a leg dropping from 370 checks to 3 was green. The flag skips the
-twelve preflights because the dedicated `preflight` job already runs them
+thirteen preflights because the dedicated `preflight` job already runs them
 once. **The shared readers — `test_summary`, `suite_summary`,
 `declare_suite_counts`, `suite_count` — are deliberately defined OUTSIDE the
 skipped block**, and that is not tidiness: with them inside, `--no-preflight`

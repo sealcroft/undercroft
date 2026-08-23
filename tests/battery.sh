@@ -48,7 +48,7 @@ for a in "$@"; do
     # compose run` itself, so that the post-run check-count comparison — which
     # only a RUN can perform, and which therefore cannot be a preflight —
     # happens on a pull request instead of only on the maintainer's machine.
-    # Without this flag every leg would re-run all twelve preflights, which
+    # Without this flag every leg would re-run all thirteen preflights, which
     # the dedicated `preflight` job already does once. ROADMAP M13.
     --no-preflight) NO_PREFLIGHT=1 ;;
     # Exit 1, never 2. Exit 2 is this project's integrity verdict on every
@@ -1301,6 +1301,109 @@ echo "ok    every version surface agrees with the workspace ($WS_VERSION), over 
 # below pairs each suffix only with full names in ITS OWN row, and it was
 # cross-checked against an independent implementation in a second language
 # before being believed — both return 64 + 17 + 0.
+echo "═══ preflight: measured retrieval claims carry their configuration ═══"
+# ROADMAP O70 and O71 both landed a measured figure in docs/AGENTS.md, and both
+# entries state the same gate in different words: the claim must arrive with the
+# configuration it was taken under. An unqualified retrieval percentage is the
+# defect the `prose figures` preflight exists to catch one file over — a number
+# with no dataset, no embedder and no metric beside it reads as a property of
+# the engine when it is a property of one run.
+#
+# There is a second thing this guards and it is the sharper one. The tree holds
+# TWO room_cap measurements that point opposite ways: LongMemEval / room_cap=2 /
+# answer accuracy at -5.6pp (docs/LABELS.md, docs/CONSULTATION_REVIEW.md and the
+# architecture reference), and LoCoMo / room_cap=1 / evidence recall at +2.2.
+# They are evidence about different things and must never be read as one number,
+# so the reconciliation paragraph is load-bearing rather than decorative: drop it
+# and the published manual contradicts the published architecture page.
+#
+# Deliberately NOT gated here: the values themselves. Their source of truth is a
+# run under docs/research/, which is gitignored by the O75 ruling, so a fresh
+# clone cannot recompute them and a gate that pretended to would be checking a
+# file it cannot see. This checks that the qualifiers travel with the numbers,
+# which is what a reader needs and what rots first.
+
+MRC_DOC="docs/AGENTS.md"
+MRC_FAIL=0
+
+# Section slices. sed ranges rather than an awk state machine: the stop anchors
+# are the next heading, so a section that loses its terminator collapses to
+# nothing and the token check below fails loudly instead of silently widening.
+mrc_slice() { sed -n "$1" "$MRC_DOC"; }
+
+# $1 label, $2 text, $3.. required tokens. Prints every miss; returns 1 on any.
+mrc_requires() {
+  _label="$1"; _text="$2"; shift 2
+  _miss=0
+  for _tok in "$@"; do
+    case "$_text" in
+      *"$_tok"*) ;;
+      *) echo "FAIL  $_label omits the qualifier '$_tok'"; _miss=1;;
+    esac
+  done
+  return "$_miss"
+}
+
+MRC_RC=$(mrc_slice '/^### `room_cap` — what the knob does, measured$/,/^### Reading conventions/p')
+MRC_AS=$(mrc_slice '/^### 7\.2 Assembling the block/,/^### 7\.3 /p')
+
+# PREMISE. Both slices must be non-trivial before any pass is believed: a
+# renamed heading yields an empty slice, and an empty slice satisfies no token
+# check by being clean — it satisfies none by being absent, which is the same
+# transcript as a broken scanner.
+if [ "$(printf '%s' "$MRC_RC" | wc -l)" -lt 20 ]; then
+  echo "FAIL  the room_cap section of $MRC_DOC did not slice (heading renamed or removed)."
+  echo "      ROADMAP O71 requires its measurement to stay qualified wherever it lives."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+if [ "$(printf '%s' "$MRC_AS" | wc -l)" -lt 20 ]; then
+  echo "FAIL  section 7.2 of $MRC_DOC did not slice (heading renamed or removed)."
+  echo "      ROADMAP O70 requires its measured deltas to stay in place."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+
+# O71: dataset, embedder, scope, the metric it is NOT (recall, not accuracy),
+# and the reconciliation against the older opposite-signed result.
+mrc_requires "the room_cap section" "$MRC_RC" \
+  "locomo10" "undercroft-hash-v3" "wing-scoped" "evidence recall" \
+  "LongMemEval" "5.6" || MRC_FAIL=1
+
+# O70: dataset, embedder, the metric (these ARE judged answers, unlike O71's),
+# and the three arm figures the section exists to carry. The gate names the
+# numbers because the entry's own wording is "the measured deltas, not
+# adjectives" — prose that says "substantially better" passes every other check
+# in this file.
+mrc_requires "section 7.2" "$MRC_AS" \
+  "locomo10" "undercroft-hash-v3" "answer accuracy" \
+  "68.6" "80.8" "81.4" "20.9" "85.0" || MRC_FAIL=1
+
+# CALIBRATION. A checker that flags an artifact already verified by eye is wrong
+# about the checker, and one that passes a mutilated artifact is worse. Strip a
+# qualifier from a COPY and require the same predicate to notice; the real file
+# is never touched.
+MRC_MUT=$(printf '%s\n' "$MRC_RC" | grep -v 'undercroft-hash-v3' || true)
+if mrc_requires "calibration probe" "$MRC_MUT" "undercroft-hash-v3" >/dev/null 2>&1; then
+  echo "FAIL  the qualifier check passed a section with the embedder stripped out,"
+  echo "      so it cannot see what it claims to check."
+  MRC_FAIL=1
+fi
+
+if [ "$MRC_FAIL" -ne 0 ]; then
+  echo ""
+  echo "      A measured retrieval figure travels with the run that produced it:"
+  echo "      dataset, embedder, scope, and which metric it is. Recall and answer"
+  echo "      accuracy are different claims and this tree has both."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    both measured retrieval sections in $MRC_DOC carry their dataset,"
+echo "      embedder, scope and metric, and the room_cap reconciliation stands"
+
 echo "═══ preflight: prose figures ═══"
 
 pf_word() {

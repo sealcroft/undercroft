@@ -7,6 +7,77 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### the two measured retrieval levers a caller had no way to find (M34)
+
+**No engine code changed. Two documented capabilities, one new gate, and a
+correction to a filing.** Both entries came out of the 2026-08-22 LoCoMo run
+and both were docs gaps rather than defects: the capability shipped, the
+measurement existed, and nothing told a reader either one mattered.
+
+**`docs/AGENTS.md` §7.2 — assembling a context block (ROADMAP O70).** A search
+hit carries twenty fields, verified live against a running engine rather than
+counted from the source. The obvious use of one — take `content`, concatenate,
+send — is the worst-scoring shape measured: **68.6% overall, 20.9% temporal**,
+against **81.4% / 81.3%** when the hit travels as returned. 207 temporal
+questions flip wrong→right against one the other way (McNemar p=7.5e-46). The
+engine had already resolved every one of those dates and returned them on
+every hit.
+
+**The middle arm is why this is a recipe and not a one-field tip.** Adding
+`content_date` alone *regresses* multi-hop by **7.8 points** (64.5% → 56.7%,
+p=0.0036) — a date beside every line helps a question about *when* and crowds a
+question about *what connects two sessions*. Publishing "add `content_date`" as
+the lesson would have shipped a measured regression as advice. The section
+leads to passing the hit's own structure instead.
+
+**And it names the surface, because the filing was `/v1`-shaped.** MCP's
+`undercroft_search` already renders the wing/room, the drawer's date and how
+long ago, the other recorded days, the resolved in-text dates and the four
+evidence channels — so an agent on MCP has the good shape by default and the
+mistake there is stripping it. Established by reading `mcp.rs`, not assumed
+from symmetry.
+
+**`docs/AGENTS.md` §6 — what `room_cap` does (ROADMAP O71).** `room_cap=1`
+measures **+8.2 points of multi-hop evidence recall** (43.4% → 51.6%), +2.2
+overall, no category regressing, latency unchanged. `room_cap=2` does nothing,
+because the busiest room averages 1.9 slots so the cap rarely binds — which the
+section demonstrates with three live calls rather than asserting: default 9
+distinct rooms with one holding two slots, `room_cap=1` 10 distinct rooms,
+`room_cap=2` identical to the default. **The default does not change**: a
+default that changes what is retrievable is MAJOR by this project's own test.
+
+**Stated where it would otherwise be assumed:** O70's figures are judged answer
+accuracy; O71's are retrieval recall only. Recall up is not accuracy up, and
+whether `room_cap` improves *answers* was not measured.
+
+**The O71 filing's premise was wrong, and correcting it was most of the work.**
+It said `room_cap`'s effect "is documented nowhere". It is documented — as
+**harmful** — on three tracked surfaces, one of them the governed architecture
+diagram, which renders "room_cap=2 measured −5.6 pp". That is a different
+experiment: **LongMemEval**, **`room_cap=2`**, **answer accuracy**, 75.6% →
+70.0%. Publishing "+8.2, no category regresses" beside it unreconciled would
+have put the manual in direct contradiction with the architecture page on the
+same site. §6 carries the reconciliation, and both agree a cap of two is not
+the setting that helps. The residue — that the older figure is itself
+unqualified on those three surfaces, that two of them cite a ROADMAP table
+which no longer exists, and that `docs/LABELS.md` classes a page-cut operation
+as a *score modifier* — is filed as **O77** rather than fixed in passing, since
+one part edits a governed diagram and another is a doctrine change.
+
+**Gate: a thirteenth host-side preflight**, `measured retrieval claims carry
+their configuration`, requiring both sections to name their dataset, embedder,
+scope and metric, and requiring the room_cap reconciliation to stand. It
+deliberately does **not** check the values: their source is a run under
+`docs/research/`, gitignored by the O75 ruling, so a gate pretending to
+recompute them would be reading a file no fresh clone has. Four arms were run
+against the real file — intact passes, embedder stripped fails, reconciliation
+removed fails, §7.2 excised fails — plus an internal calibration probe, because
+a checker that cannot see reports what a clean tree reports.
+
+**Also here:** §7.1's operational tail became **§7.3**, which is what it always
+was; the §10 reference now points into both new sections; and the preflight
+count moved from twelve to thirteen in the four places that publish it.
+
 ### twelve diagrams, and a gate for the set nothing derives (M33)
 
 **No engine code changed.** `architecture/platform-views/` adds twelve

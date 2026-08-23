@@ -115,7 +115,7 @@ jobs:
       # publishes for it — a comparison only a RUN can perform, which is why
       # it cannot be a preflight and why, until ROADMAP M13, it happened
       # nowhere on a pull request. A leg dropping from 370 checks to 3 was
-      # green. `--no-preflight` skips the twelve host-side preflights, which
+      # green. `--no-preflight` skips the thirteen host-side preflights, which
       # the dedicated `preflight` job above already runs once.
       #
       # It also gets `--build` (the script always passes it) and the narrowed

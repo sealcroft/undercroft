@@ -451,6 +451,79 @@ embedder's job. **Reading dates inside the text** is the scanner's, selected
 per request with `language` (`en`, `ar`), and it works regardless of which
 embedder found the drawer.
 
+### `room_cap` — what the knob does, measured
+
+`room_cap` is a **soft** per-room cap on selection. Once every room has had
+its share, leftover slots refill in score order, so a page is never shorter
+than you asked for and a genuinely single-room question still gets all its
+evidence. The default (absent) is pure score order. It changes **which hits
+fill the page**, never how any hit scores.
+
+A room is a real structural unit — one session, one ticket, one meeting — so
+the question it helps is the one whose answer is spread across several of
+them, and that is exactly the question a caller cannot flag in advance.
+
+Measured A/B on one vault, deterministic, **all-gold evidence recall at
+k=10** — sealed vault, `undercroft-hash-v3`, `k=10`, wing-scoped, 512-token
+chunks, LoCoMo `locomo10`, 1,540 questions:
+
+| | single-hop | multi-hop | temporal | open-domain | overall |
+|---|---|---|---|---|---|
+| default | 97.1% | **43.4%** | 88.8% | 53.9% | 83.0% |
+| `room_cap=1` | 97.7% | **51.6%** | 90.3% | 55.1% | **85.2%** |
+| `room_cap=2` | 97.1% | 44.1% | 89.1% | 53.9% | 83.2% |
+
+**+8.2 points of multi-hop evidence recall, no category regresses, latency
+unchanged** (50 s against 51 s over the same 1,540 queries).
+
+**`room_cap=2` does almost nothing, and the reason is worth knowing before
+you reach for it.** The busiest room on that corpus averages 1.9 slots, so a
+cap of two rarely binds at all; the gain comes from the many rooms holding
+*exactly* two. You can watch that happen on any vault — same query, one
+parameter:
+
+```bash
+for cap in '' ',"room_cap":1' ',"room_cap":2'; do
+  curl -s -X POST -H "Authorization: Bearer $TOKEN" \
+       -H 'Content-Type: application/json' \
+       -d "{\"query\":\"$Q\",\"limit\":10$cap}" \
+       "$ENGINE/v1/vaults/$VAULT/search" |
+    python3 -c "import sys,json,collections; r=[h['room'] for h in json.load(sys.stdin)['hits']]; c=collections.Counter(r); print('rooms=%d max=%d' % (len(c), max(c.values())))"
+done
+# rooms=9  max=2   <- default: one room holds two of the ten slots
+# rooms=10 max=1   <- room_cap=1: it gives one up, a tenth room enters
+# rooms=9  max=2   <- room_cap=2: identical to the default; the cap never binds
+```
+
+**This is retrieval recall, not answer accuracy.** Every figure above counts
+whether the evidence reached the page. Whether recovering it produces a
+better *answer* was **not** measured, and recall up is not accuracy up — the
+experiment that would settle it is a re-run of the answering stage, which
+nobody has run. Treat the table as a reason to try the knob on your own
+corpus, not as a promised score.
+
+**It is deliberately not the default.** A default that changes what is
+retrievable is a MAJOR change by this project's own versioning test, and it
+would move the page under every existing deployment. Declare it per request —
+it is on all three surfaces (`room_cap` on `/v1` and `undercroft_search`,
+`--room-cap` on the CLI).
+
+**Except on the remote-index path**, where it does not apply: `search
+--backend <remote>` ranks through the legacy fusion, which has no room cap.
+The CLI *refuses* the flag there rather than accepting a declaration it would
+silently ignore — a declaration this path cannot honour must not look like one
+it did.
+
+> **This does not overturn the earlier `room_cap` result, and the two numbers
+> must never be placed side by side.** [docs/LABELS.md](https://sealcroft.com/undercroft/docs/labels.html)
+> and the architecture reference record `room_cap` measuring **−5.6pp**. That
+> was a different experiment: **LongMemEval**, **`room_cap=2`**, scoring
+> **answer accuracy** (75.6% → 70.0%), with every category down. The table
+> above is **LoCoMo**, **`room_cap=1`**, scoring **evidence recall**.
+> Different dataset, different cap, different question — so they are evidence
+> about different things. What both agree on: a cap of **two** is not the
+> setting that helps.
+
 ### Reading conventions are declared, not detected
 
 Four read-time fields decide how a drawer's dates are read. All are per request,
@@ -715,7 +788,94 @@ an envelope ends up labelled with provenance it never received.
 shape are C2.1, still planned — so nothing in this repo can stop a
 caller from concatenating a drawer straight into a system prompt.
 
-Daily/CI:
+### 7.2 Assembling the block — which fields, and what leaving them out costs
+
+§7.1 is about the *shape* of the block: delimit it, label it untrusted, keep
+it out of the instruction region. This is about its *contents*, and the two
+are independent — a perfectly delimited block can still be missing the field
+that answers the question.
+
+**A search hit carries twenty fields, and the obvious thing to do with one is
+the worst-scoring shape measured.** Take `content`, concatenate the hits, send
+that. It is what a BM25-shaped retrieval baseline does, it is what every
+example of "stuff the context" does, and on a real corpus it discards the
+engine's entire temporal contribution.
+
+Measured on 1,540 questions over one corpus, with **one shared retrieval** —
+the same ranked hits fed to all three arms, zero ranking drift, so the only
+variable is what the block carried. Sealed vault, `undercroft-hash-v3`,
+`k=10`, wing-scoped, 512-token chunks, LoCoMo `locomo10`; answering and
+judging both by the same model. **These are judged answer accuracy, not
+retrieval recall:**
+
+| what the block carried | overall | single-hop | multi-hop | temporal | open-domain |
+|---|---|---|---|---|---|
+| `content` alone | 68.6% | 89.5% | 64.5% | **20.9%** | 57.3% |
+| `content` + `content_date` | 80.8% | 89.4% | **56.7%** | **85.0%** | 61.5% |
+| the whole hit, as returned | **81.4%** | 90.5% | 62.1% | 81.3% | 58.3% |
+
+**Temporal accuracy goes from 20.9% to 85.0% on the strength of one field.**
+207 temporal questions flip wrong→right against one flipping the other way
+(McNemar p=7.5e-46); overall +12.2 points (p=7.6e-22). The engine had already
+resolved every one of those dates and returned them on every hit — the first
+arm simply threw them away.
+
+**But hand-picking one field is not the lesson.** Read the middle row against
+the first: adding `content_date` alone *costs* **7.8 points of multi-hop**
+(64.5% → 56.7%, p=0.0036), a real and significant regression. A date beside
+every line helps a question about *when* and crowds a question about *what
+connects two sessions*. The third arm — pass the hit as the engine returned
+it — recovers most of that (62.1%), scores best overall, and is the only shape
+that does not silently go stale the next time a field is added. Its lead over
+the middle row is not significant on its own (p=0.55); what is significant is
+that both beat `content` alone.
+
+So the recipe is **keep the hit's own structure** rather than curating it:
+
+1. **One block per hit**, carrying its `id`, `wing` and `room` — §7.1's rule,
+   and it is what stops a drawer impersonating the block above it.
+2. **`content_date` on every block.** This is the single highest-value field
+   and the one that is trivially forgotten, because a drawer reads perfectly
+   well without it. "Last Tuesday" is unanswerable when the reader does not
+   know which Tuesday the writer was sitting in.
+3. **`time_mentions`**, already resolved against that drawer's own anchor.
+   These answer a different question from `content_date`: the drawer's date is
+   when it was *written*, a mention is when the thing it describes *happened*.
+4. **`occurrences`** when it has more than one entry — the same wording
+   recorded on several days. The text is one record; the chronology is all of
+   them, and collapsing it to the first loses the repetition.
+5. **`elapsed`/`elapsed_days`** when you passed `as_of` — the engine has done
+   the calendar arithmetic exactly, and a model asked to do it from two
+   timestamps will sometimes do it wrong.
+6. **`entities`** if your prompt benefits from them; they are derived at read
+   from the drawer's own words.
+
+Scores (`score`, `semantic`, `lexical`, `lexical_exact`, `lexical_morph`) are
+for *your* policy — deciding what to drop, what to flag as thin — and belong
+in your code rather than in the model's context.
+
+**Which surface has to do this.** On `/v1` the block is yours to build, and
+that is where the table above was measured. **MCP already does it for you** —
+`undercroft_search` renders each hit with its wing and room, the drawer's own
+date, its id and the four evidence channels on their own line — plus, when
+they apply, how long ago that was (with `as_of`), the other days the same
+wording was recorded, and the dates resolved out of its text. An agent
+driving MCP gets the good shape by default, and the mistake there is stripping
+it back down to the content. `undercroft search` renders the same evidence.
+The failure this section is about belongs to a caller assembling its own
+context out of the JSON.
+
+**What this does not say.** These figures are one corpus, one embedder tier
+and one model in both roles. They say that discarding the engine's temporal
+output costs a great deal on questions that turn on time; they do not
+transfer as a promise to a different corpus. The adversarial category of this
+dataset (446 questions) is excluded by the benchmark itself and is not in any
+column above. A stricter reading of the same answers — withdrawing 15 lenient
+credits where the gold answer is an absolute date and the response states none
+— puts the first row at 67.7% overall and 16.2% temporal, which moves the gap
+in the same direction.
+
+### 7.3 Daily and CI checks
 
 ```bash
 undercroft verify           # six legs: HMAC every record, replay the audit
@@ -992,7 +1152,7 @@ classifies it deliberately:
 | POST | `/v1/vaults/{id}/kg/authority` | place a fact on the authority tier (`triple_id`, `authority_class`, `review_state`, opt `canonical_key`); audited, HMAC-covered. A value outside the closed vocabulary, or a `triple_id` that names no fact, is **400** |
 | GET | `/v1/vaults/{id}/kg/receipts` | every distilled fact's receipt verdict against its cited verbatim source (`verified`\|`source_changed`\|`dangling`\|`unreceipted`\|`tampered`) + summary counts — the KG half of "alert on `tampered` without walking the list"; `GET …/supersessions` below is the drawer-level analogue. Carries **`ok`** (false when any receipt is `tampered`), the field a scripted operator classifies a 200 on; without it `ops … kg receipts` exited 0 over a forged citation while the count sat in the body. **`?integrity_only=1`** answers `{ok, checked:"receipt_tags"}` alone and skips the per-fact walk: a forged receipt is one HMAC over the receipt canonical and reads no drawer, while the full walk decrypts every cited source to separate `verified`/`source_changed`/`dangling` — which no integrity decision reads. Measured 8.6 us/fact against 0.7 (`undercroft-bench receiptscale`). It exists because 1.2.0 put this route on the tenant data plane (O67) and monitoring is its most frequent caller; the parameter is additive, so the default response is unchanged |
 | POST | `/v1/vaults/{id}/refine` | distil verbatim drawers into receipted KG facts + searchable fact-drawers (needs `UNDERCROFT_LLM_URL`). A fact is dated by the words in its note ("three months ago"), not by the note's own date: the extractor returns the span verbatim, the engine rejects any span the note does not contain and resolves the rest deterministically, falling back to `content_date`. The response reports `dated_from_text`, `stated`/`background`, and **`quarantined`** — fact mirrors the admission screen diverted, which is not the same as facts not added: the fact is in the graph and `kg_query` serves it, while its searchable mirror sits in the reserved review wing. Pass `dry_run: true` to get `preview` (the triples it would add) and write nothing. Every distilled fact records its **extractor identity** (the model that claimed it) inside the fact's HMAC — provenance an offline attacker cannot rewrite; facts added by hand carry none. **`undercroft refine` is the same code path** (`--wing`/`--room`/`--fact-room`/`--limit`/`--dry-run`), so the two surfaces build the same vault from the same `UNDERCROFT_LLM_*` configuration; before 1.0.0 the CLI wrote no fact date, no grounding verdict and no searchable mirror |
-| POST | `/v1/vaults/{id}/search` | body also accepts `room_cap` (soft per-room cap on selection; absent = pure score order) and `as_of` (RFC 3339 reference date). Hits carry `content_date`, `filed_at`, `time_mentions`, `entities`, and — when `as_of` is given — `elapsed_days`, `elapsed_weeks`, `elapsed_months`, `elapsed`, `same_frame`. Each entry in `time_mentions` carries `resolved` plus `resolved_end` when the text named a period ("May 2023", "last week") rather than a day, and — with `as_of` — its **own** `elapsed_days`/`elapsed` (`elapsed_days_end` for a period). Those answer a different question from the hit's: the drawer's `content_date` is when it was written, a mention is when the thing it describes happened. `time_mentions` is **read live**, not from the seal — it is derived from the drawer's own text and `content_date`, both immutable, so every improvement to the scanner applies to existing vaults with no migration. `mentions_restated: true` appears only when this build reads the drawer differently from the reading sealed onto it |
+| POST | `/v1/vaults/{id}/search` | body also accepts `room_cap` (soft per-room cap on selection; absent = pure score order — §6 has the measured effect, and it is not the knob's default for a reason) and `as_of` (RFC 3339 reference date). Hits carry `content_date`, `filed_at`, `time_mentions`, `entities`, and — when `as_of` is given — `elapsed_days`, `elapsed_weeks`, `elapsed_months`, `elapsed`, `same_frame`. **§7.2 is what to do with them**: assembling a context block from `content` alone is the worst-scoring shape measured, and the per-field documentation in this row does not add up to that warning on its own. Each entry in `time_mentions` carries `resolved` plus `resolved_end` when the text named a period ("May 2023", "last week") rather than a day, and — with `as_of` — its **own** `elapsed_days`/`elapsed` (`elapsed_days_end` for a period). Those answer a different question from the hit's: the drawer's `content_date` is when it was written, a mention is when the thing it describes happened. `time_mentions` is **read live**, not from the seal — it is derived from the drawer's own text and `content_date`, both immutable, so every improvement to the scanner applies to existing vaults with no migration. `mentions_restated: true` appears only when this build reads the drawer differently from the reading sealed onto it |
 | POST | `/v1/vaults/{id}/verify` | integrity verdict, **six legs**: HMAC every record, replay the audit chain, check every drawer supersession receipt, check every knowledge-graph fact receipt, resolve every knowledge-graph audit label, and compare every mirror column against the HMAC-covered meta. `ok` covers all six — the same verdict CLI `verify` exits 2 on and MCP prints as VERIFY FAILED — plus `records_checked`, `bad_records`, `chain_ok`, a `supersessions` count breakdown, `bad_supersessions` (links whose receipt failed its HMAC), a `receipts` count breakdown, `bad_receipts` (facts whose citation binding failed its HMAC), `orphan_labels` (an audit label naming no live record — `record_id` is outside the chain hash, so a relabel passes every other leg. Covers graph labels **and bare drawer ids**: a drawer label with no live row and no `del/{id}` tombstone is a relabel onto a drawer nothing destroyed, since the crate's single `DELETE FROM drawers` writes that tombstone in the same transaction. Prefixed namespaces stay out — `del/`, `retention-clear/`, `read/`, `egress/`, `rotate/` all have legitimate absent subjects) and `mirror_drift` (a clear `wing`/`room`/`kind`/`supersedes` column disagreeing with the covered copy — the record is intact, the column was edited offline). The **fact-receipt leg arrived in 1.1.0**: the check existed one call away and no verify path made it, so a forged citation answered `"ok": true` here, exit 0 on the CLI, `isError: false` on MCP — and `backup create` gates on this verdict, so the forgery was archived as clean |
 | GET | `/v1/vaults/{id}/supersessions` | every drawer supersession link's verdict (`verified`\|`source_changed`\|`dangling`\|`unreceipted`\|`tampered`) + summary counts — alert on `tampered` without walking the list |
 | POST | `/v1/vaults/{id}/forget` | destroy the named drawers through the audit chain and return the attestation (`{ids}` in; heads + tombstone interval + content fingerprints out, unsigned — sign via CLI `forget --sign`). Verify with CLI `verify-forgetting`. Optional `backend` also issues a delete to that remote mirror FIRST, so a failure there leaves the vault intact; without it the attestation's `mirror` field WARNS that a pushed mirror may still hold the content, because destroying the local row does not reach a third party |
