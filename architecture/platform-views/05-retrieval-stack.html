@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Undercroft — The Retrieval Stack</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:  #04080a;
+      --color-raise:  #071014;
+      --color-ink:    #d9f0ea;
+      --color-muted:  #7fa39c;
+      --color-accent: #35e0c2;
+      --font-sans:  'Geist', system-ui, sans-serif;
+      --font-serif: 'Instrument Serif', serif;
+      --font-mono:  'Geist Mono', ui-monospace, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1200px; width: 100%; }
+    .eyebrow {
+      font-family: var(--font-mono); font-size: 0.66rem; font-weight: 500;
+      letter-spacing: 0.18em; text-transform: uppercase;
+      color: var(--color-muted); margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400; letter-spacing: -0.02em; line-height: 1.15;
+      color: var(--color-ink); margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 900px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Layer stack · 05 of 12 · Undercroft</p>
+    <h1>The retrieval stack, from question to ranked answer</h1>
+
+    <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="retrieval-stack-title retrieval-stack-desc">
+      <title id="retrieval-stack-title">Undercroft retrieval stack</title>
+      <desc id="retrieval-stack-desc">A search in Undercroft descends through six layers — the caller's declaration of wing, room, kind, trust floor, limit and language, parsed once for all three surfaces; scope resolution, where a narrowing and an exclusion are different relations and pools are sized by the scope's own population; candidate generation by one of six tiers chosen from corpus size and vault level; hydration, which decrypts the candidates and on a sealed vault is the only door BM25 evidence comes through; fusion of cosine with Okapi BM25 behind a semantic admission gate measured from the embedder in hand; and the boundary, where verified_meta_admits reads the HMAC-covered metadata rather than the clear mirror column.</desc>
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7fa39c"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#35e0c2"/></marker>
+        <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#c9a961"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#04080a"/>
+
+      <!-- ============ ZONES (drawn first) ============ -->
+      <rect x="176" y="64" width="688" height="200" rx="8" fill="rgba(217,240,234,0.02)" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
+      <rect x="460" y="68" width="120" height="12" rx="2" fill="#04080a"/>
+      <text x="520" y="77" fill="rgba(217,240,234,0.40)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">CALLER STATES</text>
+
+      <rect x="176" y="272" width="688" height="280" rx="8" fill="rgba(217,240,234,0.02)" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
+      <rect x="464" y="276" width="112" height="12" rx="2" fill="#04080a"/>
+      <text x="520" y="285" fill="rgba(217,240,234,0.40)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">ENGINE FINDS</text>
+
+      <rect x="176" y="560" width="688" height="120" rx="8" fill="rgba(217,240,234,0.02)" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
+      <rect x="460" y="564" width="120" height="12" rx="2" fill="#04080a"/>
+      <text x="520" y="573" fill="rgba(217,240,234,0.40)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">STORE DECIDES</text>
+
+      <!-- ============ ARROWS (before boxes) ============ -->
+      <!-- descent indicator, left margin (shared x, straight) -->
+      <line x1="144" y1="108" x2="144" y2="652" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- L3 -> margin note (shared y, straight) -->
+      <line x1="848" y1="340" x2="880" y2="340" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- L6 -> margin note (shared y, straight) -->
+      <line x1="848" y1="628" x2="880" y2="628" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- ============ ARROW LABELS (mask + 8px gap) ============ -->
+      <rect x="124" y="88" width="40" height="12" rx="2" fill="#04080a"/>
+      <text x="144" y="97" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">QUERY</text>
+
+      <rect x="124" y="660" width="40" height="12" rx="2" fill="#04080a"/>
+      <text x="144" y="669" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">BYTES</text>
+
+      <!-- ============ NODES ============ -->
+      <!-- L1 Declaration -->
+      <rect x="192" y="96" width="656" height="72" rx="6" fill="#04080a"/>
+      <rect x="192" y="96" width="656" height="72" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <rect x="208" y="112" width="24" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
+      <text x="220" y="121" fill="rgba(217,240,234,0.80)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">L1</text>
+      <text x="256" y="122" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif">Declaration</text>
+      <text x="256" y="140" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace">wing · room · kind · trust floor · limit · language · room_cap</text>
+      <text x="256" y="154" fill="#5c7f79" font-size="9" font-family="'Geist Mono', monospace">one parse, shared by CLI, MCP and /v1</text>
+
+      <!-- L2 Scope resolution -->
+      <rect x="192" y="176" width="656" height="72" rx="6" fill="#04080a"/>
+      <rect x="192" y="176" width="656" height="72" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <rect x="208" y="192" width="24" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
+      <text x="220" y="201" fill="rgba(217,240,234,0.80)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">L2</text>
+      <text x="256" y="202" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif">Scope resolution</text>
+      <text x="256" y="220" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace">Only is a narrowing · AllBut is an exclusion</text>
+      <text x="256" y="234" fill="#5c7f79" font-size="9" font-family="'Geist Mono', monospace">pools are sized by the scope's own population</text>
+
+      <!-- L3 Candidate generation (FOCAL) -->
+      <rect x="192" y="304" width="656" height="72" rx="6" fill="#04080a"/>
+      <rect x="192" y="304" width="656" height="72" rx="6" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1.2"/>
+      <rect x="208" y="320" width="24" height="12" rx="2" fill="transparent" stroke="rgba(53,224,194,0.50)" stroke-width="0.8"/>
+      <text x="220" y="329" fill="#35e0c2" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">L3</text>
+      <text x="256" y="330" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif">Candidate generation</text>
+      <text x="256" y="348" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace">one tier proposes candidates; none of them decides score</text>
+      <text x="256" y="362" fill="#5c7f79" font-size="9" font-family="'Geist Mono', monospace">chosen by corpus size and vault level</text>
+
+      <!-- L4 Hydration -->
+      <rect x="192" y="384" width="656" height="72" rx="6" fill="#04080a"/>
+      <rect x="192" y="384" width="656" height="72" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <rect x="208" y="400" width="24" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
+      <text x="220" y="409" fill="rgba(217,240,234,0.80)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">L4</text>
+      <text x="256" y="410" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif">Hydration</text>
+      <text x="256" y="428" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace">decrypt the candidates</text>
+      <text x="256" y="442" fill="#5c7f79" font-size="9" font-family="'Geist Mono', monospace">on a sealed vault this is the only door BM25 evidence comes through</text>
+
+      <!-- L5 Fusion and gate -->
+      <rect x="192" y="464" width="656" height="72" rx="6" fill="#04080a"/>
+      <rect x="192" y="464" width="656" height="72" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <rect x="208" y="480" width="24" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
+      <text x="220" y="489" fill="rgba(217,240,234,0.80)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">L5</text>
+      <text x="256" y="490" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif">Fusion and gate</text>
+      <text x="256" y="508" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace">cosine blended with Okapi BM25</text>
+      <text x="256" y="522" fill="#5c7f79" font-size="9" font-family="'Geist Mono', monospace">the semantic admission gate is measured from the embedder in hand</text>
+
+      <!-- L6 Boundary (FOCAL) -->
+      <rect x="192" y="592" width="656" height="72" rx="6" fill="#04080a"/>
+      <rect x="192" y="592" width="656" height="72" rx="6" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1.2"/>
+      <rect x="208" y="608" width="24" height="12" rx="2" fill="transparent" stroke="rgba(53,224,194,0.50)" stroke-width="0.8"/>
+      <text x="220" y="617" fill="#35e0c2" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">L6</text>
+      <text x="256" y="618" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif">Boundary</text>
+      <text x="256" y="636" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace">verified_meta_admits reads the HMAC-covered metadata</text>
+      <text x="256" y="650" fill="#5c7f79" font-size="9" font-family="'Geist Mono', monospace">the SQL clause is only an accelerator, never the decision</text>
+
+      <!-- ============ RIGHT MARGIN NOTES ============ -->
+      <text x="888" y="316" fill="rgba(127,163,156,0.75)" font-size="7" font-family="'Geist Mono', monospace" letter-spacing="0.14em">CANDIDATE TIERS</text>
+      <text x="888" y="336" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace">exact scan · fts prefilter</text>
+      <text x="888" y="352" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace">pq/ivf · per-wing pq</text>
+      <text x="888" y="368" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace">muvera fde · hnsw</text>
+
+      <text x="888" y="612" fill="rgba(127,163,156,0.75)" font-size="7" font-family="'Geist Mono', monospace" letter-spacing="0.14em">THE DECISION</text>
+      <text x="888" y="632" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace">reads the covered copy</text>
+      <text x="888" y="648" fill="#5c7f79" font-size="9" font-family="'Geist Mono', monospace">not the clear mirror column</text>
+
+      <!-- ============ LEGEND ============ -->
+      <line x1="120" y1="728" x2="1080" y2="728" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
+      <text x="120" y="748" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">LEGEND</text>
+
+      <rect x="228" y="740" width="16" height="10" rx="2" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1"/>
+      <text x="252" y="748" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace">FOCAL</text>
+
+      <rect x="332" y="740" width="16" height="10" rx="2" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <text x="356" y="748" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace">LAYER</text>
+
+      <rect x="436" y="740" width="16" height="10" rx="2" fill="rgba(217,240,234,0.02)" stroke="rgba(217,240,234,0.10)" stroke-width="1"/>
+      <text x="460" y="748" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace">STAGE GROUP</text>
+
+      <line x1="584" y1="744" x2="616" y2="744" stroke="#7fa39c" stroke-width="1.2"/>
+      <text x="624" y="748" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace">READ ORDER</text>
+    </svg>
+  </div>
+</body>
+</html>

@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Undercroft — The Write Path</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:  #04080a;
+      --color-raise:  #071014;
+      --color-ink:    #d9f0ea;
+      --color-muted:  #7fa39c;
+      --color-accent: #35e0c2;
+      --font-sans:  'Geist', system-ui, sans-serif;
+      --font-serif: 'Instrument Serif', serif;
+      --font-mono:  'Geist Mono', ui-monospace, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1200px; width: 100%; }
+    .eyebrow {
+      font-family: var(--font-mono); font-size: 0.66rem; font-weight: 500;
+      letter-spacing: 0.18em; text-transform: uppercase;
+      color: var(--color-muted); margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400; letter-spacing: -0.02em; line-height: 1.15;
+      color: var(--color-ink); margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 900px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Process · 04 of 12 · Undercroft</p>
+    <h1>The write path, and the choke point every save passes</h1>
+
+    <svg viewBox="0 0 1200 736" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="write-path-title write-path-desc">
+      <title id="write-path-title">Undercroft write path</title>
+      <desc id="write-path-desc">Every save in Undercroft runs the same eight ordered steps — validate the declared wing and room names, screen the content, derive a deterministic drawer id, embed it, compress it in its own frame, seal it with AAD bound to the vault, tag it with HMAC, and append to the audit chain inside the same SQLite transaction — and a save the screen flags is diverted instead into a quarantine wing, where it is reported as quarantined with the id it actually landed under.</desc>
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7fa39c"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#35e0c2"/></marker>
+        <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#c9a961"/></marker>
+        <marker id="arrow-danger" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ff5d73"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#04080a"/>
+
+      <!-- ============ ZONES (drawn first) ============ -->
+      <rect x="120" y="104" width="960" height="160" rx="8" fill="rgba(217,240,234,0.02)" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
+      <rect x="552" y="108" width="96" height="12" rx="2" fill="#04080a"/>
+      <text x="600" y="117" fill="rgba(217,240,234,0.40)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">ADMIT AND DERIVE</text>
+
+      <rect x="120" y="432" width="960" height="160" rx="8" fill="rgba(217,240,234,0.02)" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
+      <rect x="552" y="436" width="96" height="12" rx="2" fill="#04080a"/>
+      <text x="600" y="445" fill="rgba(217,240,234,0.40)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">SEAL AND COMMIT</text>
+
+      <!-- ============ ARROWS (before boxes) ============ -->
+      <!-- caller in -> step 01 (shared x) -->
+      <line x1="240" y1="64" x2="240" y2="136" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- 01 -> 02 (shared y) -->
+      <line x1="344" y1="184" x2="376" y2="184" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- 02 -> 03 (shared y) -->
+      <line x1="584" y1="184" x2="616" y2="184" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- 03 -> 04 (shared y) -->
+      <line x1="824" y1="184" x2="856" y2="184" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- 04 -> 05, the row turn (shared x) -->
+      <line x1="960" y1="232" x2="960" y2="464" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- 05 -> 06 (shared y, leftward) -->
+      <line x1="856" y1="512" x2="824" y2="512" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- 06 -> 07 (shared y, leftward) -->
+      <line x1="616" y1="512" x2="584" y2="512" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- 07 -> 08 (shared y, leftward) -->
+      <line x1="376" y1="512" x2="344" y2="512" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- 02 -> quarantine, the refusal branch (shared x) -->
+      <line x1="480" y1="232" x2="480" y2="304" stroke="#ff5d73" stroke-width="1.2" marker-end="url(#arrow-danger)"/>
+      <!-- 08 -> disk (shared x) -->
+      <line x1="240" y1="560" x2="240" y2="616" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- ============ ARROW LABELS (mask + 8px gap) ============ -->
+      <rect x="248" y="72" width="72" height="12" rx="2" fill="#04080a"/>
+      <text x="284" y="81" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">save(content)</text>
+
+      <rect x="488" y="256" width="56" height="12" rx="2" fill="#04080a"/>
+      <text x="516" y="265" fill="#ff5d73" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">FLAGGED</text>
+
+      <rect x="248" y="600" width="72" height="12" rx="2" fill="#04080a"/>
+      <text x="284" y="609" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">bytes on disk</text>
+
+      <!-- ============ NODES ============ -->
+      <!-- 01 Validate declaration -->
+      <rect x="136" y="136" width="208" height="96" rx="6" fill="#04080a"/>
+      <rect x="136" y="136" width="208" height="96" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <rect x="144" y="142" width="24" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
+      <text x="156" y="151" fill="rgba(217,240,234,0.80)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">01</text>
+      <text x="240" y="178" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Validate declaration</text>
+      <text x="240" y="196" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">wing and room names</text>
+      <text x="240" y="210" fill="#5c7f79" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">checked before any rewrite</text>
+
+      <!-- 02 Screen (FOCAL) -->
+      <rect x="376" y="136" width="208" height="96" rx="6" fill="#04080a"/>
+      <rect x="376" y="136" width="208" height="96" rx="6" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1.2"/>
+      <rect x="384" y="142" width="24" height="12" rx="2" fill="transparent" stroke="rgba(53,224,194,0.50)" stroke-width="0.8"/>
+      <text x="396" y="151" fill="#35e0c2" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">02</text>
+      <text x="480" y="178" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Screen</text>
+      <text x="480" y="196" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">write_drawer(Screen)</text>
+      <text x="480" y="210" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">Apply or Bypass(reason)</text>
+      <text x="480" y="224" fill="#5c7f79" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">a new path will not compile</text>
+
+      <!-- 03 Chunk and derive id -->
+      <rect x="616" y="136" width="208" height="96" rx="6" fill="#04080a"/>
+      <rect x="616" y="136" width="208" height="96" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <rect x="624" y="142" width="24" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
+      <text x="636" y="151" fill="rgba(217,240,234,0.80)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">03</text>
+      <text x="720" y="178" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Chunk and derive id</text>
+      <text x="720" y="196" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">(wing,room,source,chunk,norm)</text>
+      <text x="720" y="210" fill="#5c7f79" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">deterministic · idempotent</text>
+
+      <!-- 04 Embed -->
+      <rect x="856" y="136" width="208" height="96" rx="6" fill="#04080a"/>
+      <rect x="856" y="136" width="208" height="96" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <rect x="864" y="142" width="24" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
+      <text x="876" y="151" fill="rgba(217,240,234,0.80)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">04</text>
+      <text x="960" y="178" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Embed</text>
+      <text x="960" y="196" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">vector for the semantic channel</text>
+      <text x="960" y="210" fill="#5c7f79" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">offline by default</text>
+
+      <!-- 05 Compress -->
+      <rect x="856" y="464" width="208" height="96" rx="6" fill="#04080a"/>
+      <rect x="856" y="464" width="208" height="96" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <rect x="864" y="470" width="24" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
+      <text x="876" y="479" fill="rgba(217,240,234,0.80)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">05</text>
+      <text x="960" y="506" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Compress</text>
+      <text x="960" y="524" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">zstd, one frame per drawer</text>
+      <text x="960" y="538" fill="#5c7f79" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">never shared across drawers</text>
+
+      <!-- 06 Seal -->
+      <rect x="616" y="464" width="208" height="96" rx="6" fill="#04080a"/>
+      <rect x="616" y="464" width="208" height="96" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <rect x="624" y="470" width="24" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
+      <text x="636" y="479" fill="rgba(217,240,234,0.80)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">06</text>
+      <text x="720" y="506" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Seal</text>
+      <text x="720" y="524" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">XChaCha20-Poly1305</text>
+      <text x="720" y="538" fill="#5c7f79" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">AAD binds the vault id</text>
+
+      <!-- 07 HMAC tag -->
+      <rect x="376" y="464" width="208" height="96" rx="6" fill="#04080a"/>
+      <rect x="376" y="464" width="208" height="96" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <rect x="384" y="470" width="24" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
+      <text x="396" y="479" fill="rgba(217,240,234,0.80)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">07</text>
+      <text x="480" y="506" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">HMAC tag</text>
+      <text x="480" y="524" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">HMAC-SHA256 over the record</text>
+      <text x="480" y="538" fill="#5c7f79" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">verified before every read</text>
+
+      <!-- 08 Chain append and anchor (FOCAL) -->
+      <rect x="136" y="464" width="208" height="96" rx="6" fill="#04080a"/>
+      <rect x="136" y="464" width="208" height="96" rx="6" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1.2"/>
+      <rect x="144" y="470" width="24" height="12" rx="2" fill="transparent" stroke="rgba(53,224,194,0.50)" stroke-width="0.8"/>
+      <text x="156" y="479" fill="#35e0c2" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">08</text>
+      <text x="240" y="506" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Chain append and anchor</text>
+      <text x="240" y="524" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">same SQLite transaction</text>
+      <text x="240" y="538" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">manifest anchor is fsynced</text>
+      <text x="240" y="552" fill="#5c7f79" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">and deliberately lags</text>
+
+      <!-- diverted branch target -->
+      <rect x="376" y="304" width="208" height="80" rx="6" fill="#04080a"/>
+      <rect x="376" y="304" width="208" height="80" rx="6" fill="rgba(255,93,115,0.10)" stroke="#ff5d73" stroke-width="1"/>
+      <rect x="384" y="310" width="52" height="12" rx="2" fill="transparent" stroke="rgba(255,93,115,0.45)" stroke-width="0.8"/>
+      <text x="410" y="319" fill="#ff5d73" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">DIVERTED</text>
+      <text x="480" y="344" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">quarantine-pending</text>
+      <text x="480" y="362" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">reports quarantined:true</text>
+      <text x="480" y="376" fill="#5c7f79" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">and the id it landed under</text>
+
+      <!-- ============ LEGEND ============ -->
+      <line x1="120" y1="664" x2="1080" y2="664" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
+      <text x="120" y="684" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">LEGEND</text>
+
+      <rect x="228" y="676" width="16" height="10" rx="2" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1"/>
+      <text x="252" y="684" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace">FOCAL</text>
+
+      <rect x="332" y="676" width="16" height="10" rx="2" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <text x="356" y="684" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace">STEP</text>
+
+      <rect x="428" y="676" width="16" height="10" rx="2" fill="rgba(255,93,115,0.10)" stroke="#ff5d73" stroke-width="1"/>
+      <text x="452" y="684" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace">DIVERTED</text>
+
+      <line x1="580" y1="681" x2="612" y2="681" stroke="#7fa39c" stroke-width="1.2"/>
+      <text x="620" y="684" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace">FLOW</text>
+
+      <line x1="692" y1="681" x2="724" y2="681" stroke="#ff5d73" stroke-width="1.2"/>
+      <text x="732" y="684" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace">DIVERSION</text>
+    </svg>
+  </div>
+</body>
+</html>

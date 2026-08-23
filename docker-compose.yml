@@ -232,10 +232,17 @@ services:
   # `--check` must write nothing, and the old gate's real defect was that it
   # wrote index.html BEFORE comparing, so a firing check left the file already
   # mutated. Read-only makes "writes nothing" enforced instead of claimed.
+  # Two verifications over `architecture/`, one service and therefore one CI
+  # leg. `build.sh --check` proves index.html and the PDFs are what diagrams/
+  # derives to; `platform-views/check.py` gates the illustrative parallel set,
+  # which has NO build step — nothing derives those files, so a checker is the
+  # only thing that can keep them honest. Chained with `&&` so the exit code
+  # is the failing one. The mount stays READ-ONLY: both must write nothing,
+  # and the old arch gate's real defect was writing before it compared.
   arch-check:
     image: python:3.12-slim
     working_dir: /a
-    entrypoint: ["sh", "build.sh", "--check"]
+    entrypoint: ["sh", "-c", "sh build.sh --check && python3 platform-views/check.py"]
     volumes:
       - ./architecture:/a:ro
 

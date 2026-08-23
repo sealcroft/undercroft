@@ -1244,6 +1244,26 @@ Consequences that are binding, not advisory:
   section at a time** behind a sidebar, enabled by script (`body.paged`)
   so that with JS off every section stays visible and the document still
   reads end to end
+- `architecture/platform-views/` — an **illustrative parallel set** of twelve
+  self-contained HTML diagrams (surfaces, crate map, write path, retrieval
+  stack, containment/keys, admission, lifecycle, agent session, deployment,
+  capability matrix, integrity chain) in the product's own dark palette,
+  tokens taken from `website/landing/index.html`. **`diagrams/` remains the
+  authority** — this set is a second description of the same system, and the
+  two are bound by nothing but attention, so a change to the engine must move
+  both or they disagree. `index.html` here is the entry point and
+  `check.py` is the gate, run by the same `arch-check` service (one service,
+  one CI leg): inventory counted in BOTH directions against `index.html`,
+  the accessible-SVG contract, offline-only assets, LF endings, a 9-node /
+  2-accent budget, and the geometry rules a renderer would otherwise be needed
+  to catch — no diagonal connector, none passing behind a non-endpoint box, no
+  label mask painted over by a later node. It carries a **premise probe**: the
+  geometry checks must fail on a known-bad fixture before any clean result is
+  believed. **`rx` is the discriminator between a node and a zone** (6 vs 8) —
+  a first version treated every large stroked rect as a node and reported 96
+  breaches across a set whose exemplar had already been verified by eye, which
+  is the calibration rule in one line: *a check that flags the artifact you
+  confirmed with your own eyes is wrong about the check*
 - `website/` — GitHub Pages: `landing/index.html` (custom landing) + mdBook docs
   under `src/`. **`build-site.sh` is the ONE assembly**, run by both
   `pages.yml` and `docker compose run --rm site`; the two used to carry
@@ -1320,15 +1340,50 @@ Consequences that are binding, not advisory:
   prompt text and no AMB code** — their clone ships no LICENSE, so it is
   all-rights-reserved by default and must never enter this repo or its
   history; the procedure asks the operator for their clone path and maps
-  prompts, schemas and cached splits from there. Covers all five cached
+  prompts, schemas and cached splits from there. Covers the five judged
   datasets and warns they are not interchangeable (`personamem` is MCQ
   with **no judge at all**, `beam` is a continuous rubric whose
-  `build_judge_prompt` is never called, `locomo` alone skips a category).
-  Its traps section is load-bearing: `task_type: "open"` needs a
+  `build_judge_prompt` is never called, `locomo` alone skips a category);
+  a **sixth**, `sdebench`, is cached and deliberately out of scope — it is
+  `task_type: "coding"`, scored by pytest, with no answer model and no
+  judge. Its traps section is load-bearing: `task_type: "open"` needs a
   reasoning+answer schema, `query_timestamp` uses a LEXICOGRAPHIC
-  session sort, LoCoMo's category ints are 1 single-hop / 3 multi-hop,
-  and `k` defaults to **10** — at k=30 that was 34% of a whole
-  conversation and the resulting 94.4% was uninterpretable
+  session sort, and `k` defaults to **10** — at k=30 that was 34% of a
+  whole conversation and the resulting 94.4% was uninterpretable.
+  **LoCoMo's category ints are `1` MULTI-HOP and `4` SINGLE-HOP** (2
+  temporal, 3 open-domain, 5 adversarial). This line said the opposite
+  until 2026-08-22, having copied the CLONE's `_CATEGORY_NAMES`, which
+  rotates three of the five labels — so the guide and
+  `docs/AMB_REPLICATION.md` contradicted each other and the guide was the
+  wrong one. Measured on the full split: cat 1 carries **3.13** evidence
+  turns over **2.67** sessions, cat 4 carries **1.07/1.00**, and cat 4 is
+  by far the largest at 841 of 1,540 — a single-hop question cannot span
+  three turns in three sessions. The lesson is this file's own: a claim
+  copied from a third party's source is not verified by having been
+  written down, and the data settles it in one query.
+  **The context model carries NO timestamps for any provider** —
+  `modes/rag.py` uses `doc.content` alone and AMB's BM25 baseline drops
+  `Document.timestamp` — while `locomo`'s prompt tells the model to mind
+  the timestamps. Measured, that single field is worth **+64 points of
+  temporal accuracy** (20.9% → 85.0%) and **+12 overall**; 76.0% of
+  temporal golds are dates absent from the retrieved text. Choose and
+  REPORT the context shape before running
+- `docs/research/` — **gitignored** benchmark-run working sets, on the
+  `.handover/` pattern: ignored by git, a governance surface anyway. It
+  exists because a run's working set holds the third-party corpus and that
+  benchmark's **rendered prompt text** verbatim, which is its source in
+  string form — and their clone ships no LICENSE, so it must never enter
+  this repo *or its history*. **Gitignoring is what makes keeping the full
+  run data safe**; the alternative was discarding the per-question answers
+  and verdicts, i.e. the evidence any later challenge to a figure would
+  need. Aggregate figures carrying no corpus content publish the normal
+  way — `benchmarks/logs/` and `benchmarks/RESULTS.md`, under that
+  directory's own standing rule (*"never benchmark-corpus content"*, which
+  the existing LoCoMo logs hold to). **A fresh clone has none of it**, so
+  anything a later session must not lose belongs in a TRACKED file; each
+  run folder therefore carries a README stating its findings in prose
+  rather than leaving them implicit in the data. Holds
+  `amb-locomo10-2026-08-22/` (M32)
 - `SECURITY.md` (disclosure policy; private vulnerability reporting is
   enabled on the repo), `NOTICE` (MemPalace MIT heritage attribution),
   `LICENSE` (BUSL 1.1 — see Conventions)
@@ -1480,9 +1535,14 @@ bash tests/tls-pins.sh                # CA pins readable by the engine (7 checks
                                       # starts — that needs the full image and four
                                       # containers, deferred on cost with the command
                                       # written down in ROADMAP M7
-docker compose run --rm arch-check    # the architecture reference is what
+docker compose run --rm arch-check    # TWO verifications, one service: the
+                                      # architecture reference is what
                                       # diagrams/ and its own headings derive
-                                      # to. No build, stock python, READ-ONLY
+                                      # to, AND platform-views/check.py gates
+                                      # the illustrative parallel set, which
+                                      # has no build step so a checker is the
+                                      # only thing keeping it honest.
+                                      # No build, stock python, READ-ONLY
                                       # mount — `--check` must write nothing,
                                       # and the old gate's real defect was
                                       # writing index.html BEFORE comparing.

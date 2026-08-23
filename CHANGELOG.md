@@ -7,6 +7,106 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### twelve diagrams, and a gate for the set nothing derives (M33)
+
+**No engine code changed.** `architecture/platform-views/` adds twelve
+self-contained HTML diagrams covering the platform end to end — the four
+surfaces, the crate dependency graph, the write path, the retrieval stack,
+containment and keys, admission control, vault lifecycle, an agent session,
+deployment shapes, the capability matrix, and the integrity chain — skinned
+from the product's own palette in `website/landing/index.html`.
+
+**They are illustrative, and `diagrams/` remains the authority.** This is a
+second description of one system with nothing binding the two together, so the
+caveat is written into the set's own index page rather than only into a commit
+message: change the engine and both must move or they disagree.
+
+**The gate exists because nothing derives these files.** `diagrams/` is kept
+honest by `build.sh` regenerating from it; a hand-authored set has no such
+mechanism, so `platform-views/check.py` is the only thing that can catch a
+regression. It rides the existing `arch-check` service — one service, one CI
+leg, still a read-only mount — and counts the inventory against `index.html`
+in both directions, checks the accessible-SVG contract, refuses any external
+request but the font stylesheet, refuses CRLF, enforces a 9-node / 2-accent
+budget, and verifies the geometry rules that otherwise need a renderer: no
+diagonal connector, none passing behind a non-endpoint box, no label mask
+painted over by a node drawn later.
+
+**It carries a premise probe, and it needed one.** The first version of the
+geometry check treated every large stroked rect as a node and reported 96
+breaches across a set whose exemplar had already been confirmed by eye. `rx`
+is the discriminator — 6 is a node, 8 is a zone, and zones are painted before
+arrows precisely so connectors may cross them. The rule that fell out of it:
+*a check that flags the artifact you verified with your own eyes is wrong
+about the check, not the artifact.* The geometry checks now run against a
+known-bad fixture first and the gate exits non-zero if they fail to see it.
+
+**One defect of mine the fleet caught.** The crate-map brief was written from
+recall rather than from the manifests and was wrong in five places — `cli`
+depends on neither `config` nor `net`, `store` has six dependencies rather
+than three, `vault` also pulls `obs`, and the orchestrator pulls three rather
+than two. The agent drawing it read the `Cargo.toml` files, drew what they
+said, and reported the contradiction; verified, it was right on every point.
+
+### the benchmark ran, and the guide's own category map was the clone's error (M32)
+
+**No engine code changed.** The Agent Memory Benchmark's LoCoMo protocol was
+run end to end against a live `serve-http` — all **1,540** queries of
+`locomo10`, sealed vault, `undercroft-hash-v3`, `k=10`, both model roles pinned
+to Sonnet 5 — and the documentation it exercised is what moved.
+
+**`CLAUDE.md` carried the wrong LoCoMo category map**, contradicting
+`docs/AMB_REPLICATION.md` in the same repo. It said `1` single-hop / `3`
+multi-hop, which is the external clone's `_CATEGORY_NAMES` — and that rotates
+three of the five labels. The data settles it in one query: cat 1 carries
+**3.13** evidence turns over **2.67** sessions (multi-hop), cat 4 carries
+**1.07/1.00** and is 841 of 1,540 (single-hop). A claim copied from a third
+party's source is not verified by having been written down. The clone is not
+patched — that is a hard constraint of the procedure — so figures now carry the
+raw integer plus both labels.
+
+**The context model carries no timestamps, for any provider, and it dominates
+the score.** `modes/rag.py` builds context from `doc.content` alone and AMB's
+own BM25 baseline drops `Document.timestamp`, while `locomo`'s answer prompt
+instructs the model to mind the timestamps. **244 of 321 temporal golds
+(76.0%) are dates absent from the retrieved text.** Three context shapes AMB's
+contract permits, measured over **one shared retrieval** (0 ranking drift, so
+construction was the only variable): temporal **20.9% → 85.0% / 81.3%**,
+overall **68.6% → 80.8% / 81.4%**. Undercroft had resolved `"yesterday"` to
+`2023-05-07` against the drawer's `content_date` — the gold answer — and the
+baseline shape discards it.
+
+**Two of my own claims were refuted by the arithmetic that should have run
+first.** A 3.7-point temporal difference and a 0.6-point overall difference
+between the two upper arms were written up as findings; McNemar on the paired
+outcomes returned p=0.074 and p=0.55. What survives is decisive — 207 temporal
+queries flip wrong→right against 1 the other way — and one regression is real:
+the dated-content shape costs **significant** multi-hop accuracy (p=0.0036),
+mechanism unestablished, gold-list coverage 44.1% → 38.6% at unchanged answer
+length. §7 now requires the test and the discordant counts, not two percentages.
+
+**Judge leniency is not uniform across arms**, which matters because it always
+flatters the weakest one: the content-only arm took 15 credits where the gold
+was an absolute date and the answer stated none, worth 0.9 points overall and
+4.7 on temporal; the other two took zero. Both as-judged and strict figures are
+published. Judge agreement with unanimous blind re-raters measured 95.2% /
+100.0% / 93.5%.
+
+`docs/AMB_REPLICATION.md` §3 was also short by two cached splits (`beam/500k`,
+and `sdebench/boltons` — a sixth dataset, `task_type: "coding"`, deliberately
+out of scope), found by enumerating the cache rather than reading the table.
+
+**`docs/research/` is a new gitignored directory** on the `.handover/` pattern,
+and the only tracked part of it is the ignore rule. A run's working set holds
+the third-party corpus and that benchmark's rendered prompt text verbatim, so
+it can never be committed — but stripping a run down to what is publishable
+throws away the per-question answers and verdicts, which is the evidence any
+later challenge to a figure would need. Ignoring the directory is what makes
+keeping all 244 MB of it safe. Aggregates carrying no corpus content still
+publish the normal way, under `benchmarks/logs/README.md`'s standing rule.
+Because a fresh clone has none of it, each run folder states its findings in
+prose, and `CLAUDE.md` now records that the directory exists at all.
+
 ### a corpus test I had not run, an estimate wrong by 400×, and the cheap half of a receipt walk (M27)
 
 **Asked whether a real-corpus test had been run: it had not.** That is

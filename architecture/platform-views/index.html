@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Undercroft — Platform Views</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --paper:#04080a; --raise:#071014; --ink:#d9f0ea; --muted:#7fa39c;
+      --soft:#5c7f79; --rule:rgba(217,240,234,0.12); --accent:#35e0c2;
+      --gold:#c9a961; --danger:#ff5d73;
+      --sans:'Geist',system-ui,sans-serif; --serif:'Instrument Serif',serif;
+      --mono:'Geist Mono',ui-monospace,monospace;
+    }
+    body { font-family:var(--sans); background:var(--paper); color:var(--ink);
+           min-height:100vh; padding:3.5rem 2rem; }
+    .frame { max-width:1100px; margin:0 auto; }
+    .eyebrow { font-family:var(--mono); font-size:0.66rem; font-weight:500;
+               letter-spacing:0.18em; text-transform:uppercase; color:var(--muted);
+               margin-bottom:0.6rem; }
+    h1 { font-family:var(--serif); font-size:clamp(1.8rem,3vw,2.6rem); font-weight:400;
+         letter-spacing:-0.02em; line-height:1.1; margin-bottom:0.9rem; }
+    .lede { color:var(--muted); font-size:0.95rem; line-height:1.65; max-width:64ch;
+            margin-bottom:1rem; }
+    .caveat { border:1px solid rgba(201,169,97,0.35); background:rgba(201,169,97,0.05);
+              border-radius:6px; padding:0.9rem 1.1rem; margin:1.75rem 0 2.5rem;
+              font-size:0.85rem; line-height:1.6; color:var(--ink); max-width:74ch; }
+    .caveat strong { color:var(--gold); }
+    .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr));
+            gap:1rem; }
+    a.card { display:block; text-decoration:none; color:inherit; background:var(--raise);
+             border:1px solid var(--rule); border-radius:6px; padding:1.1rem 1.2rem;
+             transition:border-color .15s ease, transform .15s ease; }
+    a.card:hover { border-color:var(--accent); transform:translateY(-2px); }
+    .n { font-family:var(--mono); font-size:0.7rem; color:var(--accent);
+         letter-spacing:0.14em; }
+    .t { font-size:0.98rem; font-weight:600; margin:0.45rem 0 0.35rem; }
+    .d { font-size:0.8rem; color:var(--muted); line-height:1.55; }
+    .kind { display:inline-block; font-family:var(--mono); font-size:0.62rem;
+            letter-spacing:0.1em; text-transform:uppercase; color:var(--soft);
+            border:1px solid rgba(92,127,121,0.4); border-radius:2px;
+            padding:0.1rem 0.35rem; margin-top:0.6rem; }
+    footer { margin-top:3rem; padding-top:1.25rem; border-top:1px solid var(--rule);
+             font-family:var(--mono); font-size:0.7rem; color:var(--soft);
+             line-height:1.8; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Undercroft · Platform Views</p>
+    <h1>Twelve views of an encrypted memory engine</h1>
+    <p class="lede">
+      A parallel, illustrative set covering the platform end to end — surfaces,
+      components, the write and read paths, the security model, and the operational
+      shapes it runs in. Each is a self-contained page; open any one on its own.
+    </p>
+
+    <div class="caveat">
+      <strong>These are not the authoritative architecture reference.</strong>
+      <code>architecture/diagrams/</code> holds the eleven governed SVGs that
+      <code>build.sh</code> derives the PDFs and the inlined reference page from, and
+      that CI gates through <code>arch-check</code>. This set is a second description
+      of the same system with no gate binding the two together — so if the engine
+      changes, <em>both</em> must move or they will disagree. Treat the governed set
+      as the source of truth and this one as the explanatory view.
+    </div>
+
+    <div class="grid">
+      <a class="card" href="01-platform-overview.html">
+        <div class="n">01</div><div class="t">The platform, end to end</div>
+        <div class="d">An agent reaches one engine through three surfaces; the store uses the core library and the vault crypto layer to put sealed bytes on disk beside a manifest anchor.</div>
+        <span class="kind">Architecture</span>
+      </a>
+      <a class="card" href="02-interaction-layer.html">
+        <div class="n">02</div><div class="t">The four surfaces, and what each may reach</div>
+        <div class="d">CLI, MCP, REST and the control plane — and the mechanisms that keep them honest: a counted parity inventory, a read gate that fails closed, and an operator-only boundary agents never cross.</div>
+        <span class="kind">Architecture</span>
+      </a>
+      <a class="card" href="03-crate-map.html">
+        <div class="n">03</div><div class="t">Thirteen crates, and which depends on which</div>
+        <div class="d">The workspace dependency graph, drawn from the manifests rather than from memory, with the orchestrator's deliberate absence of any engine dependency marked as such.</div>
+        <span class="kind">Dependency graph</span>
+      </a>
+      <a class="card" href="04-write-path.html">
+        <div class="n">04</div><div class="t">The write path, and the choke point every save passes</div>
+        <div class="d">Validate, screen, chunk, embed, compress, seal, tag, and append to the audit chain in the same transaction — with the quarantine branch drawn where it actually forks.</div>
+        <span class="kind">Process</span>
+      </a>
+      <a class="card" href="05-retrieval-stack.html">
+        <div class="n">05</div><div class="t">The retrieval stack, from question to ranked answer</div>
+        <div class="d">Six layers: what the caller declares, how scope resolves, which candidate tier runs, hydration, fusion, and the boundary that reads the HMAC-covered copy rather than the clear mirror.</div>
+        <span class="kind">Layer stack</span>
+      </a>
+      <a class="card" href="06-containment-and-keys.html">
+        <div class="n">06</div><div class="t">What contains what, and where each key comes from</div>
+        <div class="d">Palace, vault, wing, room, drawer — beside the key hierarchy, which is a different shape on purpose, and the rule that an identifier is never derived from a rotatable key.</div>
+        <span class="kind">Nested</span>
+      </a>
+      <a class="card" href="07-admission-control.html">
+        <div class="n">07</div><div class="t">What happens to a suspicious write</div>
+        <div class="d">Declaration validated first — because the screen rewrites the fields validation reads — then the tier-one detector, the quarantine divert, and the operator ruling that is never reachable from an agent.</div>
+        <span class="kind">Flowchart</span>
+      </a>
+      <a class="card" href="08-vault-lifecycle.html">
+        <div class="n">08</div><div class="t">A vault through its life</div>
+        <div class="d">Init, open writable or read-only, rotate, repair, archive — and the reconcile-on-open guard where a crash fast-forwards and a rollback raises tamper.</div>
+        <span class="kind">State machine</span>
+      </a>
+      <a class="card" href="09-agent-session.html">
+        <div class="n">09</div><div class="t">One agent session, message by message</div>
+        <div class="d">Wake up, search, save — what actually crosses the wire, including the read choke point and the audit record that only exists when read auditing is switched on.</div>
+        <span class="kind">Sequence</span>
+      </a>
+      <a class="card" href="10-deployment.html">
+        <div class="n">10</div><div class="t">Where it runs</div>
+        <div class="d">Three shapes: a single binary with no network at all, one served host behind bearer auth, and a fleet with a control plane that is a pure API client plus read replicas.</div>
+        <span class="kind">Deployment</span>
+      </a>
+      <a class="card" href="11-capability-matrix.html">
+        <div class="n">11</div><div class="t">Which surface may do what</div>
+        <div class="d">Capability against surface, with the operator-only cells marked as refusals — an agent must not rule on the queue that exists to contain it.</div>
+        <span class="kind">Security matrix</span>
+      </a>
+      <a class="card" href="12-integrity-chain.html">
+        <div class="n">12</div><div class="t">How tampering is detected</div>
+        <div class="d">The chain advancing inside the same transaction as the data, the anchor that must never run ahead of it, and the six legs verify actually checks.</div>
+        <span class="kind">Data flow</span>
+      </a>
+    </div>
+
+    <footer>
+      Skin: undercroft dark — paper #04080a · ink #d9f0ea · accent #35e0c2 · link #c9a961 · danger #ff5d73<br>
+      Tokens taken from website/landing/index.html. Every page is self-contained; fonts are the only external request.<br>
+      Authoritative reference: architecture/diagrams/ (eleven SVGs, gated by arch-check).
+    </footer>
+  </div>
+</body>
+</html>

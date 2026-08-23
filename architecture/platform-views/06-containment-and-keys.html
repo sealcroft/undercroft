@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Undercroft — Containment and Keys</title>
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:  #04080a;
+      --color-raise:  #071014;
+      --color-ink:    #d9f0ea;
+      --color-muted:  #7fa39c;
+      --color-accent: #35e0c2;
+      --font-sans:  'Geist', system-ui, sans-serif;
+      --font-serif: 'Instrument Serif', serif;
+      --font-mono:  'Geist Mono', ui-monospace, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1200px; width: 100%; }
+    .eyebrow {
+      font-family: var(--font-mono); font-size: 0.66rem; font-weight: 500;
+      letter-spacing: 0.18em; text-transform: uppercase;
+      color: var(--color-muted); margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400; letter-spacing: -0.02em; line-height: 1.15;
+      color: var(--color-ink); margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 900px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Nested · 06 of 12 · Undercroft</p>
+    <h1>What contains what, and where each key comes from</h1>
+
+    <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="containment-and-keys-title containment-and-keys-desc">
+      <title id="containment-and-keys-title">Undercroft containment and key hierarchy</title>
+      <desc id="containment-and-keys-desc">A palace directory on one machine holds vaults, each vault holds wings that a caller scopes to and that carry trust, each wing holds rooms for a session or document, and each room holds drawers of verbatim text; beside that nest, a master key is expanded by HKDF into four derived subkeys for sealing, HMAC tagging and choosing training rows, while a separately stored kg_secret is re-sealed by a key rotation rather than re-derived, so identifiers keyed with it never move.</desc>
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7fa39c"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#35e0c2"/></marker>
+        <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#c9a961"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#04080a"/>
+
+      <!-- ============ ZONES: the containment rings + the key panel ============ -->
+      <!-- Palace (outermost) -->
+      <rect x="96" y="136" width="560" height="456" rx="8" fill="rgba(217,240,234,0.015)" stroke="rgba(217,240,234,0.18)" stroke-width="0.8"/>
+      <!-- Vault (FOCAL) -->
+      <rect x="124" y="200" width="504" height="364" rx="8" fill="rgba(53,224,194,0.07)" stroke="#35e0c2" stroke-width="1.2"/>
+      <!-- Wing -->
+      <rect x="152" y="264" width="448" height="272" rx="8" fill="rgba(217,240,234,0.03)" stroke="rgba(217,240,234,0.32)" stroke-width="0.8"/>
+      <!-- Room -->
+      <rect x="180" y="328" width="392" height="180" rx="8" fill="rgba(217,240,234,0.045)" stroke="#7fa39c" stroke-width="1"/>
+      <!-- Drawer (the atom) -->
+      <rect x="208" y="392" width="336" height="88" rx="8" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+
+      <!-- Key panel (NOT nested — a sibling, not a container of the nest) -->
+      <rect x="752" y="112" width="352" height="508" rx="8" fill="rgba(217,240,234,0.02)" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
+      <rect x="884" y="116" width="88" height="12" rx="2" fill="#04080a"/>
+      <text x="928" y="125" fill="rgba(217,240,234,0.40)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">KEY MATERIAL</text>
+
+      <!-- ============ ARROWS (before boxes) ============ -->
+      <!-- master.key -> HKDF (shared x, straight) -->
+      <line x1="928" y1="212" x2="928" y2="244" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- HKDF -> derived subkeys (shared x, straight) -->
+      <line x1="928" y1="324" x2="928" y2="356" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- key panel -> Vault ring: DERIVES, bridging the Palace boundary it crosses -->
+      <path d="M 752,408 H 664 a 8,8 0 0,0 -16,0 H 632" fill="none" stroke="#7fa39c" stroke-width="1.2" stroke-dasharray="6,4" marker-end="url(#arrow)"/>
+      <!-- the lane divider inside the key panel: below it, nothing is derived -->
+      <path d="M 784,492 H 1072" fill="none" stroke="rgba(127,163,156,0.40)" stroke-width="0.8" stroke-dasharray="4,3"/>
+      <!-- callout leader (orthogonal, dashed) -->
+      <path d="M 288,664 H 920 Q 928,664 928,656 V 600" fill="none" stroke="rgba(127,163,156,0.45)" stroke-width="1" stroke-dasharray="4,3"/>
+      <circle cx="928" cy="596" r="2" fill="#7fa39c"/>
+
+      <!-- ============ ARROW LABELS (mask + 8px gap) ============ -->
+      <rect x="936" y="216" width="40" height="12" rx="2" fill="#04080a"/>
+      <text x="956" y="225" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">IKM</text>
+
+      <rect x="936" y="328" width="64" height="12" rx="2" fill="#04080a"/>
+      <text x="968" y="337" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">4 LABELS</text>
+
+      <rect x="672" y="388" width="64" height="12" rx="2" fill="#04080a"/>
+      <text x="704" y="397" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">DERIVES</text>
+
+      <rect x="856" y="472" width="144" height="12" rx="2" fill="#04080a"/>
+      <text x="928" y="481" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">NOT DERIVED · STORED</text>
+
+      <!-- ============ NODES ============ -->
+      <!-- Palace -->
+      <rect x="112" y="140" width="40" height="12" rx="2" fill="#04080a"/>
+      <text x="132" y="149" fill="rgba(217,240,234,0.40)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">HOST</text>
+      <text x="112" y="170" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif">Palace</text>
+      <text x="112" y="188" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace">one data directory on one machine</text>
+
+      <!-- Vault (FOCAL) -->
+      <rect x="140" y="204" width="48" height="12" rx="2" fill="#04080a"/>
+      <text x="164" y="213" fill="#35e0c2" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">CRYPTO</text>
+      <text x="140" y="234" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif">Vault</text>
+      <text x="140" y="252" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace">isolation unit · keys derived per vault</text>
+
+      <!-- Wing -->
+      <rect x="168" y="268" width="48" height="12" rx="2" fill="#04080a"/>
+      <text x="192" y="277" fill="rgba(217,240,234,0.45)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">SCOPE</text>
+      <text x="168" y="298" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif">Wing</text>
+      <text x="168" y="316" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace">what a caller scopes to · trust assigned here</text>
+
+      <!-- Room -->
+      <rect x="196" y="332" width="48" height="12" rx="2" fill="#04080a"/>
+      <text x="220" y="341" fill="rgba(127,163,156,0.90)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">GROUP</text>
+      <text x="196" y="362" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif">Room</text>
+      <text x="196" y="380" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace">one session, or one document</text>
+
+      <!-- Drawer -->
+      <rect x="224" y="396" width="40" height="12" rx="2" fill="#04080a"/>
+      <text x="244" y="405" fill="rgba(217,240,234,0.80)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">ATOM</text>
+      <text x="224" y="426" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif">Drawer</text>
+      <text x="224" y="444" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace">one verbatim chunk, sealed at rest</text>
+      <text x="224" y="458" fill="#5c7f79" font-size="9" font-family="'Geist Mono', monospace">id: wing · room · source · chunk</text>
+
+      <!-- master.key -->
+      <rect x="784" y="136" width="288" height="72" rx="6" fill="#04080a"/>
+      <rect x="784" y="136" width="288" height="72" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <rect x="792" y="142" width="40" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
+      <text x="812" y="151" fill="rgba(217,240,234,0.80)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">SECRET</text>
+      <text x="928" y="174" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">master.key</text>
+      <text x="928" y="192" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">argon2id passphrase, or on disk</text>
+
+      <!-- HKDF -->
+      <rect x="784" y="248" width="288" height="72" rx="6" fill="#04080a"/>
+      <rect x="784" y="248" width="288" height="72" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <rect x="792" y="254" width="28" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
+      <text x="806" y="263" fill="rgba(217,240,234,0.80)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">KDF</text>
+      <text x="928" y="286" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">HKDF-SHA256</text>
+      <text x="928" y="304" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">one label per subkey</text>
+
+      <!-- Derived subkeys -->
+      <rect x="784" y="360" width="288" height="104" rx="6" fill="#04080a"/>
+      <rect x="784" y="360" width="288" height="104" rx="6" fill="rgba(217,240,234,0.05)" stroke="#7fa39c" stroke-width="1"/>
+      <rect x="792" y="366" width="44" height="12" rx="2" fill="transparent" stroke="rgba(127,163,156,0.40)" stroke-width="0.8"/>
+      <text x="814" y="375" fill="rgba(127,163,156,0.90)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">DERIVED</text>
+      <text x="928" y="400" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Four derived subkeys</text>
+      <text x="928" y="418" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">enc · seals content</text>
+      <text x="928" y="432" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">mac · HMAC tags + chain</text>
+      <text x="928" y="446" fill="#5c7f79" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">sample · picks training rows</text>
+
+      <!-- kg_secret (FOCAL) -->
+      <rect x="784" y="508" width="288" height="88" rx="6" fill="#04080a"/>
+      <rect x="784" y="508" width="288" height="88" rx="6" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1.2"/>
+      <rect x="792" y="514" width="40" height="12" rx="2" fill="transparent" stroke="rgba(53,224,194,0.50)" stroke-width="0.8"/>
+      <text x="812" y="523" fill="#35e0c2" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">STORED</text>
+      <text x="928" y="552" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">kg_secret</text>
+      <text x="928" y="570" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">32 random bytes, sealed in meta</text>
+      <text x="928" y="584" fill="#5c7f79" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">rotation re-seals, never re-derives</text>
+
+      <!-- ============ CALLOUT ============ -->
+      <text x="96" y="620" fill="#d9f0ea" font-size="14" font-style="italic" font-family="'Instrument Serif', serif">An identifier is never derived from a rotatable key —</text>
+      <text x="96" y="644" fill="#d9f0ea" font-size="14" font-style="italic" font-family="'Instrument Serif', serif">a moving id breaks every audit record, receipt and</text>
+      <text x="96" y="668" fill="#d9f0ea" font-size="14" font-style="italic" font-family="'Instrument Serif', serif">agent-held reference at once.</text>
+
+      <!-- ============ LEGEND ============ -->
+      <line x1="96" y1="720" x2="1104" y2="720" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
+      <text x="96" y="740" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">LEGEND</text>
+
+      <rect x="204" y="732" width="16" height="10" rx="2" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1"/>
+      <text x="228" y="740" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace">FOCAL</text>
+
+      <rect x="308" y="732" width="16" height="10" rx="2" fill="rgba(217,240,234,0.03)" stroke="rgba(217,240,234,0.32)" stroke-width="1"/>
+      <text x="332" y="740" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace">CONTAINMENT</text>
+
+      <rect x="440" y="732" width="16" height="10" rx="2" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <text x="464" y="740" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace">KEY MATERIAL</text>
+
+      <line x1="576" y1="737" x2="608" y2="737" stroke="#7fa39c" stroke-width="1.2" stroke-dasharray="6,4"/>
+      <text x="616" y="740" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace">DERIVES</text>
+
+      <line x1="704" y1="737" x2="736" y2="737" stroke="#7fa39c" stroke-width="1.2"/>
+      <text x="744" y="740" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace">KEY FLOW</text>
+    </svg>
+  </div>
+</body>
+</html>
