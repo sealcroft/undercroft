@@ -1116,7 +1116,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**97** of the **112** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**104** of the **119** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -2308,7 +2308,7 @@ thirty-one entries. Both halves are GATED now by the `prose figures`
 preflight (two rows: the entries examined, and the level-3 headings that
 exist for it to have skipped). It caught its own arrival twice — once when the
 rows were added, once when this unit's four new open entries moved 78/93 to
-82/97.
+82/97 — and a third time on 2026-08-23, when O70-O76 moved 97/112 to 104/119.
 
 **The governance half, and it is the larger one.**
 
@@ -3057,6 +3057,257 @@ actually *satisfied* by the word "gate", which every one of these gap
 paragraphs contains. Detecting "this closed entry contains an open item" needs
 a semantic reading, which this file has repeatedly refused to fake with a
 scanner (O33, O47). The mechanism here is a heading, not a gate.
+
+### O70 — the obvious way to use a search hit is the worst one, and nothing says so
+
+**Measured on 1,540 questions, 2026-08-22.** A hit carries twenty fields.
+An integrator who does the obvious thing — concatenate `content` from each hit
+into a context block — lands on the **worst configuration measured**:
+overall **68.6%**, temporal **20.9%**. Supplying the hit's `content_date`
+alongside its text moves the same corpus, the same retrieval and the same
+model to **80.8% overall and 85.0% temporal** — **+12.2 and +64.1 points**,
+McNemar p≈1e-22 with **207 temporal questions flipping wrong→right against
+one the other way.**
+
+The cause is not a defect. `content_date` and `time_mentions` are documented,
+per-field, in `docs/AGENTS.md`'s `/v1` route table, and the engine resolves
+`"yesterday"` against the drawer's own anchor and returns the answer on every
+hit. What is missing is the **recipe and the price of skipping it**: nothing
+tells a reader that assembling context from `content` alone discards the
+engine's entire temporal contribution, and per-field documentation does not
+add up to that warning on its own.
+
+**Shape of the fix.** A short "assembling context from a hit" section in
+`docs/AGENTS.md` — what to include, in what order, and what each omission
+costs, with the measured figures. Optionally an API affordance so the easy
+path is the good one: a pre-assembled context representation the caller can
+ask for instead of building. Docs-only is the cheap half and closes most of
+the gap; the affordance is a MINOR addition and a separate decision.
+
+**Rejected: changing what `search` returns by default.** The response shape is
+a documented contract, and reshaping it to make one consumption pattern easier
+is a MAJOR change to serve a documentation problem.
+
+**Gate:** the section must carry the measured deltas, not adjectives — a
+reader has to be able to see that the omission costs 64 points of temporal
+accuracy rather than "may reduce quality". If the affordance is built, a test
+must pin that the existing response shape is byte-identical without it.
+
+---
+
+### O71 — `room_cap=1` is a measured, free improvement that appears in no document
+
+**Measured, deterministic A/B on one vault, 2026-08-23.** With the same
+corpus, the same page size and no other change:
+
+| | single-hop | multi-hop | temporal | open-domain | overall |
+|---|---|---|---|---|---|
+| default | 97.1% | **43.4%** | 88.8% | 53.9% | 83.0% |
+| `room_cap=1` | 97.7% | **51.6%** | 90.3% | 55.1% | **85.2%** |
+
+**+8.2 points of multi-hop evidence recall, no category regresses, latency
+unchanged** (50 s vs 51 s over 1,540 queries). `room_cap=2` does essentially
+nothing (43.4 → 44.1) because the busiest room averages 1.9 slots, so a cap of
+two rarely binds; the gain comes from the many rooms holding exactly two.
+
+`room_cap` is documented as a knob in the `/v1` route table. Its **effect** is
+documented nowhere, so no caller has a reason to reach for it — and the
+question it helps most, a multi-part one, is exactly the question a caller
+cannot flag in advance.
+
+**Deliberately NOT a default change.** By this file's own test, "a default
+that changes what is retrievable" is MAJOR. The measurement argues for
+documenting the knob and its effect, not for flipping it under existing
+deployments.
+
+**Analysis correction worth keeping.** This entry exists because the first
+pass ruled `room_cap` out by reasoning from an average — the busiest room
+holds 1.9 slots, so capping "cannot matter". The average hid the distribution.
+One command reversed the conclusion.
+
+**Gate:** whatever documents this must cite the measurement and the config it
+was taken under (sealed vault, `undercroft-hash-v3`, k=10, wing-scoped). An
+unqualified retrieval figure is exactly the defect the `prose figures`
+preflight exists to catch.
+
+---
+
+### O72 — nothing reports that the semantic channel is contributing nothing
+
+**Measured over 15,400 returned hits, 2026-08-22.** Separation between real
+evidence and everything else:
+
+* `semantic` — **+0.012** (mean 0.598, median 0.598: pinned at its calibrated
+  neutral and barely varying)
+* `lexical` — **+0.064**
+
+Sharper, on the 251 queries whose evidence landed at rank 11–50 against the
+text that displaced it: semantic **−0.013**, lexical **−0.090**, exact
+**−0.106**. `lexical_exact` was zero for **0 of 251** — the evidence is not
+wordless, it is **paraphrased**, and it loses on word count while the channel
+that exists to rescue paraphrase does nothing.
+
+This is `HashEmbedder` behaving exactly as documented — feature hashing over
+surface forms, so texts match on shared literal tokens and trigrams. It is not
+a defect. **The gap is that an operator cannot see it.** A hash vault at
+1,000 drawers and a hash vault at 1,000,000 have the same silent
+characteristic, and the only signal today is a retrieval result that feels
+thin.
+
+**Shape of the fix.** The engine already derives `Embedder::
+semantic_admission_gate` from the embedder in hand by measuring probe pairs at
+open — the machinery for "ask the vector space a question" exists. The same
+shape could report **measured separation** on `PalaceStats`, or warn at open
+when a hash vault passes a size where paraphrase starts to dominate. Either is
+MINOR and additive.
+
+**Rejected: changing the default embedder.** A swap moves every vector and is
+a migration, not a fix; and the prior measurement is that any modern embedder
+lands within ~1pp of any other, so the choice is the operator's.
+
+**Unmeasured, stated:** how much of the +3.2–4.2pp this project previously
+measured for a served embedder survives *this* protocol. That needs a run.
+
+**Gate:** any reported figure must be derived from the embedder in hand, never
+a constant — the shipped `0.56` gate is declared by `HashEmbedder` precisely so
+the default vault does not move, and a separation report must not reintroduce
+a per-embedder constant by the back door.
+
+---
+
+### O73 — a scope deeper than the page has no signal, and only the engine can see it
+
+**Measured, 2026-08-22/23.** Evidence recall as the page grows:
+
+| all-gold | k=10 | k=20 | k=30 | k=50 |
+|---|---|---|---|---|
+| multi-hop | **43.4%** | 69.0% | 80.1% | **95.4%** |
+| overall | 83.0% | 91.1% | 94.2% | **99.0%** |
+
+Median rank of the first piece of evidence is **1**; 81.3% of questions have
+evidence in the top three; only **15 of 1,531** have evidence the engine never
+surfaces within 50. p90 of evidence rank is **17** — a ten-row page cuts
+through the middle of the distribution. **The engine ranks correctly and then
+the page ends.**
+
+21% of questions (328 of 1,531) need more than one session of evidence; one
+needs fifteen. The caller cannot know which in advance, and the engine cannot
+know the question is multi-part — but it *does* know, at the moment it
+answers, that it truncated a ranking whose tail is still scoring well.
+
+**Shape of the fix.** A cheap, additive signal on the search response — the
+scope's population, or that the page was truncated with candidates still above
+the admission floor — so a caller can decide to ask deeper. The engine holds
+both numbers already; the caller holds neither.
+
+**Rejected: raising the default `k`.** It changes what is retrieved for every
+existing caller, costs context tokens on every query including the 79% that
+need one session, and by this file's test is MAJOR.
+
+**Unmeasured, and it matters:** whether recovering this evidence produces
+better *answers*. Everything above is retrieval recall. Recall up is not
+accuracy up, and the experiment that would settle it is a re-run of the
+answering stage under `room_cap=1` and a deeper page.
+
+**Gate:** the signal must be additive — a caller that ignores it sees the
+response the route has always returned — and pinned by a test that the
+existing shape is unchanged without it.
+
+---
+
+### O74 — two diagram sets describe one system and nothing binds them
+
+`architecture/diagrams/` holds the eleven governed SVGs that `build.sh`
+derives `index.html` and the PDFs from, gated by `arch-check`.
+`architecture/platform-views/` now holds twelve illustrative HTML diagrams of
+the same system, gated by `platform-views/check.py`.
+
+**Both gates are internal.** `check.py` proves the new set is well-formed —
+inventory, accessibility, offline assets, budgets, connector geometry. Nothing
+checks that it still *describes the same engine* as `diagrams/`, or as the
+code. Change a surface and both sets must move; only attention connects them.
+
+This was created deliberately and with the trade stated at the time, so it is
+filed as a known cost rather than discovered later.
+
+**Options, none yet chosen.** (a) Accept and label: the set is illustrative and
+may lag, said on its own index page — already true, and the cheapest. (b) A
+shared inventory both sets are counted against, the way `parity.rs` counts the
+MCP surface — real coverage, real cost, and it only works for claims that
+reduce to a countable list. (c) Retire one set. **"Accepted" is not a resting
+state** by this file's own rule, so this needs a ruling rather than silence.
+
+**Gate:** whichever is chosen, the drift caveat must not live only in a commit
+message. It is on the set's index page today and must stay wherever the set is
+published.
+
+---
+
+### O75 — AMB runs outside `undercroft-bench` are not a sanctioned path
+
+**Maintainer ruling, 2026-08-23:** benchmark runs go through the repo's own
+harness; the Agent Memory Benchmark is not to be driven from anywhere else
+for now, absent a deliberate plan otherwise.
+
+**What that settles.** The 2026-08-22 AMB LoCoMo run was driven by seven
+ad-hoc Python scripts that read prompts out of an external clone at run time.
+Those scripts live in `docs/research/`, which is gitignored, and they **stay
+there**: they are not promoted into the tree, not added to `benchmarks/`, and
+not wired into any suite. A fresh clone will not carry them, and that is the
+intended outcome rather than an oversight.
+
+**What that leaves open, stated rather than buried.** The run produced figures
+that carry no corpus content and would pass `benchmarks/logs/README.md`'s
+standing rule — and they are published nowhere tracked. `benchmarks/
+RESULTS.md`'s LoCoMo rows come from `undercroft-bench locomo`, a **different
+protocol** that scores the adversarial category AMB skips, so the two sets of
+numbers must never be placed side by side. Publishing the AMB figures would
+mean publishing a measurement taken by a path that is no longer sanctioned;
+not publishing means a real measurement exists only in an ignored directory
+whose README states the findings in prose. **Neither is obviously right and
+the decision is deferred, not made.**
+
+**If AMB is ever wanted again**, the shape that fits this ruling is an
+`undercroft-bench` subcommand — the harness already reads `locomo10.json`, so
+what AMB adds is its context contract, its prompt sourcing and its judging
+rule, and the licensing constraint is unchanged: the clone ships no LICENSE,
+so its prompts and corpus must never enter this repo or its history.
+
+**One residue in a tracked file, for whoever rules on this.**
+`crates/undercroft-embed-onnx/src/rerank.rs:185` uses a paraphrase of a real
+LoCoMo question as a test fixture. Pre-existing, long-standing, one sentence,
+and marginal — recorded here so it is a decision rather than something nobody
+noticed.
+
+**Gate:** no suite, compose service or CI job may invoke the external clone.
+If AMB support is ever built into `undercroft-bench`, the `no-trace` scanner's
+rule still applies — no third-party prompt text or corpus content in tracked
+files, checked by decompressing rather than grepping.
+
+---
+
+### O76 — the residual one percent: questions whose evidence is implied, not stated
+
+**Measured, 2026-08-23.** 15 of 1,531 questions (**1.0%**) have gold evidence
+the engine never surfaces within the top 50. Not explained by question length
+(9.5 words vs 10.0 overall) or by how many sessions the evidence spans (1.39
+vs 1.37). They skew to inferential questions — *"What fields would she be
+likely to pursue?"*, *"What is her relationship status?"* — where the answer
+is implied across a conversation rather than written in it.
+
+Same root cause as **O72**: a surface-form matcher cannot reach a claim nobody
+states. Unlike O72 it does not obviously yield to a better embedder either,
+since the target text may contain no restatement to match against at any
+depth.
+
+**Deliberately not scheduled.** Filed so the floor is recorded rather than
+implied by a rounding. This is the honest bottom of the current retrieval
+model, and any claim of "near-perfect recall" should be read against it.
+
+**Gate:** if a future change claims to close this, it must be measured on
+these 15 by id, not on an aggregate that can absorb them.
+
+---
 
 ### O62 — no e2e arm drives a tamper through a live stream
 
