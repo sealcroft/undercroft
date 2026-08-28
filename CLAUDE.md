@@ -2639,6 +2639,22 @@ had and was still bypassable on the surface most deployments use.
    truth from this tree, patches only the tiles that moved, and pushes. Run
    it in the same unit, then verify the LIVE page rather than the commit —
    Pages takes a minute or two, and `--update` waits for it.
+   **And run it BEFORE the push, not after.** "Same unit" is not enough,
+   because `house-figures` is a CI job that reads the LIVE page: any push
+   moving a published figure is red from the moment it lands until the page
+   catches up, so pushing first does not risk a red window, it GUARANTEES
+   one. Recovery is `--update`, verify live, then `gh run rerun <id>
+   --failed` — and check the re-run PER JOB, since `CI verdict` fails
+   alongside whatever it was waiting on and a run conclusion alone will not
+   tell you which of them was the real one.
+   Applied backwards, as a rule here must be: it reclassifies **exactly one**
+   decision — the `M37` push on 2026-08-23, which went red for precisely this
+   reason — and confirms the obligation above by making it precise rather
+   than changing it. Every other unit that day moved landing-page figures the
+   house does not publish, so none of them would have been caught. **One
+   instance is the whole history this rule has**, and that is stated rather
+   than implied: it is a sequencing rule earned from a single observed
+   failure, not a pattern established across many.
 5. **The full Docker battery** at the final tree, with raw exit codes:
    `test`, `lint`, `obs-config`, `arch-check`, `e2e`, `orchestrator-e2e`,
    `e2e-telemetry`, `backends-e2e`, `site`, `tls-pins`. `cargo build -p <crate>` does **not** compile

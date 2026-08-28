@@ -7,6 +7,32 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### the house page moves BEFORE the push, not merely in the same unit (M38)
+
+**Doctrine only; no code, no gate.** `CLAUDE.md`'s definition of done already
+required the house page to move "in the same unit" as the work that moves one
+of its figures. It said nothing about ORDER, and that gap has a guaranteed
+cost: `house-figures` is a CI job that reads the LIVE page, so any push moving
+a published figure is red from the moment it lands until the page catches up.
+
+**Earned from an observed failure rather than reasoned about.** The M37 push
+did exactly this — `1bbf6a4` moved the cargo-test count 769 → 772, was pushed,
+and `house-figures.sh --update` ran afterwards. CI read the page mid-window and
+failed with *"the house publishes 769, the tree runs 772"*, taking `CI verdict`
+down with it. Nothing about the commit was wrong.
+
+The rule now states the sequence, the recovery (`--update`, verify live, then
+`gh run rerun <id> --failed`), and that the re-run is checked **per job** —
+because `CI verdict` fails alongside whatever it was waiting on, and a run
+conclusion alone does not say which was the real failure.
+
+**Applied backwards, as this file requires of a new rule: it reclassifies
+exactly one decision** — that push — and confirms the existing obligation by
+making it precise rather than changing it. Every other unit that day moved
+landing-page figures the house does not publish, so none would have been
+caught. That one instance is the whole history the rule has, and the entry says
+so rather than implying a pattern.
+
 ### the two things only the engine knew, and one it was never asked (M37)
 
 **MINOR: two additive capabilities, ROADMAP O72 and O73, both ruled by the
