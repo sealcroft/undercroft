@@ -806,10 +806,11 @@
 <text x="72" y="520" class="f l" fill="var(--d-amber-ink,#8d5a1d)">select top-k</text>
 <text x="72" y="539" class="f b dim">truncate to limit · optional room_cap spreads across rooms, then refills by score</text>
 <text x="72" y="555" class="f b dim">so a single-room question is never starved</text>
-<rect x="676" y="494" width="200" height="66" rx="8" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)"/>
+<rect x="676" y="494" width="200" height="84" rx="8" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)"/>
 <text x="690" y="518" class="f s" fill="var(--d-amber-ink,#8d5a1d)">the budget that decides</text>
 <text x="690" y="535" class="f s" fill="var(--d-amber-ink,#8d5a1d)">what the model ever sees</text>
-<text x="690" y="552" class="f s dim">room_cap=2 measured −5.6 pp</text>
+<text x="690" y="552" class="f s dim">room_cap=2: −5.6 pp</text>
+<text x="690" y="568" class="f s dim">(LongMemEval, QA accuracy)</text>
 <path d="M344 560 L344 578" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 
 <rect x="24" y="580" width="640" height="72" rx="8" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.8"/>
@@ -857,7 +858,7 @@
 <p>Results are truncated to the requested limit. An optional <code>room_cap</code> takes at most <em>N</em> hits per room and then refills any remaining slots in score order — a soft cap, so a genuinely single-room question still receives the full limit and recall is never traded for spread.</p>
 <div class="note amber">
   <span class="tag">Measured — enable with care</span>
-  <p>On a corpus where evidence is <em>concentrated</em> (one session holds the answer), <code>room_cap=2</code> measured <strong>5.6 points worse</strong> overall. Forcing room diversity pulls in unrelated sessions and displaces the chunks that actually contained the answer. Spreading trades precision for breadth; when precision is what the question needs, that trade loses. Default off for this reason.</p>
+  <p>On a corpus where evidence is <em>concentrated</em> (one session holds the answer), <code>room_cap=2</code> measured <strong>5.6 points worse</strong> on LongMemEval-S answer accuracy (75.6% &rarr; 70.0%). Forcing room diversity pulls in unrelated sessions and displaces the chunks that actually contained the answer. Spreading trades precision for breadth; when precision is what the question needs, that trade loses. Default off for this reason. A later run on a different protocol &mdash; LoCoMo <code>locomo10</code>, evidence <em>recall</em>, and a cap of <strong>one</strong> rather than two &mdash; moves the other way (+8.2 points of multi-hop recall); the two are not comparable and are kept apart deliberately. Both rows, with their protocols, are in <code>benchmarks/RESULTS.md</code>.</p>
 </div>
 
 <h3 id="retrieval-stage-7-assemble-context-caller-side">Stage 7 — assemble context <span class="pill exp">caller side</span></h3>

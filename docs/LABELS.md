@@ -11,9 +11,15 @@ re-deriving it.
 
 Labels used as **scopes, filters and exact keys** have all won here: wing
 scoping, `content_date`, declared language, the poison-positive date-filter
-design. Labels used as **score modifiers** have all lost: RRF −7.3pp,
-`room_cap` −5.6pp, per-query channel rescaling −9.4pp (full rows in
-ROADMAP's failed table). The rule:
+design. Labels used as **score modifiers** have all lost: RRF **−7.3pp** and
+per-query channel rescaling **−9.4pp** (LoCoMo session 20, turn all-gold,
+baseline 74.2%), and `room_cap=2` **−5.6pp** (LongMemEval-S, QA answer
+accuracy, baseline 75.6%). **Those are two different protocols and the deltas
+are not comparable** — full rows, and the reason the distinction matters, in
+`benchmarks/RESULTS.md` under "Levers that measured NEGATIVE". A third
+protocol measures a cap of ONE on evidence recall and points the other way
+(`docs/AGENTS.md` §6); whether a selection-stage cap belongs in this list at
+all is ROADMAP **O77**, open. The rule:
 
 > **A label may decide who competes. It may never adjust how they score.**
 

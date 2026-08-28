@@ -200,6 +200,52 @@ LongMemEval and **93.8 → 94.6** on LoCoMo under BM25.
   their own harness implementation; our MiniLM inference runs tract
   (pure Rust) with 256-token truncation and mean pooling.
 
+## Levers that measured NEGATIVE, and the protocol each was measured under
+
+`docs/LABELS.md` and `docs/CONSULTATION_REVIEW.md` cite these figures as the
+evidence for a design rule. Until 2026-08-23 they cited them as "full rows in
+ROADMAP's failed table" — an entry that **no longer exists**, because that file
+holds open work rather than history, and their working data lives in gitignored
+directories. A fresh clone therefore carried the claims and none of their
+provenance. They are recorded here so the numbers have a tracked home.
+
+**They are not one experiment, and reading them as one ranked list is the
+mistake this table exists to prevent.** Two protocols are represented, with
+different corpora, different baselines and different metrics:
+
+| lever | result | protocol |
+|---|---|---|
+| `Fusion::Rrf` | 66.9% (**−7.3**) | LoCoMo session 20, **turn all-gold**, baseline 74.2% |
+| `Fusion::Legacy` | 66.0% (−8.2) | same |
+| per-query channel rescale to `[0,1]` | 64.8% (**−9.4**) | same |
+| per-**document** cap ≤1 | 56.7% (−17.5) | same |
+| per-**document** cap ≤2 | 72.4% (−1.8) | same |
+| per-**room** cap, `room_cap=2` | 70.0% (**−5.6**) | LongMemEval-S, **QA answer accuracy**, baseline 75.6% |
+
+Three things follow that are easy to get wrong:
+
+1. **A per-document cap and a per-room cap are different knobs.** A room is one
+   session, ticket or meeting; a document is a source file. The −17.5 and −1.8
+   rows above are the document axis and say nothing about `room_cap`.
+2. **The `room_cap` row is a different benchmark and a different question from
+   every row above it.** It scores whether the model ANSWERED correctly on
+   LongMemEval-S; the rows above score whether the evidence was RETRIEVED on
+   LoCoMo. A percentage-point delta from one is not comparable to the other.
+3. **A third protocol exists and points the other way.** Measured 2026-08-23 on
+   LoCoMo `locomo10` (sealed vault, `undercroft-hash-v3`, k=10, wing-scoped,
+   1,540 questions), `room_cap=1` moves all-gold **evidence recall** 83.0% →
+   85.2% overall and 43.4% → 51.6% multi-hop, with no category regressing —
+   documented in `docs/AGENTS.md` §6. That is recall, not answer accuracy, and
+   it is a cap of **one** rather than two. It neither confirms nor overturns the
+   −5.6 row; the two measure different things and must never be placed side by
+   side.
+
+Whether a *selection-stage* cap belongs in the same category as the scoring
+changes above — `docs/LABELS.md` files them together as "score modifiers" —
+is an open question, filed as ROADMAP **O77**. The code puts `room_cap` in the
+page cut (`diversify_by_room`, after every score is final) where it reorders an
+index stream and touches no score.
+
 ## Retrieval performance: every lever, measured (run 2026-07-15/16, 24-core `avx512_vnni` host, inside Docker)
 
 The retrieval-quality track measured **every configurable lever** end to end.

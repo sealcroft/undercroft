@@ -3389,7 +3389,60 @@ these 15 by id, not on an aggregate that can absorb them.
 
 ---
 
-### O77 — the older `room_cap` result is unqualified on three surfaces, and two of them cite a table that is gone
+### O77 — the figures are qualified and have a tracked home; whether a selection-stage cap is a "score modifier" is UNRULED
+
+**Options (a) and (b) are DONE, 2026-08-23. Option (c) is the open part and
+it is a doctrine question, so it is deliberately not taken here.**
+
+**(a) qualified in place.** `docs/LABELS.md`, `docs/CONSULTATION_REVIEW.md` and
+the governed `architecture/diagrams/retrieval-stack.svg` now name the protocol
+beside the number. The diagram's annotation box was grown by one line to fit
+"(LongMemEval, QA accuracy)", and `architecture/build.sh` was re-run so the
+inlined copy and that diagram's PDF follow — the other ten PDFs were restored,
+because regeneration rewrites all eleven and only one source changed. The
+architecture page's prose now also carries the counterweight: a later run on a
+different protocol points the other way.
+
+**(b) the measurements have a tracked home.** `benchmarks/RESULTS.md` gains
+"Levers that measured NEGATIVE, and the protocol each was measured under".
+The dead "full rows in ROADMAP's failed table" citation is gone from both docs.
+
+**The provenance problem was WIDER than this entry said, and that is the part
+worth carrying.** It named `room_cap`. In fact **all three** figures the rule
+cites came from gitignored directories — `findings/measurements.md` for the
+RRF and channel-rescale rows, a `brainstorming/` plan for `room_cap` — so a
+fresh clone carried three published claims and none of their provenance.
+Nothing was copied out of either file: those sources predate the rename and
+still contain the former project name, so only figures were transcribed, and
+the insertion asserts no former-name token reaches the tracked tree.
+
+**And the three were never one experiment.** RRF (−7.3) and per-query channel
+rescaling (−9.4) are LoCoMo session 20, **turn all-gold**, baseline 74.2%.
+`room_cap=2` (−5.6) is LongMemEval-S, **QA answer accuracy**, baseline 75.6%.
+They are listed in one sentence as one evidence set and the deltas are not
+comparable — the same category error this entry caught for `room_cap` alone,
+now shown to run through the whole list.
+
+**What (c) still has to settle, now better informed.** The reading turned up
+evidence on BOTH sides, which is why it is not being decided from taste:
+
+* **For the rule as written:** the same tracked sweep measures a
+  per-**document** cap at **−17.5** (≤1) and **−1.8** (≤2) on turn all-gold.
+  That is a *selection-stage* cap measuring strongly negative, on the same
+  protocol as the two scoring changes. So "capping selection loses" is not an
+  empty claim, and the rule's evidence list is not obviously mis-filed.
+* **Against:** a document is not a room, `room_cap` never touches a score
+  (`diversify_by_room` reorders an index stream after every score is final),
+  and a cap of **one** on the room axis measured **+8.2 multi-hop evidence
+  recall** on a third protocol.
+
+So the question is whether the rule means "a label may not change the SCORE"
+(in which case `room_cap` is mis-filed and the -5.6 row is evidence about
+something else) or "a label may not change WHO WINS" (in which case it is
+correctly filed and the +8.2 row is the surprise). Those are different rules
+with different consequences, and by this file's own standard a doctrine claim
+gets applied backwards before it is written — including over the two other
+losses it cites.
 
 **Found while closing O71, 2026-08-23, and deliberately not fixed there.**
 `docs/LABELS.md`, `docs/CONSULTATION_REVIEW.md` and `architecture/index.html`

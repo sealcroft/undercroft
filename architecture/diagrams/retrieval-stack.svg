@@ -83,10 +83,11 @@
 <text x="72" y="520" class="f l" fill="var(--d-amber-ink,#8d5a1d)">select top-k</text>
 <text x="72" y="539" class="f b dim">truncate to limit · optional room_cap spreads across rooms, then refills by score</text>
 <text x="72" y="555" class="f b dim">so a single-room question is never starved</text>
-<rect x="676" y="494" width="200" height="66" rx="8" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)"/>
+<rect x="676" y="494" width="200" height="84" rx="8" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)"/>
 <text x="690" y="518" class="f s" fill="var(--d-amber-ink,#8d5a1d)">the budget that decides</text>
 <text x="690" y="535" class="f s" fill="var(--d-amber-ink,#8d5a1d)">what the model ever sees</text>
-<text x="690" y="552" class="f s dim">room_cap=2 measured −5.6 pp</text>
+<text x="690" y="552" class="f s dim">room_cap=2: −5.6 pp</text>
+<text x="690" y="568" class="f s dim">(LongMemEval, QA accuracy)</text>
 <path d="M344 560 L344 578" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 
 <rect x="24" y="580" width="640" height="72" rx="8" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.8"/>

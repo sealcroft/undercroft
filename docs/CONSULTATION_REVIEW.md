@@ -71,8 +71,11 @@ numbers. They are rejected not on taste but on instruments:
   measured against it.
 - **Retrieval profiles that reweight channels by intent.** Every prior
   attempt to be clever with weights measured negative here: RRF fusion
-  −7.3pp, `room_cap` diversification −5.6pp, per-query channel rescaling
-  −9.4pp. Profiles are adoptable only as **declared** read-time parameters
+  −7.3pp and per-query channel rescaling −9.4pp (LoCoMo session 20, turn
+  all-gold), and `room_cap=2` diversification −5.6pp (LongMemEval-S, QA
+  answer accuracy — a different benchmark and a different question, so the
+  three are not one ranked list; see `benchmarks/RESULTS.md`, "Levers that
+  measured NEGATIVE"). Profiles are adoptable only as **declared** read-time parameters
   (the `language`/`Locale` pattern: one declaration, documented consumers,
   never detected) and only with per-recipe negative controls of the
   `false_friends_stay_apart` class.
