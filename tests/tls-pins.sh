@@ -34,10 +34,11 @@
 # the CA private key stayed unreadable, because "make it work" has an obvious
 # wrong fix (chmod the tree) that this must never pass.
 #
-# It does NOT prove the whole observability stack starts: that needs the full
-# engine image and four containers, and the cost argument for deferring it is
-# in ROADMAP M7. This suite is the cheap half — no Rust build at all, three
-# small images — and it is the half that would have caught the actual defect.
+# The readability half needs no Rust build and three small images, and it is
+# the half that would have caught the actual defect. Since ROADMAP O63 this
+# file ALSO brings the whole deployment up and proves it boots — see the last
+# section, which carries the cost (one telemetry engine build) and the reason
+# the cheap half was never sufficient on its own.
 set -u
 
 PASS=0
@@ -82,6 +83,11 @@ cleanup() {
   done <<EOF
 $STACKS
 EOF
+  # The O63 section's own throwaway project. Guarded: `set -u` is on and this
+  # trap can fire before the variable is assigned.
+  if [ -n "${STACK_PROJ:-}" ] && [ -n "${STACK_FILE:-}" ]; then
+    docker compose -p "$STACK_PROJ" -f "$STACK_FILE" down -v >/dev/null 2>&1 || true
+  fi
 }
 trap cleanup EXIT
 
@@ -158,6 +164,161 @@ while IFS='|' read -r file term exporter vol path proj; do
 done <<EOF
 $STACKS
 EOF
+
+# ─ the whole deployment starts (ROADMAP O63) ───────────────────────────────
+#
+# Everything above proves a PIN is readable. This proves the stack that
+# depends on it actually boots — the half ROADMAP M7 deferred on cost, and
+# which this file carried as its own stated gap until now.
+#
+# It is worth being precise about why the cheap half was not enough.
+# `obs-config` validates the Prometheus and Alertmanager CONFIGS at their
+# pinned versions and starts no container, and the readability section above
+# reads a file out of a volume. A config can be flawless and a pin perfectly
+# readable while the deployment still fails to come up — nothing here had ever
+# executed `up` on this file, which is how a CA-path defect shipped for two
+# releases with every gate green.
+#
+# PORTS are the one thing that makes the full stack awkward to test, and the
+# awkwardness is the same fact the `--no-deps` comment above turns on: a
+# PUBLISHED PORT IS A HOST RESOURCE THAT A PRIVATE PROJECT NAME DOES NOT
+# SCOPE. This file publishes six (8765, 9090, 9093, 3100, 3200, 3000) and on
+# an ordinary developer machine most are already taken — measured on the
+# maintainer's, five of the six. So every mapping is rewritten to an EPHEMERAL
+# host port and read back with `compose port`.
+#
+# It has to be `!override`, and that is not a detail. Compose MERGES
+# list-valued keys, so an override that simply restates `ports:` APPENDS a
+# second mapping and the original collision survives untouched — a fix that
+# looks applied, reports nothing, and is not applied. Verified by running
+# `compose config` on a two-file pair before relying on it.
+STACK_PROJ="tlspins-stack"
+STACK_FILE="deploy/observability/docker-compose.observability.yml"
+STACK_OVERRIDE="$(mktemp -t obsports.XXXXXX.yml 2>/dev/null || echo "${TMPDIR:-/tmp}/obsports.$$.yml")"
+
+cat > "$STACK_OVERRIDE" <<'YAML'
+services:
+  undercroft:
+    ports: !override ["0:8765"]
+  prometheus:
+    ports: !override ["0:9090"]
+  alertmanager:
+    ports: !override ["0:9093"]
+  loki:
+    ports: !override ["0:3100"]
+  tempo:
+    ports: !override ["0:3200"]
+  grafana:
+    ports: !override ["0:3000"]
+YAML
+
+dc_stack() { docker compose -p "$STACK_PROJ" -f "$STACK_FILE" -f "$STACK_OVERRIDE" "$@"; }
+
+# Registered with the trap below via STACK_PROJ; see cleanup().
+dc_stack down -v >/dev/null 2>&1 || true
+
+# PREMISE. If the file resolves to no services, every assertion below would
+# pass over an empty stack — the failure mode this whole suite is about.
+STACK_SERVICES="$(dc_stack config --services 2>/dev/null | sort)"
+STACK_N="$(printf '%s\n' "$STACK_SERVICES" | grep -c . || true)"
+if [ "${STACK_N:-0}" -lt 2 ]; then
+  fail "observability: premise — the compose file resolves to services" \
+       "got ${STACK_N:-0}; the override or the file failed to parse, so nothing was examined"
+else
+  pass "observability: compose resolves $STACK_N services"
+
+  # The engine image is BUILT here (UNDERCROFT_FEATURES=telemetry). That build
+  # is the entire cost of this section; everything after it is seconds.
+  if ! dc_stack up -d >/dev/null 2>&1; then
+    fail "observability: the stack came up" \
+         "$(dc_stack logs --tail 20 2>&1 | tail -20)"
+  else
+    pass "observability: the stack came up"
+
+    # `tls-export` is the one true one-shot: it copies the public root out of
+    # Caddy's root-only tree and exits. Everything else carries `restart:`.
+    i=0
+    until [ -n "$(dc_stack ps -a --status exited -q tls-export 2>/dev/null)" ]; do
+      i=$((i + 1))
+      if [ "$i" -gt 90 ]; then break; fi
+      sleep 1
+    done
+    tls_rc="$(docker inspect -f '{{.State.ExitCode}}' \
+                "$(dc_stack ps -a -q tls-export 2>/dev/null | head -1)" 2>/dev/null || echo "")"
+    if [ "${tls_rc:-1}" = "0" ]; then
+      pass "observability: tls-export published the root and exited 0"
+    else
+      fail "observability: tls-export published the root and exited 0" \
+           "exit=${tls_rc:-<none>}; $(dc_stack logs --tail 10 tls-export 2>&1 | tail -10)"
+    fi
+
+    # THE CHECK THIS SECTION EXISTS FOR. The engine refuses to start when its
+    # declared trust root is unreadable, which is correct and is exactly what
+    # shipped. A reachable /healthz is the difference between a stack that
+    # boots and a config that merely validates.
+    eport="$(dc_stack port undercroft 8765 2>/dev/null | sed 's/.*://')"
+    if [ -z "${eport:-}" ]; then
+      fail "observability: the engine published a port" "compose port returned nothing"
+    else
+      i=0; ok=""
+      until [ -n "$ok" ]; do
+        if curl -sf "http://127.0.0.1:$eport/healthz" >/dev/null 2>&1; then ok=1; break; fi
+        i=$((i + 1))
+        # BOUNDED. An unbounded poll for a container that will never become
+        # healthy is a hang, not a wait.
+        if [ "$i" -gt 90 ]; then break; fi
+        sleep 1
+      done
+      if [ -n "$ok" ]; then
+        pass "observability: the engine answers /healthz against its real pin"
+      else
+        fail "observability: the engine answers /healthz against its real pin" \
+             "$(dc_stack logs --tail 20 undercroft 2>&1 | tail -20)"
+      fi
+    fi
+
+    # A crash-looping collector is a stack that did not start, even though
+    # `up -d` returned 0. One check names every service that is not running
+    # rather than one check per service.
+    notrunning=""
+    for svc in $STACK_SERVICES; do
+      [ "$svc" = "tls-export" ] && continue
+      st="$(docker inspect -f '{{.State.Status}}' \
+             "$(dc_stack ps -a -q "$svc" 2>/dev/null | head -1)" 2>/dev/null || echo missing)"
+      [ "$st" = "running" ] || notrunning="$notrunning $svc($st)"
+    done
+    if [ -z "$notrunning" ]; then
+      pass "observability: every long-running service is running"
+    else
+      fail "observability: every long-running service is running" "not running:$notrunning"
+    fi
+
+    # And the join: Prometheus actually SCRAPES the engine. This is the one
+    # assertion that spans the whole deployment — it needs the engine up, its
+    # bearer-gated /metrics reachable on the compose network, and the scrape
+    # config correct. `scrape_interval` is 15s, so the wait is generous.
+    pport="$(dc_stack port prometheus 9090 2>/dev/null | sed 's/.*://')"
+    if [ -z "${pport:-}" ]; then
+      fail "observability: prometheus published a port" "compose port returned nothing"
+    else
+      i=0; up=""
+      until [ -n "$up" ]; do
+        if curl -sf "http://127.0.0.1:$pport/api/v1/targets?state=active" 2>/dev/null \
+             | tr ',' '\n' | grep -q '"health":"up"'; then up=1; break; fi
+        i=$((i + 1))
+        if [ "$i" -gt 120 ]; then break; fi
+        sleep 1
+      done
+      if [ -n "$up" ]; then
+        pass "observability: prometheus reports a healthy scrape target"
+      else
+        fail "observability: prometheus reports a healthy scrape target" \
+             "$(curl -s "http://127.0.0.1:$pport/api/v1/targets?state=active" 2>&1 | head -c 400)"
+      fi
+    fi
+  fi
+fi
+rm -f "$STACK_OVERRIDE" 2>/dev/null || true
 
 echo ""
 echo "tls-pins results: $PASS passed, $FAIL failed"

@@ -7,6 +7,68 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### two gates that had never been run, and what running them found (M35)
+
+**No engine code changed.** ROADMAP **O62** and **O63**, both filed as costs
+rather than defects, both closed by folding into suites that already existed:
+no new compose service, no new CI job, no new preflight, no change to
+`verdict`'s `needs:`.
+
+**O63 — the whole observability deployment is brought up and proved to start.**
+Six checks appended to `tests/tls-pins.sh`, which already drove docker against
+this compose file under throwaway projects and already carried this as its own
+stated residue. It stands up **all 11 services** and asserts the stack comes
+up, `tls-export` publishes the root and exits 0, the engine answers
+`/healthz` **against its real pin**, every long-running service is actually
+`running` — a crash-looping collector is a stack that did not start, even
+though `up -d` returned 0 — and **Prometheus reports a healthy scrape target**,
+the one assertion that spans the whole deployment. Suite 7 → 13. **Measured
+3m04s** with a warm image cache; the telemetry engine build is the entire
+cost, stated rather than estimated because this entry was deferred *on* cost.
+
+**Ports were the whole difficulty.** The file publishes six and five of the
+six were already taken on the maintainer's machine — a published port is a
+HOST resource a private project name does not scope, the same fact that file's
+`--no-deps` comment already turns on. Every mapping is rewritten to an
+ephemeral host port and read back with `compose port`, and it has to be
+**`!override`**: Compose MERGES list-valued keys, so an override that merely
+restates `ports:` APPENDS and the original collision survives untouched — a
+fix that looks applied, reports nothing, and is not. Verified by running
+`compose config` on a two-file pair before relying on it.
+
+**O62 — a real tamper now drives a live SSE stream end to end.** Five checks
+in `tests/e2e-telemetry.sh`, folded into the SSE section that already stands
+up a telemetry server and an **hmac-only** vault — exactly what a byte-level
+forgery needs, its metadata being plaintext on disk. The arm forges
+`"wing":"tamper"` → `"wing":"tamped"` (same length, so only the record HMAC
+can object), restarts, subscribes, and reads the row back by id; it asserts
+the frame arrives as `hmac-fail`, carries `unverified: true`, and names
+**`tamped`** — the forged claim the altered row makes about itself, which is
+why the frame travels unverified at all. Suite 43 → 48. Run three times, not
+once: a battery runs each test one time, which for a timing-sensitive check is
+not a measurement.
+
+**What O62 cost is the part worth keeping.** Its first version failed its own
+premise: `md5` unchanged, nothing tampered. **SQLite runs in WAL mode, so the
+row the server wrote was in `palace.db-wal` and not in `palace.db` at all** —
+measured on a probe, the main file sat at 4 KB with no trace of the drawer
+while the WAL held it. Without that premise probe, three assertions would have
+run against an intact vault and the honest failure would have read as a
+missing feature.
+
+**Editing the WAL would have been the wrong fix**, and it is the trap to
+remember: a WAL frame carries a checksum, so a modified frame is treated as
+the end of the log and **discarded** — the row would vanish rather than fail
+its HMAC, which is a different test wearing this one's name, passing for the
+wrong reason. The fix is a clean CLI open/close, which checkpoints the WAL
+into the main file. `verify` is a read, so one command both puts the row where
+an out-of-band edit can reach it and establishes the vault was **intact
+before** the forgery — without which a later `hmac-fail` proves nothing about
+the tamper.
+
+Published counts move with them: `tls-pins` 7 → 13, `e2e-telemetry` 43 → 48,
+and the landing page's e2e sum 620 → 631.
+
 ### the two measured retrieval levers a caller had no way to find (M34)
 
 **No engine code changed. Two documented capabilities, one new gate, and a

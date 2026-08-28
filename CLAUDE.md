@@ -1508,11 +1508,11 @@ docker compose run --rm test          # cargo unit + integration tests (769 run,
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
 docker compose run --rm e2e           # e2e UI/UX suite against the release binary (390 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (123 checks)
-docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (43 checks)
+docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (48 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
                                       # answers HTTP before its Raft leader exists)
-bash tests/tls-pins.sh                # CA pins readable by the engine (7 checks).
+bash tests/tls-pins.sh                # CA pins readable + the stack starts (13 checks).
                                       # Every shipped pin, read as the ENGINE's uid.
                                       # Host-side
                                       # because it DRIVES docker: it brings the real
@@ -1531,10 +1531,22 @@ bash tests/tls-pins.sh                # CA pins readable by the engine (7 checks
                                       # a stack that cannot boot. It also asserts the
                                       # CA PRIVATE key stays unreadable, because the
                                       # obvious wrong fix (chmod the tree) would
-                                      # otherwise pass. It does NOT prove the stack
-                                      # starts — that needs the full image and four
-                                      # containers, deferred on cost with the command
-                                      # written down in ROADMAP M7
+                                      # otherwise pass. **Since ROADMAP O63 it also
+                                      # brings the WHOLE deployment up** — all 11
+                                      # services under a throwaway project — and
+                                      # asserts the engine answers /healthz against
+                                      # its real pin, every long-running service is
+                                      # running, and PROMETHEUS ACTUALLY SCRAPES it.
+                                      # That last one is the only assertion spanning
+                                      # the whole stack. Measured 3m04s end to end
+                                      # with a warm image cache; the engine build is
+                                      # the entire cost. Ports are the catch: the file
+                                      # publishes six and a developer machine holds
+                                      # most of them, so every mapping is rewritten to
+                                      # an EPHEMERAL host port with `!override` —
+                                      # Compose MERGES list keys, so an override that
+                                      # merely restates `ports:` appends and the
+                                      # collision survives untouched
 docker compose run --rm arch-check    # TWO verifications, one service: the
                                       # architecture reference is what
                                       # diagrams/ and its own headings derive

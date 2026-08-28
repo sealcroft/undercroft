@@ -3441,7 +3441,45 @@ rule is left resting on one re-classified example.
 
 ---
 
-### O62 — no e2e arm drives a tamper through a live stream
+### O62 — CLOSED 2026-08-23: a real tamper now drives a live stream end to end
+
+**CLOSED.** Five checks in `tests/e2e-telemetry.sh`, folded into the SSE
+section that already existed rather than given a suite of their own — that
+section already stands up a telemetry server and an **hmac-only** vault, which
+is exactly what a byte-level forgery needs, since its metadata is plaintext on
+disk. Suite 43 -> 48. No new compose service, no new CI job, no new preflight.
+
+The arm creates a drawer in a known wing, stops the server, forges
+`"wing":"tamper"` -> `"wing":"tamped"` (same length, so the SQLite file stays
+structurally valid and only the record HMAC can object — the primitive
+`tests/e2e-orchestrator.sh` already uses), restarts, subscribes, and reads the
+row back by id. It asserts the frame arrives as `hmac-fail`, carries
+`unverified: true`, and names **`tamped`** — the forged claim the altered row
+makes about itself, which is precisely why the frame travels unverified.
+
+**What this cost, and it is the part worth keeping.** The first version failed
+its own premise check: `md5` was unchanged, so nothing had been tampered.
+**SQLite runs in WAL mode, so the row the server wrote was in `palace.db-wal`
+and not in `palace.db` at all** — measured on a probe, the main file sat at
+4 KB with no trace of the drawer while the WAL held it. The substitution
+matched nothing and the arm correctly refused to call that a pass. Had the
+premise probe not been there, three assertions would have run against an
+intact vault and the only honest outcome — a failure — would have looked like
+a missing feature instead.
+
+**Editing the WAL would have been the wrong fix**, and this is the trap to
+record: a WAL frame carries a checksum, so a modified frame is treated as the
+end of the log and **discarded**. The row would VANISH rather than fail its
+HMAC — a different test wearing this one's name, and one that would have
+passed for the wrong reason. The fix is a clean CLI open/close, which
+checkpoints the WAL into the main file; `verify` is a read, so one command
+both moves the row where an out-of-band edit can reach it and establishes the
+vault was **intact before** the forgery, without which a later `hmac-fail`
+proves nothing about the tamper.
+
+**Determinism:** the entry deferred this on flake risk, so the arm was run
+three times rather than trusted on one green — a battery runs each test once,
+which for a timing-sensitive check is not a measurement.
 
 Filed inside M6 and given a heading here. M6 made a tamper frame carry the
 wing and room it concerns, so `monitor.html` can localize an integrity
@@ -3458,7 +3496,43 @@ failure gets waved through.
 restart, subscribe, read one frame. **Gate:** the frame carries
 `unverified:true` plus the wing and room, and the banner names them.
 
-### O63 — nothing brings the observability stack up, so nothing proves it starts
+### O63 — CLOSED 2026-08-23: the whole deployment is brought up and proved to start
+
+**CLOSED.** Six checks appended to `tests/tls-pins.sh`, which already drove
+docker against this exact compose file, already used throwaway projects, and
+already carried this gap as its own stated residue. Suite 7 -> 13. **No new
+CI job and no new compose service** — the `arch-check` precedent (one service,
+one leg) applied to a host-side suite.
+
+It brings up **all 11 services** under a private project and asserts: the file
+resolves to services at all (premise), the stack comes up, `tls-export`
+publishes the root and exits 0, **the engine answers `/healthz` against its
+real pin**, every long-running service is actually `running` (a crash-looping
+collector is a stack that did not start, even though `up -d` returned 0), and
+**Prometheus reports a healthy scrape target** — the one assertion that spans
+the whole deployment, since it needs the engine up, its bearer-gated
+`/metrics` reachable on the compose network, and the scrape config correct.
+
+**Measured cost: 3m04s** end to end with a warm image cache. The engine build
+(`UNDERCROFT_FEATURES: telemetry`) is the entire cost; everything after it is
+seconds. Stated rather than estimated, because this entry deferred on cost and
+the next person deserves the real number.
+
+**PORTS were the whole difficulty, and the fix is worth recording.** The file
+publishes six (8765, 9090, 9093, 3100, 3200, 3000) and on the maintainer's
+machine **five of the six were already taken**. A published port is a HOST
+resource that a private project name does not scope — the same fact the
+`--no-deps` comment in that file already turned on. Every mapping is therefore
+rewritten to an EPHEMERAL host port and read back with `compose port`. It has
+to be **`!override`**: Compose MERGES list-valued keys, so an override that
+simply restates `ports:` APPENDS a second mapping and the original collision
+survives untouched — a fix that looks applied, reports nothing, and is not.
+Verified by running `compose config` on a two-file pair before relying on it.
+
+**Residual, stated:** CI has no warm image cache, so the `tls-pins` job now
+pays a cold telemetry engine build. That is the price of the thing this entry
+asked for — `obs-config` validates config FILES and starts no container, and a
+config can be flawless for a stack that cannot boot.
 
 Filed inside M7 and given a heading here. M7 fixed a CA pin that made
 `deploy/observability` unstartable for two releases, and M10 added

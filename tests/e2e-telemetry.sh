@@ -246,6 +246,119 @@ grep -q '"plain"' <<<"$vl" && grep -q '"sealed"' <<<"$vl" && pass "/v1/vaults li
 kill "$S3" 2>/dev/null
 wait "$S3" 2>/dev/null
 
+echo "== ROADMAP O62: a real tamper reaches a live subscriber, localized =="
+# M6 made the tamper frame carry the wing and room it concerns, so a monitor
+# can point at a row instead of flashing the whole palace red. The wire shape
+# was pinned by unit gates and verified by hand; what did not exist was an arm
+# driving a REAL tamper through a live SSE stream end to end. This is it.
+#
+# THE ORDER IS THE TEST. Stop the server, corrupt the row, restart, subscribe,
+# then read. Tampering underneath a running server proves nothing reliably:
+# SQLite would serve the row from a page cache the edit never touched, so the
+# arm would pass or fail on timing rather than on the HMAC. A flaky integrity
+# gate is worse than a stated gap — it teaches the reader to re-run it, which
+# is how a real failure gets waved through.
+#
+# hmac-only, deliberately: its content and metadata are plaintext on disk, so
+# a fixed-length substitution can reach the covered bytes. That is the same
+# primitive `tests/e2e-orchestrator.sh` uses, and same-length matters — it
+# keeps the SQLite file structurally valid so ONLY the record HMAC can object.
+TDB="$UNDERCROFT_HOME/vaults/tampered/palace.db"
+UNDERCROFT_MCP_HTTP_TOKEN="$TOKEN" \
+  "$BIN" serve-http --host 127.0.0.1 --port 8799 >/tmp/ttamper.log 2>&1 &
+S5=$!
+wait_up 8799 || fail "tamper server did not start" "$(cat /tmp/ttamper.log)"
+TBASE="http://127.0.0.1:8799/v1/vaults"
+curl -s "${AUTH[@]}" -X POST "$TBASE" -d '{"id":"tampered","level":"hmac-only"}' >/dev/null
+TID=$(curl -s "${AUTH[@]}" -X POST "$TBASE/tampered/drawers" \
+  -d '{"text":"the bearing was replaced in March","wing":"tamper","room":"decisions"}' \
+  | tr ',' '\n' | grep '"id"' | cut -d'"' -f4)
+# The server must let go before the file is touched.
+kill "$S5" 2>/dev/null
+wait "$S5" 2>/dev/null
+
+# WAL, and this is the step the first version of this arm was missing. SQLite
+# runs in WAL mode, so a row the server wrote lives in `palace.db-wal` and is
+# NOT in `palace.db` — measured on a probe: the main file sat at 4 KB with no
+# trace of the drawer while the WAL held it, so the substitution below matched
+# nothing and the premise check below correctly refused to call that a pass.
+#
+# Editing the WAL instead would be the WRONG fix. A WAL frame carries a
+# checksum, so a modified frame is treated as the end of the log and DISCARDED
+# — the row would VANISH rather than fail its HMAC, which is a different test
+# wearing this one's name.
+#
+# A clean CLI open/close checkpoints the WAL into the main file, and `verify`
+# is a read, so this one command does two jobs: it puts the row where an
+# out-of-band edit can reach it, and it establishes that the vault was intact
+# BEFORE the forgery — without which a later `hmac-fail` proves nothing about
+# the tamper.
+if "$BIN" verify --vault tampered >/dev/null 2>&1; then
+  pass "O62 premise: the vault verifies clean before the forgery"
+else
+  fail "O62 premise: the vault verifies clean before the forgery" \
+       "$("$BIN" verify --vault tampered 2>&1 | tail -5)"
+fi
+
+if [ -z "${TID:-}" ]; then
+  fail "O62 premise: the drawer was saved and returned an id" "$(cat /tmp/ttamper.log)"
+else
+  TBEFORE="$(md5sum "$TDB" | cut -d' ' -f1)"
+  # `tamper` -> `tamped`: six characters for six. The wing is inside the
+  # HMAC-covered meta, so this is a forgery the tag must catch, and the frame
+  # should report the row's OWN altered claim rather than the true wing.
+  perl -0777 -pi -e 's/"wing":"tamper"/"wing":"tamped"/' "$TDB"
+  TAFTER="$(md5sum "$TDB" | cut -d' ' -f1)"
+  if [ "$TBEFORE" = "$TAFTER" ]; then
+    # PREMISE. If the substitution matched nothing the file is untouched and
+    # every assertion below would be measuring an intact vault — a clean
+    # tree and a broken fixture producing the same transcript.
+    fail "O62 premise: the drawer row was forged on disk" \
+         "md5 unchanged ($TBEFORE); the anchor did not match, so nothing was tampered"
+  else
+    pass "O62 premise: the drawer row was forged on disk"
+
+    UNDERCROFT_MCP_HTTP_TOKEN="$TOKEN" \
+      "$BIN" serve-http --host 127.0.0.1 --port 8799 >/tmp/ttamper2.log 2>&1 &
+    S6=$!
+    if ! wait_up 8799; then
+      fail "tamper server restarted" "$(cat /tmp/ttamper2.log)"
+    else
+      curl -sN --max-time 4 "${AUTH[@]}" "$TBASE/tampered/stream" >/tmp/tampered.sse 2>/dev/null &
+      C5=$!
+      sleep 1
+      # Read the forged row by id: the lookup succeeds, the tag check does
+      # not, and that is the path that emits. A search is also driven, so the
+      # arm does not depend on one reader having been wired to the emitter.
+      curl -s "${AUTH[@]}" "$TBASE/tampered/drawers/$TID" >/dev/null 2>&1
+      curl -s "${AUTH[@]}" -X POST "$TBASE/tampered/search" -d '{"query":"bearing"}' >/dev/null 2>&1
+      wait $C5 2>/dev/null
+
+      if grep -q "event: hmac-fail" /tmp/tampered.sse; then
+        pass "a tampered row reaches the live stream as hmac-fail"
+      else
+        fail "a tampered row reaches the live stream as hmac-fail" "$(cat /tmp/tampered.sse)"
+      fi
+      if grep -q '"unverified":true' /tmp/tampered.sse; then
+        pass "the tamper frame is marked unverified"
+      else
+        fail "the tamper frame is marked unverified" "$(cat /tmp/tampered.sse)"
+      fi
+      # M6's whole point: the alarm names a row, not the palace. And what it
+      # names is the FORGED claim — `tamped`, the value the altered row makes
+      # about itself — which is exactly why the frame travels `unverified`.
+      if grep -q '"wing":"tamped"' /tmp/tampered.sse; then
+        pass "the tamper frame localizes to the row's own claimed wing"
+      else
+        fail "the tamper frame localizes to the row's own claimed wing" \
+             "$(cat /tmp/tampered.sse)"
+      fi
+    fi
+    kill "$S6" 2>/dev/null
+    wait "$S6" 2>/dev/null
+  fi
+fi
+
 echo "== drawer-quarantined frames (admission screening on) =="
 # A diverted write must be a drawer-quarantined frame on the live feed —
 # never silence, never an ordinary drawer-saved whose only tell is a wing
