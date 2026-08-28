@@ -2133,8 +2133,18 @@ fn run(cli: Cli) -> Result<()> {
                 offset: *offset,
                 ranked_at: Some(ranked_at),
             };
+            // ROADMAP O73. Only the local path can answer exactly: the page
+            // signals come off the engine's own cut. The remote path ranks
+            // through a backend's candidate loop, so it gets `None` and keeps
+            // the weaker footer below rather than claiming a precision it does
+            // not have.
+            let mut page_deeper: Option<bool> = None;
+            let mut page_scope: Option<usize> = None;
             let hits = if backend == "local" {
-                store.search(query, &opts)?
+                let page = store.search_page(query, &opts)?;
+                page_deeper = Some(page.truncated);
+                page_scope = page.scope;
+                page.hits
             } else {
                 // A remote index answers through the legacy fusion and its own
                 // candidate loop, which consults neither the declared
@@ -2202,16 +2212,30 @@ fn run(cli: Cli) -> Result<()> {
                 // else. See `search::evidence`.
                 println!("   {}", search::evidence(hit));
             }
-            // A full page may have more below it; say exactly how to continue,
-            // clock included. A short page means the ranking is exhausted and
-            // says nothing.
-            if hits.len() == *limit {
+            // ROADMAP O73. `page_deeper` is the engine's own verdict, taken
+            // before the cut against the ADMITTED ranking; `hits.len() ==
+            // limit` is the fallback guess and cannot separate a page that
+            // exactly filled from one that was cut, so it stays only on the
+            // remote path, which has no signal to offer.
+            let more = page_deeper.unwrap_or(hits.len() == *limit);
+            if more {
                 let echo = ranked_at
                     .format(&time::format_description::well_known::Rfc3339)
                     .unwrap_or_default();
+                let certainty = if page_deeper.is_some() {
+                    "EXIST"
+                } else {
+                    "may exist"
+                };
+                let scope_note = match page_scope {
+                    Some(n) => format!(" (this scope holds {n} drawers)"),
+                    None => String::new(),
+                };
                 println!(
-                    "— deeper results may exist: repeat with --offset {} --ranked-at {echo}",
-                    offset + hits.len()
+                    "— deeper results {}: repeat with --offset {} --ranked-at {echo}{}",
+                    certainty,
+                    offset + hits.len(),
+                    scope_note
                 );
             }
         }
@@ -3540,6 +3564,19 @@ fn run(cli: Cli) -> Result<()> {
             for note in &st.unhealed {
                 println!("unhealed: {note}");
             }
+            // ROADMAP O72. What the semantic half is actually set to, and
+            // whether anything measured it — an operator reading a gate value
+            // alone cannot tell a probed floor from a shipped constant, and
+            // only one of those means this vault's vector space was examined.
+            println!(
+                "semantic: gate {} · floor {:.3} · {}",
+                match st.semantic.gate {
+                    Some(g) => format!("{g:.3}"),
+                    None => "refused".to_string(),
+                },
+                st.semantic.floor,
+                st.semantic.gate_source
+            );
             println!("wings:");
             for (w, n) in st.wings {
                 println!("  {w:<24} {n}");

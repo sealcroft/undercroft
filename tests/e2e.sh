@@ -1415,6 +1415,20 @@ atk_check "quarantined poison is unretrievable" '"hits":\[\]' "$out"
 out="$(atk POST /v1/vaults/default/drawers '{"text":"innocent looking","wing":"quarantine-pending"}')"
 atk_check "reserved wing refuses forged residents" '40[03]' "$out"
 
+# ROADMAP O73: the page signals, through the surface a caller actually drives.
+# The decisive one is the SECOND check: the page is not full, so `truncated`
+# must be false — and the third, where the page exactly fills the ranking and
+# `hits.len() == limit` (the guess this replaced) would have claimed depth
+# that does not exist.
+atk POST /v1/vaults/default/drawers '{"text":"the estuary tide gauge reading for tuesday","wing":"o73","room":"a"}' >/dev/null
+atk POST /v1/vaults/default/drawers '{"text":"the estuary tide gauge reading for wednesday","wing":"o73","room":"b"}' >/dev/null
+out="$(atk POST /v1/vaults/default/search '{"query":"estuary tide gauge","wing":"o73","limit":1}')"
+atk_check "search reports a cut page" '"truncated":true' "$out"
+out="$(atk POST /v1/vaults/default/search '{"query":"estuary tide gauge","wing":"o73","limit":50}')"
+atk_check "a ranking that fits reports truncated false" '"truncated":false' "$out"
+out="$(atk POST /v1/vaults/default/search '{"query":"estuary tide gauge","wing":"o73","limit":2}')"
+atk_check "a page that exactly fills is NOT truncated" '"truncated":false' "$out"
+
 # R5: the `dedup_threshold` arm is a SECOND save path through this route, and
 # until 2026-08-05 it hard-coded `quarantined: false` — so the same poison
 # answered 200 clean under the id the attacker aimed at, while the drawer sat
@@ -1502,7 +1516,7 @@ mcp_check "tools/list has 4 tools"  '"undercroft_verify"'
 mcp_check "save tool works"         'saved drawer'
 mcp_check "search tool round-trips" 'mcp saved this memory'
 # A full page names its continuation; past the end says so instead of "no match".
-mcp_check "full page names continuation" 'deeper results may exist'
+mcp_check "full page names continuation (exactly, not 'may')" 'deeper results EXIST'
 mcp_check "past the end says so"    'no more memories past rank 5'
 
 # **`serve-mcp --read-only` — the wiring, not the shared logic.** The

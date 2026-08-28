@@ -1638,6 +1638,34 @@ pub(crate) fn supersession_canonical(
     out
 }
 
+/// A page of results together with the two things only the engine can know
+/// about it: whether the ranking held more than this page returned, and how
+/// large the declared scope was.
+///
+/// ROADMAP O73. The engine ranks correctly and then the page ends — median
+/// rank of the first piece of evidence is 1, but p90 of evidence rank is 17,
+/// so a ten-row page cuts through the middle of the distribution. The caller
+/// cannot know that; at the moment it answers, the engine can.
+///
+/// Both fields are ADDITIVE: `search` still returns a bare `Vec<SearchHit>`
+/// and is byte-identical, so a caller that never asks for a page sees exactly
+/// the response it always did.
+#[derive(Debug, Clone)]
+pub struct SearchPage {
+    pub hits: Vec<SearchHit>,
+    /// The admitted ranking held more rows than `[offset, offset+limit)`
+    /// covered. Exact, not a guess: admission (`hits.retain`) runs BEFORE the
+    /// page cut, so this compares admitted candidates against the window
+    /// rather than testing `hits.len() == limit`, which cannot tell a page
+    /// that exactly filled from one that was cut.
+    pub truncated: bool,
+    /// How many rows the request's declared scope covers. `None` when the
+    /// request declared no NARROWING scope — a bare exclusion is the
+    /// complement of a small set, so its cardinality is the corpus wearing a
+    /// scope's name and is deliberately not reported as one.
+    pub scope: Option<usize>,
+}
+
 #[derive(Debug, Clone)]
 pub struct SearchHit {
     pub drawer: Drawer,
@@ -2209,6 +2237,11 @@ pub struct PalaceStore {
     /// the fixed map compressed (the xlingual mixed-corpus finding). See
     /// [`Embedder::semantic_floor`].
     sem_floor: f32,
+    /// Where the semantic gate in force CAME FROM (ROADMAP O72), decided once
+    /// at open. An operator reading a gate value alone cannot tell a probed
+    /// floor from a shipped constant, and the two call for different actions:
+    /// a declared constant means nothing measured this vault's vector space.
+    sem_gate_source: &'static str,
     /// Whether flagged writes divert to the quarantine wing
     /// (`UNDERCROFT_ADMISSION=quarantine`; default off — admission changes
     /// what a save DOES, so it is the deployment's declaration).
@@ -3427,6 +3460,16 @@ impl PalaceStore {
             std::env::var("UNDERCROFT_SEMANTIC_GATE").ok().as_deref(),
         )?;
         let sem_floor = resolve_semantic_floor(embedder.as_ref());
+        // Provenance, not a second resolution: the value above already
+        // decided WHAT the gate is; this records WHERE it came from, which no
+        // amount of staring at the number recovers.
+        let sem_gate_source = match std::env::var("UNDERCROFT_SEMANTIC_GATE").ok() {
+            Some(v) if v.trim().eq_ignore_ascii_case("off") => "declared-off",
+            Some(v) if !v.trim().is_empty() => "declared",
+            _ if semantic_gate.is_none() => "refused",
+            _ if embedder.semantic_gate_is_measured() => "measured",
+            _ => "embedder-constant",
+        };
         let store = Self {
             conn,
             vault,
@@ -3435,6 +3478,7 @@ impl PalaceStore {
             late: None,
             emb_cache: std::cell::RefCell::new(None),
             semantic_gate,
+            sem_gate_source,
             fts: false,
             fts_min,
             fusion: Fusion::from_env(),
@@ -5309,6 +5353,14 @@ impl PalaceStore {
     /// prefilter threshold first cut candidates to the FTS5 BM25 top-K
     /// (final scoring is unchanged — the index only narrows the scan).
     pub fn search(&self, query: &str, opts: &SearchOptions) -> Result<Vec<SearchHit>, StoreError> {
+        self.search_page(query, opts).map(|p| p.hits)
+    }
+
+    /// `search`, plus what only the engine knows about the page it just cut
+    /// (ROADMAP O73). `search` above is this call with the extra fields
+    /// dropped, so the old contract is preserved by construction rather than
+    /// by a second implementation that could drift from it.
+    pub fn search_page(&self, query: &str, opts: &SearchOptions) -> Result<SearchPage, StoreError> {
         if self.external_dim.is_some() {
             return Err(StoreError::ExternalVault);
         }
@@ -5326,6 +5378,17 @@ impl PalaceStore {
         qvec: Vec<f32>,
         opts: &SearchOptions,
     ) -> Result<Vec<SearchHit>, StoreError> {
+        self.search_page_with_vector(query, qvec, opts)
+            .map(|p| p.hits)
+    }
+
+    /// `search_with_vector`, plus the page signals (ROADMAP O73).
+    pub fn search_page_with_vector(
+        &self,
+        query: &str,
+        qvec: Vec<f32>,
+        opts: &SearchOptions,
+    ) -> Result<SearchPage, StoreError> {
         match self.external_dim {
             None => Err(StoreError::NotExternalVault),
             Some(dim) if qvec.len() != dim => Err(StoreError::EmbeddingDim {
@@ -5471,7 +5534,7 @@ impl PalaceStore {
         query: &str,
         qvec: Vec<f32>,
         opts: &SearchOptions,
-    ) -> Result<Vec<SearchHit>, StoreError> {
+    ) -> Result<SearchPage, StoreError> {
         let _span = undercroft_obs::scope("search", self.vault.id());
         let obs_start = std::time::Instant::now();
         let limit = if opts.limit == 0 { 10 } else { opts.limit };
@@ -6026,6 +6089,14 @@ impl PalaceStore {
         // without one it is a plain slice of score order. Either way the
         // result is ranks `[offset, offset + limit)` of the list a single
         // call with limit `depth` would return.
+        // ROADMAP O73. Counted BEFORE the cut, and it is the admitted count:
+        // `hits.retain` above has already dropped everything the gate refused,
+        // so this compares real candidates against the window `[offset,
+        // offset+limit)`. That is why it is exact where `hits.len() == limit`
+        // is a guess — a page that exactly filled and a page that was cut are
+        // indistinguishable after the fact, which is the same conflation O53
+        // removed from the scoped pool.
+        let admitted = hits.len();
         match opts.room_cap {
             Some(cap) if cap > 0 => {
                 hits = diversify_by_room(std::mem::take(&mut hits), opts.offset, limit, cap)
@@ -6037,6 +6108,7 @@ impl PalaceStore {
                 }
             }
         }
+        let page_truncated = admitted > depth;
 
         let fusion_label = match self.fusion {
             Fusion::Legacy => "legacy",
@@ -6060,7 +6132,25 @@ impl PalaceStore {
             ReadScope::from_opts(opts),
             hits.len(),
         )?;
-        Ok(hits)
+        Ok(SearchPage {
+            hits,
+            truncated: page_truncated,
+            // The narrowing's population. `scope_population` answers `None`
+            // for an exclusion by design, so an unscoped query reports no
+            // scope rather than reporting the corpus as one.
+            scope: scope_live,
+        })
+    }
+
+    /// The semantic channel as configured on this vault (ROADMAP O72).
+    /// Reads three values already resolved at open; it measures nothing here,
+    /// so `stats` stays a cheap call.
+    pub fn semantic_channel(&self) -> crate::manage::SemanticChannel {
+        crate::manage::SemanticChannel {
+            gate: self.semantic_gate,
+            floor: self.sem_floor,
+            gate_source: self.sem_gate_source,
+        }
     }
 
     /// Turn read auditing on or off programmatically (the env
@@ -9044,6 +9134,175 @@ mod tests {
         assert_eq!(capped.len(), 3, "capped search still fills the limit");
         // The cap can only change WHICH rooms appear, never how many hits.
         assert!(capped.iter().any(|h| h.drawer.meta.room == "quiet"));
+    }
+
+    /// ROADMAP O73. The page signals, and the ONE case that separates them
+    /// from the guess they replace.
+    ///
+    /// `hits.len() == limit` is what every surface used to infer "there may be
+    /// more". It cannot distinguish a page that was cut from one that exactly
+    /// filled, so a full FINAL page advertised depth that does not exist. The
+    /// decisive assertion here is the middle one: with the limit set to
+    /// exactly the number of admitted rows, the page is full and `truncated`
+    /// must still be FALSE.
+    #[test]
+    fn the_page_signals_are_exact_not_a_full_page_guess() {
+        // HmacOnly on purpose: the scope leg below is TIER-DEPENDENT, and this
+        // level engages the prefilter that materializes a membership set. See
+        // the scope assertions for what that means for callers.
+        let (_dir, mut s) = store(SecurityLevel::HmacOnly);
+        // Strong literal overlap, so admission keeps every one of them and the
+        // premise below is about the page cut rather than about the gate.
+        for i in 0..6u32 {
+            s.upsert(&drawer(
+                if i % 2 == 0 { "even" } else { "odd" },
+                "r",
+                &format!("harbour tide survey note number {i}"),
+                i,
+            ))
+            .unwrap();
+        }
+        let deep = s
+            .search_page(
+                "harbour tide survey",
+                &SearchOptions {
+                    limit: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        // PREMISE. Everything below reasons about how many rows were ADMITTED;
+        // if the gate dropped some, the counts under test mean something else.
+        let admitted = deep.hits.len();
+        assert_eq!(admitted, 6, "premise: every drawer must be admitted");
+        assert!(!deep.truncated, "a ranking that fits is not truncated");
+
+        // THE DISCRIMINATOR: the page is exactly full, and the old
+        // `hits.len() == limit` test would have said "there may be more".
+        let exact = s
+            .search_page(
+                "harbour tide survey",
+                &SearchOptions {
+                    limit: admitted,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(exact.hits.len(), admitted, "the page is full");
+        assert!(
+            !exact.truncated,
+            "a page that exactly filled the ranking is NOT truncated - the case the hits.len() == limit guess gets wrong"
+        );
+
+        let cut = s
+            .search_page(
+                "harbour tide survey",
+                &SearchOptions {
+                    limit: admitted - 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(cut.truncated, "a ranking deeper than the page is truncated");
+
+        // The scope leg. An unscoped request declares no NARROWING, so it
+        // reports no population rather than reporting the corpus as one.
+        assert_eq!(deep.scope, None, "unscoped queries report no scope");
+        let scoped = s
+            .search_page(
+                "harbour tide survey",
+                &SearchOptions {
+                    wing: Some("even".into()),
+                    limit: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(scoped.scope, Some(3), "the wing holds three drawers");
+
+        // And the old entry point is unchanged: same hits, no extra fields.
+        let plain = s
+            .search(
+                "harbour tide survey",
+                &SearchOptions {
+                    limit: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let a: Vec<&str> = plain.iter().map(|h| h.drawer.id.as_str()).collect();
+        let b: Vec<&str> = deep.hits.iter().map(|h| h.drawer.id.as_str()).collect();
+        assert_eq!(a, b, "search() must still answer exactly as it did");
+    }
+
+    /// ROADMAP O73, the caveat pinned rather than left in prose: `truncated`
+    /// answers on every security level, `scope` does NOT.
+    ///
+    /// The population is a by-product of the prefilter materializing a
+    /// membership set. A small sealed vault runs a bounded exact scan and
+    /// never builds one, so the field is absent — which is why absence must
+    /// be read as "the engine did not have it to hand", never as "no scope was
+    /// declared" and never as "the scope is empty". A caller that treats a
+    /// missing `scope_size` as zero would be badly wrong.
+    #[test]
+    fn truncated_answers_on_every_level_and_scope_is_tier_dependent() {
+        for level in [SecurityLevel::Sealed, SecurityLevel::HmacOnly] {
+            let (_dir, mut s) = store(level);
+            for i in 0..6u32 {
+                s.upsert(&drawer(
+                    if i % 2 == 0 { "even" } else { "odd" },
+                    "r",
+                    &format!("harbour tide survey note number {i}"),
+                    i,
+                ))
+                .unwrap();
+            }
+            let opts = SearchOptions {
+                wing: Some("even".into()),
+                limit: 1,
+                ..Default::default()
+            };
+            let page = s.search_page("harbour tide survey", &opts).unwrap();
+            // The signal this entry exists for holds regardless of level.
+            assert!(
+                page.truncated,
+                "{level:?}: three in-scope rows against a page of one is truncated"
+            );
+            // And the other one is allowed to be absent. Asserting the exact
+            // tier here would pin an implementation detail; asserting the
+            // CONTRACT — never a wrong number — is what a caller relies on.
+            if let Some(n) = page.scope {
+                assert_eq!(n, 3, "{level:?}: when reported, it must be right");
+            }
+        }
+    }
+
+    /// ROADMAP O72. The default vault's semantic gate is a DECLARED constant,
+    /// and that is the fact the number alone cannot carry.
+    ///
+    /// `0.56` looks like a measurement wherever it is printed. It is not one
+    /// for this vault: `HashEmbedder` overrides the probing default and
+    /// declares its gate precisely so the shipped configuration pays no
+    /// forward passes at open. An operator asking "is my semantic channel
+    /// doing anything?" needs to know that nothing examined this vector
+    /// space — separation between real evidence and everything else measured
+    /// +0.012 here against lexical's +0.064 — and `gate_source` is the only
+    /// field that says so.
+    #[test]
+    fn the_default_vaults_semantic_gate_is_declared_not_measured() {
+        let (_dir, s) = store(SecurityLevel::Sealed);
+        let sem = s.semantic_channel();
+        assert_eq!(
+            sem.gate_source, "embedder-constant",
+            "the hash embedder DECLARES its gate; reporting it as measured would tell an operator this vault's vector space was examined"
+        );
+        assert!(sem.gate.is_some(), "the default vault does gate");
+        // The floor is the hash declaration, which reproduces the shipped
+        // cosine map exactly — 0, not a probed value.
+        assert_eq!(sem.floor, 0.0);
+        // And the report is cheap: it reads what open already resolved, so
+        // `stats` never pays a forward pass for it.
+        assert_eq!(s.semantic_channel().gate, sem.gate);
     }
 
     /// The pagination contract: pages are slices of the one ranking a single

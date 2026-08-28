@@ -49,6 +49,19 @@ pub trait Embedder {
         calibrate_admission_gate(self)
     }
 
+    /// Whether [`Self::semantic_admission_gate`] MEASURED this vector space or
+    /// returned a constant the implementation declares (ROADMAP O72).
+    ///
+    /// The distinction is invisible from the value alone and an operator
+    /// cannot otherwise recover it: the default implementation probes, while
+    /// [`HashEmbedder`] deliberately declares its gate so the default vault
+    /// pays no forward passes at open. Reported on `PalaceStats`, because "my
+    /// semantic channel contributes nothing" and "my semantic channel was
+    /// never measured" are different situations with different remedies.
+    fn semantic_gate_is_measured(&self) -> bool {
+        true
+    }
+
     /// The raw cosine this vector space gives known-unrelated text — the
     /// zero point the store's cosine→`semantic` map is calibrated against —
     /// or `None` for a space whose floor is not knowable here (the store
@@ -324,6 +337,11 @@ impl Embedder for HashEmbedder {
         Some(HASH_ADMISSION_GATE)
     }
 
+    /// DECLARED, not measured — see [`Self::semantic_floor`] below for why.
+    fn semantic_gate_is_measured(&self) -> bool {
+        false
+    }
+
     /// DECLARED zero, not measured: feature hashing over surface forms
     /// puts texts sharing no token at cosine ~0, and the shipped
     /// `(cos+1)/2` map IS the floor-0 calibration — declaring it keeps
@@ -409,6 +427,12 @@ impl Embedder for ExternalEmbedder {
     /// `UNDERCROFT_SEMANTIC_GATE=<measured value>` — not a guess made here.
     fn semantic_admission_gate(&self) -> Option<f32> {
         None
+    }
+
+    /// Nothing was measured: the vectors come from a model this process has
+    /// never seen, so there was no probe to run.
+    fn semantic_gate_is_measured(&self) -> bool {
+        false
     }
 
     /// `None` for the same reason as the gate: the vectors come from a

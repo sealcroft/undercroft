@@ -592,7 +592,13 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                 offset,
                 ranked_at: Some(ranked_at),
             };
-            let hits = store.search(query, &opts)?;
+            // ROADMAP O73: the page variant, so the footer below can state
+            // what the engine knows instead of inferring it from the page
+            // being full.
+            let page = store.search_page(query, &opts)?;
+            let deeper = page.truncated;
+            let scope_size = page.scope;
+            let hits = page.hits;
             // What this request's own filters kept out of the competition
             // (docs/LABELS.md) — the unlabeled-kind count and the trust-floor
             // count, measured by the same helper every surface uses. The trust
@@ -704,14 +710,21 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                     h.drawer.content
                 ));
             }
-            // A full page may have more below it; say exactly how to continue.
-            // A short page means the ranking is exhausted and says nothing.
-            if hits.len() == limit {
+            // ROADMAP O73. This used to fire on `hits.len() == limit`, which
+            // is a GUESS: a page that exactly filled and a page that was cut
+            // are indistinguishable after the fact, so a full FINAL page
+            // advertised depth that did not exist. `truncated` is the engine's
+            // own answer, taken before the cut against the admitted ranking.
+            if deeper {
                 let echo = ranked_at
                     .format(&time::format_description::well_known::Rfc3339)
                     .unwrap_or_default();
+                let scope_note = match scope_size {
+                    Some(n) => format!(" (this scope holds {n} drawers)"),
+                    None => String::new(),
+                };
                 out.push_str(&format!(
-                    "— deeper results may exist: repeat this search with offset={} and ranked_at={echo}\n",
+                    "— deeper results EXIST{scope_note}: repeat this search with offset={} and ranked_at={echo}\n",
                     offset + hits.len(),
                 ));
             }

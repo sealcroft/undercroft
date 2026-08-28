@@ -3212,7 +3212,40 @@ preflight exists to catch.
 
 ---
 
-### O72 — nothing reports that the semantic channel is contributing nothing
+### O72 — CLOSED 2026-08-23: the vault reports the semantic channel it is actually running
+
+**CLOSED.** `PalaceStats` gains `semantic` — the admission `gate` in force,
+the calibration `floor`, and `gate_source`. Projected on **all four**
+renderers (`parity.rs::HAND_PROJECTED` demanded three by name and the gate
+failed until each had it: the CLI, `/v1`, and `ui.html`, the console this
+project has twice forgotten).
+
+**`gate_source` is the field this entry is really about, and it is the one the
+filing did not ask for.** The entry proposed reporting *measured separation*,
+and reading the code showed why that is not the cheap half it sounds like:
+the trait default DOES probe, but `HashEmbedder` **overrides it with a
+declared constant** and says so — *"pays no probe embeds at open"* — and
+`ExternalEmbedder` returns `None`. So on the exact vault the entry is about,
+the existing machinery measures nothing, and a reported figure would have had
+to come from new probe passes. The value alone cannot carry the distinction
+either: a printed `0.56` looks like a measurement of your corpus and is a
+shipped constant. `Embedder::semantic_gate_is_measured` supplies it, and the
+store resolves the source once at open.
+
+Verified live: a default vault reports `gate 0.560 · floor 0.000 ·
+embedder-constant`, `UNDERCROFT_SEMANTIC_GATE=off` reports `refused ·
+declared-off`, and a declared `0.80` reports `declared`.
+
+**Deliberately NOT done: the size-threshold warning** the entry also proposes
+("warn when a hash vault passes a size where paraphrase starts to dominate").
+That threshold would be inference, and this project's contract is that a
+signal is read and a convention declared while nothing is inferred. The report
+states what is in force and passes no judgement; deciding a number is too low
+is a threshold nobody measured.
+
+**Still unmeasured, restated so it is not lost:** how much of the +3.2-4.2pp
+previously measured for a served embedder survives this protocol. That needs a
+run, and nothing here substitutes for it.
 
 **Measured over 15,400 returned hits, 2026-08-22.** Separation between real
 evidence and everything else:
@@ -3255,7 +3288,43 @@ a per-embedder constant by the back door.
 
 ---
 
-### O73 — a scope deeper than the page has no signal, and only the engine can see it
+### O73 — CLOSED 2026-08-23: the response says whether the page was cut, and how large the scope was
+
+**CLOSED.** `SearchPage` carries the hits plus `truncated` and `scope`;
+`search`/`search_with_vector` are unchanged and now delegate to the page
+variants with the extra fields dropped, so the old contract is preserved **by
+construction** rather than by a second implementation that could drift. On
+`/v1` the response gains `truncated` always and `scope_size` when known; the
+CLI and MCP footers gained the same.
+
+**`truncated` is exact, and the thing it replaces was a guess.** Every surface
+inferred "there may be more" from `hits.len() == limit`, which cannot separate
+a page that was cut from one that exactly filled — so a full FINAL page
+advertised depth that does not exist. Admission (`hits.retain`) runs BEFORE
+the page cut, so comparing admitted candidates against the window is both free
+and correct. MCP's footer now says *"deeper results EXIST"* rather than *"may
+exist"*, and an existing e2e assertion pinning the old wording had to be
+updated — my own regression, caught by the suite.
+
+**The scope half is TIER-DEPENDENT and that had to be documented rather than
+hidden.** The population is a by-product of the prefilter materializing a
+membership set: a small sealed vault runs a bounded exact scan and never
+builds one, so the field is absent. Found by the test failing on `Sealed`
+while the live probe on an hmac-only vault reported `4`. **Absence therefore
+means "the engine did not have it to hand" — never "no scope was declared"
+and never "the scope is empty"**, and a caller treating a missing
+`scope_size` as zero would be badly wrong. That is stated in the route table,
+in the struct, and pinned by a test that asserts the contract (never a wrong
+number) rather than the tier.
+
+**Rejected, still:** raising the default `k`. It changes what every existing
+caller retrieves and is MAJOR by this file's test. The signal lets a caller
+decide instead.
+
+**Unmeasured, and it matters:** whether recovering this evidence produces
+better ANSWERS. Everything behind this entry is retrieval recall. Recall up is
+not accuracy up, and the experiment that would settle it is a re-run of the
+answering stage.
 
 **Measured, 2026-08-22/23.** Evidence recall as the page grows:
 

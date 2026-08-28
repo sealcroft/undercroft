@@ -501,6 +501,8 @@ impl Tenancy {
             Body::Json(json!({
                 "id": id,
                 "drawers": full.records,
+                // ROADMAP O72: the semantic channel as configured. Additive.
+                "semantic": full.semantic,
                 // **The same number under the name the struct and every
                 // other surface give it** (M2, round-four #45). `records` is
                 // what `PalaceStats` calls it, what the CLI and MCP print,
@@ -839,15 +841,22 @@ impl Tenancy {
         // cannot honour was parsed here and then read only on the external
         // arm, so it ranked against vectors it never touched.
         refuse_unhonourable_vector(vector.is_some(), store.is_external())?;
-        let hits = if store.is_external() {
+        // ROADMAP O73: the page variants, so the response can say whether the
+        // ranking went deeper than this page and how large the declared scope
+        // was. `search`/`search_with_vector` are these calls with the extra
+        // fields dropped, so nothing about the hits themselves changes.
+        let page = if store.is_external() {
             let v =
                 vector.ok_or_else(|| RestError::new(400, "external vault requires 'vector'"))?;
             store
-                .search_with_vector(&query, v, &opts)
+                .search_page_with_vector(&query, v, &opts)
                 .map_err(store_err)?
         } else {
-            store.search(&query, &opts).map_err(store_err)?
+            store.search_page(&query, &opts).map_err(store_err)?
         };
+        let page_truncated = page.truncated;
+        let page_scope = page.scope;
+        let hits = page.hits;
         let hits: Vec<Value> = hits
             .into_iter()
             .map(|h| {
@@ -942,7 +951,19 @@ impl Tenancy {
             "hits": hits,
             "next_offset": next_offset,
             "ranked_at": ranked_at_echo,
+            // ROADMAP O73. `truncated` is exact rather than inferred: the
+            // engine compares ADMITTED candidates against the requested
+            // window, which a caller cannot do — testing `hits.len() ==
+            // limit` cannot separate a page that exactly filled from one that
+            // was cut. Additive: every field above is unchanged.
+            "truncated": page_truncated,
         });
+        // Present only when the request declared a NARROWING scope. A bare
+        // exclusion is the complement of a small set, so reporting its
+        // cardinality would be reporting the corpus as a scope.
+        if let Some(n) = page_scope {
+            resp["scope_size"] = json!(n);
+        }
         if let Some(n) = excluded.unlabeled {
             resp["unlabeled_excluded"] = json!(n);
         }

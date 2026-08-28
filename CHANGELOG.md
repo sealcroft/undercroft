@@ -7,6 +7,63 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### the two things only the engine knew, and one it was never asked (M37)
+
+**MINOR: two additive capabilities, ROADMAP O72 and O73, both ruled by the
+maintainer before any code was written.** Every existing field and every
+existing call keeps its exact shape.
+
+**O73 — the search response says whether the page was cut.** `SearchPage`
+carries the hits plus `truncated` and `scope`; `search` and
+`search_with_vector` now delegate to the page variants with the extra fields
+dropped, so the old contract is preserved **by construction** rather than by a
+second implementation that could drift. `/v1` gains `truncated` always and
+`scope_size` when known; the CLI and MCP footers gained the same.
+
+**What it replaces was a guess.** Every surface inferred "there may be more"
+from `hits.len() == limit`, which cannot separate a page that was cut from one
+that exactly filled — so a full FINAL page advertised depth that does not
+exist. Admission runs BEFORE the page cut, so comparing admitted candidates
+against the window is both free and exact. MCP now says *"deeper results
+EXIST"*. An existing e2e assertion pinned the old wording and had to be
+updated: my own regression, caught by the suite.
+
+**`scope_size` is tier-dependent, and that is documented rather than hidden.**
+The population is a by-product of the prefilter materializing a membership
+set, so a small sealed vault — which runs a bounded exact scan — omits it.
+Found by the test failing on a sealed vault while a live hmac-only probe
+reported `4`. **Absence means the engine did not have the number; it never
+means the scope is empty or that none was declared.** Stated in the route
+table and in the struct, and pinned by a test asserting the contract rather
+than the tier.
+
+**O72 — the vault reports the semantic channel it is actually running.**
+`PalaceStats` gains `semantic`: the admission `gate` in force, the calibration
+`floor`, and `gate_source`. Projected on all four renderers — the parity gate
+failed until the CLI, `/v1` and `ui.html` each had it.
+
+**`gate_source` is the field that matters, and the filing did not ask for
+it.** The entry proposed reporting measured separation; reading the code
+showed the machinery is bypassed exactly where it is needed. The trait default
+probes, but `HashEmbedder` **overrides it with a declared constant** — *"pays
+no probe embeds at open"* — and `ExternalEmbedder` returns `None`. So on the
+default vault nothing measures anything, and a printed `0.56` looks like a
+measurement of your corpus while being a shipped constant. Verified live: a
+default vault reports `gate 0.560 · floor 0.000 · embedder-constant`;
+`UNDERCROFT_SEMANTIC_GATE=off` reports `refused · declared-off`; a declared
+`0.80` reports `declared`.
+
+**Deliberately not built:** the size-threshold warning the entry also
+proposes. That threshold would be inference, and the contract here is that a
+signal is read and a convention declared while nothing is inferred. The report
+states what is in force and passes no judgement.
+
+**Stated, not implied:** O73's figures are retrieval recall. Recall up is not
+accuracy up, and whether recovering that evidence produces better answers was
+not measured.
+
+Counts move with them: cargo tests 769 → 772, e2e 393, landing sums 634/772.
+
 ### three published figures that cited a table which no longer exists (M36)
 
 **No engine code changed.** ROADMAP **O77**, options (a) and (b). The doctrine

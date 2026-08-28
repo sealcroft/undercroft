@@ -112,6 +112,43 @@ pub struct PalaceStats {
     /// "the anchor is N behind" and "a writer's staging manifest is still
     /// there" are exactly the facts an operator goes looking for later.
     pub unhealed: Vec<String>,
+    /// The semantic channel as this vault is ACTUALLY configured
+    /// (ROADMAP O72): the admission gate in force, the calibration floor, and
+    /// where the gate came from.
+    ///
+    /// It exists because "my semantic channel contributes nothing" is a real
+    /// and silent condition — measured over 15,400 returned hits on the
+    /// default embedder, separation between real evidence and everything else
+    /// was **+0.012** against lexical's +0.064 — and an operator had no way to
+    /// see it. A hash vault at a thousand drawers and one at a million look
+    /// identical from outside; the only signal was a result that felt thin.
+    ///
+    /// Reported rather than judged. The engine states what is in force and
+    /// where it came from; it does not decide that a number is too low, which
+    /// would be a threshold nobody measured.
+    pub semantic: SemanticChannel,
+}
+
+/// What the semantic half of retrieval is set to on this vault, and whether
+/// anything measured it (ROADMAP O72).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SemanticChannel {
+    /// The admission gate a semantic-only hit must clear, or `None` when
+    /// semantic-only admission is refused outright (an external vault, whose
+    /// vectors come from a model this process has never seen, or an operator
+    /// declaring `UNDERCROFT_SEMANTIC_GATE=off`).
+    pub gate: Option<f32>,
+    /// The cosine the embedder gives known-unrelated text — the zero point the
+    /// cosine-to-`semantic` map is calibrated against.
+    pub floor: f32,
+    /// `measured` (probed from the embedder at open), `embedder-constant` (the
+    /// embedder declares its own and pays no probes — what the DEFAULT vault
+    /// does), `declared` / `declared-off` (the operator set it), or `refused`.
+    ///
+    /// This is the field the entry is really about. The value alone cannot
+    /// tell a probed floor from a shipped one, and only one of those means
+    /// this vault's vector space was ever examined.
+    pub gate_source: &'static str,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -1034,6 +1071,7 @@ impl PalaceStore {
             codebooks: self.codebook_generations(),
             read_only: self.is_read_only(),
             unhealed: self.unhealed().to_vec(),
+            semantic: self.semantic_channel(),
         })
     }
 

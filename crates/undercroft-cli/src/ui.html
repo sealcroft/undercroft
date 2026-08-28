@@ -212,6 +212,17 @@
             <div class="h">TRAINED INDEX ARTIFACTS</div>
             <div class="kv" id="sCodebooks">—</div>
           </div>
+          <!-- ROADMAP O72. "My semantic channel contributes nothing" is a
+               real and silent condition: measured over 15,400 returned hits
+               on the default embedder, separation between real evidence and
+               everything else was +0.012 against lexical's +0.064. Nothing
+               on any surface said so. This states what is IN FORCE and where
+               it came from, and deliberately passes no judgement — calling a
+               number too low would be a threshold nobody measured. -->
+          <div class="sect">
+            <div class="h">SEMANTIC CHANNEL</div>
+            <div class="kv" id="sSemantic">—</div>
+          </div>
           <div class="sect">
             <div class="h">WINGS — DRAWER DISTRIBUTION</div>
             <table><thead><tr><th>WING</th><th>DRAWERS</th><th style="width:50%">SHARE</th></tr></thead><tbody id="wingRows"></tbody></table>
@@ -1035,6 +1046,18 @@ async function loadOverview() {
       .filter(c => c.generation > 0)
       .map(c => c.artifact + " gen " + c.generation);
     $("sCodebooks").textContent = trained.length ? trained.join(" · ") : "none trained";
+    // O72: gate, floor, and — the part the value alone cannot tell you —
+    // whether anything MEASURED this vault's vector space. `embedder-constant`
+    // is the default vault: the hash embedder declares its own gate and pays
+    // no probe embeds at open, so nothing here was probed. textContent, so no
+    // escaping (see the note above `trained`).
+    const sem = s.semantic || null;
+    $("sSemantic").textContent = sem
+      ? "gate " + (sem.gate === null || sem.gate === undefined
+            ? "refused" : Number(sem.gate).toFixed(3))
+        + " · floor " + Number(sem.floor).toFixed(3)
+        + " · " + sem.gate_source
+      : "—";
     // M5: R4's report. A non-empty list means either "this replica is
     // serving a vault its writer has not finished with" or "this vault still
     // holds some graph words in clear at rest" — each note says which.
