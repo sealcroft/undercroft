@@ -4,7 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Undercroft — Crate Map</title>
-  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
@@ -13,9 +12,9 @@
       --color-ink:    #d9f0ea;
       --color-muted:  #7fa39c;
       --color-accent: #35e0c2;
-      --font-sans:  'Geist', system-ui, sans-serif;
-      --font-serif: 'Instrument Serif', serif;
-      --font-mono:  'Geist Mono', ui-monospace, monospace;
+      --font-sans:  -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --font-serif: Georgia, "Times New Roman", serif;
+      --font-mono:  ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     }
     body {
       font-family: var(--font-sans);
@@ -59,19 +58,19 @@
       <!-- ============ ZONES (drawn first) ============ -->
       <rect x="96" y="124" width="1008" height="120" rx="8" fill="rgba(217,240,234,0.02)" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
       <rect x="560" y="128" width="80" height="12" rx="2" fill="#04080a"/>
-      <text x="600" y="137" fill="rgba(217,240,234,0.40)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">BINARIES</text>
+      <text x="600" y="137" fill="rgba(217,240,234,0.40)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.14em">BINARIES</text>
 
       <rect x="96" y="284" width="1008" height="120" rx="8" fill="rgba(217,240,234,0.02)" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
       <rect x="568" y="288" width="64" height="12" rx="2" fill="#04080a"/>
-      <text x="600" y="297" fill="rgba(217,240,234,0.40)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">ENGINE</text>
+      <text x="600" y="297" fill="rgba(217,240,234,0.40)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.14em">ENGINE</text>
 
       <rect x="96" y="444" width="1008" height="120" rx="8" fill="rgba(217,240,234,0.02)" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
       <rect x="556" y="448" width="88" height="12" rx="2" fill="#04080a"/>
-      <text x="600" y="457" fill="rgba(217,240,234,0.40)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">FOUNDATION</text>
+      <text x="600" y="457" fill="rgba(217,240,234,0.40)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.14em">FOUNDATION</text>
 
       <rect x="96" y="604" width="1008" height="120" rx="8" fill="rgba(217,240,234,0.02)" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
       <rect x="564" y="608" width="72" height="12" rx="2" fill="#04080a"/>
-      <text x="600" y="617" fill="rgba(217,240,234,0.40)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">DOMAIN</text>
+      <text x="600" y="617" fill="rgba(217,240,234,0.40)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.14em">DOMAIN</text>
 
       <!-- ============ ARROWS (before boxes) ============ -->
       <!-- E1 cli -> store (shared x) -->
@@ -105,144 +104,144 @@
 
       <!-- ============ ARROW LABELS (mask + gap) ============ -->
       <rect x="700" y="144" width="120" height="12" rx="2" fill="#04080a"/>
-      <text x="760" y="153" fill="#ff5d73" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">NO ENGINE DEP</text>
+      <text x="760" y="153" fill="#ff5d73" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">NO ENGINE DEP</text>
 
       <rect x="660" y="312" width="100" height="12" rx="2" fill="#04080a"/>
-      <text x="710" y="321" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">COUNTS ONLY</text>
+      <text x="710" y="321" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">COUNTS ONLY</text>
 
       <rect x="136" y="336" width="120" height="12" rx="2" fill="#04080a"/>
-      <text x="196" y="345" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">DOMAIN TYPES</text>
+      <text x="196" y="345" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">DOMAIN TYPES</text>
 
       <rect x="584" y="384" width="100" height="12" rx="2" fill="#04080a"/>
-      <text x="634" y="393" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">DECLARATIONS</text>
+      <text x="634" y="393" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">DECLARATIONS</text>
 
       <rect x="940" y="480" width="120" height="12" rx="2" fill="#04080a"/>
-      <text x="1000" y="489" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">TLS OR LOOPBACK</text>
+      <text x="1000" y="489" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">TLS OR LOOPBACK</text>
 
       <!-- ============ NODES ============ -->
       <!-- undercroft-cli -->
       <rect x="380" y="140" width="200" height="88" rx="6" fill="#04080a"/>
       <rect x="380" y="140" width="200" height="88" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
       <rect x="388" y="146" width="40" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
-      <text x="408" y="155" fill="rgba(217,240,234,0.80)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">BINARY</text>
+      <text x="408" y="155" fill="rgba(217,240,234,0.80)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">BINARY</text>
       <rect x="536" y="146" width="36" height="12" rx="2" fill="transparent" stroke="rgba(92,127,121,0.50)" stroke-width="0.8"/>
-      <text x="554" y="155" fill="#5c7f79" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">0 in</text>
-      <text x="480" y="184" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">undercroft-cli</text>
-      <text x="480" y="202" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">CLI · MCP · HTTP · tenants</text>
-      <text x="480" y="216" fill="#5c7f79" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">links 8 workspace crates</text>
+      <text x="554" y="155" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">0 in</text>
+      <text x="480" y="184" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">undercroft-cli</text>
+      <text x="480" y="202" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">CLI · MCP · HTTP · tenants</text>
+      <text x="480" y="216" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">links 8 workspace crates</text>
 
       <!-- undercroft-orchestrator -->
       <rect x="860" y="140" width="200" height="88" rx="6" fill="#04080a"/>
       <rect x="860" y="140" width="200" height="88" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
       <rect x="868" y="146" width="40" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
-      <text x="888" y="155" fill="rgba(217,240,234,0.80)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">BINARY</text>
+      <text x="888" y="155" fill="rgba(217,240,234,0.80)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">BINARY</text>
       <rect x="1016" y="146" width="36" height="12" rx="2" fill="transparent" stroke="rgba(92,127,121,0.50)" stroke-width="0.8"/>
-      <text x="1034" y="155" fill="#5c7f79" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">0 in</text>
-      <text x="960" y="184" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">undercroft-orchestrator</text>
-      <text x="960" y="202" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">control plane · /t/* · /admin/*</text>
-      <text x="960" y="216" fill="#5c7f79" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">pure /v1 client</text>
+      <text x="1034" y="155" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">0 in</text>
+      <text x="960" y="184" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">undercroft-orchestrator</text>
+      <text x="960" y="202" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">control plane · /t/* · /admin/*</text>
+      <text x="960" y="216" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">pure /v1 client</text>
 
       <!-- undercroft-store (FOCAL) -->
       <rect x="380" y="300" width="200" height="88" rx="6" fill="#04080a"/>
       <rect x="380" y="300" width="200" height="88" rx="6" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1.2"/>
       <rect x="388" y="306" width="36" height="12" rx="2" fill="transparent" stroke="rgba(53,224,194,0.50)" stroke-width="0.8"/>
-      <text x="406" y="315" fill="#35e0c2" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">STORE</text>
+      <text x="406" y="315" fill="#35e0c2" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">STORE</text>
       <rect x="536" y="306" width="36" height="12" rx="2" fill="transparent" stroke="rgba(53,224,194,0.50)" stroke-width="0.8"/>
-      <text x="554" y="315" fill="#35e0c2" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">1 in</text>
-      <text x="480" y="344" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">undercroft-store</text>
-      <text x="480" y="362" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">SQLite · search · audit chain</text>
-      <text x="480" y="376" fill="#5c7f79" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">admission · KG · retention</text>
+      <text x="554" y="315" fill="#35e0c2" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">1 in</text>
+      <text x="480" y="344" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">undercroft-store</text>
+      <text x="480" y="362" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">SQLite · search · audit chain</text>
+      <text x="480" y="376" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">admission · KG · retention</text>
 
       <!-- undercroft-obs -->
       <rect x="860" y="300" width="200" height="88" rx="6" fill="#04080a"/>
       <rect x="860" y="300" width="200" height="88" rx="6" fill="rgba(217,240,234,0.05)" stroke="#7fa39c" stroke-width="1"/>
       <rect x="868" y="306" width="28" height="12" rx="2" fill="transparent" stroke="rgba(127,163,156,0.40)" stroke-width="0.8"/>
-      <text x="882" y="315" fill="rgba(127,163,156,0.90)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">OBS</text>
+      <text x="882" y="315" fill="rgba(127,163,156,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">OBS</text>
       <rect x="1016" y="306" width="36" height="12" rx="2" fill="transparent" stroke="rgba(92,127,121,0.50)" stroke-width="0.8"/>
-      <text x="1034" y="315" fill="#5c7f79" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">2 in</text>
-      <text x="960" y="344" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">undercroft-obs</text>
-      <text x="960" y="362" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">metrics · traces · SSE</text>
-      <text x="960" y="376" fill="#5c7f79" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">zero deps by default</text>
+      <text x="1034" y="315" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">2 in</text>
+      <text x="960" y="344" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">undercroft-obs</text>
+      <text x="960" y="362" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">metrics · traces · SSE</text>
+      <text x="960" y="376" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">zero deps by default</text>
 
       <!-- undercroft-vault (FOCAL) -->
       <rect x="140" y="460" width="200" height="88" rx="6" fill="#04080a"/>
       <rect x="140" y="460" width="200" height="88" rx="6" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1.2"/>
       <rect x="148" y="466" width="36" height="12" rx="2" fill="transparent" stroke="rgba(53,224,194,0.50)" stroke-width="0.8"/>
-      <text x="166" y="475" fill="#35e0c2" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">VAULT</text>
+      <text x="166" y="475" fill="#35e0c2" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">VAULT</text>
       <rect x="296" y="466" width="36" height="12" rx="2" fill="transparent" stroke="rgba(53,224,194,0.50)" stroke-width="0.8"/>
-      <text x="314" y="475" fill="#35e0c2" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">1 in</text>
-      <text x="240" y="504" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">undercroft-vault</text>
-      <text x="240" y="522" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">HKDF · XChaCha20 · HMAC</text>
-      <text x="240" y="536" fill="#5c7f79" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">rotation · export bundles</text>
+      <text x="314" y="475" fill="#35e0c2" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">1 in</text>
+      <text x="240" y="504" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">undercroft-vault</text>
+      <text x="240" y="522" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">HKDF · XChaCha20 · HMAC</text>
+      <text x="240" y="536" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">rotation · export bundles</text>
 
       <!-- undercroft-llm + -index -->
       <rect x="380" y="460" width="200" height="88" rx="6" fill="#04080a"/>
       <rect x="380" y="460" width="200" height="88" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
       <rect x="388" y="466" width="52" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
-      <text x="414" y="475" fill="rgba(217,240,234,0.80)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">ADAPTERS</text>
+      <text x="414" y="475" fill="rgba(217,240,234,0.80)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">ADAPTERS</text>
       <rect x="536" y="466" width="36" height="12" rx="2" fill="transparent" stroke="rgba(92,127,121,0.50)" stroke-width="0.8"/>
-      <text x="554" y="475" fill="#5c7f79" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">1 in</text>
-      <text x="480" y="504" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">undercroft-llm + -index</text>
-      <text x="480" y="522" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">served embedders · runtimes</text>
-      <text x="480" y="536" fill="#5c7f79" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">remote vector backends</text>
+      <text x="554" y="475" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">1 in</text>
+      <text x="480" y="504" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">undercroft-llm + -index</text>
+      <text x="480" y="522" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">served embedders · runtimes</text>
+      <text x="480" y="536" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">remote vector backends</text>
 
       <!-- undercroft-config -->
       <rect x="620" y="460" width="200" height="88" rx="6" fill="#04080a"/>
       <rect x="620" y="460" width="200" height="88" rx="6" fill="rgba(217,240,234,0.05)" stroke="#7fa39c" stroke-width="1"/>
       <rect x="628" y="466" width="40" height="12" rx="2" fill="transparent" stroke="rgba(127,163,156,0.40)" stroke-width="0.8"/>
-      <text x="648" y="475" fill="rgba(127,163,156,0.90)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">CONFIG</text>
+      <text x="648" y="475" fill="rgba(127,163,156,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">CONFIG</text>
       <rect x="776" y="466" width="36" height="12" rx="2" fill="transparent" stroke="rgba(92,127,121,0.50)" stroke-width="0.8"/>
-      <text x="794" y="475" fill="#5c7f79" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">2 in</text>
-      <text x="720" y="504" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">undercroft-config</text>
-      <text x="720" y="522" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">declaration resolvers</text>
-      <text x="720" y="536" fill="#5c7f79" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">engine + control plane</text>
+      <text x="794" y="475" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">2 in</text>
+      <text x="720" y="504" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">undercroft-config</text>
+      <text x="720" y="522" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">declaration resolvers</text>
+      <text x="720" y="536" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">engine + control plane</text>
 
       <!-- undercroft-core -->
       <rect x="140" y="620" width="200" height="88" rx="6" fill="#04080a"/>
       <rect x="140" y="620" width="200" height="88" rx="6" fill="rgba(217,240,234,0.05)" stroke="#7fa39c" stroke-width="1"/>
       <rect x="148" y="626" width="32" height="12" rx="2" fill="transparent" stroke="rgba(127,163,156,0.40)" stroke-width="0.8"/>
-      <text x="164" y="635" fill="rgba(127,163,156,0.90)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">CORE</text>
+      <text x="164" y="635" fill="rgba(127,163,156,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">CORE</text>
       <rect x="296" y="626" width="36" height="12" rx="2" fill="transparent" stroke="rgba(92,127,121,0.50)" stroke-width="0.8"/>
-      <text x="314" y="635" fill="#5c7f79" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">3 in</text>
-      <text x="240" y="664" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">undercroft-core</text>
-      <text x="240" y="682" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">chunk · ids · normalize</text>
-      <text x="240" y="696" fill="#5c7f79" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">no i/o, no crypto</text>
+      <text x="314" y="635" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">3 in</text>
+      <text x="240" y="664" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">undercroft-core</text>
+      <text x="240" y="682" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">chunk · ids · normalize</text>
+      <text x="240" y="696" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">no i/o, no crypto</text>
 
       <!-- undercroft-net -->
       <rect x="620" y="620" width="200" height="88" rx="6" fill="#04080a"/>
       <rect x="620" y="620" width="200" height="88" rx="6" fill="rgba(217,240,234,0.05)" stroke="#7fa39c" stroke-width="1"/>
       <rect x="628" y="626" width="28" height="12" rx="2" fill="transparent" stroke="rgba(127,163,156,0.40)" stroke-width="0.8"/>
-      <text x="642" y="635" fill="rgba(127,163,156,0.90)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">NET</text>
+      <text x="642" y="635" fill="rgba(127,163,156,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">NET</text>
       <rect x="776" y="626" width="36" height="12" rx="2" fill="transparent" stroke="rgba(92,127,121,0.50)" stroke-width="0.8"/>
-      <text x="794" y="635" fill="#5c7f79" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle">2 in</text>
-      <text x="720" y="664" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">undercroft-net</text>
-      <text x="720" y="682" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">TLS or loopback only</text>
-      <text x="720" y="696" fill="#5c7f79" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">CA pinning · no override</text>
+      <text x="794" y="635" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">2 in</text>
+      <text x="720" y="664" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">undercroft-net</text>
+      <text x="720" y="682" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">TLS or loopback only</text>
+      <text x="720" y="696" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">CA pinning · no override</text>
 
       <!-- ============ FOOTNOTES ============ -->
-      <text x="880" y="636" fill="rgba(127,163,156,0.90)" font-size="7" font-family="'Geist Mono', monospace" letter-spacing="0.14em">N IN — DEPENDENTS DRAWN HERE</text>
-      <text x="880" y="664" fill="rgba(127,163,156,0.90)" font-size="7" font-family="'Geist Mono', monospace" letter-spacing="0.14em">NOT SHOWN</text>
-      <text x="880" y="682" fill="#5c7f79" font-size="9" font-family="'Geist Mono', monospace">undercroft-embed-onnx · -embed-ort</text>
-      <text x="880" y="696" fill="#5c7f79" font-size="9" font-family="'Geist Mono', monospace">undercroft-bench · edges reduced</text>
+      <text x="880" y="636" fill="rgba(127,163,156,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" letter-spacing="0.14em">N IN — DEPENDENTS DRAWN HERE</text>
+      <text x="880" y="664" fill="rgba(127,163,156,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" letter-spacing="0.14em">NOT SHOWN</text>
+      <text x="880" y="682" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">undercroft-embed-onnx · -embed-ort</text>
+      <text x="880" y="696" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">undercroft-bench · edges reduced</text>
 
       <!-- ============ LEGEND ============ -->
       <line x1="96" y1="780" x2="1104" y2="780" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
-      <text x="96" y="800" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">LEGEND</text>
+      <text x="96" y="800" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" letter-spacing="0.14em">LEGEND</text>
 
       <rect x="204" y="792" width="16" height="10" rx="2" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1"/>
-      <text x="228" y="800" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace">FOCAL</text>
+      <text x="228" y="800" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">FOCAL</text>
 
       <rect x="308" y="792" width="16" height="10" rx="2" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
-      <text x="332" y="800" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace">WORKSPACE CRATE</text>
+      <text x="332" y="800" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">WORKSPACE CRATE</text>
 
       <rect x="488" y="792" width="16" height="10" rx="2" fill="rgba(217,240,234,0.05)" stroke="#7fa39c" stroke-width="1"/>
-      <text x="512" y="800" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace">LEAF — NO DEPS DRAWN</text>
+      <text x="512" y="800" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">LEAF — NO DEPS DRAWN</text>
 
       <line x1="700" y1="797" x2="732" y2="797" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
-      <text x="744" y="800" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace">DEPENDS ON</text>
+      <text x="744" y="800" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">DEPENDS ON</text>
 
       <line x1="868" y1="797" x2="900" y2="797" stroke="#ff5d73" stroke-width="1.2" stroke-dasharray="5,4"/>
-      <text x="912" y="800" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace">ABSENT BY DESIGN</text>
+      <text x="912" y="800" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">ABSENT BY DESIGN</text>
     </svg>
   </div>
 </body>

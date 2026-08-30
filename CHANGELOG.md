@@ -7,6 +7,82 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### checking the new diagram set against the code, and the two claims that did not survive it (M40)
+
+**No engine code changed.** This is the verification ROADMAP **O74** says
+nothing performs — the illustrative `architecture/platform-views/` set read
+against the tree rather than against the prose about the tree.
+
+**The set's content passed.** Every structural claim it publishes was
+re-derived from source: thirteen crates, the CLI linking eight workspace
+crates, 34 MCP tools of which 12 write (`READ_TOOLS` 22 + `WRITE_TOOLS` 12),
+37 `/v1` routes, 74 CLI operations (59 `SURFACE_ABSENCES` anchors + 15
+`SURFACE_COMPLETE`), the three named POST exceptions in `tenant.rs::mutates`,
+four HKDF subkeys beside a separately-stored `kg_secret`, and `verify`'s six
+legs. The result is recorded as a dated table in O74 — a snapshot, explicitly
+not a binding, since seven commits landed after the set was written and one of
+them touched four surface files without moving a published count. That it
+happened not to is checked, not assumed.
+
+**It also publishes no measured figure at all** — no `pp`, no `%`, anywhere in
+the twelve. Worth preserving deliberately: it is why the set could not carry
+the unqualified `room_cap` figure that `e40107b` had just repaired on the
+governed `retrieval-stack.svg`. Its twin names the filter and attaches no
+number.
+
+**Two claims did not survive, and both are mine — prose about the tree that
+the tree contradicts.**
+
+**`CLAUDE.md` said `SURFACE_ABSENCES` holds 63 rows. It holds 62.** The 63rd
+`Absence::` is a COMMENT — the identical miscount ROADMAP **O68** records
+having already caught one variant down, where it corrected `Drift` 22 → 21 and
+left the TOTAL, one line up in the same sentence, still comment-inflated. The
+`= 74` was never wrong, because it derives from ANCHORS (59) plus
+`SURFACE_COMPLETE` (15) and not from rows, which is exactly why nothing
+noticed. Ungated: `prose figures` counts ten figures and this is not one.
+
+**`CLAUDE.md` described `check.py` as gating "offline-only assets". It did
+not** — and this one is now FIXED rather than merely described (**O78**).
+`check.py` allowlisted `FONT_HOSTS`, and all thirteen files carried a
+`fonts.googleapis.com` stylesheet: the only font-CDN reference in the
+repository, in a project that closed this class for the published site in
+**O2**. Its docstring contradicted itself — *"no external request except the
+Google Fonts stylesheet"* one line above *"These pages must render from a
+checkout with no network"* — which is how it passed review.
+
+**The grounding disqualified the repair that looked obvious.** "Vendor them,
+as O2 did" fails once you ask whether these are the product's fonts: the
+vendored set is **IBM Plex + GFS Didot**, the landing page uses IBM Plex, and
+`Geist` / `Instrument Serif` appear in **no other file in the tree**.
+Vendoring would have added three unused families for an unpublished directory.
+The precedent that governs a file in `architecture/` is the governed
+`architecture/index.html` beside it — system stacks, fetching nothing — so
+that is what shipped, across six exact strings (three CSS custom properties,
+three inline SVG `font-family` attributes). The colour tokens really are the
+landing page's, same hex under renamed variables; the typography never was,
+so nothing was lost.
+
+**`FONT_HOSTS` is deleted**, which turns `check.py`'s `external request:` arm
+from a formality into the gate. Counterfactual executed: a CDN stylesheet
+injected into `05-retrieval-stack.html` makes `arch-check` exit **1** and name
+the URL; restored, it is green, and that file's whole diff is font-only.
+
+**Rendered and measured, because no gate here can see a font metric.** A system
+stack has different glyph widths, and `check.py` checks connectors and label
+masks, not whether a label still fits its box. All twelve pages were loaded and
+every `<text>`'s live `getBBox()` compared to the smallest `<rect>` containing
+it: **505 in-box labels, 0 overflowing.** Not gated — that needs a renderer,
+and adding a headless browser to the battery to watch twelve static files is
+not worth it; the consequence, stated, is that a future font or copy edit here
+owes the same manual pass.
+
+Not a shipped defect at any point — `build-site.sh` assembles `website/` only,
+so `architecture/` never reached Pages and its CDN gate was right to report
+clean.
+
+All corrections carry their own date and reason in place, per this project's
+rule that a figure fixed silently teaches nobody.
+
 ### the two retrieval levers nothing told a caller about, and the contradiction under one of them (M39)
 
 **ROADMAP O77 CLOSED by measurement rather than by argument**, and the doctrine

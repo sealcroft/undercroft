@@ -1116,7 +1116,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**105** of the **120** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**106** of the **121** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -3390,6 +3390,38 @@ state** by this file's own rule, so this needs a ruling rather than silence.
 message. It is on the set's index page today and must stay wherever the set is
 published.
 
+**Verified by hand 2026-08-30 — the check this entry says nothing performs,
+performed once.** Every structural claim the set publishes was re-derived from
+source (never from `CLAUDE.md`, which is prose about the tree and was itself
+wrong about one figure in the same sweep — see O78's sibling correction):
+
+| the set claims | re-derived from | verdict |
+|---|---|---|
+| thirteen crates | `ls -d crates/*/` | ✅ 13 |
+| CLI links 8 workspace crates | `undercroft-cli/Cargo.toml` | ✅ 8 |
+| 34 MCP tools · 12 writes | `MCP_TOOLS` = 34; `READ_TOOLS` 22 + `WRITE_TOOLS` 12 | ✅ |
+| 37 `/v1` routes | the `prose figures` preflight, against the dispatch | ✅ 37 |
+| 74 CLI operations | 59 `SURFACE_ABSENCES` anchors + 15 `SURFACE_COMPLETE` | ✅ 74 |
+| 3 named POST exceptions | `tenant.rs::mutates` — search, verify, verify-forgetting | ✅ |
+| four HKDF subkeys; `kg_secret` 32 bytes sealed in `meta`, re-sealed not re-derived | the containment diagram against the vault crate's doctrine | ✅ |
+| `verify` has six legs | record HMACs, chain replay, supersessions, KG receipts, orphan labels, mirror drift | ✅ |
+
+**Two findings that are worth more than the table.** First, the set publishes
+**no measured figure at all** — a scan for `N pp` / `N%` across all twelve
+returns nothing. That is a real design property and it should be preserved
+deliberately: it means the set can go stale on STRUCTURE but never on
+benchmark provenance, which is the failure `e40107b` had just repaired on the
+governed `retrieval-stack.svg` days earlier. The illustrative twin was checked
+for that same defect and does not have it — it names `room_cap` as a declared
+filter and attaches no number to it.
+
+Second, and this is the honest limit of the exercise: **one hand-verification
+is a snapshot, not a binding.** Seven commits landed after the set was
+written, one of them (`1bbf6a4`) touching `main.rs`, `mcp.rs`, `tenant.rs` and
+`ui.html`. It happened not to move any count the set publishes — checked, not
+assumed. Nothing would have said so if it had, which is precisely what this
+entry is about and why the snapshot does not close it.
+
 ---
 
 ### O75 — AMB runs outside `undercroft-bench` are not a sanctioned path
@@ -3455,6 +3487,131 @@ model, and any claim of "near-perfect recall" should be read against it.
 
 **Gate:** if a future change claims to close this, it must be measured on
 these 15 by id, not on an aggregate that can absorb them.
+
+---
+
+### O78 — CLOSED 2026-08-30: the platform-views set fetched a font from Google, and the option list was wrong
+
+**Found 2026-08-30 by checking the new diagram set against the code**, which
+is the verification O74 says nothing performs. The set's CONTENT came back
+clean — every structural claim it publishes was re-derived from source and
+holds (see below). What did not come back clean is how the pages LOAD.
+
+All **thirteen** files under `architecture/platform-views/` carry
+`<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif…">`.
+They are the only font-CDN reference in the repository. Measured:
+`grep -rl fonts.googleapis.com --include=*.html .` returns those thirteen and
+nothing else.
+
+**Three things make that a divergence rather than a preference.**
+
+* **The authority beside it fetches nothing.** The governed
+  `architecture/index.html` uses system font stacks
+  (`-apple-system, BlinkMacSystemFont, "Segoe UI"…`) and contains **zero**
+  CDN references. So the illustrative set took on a dependency the set it
+  illustrates deliberately avoids — and O74's whole subject is the two sets
+  diverging with nothing to notice.
+* **This project already closed this class once.** ROADMAP **O2** removed
+  three Google font families from the published site and vendored them under
+  `website/landing/assets/fonts/` with their OFL texts; `build-site.sh` now
+  FAILS if the assembled site references a font CDN at all.
+* **The gate permits it, and the doctrine describing the gate said
+  otherwise.** `check.py` allowlists `FONT_HOSTS` and its own docstring reads
+  *"offline — no external request except the Google Fonts stylesheet+files"*
+  — while the next sentence claims *"These pages must render from a checkout
+  with no network."* Both cannot be true as written. `CLAUDE.md` compressed
+  that to **"offline-only assets"**, which is stronger than either, and is
+  corrected in the same unit as this filing.
+
+**What is NOT wrong, stated so the cost is not overstated.** These pages are
+**not published**: `website/build-site.sh` assembles `website/landing/` and
+`website/book/` only, so `architecture/` never reaches Pages and no site
+visitor fetches Google. `build-site.sh`'s CDN gate scans the assembled `$OUT`
+and is therefore correct to report clean — it is not blind, the files are
+genuinely outside its scope. The fonts also degrade to a declared fallback
+stack, so an offline reader gets a styled page, just not the intended one.
+The exposure is a local reader's browser making a third-party request while
+reading this system's security architecture.
+
+**Ruled and implemented 2026-08-30 — and the grounding DISQUALIFIED the option
+this entry recommended.** The three options first written here were (a) vendor
+per O2, (b) system stacks, (c) keep the allowlist and correct the docstring.
+Option (b) shipped, but not for the reason (b) was written down.
+
+**What settled it was one question nobody had asked: are these the product's
+fonts?** They are not. The vendored set under `website/landing/assets/fonts/`
+is **IBM Plex Sans, IBM Plex Mono and GFS Didot**; the landing page's own
+`--sans`/`--mono` are IBM Plex; and `Geist` / `Instrument Serif` appear in **no
+other file in this repository**. So:
+
+* **(a) collapses.** "Vendor them, as O2 did" would have added three font
+  families the product does not use — six-plus new `woff2` files and three OFL
+  texts — to serve an unpublished internal directory. O2's precedent is *do not
+  fetch fonts*, not *vendor whatever a page happens to reference*.
+* **(b)'s stated cost evaporates.** This entry claimed system stacks would
+  "lose the set's typographic identity, taken from `website/landing/index.html`
+  on purpose". Measured, the COLOUR tokens are indeed the landing page's (same
+  hex under renamed variables), and the typography never was. There was no
+  identity to lose.
+* **The precedent that actually governs** a file in `architecture/` is the
+  governed `architecture/index.html` sitting beside it, which uses system
+  stacks and fetches nothing. (b) is not a compromise here; it is conformity.
+
+**Shipped.** The `<link>` is gone from all thirteen files and every reference
+to both families — three CSS custom properties and three inline SVG
+`font-family` attributes, six exact strings — is a system stack. `Geist` and
+`Instrument Serif` now appear nowhere in the tree.
+
+**The gate is the point, not the edit.** `FONT_HOSTS` is DELETED, so
+`check.py`'s existing `external request:` arm stops being a formality and
+becomes the check — it now fires on any `https?://` in a `src`/`href`, with no
+exemption. Its docstring no longer contradicts itself: it said *"no external
+request except the Google Fonts stylesheet"* and, one line later, *"These pages
+must render from a checkout with no network."* Both could not be true, and that
+internal contradiction is how it passed review.
+
+**Counterfactual executed, not asserted.** A `fonts.googleapis.com` stylesheet
+was injected into `05-retrieval-stack.html` behind an anchor check that aborts
+rather than proceeding on a miss; `arch-check` exited **1** and named
+`external request: https://fonts.googleapis.com/…`. Restored, the suite is
+green, and the restored file's whole diff against HEAD is font-only — checked
+line by line, not assumed.
+
+**One method failure of mine is recorded here because it nearly shipped.** The
+first sweep read the declarations with `grep -E '\-\-(sans|serif|mono):'`,
+concluded "uniform across all 13", and edited on that basis. The twelve
+DIAGRAMS declare `--font-sans:`, which that pattern cannot match — so the
+survey saw `index.html` alone and was blind to 12 of 13 files, and the first
+edit landed on one. Caught only by counting the result afterwards. It is this
+tree's oldest lesson arriving in my own edit: *a check that cannot see what it
+is counting agrees with any answer*, the same shape as O68's counted comment
+and O43's abbreviated env rows.
+
+**Rendered and MEASURED, because no gate here can see a font metric.** Swapping
+a webfont for a system stack changes glyph widths, and `check.py`'s geometry
+arms check connectors and label masks — not whether a label still fits its box.
+So every one of the twelve pages was loaded and each `<text>` element's live
+`getBBox()` compared against the smallest `<rect>` actually containing it:
+**505 in-box labels, 0 overflowing**, per page 36/45/58/43/29/36/29/43/36/45/
+65/40. Two pages were also read by eye.
+
+That check took two attempts and the first was wrong in the instructive
+direction: with no upper bound on the containment test (`b.x >= r.x` and
+nothing else) it attributed the right-margin ANNOTATIONS — which sit outside
+the boxes by design — to the 656-wide group rect and reported seven overflows
+up to 173 px. A checker that flags the artifact you have already confirmed by
+eye is wrong about the checker, which is the calibration rule `check.py`'s own
+`rx` discriminator was written from.
+
+**Gate:** the deleted allowlist IS the gate — no new code, a removed exemption.
+The standing requirement is that no fourteenth file joins the set carrying an
+external host, which the same arm now enforces unconditionally. The overflow
+measurement is deliberately NOT gated: it needs a renderer, `arch-check` is a
+stock python image with none, and adding a headless browser to the battery to
+watch twelve static files is a cost this set does not justify. It is recorded
+here as the evidence for this change rather than as a standing check — and the
+honest consequence is that a future font or copy edit here owes the same manual
+pass.
 
 ---
 

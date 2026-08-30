@@ -1248,13 +1248,23 @@ Consequences that are binding, not advisory:
   self-contained HTML diagrams (surfaces, crate map, write path, retrieval
   stack, containment/keys, admission, lifecycle, agent session, deployment,
   capability matrix, integrity chain) in the product's own dark palette,
-  tokens taken from `website/landing/index.html`. **`diagrams/` remains the
-  authority** — this set is a second description of the same system, and the
+  colour tokens taken from `website/landing/index.html` (verified 2026-08-30:
+  same hex values under renamed variables). **The TYPOGRAPHY was never the
+  product's**, and that is worth knowing because the sentence above implies
+  otherwise: the set shipped on Geist + Instrument Serif from a Google Fonts
+  CDN, faces that appear in NO other file in this tree — the landing page and
+  the whole vendored set are IBM Plex + GFS Didot. So "vendor them, as O2 did"
+  was the wrong repair; it would have added three families the product does
+  not use, for an unpublished directory. They are **system stacks** now,
+  matching the governed `architecture/index.html` beside them, which is the
+  precedent that actually governs a file in this directory (ROADMAP O78).
+  **`diagrams/` remains the authority** — this set is a second description of the same system, and the
   two are bound by nothing but attention, so a change to the engine must move
   both or they disagree. `index.html` here is the entry point and
   `check.py` is the gate, run by the same `arch-check` service (one service,
   one CI leg): inventory counted in BOTH directions against `index.html`,
-  the accessible-SVG contract, offline-only assets, LF endings, a 9-node /
+  the accessible-SVG contract, **offline assets with NO exception**, LF
+  endings, a 9-node /
   2-accent budget, and the geometry rules a renderer would otherwise be needed
   to catch — no diagonal connector, none passing behind a non-endpoint box, no
   label mask painted over by a later node. It carries a **premise probe**: the
@@ -2334,8 +2344,15 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   **The CLI axis had no such inventory at all until M16**, so every CLI-only
   capability was an unrecorded gap by construction — measured, **74** CLI
   operations of which `parity.rs` named **17**. `SURFACE_ABSENCES` +
-  `SURFACE_COMPLETE` now PARTITION it (63 rows over 59 anchors, plus 15
-  reachable everywhere = 74), keyed on the `main.rs` dispatch anchor and on
+  `SURFACE_COMPLETE` now PARTITION it (62 rows over 59 anchors, plus 15
+  reachable everywhere = 74 — this said **63** until 2026-08-30, and the 63rd
+  `Absence::` is a COMMENT, which is the identical miscount O68 records having
+  already caught one variant down: it corrected `Drift` 22 → 21 and left the
+  TOTAL, one line up in the same sentence, still comment-inflated. The `= 74`
+  was never wrong, because it derives from ANCHORS plus `SURFACE_COMPLETE` and
+  not from rows — which is exactly why nothing noticed. Ungated: the `prose
+  figures` preflight counts ten figures and this is not one of them), keyed on
+  the `main.rs` dispatch anchor and on
   `(anchor, absent_from)` because a ruling differs per surface — `repair` is
   a boundary on MCP and a drift on `/v1`. **`Absence::Unruled` is a real
   verdict, not a smaller boundary**: where the absence is a PRODUCT decision

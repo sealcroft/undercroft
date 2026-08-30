@@ -4,7 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Undercroft — Platform Overview</title>
-  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
@@ -13,9 +12,9 @@
       --color-ink:    #d9f0ea;
       --color-muted:  #7fa39c;
       --color-accent: #35e0c2;
-      --font-sans:  'Geist', system-ui, sans-serif;
-      --font-serif: 'Instrument Serif', serif;
-      --font-mono:  'Geist Mono', ui-monospace, monospace;
+      --font-sans:  -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --font-serif: Georgia, "Times New Roman", serif;
+      --font-mono:  ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     }
     body {
       font-family: var(--font-sans);
@@ -59,15 +58,15 @@
       <!-- ============ ZONES (drawn first) ============ -->
       <rect x="120" y="152" width="960" height="136" rx="8" fill="rgba(217,240,234,0.02)" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
       <rect x="560" y="156" width="80" height="12" rx="2" fill="#04080a"/>
-      <text x="600" y="165" fill="rgba(217,240,234,0.40)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">SURFACES</text>
+      <text x="600" y="165" fill="rgba(217,240,234,0.40)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.14em">SURFACES</text>
 
       <rect x="120" y="352" width="960" height="152" rx="8" fill="rgba(217,240,234,0.02)" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
       <rect x="568" y="356" width="64" height="12" rx="2" fill="#04080a"/>
-      <text x="600" y="365" fill="rgba(217,240,234,0.40)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">ENGINE</text>
+      <text x="600" y="365" fill="rgba(217,240,234,0.40)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.14em">ENGINE</text>
 
       <rect x="120" y="568" width="960" height="136" rx="8" fill="rgba(217,240,234,0.02)" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
       <rect x="564" y="572" width="72" height="12" rx="2" fill="#04080a"/>
-      <text x="600" y="581" fill="rgba(217,240,234,0.40)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.14em">AT REST</text>
+      <text x="600" y="581" fill="rgba(217,240,234,0.40)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.14em">AT REST</text>
 
       <!-- ============ ARROWS (before boxes) ============ -->
       <!-- agent -> CLI -->
@@ -98,113 +97,113 @@
 
       <!-- ============ ARROW LABELS (mask + 8px gap) ============ -->
       <rect x="656" y="120" width="52" height="12" rx="2" fill="#04080a"/>
-      <text x="682" y="129" fill="#c9a961" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">HTTPS</text>
+      <text x="682" y="129" fill="#c9a961" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">HTTPS</text>
 
       <rect x="740" y="408" width="60" height="12" rx="2" fill="#04080a"/>
-      <text x="770" y="417" fill="#35e0c2" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">SEAL+TAG</text>
+      <text x="770" y="417" fill="#35e0c2" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">SEAL+TAG</text>
 
       <rect x="392" y="408" width="60" height="12" rx="2" fill="#04080a"/>
-      <text x="422" y="417" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">CHUNK/ID</text>
+      <text x="422" y="417" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">CHUNK/ID</text>
 
       <rect x="596" y="512" width="60" height="12" rx="2" fill="#04080a"/>
-      <text x="626" y="521" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.06em">ROWS</text>
+      <text x="626" y="521" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">ROWS</text>
 
       <!-- ============ NODES ============ -->
       <!-- Agent (input) -->
       <rect x="520" y="48" width="160" height="56" rx="6" fill="#04080a"/>
       <rect x="520" y="48" width="160" height="56" rx="6" fill="rgba(127,163,156,0.10)" stroke="#5c7f79" stroke-width="1"/>
       <rect x="528" y="54" width="40" height="12" rx="2" fill="transparent" stroke="rgba(92,127,121,0.40)" stroke-width="0.8"/>
-      <text x="548" y="63" fill="rgba(92,127,121,0.90)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">CALLER</text>
-      <text x="600" y="88" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Agent or operator</text>
+      <text x="548" y="63" fill="rgba(92,127,121,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">CALLER</text>
+      <text x="600" y="88" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Agent or operator</text>
 
       <!-- CLI -->
       <rect x="160" y="184" width="200" height="72" rx="6" fill="#04080a"/>
       <rect x="160" y="184" width="200" height="72" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
       <rect x="168" y="190" width="28" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
-      <text x="182" y="199" fill="rgba(217,240,234,0.80)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">CLI</text>
-      <text x="260" y="222" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Command line</text>
-      <text x="260" y="240" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">74 operations</text>
+      <text x="182" y="199" fill="rgba(217,240,234,0.80)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">CLI</text>
+      <text x="260" y="222" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Command line</text>
+      <text x="260" y="240" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">74 operations</text>
 
       <!-- MCP -->
       <rect x="500" y="184" width="200" height="72" rx="6" fill="#04080a"/>
       <rect x="500" y="184" width="200" height="72" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
       <rect x="508" y="190" width="28" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
-      <text x="522" y="199" fill="rgba(217,240,234,0.80)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">MCP</text>
-      <text x="600" y="222" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Agent tools</text>
-      <text x="600" y="240" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">34 tools · 12 write</text>
+      <text x="522" y="199" fill="rgba(217,240,234,0.80)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">MCP</text>
+      <text x="600" y="222" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Agent tools</text>
+      <text x="600" y="240" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">34 tools · 12 write</text>
 
       <!-- /v1 -->
       <rect x="840" y="184" width="200" height="72" rx="6" fill="#04080a"/>
       <rect x="840" y="184" width="200" height="72" rx="6" fill="#071014" stroke="#c9a961" stroke-width="1"/>
       <rect x="848" y="190" width="32" height="12" rx="2" fill="transparent" stroke="rgba(201,169,97,0.40)" stroke-width="0.8"/>
-      <text x="864" y="199" fill="rgba(201,169,97,0.90)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">REST</text>
-      <text x="940" y="222" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">HTTP API</text>
-      <text x="940" y="240" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">37 routes · /v1</text>
+      <text x="864" y="199" fill="rgba(201,169,97,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">REST</text>
+      <text x="940" y="222" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">HTTP API</text>
+      <text x="940" y="240" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">37 routes · /v1</text>
 
       <!-- Core -->
       <rect x="160" y="384" width="200" height="88" rx="6" fill="#04080a"/>
       <rect x="160" y="384" width="200" height="88" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
       <rect x="168" y="390" width="32" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
-      <text x="184" y="399" fill="rgba(217,240,234,0.80)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">CORE</text>
-      <text x="260" y="428" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Domain library</text>
-      <text x="260" y="446" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">chunk · ids · dates</text>
-      <text x="260" y="460" fill="#5c7f79" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">no i/o, no crypto</text>
+      <text x="184" y="399" fill="rgba(217,240,234,0.80)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">CORE</text>
+      <text x="260" y="428" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Domain library</text>
+      <text x="260" y="446" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">chunk · ids · dates</text>
+      <text x="260" y="460" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">no i/o, no crypto</text>
 
       <!-- Store (FOCAL) -->
       <rect x="500" y="384" width="200" height="88" rx="6" fill="#04080a"/>
       <rect x="500" y="384" width="200" height="88" rx="6" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1.2"/>
       <rect x="508" y="390" width="36" height="12" rx="2" fill="transparent" stroke="rgba(53,224,194,0.50)" stroke-width="0.8"/>
-      <text x="526" y="399" fill="#35e0c2" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">STORE</text>
-      <text x="600" y="428" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Retrieval + choke points</text>
-      <text x="600" y="446" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">search · admission · audit</text>
-      <text x="600" y="460" fill="#5c7f79" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">every write passes here</text>
+      <text x="526" y="399" fill="#35e0c2" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">STORE</text>
+      <text x="600" y="428" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Retrieval + choke points</text>
+      <text x="600" y="446" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">search · admission · audit</text>
+      <text x="600" y="460" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">every write passes here</text>
 
       <!-- Vault (FOCAL) -->
       <rect x="840" y="384" width="200" height="88" rx="6" fill="#04080a"/>
       <rect x="840" y="384" width="200" height="88" rx="6" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1.2"/>
       <rect x="848" y="390" width="36" height="12" rx="2" fill="transparent" stroke="rgba(53,224,194,0.50)" stroke-width="0.8"/>
-      <text x="866" y="399" fill="#35e0c2" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">VAULT</text>
-      <text x="940" y="428" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">Keys and sealing</text>
-      <text x="940" y="446" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">HKDF · XChaCha20 · HMAC</text>
-      <text x="940" y="460" fill="#5c7f79" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">per-vault derived keys</text>
+      <text x="866" y="399" fill="#35e0c2" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">VAULT</text>
+      <text x="940" y="428" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Keys and sealing</text>
+      <text x="940" y="446" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">HKDF · XChaCha20 · HMAC</text>
+      <text x="940" y="460" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">per-vault derived keys</text>
 
       <!-- palace.db -->
       <rect x="330" y="600" width="240" height="72" rx="6" fill="#04080a"/>
       <rect x="330" y="600" width="240" height="72" rx="6" fill="rgba(217,240,234,0.05)" stroke="#7fa39c" stroke-width="1"/>
       <rect x="338" y="606" width="36" height="12" rx="2" fill="transparent" stroke="rgba(127,163,156,0.40)" stroke-width="0.8"/>
-      <text x="356" y="615" fill="rgba(127,163,156,0.90)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">SQLITE</text>
-      <text x="450" y="638" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">palace.db</text>
-      <text x="450" y="656" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">drawers · audit chain · index</text>
+      <text x="356" y="615" fill="rgba(127,163,156,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">SQLITE</text>
+      <text x="450" y="638" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">palace.db</text>
+      <text x="450" y="656" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">drawers · audit chain · index</text>
 
       <!-- manifest -->
       <rect x="670" y="600" width="240" height="72" rx="6" fill="#04080a"/>
       <rect x="670" y="600" width="240" height="72" rx="6" fill="rgba(217,240,234,0.05)" stroke="#7fa39c" stroke-width="1"/>
       <rect x="678" y="606" width="44" height="12" rx="2" fill="transparent" stroke="rgba(127,163,156,0.40)" stroke-width="0.8"/>
-      <text x="700" y="615" fill="rgba(127,163,156,0.90)" font-size="7" font-family="'Geist Mono', monospace" text-anchor="middle" letter-spacing="0.08em">ANCHOR</text>
-      <text x="790" y="638" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'Geist', sans-serif" text-anchor="middle">vault.json</text>
-      <text x="790" y="656" fill="#7fa39c" font-size="9" font-family="'Geist Mono', monospace" text-anchor="middle">rollback anchor, outside the db</text>
+      <text x="700" y="615" fill="rgba(127,163,156,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">ANCHOR</text>
+      <text x="790" y="638" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">vault.json</text>
+      <text x="790" y="656" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">rollback anchor, outside the db</text>
 
       <!-- ============ LEGEND ============ -->
       <line x1="120" y1="728" x2="1080" y2="728" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
-      <text x="120" y="748" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace" letter-spacing="0.14em">LEGEND</text>
+      <text x="120" y="748" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" letter-spacing="0.14em">LEGEND</text>
 
       <rect x="228" y="740" width="16" height="10" rx="2" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1"/>
-      <text x="252" y="748" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace">FOCAL</text>
+      <text x="252" y="748" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">FOCAL</text>
 
       <rect x="332" y="740" width="16" height="10" rx="2" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
-      <text x="356" y="748" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace">COMPONENT</text>
+      <text x="356" y="748" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">COMPONENT</text>
 
       <rect x="472" y="740" width="16" height="10" rx="2" fill="rgba(217,240,234,0.05)" stroke="#7fa39c" stroke-width="1"/>
-      <text x="496" y="748" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace">ON DISK</text>
+      <text x="496" y="748" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">ON DISK</text>
 
       <rect x="600" y="740" width="16" height="10" rx="2" fill="rgba(127,163,156,0.10)" stroke="#5c7f79" stroke-width="1"/>
-      <text x="624" y="748" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace">CALLER</text>
+      <text x="624" y="748" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">CALLER</text>
 
       <line x1="724" y1="745" x2="756" y2="745" stroke="#c9a961" stroke-width="1.2"/>
-      <text x="764" y="748" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace">HTTP</text>
+      <text x="764" y="748" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">HTTP</text>
 
       <line x1="836" y1="745" x2="868" y2="745" stroke="#35e0c2" stroke-width="1.2"/>
-      <text x="876" y="748" fill="#7fa39c" font-size="8" font-family="'Geist Mono', monospace">CRYPTO PATH</text>
+      <text x="876" y="748" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">CRYPTO PATH</text>
     </svg>
   </div>
 </body>

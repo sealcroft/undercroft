@@ -14,8 +14,15 @@ WHAT IT CHECKS, and why each one is here rather than assumed:
               prefixed ids. Bare id="title" would collide if two diagrams were
               ever inlined on one page, and the second would be announced with
               the first one's name.
-  offline     no external request except the Google Fonts stylesheet+files.
-              These pages must render from a checkout with no network.
+  offline     NO external request, without exception. These pages must render
+              from a checkout with no network — and until 2026-08-30 they did
+              not: an allowlist here exempted the Google Fonts hosts, all
+              thirteen pages carried that stylesheet, and they were the only
+              font-CDN reference in the tree. The two sentences this docstring
+              used to carry contradicted each other, which is how it survived
+              review (ROADMAP O78). The fonts are system stacks now, matching
+              the GOVERNED architecture/index.html beside them; the allowlist
+              is deleted, so this arm is the gate rather than a formality.
   encoding    no CRLF. `.gitattributes` declares LF and the repo has been
               broken by text-mode edits on Windows before.
   budget      <=9 node boxes and <=2 accent (teal) nodes per diagram. The
@@ -44,7 +51,6 @@ import sys
 NUM = r"-?\d+(?:\.\d+)?"
 PAPER = ("#04080a", "#071014")
 ACCENT = "#35e0c2"
-FONT_HOSTS = ("fonts.googleapis.com", "fonts.gstatic.com")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -156,8 +162,7 @@ def inspect(path):
     if b"\r" in raw:
         bad.append("CRLF line endings (.gitattributes declares LF)")
     for url in re.findall(r'(?:src|href)="(https?://[^"]+)"', s):
-        if not any(h in url for h in FONT_HOSTS):
-            bad.append("external request: %s" % url)
+        bad.append("external request: %s" % url)
     if "JetBrains" in s:
         bad.append("JetBrains Mono is banned as a blanket dev font")
     if 'role="img"' not in svg or "aria-labelledby" not in svg:
