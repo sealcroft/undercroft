@@ -3424,11 +3424,41 @@ entry is about and why the snapshot does not close it.
 
 ---
 
-### O75 — AMB runs outside `undercroft-bench` are not a sanctioned path
+### O75 — CLOSED 2026-08-30 by ruling: AMB is not part of the plan
 
-**Maintainer ruling, 2026-08-23:** benchmark runs go through the repo's own
-harness; the Agent Memory Benchmark is not to be driven from anywhere else
-for now, absent a deliberate plan otherwise.
+**Maintainer ruling, 2026-08-30: AMB is not part of the plan.** That settles
+the question this entry was holding open — the 2026-08-22 figures are **not
+published**, and no `undercroft-bench` AMB subcommand is to be built. The
+2026-08-23 ruling below stands and is now moot rather than provisional: there
+is no sanctioned path because there is no planned use.
+
+**What that closes, stated so nobody reopens it by accident.** The entry framed
+publish-or-not as "neither is obviously right and the decision is deferred".
+It is no longer deferred. A real measurement continues to exist only in the
+gitignored `docs/research/amb-locomo10-2026-08-22/`, whose README states its
+findings in prose — and that is now the intended resting place, not a gap. The
+figures must never be placed beside `benchmarks/RESULTS.md`'s LoCoMo rows in
+any case, those coming from a different protocol that scores a category AMB
+skips.
+
+**What the ruling does NOT stop, said positively so nobody reads it as a
+freeze on measurement.** We continue to run **our own harness** —
+`undercroft-bench`, whose subcommands are `locomo`, `model-eval`, `synth`,
+`wingscale`, `scopescale`, `pqscale`, `screenfp` and `xlingual` — to check how
+the engine is actually working. That is the sanctioned path and it is
+unchanged. What is closed is driving a THIRD-PARTY protocol, and building AMB
+support into our harness. "AMB is not part of the plan" is a statement about
+whose benchmark we implement, never about whether we measure.
+
+**The licensing constraint outlives the ruling** and is the one thing here that
+is not moot: the AMB clone ships no LICENSE, so its prompts and corpus must
+never enter this repo or its history. `docs/research/` stays gitignored.
+
+---
+
+**Prior ruling, 2026-08-23**, kept as the record: benchmark runs go through the
+repo's own harness; the Agent Memory Benchmark is not to be driven from
+anywhere else for now, absent a deliberate plan otherwise.
 
 **What that settles.** The 2026-08-22 AMB LoCoMo run was driven by seven
 ad-hoc Python scripts that read prompts out of an external clone at run time.
@@ -3454,11 +3484,37 @@ what AMB adds is its context contract, its prompt sourcing and its judging
 rule, and the licensing constraint is unchanged: the clone ships no LICENSE,
 so its prompts and corpus must never enter this repo or its history.
 
-**One residue in a tracked file, for whoever rules on this.**
-`crates/undercroft-embed-onnx/src/rerank.rs:185` uses a paraphrase of a real
-LoCoMo question as a test fixture. Pre-existing, long-standing, one sentence,
-and marginal — recorded here so it is a decision rather than something nobody
-noticed.
+**One residue in a tracked file — and READING it corrected the filing three
+ways.** `crates/undercroft-embed-onnx/src/rerank.rs:184-186` is a
+`ranks_relevant_above_irrelevant` fixture paraphrasing a LoCoMo-style question.
+The entry called it "one sentence"; it is **two strings**, a query and a
+matching passage, plus an unrelated third as the negative control. It is inside
+a test marked `#[ignore]` in a crate **excluded from `default-members`**, so it
+runs in no battery and no CI leg and is not among the 772. And the licensing
+rule this entry exists to enforce targets the **AMB clone**, which ships no
+LICENSE — whereas this paraphrases **LoCoMo**, a published dataset the repo
+already measures against.
+
+So the residue is more marginal than filed, on all three axes. It is recorded
+as a decision rather than an oversight, per this file's rule that an accepted
+cost carries its argument. **Not closed by the AMB ruling above**, because it
+would exist even if AMB had never been run.
+
+**And the TEST is required — checked against the code, because "delete the
+fixture" would have been the cheap wrong answer.** The cross-encoder reranker
+is a live, documented option, not dead weight: `UNDERCROFT_RERANKER` is a
+closed vocabulary (`onnx`, `ort`, `colbert`, `colbert-ort`) validated by
+`config_check.rs`, and `OnnxReranker::from_env()` is constructed by the CLI
+(`main.rs:1336` and `:1504`) and by the bench harness (`:583`). The crate holds
+only **three** tests and this is the only behavioural check on that path — and
+it earns its place, because tract 0.22 runs BERT-family models but **not**
+DeBERTa rerankers, so this is what tells an operator whether the model they
+supplied actually loads and ranks. Its `#[ignore]` is because it needs a
+user-supplied model, not because it is vestigial.
+
+So the only thing ever in question was the two example STRINGS, and those are
+fine. If they are ever swapped it is a copy edit that must keep the passage
+semantically relevant to the query — the test itself stays.
 
 **Gate:** no suite, compose service or CI job may invoke the external clone.
 If AMB support is ever built into `undercroft-bench`, the `no-trace` scanner's

@@ -7,6 +7,50 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### AMB is ruled out of the plan, and the test it left behind turns out to be load-bearing (M41)
+
+**ROADMAP O75 CLOSED by maintainer ruling, 2026-08-30.** No code changed. Seven
+open items remain.
+
+**The ruling:** AMB is not part of the plan. That settles what the entry was
+holding open — the 2026-08-22 figures are **not published**, and no
+`undercroft-bench` AMB subcommand gets built. The measurement continues to
+exist only in the gitignored `docs/research/amb-locomo10-2026-08-22/`, whose
+README states its findings in prose, and that is now the intended resting place
+rather than a gap.
+
+**Written positively, because the obvious misreading is that measurement
+stopped.** It did not. We keep running **our own harness** — `undercroft-bench`
+`locomo`, `model-eval`, `synth`, `wingscale`, `scopescale`, `pqscale`,
+`screenfp`, `xlingual` — to check how the engine is actually working. What is
+closed is driving a THIRD-PARTY protocol and building AMB into our harness.
+The ruling is about whose benchmark we implement, never about whether we
+measure. The licensing constraint outlives it and is the one non-moot part: the
+AMB clone ships no LICENSE, so its prompts and corpus must never enter this
+repo or its history.
+
+**The leftover the entry had parked inside itself, re-checked against the code,
+which corrected the filing three ways.** `rerank.rs` uses a hand-written
+sentence resembling a LoCoMo question as a reranker fixture. It is **two
+strings plus a negative control**, not "one sentence"; it sits in an
+`#[ignore]`d test in a crate excluded from `default-members`, so it runs in no
+battery and no CI leg and is not among the 772; and it paraphrases **LoCoMo**,
+a published dataset this repo already benchmarks against — not the unlicensed
+AMB clone the rule actually targets. More marginal than filed on every axis,
+and left as an accepted cost carrying its argument.
+
+**And the TEST is REQUIRED — the cheap wrong answer would have been to delete
+it.** The cross-encoder reranker is a live, documented option:
+`UNDERCROFT_RERANKER` is a closed vocabulary (`onnx`, `ort`, `colbert`,
+`colbert-ort`) validated by `config_check.rs`, and `OnnxReranker::from_env()`
+is constructed by the CLI (`main.rs:1336`, `:1504`) and the bench harness
+(`:583`). That crate holds only **three** tests and this is the only
+behavioural check on the path — earning its place because tract 0.22 runs
+BERT-family models but **not** DeBERTa rerankers, so it is what tells an
+operator whether their supplied model loads and ranks at all. The `#[ignore]`
+is a model dependency, not vestige. Only the two example strings were ever in
+question, and the test stays regardless.
+
 ### checking the new diagram set against the code, and the two claims that did not survive it (M40)
 
 **No engine code changed.** This is the verification ROADMAP **O74** says
