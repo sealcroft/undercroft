@@ -3458,7 +3458,60 @@ these 15 by id, not on an aggregate that can absorb them.
 
 ---
 
-### O77 — the figures are qualified and have a tracked home; whether a selection-stage cap is a "score modifier" is UNRULED
+### O77 — CLOSED 2026-08-23: measured, and `room_cap` is not a score modifier
+
+**CLOSED by measurement rather than by argument.** (a) and (b) landed earlier;
+(c) — the doctrine question — is settled by a sweep that had never been run.
+
+**The instrument first**: `undercroft-bench locomo|longmemeval` gained a
+`--room-cap` flag (experiment-only; no shipped default moves). The first sweep
+returned a NULL result — caps 1, 2 and 3 identical to baseline to the decimal —
+and that was the harness, not the engine: at `--pool 400` against ~19 sessions
+the soft cap fills one slot per room and refills the other 380 in score order,
+reproducing the ranking exactly. **A soft cap is a no-op when the page greatly
+exceeds the room count**, which is undocumented, easy to mistake for "the flag
+does nothing", and is now in `docs/AGENTS.md` §6.
+
+Re-run at page size over all 1,982 evaluable LoCoMo QA:
+
+| `room_cap` | any-gold session R@10 | turn all-gold@10 | multi-hop |
+|---|---|---|---|
+| none | 91.6% | 52.5% | 7.8% |
+| 1 | 94.0% | 36.2% | 3.6% |
+| 2 | 92.0% | 46.3% | 7.1% |
+| 3 | 91.7% | 51.0% | 7.5% |
+
+**The knob is a monotone TRADE**: +2.4 any-gold against −16.3 all-gold at a cap
+of one, decaying to noise by three. The mechanism is the one already on file
+for the per-document cap — evidence averages ~1.17 turns per session, so a cap
+of one blocks the second turn of the RIGHT session about as often as it admits
+a new one.
+
+**The decisive fact: multi-hop moves −4.2 here and +8.2 in the AMB run, on the
+SAME dataset.** Chunking, unit and scope decide the sign. A knob whose sign
+flips with configuration is not evidence about scoring, and no single figure —
+not −5.6, not +8.2 — is "what `room_cap` does". It is removed from
+`docs/LABELS.md`'s score-modifier list and from
+`docs/CONSULTATION_REVIEW.md`'s, and the doctrine gains the **selection stage**
+its two-stage taxonomy had no slot for: declared per request, disclosed, never
+a default.
+
+**What the measurement did NOT settle, stated rather than absorbed.**
+
+* **No label-as-weight has ever been measured, and it cannot be measured on
+  these corpora.** Verified by reading the ingest: LME builds
+  `Drawer::new("haystack", &sid, …)`, so the wing is a constant, `kind` is
+  never declared, and the only varying label is the room — the very unit being
+  retrieved. Weighting the gold room is cheating; weighting an arbitrary one
+  measures noise. So the rule's LABEL half rests on the poison invariant, not
+  on evidence, and `LABELS.md` now says so. Closing it needs a corpus carrying
+  an independent declared label a caller could legitimately declare.
+* **Answer accuracy is still unmeasured.** Everything above is retrieval. The
+  harnesses do not answer or judge, so converting any of this into an accuracy
+  delta needs an answering model and a judge, through `undercroft-bench` per
+  O75. Until then −5.6 (QA accuracy) and the recall figures are not commensurable.
+* The sweep is one corpus, one embedder, one pool geometry. The deltas are
+  controlled; the absolutes are not comparable to figures taken at other pools.
 
 **Options (a) and (b) are DONE, 2026-08-23. Option (c) is the open part and
 it is a doctrine question, so it is deliberately not taken here.**

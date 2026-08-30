@@ -7,6 +7,58 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### the two retrieval levers nothing told a caller about, and the contradiction under one of them (M39)
+
+**ROADMAP O77 CLOSED by measurement rather than by argument**, and the doctrine
+it was about is corrected. The engine is unchanged; the only code is a
+benchmark flag.
+
+**`undercroft-bench locomo|longmemeval` gained `--room-cap`** — experiment-only,
+no shipped default moves — because the `−5.6pp` the doctrine cited was one run
+at one cap value with **no sweep**, and had been read for years as a property
+of the knob.
+
+**The first sweep returned a null result and it was the harness, not the
+engine.** At `--pool 400` against ~19 sessions, caps of 1, 2 and 3 were
+identical to baseline to the decimal: the soft cap takes one slot per room then
+refills the other 380 in score order, reproducing the ranking. **A soft cap is
+a no-op when the page greatly exceeds the room count** — undocumented, easy to
+mistake for a dead flag, and now in `docs/AGENTS.md` §6.
+
+Re-run at page size over all 1,982 evaluable LoCoMo QA, everything but the cap
+held identical:
+
+| `room_cap` | any-gold session R@10 | turn all-gold@10 | multi-hop |
+|---|---|---|---|
+| none | 91.6% | 52.5% | 7.8% |
+| 1 | **94.0%** | 36.2% | 3.6% |
+| 2 | 92.0% | 46.3% | 7.1% |
+| 3 | 91.7% | 51.0% | 7.5% |
+
+**It is a monotone TRADE**: +2.4 any-gold against −16.3 all-gold at a cap of
+one, decaying to noise by three — buying distinct gold units at the cost of
+complete ones, exactly the mechanism already on file for the per-document cap
+(evidence averages ~1.17 turns per session, so a cap of one blocks the second
+turn of the *right* session about as often as it admits a new one).
+
+**The decisive fact: multi-hop moves −4.2 here and +8.2 in the AMB run, on the
+SAME dataset** — chunking, unit and scope decide the sign. A knob whose sign
+flips with configuration is not evidence about scoring. `room_cap` is therefore
+removed from the score-modifier evidence in `docs/LABELS.md` and
+`docs/CONSULTATION_REVIEW.md`, and the doctrine gains the **selection stage**
+its two-stage taxonomy had no slot for: declared per request, disclosed, never
+a default. `docs/AGENTS.md` §6 now carries the counter-measurement, so this
+morning's +8.2 can no longer be read as "what `room_cap` does".
+
+**Two things the measurement did NOT settle, and both are now stated in the
+doctrine instead of implied.** No label-as-weight has ever been measured, and
+it cannot be measured on these corpora — verified by reading the ingest, the
+wing is a constant, `kind` is never declared, and the only varying label is the
+unit being retrieved. So the rule's label half rests on the poison invariant,
+not on evidence, and `LABELS.md` says so. And answer accuracy remains
+unmeasured: the harnesses retrieve but do not answer or judge, so the QA-accuracy
+figure and the recall figures are not commensurable.
+
 ### the house page moves BEFORE the push, not merely in the same unit (M38)
 
 **Doctrine only; no code, no gate.** `CLAUDE.md`'s definition of done already

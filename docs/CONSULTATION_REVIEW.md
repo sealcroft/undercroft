@@ -72,10 +72,9 @@ numbers. They are rejected not on taste but on instruments:
 - **Retrieval profiles that reweight channels by intent.** Every prior
   attempt to be clever with weights measured negative here: RRF fusion
   −7.3pp and per-query channel rescaling −9.4pp (LoCoMo session 20, turn
-  all-gold), and `room_cap=2` diversification −5.6pp (LongMemEval-S, QA
-  answer accuracy — a different benchmark and a different question, so the
-  three are not one ranked list; see `benchmarks/RESULTS.md`, "Levers that
-  measured NEGATIVE"). Profiles are adoptable only as **declared** read-time parameters
+  all-gold). `room_cap` was cited here too and has been REMOVED: it adjusts no
+  weight, and swept it is a metric-dependent trade whose sign flips with
+  chunking (ROADMAP O77; rows in `benchmarks/RESULTS.md`). Profiles are adoptable only as **declared** read-time parameters
   (the `language`/`Locale` pattern: one declaration, documented consumers,
   never detected) and only with per-recipe negative controls of the
   `false_friends_stay_apart` class.

@@ -240,6 +240,48 @@ Three things follow that are easy to get wrong:
    −5.6 row; the two measure different things and must never be placed side by
    side.
 
+### The `room_cap` sweep the doctrine never had (2026-08-23)
+
+The `-5.6pp` row above was **one run at one cap value with no sweep**, and it
+was cited for years as though it were a property of the knob. Measured here on
+LoCoMo `locomo10`, all **1,982** evaluable QA, sealed vault, hash embedder,
+turn units, `k=10`, **`--pool 10`** so the page is the pool — everything but the
+cap held identical (`undercroft-bench locomo … --room-cap N`):
+
+| `room_cap` | any-gold **session** R@10 | turn **all-gold**@10 | multi-hop (cat 1) |
+|---|---|---|---|
+| none | 91.6% | **52.5%** | 7.8% |
+| 1 | **94.0%** | 36.2% | 3.6% |
+| 2 | 92.0% | 46.3% | 7.1% |
+| 3 | 91.7% | 51.0% | 7.5% |
+
+**The knob is a monotone TRADE, not a win or a loss.** Tightening it buys
+distinct gold *units* and costs *complete* ones: +2.4 any-gold against -16.3
+all-gold at a cap of one, decaying smoothly to noise by three. Which sign you
+report is decided by which metric you chose.
+
+The mechanism is the one `findings/measurements.md` gave for the per-document
+cap and it reproduces here: evidence averages ~1.17 turns per session, so a cap
+of one blocks the second turn of the RIGHT session about as often as it admits
+a new session.
+
+**Two facts that change how the earlier figures should be read.**
+
+1. **Multi-hop moves the OPPOSITE way from the AMB run.** That run measured
+   `room_cap=1` at **+8.2** points of multi-hop evidence recall (512-token
+   chunks, wing-scoped, session-level units); this one measures **-4.2** on the
+   same dataset at turn level. Same knob, same corpus, opposite sign — decided
+   by chunking, unit and scope. **No single number is "what `room_cap` does".**
+2. **The soft cap is a NO-OP when the page greatly exceeds the room count.**
+   At `--pool 400` against ~19 sessions, caps of 1, 2 and 3 all returned
+   results *identical to the baseline to the decimal*: the cap fills one slot
+   per room and then refills the remaining 380-odd in score order, reproducing
+   the original ranking. This is not documented anywhere and it is easy to
+   mistake for "the flag does nothing".
+
+Reproduce with `undercroft-bench locomo <corpus> -k 10 --unit turn --pool 10
+--room-cap N`; the flag exists for this sweep and changes no shipped default.
+
 Whether a *selection-stage* cap belongs in the same category as the scoring
 changes above — `docs/LABELS.md` files them together as "score modifiers" —
 is an open question, filed as ROADMAP **O77**. The code puts `room_cap` in the

@@ -51,6 +51,12 @@ enum Command {
         /// Skip the first N questions (for sharded parallel runs)
         #[arg(long, default_value_t = 0)]
         skip: usize,
+        /// EXPERIMENT ONLY (ROADMAP O77): soft per-room cap on selection.
+        /// Absent = the shipped default, pure score order. Exists so the
+        /// cap can be SWEPT rather than argued about — the -5.6pp figure
+        /// the doctrine cites was one run at one cap value with no sweep.
+        #[arg(long)]
+        room_cap: Option<usize>,
         /// Report recall/ndcg at this k
         #[arg(short = 'k', long, default_value_t = 5)]
         k: usize,
@@ -365,6 +371,12 @@ enum Command {
         /// unpinned repeat records what the host clock drifts.
         #[arg(long)]
         paging_contract: bool,
+        /// EXPERIMENT ONLY (ROADMAP O77): soft per-room cap on selection.
+        /// Absent = the shipped default, pure score order. Exists so the
+        /// cap can be SWEPT rather than argued about — the -5.6pp figure
+        /// the doctrine cites was one run at one cap value with no sweep.
+        #[arg(long)]
+        room_cap: Option<usize>,
     },
     /// Head-to-head vs external memory systems (competitive track C1.1):
     /// the LoCoMo protocol + scorer, driven through a system adapter —
@@ -747,6 +759,7 @@ fn run_longmemeval(
     k: usize,
     level: SecurityLevel,
     skip: usize,
+    room_cap: Option<usize>,
 ) -> Result<()> {
     let raw = std::fs::read_to_string(dataset)
         .with_context(|| format!("reading dataset {}", dataset.display()))?;
@@ -833,7 +846,7 @@ fn run_longmemeval(
                 wing: None,
                 room: None,
                 limit: k * 8,
-                room_cap: None,
+                room_cap,
                 ..Default::default()
             },
         )?;
@@ -2727,6 +2740,7 @@ fn locomo_eval(
     pool: usize,
     turn_units: bool,
     paging: bool,
+    room_cap: Option<usize>,
 ) -> Result<(f32, u32, CategoryScores, PhaseTiming, GoldRecall)> {
     let mut recall_sum = 0f32;
     let mut evaluated = 0u32;
@@ -2861,7 +2875,7 @@ fn locomo_eval(
                 wing: None,
                 room: None,
                 limit: if pool > 0 { pool } else { k * 6 },
-                room_cap: None,
+                room_cap,
                 ..Default::default()
             };
             let search_started = Instant::now();
@@ -4165,7 +4179,8 @@ fn main() -> Result<()> {
             k,
             level,
             skip,
-        } => run_longmemeval(&dataset, limit, k, level_of(&level), skip),
+            room_cap,
+        } => run_longmemeval(&dataset, limit, k, level_of(&level), skip, room_cap),
         Command::Synth { n, level, queries } => run_synth(n, level_of(&level), queries),
         Command::Pqscale {
             sizes,
@@ -4252,6 +4267,7 @@ fn main() -> Result<()> {
             unit,
             pool,
             paging_contract,
+            room_cap,
         } => {
             let raw = std::fs::read_to_string(&dataset)
                 .with_context(|| format!("reading {}", dataset.display()))?;
@@ -4269,6 +4285,7 @@ fn main() -> Result<()> {
                 pool,
                 unit == "turn",
                 paging_contract,
+                room_cap,
             )?;
             // RAW line carries the exact numerator/denominator so sharded runs
             // (convos [start,end)) sum to the full R@k without rounding drift.
@@ -4653,7 +4670,7 @@ mod tests {
             // fixture too — asserted below, so the contract check itself
             // has coverage rather than existing only when an operator
             // passes the flag.
-            locomo_eval(&[sample], 5, "local", 800, 8000, 0, false, true).unwrap();
+            locomo_eval(&[sample], 5, "local", 800, 8000, 0, false, true, None).unwrap();
         assert_eq!(n, 1, "evidence-free QA must be skipped");
         assert_eq!(recall, 1.0, "evidence session must be retrieved");
         assert_eq!(per_cat.get("1").unwrap().1, 1);

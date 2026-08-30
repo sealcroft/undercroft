@@ -476,6 +476,23 @@ chunks, LoCoMo `locomo10`, 1,540 questions:
 **+8.2 points of multi-hop evidence recall, no category regresses, latency
 unchanged** (50 s against 51 s over the same 1,540 queries).
 
+**Do not read that as "what `room_cap` does" — it is what it did in that
+configuration.** Swept on the SAME dataset at turn level with a page-sized pool
+(`undercroft-bench locomo … --unit turn --pool 10`), the sign flips: a cap of
+one buys **+2.4** points of any-gold session recall and costs **−16.3** of turn
+all-gold, moving multi-hop **−4.2** where the run above measured +8.2. The knob
+is a monotone TRADE — distinct gold units against complete ones — decaying to
+noise by a cap of three, and which sign you see is decided by your chunking,
+your unit and the metric you care about. Full sweep in `benchmarks/RESULTS.md`.
+**Try it on your own corpus; do not adopt it on the strength of either figure.**
+
+**And it does nothing at all when your page is much larger than your room
+count.** The cap is soft: it takes its share per room and then refills the
+remaining slots in score order. Measured, a 400-slot page against ~19 rooms
+returned results identical to the uncapped baseline *to the decimal* for caps
+of 1, 2 and 3. If you set it and nothing changes, this is why — the knob bites
+at page sizes comparable to the number of rooms in scope.
+
 **`room_cap=2` does almost nothing, and the reason is worth knowing before
 you reach for it.** The busiest room on that corpus averages 1.9 slots, so a
 cap of two rarely binds at all; the gain comes from the many rooms holding
