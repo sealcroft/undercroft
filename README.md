@@ -411,9 +411,9 @@ Passphrase mode: set `UNDERCROFT_PASSPHRASE` before `init` and every command.
 | Palace core | `save`, `search`, `wake_up`, `verify`, `status`, `history`, `get_closet_index` |
 | Drawers | `get_drawer`, `add_drawer`, `update_drawer`, `delete_drawer`, `list_drawers`, `delete_by_source`, `check_duplicate` |
 | Navigation | `list_wings`, `list_rooms`, `get_taxonomy`, `create_tunnel`, `list_tunnels`, `follow_tunnel`, `delete_tunnel`, `traverse`, `list_hallways` |
-| Knowledge graph | `kg_add`, `kg_query`, `kg_invalidate`, `kg_supersede`, `kg_timeline`, `kg_stats`, `lookup_canonical` |
+| Knowledge graph | `kg_add`, `kg_query`, `kg_invalidate`, `kg_supersede`, `kg_timeline`, `kg_stats`, `lookup_canonical`, `kg_rel`, `kg_receipts` |
 | Agent diaries | `diary_write`, `diary_read`, `list_agents` |
-| Maintenance | `dedup` |
+| Maintenance | `dedup`, `check_erasure_receipt`, `index_status` |
 
 Deliberately **absent** from MCP: admission rulings, wing trust, retention,
 forgetting, key rotation, and **placing a fact on the authority tier** —

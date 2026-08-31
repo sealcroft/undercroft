@@ -2081,6 +2081,16 @@ rest_body "external wrong dim"  'dimension'       -- -X POST "$API/vaults/ext/dr
   -H "X-Vault-Assertion: $(sign ext)" -d '{"text":"customer prefers dark mode","vector":[0.1,0.2]}'
 rest_body "external ok dim"     '"created":true'  -- -X POST "$API/vaults/ext/drawers" \
   -H "X-Vault-Assertion: $(sign ext)" -d '{"text":"customer prefers dark mode","vector":[1,0,0,0]}'
+# ROADMAP O81, second half. This vault was created and is served by `/v1`,
+# which reconstructs its recorded `external:` identity — and the CLI could NOT
+# open it, so `verify`, `rotate`, `repair`, `backup create`, `export`, `forget`
+# and `retention sweep` were unreachable for it. It failed as an
+# EmbedderMismatch, which reads as a corrupted vault rather than as a surface
+# that cannot open it. The operator plane reaches it now.
+check "CLI opens an external: vault" 0 "records checked" -- \
+  env UNDERCROFT_HOME="$REST_HOME" "$BIN" verify --vault ext
+check "CLI stats on an external: vault" 0 "records" -- \
+  env UNDERCROFT_HOME="$REST_HOME" "$BIN" stats --vault ext
 
 rest_body "delete vault"        '"deleted":true'  -- -X DELETE "$API/vaults/globex" \
   -H "X-Vault-Assertion: $(sign globex)"

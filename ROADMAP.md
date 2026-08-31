@@ -3709,7 +3709,7 @@ one, not by observing the current tree passes.
 
 ---
 
-### O81 — `config check` blesses an embedder value that makes every CLI command panic
+### O81 — CLOSED 2026-08-31: the spelling is gone AND the operator plane can open an external vault
 
 **Found by the pre-release drift audit, 2026-08-31.** Pre-existing.
 
@@ -3747,9 +3747,42 @@ operator plane — are unreachable for a vault the multi-tenant server creates
 and serves. That is a capability missing from a surface with no `Absence` row
 and no filing, which this project's own rule forbids.
 
-**Not fixed here:** dropping `"external"` from the OK-set is one line, but it
-forecloses the second half. Which of the two is right — remove the spelling, or
-implement the arm and close the operator-plane gap — is a product ruling.
+**RULED AND FIXED 2026-08-31, and the two halves turned out INDEPENDENT rather
+than exclusive.** The filing framed it as a choice; reading the code showed it
+was not one.
+
+`embedder_factory` — the `/v1` opener — consults `PalaceStore::recorded_embedder`
+and reconstructs an `ExternalEmbedder` from the vault's recorded
+`external:<name>@<dim>` **before** it looks at `UNDERCROFT_EMBEDDER`. So an
+external vault is reached by its RECORDED IDENTITY, never by the declaration —
+and the declaration form carries no name and no dimension, so it could not
+identify a vector space even if an arm existed. `"external"` was therefore
+never a legal declaration, which is what every document already said
+(`hash|http|onnx|ort`), including `check_embedder`'s own error string one line
+below the bug. Breadth plus doctrine: the code was wrong.
+
+**Both halves shipped.** The spelling is out of the OK-set, so the panic is
+gone and `config check` refuses it. And `open_store_as` now consults
+`recorded_embedder` first, exactly as `/v1` does — so `verify`, `rotate`,
+`repair`, `backup create`, `export`, `forget` and `retention sweep` reach a
+vault the multi-tenant server creates and serves. It used to fail as
+`EmbedderMismatch`, which reads as a corrupted vault rather than as a surface
+that cannot open it.
+
+**One exit, deliberately.** The external branch assigns into the same binding
+rather than returning early: `attach_reranker`, `attach_retrieval` and
+`attach_admission_advisor` run below on every opened store, so an early return
+would have opened an external vault with no reranker, no declared retrieval
+tier and no admission advisor — and duplicating the three calls would be a
+second implementation of one decision.
+
+**Gated by the INVARIANT, not the string.** `config_check_accepts_only_embedder_names_the_opener_implements`
+reads `open_store_as`'s arms out of the source and asserts that every value the
+validator accepts is one the opener can act on — so it fails on a future
+spelling nobody implemented, not merely on this one. Counterfactualled:
+restoring `"external"` to the OK-set makes it fail, naming the panic and the
+false pre-flight verdict. Two e2e arms drive the CLI against an `external:`
+vault the REST server created.
 
 **Gate:** whichever lands, a check must count `check_embedder`'s OK-set against
 `open_store_as`'s arms, so the two cannot disagree again; and if `external`

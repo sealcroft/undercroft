@@ -1159,50 +1159,77 @@ fn open_store_as(cli: &Cli, vault: &str, posture: Posture) -> Result<PalaceStore
         Posture::ReadOnly => PalaceStore::open_read_only(v, e),
         Posture::ReadWrite => PalaceStore::open_with_embedder(v, e),
     };
-    let mut store = match std::env::var("UNDERCROFT_EMBEDDER").as_deref() {
-        Ok("onnx") => {
-            #[cfg(feature = "onnx")]
-            {
-                let embedder = undercroft_embed_onnx::from_env()
-                    .map_err(|e| anyhow::anyhow!("loading ONNX embedder: {e}"))?;
-                open(v, Box::new(embedder))?
-            }
-            #[cfg(not(feature = "onnx"))]
-            bail!(
-                "UNDERCROFT_EMBEDDER=onnx requires a build with the 'onnx' feature \
+    // **A vault's RECORDED identity outranks the declaration** — the same
+    // order `embedder_factory` uses for `/v1`, and the CLI did not have it
+    // (ROADMAP O81). A vault created `external:<name>@<dim>` through
+    // `POST /v1/vaults` was openable on `/v1` and UNOPENABLE here, so
+    // `verify`, `rotate`, `repair`, `backup create`, `export`, `forget` and
+    // `retention sweep` — the whole operator plane — were unreachable for a
+    // vault the multi-tenant server creates and serves. It failed as an
+    // `EmbedderMismatch`, which reads as a corrupted vault rather than as a
+    // surface that cannot open it.
+    //
+    // `recorded_embedder` opens the database read-only to read one meta row,
+    // so this costs one extra open on a path that is about to open it anyway.
+    let external: Option<Box<dyn undercroft_core::embed::Embedder + Send>> =
+        PalaceStore::recorded_embedder(&v)?.and_then(|(name, dim)| {
+            name.strip_prefix("external:").map(|bare| {
+                Box::new(undercroft_core::ExternalEmbedder::new(bare, dim))
+                    as Box<dyn undercroft_core::embed::Embedder + Send>
+            })
+        });
+    // One exit, deliberately: `attach_reranker`, `attach_retrieval` and
+    // `attach_admission_advisor` run below on EVERY opened store, so an early
+    // return here would silently open an external vault with no reranker, no
+    // declared retrieval tier and no admission advisor — and duplicating the
+    // three calls would be a second implementation of one decision.
+    let mut store = match external {
+        Some(e) => open(v, e)?,
+        None => match std::env::var("UNDERCROFT_EMBEDDER").as_deref() {
+            Ok("onnx") => {
+                #[cfg(feature = "onnx")]
+                {
+                    let embedder = undercroft_embed_onnx::from_env()
+                        .map_err(|e| anyhow::anyhow!("loading ONNX embedder: {e}"))?;
+                    open(v, Box::new(embedder))?
+                }
+                #[cfg(not(feature = "onnx"))]
+                bail!(
+                    "UNDERCROFT_EMBEDDER=onnx requires a build with the 'onnx' feature \
                  (cargo build -p undercroft-cli --features onnx)"
-            );
-        }
-        Ok("ort") => {
-            #[cfg(feature = "ort")]
-            {
-                let embedder = undercroft_embed_ort::embedder_from_env()
-                    .map_err(|e| anyhow::anyhow!("loading ORT embedder: {e}"))?;
+                );
+            }
+            Ok("ort") => {
+                #[cfg(feature = "ort")]
+                {
+                    let embedder = undercroft_embed_ort::embedder_from_env()
+                        .map_err(|e| anyhow::anyhow!("loading ORT embedder: {e}"))?;
+                    open(v, Box::new(embedder))?
+                }
+                #[cfg(not(feature = "ort"))]
+                bail!(
+                    "UNDERCROFT_EMBEDDER=ort requires a build with the 'ort' feature \
+                 (cargo build -p undercroft-cli --features ort)"
+                );
+            }
+            // A model served over HTTP — Ollama, llama.cpp server, LM Studio,
+            // vLLM, text-embeddings-inference. No feature gate: the client is
+            // `ureq`, which the LLM crate already links for `refine`.
+            Ok("http") => {
+                let embedder = undercroft_llm::HttpEmbedder::from_env()
+                    .map_err(|e| anyhow::anyhow!("connecting to the embeddings endpoint: {e}"))?;
                 open(v, Box::new(embedder))?
             }
-            #[cfg(not(feature = "ort"))]
-            bail!(
-                "UNDERCROFT_EMBEDDER=ort requires a build with the 'ort' feature \
-                 (cargo build -p undercroft-cli --features ort)"
-            );
-        }
-        // A model served over HTTP — Ollama, llama.cpp server, LM Studio,
-        // vLLM, text-embeddings-inference. No feature gate: the client is
-        // `ureq`, which the LLM crate already links for `refine`.
-        Ok("http") => {
-            let embedder = undercroft_llm::HttpEmbedder::from_env()
-                .map_err(|e| anyhow::anyhow!("connecting to the embeddings endpoint: {e}"))?;
-            open(v, Box::new(embedder))?
-        }
-        Ok("hash") | Ok("") | Err(_) => open(v, Box::new(undercroft_core::HashEmbedder))?,
-        Ok(other) => {
-            // The message comes from the SAME validator `config check` runs,
-            // so the pre-flight and the start-up can never disagree about
-            // what is legal. The named arms above matched every legal value,
-            // so this is an error by construction.
-            bail!(check_embedder(other)
-                .expect_err("every legal embedder name is matched by an arm above"))
-        }
+            Ok("hash") | Ok("") | Err(_) => open(v, Box::new(undercroft_core::HashEmbedder))?,
+            Ok(other) => {
+                // The message comes from the SAME validator `config check` runs,
+                // so the pre-flight and the start-up can never disagree about
+                // what is legal. The named arms above matched every legal value,
+                // so this is an error by construction.
+                bail!(check_embedder(other)
+                    .expect_err("every legal embedder name is matched by an arm above"))
+            }
+        },
     };
     attach_reranker(&mut store)?;
     attach_retrieval(&mut store)?;
@@ -1237,7 +1264,22 @@ pub(crate) fn attach_admission_advisor(store: &mut PalaceStore) -> Result<()> {
 /// opens nothing and makes no outbound call, and loading a model is both.
 pub(crate) fn check_embedder(raw: &str) -> Result<(), String> {
     match raw {
-        "" | "hash" | "http" | "external" => Ok(()),
+        // **`"external"` was in this set and is not a legal declaration**
+        // (ROADMAP O81). `open_store_as` has no arm for it, so its catch-all
+        // did `check_embedder(other).expect_err(...)` on an `Ok` and PANICKED
+        // at exit 101, while `config check` printed "This environment starts"
+        // — one declaration, three answers across three surfaces, and the
+        // pre-flight gave the wrong one for a `(Protects, Checked)` variable
+        // whose whole promise is that it runs the resolver the engine runs.
+        //
+        // It is not merely unimplemented: the declaration form carries no
+        // name and no dimension, so it could not identify a vector space even
+        // if an arm existed. An external vault is reached by its RECORDED
+        // identity (`external:<name>@<dim>`), which the opener below now
+        // consults — never by this variable. Every document already said the
+        // legal set is hash|http|onnx|ort, including this function's own
+        // error string below.
+        "" | "hash" | "http" => Ok(()),
         "onnx" if !cfg!(feature = "onnx") => Err(
             "UNDERCROFT_EMBEDDER=onnx requires a build with the 'onnx' feature \
              (cargo build -p undercroft-cli --features onnx)"
@@ -4276,6 +4318,62 @@ mod tests {
     use super::*;
     use std::ffi::OsString;
     use tempfile::TempDir;
+
+    /// **`config check`'s OK-set and the opener's arms cannot disagree**
+    /// (ROADMAP O81).
+    ///
+    /// `check_embedder` blessed `"external"` while `open_store_as` had no arm
+    /// for it, so the catch-all called `.expect_err()` on an `Ok` and PANICKED
+    /// at exit 101 — while the pre-flight printed "This environment starts."
+    /// One declaration, three answers: `ok` from `config check`, a panic from
+    /// the CLI and `/mcp`, a clean 500 from `/v1`.
+    ///
+    /// This asserts the INVARIANT rather than the one bad string: every value
+    /// the validator accepts must be a value the opener can act on. The
+    /// opener's `hash`/`""`/`Err(_)` arm is total over the rest, so the test
+    /// is that the accepted set is exactly the arms that exist — which is why
+    /// it fails on a future `check_embedder` that grows a spelling nobody
+    /// implemented, not merely on this one.
+    #[test]
+    fn config_check_accepts_only_embedder_names_the_opener_implements() {
+        // The arms `open_store_as` actually has, read off the source so this
+        // cannot drift from the match it describes.
+        let src = include_str!("main.rs");
+        let opener = src
+            .split_once("fn open_store_as")
+            .expect("premise: open_store_as exists")
+            .1;
+        let opener = &opener[..opener
+            .find(
+                "
+}
+",
+            )
+            .unwrap_or(opener.len())];
+        for name in ["", "hash", "http", "onnx", "ort"] {
+            // Feature-gated names are still legal NAMES; `check_embedder`
+            // refuses them with a build hint, which is a different answer
+            // from "unknown".
+            let accepted = check_embedder(name).is_ok()
+                || check_embedder(name)
+                    .unwrap_err()
+                    .contains("requires a build with");
+            assert!(
+                accepted,
+                "{name:?} is an opener arm but check_embedder rejects it"
+            );
+        }
+        // The reverse, which is the direction that panicked: nothing the
+        // validator accepts may be absent from the opener.
+        for name in ["external", "openai", "cohere"] {
+            if check_embedder(name).is_ok() {
+                assert!(
+                    opener.contains(&format!("Ok(\"{name}\")")),
+                    "check_embedder accepts {name:?} but open_store_as has no arm for it, so its catch-all calls .expect_err() on that Ok and PANICS at exit 101 while `config check` reports the environment starts"
+                );
+            }
+        }
+    }
 
     /// **Every advertised subcommand carries its OWN help text, and the
     /// documented two-word `config check` runs.**

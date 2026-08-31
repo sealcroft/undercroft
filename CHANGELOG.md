@@ -7,6 +7,50 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### a declaration that made the CLI panic, and the operator plane that could not open its own vaults (M48)
+
+**ROADMAP O81 CLOSED**, and the filing's central question — *remove the
+spelling, or implement the arm?* — dissolved on reading the code. **The two
+halves were independent, not exclusive.**
+
+**`UNDERCROFT_EMBEDDER=external` was never a legal declaration.**
+`check_embedder` blessed it while `open_store_as` had no arm, so the catch-all
+called `.expect_err()` on an `Ok` and **panicked at exit 101** — while
+`config check` printed *"This environment starts."* One declaration, three
+answers: `ok` from the pre-flight, a panic from the CLI and `/mcp`, a clean 500
+from `/v1`. For a `(Protects, Checked)` variable whose entire promise is that
+the pre-flight runs the resolver the engine runs.
+
+It is not merely unimplemented. An external vault is reached by its **recorded
+identity** — `embedder_factory` consults `recorded_embedder` and rebuilds an
+`ExternalEmbedder` *before* looking at the variable — and the declaration form
+carries no name and no dimension, so it could not identify a vector space even
+if an arm existed. Every document already said `hash|http|onnx|ort`, including
+`check_embedder`'s own error string one line below the bug.
+
+**The second half was a real capability gap.** `open_store_as` never consulted
+`recorded_embedder`, so a vault created `external:<name>@<dim>` through
+`POST /v1/vaults` was openable on `/v1` and **unopenable on the CLI** —
+`verify`, `rotate`, `repair`, `backup create`, `export`, `forget` and
+`retention sweep`, the whole operator plane, unreachable for a vault the
+multi-tenant server creates and serves. It failed as `EmbedderMismatch`, which
+reads as a corrupted vault rather than as a surface that cannot open it. The
+CLI now uses the same precedence `/v1` has always used.
+
+**One exit, deliberately:** the external branch assigns into the same binding
+rather than returning early, because `attach_reranker`, `attach_retrieval` and
+`attach_admission_advisor` run below on every opened store. An early return
+would have opened an external vault with no reranker, no declared retrieval
+tier and no admission advisor; duplicating the three calls would have been a
+second implementation of one decision.
+
+**Gated by the INVARIANT rather than the bad string.** The new test reads
+`open_store_as`'s arms out of the source and asserts every value the validator
+accepts is one the opener can act on — so it fails on a future spelling nobody
+implemented. **Counterfactualled:** restoring `"external"` to the OK-set makes
+it fail, naming the panic and the false pre-flight verdict. Two e2e arms drive
+the CLI against an `external:` vault the REST server created (428 → 430).
+
 ### the independent verifier pass — and it found a live quarantine leak I had shipped (M47)
 
 **Seven adversarial verifiers, one per dimension `CLAUDE.md` names, read-only.**
