@@ -225,6 +225,15 @@ body_has "ops anchor"        '"anchored"'  -- -X POST "${ADMIN[@]}" "$O/admin/te
 body_has "ops supersessions" 'supersessions' -- "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/supersessions"
 body_has "ops admission list" 'pending'    -- "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/admission"
 body_has "ops trust list"    'assignments' -- "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/trust"
+# Backups on the OPERATOR plane (ROADMAP O68). They are `Absence::Boundary` on
+# MCP and must never reach the tenant data plane, so this is the only door a
+# fleet operator has — which is the entire justification for the routes.
+body_has "ops backup create" '"backup"'  -- -X POST "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/backups"
+body_has "ops backup list"   '"backups"' -- "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/backups"
+# The tenant plane must REFUSE them, and name the plane that holds them
+# rather than 404ing as though the capability did not exist.
+code_is  "backups are not on the tenant data plane" 404 -- \
+  -H "Authorization: Bearer $OPS_TOKEN" "$O/t/backups"
 body_has "ops trust assign"  '"trust":"trusted"' -- -X POST "${ADMIN[@]}"   -d '{"wing":"w","trust":"trusted"}' "$O/admin/tenants/$OPS_ID/ops/trust"
 body_has "ops retention list" 'policies'   -- "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/retention"
 body_has "ops retention set" '"days":3650' -- -X POST "${ADMIN[@]}"   -d '{"wing":"w","days":3650}' "$O/admin/tenants/$OPS_ID/ops/retention"

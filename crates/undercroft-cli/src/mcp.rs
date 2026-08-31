@@ -1104,22 +1104,35 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                     undercroft_store::StoreError::Invalid(format!("not an attestation: {e}"))
                 })?;
             let verdict = store.verify_forget_attestation(&att)?;
-            let (v, note) = match verdict {
-                undercroft_store::AttestationVerdict::Verified => ("verified", None),
-                undercroft_store::AttestationVerdict::Recorded { rotations_since } => (
-                    "recorded",
-                    Some(format!(
-                        "the keyed replay is unavailable — a key rotation destroyed the MAC key \
-                         that made these tombstones ({rotations_since} rotation(s) recorded \
-                         since). This vault's preserved audit trail holds exactly these \
-                         tombstones, contiguously. It is NOT a tamper verdict."
-                    )),
-                ),
-            };
-            Ok(serde_json::to_string_pretty(&json!({
-                "verdict": v,
-                "note": note,
-            }))?)
+            // The SAME shape `/v1` answers in, field for field. A first
+            // version of this arm returned `verdict` plus a prose note, and
+            // that is precisely the drift a pre-release audit exists to
+            // catch: `signed` and `sender` are load-bearing, not decoration.
+            // `sender` AND `sig`, never `sig` alone — the sender is the
+            // public key the signature is checked against, so a document
+            // carrying one without the other is attributable to NOBODY, and
+            // an agent that cannot see that field cannot know it.
+            let signed = att.sender.is_some() && att.sig.is_some();
+            let mut out = json!({
+                "verdict": match verdict {
+                    undercroft_store::AttestationVerdict::Verified => "verified",
+                    undercroft_store::AttestationVerdict::Recorded { .. } => "recorded",
+                },
+                "drawers": att.drawers.len(),
+                "signed": signed,
+            });
+            if let undercroft_store::AttestationVerdict::Recorded { rotations_since } = verdict {
+                out["rotations_since"] = json!(rotations_since);
+                // The third verdict is NOT a tamper verdict (O13): the key
+                // that made these tombstones was destroyed by a rotation, so
+                // the replay is unavailable and the preserved audit trail
+                // carries them contiguously instead. A narrower claim.
+                out["keyed_replay"] = json!("unavailable");
+            }
+            if signed {
+                out["sender"] = json!(att.sender);
+            }
+            Ok(serde_json::to_string_pretty(&out)?)
         }
         "undercroft_index_status" => {
             let backend = opt_str(args, "backend").unwrap_or("");

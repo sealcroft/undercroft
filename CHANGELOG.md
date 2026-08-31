@@ -7,6 +7,53 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### the pre-release drift audit, and the one drift it found was mine (M46)
+
+**The drift check `CLAUDE.md` requires before every release**, run over the
+seven dimensions it names, against a surface that had just grown 19 `/v1`
+routes and 4 MCP tools in one day.
+
+**Most dimensions came back clean because they are now GATED, and the audit
+was aimed at what a gate cannot see.** Config wiring is counted both ways on
+both axes; the `/v1` route set is compared as sets against the dispatch; the
+CLI axis is partitioned by `SURFACE_ABSENCES`/`SURFACE_COMPLETE`; `ReadOp::ALL`
+is counted against its driver table. Re-checking those by hand would have been
+re-running the gates.
+
+**What the audit verified by reading, because nothing gates it:**
+
+* **The quarantine fence reaches every new route.** `wake-up`, `closets` and
+  `hallways` all funnel through `recent()`, which excludes the reserved wing
+  in SQL; `follow_tunnel` refuses it explicitly on top of `create_tunnel`
+  already refusing it as an endpoint; `diary_read` constructs `agent-<name>`
+  and cannot name it. The MCP fence iterates **all raw arguments**
+  generically, so the four new tools inherit it rather than needing rows.
+* **All four new `READ_TOOLS` are genuinely reads** — `&self` on every one.
+  A `&mut self` among them would have let a `--read-only` server mutate.
+* **The new `ops_alias` entries are live, not dead** — `Command::Ops`
+  resolves any op generically, so no new subcommand was needed.
+
+**THE ONE REAL DRIFT WAS SELF-INFLICTED, from the previous unit.**
+`undercroft_check_erasure_receipt` answered `{verdict, note}` while its `/v1`
+sibling answers `{verdict, drawers, signed, sender, rotations_since,
+keyed_replay}`. `signed` and `sender` are load-bearing, not decoration: a
+document carrying a signature without a sender is **attributable to nobody**,
+and an agent that cannot see the field cannot know it. The MCP arm now answers
+in the same shape, field for field. This is exactly the class the 65-drift
+audit was built to find — one capability, two surfaces, quietly different —
+and it was 24 hours old.
+
+**A difference that is NOT a drift, recorded so nobody "fixes" it.**
+`kg_rel` returns a bare array over MCP and a `{predicate, facts}` envelope on
+`/v1`. That matches each surface's own convention — `kg_query` and
+`kg_timeline` already return bare arrays over MCP — so the shapes differ
+because the surfaces do, not because a contract slipped.
+
+**And one gap in my own O68 work:** the backup routes reached the
+orchestrator's ops plane with no orchestrator e2e arm. Three added (124 →
+127), including the one that matters most — the tenant data plane must
+**refuse** them, since all three are `Absence::Boundary` on MCP.
+
 ### O68 closes: zero Drift rows, `/v1` at 56 routes, MCP at 38 tools (M45)
 
 **ROADMAP O68 CLOSED.** The last 7 of its 21 rows landed. `SURFACE_ABSENCES`
