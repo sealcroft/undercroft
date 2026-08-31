@@ -58,6 +58,17 @@ pub(crate) const READ_TOOLS: &[&str] = &[
     "undercroft_kg_timeline",
     "undercroft_kg_stats",
     "undercroft_lookup_canonical",
+    // ROADMAP O68. All four are READS, which is the whole reason they were
+    // drift rather than boundary: `kg_receipts` reports per-fact receipt
+    // verdicts an agent already learns the AGGREGATE of through
+    // `undercroft_verify`, `verify_forgetting` checks a caller-supplied
+    // document and mutates nothing, `kg_rel` is the one kg read shape
+    // neither agent surface had, and `index_status` asks a mirror for a
+    // count — unlike `index push`, which is egress and stays absent.
+    "undercroft_kg_receipts",
+    "undercroft_check_erasure_receipt",
+    "undercroft_kg_rel",
+    "undercroft_index_status",
 ];
 
 /// Whether a read-only server must refuse this tool.
@@ -476,6 +487,15 @@ fn tool_definitions() -> Value {
         tool("undercroft_kg_stats", "Knowledge-graph counts.", json!({}), &[]),
         tool("undercroft_lookup_canonical", "The exact-authority door: the one active, approved, canonical fact for a key. Consult BEFORE semantic recall for exact or high-risk asks — an empty answer means no declared truth exists, never a guess.",
             json!({ "key": s("canonical key") }), &["key"]),
+        // --- ROADMAP O68: four reads that were reachable from the CLI alone ---
+        tool("undercroft_kg_rel", "Facts by PREDICATE (the edge label), e.g. every 'reports-to'. Not composable from kg_query, which is entity-shaped.",
+            json!({ "predicate": s("predicate to match"), "as_of": s("ISO date: facts active then") }), &["predicate"]),
+        tool("undercroft_kg_receipts", "Per-fact receipt verdicts against each cited verbatim source (verified|source_changed|dangling|unreceipted|tampered). undercroft_verify reports the AGGREGATE; this says WHICH.",
+            json!({ "problems_only": json!({ "type": "boolean", "description": "omit verified facts" }) }), &[]),
+        tool("undercroft_check_erasure_receipt", "Check a caller-supplied erasure attestation against this vault: verdict is 'verified', or 'recorded' when a key rotation destroyed the replay key — a narrower claim, NOT a tamper verdict.",
+            json!({ "attestation": s("the attestation document, as JSON") }), &["attestation"]),
+        tool("undercroft_index_status", "Remote vector-mirror status: the backend's record count beside the authoritative local one. A pure read — pushing is not offered here.",
+            json!({ "backend": s("backend name; empty uses UNDERCROFT_INDEX") }), &[]),
         // --- agent diaries ---
         tool("undercroft_diary_write", "Append a diary entry for an agent.",
             json!({ "agent": s("agent name"), "entry": s("diary text") }), &["agent", "entry"]),
@@ -1042,6 +1062,79 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                 undercroft_store::Read::Returned(undercroft_store::ReadOp::KgTimeline),
             )?;
             Ok(serde_json::to_string_pretty(&tl)?)
+        }
+        // ---- ROADMAP O68 ----
+        "undercroft_kg_rel" => {
+            let predicate = req_str(args, "predicate")?;
+            let facts = store.kg_query_relationship(
+                predicate,
+                opt_str(args, "as_of"),
+                undercroft_store::Read::Returned(undercroft_store::ReadOp::KgQuery),
+            )?;
+            Ok(serde_json::to_string_pretty(&facts)?)
+        }
+        "undercroft_kg_receipts" => {
+            let problems_only = args
+                .get("problems_only")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            let receipts = store.kg_verify_receipts()?;
+            let rows: Vec<serde_json::Value> = receipts
+                .iter()
+                .filter(|r| {
+                    !problems_only
+                        || !matches!(r.verdict, undercroft_store::ReceiptVerdict::Verified)
+                })
+                .map(|r| {
+                    json!({
+                        "triple_id": r.triple_id,
+                        "source_drawer_id": r.source_drawer_id,
+                        "verdict": format!("{:?}", r.verdict).to_lowercase(),
+                    })
+                })
+                .collect();
+            Ok(serde_json::to_string_pretty(&json!({ "receipts": rows }))?)
+        }
+        "undercroft_check_erasure_receipt" => {
+            // The document is the CALLER's, so a malformed one is THEIR
+            // error and must not read as a tamper verdict.
+            let raw = req_str(args, "attestation")?;
+            let att: undercroft_store::ForgetAttestation =
+                serde_json::from_str(raw).map_err(|e| {
+                    undercroft_store::StoreError::Invalid(format!("not an attestation: {e}"))
+                })?;
+            let verdict = store.verify_forget_attestation(&att)?;
+            let (v, note) = match verdict {
+                undercroft_store::AttestationVerdict::Verified => ("verified", None),
+                undercroft_store::AttestationVerdict::Recorded { rotations_since } => (
+                    "recorded",
+                    Some(format!(
+                        "the keyed replay is unavailable — a key rotation destroyed the MAC key \
+                         that made these tombstones ({rotations_since} rotation(s) recorded \
+                         since). This vault's preserved audit trail holds exactly these \
+                         tombstones, contiguously. It is NOT a tamper verdict."
+                    )),
+                ),
+            };
+            Ok(serde_json::to_string_pretty(&json!({
+                "verdict": v,
+                "note": note,
+            }))?)
+        }
+        "undercroft_index_status" => {
+            let backend = opt_str(args, "backend").unwrap_or("");
+            let local = store.count()?;
+            let collection = store.index_collection();
+            let mut index = crate::open_index(backend).map_err(|e| {
+                undercroft_store::StoreError::Invalid(format!("index backend: {e}"))
+            })?;
+            let (name, remote) = store.index_status(index.as_mut())?;
+            Ok(serde_json::to_string_pretty(&json!({
+                "backend": name,
+                "collection": collection,
+                "remote_records": remote,
+                "local_records": local,
+            }))?)
         }
         "undercroft_kg_stats" => {
             let st = store.kg_stats()?;

@@ -239,6 +239,16 @@ fn data_subpath_ok(subpath: &str) -> bool {
             // Not listed because they are already covered: `["drawers"]`
             // carries the filtered `DELETE …?source=`, and `["drawers", _]`
             // carries `POST …/drawers/check-duplicate`.
+            // `kg/rel` is the predicate-shaped kg READ, and it joins its
+            // entity-shaped siblings above for the same reason they are here:
+            // a vault's distilled facts belong to the tenant whose drawers
+            // they came from. `index/status` reports a mirror's record count
+            // beside the authoritative local one — the counts are the
+            // tenant's own, and the engine now treats it as agent-facing;
+            // `index push` is EGRESS and is on neither plane, which is the
+            // boundary its status sibling does not share.
+            | ["kg", "rel"]
+            | ["index", "status"]
             | ["dedup"]
             | ["tunnels"]
             | ["tunnels", _]
@@ -450,6 +460,22 @@ const OPS_ROUTES: &[(&str, &str)] = &[
     ("POST", "retention/sweep"),
     ("GET", "trust"),
     ("POST", "trust"),
+    // Backups (ROADMAP O68, 2026-08-31). OPERATOR plane, never the tenant
+    // one: all three are `Absence::Boundary` on MCP in the engine's own
+    // inventory — they touch the server's filesystem, and `restore` is the
+    // most destructive operation in the tree.
+    //
+    // `restore` is NOT safe while the engine serves that vault, unlike
+    // `verify`/`repair`/`anchor` above, and it does not need to be: the
+    // engine takes an exclusive hold and answers **409** rather than
+    // unlinking a database a server still holds open (O69). So the row is
+    // safe to forward — the refusal happens at the engine, where the handle
+    // is, instead of being approximated by omitting the route here. The
+    // practical consequence is that a fleet restore is a maintenance-window
+    // operation, which is a property of the operation and not of this table.
+    ("POST", "backups"),
+    ("GET", "backups"),
+    ("POST", "backups/restore"),
     // Tightening the manifest rollback anchor (engine R3). Unlike the vault
     // KEY rotation two lines of prose up, this one is safe while the engine
     // is serving: it fsyncs a manifest that names the head the database
@@ -554,6 +580,12 @@ pub(crate) fn ops_alias(op: &str) -> Option<(&'static str, &'static str)> {
         // answer, enforced here rather than filed. It caught this omission on
         // the battery, not in review.
         "authority" => ("POST", "kg/authority"),
+        // Backups (ROADMAP O68). Added WITH their routes, for the reason the
+        // comment above records: a route on the admin plane with no CLI alias
+        // is reachable by curl alone.
+        "backup-create" => ("POST", "backups"),
+        "backups" => ("GET", "backups"),
+        "backup-restore" => ("POST", "backups/restore"),
         _ => return None,
     })
 }
@@ -1620,6 +1652,12 @@ mod tests {
             // reachable by curl alone". The gate caught the omission on the
             // battery rather than in review, which is the whole point of it.
             "authority",
+            // Backups (ROADMAP O68), and this gate refused the routes until
+            // they were listed — the same catch it made for `authority`, two
+            // lines up, on the same battery rather than in review.
+            "backup-create",
+            "backups",
+            "backup-restore",
         ];
         // RESIDUAL, stated rather than found later: this array is a
         // hand-written literal, and `ops_alias` is a `match` that cannot be

@@ -381,6 +381,17 @@ impl Tenancy {
             ("GET", &["v1", "vaults", id, "supersessions"]) => {
                 self.drawer_supersessions(id, req, now)
             }
+            // Backups (ROADMAP O68), vault-scoped rather than a palace-level
+            // family — see `backup_create` for why. All three are OPERATOR
+            // routes on a fleet and are on the orchestrator's OPS plane, never
+            // its tenant data plane.
+            ("GET", &["v1", "vaults", id, "kg", "rel"]) => self.kg_rel(id, req, now),
+            ("GET", &["v1", "vaults", id, "index", "status"]) => self.index_status(id, req, now),
+            ("POST", &["v1", "vaults", id, "backups"]) => self.backup_create(id, req, now),
+            ("GET", &["v1", "vaults", id, "backups"]) => self.backup_list(id, req, now),
+            ("POST", &["v1", "vaults", id, "backups", "restore"]) => {
+                self.backup_restore(id, req, body, now)
+            }
             // Drawer maintenance (ROADMAP O68). `check-duplicate` is a
             // LITERAL at the same depth as `{drawer_id}`, but no `POST
             // …/drawers/{drawer_id}` exists, so the method disambiguates.
@@ -1931,6 +1942,204 @@ impl Tenancy {
     /// principal's declaration: an OPERATOR surface, deliberately absent
     /// from MCP — an agent that writes content must not be able to raise
     /// its own standing (docs/LABELS.md). Audited through the chain.
+    /// `GET /v1/vaults/{id}/kg/rel?predicate=&as_of=` — facts by PREDICATE
+    /// (ROADMAP O68).
+    ///
+    /// The one knowledge-graph read shape neither agent surface had, and it
+    /// is **not composable** from the entity-shaped `kg/query` they do have:
+    /// "who reports to whom" is a question about an edge label, and answering
+    /// it by enumerating every entity and filtering client-side is a
+    /// different cost and a different read-audit footprint.
+    ///
+    /// Records `ReadOp::KgQuery` at the store, like its entity-shaped sibling
+    /// — one namespace per TOOL, which is what O51 settled.
+    fn kg_rel(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let predicate = query_param(req, "predicate")
+            .ok_or_else(|| RestError::new(400, "predicate is required"))?;
+        let as_of = query_param(req, "as_of");
+        let store = self.store_for(id)?;
+        let facts = store
+            .kg_query_relationship(
+                &predicate,
+                as_of.as_deref(),
+                undercroft_store::Read::Returned(undercroft_store::ReadOp::KgQuery),
+            )
+            .map_err(store_err)?;
+        Ok((
+            200,
+            Body::Json(json!({
+                "predicate": predicate,
+                "facts": serde_json::to_value(&facts).unwrap_or_else(|_| json!([])),
+            })),
+        ))
+    }
+
+    /// `GET /v1/vaults/{id}/index/status?backend=` — remote-mirror status.
+    ///
+    /// A pure READ, which is why `index push`'s egress boundary does not
+    /// cover it: push sends embeddings out of the process, this asks a
+    /// backend how many records it holds and compares that to the local
+    /// count. A caller diagnosing "is my mirror behind?" needs the pair, and
+    /// the local half is the authoritative one.
+    fn index_status(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let backend = query_param(req, "backend");
+        let store = self.store_for(id)?;
+        let local = store.count().map_err(store_err)?;
+        let collection = store.index_collection();
+        let mut index = crate::open_index(backend.as_deref().unwrap_or(""))
+            .map_err(|e| RestError::new(400, format!("index backend: {e}")))?;
+        let (name, remote) = store
+            .index_status(index.as_mut())
+            .map_err(|e| RestError::new(502, format!("index backend: {e}")))?;
+        Ok((
+            200,
+            Body::Json(json!({
+                "backend": name,
+                "collection": collection,
+                "remote_records": remote,
+                "local_records": local,
+            })),
+        ))
+    }
+
+    /// `POST /v1/vaults/{id}/backups` — snapshot THIS vault (ROADMAP O68).
+    ///
+    /// **Vault-scoped, and the filing's "palace-scoped `/v1/backups` family"
+    /// was the wrong shape.** Three things decided it, none of them taste.
+    ///
+    /// The row justifying these routes names *a fleet operator whose only door
+    /// is `/v1`* — and both orchestrator planes proxy a SUBPATH under a
+    /// tenant (`/admin/tenants/{id}/ops/<subpath>` →
+    /// `/v1/vaults/{id}/<subpath>`). A `/v1/backups` route sits under neither
+    /// plane, so it would be unreachable by the exact caller it was filed for.
+    ///
+    /// Per-vault is also the right BOUNDARY: the backups directory holds
+    /// `{vault}-{stamp}` entries for EVERY vault, so a palace-wide list
+    /// handed to a caller addressing one vault leaks other tenants' vault ids
+    /// off a shared engine. "`list` opens no vault" is a fact about the CLI's
+    /// implementation, not a requirement on the route.
+    ///
+    /// And `create` was already per-vault: it takes one vault and gates on
+    /// THAT vault's verify verdict, which is preserved here — never archive a
+    /// palace that fails its own HMACs, and say so as an integrity verdict
+    /// (409 + `class: "integrity"`, the wire form of the CLI's exit 2).
+    fn backup_create(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let root = self.manager.root().to_path_buf();
+        {
+            let store = self.store_for(id)?;
+            let report = store.verify().map_err(store_err)?;
+            if !report.ok() {
+                return Err(RestError::new(
+                    409,
+                    "refusing to back up: integrity verification failed",
+                )
+                .integrity());
+            }
+        }
+        // The handle is dropped before copying so the snapshot is not taken
+        // through a store this process is still writing.
+        self.stores.remove(id);
+        let stamp = time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .map_err(|e| RestError::new(500, e.to_string()))?
+            .replace([':', '.'], "-");
+        let src = root.join("vaults").join(id);
+        let name = format!("{id}-{stamp}");
+        let dst = root.join("backups").join(&name);
+        crate::copy_dir(&src, &dst).map_err(|e| RestError::new(500, e.to_string()))?;
+        crate::prune_backups(&root.join("backups"), id, 10)
+            .map_err(|e| RestError::new(500, e.to_string()))?;
+        Ok((201, Body::Json(json!({ "backup": name, "vault": id }))))
+    }
+
+    /// `GET /v1/vaults/{id}/backups` — this vault's snapshots.
+    ///
+    /// Filtered to the addressed vault by reading each backup's OWN manifest
+    /// rather than by matching the directory name's prefix. A name-prefix
+    /// filter would be the `-20` bug wearing a different hat: `proj` and
+    /// `proj-archive` share a prefix, and the manifest is authoritative.
+    fn backup_list(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let dir = self.manager.root().join("backups");
+        let mut names: Vec<String> = Vec::new();
+        if let Ok(rd) = std::fs::read_dir(&dir) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if crate::read_backup_vault_id(&p).ok().as_deref() == Some(id) {
+                    names.push(e.file_name().to_string_lossy().to_string());
+                }
+            }
+        }
+        names.sort();
+        Ok((200, Body::Json(json!({ "vault": id, "backups": names }))))
+    }
+
+    /// `POST /v1/vaults/{id}/backups/{name}/restore` — restore this vault.
+    ///
+    /// **The addressed vault must MATCH the backup manifest's own id**, and
+    /// that check does not exist on the CLI. It is what makes the route safer
+    /// than the command it exposes: `restore` derives its target from
+    /// `vault.json` (never from the directory name — that was fixed before
+    /// this route existed), so addressing vault A with a backup of vault B
+    /// would silently act on B. Here it is a 400.
+    ///
+    /// **It refuses while the vault is in use** (O69): `remove_dir_all` under
+    /// an open SQLite handle leaves a server writing to an unlinked database
+    /// and the vault permanently unopenable. On a served engine that means the
+    /// realistic use is a maintenance window — stated here rather than
+    /// discovered in an incident. This process's own cached handle is dropped
+    /// first, or it would be the thing blocking itself.
+    fn backup_restore(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        // The backup NAME travels in the body, not the path, and that is not
+        // cosmetic. The orchestrator's operator plane matches a subpath
+        // EXACTLY (`ops_route_ok`), so a parameterised segment could not be
+        // expressed there without loosening a security-relevant matcher — and
+        // this route's whole justification is the fleet operator who reaches
+        // the engine only through that plane. Keeping the subpath literal
+        // (`backups/restore`, like `retention/sweep`) also keeps a
+        // caller-supplied string out of the URL path entirely.
+        let body = parse_json(body)?;
+        let name = body_str(&body, "name")?;
+        let name = name.as_str();
+        undercroft_core::validate_name(name, "backup")
+            .map_err(|e| RestError::new(400, e.to_string()))?;
+        let root = self.manager.root().to_path_buf();
+        let src = root.join("backups").join(name);
+        if !src.join("vault.json").exists() {
+            return Err(RestError::new(404, format!("no backup named {name}")));
+        }
+        let vault_name =
+            crate::read_backup_vault_id(&src).map_err(|e| RestError::new(400, e.to_string()))?;
+        if vault_name != id {
+            return Err(RestError::new(
+                400,
+                format!("backup '{name}' holds vault '{vault_name}', not '{id}'"),
+            ));
+        }
+        let dst = root.join("vaults").join(&vault_name);
+        self.stores.remove(id);
+        let _hold = if dst.exists() {
+            Some(
+                undercroft_store::hold_vault_exclusively(&dst)
+                    .map_err(|_| RestError::new(409, "vault is in use — stop the server first"))?,
+            )
+        } else {
+            None
+        };
+        if dst.exists() {
+            std::fs::remove_dir_all(&dst).map_err(|e| RestError::new(500, e.to_string()))?;
+        }
+        crate::copy_dir(&src, &dst).map_err(|e| RestError::new(500, e.to_string()))?;
+        Ok((
+            200,
+            Body::Json(json!({ "restored": vault_name, "from": name })),
+        ))
+    }
+
     /// `POST /v1/vaults/{id}/drawers/check-duplicate` — would this text be a
     /// duplicate? (ROADMAP O68)
     ///

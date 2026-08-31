@@ -1277,6 +1277,19 @@ if grep -q "undercroft_kg_add" <<<"$out"; then
 else
   echo "FAIL  http tools/list with token"; echo "$out" | head -3 | sed 's/^/      /'; FAIL=$((FAIL+1))
 fi
+# ROADMAP O68: the four reads that were CLI-only are ADVERTISED now. All four
+# together, because a parity inventory can say a tool exists while the server
+# never offers it — the inventory is the claim, this is the surface.
+miss=""
+for t in undercroft_kg_rel undercroft_kg_receipts undercroft_check_erasure_receipt \
+         undercroft_index_status; do
+  grep -q "$t" <<<"$out" || miss="$miss $t"
+done
+if [ -z "$miss" ]; then
+  echo "ok    O68's four reads are advertised over MCP"; PASS=$((PASS+1))
+else
+  echo "FAIL  O68's four reads are advertised over MCP — missing:$miss"; FAIL=$((FAIL+1))
+fi
 kill $HTTP_PID 2>/dev/null
 # Read-only server rejects writes.
 #
@@ -1753,6 +1766,31 @@ rest_body "supersession verified" '"verdict":"verified"' -- "$API/vaults/acme/su
   -H "X-Vault-Assertion: $(sign acme)"
 rest_body "superseded drawer kept" '"the retro is on thursdays at four"' -- \
   "$API/vaults/acme/drawers/$OLD_ID" -H "X-Vault-Assertion: $(sign acme)"
+
+# ---- the last of O68 on /v1 -----------------------------------------------
+rest_body "/v1 kg rel by predicate" '"facts"' -- \
+  "$API/vaults/acme/kg/rel?predicate=works-at" -H "X-Vault-Assertion: $(sign acme)"
+rest_code "/v1 kg rel needs a predicate" 400 -- "$API/vaults/acme/kg/rel" \
+  -H "X-Vault-Assertion: $(sign acme)"
+# Backups. `create` gates on the verify verdict and answers an INTEGRITY
+# verdict when it fails — the wire form of the CLI's exit 2.
+rest_body "/v1 backup create" '"backup"' -- -X POST "$API/vaults/acme/backups" \
+  -H "X-Vault-Assertion: $(sign acme)"
+rest_body "/v1 backup list is scoped to this vault" '"vault":"acme"' -- \
+  "$API/vaults/acme/backups" -H "X-Vault-Assertion: $(sign acme)"
+BK="$(curl -s "$API/vaults/acme/backups" -H "X-Vault-Assertion: $(sign acme)" \
+  | sed -n 's/.*\["\([^"]*\)".*/\1/p')"
+rest_code "/v1 restore needs a name" 400 -- -X POST "$API/vaults/acme/backups/restore" \
+  -H "X-Vault-Assertion: $(sign acme)" -d '{}'
+rest_code "/v1 restore rejects an unknown backup" 404 -- -X POST \
+  "$API/vaults/acme/backups/restore" -H "X-Vault-Assertion: $(sign acme)" \
+  -d '{"name":"no-such-backup"}'
+# THE CHECK THE CLI DOES NOT HAVE: the addressed vault must match the
+# backup's own manifest, so addressing globex with an acme backup is a 400
+# rather than a silent restore of acme.
+rest_code "/v1 restore refuses a backup of another vault" 400 -- -X POST \
+  "$API/vaults/globex/backups/restore" -H "X-Vault-Assertion: $(sign globex)" \
+  -d "{\"name\":\"$BK\"}"
 
 # ---- drawer maintenance on /v1 (ROADMAP O68) ------------------------------
 rest_body "/v1 check-duplicate finds none" '"duplicate":false' -- -X POST \

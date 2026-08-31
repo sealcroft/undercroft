@@ -38,7 +38,7 @@ the same bearer, for programmatic (non-MCP) callers and for orchestration
 platforms that use one **vault per tenant**. One palace per process stays
 the model — tenancy is vaults, not palaces.
 
-**All 51 routes**, counted against `route()` in
+**All 56 routes**, counted against `route()` in
 `crates/undercroft-cli/src/tenant.rs` rather than remembered — and the LIST is
 GATED now (ROADMAP O45), because "rather than remembered" was exactly what
 happened: this list said 35 and omitted
@@ -105,6 +105,8 @@ GET    /v1/vaults/{id}/kg/receipts      receipt verdicts per fact
 GET    /v1/vaults/{id}/kg/canonical/{key}   the one active approved fact
 POST   /v1/vaults/{id}/kg/authority     declare authority_class / review_state
 GET    /v1/vaults/{id}/supersessions    drawer supersession links + verdicts
+GET    /v1/vaults/{id}/kg/rel            facts by PREDICATE (predicate, as_of?)
+GET    /v1/vaults/{id}/index/status      remote mirror vs local record counts
 POST   /v1/vaults/{id}/tunnels          connect two wings {from,to,label}
 GET    /v1/vaults/{id}/tunnels          list tunnels (wing?)
 GET    /v1/vaults/{id}/tunnels/traverse wings reachable from start (start, depth?)
@@ -121,6 +123,10 @@ GET    /v1/vaults/{id}/closets          the closet index (wing?)
 GET    /v1/vaults/{id}/hallways         entity co-occurrence (wing, top?)
 
 ── operator plane (never on MCP) ────────────────────────────────────────
+POST   /v1/vaults/{id}/backups          snapshot this vault (409 if it fails verify)
+GET    /v1/vaults/{id}/backups          this vault's snapshots
+POST   /v1/vaults/{id}/backups/restore  {name}; 400 if the backup holds another
+                                        vault, 409 while the vault is in use
 GET    /v1/vaults/{id}/history          audit chain (subject?, limit?, offset?)
 GET    /v1/vaults/{id}/trust            wing trust assignments
 POST   /v1/vaults/{id}/trust            assign one (closed vocabulary)

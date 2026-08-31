@@ -7,6 +7,57 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### O68 closes: zero Drift rows, `/v1` at 56 routes, MCP at 38 tools (M45)
+
+**ROADMAP O68 CLOSED.** The last 7 of its 21 rows landed. `SURFACE_ABSENCES`
+holds **zero** `Absence::Drift` entries; `/v1` finished at **56 routes**
+(37 → 56) and MCP at **38 tools** (34 → 38).
+
+**Four MCP reads** — `undercroft_kg_rel` (facts by predicate, the one kg read
+shape neither agent surface had and not composable from the entity-shaped
+`kg_query`), `undercroft_kg_receipts` (per-fact verdicts, where
+`undercroft_verify` gave only the aggregate — an agent learned THAT a citation
+was forged and never WHICH), `undercroft_check_erasure_receipt`, and
+`undercroft_index_status`. All four are `READ_TOOLS`; `index push` stays absent
+because it is EGRESS, the boundary its status sibling does not share.
+
+**Two `/v1` halves** — `GET …/kg/rel` and `GET …/index/status`.
+
+**Backups, and the shape was RULED from the tree rather than chosen.** The
+filing proposed a palace-scoped `/v1/backups` family; it is vault-scoped
+instead, because (1) both orchestrator planes proxy a subpath under a tenant,
+so `/v1/backups` would be unreachable by the fleet operator the row was
+justified for; (2) the backups directory holds entries for every vault, so a
+palace-wide list leaks other tenants' vault ids — and the route filters by each
+backup's own MANIFEST, never a name prefix, since `proj` and `proj-archive`
+share one; and (3) requiring the addressed vault to MATCH the manifest id is a
+check the CLI does not have. The backup name travels in the **body** because
+`ops_route_ok` matches subpaths exactly and a parameterised segment would have
+meant loosening a security-relevant matcher on the very plane the route serves.
+
+**Half the blocker did not exist.** O68 said `restore` splits the directory
+name on `-20`; that was fixed before this work — `read_backup_vault_id` reads
+`id` from the backup's own `vault.json` and validates it. Fifth filing this
+campaign wrong about the tree.
+
+**A TOOL WAS RENAMED RATHER THAN A GATE WEAKENED.**
+`undercroft_verify_forgetting` failed `operator_only_capabilities_never_reach_mcp`
+because it *contains* `forget`, an `OPERATOR_ONLY` capability — and that gate
+matches substrings on purpose. The gate was right: on an agent surface a read
+must not share its stem with the destructive operation it may never reach. It
+is **`undercroft_check_erasure_receipt`** now. An exemption list would have
+eroded a boundary to fix a name.
+
+**Four gates fired and every one was correct** — the orchestrator's capability
+classifier three times (`dedup`, `kg/rel`, `backups/_/restore`), and
+`every_ops_alias_is_an_allowed_route_and_every_route_has_an_alias`, which
+refused the backup routes until each had a CLI alias (*"reachable by curl
+alone"*), exactly as it did for `authority` under O67.
+
+**Residual, stated:** `restore` answers **409** while the vault is in use
+(O69), so on a served fleet it is a maintenance-window operation — documented
+on the route rather than discovered in an incident.
+
 ### fourteen of O68's twenty-one ruled gaps close, and `/v1` goes 37 → 51 routes (M44)
 
 **ROADMAP O68, partially closed — 14 rows down, 7 to go.** Three families

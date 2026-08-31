@@ -4556,7 +4556,7 @@ now gets exit 1 where it used to get exit 0 — and used to get a destroyed
 vault. Stated there is that `config check` cannot detect this, because it is a
 command's behaviour rather than a declaration.
 
-### O68 — nineteen ruled gaps need a release, and `restore` needs a protocol before it can have one
+### O68 — CLOSED 2026-08-31: all twenty-one rows are reachable, and the backup shape was ruled from the tree
 
 **Created by O66's rulings on 2026-08-21**, and it exists because the
 maintainer took the option that separates *is this a gap* from *when does it
@@ -4673,8 +4673,73 @@ until someone edited the reader. It is now generic (`{name}` → `name`), which
 keeps the fail-closed property, matches when names agree, and removes a
 maintenance list that could rot.
 
-**Still open — the 7 remaining rows**, and they are the ones with decisions in
-them rather than the ones that were merely unwritten:
+**CLOSED 2026-08-31 — the remaining 7 landed too.** `/v1` finished at **56
+routes** (37 → 56) and MCP at **38 tools** (34 → 38). `SURFACE_ABSENCES` holds
+**zero** `Absence::Drift` rows.
+
+**The backup shape was RULED, and the tree decided it rather than taste.** The
+filing proposed a palace-scoped `/v1/backups` family. That is the wrong shape,
+for three reasons found by reading:
+
+1. **It would be unreachable by the caller it was filed for.** The row
+   justifies `create` as *"a fleet operator whose only door is `/v1`"* — and
+   both orchestrator planes proxy a SUBPATH under a tenant
+   (`/admin/tenants/{id}/ops/<subpath>` → `/v1/vaults/{id}/<subpath>`). A
+   `/v1/backups` route sits under neither.
+2. **Per-vault is the correct boundary anyway.** The backups directory holds
+   `{vault}-{stamp}` entries for EVERY vault; a palace-wide list handed to a
+   caller addressing one vault leaks other tenants' vault ids off a shared
+   engine. *"`list` opens no vault"* is a fact about the CLI's implementation,
+   not a requirement on the route — and the route filters by reading each
+   backup's own MANIFEST, never a name prefix, since `proj` and `proj-archive`
+   share one.
+3. **It makes `restore` safer than the CLI.** The addressed vault must MATCH
+   the manifest id or it is a 400 — a check the command does not have.
+
+So: `POST`/`GET /v1/vaults/{id}/backups` and
+`POST /v1/vaults/{id}/backups/restore`, all three on the orchestrator's **OPS**
+plane and never its tenant one, because all three are `Absence::Boundary` on
+MCP in the engine's own inventory.
+
+**The backup NAME travels in the BODY**, and that is not cosmetic:
+`ops_route_ok` matches a subpath EXACTLY, so a parameterised segment could not
+be expressed without loosening a security-relevant matcher — on the very plane
+this route exists to serve. It also keeps a caller-supplied string out of the
+URL path.
+
+**HALF THIS ENTRY'S BLOCKER DID NOT EXIST.** It said `restore` "derives the
+vault name by splitting the backup directory name on `-20`". That was fixed
+before this work started: `read_backup_vault_id` reads `id` from the backup's
+own `vault.json`, errors when absent, and validates it. The `-20` split
+survives only in a comment describing what it used to do. Fifth filing this
+campaign wrong about the tree.
+
+**A TOOL WAS RENAMED RATHER THAN A GATE WEAKENED.**
+`undercroft_verify_forgetting` failed `operator_only_capabilities_never_reach_mcp`
+because it CONTAINS `forget`, an `OPERATOR_ONLY` capability, and that gate
+matches substrings deliberately (its own comment records why: a prefix-only
+needle could not express "no MCP tool may write the authority tier"). The gate
+was RIGHT — on an agent surface a read must not share its stem with the
+destructive operation it may never reach. It is `undercroft_check_erasure_receipt`
+now, which collides with neither that list nor the read-only gate's
+mutating-verb heuristic. Adding an exemption would have started eroding a
+boundary to fix a name.
+
+**Three orchestrator gates fired and all three were right**: the capability
+classifier refused `dedup`, then `kg/rel`, then `backups/_/restore`; and
+`every_ops_alias_is_an_allowed_route_and_every_route_has_an_alias` refused the
+backup routes until each had a CLI alias — *"reachable by curl alone"* — the
+same catch it made for `authority` under O67, again on the battery rather than
+in review.
+
+**Residual, stated:** `restore` refuses with **409** while the vault is in use
+(O69), so on a served fleet it is a maintenance-window operation. That is a
+property of the operation, not of the route, and it is documented on the route
+rather than left to be discovered in an incident.
+
+---
+
+**What the 7 needed, as filed** (kept as the record of the plan):
 
 * **4 MCP tools** — `kg receipts`, `verify-forgetting`, `kg rel`, `index
   status`. Adding these moves `MCP_TOOLS` 34 → 38, which is a **published

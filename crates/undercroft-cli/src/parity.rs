@@ -240,6 +240,11 @@ pub const MCP_TOOLS: &[&str] = &[
     "undercroft_kg_supersede",
     "undercroft_kg_stats",
     "undercroft_lookup_canonical",
+    // ROADMAP O68 (2026-08-31) — four reads that were CLI-only.
+    "undercroft_kg_rel",
+    "undercroft_kg_receipts",
+    "undercroft_check_erasure_receipt",
+    "undercroft_index_status",
 ];
 
 /// Capabilities that must NEVER appear on MCP. Not an oversight to be
@@ -523,14 +528,6 @@ pub const SURFACE_ABSENCES: &[(&str, &str, Absence, &str)] = &[
     // that made them look like boundaries is the INVERSE of the operator-only
     // one (present on `/v1`, absent from MCP), and the operator-only argument
     // therefore never applied to them.
-    ("KgAction::Rel", "mcp+v1", Absence::Drift,
-     "query facts by predicate — the only kg READ shape neither agent surface has, and it is not composable from the entity-shaped kg_query they do have (target O68)"),
-    ("KgAction::Receipts", "mcp", Absence::Drift,
-     "per-fact receipt verdicts. MCP's undercroft_verify already reports the aggregate KG-receipt leg, so an agent learns THAT a citation is forged and cannot learn WHICH (target O68)"),
-    ("Command::VerifyForgetting", "mcp", Absence::Drift,
-     "check a caller-supplied erasure attestation against this vault. Present on /v1 and absent from MCP, which is the inverse of the operator-only shape, so that reasoning never explained it (target O68)"),
-    ("IndexAction::Status", "mcp+v1", Absence::Drift,
-     "remote-index mirror status. A pure read, unlike Push which is egress — so Push's boundary does not cover it (target O68)"),
     // **RULED 2026-08-21 (ROADMAP O66): all three backup operations reach
     // `/v1`.** The maintainer took the full-parity option over keeping the
     // destructive half on the engine host. Two consequences are recorded
@@ -545,12 +542,6 @@ pub const SURFACE_ABSENCES: &[(&str, &str, Absence, &str)] = &[
     //   the process serving unlinked inodes and writing them back. A route
     //   MUST close the handle first; O68 carries that as a blocker rather
     //   than a detail.
-    ("BackupAction::Create", "v1", Absence::Drift,
-     "a fleet operator whose only door is /v1 has no snapshot path and must reach the engine host's filesystem; create is also the one caller that gates archiving on the verify verdict (target O68)"),
-    ("BackupAction::List", "v1", Absence::Drift,
-     "opens no vault, so a route is trivial — which is exactly what made the absence read as forgotten rather than fenced (target O68)"),
-    ("BackupAction::Restore", "v1", Absence::Drift,
-     "the most destructive operation in the tree, and ruled reachable. Blocked on a handle-close protocol: remove_dir_all under an open SQLite handle leaves a server serving unlinked inodes (target O68)"),
 ];
 
 /// CLI operations reachable from all three engine surfaces. The other half of
@@ -563,6 +554,17 @@ pub const SURFACE_ABSENCES: &[(&str, &str, Absence, &str)] = &[
 /// `CLAUDE.md`: *"a tool without a line fails the build and a line without a
 /// tool fails it too, which a hand-maintained doc table cannot do."*
 pub const SURFACE_COMPLETE: &[&str] = &[
+    // The last of O68, landed 2026-08-31. The four MCP additions are all
+    // READS; `index push` stays absent because it is EGRESS, which is a
+    // boundary its status sibling does not share. Backups are vault-scoped
+    // on `/v1` and OPERATOR-only on a fleet: they are MCP boundaries, and a
+    // palace-wide list would leak other tenants' vault ids — so the three
+    // backup anchors stay in SURFACE_ABSENCES on their `mcp` Boundary rows
+    // and only their `v1` Drift rows are gone. They are NOT complete.
+    "KgAction::Rel",
+    "KgAction::Receipts",
+    "Command::VerifyForgetting",
+    "IndexAction::Status",
     // Drawer maintenance, landed on `/v1` by ROADMAP O68 (2026-08-31).
     "Command::Dedup",
     "DrawerAction::CheckDup",

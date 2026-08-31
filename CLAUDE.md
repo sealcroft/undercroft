@@ -981,7 +981,7 @@ Consequences that are binding, not advisory:
   `serve-http --read-only` opens BOTH its stores read-only; the two opens
   had drifted apart, and which port path opened the vault decided whether
   a `--read-only` server re-embedded every drawer at start-up and appended
-  a read-audit record per `/mcp` search; mcp.rs: MCP stdio — **34 tools (incl. `undercroft_history`, the audit chain
+  a read-audit record per `/mcp` search; mcp.rs: MCP stdio — **38 tools (incl. `undercroft_history`, the audit chain
   at `HistoryScope::Agent` — fenced by namespace and by the reserved review
   wing, so a diverted write cannot read its own evidence back), 12
   of them writes** — the read-only gate is `READ_TOOLS` and it FAILS
@@ -1527,7 +1527,7 @@ docker compose run --rm test          # cargo unit + integration tests (773 run,
                                       # onnx crate's own ignored test is outside
                                       # default-members and never in this count)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (420 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (428 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (124 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (48 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate

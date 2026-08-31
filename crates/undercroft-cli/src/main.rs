@@ -1393,7 +1393,7 @@ fn attach_reranker(store: &mut PalaceStore) -> Result<()> {
     }
 }
 
-fn open_index(backend: &str) -> Result<Box<dyn undercroft_index::VectorIndex>> {
+pub(crate) fn open_index(backend: &str) -> Result<Box<dyn undercroft_index::VectorIndex>> {
     Ok(undercroft_index::from_env(backend)?)
 }
 
@@ -4096,7 +4096,7 @@ fn collect_transcripts(path: &Path) -> Result<Vec<PathBuf>> {
 /// does, and a vault name may itself contain it. `vault.json` states the id
 /// outright, so it is read rather than reconstructed — the manifest is the
 /// authority on which vault this is, exactly as it is for everything else.
-fn read_backup_vault_id(src: &Path) -> Result<String> {
+pub(crate) fn read_backup_vault_id(src: &Path) -> Result<String> {
     let raw = std::fs::read_to_string(src.join("vault.json"))
         .with_context(|| format!("reading {}", src.join("vault.json").display()))?;
     let v: serde_json::Value = serde_json::from_str(&raw)
@@ -4115,7 +4115,7 @@ fn read_backup_vault_id(src: &Path) -> Result<String> {
     Ok(id.to_string())
 }
 
-fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
+pub(crate) fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
     std::fs::create_dir_all(dst)?;
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;
@@ -4130,7 +4130,7 @@ fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-fn prune_backups(dir: &Path, vault: &str, keep: usize) -> Result<()> {
+pub(crate) fn prune_backups(dir: &Path, vault: &str, keep: usize) -> Result<()> {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return Ok(());
     };
