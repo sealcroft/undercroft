@@ -38,7 +38,7 @@ the same bearer, for programmatic (non-MCP) callers and for orchestration
 platforms that use one **vault per tenant**. One palace per process stays
 the model — tenancy is vaults, not palaces.
 
-**All 37 routes**, counted against `route()` in
+**All 51 routes**, counted against `route()` in
 `crates/undercroft-cli/src/tenant.rs` rather than remembered — and the LIST is
 GATED now (ROADMAP O45), because "rather than remembered" was exactly what
 happened: this list said 35 and omitted
@@ -88,6 +88,9 @@ PUT    /v1/vaults/{id}/drawers/{drawer_id}  {text}               replace content
 DELETE /v1/vaults/{id}/drawers/{drawer_id}
 POST   /v1/vaults/{id}/search          {query, wing?, room?, limit?, vector?, …}
 GET    /v1/vaults/{id}/taxonomy         (wing → room tree with counts)
+POST   /v1/vaults/{id}/drawers/check-duplicate  {text} -> {duplicate, id}
+DELETE /v1/vaults/{id}/drawers          ?source=  every drawer from one file
+POST   /v1/vaults/{id}/dedup            {apply?} — DRY RUN unless apply:true
 
 ── knowledge graph (read-only browse, plus the authority tier) ───────────
 GET    /v1/vaults/{id}/kg/stats         (entity/triple/active/closed counts)
@@ -102,6 +105,20 @@ GET    /v1/vaults/{id}/kg/receipts      receipt verdicts per fact
 GET    /v1/vaults/{id}/kg/canonical/{key}   the one active approved fact
 POST   /v1/vaults/{id}/kg/authority     declare authority_class / review_state
 GET    /v1/vaults/{id}/supersessions    drawer supersession links + verdicts
+POST   /v1/vaults/{id}/tunnels          connect two wings {from,to,label}
+GET    /v1/vaults/{id}/tunnels          list tunnels (wing?)
+GET    /v1/vaults/{id}/tunnels/traverse wings reachable from start (start, depth?)
+DELETE /v1/vaults/{id}/tunnels/{tid}    remove one tunnel (404 if absent)
+GET    /v1/vaults/{id}/tunnels/{tid}/drawers  drawers from the far wing (limit?)
+
+── session context and agent diaries ────────────────────────────────────
+GET    /v1/vaults/{id}/wake-up          recent drawers for session start (wing?)
+                                         NO identity layer — see AGENTS.md §10
+POST   /v1/vaults/{id}/diary            {agent, entry}; 202 if screened away
+GET    /v1/vaults/{id}/diary            one agent's entries (agent, limit?)
+GET    /v1/vaults/{id}/diary/agents     who has written a diary
+GET    /v1/vaults/{id}/closets          the closet index (wing?)
+GET    /v1/vaults/{id}/hallways         entity co-occurrence (wing, top?)
 
 ── operator plane (never on MCP) ────────────────────────────────────────
 GET    /v1/vaults/{id}/history          audit chain (subject?, limit?, offset?)

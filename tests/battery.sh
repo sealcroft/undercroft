@@ -1591,8 +1591,7 @@ fi
 v1_doc_routes() { # v1_doc_routes <file> <extractor-regex>
   grep -ohE "$2" "$1" \
     | sed -E 's/^\| *//; s/ *\| *`/ /; s/`//g; s/^([A-Z]+) +/\1 /' \
-    | sed -e 's#/v1#v1#' -e 's#{drawer_id}#drawer_id#g' -e 's#{key}#key#g' \
-          -e 's#{id}#id#g' -e 's#{[a-z_]*}#X#g' \
+    | sed -e 's#/v1#v1#' -E -e 's#\{([a-z_]+)\}#\1#g' \
     | awk '{print $1" "$2}' | sort -u
 }
 V1_RS=$(v1_doc_routes docs/remote-server.md '^(GET|POST|PUT|PATCH|DELETE) +/v1/[a-z{}/_-]+')

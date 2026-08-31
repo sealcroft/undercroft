@@ -4629,6 +4629,64 @@ flips each row from `Drift` to `SURFACE_COMPLETE` as its route lands, and
 fails in both directions — so this entry cannot be declared done while a row
 still says `Drift`, and a row cannot be quietly moved without a route.
 
+---
+
+**PROGRESS 2026-08-31 — 14 of the 21 rows are closed, 7 remain.** `/v1` went
+**37 → 51 routes**. Landed, each with a handler, both gated doc references,
+and an e2e arm driven through the surface rather than through the store:
+
+| family | routes | rows |
+|---|---|---|
+| tunnels | `POST`/`GET …/tunnels`, `GET …/tunnels/traverse`, `DELETE …/tunnels/{tid}`, `GET …/tunnels/{tid}/drawers` | 5 |
+| diary + session context | `POST`/`GET …/diary`, `GET …/diary/agents`, `GET …/wake-up`, `GET …/closets`, `GET …/hallways` | 6 |
+| drawer maintenance | `POST …/drawers/check-duplicate`, `DELETE …/drawers?source=`, `POST …/dedup` | 3 |
+
+**The handlers are THIN, deliberately.** Every guard these writes need already
+stands at the store's choke point — `create_tunnel` validates both wing names
+and the label, refuses the reserved review wing, screens the label through
+`admission::SCREENED_FIELDS`, chains and anchors; `diary_write` returns a
+`SaveOutcome` so a diverted entry answers **202** with `quarantined: true`
+rather than being reported as written. Re-implementing any of that in a route
+would be the second implementation of one decision this project keeps
+removing.
+
+**Two content-returning doors needed NOTHING added**, which is O50/O51 paying
+off exactly as designed: `follow_tunnel` records `ReadOp::Tunnel` and
+`diary_read` records `ReadOp::Diary` **at the store**, so a new surface
+inherits the audit record instead of forgetting it.
+
+**One BOUNDARY inside the drift fix, and it is not a gap.** `GET …/wake-up`
+returns `identity: null` always. The CLI's L0 layer reads `identity.txt` from
+the palace data directory, which is per-INSTALLATION; `/v1` is per-vault, and
+the orchestrator proxies a TENANT token onto these routes, so returning it
+would hand every tenant on a shared engine the operator's own note. The
+vault-scoped half is served, the trust-floor distinction is carried over
+verbatim (an empty result under a declared floor means *nothing meets the
+floor*, not *the vault is empty* — a difference a caller cannot see through),
+and an e2e arm pins the null.
+
+**A gate of this project's own was narrowed while doing it.** The `/v1`
+route-set preflight normalised doc placeholders through an ALLOWLIST —
+`{id}`, `{key}`, `{drawer_id}` — mapping anything else to a constant that
+could only ever mismatch. So a route with a new parameter name failed the gate
+until someone edited the reader. It is now generic (`{name}` → `name`), which
+keeps the fail-closed property, matches when names agree, and removes a
+maintenance list that could rot.
+
+**Still open — the 7 remaining rows**, and they are the ones with decisions in
+them rather than the ones that were merely unwritten:
+
+* **4 MCP tools** — `kg receipts`, `verify-forgetting`, `kg rel`, `index
+  status`. Adding these moves `MCP_TOOLS` 34 → 38, which is a **published
+  figure on the house page**, so that unit owes the house update too.
+* **`kg rel` and `index status`** each also owe their `/v1` half.
+* **The 3 backup rows still carry both shape decisions** stated above: `list`
+  and `create` are PALACE-scoped and need a `/v1/backups` family rather than a
+  per-vault path (there is no non-vault-scoped family today — all 51 routes
+  live under `/v1/vaults` except the two collection routes), and `restore`
+  still derives the vault name by splitting the backup directory name on the
+  `-20` timestamp prefix, which a route must not inherit.
+
 ### O65 — CLOSED 2026-08-21: the house page is correct, gated, and now a governance surface
 
 **Ruled 2026-08-21**: keep the figures, fix the values, qualify the benchmark.

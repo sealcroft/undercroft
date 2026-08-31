@@ -1753,6 +1753,88 @@ rest_body "supersession verified" '"verdict":"verified"' -- "$API/vaults/acme/su
   -H "X-Vault-Assertion: $(sign acme)"
 rest_body "superseded drawer kept" '"the retro is on thursdays at four"' -- \
   "$API/vaults/acme/drawers/$OLD_ID" -H "X-Vault-Assertion: $(sign acme)"
+
+# ---- drawer maintenance on /v1 (ROADMAP O68) ------------------------------
+rest_body "/v1 check-duplicate finds none" '"duplicate":false' -- -X POST \
+  "$API/vaults/acme/drawers/check-duplicate" -H "X-Vault-Assertion: $(sign acme)" \
+  -d '{"text":"a sentence nobody has filed before, truly"}'
+rest_body "/v1 check-duplicate finds one" '"duplicate":true' -- -X POST \
+  "$API/vaults/acme/drawers/check-duplicate" -H "X-Vault-Assertion: $(sign acme)" \
+  -d '{"text":"the retro moved to tuesdays at ten"}'
+# Dry run is the DEFAULT: a caller who forgets `apply` must get a preview,
+# never a deletion.
+rest_body "/v1 dedup defaults to a dry run" '"applied":false' -- -X POST \
+  "$API/vaults/acme/dedup" -H "X-Vault-Assertion: $(sign acme)" -d '{}'
+rest_body "/v1 dedup reports quarantined separately" '"quarantined"' -- -X POST \
+  "$API/vaults/acme/dedup" -H "X-Vault-Assertion: $(sign acme)" -d '{}'
+# The filtered delete refuses to be a "delete everything" by omission.
+rest_code "/v1 delete-by-source needs a source" 400 -- -X DELETE \
+  "$API/vaults/acme/drawers" -H "X-Vault-Assertion: $(sign acme)"
+rest_body "/v1 delete-by-source" '"deleted"' -- -X DELETE \
+  "$API/vaults/acme/drawers?source=nothing-was-mined-from-here.md" \
+  -H "X-Vault-Assertion: $(sign acme)"
+
+# ---- session context + diaries on /v1 (ROADMAP O68) -----------------------
+rest_body "/v1 wake-up returns recent" '"recent"' -- "$API/vaults/acme/wake-up" \
+  -H "X-Vault-Assertion: $(sign acme)"
+# The BOUNDARY, asserted rather than assumed: the CLI's L0 identity layer reads
+# a per-INSTALLATION file, and the orchestrator proxies a TENANT token onto
+# these routes, so it must never come back here.
+rest_body "/v1 wake-up withholds the identity layer" '"identity":null' -- \
+  "$API/vaults/acme/wake-up" -H "X-Vault-Assertion: $(sign acme)"
+rest_body "/v1 diary write" '"quarantined":false' -- -X POST "$API/vaults/acme/diary" \
+  -H "X-Vault-Assertion: $(sign acme)" \
+  -d '{"agent":"scribe","entry":"reviewed the retro notes"}'
+rest_body "/v1 diary read" 'reviewed the retro notes' -- \
+  "$API/vaults/acme/diary?agent=scribe" -H "X-Vault-Assertion: $(sign acme)"
+rest_body "/v1 diary agents" 'scribe' -- "$API/vaults/acme/diary/agents" \
+  -H "X-Vault-Assertion: $(sign acme)"
+rest_code "/v1 diary read needs an agent" 400 -- "$API/vaults/acme/diary" \
+  -H "X-Vault-Assertion: $(sign acme)"
+rest_body "/v1 closets index" '"index"' -- "$API/vaults/acme/closets" \
+  -H "X-Vault-Assertion: $(sign acme)"
+rest_body "/v1 hallways" '"hallways"' -- "$API/vaults/acme/hallways?wing=eng" \
+  -H "X-Vault-Assertion: $(sign acme)"
+rest_code "/v1 hallways needs a wing" 400 -- "$API/vaults/acme/hallways" \
+  -H "X-Vault-Assertion: $(sign acme)"
+
+# ---- tunnels on /v1 (ROADMAP O68) -----------------------------------------
+# Five CLI operations that were `Absence::Drift` with `target O68`. Driven
+# through the surface a caller actually uses, not through the store.
+# Names are `/v1`-prefixed: the CLI half of this family is already checked
+# above under the bare names, and two arms sharing a name make a failure
+# ambiguous in the log.
+rest_body "/v1 tunnel create" '"label":"shared retros"' -- -X POST "$API/vaults/acme/tunnels" \
+  -H "X-Vault-Assertion: $(sign acme)" \
+  -d '{"from":"eng","to":"notes","label":"shared retros"}'
+TUN_ID="$(curl -s "$API/vaults/acme/tunnels" -H "X-Vault-Assertion: $(sign acme)" \
+  | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')"
+# `follow` reads the DESTINATION wing, so it needs a drawer there or it
+# returns an empty list and the arm proves nothing about content.
+rest_body "/v1 drawer into the far wing" '"created":true' -- -X POST "$API/vaults/acme/drawers" \
+  -H "X-Vault-Assertion: $(sign acme)" \
+  -d '{"text":"tunnelled note: the far wing has content","wing":"notes","room":"misc"}'
+rest_body "/v1 tunnel list"   '"from":"eng"'   -- "$API/vaults/acme/tunnels" \
+  -H "X-Vault-Assertion: $(sign acme)"
+rest_body "/v1 tunnel list scoped by wing" '"to":"notes"' -- \
+  "$API/vaults/acme/tunnels?wing=eng" -H "X-Vault-Assertion: $(sign acme)"
+# `traverse` is a LITERAL segment sharing its length with `{tid}`; if the
+# binding were matched first this would 404 or be read as a tunnel id.
+rest_body "/v1 tunnel traverse reaches the far wing" '"wing":"notes"' -- \
+  "$API/vaults/acme/tunnels/traverse?start=eng&depth=2" -H "X-Vault-Assertion: $(sign acme)"
+# The content-returning door. It records ReadOp::Tunnel at the STORE, so the
+# route inherits the audit record rather than needing its own.
+rest_body "/v1 tunnel follow returns drawers" '"content"' -- \
+  "$API/vaults/acme/tunnels/$TUN_ID/drawers?limit=5" -H "X-Vault-Assertion: $(sign acme)"
+# The reserved review wing is refused as an endpoint at the store's choke
+# point, on every surface — 400, never a 500 "corrupt row".
+rest_code "/v1 tunnel refuses the quarantine wing" 400 -- -X POST "$API/vaults/acme/tunnels" \
+  -H "X-Vault-Assertion: $(sign acme)" \
+  -d '{"from":"eng","to":"quarantine-pending","label":"forged"}'
+rest_body "/v1 tunnel delete" '"deleted":true' -- -X DELETE "$API/vaults/acme/tunnels/$TUN_ID" \
+  -H "X-Vault-Assertion: $(sign acme)"
+rest_code "/v1 deleting an absent tunnel is 404" 404 -- -X DELETE \
+  "$API/vaults/acme/tunnels/$TUN_ID" -H "X-Vault-Assertion: $(sign acme)"
 # U12: the receipts summary must carry every verdict, `unreceipted`
 # included. The route built its counts from a hard-coded vocabulary that
 # omitted it, so a fact with a citation and no binding would have appeared

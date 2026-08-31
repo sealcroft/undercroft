@@ -217,6 +217,37 @@ fn data_subpath_ok(subpath: &str) -> bool {
             | ["kg", "timeline"]
             | ["kg", "receipts"]
             | ["kg", "canonical", _]
+            // ROADMAP O68 (2026-08-31). Fourteen engine capabilities reached
+            // `/v1` and this gate refused to let them be UNCLASSIFIED — it
+            // failed the build naming `dedup`, which is O67's design working:
+            // an omission and a boundary look identical from outside.
+            //
+            // All of these are on the TENANT plane, by the criterion the list
+            // above already uses: every one is reachable from MCP, i.e. the
+            // engine already treats it as agent-facing rather than operator
+            // business. A vault's tunnels, its agent diaries, its closet
+            // index and its co-occurrence pairs belong to the tenant whose
+            // drawers they were derived from, exactly as `taxonomy` and the
+            // kg reads do.
+            //
+            // `dedup` DESTROYS drawers under `{"apply":true}`, and it still
+            // belongs here: `undercroft_dedup` is an MCP write tool on the
+            // engine, and `["drawers", _]` above already carries DELETE of a
+            // single drawer. A tenant removing their own drawers is the
+            // existing model, not a new power.
+            //
+            // Not listed because they are already covered: `["drawers"]`
+            // carries the filtered `DELETE …?source=`, and `["drawers", _]`
+            // carries `POST …/drawers/check-duplicate`.
+            | ["dedup"]
+            | ["tunnels"]
+            | ["tunnels", _]
+            | ["tunnels", _, "drawers"]
+            | ["diary"]
+            | ["diary", "agents"]
+            | ["wake-up"]
+            | ["closets"]
+            | ["hallways"]
     )
 }
 

@@ -381,6 +381,38 @@ impl Tenancy {
             ("GET", &["v1", "vaults", id, "supersessions"]) => {
                 self.drawer_supersessions(id, req, now)
             }
+            // Drawer maintenance (ROADMAP O68). `check-duplicate` is a
+            // LITERAL at the same depth as `{drawer_id}`, but no `POST
+            // …/drawers/{drawer_id}` exists, so the method disambiguates.
+            // The filtered DELETE sits on the COLLECTION and is four
+            // segments, against five for the single-drawer delete.
+            ("POST", &["v1", "vaults", id, "drawers", "check-duplicate"]) => {
+                self.check_duplicate(id, req, body, now)
+            }
+            ("DELETE", &["v1", "vaults", id, "drawers"]) => self.delete_by_source(id, req, now),
+            ("POST", &["v1", "vaults", id, "dedup"]) => self.dedup(id, req, body, now),
+            // Diary and session context (ROADMAP O68). `agents` is a LITERAL
+            // and takes no id, so it cannot collide with the `?agent=` read.
+            ("POST", &["v1", "vaults", id, "diary"]) => self.diary_write(id, req, body, now),
+            ("GET", &["v1", "vaults", id, "diary"]) => self.diary_read(id, req, now),
+            ("GET", &["v1", "vaults", id, "diary", "agents"]) => self.diary_agents(id, req, now),
+            ("GET", &["v1", "vaults", id, "wake-up"]) => self.wake_up(id, req, now),
+            ("GET", &["v1", "vaults", id, "closets"]) => self.closets(id, req, now),
+            ("GET", &["v1", "vaults", id, "hallways"]) => self.hallways(id, req, now),
+            // Tunnels (ROADMAP O68). `traverse` is a LITERAL and must precede
+            // the `{tid}` binding below — both are five segments, and a
+            // binding placed first would swallow it silently.
+            ("POST", &["v1", "vaults", id, "tunnels"]) => self.tunnel_create(id, req, body, now),
+            ("GET", &["v1", "vaults", id, "tunnels"]) => self.tunnel_list(id, req, now),
+            ("GET", &["v1", "vaults", id, "tunnels", "traverse"]) => {
+                self.tunnel_traverse(id, req, now)
+            }
+            ("DELETE", &["v1", "vaults", id, "tunnels", tid]) => {
+                self.tunnel_delete(id, tid, req, now)
+            }
+            ("GET", &["v1", "vaults", id, "tunnels", tid, "drawers"]) => {
+                self.tunnel_follow(id, tid, req, now)
+            }
             ("POST", &["v1", "vaults", id, "trust"]) => self.set_trust(id, req, body, now),
             ("GET", &["v1", "vaults", id, "history"]) => self.history(id, req, now),
             ("GET", &["v1", "vaults", id, "trust"]) => self.list_trust(id, req, now),
@@ -1899,6 +1931,331 @@ impl Tenancy {
     /// principal's declaration: an OPERATOR surface, deliberately absent
     /// from MCP — an agent that writes content must not be able to raise
     /// its own standing (docs/LABELS.md). Audited through the chain.
+    /// `POST /v1/vaults/{id}/drawers/check-duplicate` — would this text be a
+    /// duplicate? (ROADMAP O68)
+    ///
+    /// A POST because the probe is the CALLER's text and has to travel in a
+    /// body — the same reason `search`, `verify` and `verify-forgetting` are
+    /// POSTs that read. It is therefore one of the read-only server's named
+    /// exceptions... **no: it is NOT.** It is left as a write for the
+    /// read-only gate deliberately, because `mutates` fails CLOSED and adding
+    /// an exception is what that design makes someone justify. Nothing here
+    /// mutates, but a caller wanting it on a read-only replica should ask for
+    /// it as its own decision rather than inherit it from a docstring.
+    ///
+    /// The content is normalised exactly as the CLI does before probing, or
+    /// the same text typed with different trailing whitespace answers
+    /// differently on the two surfaces.
+    fn check_duplicate(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let body = parse_json(body)?;
+        let text = body_str(&body, "text")?;
+        let store = self.store_for(id)?;
+        let probe = undercroft_core::normalize_content(&text);
+        let dup = store.check_duplicate(&probe).map_err(store_err)?;
+        Ok((
+            200,
+            Body::Json(json!({ "duplicate": dup.is_some(), "id": dup })),
+        ))
+    }
+
+    /// `DELETE /v1/vaults/{id}/drawers?source=` — every drawer mined from one
+    /// source file.
+    ///
+    /// Hung off the drawers COLLECTION rather than given a verb path, because
+    /// that is what it is: a filtered delete over the collection. `?source=`
+    /// is required — a bare `DELETE …/drawers` would otherwise read as "empty
+    /// the vault", which is not a capability this route offers at any price.
+    fn delete_by_source(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let source =
+            query_param(req, "source").ok_or_else(|| RestError::new(400, "source is required"))?;
+        let store = self.store_for(id)?;
+        let n = store.delete_by_source(&source).map_err(store_err)?;
+        Ok((200, Body::Json(json!({ "source": source, "deleted": n }))))
+    }
+
+    /// `POST /v1/vaults/{id}/dedup` — collapse duplicate drawers.
+    ///
+    /// `{"apply": false}` (the default) is a DRY RUN and reports what would
+    /// go; `true` performs it. The default is the conservative one on
+    /// purpose — this destroys drawers, and a caller that forgets the field
+    /// should get a preview, not a deletion.
+    ///
+    /// `quarantined` is reported rather than folded into `removed`, and that
+    /// distinction is the whole honesty of the report: when a survivor's
+    /// rewrite is diverted by the screen, NOTHING is deleted for that group,
+    /// because the duplicates still hold the only copies of occurrence dates
+    /// the survivor never received. Collapsing them anyway would destroy
+    /// history to merge text that was never merged.
+    fn dedup(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let apply = if body.trim().is_empty() {
+            false
+        } else {
+            parse_json(body)?
+                .get("apply")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+        };
+        let store = self.store_for(id)?;
+        let r = store.dedup(apply).map_err(store_err)?;
+        Ok((
+            200,
+            Body::Json(json!({
+                "duplicate_groups": r.duplicate_groups,
+                "removed": r.removed,
+                "applied": r.applied,
+                "dates_kept": r.dates_kept,
+                "quarantined": r.quarantined,
+            })),
+        ))
+    }
+
+    /// `POST /v1/vaults/{id}/diary` — one agent diary entry (ROADMAP O68).
+    ///
+    /// Screened like every other save, and it reports the DIVERSION rather
+    /// than swallowing it: `diary_write` answers a `SaveOutcome`, and a
+    /// quarantined entry is **202** with `quarantined: true`, because
+    /// `diary read` will not find it and calling that "written" is a claim
+    /// about a write that did not happen — the same rule the drawer save
+    /// arms follow.
+    fn diary_write(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let body = parse_json(body)?;
+        let agent = body_str(&body, "agent")?;
+        let entry = body_str(&body, "entry")?;
+        let store = self.store_for(id)?;
+        let out = store.diary_write(&agent, &entry, "v1").map_err(store_err)?;
+        let code = if out.quarantined { 202 } else { 201 };
+        Ok((
+            code,
+            Body::Json(json!({
+                "agent": agent,
+                "id": out.id,
+                "quarantined": out.quarantined,
+            })),
+        ))
+    }
+
+    /// `GET /v1/vaults/{id}/diary?agent=&limit=` — one agent's entries.
+    ///
+    /// Content-returning, and the witness is already at the store:
+    /// `diary_read` records `ReadOp::Diary` and passes `BulkMember` to the
+    /// inner `recent`, so the trail says one diary read rather than N gets.
+    fn diary_read(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let agent =
+            query_param(req, "agent").ok_or_else(|| RestError::new(400, "agent is required"))?;
+        let limit = query_param(req, "limit")
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(20);
+        let store = self.store_for(id)?;
+        let entries = store.diary_read(&agent, limit).map_err(store_err)?;
+        let rows: Vec<Value> = entries
+            .into_iter()
+            .map(|d| json!({ "id": d.id, "room": d.meta.room, "content": d.content }))
+            .collect();
+        Ok((200, Body::Json(json!({ "agent": agent, "entries": rows }))))
+    }
+
+    /// `GET /v1/vaults/{id}/diary/agents` — who has written a diary.
+    ///
+    /// Metadata about the WRITERS, not the corpus: wing names only, no
+    /// entries, so it is not a content door.
+    fn diary_agents(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let store = self.store_for(id)?;
+        let agents = store.list_agents().map_err(store_err)?;
+        Ok((200, Body::Json(json!({ "agents": agents }))))
+    }
+
+    /// `GET /v1/vaults/{id}/wake-up?wing=` — session-start context.
+    ///
+    /// **The CLI's L0 IDENTITY layer is deliberately ABSENT here, and that is
+    /// a boundary rather than an oversight.** `undercroft wake-up` prints an
+    /// identity note read from `identity.txt` in the palace data directory —
+    /// which is per-INSTALLATION, not per-vault. `/v1` is a per-vault surface,
+    /// and the orchestrator proxies a TENANT token onto exactly these routes,
+    /// so returning that file here would hand every tenant on a shared engine
+    /// the operator's own note. What this returns is the vault-scoped half.
+    ///
+    /// The trust-floor distinction is carried over verbatim, because it is the
+    /// one that lies if dropped: an empty result under a declared floor means
+    /// "nothing meets the floor", NOT "the palace is empty", and a caller
+    /// cannot see through the difference.
+    fn wake_up(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let wing = query_param(req, "wing");
+        let store = self.store_for(id)?;
+        let recent = store
+            .recent(
+                wing.as_deref(),
+                15,
+                undercroft_store::Read::Returned(undercroft_store::ReadOp::Recent),
+            )
+            .map_err(store_err)?;
+        let empty_because = if recent.is_empty() {
+            match store.trust_floor() {
+                Some(f) => json!(format!(
+                    "no drawers meet the declared trust floor '{f}' — the vault is NOT empty"
+                )),
+                None => json!("the vault is empty"),
+            }
+        } else {
+            Value::Null
+        };
+        let rows: Vec<Value> = recent
+            .into_iter()
+            .map(|d| {
+                json!({
+                    "id": d.id,
+                    "wing": d.meta.wing,
+                    "room": d.meta.room,
+                    "content": d.content,
+                })
+            })
+            .collect();
+        Ok((
+            200,
+            Body::Json(json!({
+                "recent": rows,
+                "empty_because": empty_because,
+                "identity": Value::Null,
+            })),
+        ))
+    }
+
+    /// `GET /v1/vaults/{id}/closets?wing=` — the closet index.
+    fn closets(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let wing = query_param(req, "wing");
+        let store = self.store_for(id)?;
+        let lines = store.closet_index(wing.as_deref()).map_err(store_err)?;
+        Ok((200, Body::Json(json!({ "index": lines }))))
+    }
+
+    /// `GET /v1/vaults/{id}/hallways?wing=&top=` — entity co-occurrence.
+    fn hallways(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let wing =
+            query_param(req, "wing").ok_or_else(|| RestError::new(400, "wing is required"))?;
+        let top = query_param(req, "top")
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(10);
+        let store = self.store_for(id)?;
+        let rows = store.hallways(&wing, top).map_err(store_err)?;
+        let pairs: Vec<Value> = rows
+            .into_iter()
+            .map(|h| json!({ "a": h.entity_a, "b": h.entity_b, "strength": h.strength }))
+            .collect();
+        Ok((200, Body::Json(json!({ "wing": wing, "hallways": pairs }))))
+    }
+
+    /// `POST /v1/vaults/{id}/tunnels` — connect two wings (ROADMAP O68).
+    ///
+    /// **A thin wrapper, deliberately.** Every guard this write needs already
+    /// stands at the store's own choke point: `create_tunnel` validates both
+    /// wing names and the label through `validate_name`, refuses the reserved
+    /// review wing as either endpoint, runs the tier-1 screen over the label
+    /// via the shared `SCREENED_FIELDS` inventory (O29), appends its own chain
+    /// record and anchors the manifest. Re-implementing any of that here would
+    /// be the second implementation of one decision this project keeps
+    /// removing — the route's job is to parse and to answer.
+    fn tunnel_create(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let body = parse_json(body)?;
+        let from = body_str(&body, "from")?;
+        let to = body_str(&body, "to")?;
+        let label = body_str(&body, "label")?;
+        let store = self.store_for(id)?;
+        let tid = store.create_tunnel(&from, &to, &label).map_err(store_err)?;
+        Ok((
+            201,
+            Body::Json(json!({ "id": tid, "from": from, "to": to, "label": label })),
+        ))
+    }
+
+    /// `GET /v1/vaults/{id}/tunnels` — every tunnel, or those touching `?wing=`.
+    fn tunnel_list(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let wing = query_param(req, "wing");
+        let store = self.store_for(id)?;
+        let tunnels = store.list_tunnels(wing.as_deref()).map_err(store_err)?;
+        let rows: Vec<Value> = tunnels
+            .into_iter()
+            .map(|t| json!({ "id": t.id, "from": t.from_wing, "to": t.to_wing, "label": t.label }))
+            .collect();
+        Ok((200, Body::Json(json!({ "tunnels": rows }))))
+    }
+
+    /// `DELETE /v1/vaults/{id}/tunnels/{tid}` — remove one.
+    ///
+    /// 404 when it does not exist, which is what the CLI's own `bail!` means
+    /// one surface over; the store answers `false` rather than erroring.
+    fn tunnel_delete(&mut self, id: &str, tid: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let store = self.store_for(id)?;
+        if store.delete_tunnel(tid).map_err(store_err)? {
+            Ok((200, Body::Json(json!({ "id": tid, "deleted": true }))))
+        } else {
+            Err(RestError::new(404, format!("no tunnel with id {tid}")))
+        }
+    }
+
+    /// `GET /v1/vaults/{id}/tunnels/{tid}/drawers` — recent drawers from the
+    /// tunnel's destination wing.
+    ///
+    /// **This one RETURNS VERBATIM CONTENT**, so it is an exfiltration door in
+    /// O50's sense — and it needs nothing added here, because `follow_tunnel`
+    /// records `ReadOp::Tunnel` at the store, which is where O51 put the
+    /// witness precisely so a new surface inherits it instead of forgetting
+    /// it. Named `/drawers` rather than `/follow` because the path should say
+    /// what comes back, and a caller reading it must know content does.
+    fn tunnel_follow(&mut self, id: &str, tid: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let limit = query_param(req, "limit")
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(10);
+        let store = self.store_for(id)?;
+        let drawers = store.follow_tunnel(tid, limit).map_err(store_err)?;
+        let rows: Vec<Value> = drawers
+            .into_iter()
+            .map(|d| {
+                json!({
+                    "id": d.id,
+                    "wing": d.meta.wing,
+                    "room": d.meta.room,
+                    "content": d.content,
+                })
+            })
+            .collect();
+        Ok((200, Body::Json(json!({ "drawers": rows }))))
+    }
+
+    /// `GET /v1/vaults/{id}/tunnels/traverse?start=&depth=` — wings reachable
+    /// from a start wing over tunnels, breadth-first.
+    ///
+    /// Returns wing NAMES and depths, never content, so it is not a `ReadOp`
+    /// door. The literal `traverse` arm is matched BEFORE `{tid}` in the
+    /// dispatch, since both are five segments and a binding would otherwise
+    /// swallow it.
+    fn tunnel_traverse(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let start =
+            query_param(req, "start").ok_or_else(|| RestError::new(400, "start is required"))?;
+        let depth = query_param(req, "depth")
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(2);
+        let store = self.store_for(id)?;
+        let reached = store.traverse(&start, depth).map_err(store_err)?;
+        let rows: Vec<Value> = reached
+            .into_iter()
+            .map(|(wing, d)| json!({ "wing": wing, "depth": d }))
+            .collect();
+        Ok((200, Body::Json(json!({ "start": start, "reached": rows }))))
+    }
+
     fn set_trust(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
         self.assert_or_401(id, req, now)?;
         let body = parse_json(body)?;

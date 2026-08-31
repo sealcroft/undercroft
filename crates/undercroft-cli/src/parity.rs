@@ -493,30 +493,6 @@ pub const SURFACE_ABSENCES: &[(&str, &str, Absence, &str)] = &[
     // "with a target" — and `every_cli_capability_is_reachable_or_ruled_absent`
     // enforces it, so a gap cannot become `Unruled` wearing a different
     // variant by having nowhere to go.
-    ("Command::Dedup", "v1", Absence::Drift,
-     "corpus-wide duplicate collapse. A remote client can pass dedup_threshold per save but cannot collapse a corpus it already wrote (target O68)"),
-    ("Command::WakeUp", "v1", Absence::Drift,
-     "session-context load — one of the two surfaces whose whole job is loading context at session start, and the remote plane cannot do it (target O68)"),
-    ("Command::Closets", "v1", Absence::Drift,
-     "per-wing content index; one of the reads wake-up depends on, and absent from the remote plane with it (target O68)"),
-    ("Command::Hallways", "v1", Absence::Drift,
-     "entity co-occurrence within a wing — a derived read the remote plane cannot ask for (target O68)"),
-    ("DiaryAction::Write", "v1", Absence::Drift,
-     "agent diary write. A write path, so the route must state Screen::Apply at the choke point like every other (target O68)"),
-    ("DiaryAction::Read", "v1", Absence::Drift,
-     "agent diary read — per-agent working memory, and a content-returning read, so it owes a ReadOp door (target O68)"),
-    ("DiaryAction::Agents", "v1", Absence::Drift,
-     "list diary agents; it enumerates who has written, which is metadata about the writers rather than about the corpus (target O68)"),
-    ("TunnelAction::Create", "v1", Absence::Drift,
-     "cross-wing tunnel creation. A write, and the label is agent-written free text already carried by admission::SCREENED_FIELDS (target O68)"),
-    ("TunnelAction::List", "v1", Absence::Drift,
-     "list tunnels — the read half of a link graph whose write half is equally absent (target O68)"),
-    ("TunnelAction::Follow", "v1", Absence::Drift,
-     "follow a tunnel to read the drawers it links; a content-returning read, so it is a read-audit door too (target O68)"),
-    ("TunnelAction::Delete", "v1", Absence::Drift,
-     "delete a tunnel; destructive on the link graph though not on drawers, so it is a write for the read-only gate (target O68)"),
-    ("TunnelAction::Traverse", "v1", Absence::Drift,
-     "traverse the tunnel graph from a wing, returning reachable wings rather than content (target O68)"),
     // ---- The kg WRITE family: already ruled, by a document, in the present
     // tense. `docs/AGENTS.md` says "/v1 has no DIRECT KG *write* routes
     // except POST …/kg/authority … That is a present-tense boundary, not a
@@ -553,10 +529,6 @@ pub const SURFACE_ABSENCES: &[(&str, &str, Absence, &str)] = &[
      "per-fact receipt verdicts. MCP's undercroft_verify already reports the aggregate KG-receipt leg, so an agent learns THAT a citation is forged and cannot learn WHICH (target O68)"),
     ("Command::VerifyForgetting", "mcp", Absence::Drift,
      "check a caller-supplied erasure attestation against this vault. Present on /v1 and absent from MCP, which is the inverse of the operator-only shape, so that reasoning never explained it (target O68)"),
-    ("DrawerAction::CheckDup", "v1", Absence::Drift,
-     "duplicate oracle before a save. /v1's dedup_threshold on the save body is a different capability — per-save and one drawer, and it cannot answer before writing (target O68)"),
-    ("DrawerAction::DeleteBySource", "v1", Absence::Drift,
-     "delete every drawer mined from one source file; the remote plane can delete by id only, so undoing one mined document means N calls (target O68)"),
     ("IndexAction::Status", "mcp+v1", Absence::Drift,
      "remote-index mirror status. A pure read, unlike Push which is egress — so Push's boundary does not cover it (target O68)"),
     // **RULED 2026-08-21 (ROADMAP O66): all three backup operations reach
@@ -591,6 +563,28 @@ pub const SURFACE_ABSENCES: &[(&str, &str, Absence, &str)] = &[
 /// `CLAUDE.md`: *"a tool without a line fails the build and a line without a
 /// tool fails it too, which a hand-maintained doc table cannot do."*
 pub const SURFACE_COMPLETE: &[&str] = &[
+    // Drawer maintenance, landed on `/v1` by ROADMAP O68 (2026-08-31).
+    "Command::Dedup",
+    "DrawerAction::CheckDup",
+    "DrawerAction::DeleteBySource",
+    // Diary + session context, landed on `/v1` by ROADMAP O68 (2026-08-31).
+    // `wake-up` is the partial one and says so at its handler: the CLI's L0
+    // IDENTITY layer reads a per-INSTALLATION file, which a per-vault route
+    // proxying a tenant token must not return. The vault-scoped half is here.
+    "Command::WakeUp",
+    "Command::Closets",
+    "Command::Hallways",
+    "DiaryAction::Write",
+    "DiaryAction::Read",
+    "DiaryAction::Agents",
+    // The tunnel family, landed on `/v1` by ROADMAP O68 (2026-08-31). All
+    // five were `Absence::Drift` with `target O68`; they are reachable from
+    // CLI, MCP and `/v1` now, so they move here rather than being edited.
+    "TunnelAction::Create",
+    "TunnelAction::List",
+    "TunnelAction::Follow",
+    "TunnelAction::Delete",
+    "TunnelAction::Traverse",
     "Command::Remember",
     "Command::Search",
     "Command::Stats",

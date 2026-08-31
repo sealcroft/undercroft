@@ -7,6 +7,71 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### fourteen of O68's twenty-one ruled gaps close, and `/v1` goes 37 → 51 routes (M44)
+
+**ROADMAP O68, partially closed — 14 rows down, 7 to go.** Three families
+reach `/v1` for the first time, each with a handler, both gated doc
+references, and an e2e arm driven **through the surface** rather than the
+store.
+
+**Tunnels (5):** `POST`/`GET …/tunnels`, `GET …/tunnels/traverse`,
+`DELETE …/tunnels/{tid}`, `GET …/tunnels/{tid}/drawers`.
+**Diary + session context (6):** `POST`/`GET …/diary`, `GET …/diary/agents`,
+`GET …/wake-up`, `GET …/closets`, `GET …/hallways`.
+**Drawer maintenance (3):** `POST …/drawers/check-duplicate`,
+`DELETE …/drawers?source=`, `POST …/dedup`.
+
+**The handlers are THIN on purpose.** Every guard these writes need already
+stands at the store's choke point: `create_tunnel` validates both wing names
+and the label, refuses the reserved review wing as an endpoint, screens the
+label through `admission::SCREENED_FIELDS`, chains and anchors. `diary_write`
+returns a `SaveOutcome`, so a diverted entry answers **202** with
+`quarantined: true` instead of being reported as written — `diary read` will
+not find it, and calling that "written" is a claim about a write that did not
+happen. Re-implementing any of it in a route would be the second
+implementation of one decision.
+
+**Two content-returning doors needed nothing added**, which is O50/O51 paying
+off as designed: `follow_tunnel` records `ReadOp::Tunnel` and `diary_read`
+records `ReadOp::Diary` **at the store**, so a new surface inherits the audit
+record rather than forgetting it.
+
+**One BOUNDARY inside the drift fix.** `GET …/wake-up` always returns
+`identity: null`. The CLI's L0 layer reads `identity.txt` from the palace data
+directory — per-INSTALLATION, not per-vault — and the orchestrator proxies a
+TENANT token onto these routes, so returning it would hand every tenant on a
+shared engine the operator's own note. The vault-scoped half is served, the
+trust-floor distinction is carried over verbatim (an empty result under a
+declared floor means *nothing meets the floor*, **not** *the vault is empty*),
+and an e2e arm pins the null.
+
+**A gate of ours was narrowed while doing this.** The `/v1` route-set
+preflight normalised doc placeholders through an ALLOWLIST — `{id}`, `{key}`,
+`{drawer_id}` — and mapped anything else to a constant that could only ever
+mismatch, so a route with a new parameter name failed until someone edited the
+reader. It is generic now (`{name}` → `name`): same fail-closed property, no
+maintenance list to rot.
+
+**Two gates fired on this work, both correctly, and neither was mine to
+argue with.**
+
+The **orchestrator's** `every_operator_capability_is_reachable_or_recorded_as_absent`
+failed the build naming `dedup`: adding a route to the engine leaves the
+control plane with a capability it neither reaches on the ops plane, records
+as deliberately absent, nor carries on the tenant data plane — and *"an
+omission and a boundary look identical from outside"* is exactly why O67 built
+it. All fourteen are classified now, on the **tenant** plane, by the criterion
+that list already used: every one is reachable from MCP, so the engine already
+treats it as agent-facing rather than operator business. `dedup` destroys
+drawers under `{"apply":true}` and still belongs there — `undercroft_dedup` is
+an MCP write tool and `["drawers", _]` already carried DELETE of a single
+drawer, so a tenant removing their own drawers is the existing model, not a
+new power.
+
+And the **M42 gate caught its first real drift, one day old**: the
+platform-views diagrams published `37 routes`, and the preflight named it the
+moment the dispatch moved.
+
 ### one endpoint answered in two content types, and no 401 in the tree named its scheme (M43)
 
 **ROADMAP O64 CLOSED.** `serve-http`'s two transport-gate 401s now answer
