@@ -1116,7 +1116,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**106** of the **121** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**111** of the **126** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -3593,6 +3593,218 @@ these 15 by id, not on an aggregate that can absorb them.
 
 ---
 
+### O83 — a genuinely read-only mirror status needs a non-creating lookup on five backends
+
+**Found by the pre-release drift audit, 2026-08-31, on code O68 had shipped
+the day before.** The exposure is FIXED; what is filed here is the better
+version of the capability.
+
+`PalaceStore::index_status` calls `index.ensure(…)`, which **CREATES**: `PUT
+/collections` on qdrant, `CREATE EXTENSION` + `CREATE TABLE` on pgvector,
+`POST /collections` on chroma, milvus and weaviate. That was harmless while
+the only caller was an operator's own CLI. O68 exposed it as a **GET** on
+`/v1`, an MCP **`READ_TOOL`**, and on the orchestrator's **tenant** data plane
+— so a read issued DDL against operator infrastructure from a `--read-only`
+server and from a tenant bearer.
+
+**Removing `ensure` was tried first and the backends suite refused it in one
+line**: chroma's `count` needs the collection id that `ensure` resolves, and
+chroma resolves it with `get_or_create: true`. There is no non-creating lookup
+on that client, nor on the other four.
+
+**So the CLASSIFICATION was the error, not the call.** An operation that
+creates state is a WRITE, and it is one now: `POST` on `/v1` (a GET is never
+refused by the read-only gate), `WRITE_TOOLS` on MCP, and `OPS_ROUTES` rather
+than the tenant plane on a fleet. The surfaces were wrong; the call is honest.
+
+**What is still owed**, and why it is filed rather than folded in: a genuinely
+read-only status needs a per-backend `exists`/`count` path that does not
+create — five backends, five APIs — plus a ruling on what "no mirror" answers.
+Today, because `ensure` runs first, **"no mirror exists" and "the mirror is
+empty" both return `0`**, so the route cannot answer the question its own doc
+says it exists for.
+
+**Gate:** the closing change must make `index_status` reachable as a GET/read
+again ONLY once no backend writes on that path — proven per backend, not
+inferred from qdrant — and must distinguish an absent mirror from an empty
+one.
+
+---
+
+### O79 — `refine` reads the whole corpus verbatim, ships it to a network endpoint, and records nothing
+
+**Found by the pre-release drift audit, 2026-08-31.** Pre-existing, not from
+1.2.0's work.
+
+`refine.rs` reads its sources with
+`Read::Internal(InternalRead::WritePathLookup)`, a witness whose own doc says
+*"A lookup performed to decide a WRITE — dedup, supersession, an existence
+check. **The caller never asked to read this.**"* Every other use of that
+variant is a single-row internal lookup inside the store. Here the caller
+asked, explicitly, and sized the ask: `POST /v1/vaults/{id}/refine` takes a
+`limit` that **defaults to 1,000,000**.
+
+Each drawer's plaintext is then POSTed to `UNDERCROFT_LLM_URL`. So under
+`UNDERCROFT_READ_AUDIT=chain` — declared for insider/exfil accounting — a
+whole-corpus plaintext egress appends **zero** records, while the same
+caller's single `GET …/drawers/{id}` appends one. On `{"dry_run": true}`
+nothing is written at all, so the network call happens and no evidence of it
+exists anywhere.
+
+**The inconsistency is internal to the tree**: `index push` mints
+`egress/index-push` UNCONDITIONALLY because it carries embeddings, which are
+merely plaintext-*derived*. `refine` ships the plaintext itself and mints
+nothing.
+
+**Scope, stated honestly.** `refine` is on `OPS_ROUTES`, so a fleet TENANT
+cannot reach it. The exposure is the `/v1` bearer holder and the CLI operator
+— which is exactly the population read-auditing is documented for.
+
+**Not fixed here, deliberately.** It needs a `ReadOp` (or an `egress/`
+namespace — the two answer different questions), a driver row in the gate that
+counts `ReadOp::ALL`, and a ruling on whether a dry run that leaks the corpus
+without writing a fact is a read, an egress, or both. That is a security
+verdict, and this file's rule is to file rather than half-land one.
+
+**Gate:** whatever lands must make `refine` appear in the chain under
+`UNDERCROFT_READ_AUDIT=chain` with the dry-run path covered, and must be
+counted by the same both-directions driver table that already covers the
+thirteen read doors.
+
+---
+
+### O80 — the audit-namespace gate compares two lists to each other, and `tunnel/` is in neither
+
+**Found by the pre-release drift audit, 2026-08-31.**
+
+`manage.rs`'s `MINTED` inventory claims *"Every audit namespace the store MINTS
+is classified here"* and lists eleven: `admission/ trust/ retention/
+retention-clear/ del/ egress/ read/ rotate/ migrate/ kg/ kg-entity/`.
+Measured, `chain_append` also mints **`tunnel/{id}`**, which is on neither
+that list nor `AGENT_FENCED_NAMESPACES`.
+
+**The gate cannot see it.** Its own docstring says it *"counts the emitted
+prefixes against the two lists"* — precisely because *"it cannot see a
+namespace nobody added, which is exactly how `migrate/` reached the agent
+surface."* It does not do that. It iterates the two constants and compares
+them **to each other**, so a namespace the code emits and nobody listed is
+invisible by construction. The gate is green today while the invariant it
+states is false — the *ask what a gate can SEE* rule, on the gate written from
+that rule.
+
+**Live exposure is low and should not be overstated:** `tunnel/{id}` reaches
+`HistoryScope::Agent` unfenced, but an agent can already enumerate tunnels via
+`undercroft_list_tunnels`, so nothing is learned that was hidden. The defect
+is that **nobody ruled**, and the mechanism that was supposed to force a
+ruling does not.
+
+**Not fixed here** because the fix has two halves and the second needs a
+ruling: read the emitted prefixes out of the source (the gate's stated design)
+AND decide whether `tunnel/` is agent-fenced. Adding it to a list without
+ruling would be the omission this entry is about, one line over.
+
+**Gate:** the corrected check must fail on a namespace present in
+`chain_append` and absent from `MINTED` — proven by a counterfactual that adds
+one, not by observing the current tree passes.
+
+---
+
+### O81 — `config check` blesses an embedder value that makes every CLI command panic
+
+**Found by the pre-release drift audit, 2026-08-31.** Pre-existing.
+
+`check_embedder` returns `Ok(())` for `"external"`. `open_store_as` — the sole
+store-open door for the CLI and `/mcp` — has arms for `onnx`, `ort`, `http`,
+`hash`/`""`/unset, and a catch-all that does
+`bail!(check_embedder(other).expect_err("every legal embedder name is matched
+by an arm above"))`. Calling `.expect_err()` on an `Ok` **panics**.
+
+So one declaration, `UNDERCROFT_EMBEDDER=external`, gives three answers:
+
+| surface | behaviour |
+|---|---|
+| `undercroft config check` | `ok` + *"This environment starts."*, **exit 0** |
+| CLI and `/mcp` | **panic, exit 101** — a code the exit doctrine does not define |
+| `/v1` | clean `bail!` → 500 per vault open |
+
+`UNDERCROFT_EMBEDDER` is classed `(Protects, Checked)`, whose entire promise is
+that the pre-flight runs the resolver the engine runs. Every document agrees
+the legal set is `hash|http|onnx|ort` — including `check_embedder`'s OWN error
+string one line below the bug. By the drift-direction rule (breadth plus
+doctrine) the **code** is wrong.
+
+**Why no gate:** the pre-flight's both-directions gates probe with an illegal
+value and ask only *"did a parse run?"* One does. Nothing compares
+`check_embedder`'s OK-set to `open_store_as`'s match arms, and no test in the
+tree sets `UNDERCROFT_EMBEDDER` at all.
+
+**Related and probably one half-landed change (filed with it):** a vault
+created `external:<name>@<dim>` through `POST /v1/vaults` is openable on `/v1`
+(which consults `recorded_embedder` before the variable) and **unopenable on
+the CLI**, whose door never calls `recorded_embedder`. So `verify`, `rotate`,
+`repair`, `backup create`, `export`, `forget` and `retention sweep` — the whole
+operator plane — are unreachable for a vault the multi-tenant server creates
+and serves. That is a capability missing from a surface with no `Absence` row
+and no filing, which this project's own rule forbids.
+
+**Not fixed here:** dropping `"external"` from the OK-set is one line, but it
+forecloses the second half. Which of the two is right — remove the spelling, or
+implement the arm and close the operator-plane gap — is a product ruling.
+
+**Gate:** whichever lands, a check must count `check_embedder`'s OK-set against
+`open_store_as`'s arms, so the two cannot disagree again; and if `external`
+survives, an `Absence` row must record the CLI gap or close it.
+
+---
+
+### O82 — three smaller findings from the same audit, filed rather than folded in
+
+Each is evidenced and none is fixed, because each needs a ruling or touches a
+contract.
+
+**(a) `GET /v1/vaults/{id}/stream` bypasses the `/v1` error envelope.** The SSE
+route is intercepted in `http.rs` BEFORE `Tenancy::handle`, so it never reaches
+`respond` — the one place that stamps `WWW-Authenticate` and renders `class`.
+`authorize` does `.map_err(|e| e.code)`, discarding both the message and the
+integrity class, and the reply is `Response::from_string("")` with no headers.
+So a tampered vault answers `409 {"error":…,"class":"integrity"}` on
+`…/stats` and a bare, bodyless `409` on `…/stream` — and the 401 there carries
+no challenge, which is the defect M43 closed everywhere the sweep could see.
+It could not see this one: the unit gate asserts the `unauthorized()` HELPER,
+not its call sites, and the telemetry e2e only ever streams WITH a valid
+bearer. Telemetry-only route.
+
+**(b) The orchestrator's `config check` is blind to the telemetry
+declarations that stop its own `serve` from starting.** `ORCH_ENV_VARS` claims
+to hold *"every declaration THIS binary reads"* and lists eight, all
+`UNDERCROFT_ORCH_*`. Under `--features telemetry` the binary also reads
+`UNDERCROFT_OTLP_ENDPOINT` and `UNDERCROFT_OTLP_CA` — both `(Protects,
+Checked)` in the engine's inventory — through `undercroft_obs::init_as`, which
+is FATAL for `serve` and warn-and-continue under the pre-flight. So
+`config check` prints one warning and *"serve would start in this
+environment"*, exit 0, for an environment where `serve` refuses. This is O21's
+defect one binary over; the cross-crate gate cannot see it because it matches
+only lines beginning `("UNDERCROFT_ORCH_`.
+
+**(c) pgvector resolves `UNDERCROFT_INDEX_CA` outside the shared helper.** The
+other four backends go through `undercroft_net::agent_from_env`, documented as
+*"the one constructor every hop that reads a `*_CA` variable should use"*.
+pgvector reads the variable itself, so it neither trims nor refuses
+whitespace-only (one declaration, two answers across five backends) and it
+**re-reads the PEM per construction** — which `pin_from_env` caches
+deliberately, because *"re-reading the file per call makes the pin mutable at
+runtime … silent un-pinning by another name"*. `index/status` is reachable
+per-request, so for this hop the stated restart-to-rotate property does not
+hold. The `no_crate_but_undercroft_net_builds_its_own_http_client` gate scans
+for ureq's builder token; this is `tokio_postgres_rustls`, so it cannot see it
+— the same shape as the OTLP defect that gate was written for.
+
+**Gate:** each needs its own, and (a) suggests the general one — a check that
+every `/v1` reply, including routes intercepted before `Tenancy::handle`, goes
+through one response writer.
+
+---
+
 ### O78 — CLOSED 2026-08-30: the platform-views set fetched a font from Google, and the option list was wrong
 
 **Found 2026-08-30 by checking the new diagram set against the code**, which
@@ -4736,6 +4948,37 @@ in review.
 (O69), so on a served fleet it is a maintenance-window operation. That is a
 property of the operation, not of the route, and it is documented on the route
 rather than left to be discovered in an incident.
+
+**CORRECTION 2026-08-31 — this closure shipped SEVEN defects, and the
+independent verifier pass found them the next day.** The inventory arithmetic
+was right and the surfaces were not. Recorded here rather than only in the
+CHANGELOG, because an entry that reads CLOSED and clean is what the next
+reader trusts:
+
+* **A live quarantine leak.** `wake-up`, `closets` and `hallways` accepted
+  `?wing=quarantine-pending` and returned pending-review content, because
+  `recent()` excludes the reserved wing only in its `else` branch — naming a
+  wing opts IN, and `review_door` is the gate on that opt-in. The three older
+  content routes call it; these three did not. Under per-vault assertions one
+  valid assertion got 403 from the old doors and 200 with verbatim text from
+  the new ones. **O68's own per-route checklist never listed the read fence**,
+  which is how all three missed it at once.
+* **`index/status` created what it reported on** — see O83.
+* **`kg_receipts` over MCP rendered `SourceChanged` as `sourcechanged`**,
+  bypassing serde's rename, so an agent filtering the documented
+  `source_changed` never matched a drifted citation.
+* **All four new `/v1` numeric defaults disagreed with CLI and MCP**, which
+  agreed with each other — the defect `search.rs` exists to prevent.
+* **`undercroft_index_status` advertised a fallback to `UNDERCROFT_INDEX`**, a
+  variable that exists nowhere.
+* **Eleven surfaces still published 34 MCP tools**, including the governed
+  source SVG, and no tool table carried the four new tools.
+* **Two documents kept calling `verify-forgetting` an MCP boundary** after it
+  became an MCP tool.
+
+All are fixed. The lesson is the one the CHANGELOG states for M47: the
+inventory gate can be green in both directions while every surface behind it
+is wrong, because it counts NAMES and not BEHAVIOUR.
 
 ---
 

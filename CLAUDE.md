@@ -983,8 +983,9 @@ Consequences that are binding, not advisory:
   a `--read-only` server re-embedded every drawer at start-up and appended
   a read-audit record per `/mcp` search; mcp.rs: MCP stdio — **38 tools (incl. `undercroft_history`, the audit chain
   at `HistoryScope::Agent` — fenced by namespace and by the reserved review
-  wing, so a diverted write cannot read its own evidence back), 12
-  of them writes** — the read-only gate is `READ_TOOLS` and it FAILS
+  wing, so a diverted write cannot read its own evidence back), 13
+  of them writes** (`index_status` joined them 2026-08-31: it CREATES the
+  collection it reports on, so it was never a read — O83) — the read-only gate is `READ_TOOLS` and it FAILS
   CLOSED (`refused_when_read_only` = not-a-read), because
   `WRITE_TOOLS.contains(name)` served any tool nobody had classified yet and
   its compensating parity heuristic was blind to `_merge`, `_move`,

@@ -347,7 +347,7 @@ undercroft bundle sign-keygen|sender  # Ed25519 sender-attestation identities (e
 undercroft transcript render <f.jsonl># pretty-print an agent transcript
 undercroft daemon run [--watch --interval --once]  # background auto-save loop
 undercroft hooks claude-code          # auto-save hook settings snippet
-undercroft serve-mcp [--vault]        # MCP stdio server (34 tools)
+undercroft serve-mcp [--vault]        # MCP stdio server (38 tools)
 undercroft serve-mcp --read-only     # ...recall only: every write tool refused,
                                      #    and the vault opened read-only
 undercroft serve-http [--host --port --read-only]  # MCP /mcp + multi-tenant REST /v1
@@ -404,7 +404,7 @@ lag is observable. Design + surface:
 Palace location: `$UNDERCROFT_HOME` (default `~/.undercroft`; `/data` in Docker).
 Passphrase mode: set `UNDERCROFT_PASSPHRASE` before `init` and every command.
 
-## MCP tools (34)
+## MCP tools (38)
 
 | Category | Tools |
 |---|---|

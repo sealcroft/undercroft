@@ -487,6 +487,35 @@ impl PalaceStore {
     }
 
     /// Remote index status: name + record count for this vault's collection.
+    /// Remote mirror status — **read-only, and that is a correction.**
+    ///
+    /// This used to call `index.ensure(…)` first, which CREATES: `PUT
+    /// /collections` on qdrant, `CREATE EXTENSION` + `CREATE TABLE` on
+    /// pgvector, `POST /collections` on chroma, milvus and weaviate. That was
+    /// harmless while the only caller was the CLI's `index status`, run by an
+    /// operator on their own infrastructure. ROADMAP O68 then exposed it as a
+    /// `GET` on `/v1`, as an MCP READ_TOOL, and on the orchestrator's TENANT
+    /// data plane — at which point a *read* issued DDL against operator
+    /// infrastructure from a `--read-only` server and from a tenant bearer.
+    /// Found by the pre-release drift audit, and the exposure was one day old.
+    ///
+    /// It also could not answer its own question: `ensure` MANUFACTURED the
+    /// mirror it was asked to report on, so "no mirror exists" and "the mirror
+    /// is empty" both came back as `0`.
+    ///
+    /// **`ensure` STAYS, and the exposure was reclassified instead.** Removing
+    /// it was tried first and the backends suite refused it in one line:
+    /// chroma's `count` needs the collection id that `ensure` resolves, and
+    /// chroma resolves it with `get_or_create: true` — there is no
+    /// non-creating lookup on that client, nor on the other four. A genuinely
+    /// read-only status therefore needs a new per-backend `exists`/`count`
+    /// path across five backends plus a ruling on what "no mirror" answers,
+    /// which is filed as **O83** rather than half-landed here.
+    ///
+    /// So this is a WRITE, and it is classified as one now: `POST` on `/v1`
+    /// (a GET is never refused by the read-only gate), `WRITE_TOOLS` on MCP,
+    /// and the operator plane rather than the tenant one on a fleet. That is
+    /// the honest description — the surfaces were wrong, not the call.
     pub fn index_status(&self, index: &mut dyn VectorIndex) -> Result<(String, u64), StoreError> {
         let collection = self.index_collection();
         index.ensure(&collection, self.embedder_dimension())?;

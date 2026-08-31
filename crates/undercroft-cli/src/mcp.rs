@@ -68,7 +68,6 @@ pub(crate) const READ_TOOLS: &[&str] = &[
     "undercroft_kg_receipts",
     "undercroft_check_erasure_receipt",
     "undercroft_kg_rel",
-    "undercroft_index_status",
 ];
 
 /// Whether a read-only server must refuse this tool.
@@ -101,6 +100,9 @@ pub(crate) const WRITE_TOOLS: &[&str] = &[
     "undercroft_kg_supersede",
     "undercroft_diary_write",
     "undercroft_dedup",
+    // It CREATES the collection it reports on (`ensure`), so a read-only
+    // server must refuse it. See O83.
+    "undercroft_index_status",
 ];
 
 /// **The quarantine fence.** MCP is the agent surface; the review queue is
@@ -494,8 +496,8 @@ fn tool_definitions() -> Value {
             json!({ "problems_only": json!({ "type": "boolean", "description": "omit verified facts" }) }), &[]),
         tool("undercroft_check_erasure_receipt", "Check a caller-supplied erasure attestation against this vault: verdict is 'verified', or 'recorded' when a key rotation destroyed the replay key — a narrower claim, NOT a tamper verdict.",
             json!({ "attestation": s("the attestation document, as JSON") }), &["attestation"]),
-        tool("undercroft_index_status", "Remote vector-mirror status: the backend's record count beside the authoritative local one. A pure read — pushing is not offered here.",
-            json!({ "backend": s("backend name; empty uses UNDERCROFT_INDEX") }), &[]),
+        tool("undercroft_index_status", "Remote vector-mirror status: the backend's record count beside the authoritative local one. A WRITE — it CREATES the collection it reports on, so a read-only server refuses it. Pushing is not offered here.",
+            json!({ "backend": s("backend name: qdrant|chroma|pgvector|milvus|weaviate") }), &["backend"]),
         // --- agent diaries ---
         tool("undercroft_diary_write", "Append a diary entry for an agent.",
             json!({ "agent": s("agent name"), "entry": s("diary text") }), &["agent", "entry"]),
@@ -1089,11 +1091,35 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                     json!({
                         "triple_id": r.triple_id,
                         "source_drawer_id": r.source_drawer_id,
-                        "verdict": format!("{:?}", r.verdict).to_lowercase(),
+                        // SERDE, not Debug-lowercased. `ReceiptVerdict` is
+                        // `rename_all = "snake_case"`, so `{:?}`.to_lowercase()
+                        // renders `SourceChanged` as `sourcechanged` — a
+                        // spelling no other surface uses and this tool's own
+                        // schema does not advertise. Four of five variants are
+                        // single words and round-trip identically, which is
+                        // why it read as fine: the ONE that diverges is the
+                        // one meaning "the source this fact cites has been
+                        // edited since", so an agent filtering on the
+                        // documented `source_changed` never matched and read a
+                        // drifted citation as sound.
+                        "verdict": serde_json::to_value(&r.verdict)
+                            .unwrap_or_else(|_| json!("unknown")),
                     })
                 })
                 .collect();
-            Ok(serde_json::to_string_pretty(&json!({ "receipts": rows }))?)
+            // `ok` beside the list, for the reason `/v1` carries it: a
+            // caller exited 0 with a forged citation sitting in the body,
+            // unread, because nothing agreed to read it. The agent surface is
+            // where a caller is least able to re-derive it.
+            let tampered = receipts
+                .iter()
+                .filter(|r| matches!(r.verdict, undercroft_store::ReceiptVerdict::Tampered))
+                .count();
+            Ok(serde_json::to_string_pretty(&json!({
+                "receipts": rows,
+                "ok": tampered == 0,
+                "tampered": tampered,
+            }))?)
         }
         "undercroft_check_erasure_receipt" => {
             // The document is the CALLER's, so a malformed one is THEIR

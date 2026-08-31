@@ -248,7 +248,6 @@ fn data_subpath_ok(subpath: &str) -> bool {
             // `index push` is EGRESS and is on neither plane, which is the
             // boundary its status sibling does not share.
             | ["kg", "rel"]
-            | ["index", "status"]
             | ["dedup"]
             | ["tunnels"]
             | ["tunnels", _]
@@ -476,6 +475,9 @@ const OPS_ROUTES: &[(&str, &str)] = &[
     ("POST", "backups"),
     ("GET", "backups"),
     ("POST", "backups/restore"),
+    // Moved OFF the tenant data plane 2026-08-31: it CREATES the collection
+    // it reports on, so it is operator business, not a tenant read (O83).
+    ("POST", "index/status"),
     // Tightening the manifest rollback anchor (engine R3). Unlike the vault
     // KEY rotation two lines of prose up, this one is safe while the engine
     // is serving: it fsyncs a manifest that names the head the database
@@ -586,6 +588,7 @@ pub(crate) fn ops_alias(op: &str) -> Option<(&'static str, &'static str)> {
         "backup-create" => ("POST", "backups"),
         "backups" => ("GET", "backups"),
         "backup-restore" => ("POST", "backups/restore"),
+        "index-status" => ("POST", "index/status"),
         _ => return None,
     })
 }
@@ -1658,6 +1661,7 @@ mod tests {
             "backup-create",
             "backups",
             "backup-restore",
+            "index-status",
         ];
         // RESIDUAL, stated rather than found later: this array is a
         // hand-written literal, and `ops_alias` is a `match` that cannot be

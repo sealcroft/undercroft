@@ -386,7 +386,10 @@ impl Tenancy {
             // routes on a fleet and are on the orchestrator's OPS plane, never
             // its tenant data plane.
             ("GET", &["v1", "vaults", id, "kg", "rel"]) => self.kg_rel(id, req, now),
-            ("GET", &["v1", "vaults", id, "index", "status"]) => self.index_status(id, req, now),
+            // POST, not GET: this CREATES the collection it reports on
+            // (`ensure`), and `mutates()` never refuses a GET — so a GET here
+            // meant a `--read-only` server issuing DDL. See O83.
+            ("POST", &["v1", "vaults", id, "index", "status"]) => self.index_status(id, req, now),
             ("POST", &["v1", "vaults", id, "backups"]) => self.backup_create(id, req, now),
             ("GET", &["v1", "vaults", id, "backups"]) => self.backup_list(id, req, now),
             ("POST", &["v1", "vaults", id, "backups", "restore"]) => {
@@ -2256,9 +2259,10 @@ impl Tenancy {
         self.assert_or_401(id, req, now)?;
         let agent =
             query_param(req, "agent").ok_or_else(|| RestError::new(400, "agent is required"))?;
+        // 10, matching CLI and MCP.
         let limit = query_param(req, "limit")
             .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(20);
+            .unwrap_or(10);
         let store = self.store_for(id)?;
         let entries = store.diary_read(&agent, limit).map_err(store_err)?;
         let rows: Vec<Value> = entries
@@ -2296,6 +2300,18 @@ impl Tenancy {
     fn wake_up(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
         self.assert_or_401(id, req, now)?;
         let wing = query_param(req, "wing");
+        // THE REVIEWER'S DOOR (ROADMAP O68 follow-up). Naming the reserved
+        // wing opts IN to quarantined content — `recent` excludes it only in
+        // the `else` branch, so a named wing switches the fence off by
+        // design, and this is the gate on that opt-in. `search`,
+        // `list_drawers` and `get_drawer` have had it since the queue
+        // existed; these three routes landed without it and returned pending
+        // review evidence to any caller who named the wing, including under
+        // per-vault assertions, where an assertion authorizes one vault and
+        // does NOT make its holder this deployment's reviewer.
+        if wing.as_deref() == Some(undercroft_store::QUARANTINE_WING) {
+            review_door(self.requires_assertion(), wing.as_deref())?;
+        }
         let store = self.store_for(id)?;
         let recent = store
             .recent(
@@ -2339,6 +2355,18 @@ impl Tenancy {
     fn closets(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
         self.assert_or_401(id, req, now)?;
         let wing = query_param(req, "wing");
+        // THE REVIEWER'S DOOR (ROADMAP O68 follow-up). Naming the reserved
+        // wing opts IN to quarantined content — `recent` excludes it only in
+        // the `else` branch, so a named wing switches the fence off by
+        // design, and this is the gate on that opt-in. `search`,
+        // `list_drawers` and `get_drawer` have had it since the queue
+        // existed; these three routes landed without it and returned pending
+        // review evidence to any caller who named the wing, including under
+        // per-vault assertions, where an assertion authorizes one vault and
+        // does NOT make its holder this deployment's reviewer.
+        if wing.as_deref() == Some(undercroft_store::QUARANTINE_WING) {
+            review_door(self.requires_assertion(), wing.as_deref())?;
+        }
         let store = self.store_for(id)?;
         let lines = store.closet_index(wing.as_deref()).map_err(store_err)?;
         Ok((200, Body::Json(json!({ "index": lines }))))
@@ -2349,9 +2377,17 @@ impl Tenancy {
         self.assert_or_401(id, req, now)?;
         let wing =
             query_param(req, "wing").ok_or_else(|| RestError::new(400, "wing is required"))?;
+        // Same reviewer's door as `wake-up` and `closets` above. `hallways`
+        // takes a REQUIRED wing, so the caller always names one — which makes
+        // this the only shape where the reserved wing is not even an opt-in
+        // by omission, and the guard is therefore the whole boundary.
+        if wing == undercroft_store::QUARANTINE_WING {
+            review_door(self.requires_assertion(), Some(wing.as_str()))?;
+        }
+        // 20, matching CLI and MCP.
         let top = query_param(req, "top")
             .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(10);
+            .unwrap_or(20);
         let store = self.store_for(id)?;
         let rows = store.hallways(&wing, top).map_err(store_err)?;
         let pairs: Vec<Value> = rows
@@ -2423,9 +2459,12 @@ impl Tenancy {
     /// what comes back, and a caller reading it must know content does.
     fn tunnel_follow(&mut self, id: &str, tid: &str, req: &Request, now: i64) -> RestResult {
         self.assert_or_401(id, req, now)?;
+        // 5, matching CLI and MCP. `/v1` shipped 10 for one day — TWICE the
+        // verbatim drawer content per default call, on a door this handler's
+        // own comment calls an exfiltration door in O50's sense.
         let limit = query_param(req, "limit")
             .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(10);
+            .unwrap_or(5);
         let store = self.store_for(id)?;
         let drawers = store.follow_tunnel(tid, limit).map_err(store_err)?;
         let rows: Vec<Value> = drawers
@@ -2453,9 +2492,12 @@ impl Tenancy {
         self.assert_or_401(id, req, now)?;
         let start =
             query_param(req, "start").ok_or_else(|| RestError::new(400, "start is required"))?;
+        // 3, matching CLI and MCP. At 2, `/v1` returned a SMALLER
+        // reachability graph and a caller could not tell "depth 2" from
+        // "there are no wings further out".
         let depth = query_param(req, "depth")
             .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(2);
+            .unwrap_or(3);
         let store = self.store_for(id)?;
         let reached = store.traverse(&start, depth).map_err(store_err)?;
         let rows: Vec<Value> = reached
@@ -3282,9 +3324,19 @@ fn mutates(method: &str, segs: &[&str]) -> bool {
 ///   orchestrator's allowlist is the other half and belongs on its side of
 ///   the wire; this is the engine's, and neither is a substitute.
 fn review_door(under_assertions: bool, named_wing: Option<&str>) -> Result<(), RestError> {
-    // Only the by-id route reaches this branch: `search` and `list_drawers`
-    // call in exactly once the wing IS named, since that is the only way
-    // they can return a queue resident at all.
+    // Callers reach this branch two ways. The by-id route calls in
+    // unconditionally; the wing-taking routes call in only once the wing IS
+    // named, since that is the only way they can return a queue resident.
+    //
+    // **This comment said "only the by-id route" and named TWO wing-takers
+    // until 2026-08-31, and it was wrong on both counts by then.** SIX routes
+    // reach the queue's content — `search`, `list_drawers`, `get_drawer`, and
+    // the O68 trio `wake-up`, `closets`, `hallways` — and the trio landed
+    // WITHOUT this call, so on a deployment under per-vault assertions they
+    // returned pending-review text that the three older doors refused. Found
+    // by two independent verifiers in the pre-release drift audit, not by a
+    // gate: nothing counts wing-taking handlers against `review_door` call
+    // sites, and O68's own per-route checklist never listed the read fence.
     if named_wing != Some(undercroft_store::QUARANTINE_WING) {
         return Err(RestError::new(
             403,
@@ -3857,7 +3909,11 @@ mod tests {
         let (code, body) = s.call("GET", "/v1/vaults/acme/admission", None);
         assert_eq!(code, 200, "premise: the queue itself stays: {body}");
 
-        // All three doors into the queue's CONTENT are shut.
+        // Every door into the queue's CONTENT is shut. This said "all three"
+        // and listed three; O68 added `wake-up`, `closets` and `hallways`,
+        // which reach the same content through `recent(Some(wing))` and were
+        // open. A count in a comment beside a hand-written literal is the
+        // un-gated half of the claim, and it is the half that rotted.
         for (method, path, body_json) in [
             (
                 "GET",
@@ -3873,6 +3929,25 @@ mod tests {
                 "POST",
                 "/v1/vaults/acme/search".to_string(),
                 Some(r#"{"query":"APPROVED","wing":"quarantine-pending"}"#),
+            ),
+            // The O68 trio. These returned 200 with verbatim pending text
+            // until 2026-08-31 — `wake-up` is the worst of the three, since
+            // its whole job is loading context at SESSION START, which is
+            // exactly where injected text wants to be.
+            (
+                "GET",
+                "/v1/vaults/acme/wake-up?wing=quarantine-pending".to_string(),
+                None,
+            ),
+            (
+                "GET",
+                "/v1/vaults/acme/closets?wing=quarantine-pending".to_string(),
+                None,
+            ),
+            (
+                "GET",
+                "/v1/vaults/acme/hallways?wing=quarantine-pending".to_string(),
+                None,
             ),
         ] {
             let (code, body) = s.call(method, &path, body_json);

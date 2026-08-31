@@ -1548,7 +1548,7 @@ mod tests {
     /// **With a premise probe.** A scanner that finds nothing reports
     /// exactly what a clean tree reports, and this project has shipped one
     /// that did. The needle is split with `concat!` so this file — which is
-    /// inside the scanned tree and lists all 78 names — cannot satisfy its
+    /// inside the scanned tree and lists all 81 names — cannot satisfy its
     /// own probe by accident; the probe requires a variable found in a
     /// DIFFERENT crate.
     #[test]

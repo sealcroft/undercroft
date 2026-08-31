@@ -7,6 +7,93 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### the independent verifier pass — and it found a live quarantine leak I had shipped (M47)
+
+**Seven adversarial verifiers, one per dimension `CLAUDE.md` names, read-only.**
+This is the half of the drift-audit recipe M46 did not do, and the difference
+is not marginal: M46, run by the agent that wrote the code, found **one**
+drift. Seven independent readers found **twelve**, including a live
+content-exposure defect that a full battery and a green CI had both passed
+over.
+
+**THE SECURITY DEFECT, AND IT WAS MINE.** `GET …/wake-up`, `…/closets` and
+`…/hallways` — landed by O68 the day before — accepted `?wing=quarantine-pending`
+and returned pending-review content. `recent()` excludes the reserved wing only
+in its `else` branch, so **naming a wing opts IN, by design**, for the
+reviewer; `review_door` is the gate on that opt-in, and `search`,
+`list_drawers` and `get_drawer` have called it since the queue existed. The
+three new routes did not. Under `UNDERCROFT_ASSERTION_SECRET` — the
+multi-tenant posture the door exists for — one valid per-vault assertion got
+**403** from the three old doors and **200 with verbatim text** from the three
+new ones. `wake-up` is the worst of them: its whole job is loading context at
+SESSION START, which is exactly where injected text wants to be.
+
+Two verifiers found it independently, which is the corroboration that made it
+believable immediately. **My own M46 pass had checked this dimension and got it
+wrong** — I read `wing <> quarantine-pending` without noticing it was the
+`else` branch, and concluded the fence held.
+
+Fixed at all three routes; the existing table-driven test now drives **six**
+doors rather than three. Two comments that asserted the old invariant are
+corrected, including one that said *"the only way they can return a queue
+resident"* of a set that had doubled.
+
+**THE SECOND SECURITY DEFECT, ALSO MINE.** `index_status` calls
+`index.ensure(…)`, which **CREATES**: `PUT /collections` on qdrant, `CREATE
+EXTENSION` + `CREATE TABLE` on pgvector, and equivalents on chroma, milvus and
+weaviate. Harmless while the only caller was an operator's CLI; O68 exposed it
+as a `GET` on `/v1`, an MCP `READ_TOOL`, and on the orchestrator's **tenant**
+data plane — so a *read* issued DDL against operator infrastructure from a
+`--read-only` server and from a tenant bearer. It also could not answer its own
+question, because `ensure` manufactured the mirror it was asked to report on:
+"no mirror" and "empty mirror" both returned `0`. `ensure` is gone from the
+status path — one change at the store, which fixes all three surfaces at once.
+
+**Four more of mine, all silent:**
+
+* **`kg_receipts` over MCP rendered `SourceChanged` as `sourcechanged`** —
+  `format!("{:?}").to_lowercase()` bypasses serde's `rename_all`. Four of the
+  five variants are single words and round-trip identically, which is why it
+  looked fine; the one that diverges is the one meaning *the source this fact
+  cites has been edited*, so an agent filtering on the documented
+  `source_changed` never matched and read a drifted citation as sound. Now
+  serialised through serde, and the `ok`/`tampered` integrity signal `/v1`
+  carries is no longer dropped on the surface least able to re-derive it.
+* **Every numeric default the O68 `/v1` routes added disagreed with CLI and
+  MCP, which agreed with each other** — tunnel follow 5/5/**10**, traverse
+  3/3/**2**, hallways 20/20/**10**, diary 10/10/**20**. This is verbatim the
+  defect `search.rs` exists to prevent. `/v1` returned *twice* the verbatim
+  content per default call on a door its own comment calls an exfiltration
+  door. All four aligned down to the CLI/MCP value.
+* **`undercroft_index_status` advertised a fallback to `UNDERCROFT_INDEX`**, a
+  variable that exists nowhere in the tree; omitting the argument produced an
+  error. `backend` is required now, and the schema names the five real values.
+* **Eleven surfaces still published `34 MCP tools`** against a tree of 38 —
+  including `architecture/diagrams/layers.svg`, the governed SOURCE — and the
+  four new tools appeared in no tool table. The `prose figures` gate reads
+  `CLAUDE.md` alone for that figure, and the landing page's gated
+  `data-count="38"` sits **28 lines below** prose that said 34: the un-gated
+  half of a gated claim, on one page.
+
+**Filed rather than fixed, because each alters a security verdict or needs a
+ruling** — O79 (`refine` reads the whole corpus verbatim, ships it to a network
+endpoint and records nothing, under a witness that says *"the caller never
+asked to read this"*), O80 (the audit-namespace gate compares two lists to each
+other, so `tunnel/` is minted and unruled), O81 (`config check` blesses
+`UNDERCROFT_EMBEDDER=external`, which makes every CLI command **panic at exit
+101**, plus the `external:` vault the operator plane cannot open), O82 (the SSE
+route bypasses the `/v1` error envelope, stripping the integrity `class`; the
+orchestrator's own pre-flight is blind to the telemetry declarations that stop
+its `serve`; pgvector resolves its CA pin outside the shared helper).
+
+**The lesson is about the METHOD, not the findings.** A self-audit and an
+independent audit are not the same instrument, and the gap between one finding
+and twelve is the measurement. Everything here survived a full ten-suite
+battery and a green 17/17 CI — because no gate compares a response shape across
+surfaces, no gate counts wing-taking handlers against `review_door` call sites,
+and no gate reads a `&self` store method to ask whether the *backend* it calls
+writes.
+
 ### the pre-release drift audit, and the one drift it found was mine (M46)
 
 **The drift check `CLAUDE.md` requires before every release**, run over the

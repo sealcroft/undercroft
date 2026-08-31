@@ -55,9 +55,13 @@ design. A number in prose next to a gated list is the un-gated part of a
 gated claim, and it is the part that rots. It also listed 18 of them until 2026-08-05,
 omitting the whole operator plane
 (trust, admission review, retention, forgetting) plus the golden-values
-tier. Everything under *operator plane* is deliberately absent from MCP:
+tier. Everything under *operator plane* is deliberately absent from MCP —
 an agent must not rule on the queue that exists to contain it, nor assign
-the trust class that decides what it may retrieve.
+the trust class that decides what it may retrieve — **with one exception
+since 1.2.0**: `verify-forgetting` is reachable as
+`undercroft_check_erasure_receipt`. ROADMAP O68 ruled it a DRIFT rather
+than a boundary, because it checks a CALLER-SUPPLIED document and mutates
+nothing, so the operator-only reasoning never explained its absence.
 
 ```text
 ── lifecycle ────────────────────────────────────────────────────────────
@@ -106,7 +110,8 @@ GET    /v1/vaults/{id}/kg/canonical/{key}   the one active approved fact
 POST   /v1/vaults/{id}/kg/authority     declare authority_class / review_state
 GET    /v1/vaults/{id}/supersessions    drawer supersession links + verdicts
 GET    /v1/vaults/{id}/kg/rel            facts by PREDICATE (predicate, as_of?)
-GET    /v1/vaults/{id}/index/status      remote mirror vs local record counts
+POST   /v1/vaults/{id}/index/status      remote mirror vs local counts. A WRITE:
+                                        it CREATES the collection it reports on
 POST   /v1/vaults/{id}/tunnels          connect two wings {from,to,label}
 GET    /v1/vaults/{id}/tunnels          list tunnels (wing?)
 GET    /v1/vaults/{id}/tunnels/traverse wings reachable from start (start, depth?)
@@ -122,7 +127,8 @@ GET    /v1/vaults/{id}/diary/agents     who has written a diary
 GET    /v1/vaults/{id}/closets          the closet index (wing?)
 GET    /v1/vaults/{id}/hallways         entity co-occurrence (wing, top?)
 
-── operator plane (never on MCP) ────────────────────────────────────────
+── operator plane (mostly never on MCP — verify-forgetting is the one
+   exception since 1.2.0/O68, as undercroft_check_erasure_receipt) ───────
 POST   /v1/vaults/{id}/backups          snapshot this vault (409 if it fails verify)
 GET    /v1/vaults/{id}/backups          this vault's snapshots
 POST   /v1/vaults/{id}/backups/restore  {name}; 400 if the backup holds another
