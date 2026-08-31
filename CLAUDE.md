@@ -1258,9 +1258,20 @@ Consequences that are binding, not advisory:
   not use, for an unpublished directory. They are **system stacks** now,
   matching the governed `architecture/index.html` beside them, which is the
   precedent that actually governs a file in this directory (ROADMAP O78).
-  **`diagrams/` remains the authority** — this set is a second description of the same system, and the
-  two are bound by nothing but attention, so a change to the engine must move
-  both or they disagree. `index.html` here is the entry point and
+  **`diagrams/` remains the authority** — this set is a second description of
+  the same system. **Its published COUNTS are gated** since 2026-08-31 (ROADMAP
+  O74, ruled *depend on the diagrams, they represent the facts we have now*):
+  a `platform-views` block in the `prose figures` preflight joins MCP tools,
+  MCP writes, `/v1` routes, CLI operations and the crate count to the tree,
+  both arms probed. It lives in `tests/battery.sh` and NOT in `check.py`
+  because `arch-check` mounts `./architecture` alone, read-only — that checker
+  physically cannot see `crates/` and so cannot know what the truth is.
+  **What is still bound by attention alone is PROSE**: a relational claim moves
+  no count, so a figure gate cannot see it. That is not hypothetical — the
+  deployment diagram's `<desc>` said `/ui` sat behind the palace bearer when
+  `http.rs` serves it in FRONT of that gate, and the falsehood was in the text
+  a screen-reader user gets while the visible label was correct. So a change to
+  the engine must still move both sets or they disagree. `index.html` here is the entry point and
   `check.py` is the gate, run by the same `arch-check` service (one service,
   one CI leg): inventory counted in BOTH directions against `index.html`,
   the accessible-SVG contract, **offline assets with NO exception**, LF

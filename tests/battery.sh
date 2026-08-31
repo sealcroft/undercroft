@@ -1652,6 +1652,90 @@ if [ "$V1_DOC_N" != "$V1_N" ]; then
 fi
 echo "ok    the published /v1 route count ($V1_DOC_N) is the dispatch's own"
 
+# ── the illustrative diagram set publishes figures too (ROADMAP O74) ────────
+#
+# `architecture/platform-views/` is a SECOND description of the same engine.
+# Its own gate (`platform-views/check.py`) cannot do this: `arch-check` mounts
+# `./architecture` alone, read-only, so that checker physically cannot see
+# `crates/` and cannot derive what the truth is. This is therefore the only
+# place the two can be joined, and it is the same join the rows above already
+# make for `CLAUDE.md` and `architecture/index.html`.
+#
+# WHAT THIS CANNOT SEE, stated because the limit is the point. It compares
+# COUNTS. The defect that prompted it was PROSE: the deployment diagram's
+# accessible description said `/ui` sat behind the palace bearer, and `/ui` is
+# served in FRONT of that gate as a secret-free shell. No count moves when a
+# relational claim goes wrong, so a figure gate sails straight past it. Claims
+# of that shape are still bound by attention alone — that is O74's residue,
+# narrowed rather than closed.
+PV_DIR="architecture/platform-views"
+PV_TXT=$(cat "$PV_DIR"/*.html | sed -e 's/<[^>]*>/ /g')
+# `pub(crate) const`, not `pub const` — anchoring on the visibility keyword is
+# how the first version of this line measured 0 and reported the SET wrong.
+PV_WRITES=$(awk '/const WRITE_TOOLS/,/^\];/' crates/undercroft-cli/src/mcp.rs \
+            | grep -coE '"undercroft_[a-z_]+"' || true)
+PV_CLIOPS=$(( $(awk '/pub const SURFACE_ABSENCES/,/^\];/' crates/undercroft-cli/src/parity.rs \
+                 | grep -oE '^    \("[^"]+"' | sort -u | grep -c . || true) \
+             + $(awk '/pub const SURFACE_COMPLETE/,/^\];/' crates/undercroft-cli/src/parity.rs \
+                 | grep -cE '^    "' || true) ))
+
+# name|regex capturing the number as \1|truth
+PV_FIGURES=(
+  "MCP tools|([0-9]+) (MCP agent tools|tools ·)|$PF_MCP"
+  "MCP write tools|· ([0-9]+) writes?|$PV_WRITES"
+  "/v1 routes|([0-9]+)[ -]routes? ?(·|HTTP)|$V1_N"
+  "CLI operations|([0-9]+) operations|$PV_CLIOPS"
+)
+PV_FAIL=0
+PV_SEEN=0
+for row in "${PV_FIGURES[@]}"; do
+  pv_name=${row%%|*}; pv_rest=${row#*|}
+  pv_re=${pv_rest%|*}; pv_truth=${pv_rest##*|}
+  # every occurrence, because the same figure is repeated across diagrams
+  pv_found=$(printf '%s' "$PV_TXT" | grep -oE "$pv_re" | grep -oE '[0-9]+' | sort -u)
+  pv_count=$(printf '%s\n' "$pv_found" | grep -c . || true)
+  if [ "$pv_count" -eq 0 ]; then
+    echo "FAIL  platform-views: found NO '$pv_name' figure to check."
+    echo "      Either the set stopped publishing it (drop this row) or the"
+    echo "      pattern rotted — a reader that matches nothing checks nothing."
+    PV_FAIL=1
+    continue
+  fi
+  PV_SEEN=$((PV_SEEN + pv_count))
+  for pv_v in $pv_found; do
+    if [ "$pv_v" != "$pv_truth" ]; then
+      echo "FAIL  platform-views publishes $pv_name = $pv_v; the tree measures $pv_truth"
+      PV_FAIL=1
+    fi
+  done
+done
+# The crate count is spelled as a WORD in this set, so it needs its own read.
+# Only words that are NUMBERS are claims: "three separate crates reach it" is
+# an ordinary sentence, and a first version that took the alphabetically-first
+# match read "separate" as the count and failed on a correct tree.
+PV_CRATE_SEEN=0
+for pv_w in $(printf '%s' "$PV_TXT" | grep -oiE '[a-z]+ (Rust )?crates' \
+              | awk '{print tolower($1)}' | sort -u); do
+  pv_n=$(pf_word "$pv_w")
+  case $pv_n in ''|*[!0-9]*) continue;; esac   # not a number word — not a claim
+  PV_CRATE_SEEN=$((PV_CRATE_SEEN + 1))
+  if [ "$pv_n" != "$PF_CRATES" ]; then
+    echo "FAIL  platform-views says '$pv_w crates'; the tree has $PF_CRATES"
+    PV_FAIL=1
+  fi
+done
+if [ "$PV_CRATE_SEEN" -eq 0 ]; then
+  echo "FAIL  platform-views: no '<number-word> crates' phrase found — pattern rotted."
+  PV_FAIL=1
+fi
+if [ "$PV_FAIL" -ne 0 ]; then
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    platform-views' $((PV_SEEN + 1)) published figures agree with the tree"
+echo "      (counts only — a relational claim in prose is NOT gated; see O74)"
+
 fi  # end of the host-side preflight block (`--no-preflight` skips it)
 
 if [ "$PREFLIGHT_ONLY" -eq 1 ]; then

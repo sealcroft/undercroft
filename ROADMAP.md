@@ -3364,7 +3364,7 @@ existing shape is unchanged without it.
 
 ---
 
-### O74 — two diagram sets describe one system and nothing binds them
+### O74 — CLOSED 2026-08-31: the countable claims are gated, and depending on the set found a false one
 
 `architecture/diagrams/` holds the eleven governed SVGs that `build.sh`
 derives `index.html` and the PDFs from, gated by `arch-check`.
@@ -3379,16 +3379,63 @@ code. Change a surface and both sets must move; only attention connects them.
 This was created deliberately and with the trade stated at the time, so it is
 filed as a known cost rather than discovered later.
 
-**Options, none yet chosen.** (a) Accept and label: the set is illustrative and
-may lag, said on its own index page — already true, and the cheapest. (b) A
-shared inventory both sets are counted against, the way `parity.rs` counts the
-MCP surface — real coverage, real cost, and it only works for claims that
-reduce to a countable list. (c) Retire one set. **"Accepted" is not a resting
-state** by this file's own rule, so this needs a ruling rather than silence.
+**Options as first filed.** (a) Accept and label. (b) A shared inventory both
+sets are counted against. (c) Retire one set.
 
-**Gate:** whichever is chosen, the drift caveat must not live only in a commit
-message. It is on the set's index page today and must stay wherever the set is
-published.
+**RULED 2026-08-31 by the maintainer: depend on the diagrams, because they
+represent the facts we have now.** That is (b), and it is the option the
+original filing priced wrongly — it called a shared inventory "real cost", and
+by the time the ruling came the cost was nearly nil, because the `prose
+figures` preflight ALREADY reads `architecture/index.html` and
+`website/landing/index.html` and already derives every number in question.
+Extending it was a block in an existing reader, not new machinery.
+
+**A ruling that says "depend on these" is a ruling that they must be kept
+true**, which is the whole argument for gating rather than labelling: (a) asks
+a reader to trust a document nothing checks, and the moment you depend on it
+that is no longer acceptable.
+
+**Depending on them immediately found a FALSE one, which is the entry's best
+evidence for itself.** `10-deployment.html`'s accessible description said
+`serve-http` "exposes /v1, /mcp, /ui and /metrics **behind a bearer token**".
+It does not. Read in handler order, `http.rs` serves `/healthz` (247) and
+`/ui` (275) **in front of** the palace bearer gate (300); `/metrics` (316) is
+behind it. `/ui` is deliberately unauthenticated — a static shell carrying no
+secrets that the operator pastes the bearer INTO — so the design is sound and
+only the description was wrong. Corrected. Note the visible diagram was right
+all along (its label reads `/v1 + /mcp behind one bearer`); the falsehood was
+in the `<desc>`, i.e. **the text a screen-reader user gets and a sighted
+reader never sees**.
+
+**What shipped.** A `platform-views` block in the `prose figures` preflight
+joining the set's published counts to the tree: MCP tools (34), MCP write
+tools (12), `/v1` routes (37), CLI operations (74) and the crate count, which
+is spelled as a WORD and needs its own read. It lives there and not in
+`check.py` for a hard reason: `arch-check` mounts `./architecture` alone,
+read-only, so that checker physically cannot see `crates/` and cannot know what
+the truth is. Both arms executed — a figure changed to 38 fails naming both
+values; a pattern broken so it matches nothing fails as a premise failure
+rather than passing on an empty scan.
+
+**Two bugs in my own gate, caught by running it rather than by reading it.**
+It anchored on `pub const WRITE_TOOLS` where the code says `pub(crate) const`,
+so it measured 0 writes and reported the SET wrong; and its crate-count regex
+took the alphabetically-first `<word> crates` match, which is "separate crates"
+from an ordinary sentence in `03-crate-map`. Both are the same failure this
+tree keeps recording — a reader that cannot see what it is counting — arriving
+in the gate written to prevent it.
+
+**The residue, and it is the honest half of this closure.** The gate compares
+COUNTS. The defect that prompted it was PROSE, and **no count moves when a
+relational claim goes wrong** — a figure gate sails straight past "/ui is
+behind the bearer". Claims of that shape (what sits behind what, what refuses
+what, what is ordered before what) remain bound by attention alone. That is
+narrowed, not closed, and the preflight's own success line says so out loud so
+nobody reads a green as full coverage.
+
+**Gate:** the `platform-views` block in the `prose figures` preflight, both
+arms probed. The drift caveat stays on the set's index page — gating the counts
+does not make the set authoritative, and `diagrams/` remains the authority.
 
 **Verified by hand 2026-08-30 — the check this entry says nothing performs,
 performed once.** Every structural claim the set publishes was re-derived from
@@ -3954,13 +4001,37 @@ client, not a console fix, and it was not what was reported. Changing a
 response body is the kind of thing this project files rather than folds in
 silently.
 
-**The decision it needs**, which is why this is a heading and not a patch:
-every other `/v1` error carries `class` (`integrity`, and 409/400 routing
-through `vault_err`). An `unauthorized` body that grew a `class` would be
-consistent — but 401 is answered BEFORE `Tenancy::authorize` returns a vault,
-so it has no vault-scoped context, and saying more about WHY a bearer failed
-is exactly what an unauthenticated caller must not learn. Those two pull in
-opposite directions and the resolution is a ruling, not a refactor.
+**BOTH PREMISES OF THIS FILING ARE FALSE — checked against the code and the
+docs on 2026-08-31, and the entry is much smaller than it looked.** It read:
+*"every other `/v1` error carries `class` … An `unauthorized` body that grew a
+`class` would be consistent — but … saying more about WHY a bearer failed is
+exactly what an unauthenticated caller must not learn. Those two pull in
+opposite directions and the resolution is a ruling, not a refactor."*
+
+1. **`class` is NOT on every other error.** `tenant.rs`'s own comment beside
+   the envelope: *"`class` is additive and present only for the integrity
+   family."* `RestError::new` defaults it to `None`. So a 401 carrying no
+   `class` is already consistent with the MAJORITY of `/v1` errors — the
+   inconsistency this entry was built on does not exist.
+2. **The "what may a caller learn" half is already RULED, in a published
+   document.** `docs/remote-server.md`: *"Any failure is a bare 401 — the
+   reason is logged server-side, never returned."* By the drift doctrine the
+   documents lead on a promise already made, so there is nothing to weigh.
+
+**What actually remains is narrow, mechanical, and was never filed.** Three
+401 sites disagree on ENVELOPE, not content: `http.rs` (the palace bearer
+gate) and `http.rs` (the MCP transport assertion) answer with a **plain-text**
+body `unauthorized`, while `tenant.rs`'s `RestError::new(401, "unauthorized")`
+goes through the JSON envelope as `{"error":"unauthorized"}`.
+
+And even that may be principled rather than drift: the palace gate is the
+OUTERMOST gate, fronting `/mcp`, `/v1` **and `/metrics`** — three different
+content types — whereas `tenant.rs` sits inside the JSON API.
+
+**So this is a small yes/no, not a doctrinal ruling:** normalise the two
+plain-text 401s to the JSON envelope, or leave them. Either way the body stays
+the single word `unauthorized` with no `class`, so the documented contract is
+untouched and an unauthenticated caller learns nothing new.
 
 ### O67 — CLOSED 2026-08-21: the universe is derived, the partition is three-way, and eight unreachable capabilities are reachable
 

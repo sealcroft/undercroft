@@ -7,6 +7,52 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### depending on the diagram set, as ruled — which gated its counts and found a false claim (M42)
+
+**ROADMAP O74 CLOSED by maintainer ruling: *depend on the diagrams, they
+represent the facts we have now*.** That is option (b), a shared inventory —
+and a ruling that says "depend on these" is a ruling that they must be kept
+true, which is the argument for gating rather than labelling.
+
+**The original filing priced it wrongly.** It called a shared inventory "real
+coverage, real cost". By the time the ruling came the cost was nearly nil: the
+`prose figures` preflight already reads `architecture/index.html` and
+`website/landing/index.html` and already derives every number in question, so
+this was a block in an existing reader rather than new machinery.
+
+**Depending on the set immediately found a FALSE claim.**
+`10-deployment.html`'s accessible description said `serve-http` "exposes /v1,
+/mcp, **/ui** and /metrics behind a bearer token". It does not. In handler
+order `http.rs` serves `/healthz` (247) and `/ui` (275) **in front of** the
+palace bearer gate (300); `/metrics` (316) is behind it. `/ui` is deliberately
+unauthenticated — a static shell carrying no secrets that the operator pastes
+the bearer INTO — so the design was sound and only the description was wrong.
+Corrected. The visible diagram was right all along (`/v1 + /mcp behind one
+bearer`); the falsehood lived in the `<desc>`, **the text a screen-reader user
+gets and a sighted reader never sees**.
+
+**The gate.** A `platform-views` block joining the set's published counts to
+the tree — MCP tools (34), MCP writes (12), `/v1` routes (37), CLI operations
+(74), and the crate count, which is spelled as a word and needs its own read.
+It is in `tests/battery.sh`, not `check.py`, for a hard reason: `arch-check`
+mounts `./architecture` alone and read-only, so that checker cannot see
+`crates/` and cannot know the truth. Both arms executed — a figure changed to
+38 fails naming both values; a pattern broken so it matches nothing fails as a
+premise failure instead of passing on an empty scan.
+
+**Two bugs in my own gate, caught by running it rather than reading it.** It
+anchored on `pub const WRITE_TOOLS` where the code says `pub(crate) const`, so
+it measured 0 and reported the set wrong; and its crate regex took the
+alphabetically-first `<word> crates`, which is "separate crates" from an
+ordinary sentence. Both are this tree's recurring failure — a reader that
+cannot see what it counts — arriving inside the gate written to prevent it.
+
+**The residue, stated rather than absorbed.** The gate compares COUNTS, and no
+count moves when a relational claim goes wrong. Claims about what sits behind
+what, or refuses what, or is ordered before what, remain bound by attention.
+The preflight's own success line says "counts only" so a green is not misread
+as full coverage.
+
 ### AMB is ruled out of the plan, and the test it left behind turns out to be load-bearing (M41)
 
 **ROADMAP O75 CLOSED by maintainer ruling, 2026-08-30.** No code changed. Seven
