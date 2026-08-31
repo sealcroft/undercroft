@@ -7,6 +7,54 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### one endpoint answered in two content types, and no 401 in the tree named its scheme (M43)
+
+**ROADMAP O64 CLOSED.** `serve-http`'s two transport-gate 401s now answer
+`{"error":"unauthorized"}` with `Content-Type: application/json`, and **every
+401 on both binaries** sends `WWW-Authenticate: Bearer`.
+
+**The tree decided this, not taste.** Asked whether best practice is to unify
+or let each surface keep its own style, the answer was already written here:
+`undercroft-orchestrator` answers `/t/*` and `/admin/*` through `err_response`
+→ `json_response`, i.e. JSON, and the engine's own `/v1` errors do the same.
+Two of the three API-plane 401s already agreed — `http.rs`'s two gate sites
+were the outlier, which is a drift rather than a second valid convention.
+
+**The defect was not "two styles". It was one endpoint answering in two.** The
+gate sits at `http.rs:300` and `tenancy.handle` at `:379`, so `POST
+/v1/vaults/acme/search` returned `text/plain` for a bad bearer and
+`application/json` for a bad vault — and a JSON client could not predict which,
+on the most common failure path a deployment has.
+
+**A larger defect surfaced while grounding it, and no filing mentioned it:**
+`WWW-Authenticate` was **absent from the entire tree**, on both binaries, while
+RFC 9110 §11.6.1 makes it a MUST on any 401. Without it a conformant client is
+never told how to authenticate and some stacks will not retry with credentials
+at all — so this can only turn a stuck client into a working one. Added at the
+two response CHOKE POINTS (`tenant.rs::respond`, the orchestrator's
+`json_response`) keyed on the STATUS, not at the four `401` call sites, so a
+fifth raised later inherits it.
+
+**Where per-surface style is RIGHT, kept deliberately.** The rule adopted is
+*an error should match the SUCCESS format of the endpoint being called* — not
+"one format everywhere". The orchestrator's dedicated metrics listener keeps a
+`text/plain` body because its only route serves Prometheus text and a scraper
+keys on the status; it gains the challenge header and nothing else.
+
+**Nothing new is disclosed.** The body stays the single word, no reason and no
+`class` — `docs/remote-server.md`'s documented "a bare 401, the reason logged
+server-side and never returned" is untouched and is now pinned by test on both
+the unit and e2e sides, so a future edit that helpfully explains WHY a bearer
+failed fails the build.
+
+**Verified.** A unit test on the response builder, **counterfactualled**:
+reverted to the pre-fix body it FAILS, naming the two-content-types defect;
+restored, it passes. Three e2e arms read the headers off the wire through
+`serve-http`; one more asserts the challenge on the orchestrator's admin plane,
+which is the half genuinely missing there. `UPGRADING.md` and
+`docs/remote-server.md` both carry it, since a client string-matching the
+plain-text body will notice.
+
 ### depending on the diagram set, as ruled — which gated its counts and found a false claim (M42)
 
 **ROADMAP O74 CLOSED by maintainer ruling: *depend on the diagrams, they

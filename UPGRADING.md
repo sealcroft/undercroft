@@ -67,6 +67,41 @@ so rather than implying it checked them.
 
 ## 1.2.0 (unreleased)
 
+### A 401 from `serve-http` is now JSON, and every 401 carries `WWW-Authenticate`
+
+**Who is affected:** a client that string-matches the literal body
+`unauthorized`, or that assumes a `text/plain` 401, from `serve-http`'s
+transport gate. The STATUS is unchanged (401), the body still says the same
+single word, and nothing new is disclosed — only the envelope moved.
+
+`serve-http`'s two gate sites (the palace bearer, and the per-vault transport
+assertion in front of `/mcp`) answered with a bare `text/plain` body and **no
+headers at all**. Everything one layer deeper — every error raised inside
+`/v1` — answered `application/json`. So a single endpoint returned two content
+types depending on which layer rejected the caller: a bad bearer gave text, a
+bad vault gave JSON, and a JSON client could not predict which.
+
+They now answer `{"error":"unauthorized"}` with `Content-Type:
+application/json`, which is what the engine's own `/v1` errors and the
+orchestrator's `/t/*` and `/admin/*` refusals have always done. This is the
+outlier being corrected, not a new convention.
+
+Separately, **no 401 anywhere in this tree sent `WWW-Authenticate`**, which
+RFC 9110 §11.6.1 makes a MUST. Every 401 on both binaries now sends
+`WWW-Authenticate: Bearer`. Some HTTP stacks will not retry with credentials
+without it, so this can only turn a previously-stuck client into a working
+one.
+
+**What did NOT change, deliberately:** the body carries no reason and no
+`class`. `docs/remote-server.md`'s "Any failure is a bare 401 — the reason is
+logged server-side, never returned" is a documented contract and is pinned by
+test on both the unit and e2e sides. The orchestrator's dedicated metrics
+listener still answers `text/plain`, because an error should match the success
+format of the endpoint being called and that endpoint serves Prometheus text.
+
+**What to do:** if you match on the body, parse it as JSON and read `error`,
+or match on the status alone. Nothing else changes.
+
 ### `undercroft backup restore` now REFUSES while the vault is in use (exit 1)
 
 **Who is affected:** any script or runbook that restores a backup without

@@ -69,6 +69,17 @@ body_has "orchestrator healthz"        '"ok":true'    -- "$O/healthz"
 body_has "/ui serves fleet console"    'Fleet Console' -- "$O/ui"
 code_is  "admin without token is 401"  401            -- "$O/admin/instances"
 code_is  "admin with wrong token 401"  401            -- -H "Authorization: Bearer wrong-token-aaaaaaaa" "$O/admin/instances"
+# ROADMAP O64 — RFC 9110 §11.6.1 makes a challenge header a MUST on any 401,
+# and it was missing from every 401 in the fleet. The control plane's BODIES
+# were already right (`err_response` has always answered JSON), which is what
+# made the engine's two plain-text gate sites the outlier rather than a second
+# valid convention — so this asserts the half that was actually absent here.
+hdrs="$(curl -s -D - -o /dev/null "$O/admin/instances")"
+if grep -qi '^WWW-Authenticate: *Bearer' <<<"$hdrs"; then
+  ok "an admin 401 names its scheme"
+else
+  fail "an admin 401 names its scheme" "no WWW-Authenticate in: $(tr -d '\r' <<<"$hdrs" | head -4 | tr '\n' ' ')"
+fi
 
 echo "== Instance registry =="
 body_has "register engine-a" '"added":"engine-a"' -- -X POST "${ADMIN[@]}" \

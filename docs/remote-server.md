@@ -207,6 +207,17 @@ authorizes vault B (the vault id is inside the MAC), a timestamp outside
 ±120s is refused, and comparison is constant-time. Any failure is a bare
 401 — the reason is logged server-side, never returned.
 
+**The shape of every 401**, on both binaries: `{"error":"unauthorized"}` with
+`Content-Type: application/json` and `WWW-Authenticate: Bearer`. The body
+carries no reason and no `class`, which is the contract above; the challenge
+header is RFC 9110 §11.6.1's MUST and tells a client only the scheme it
+already used. Match on the status, or parse the JSON and read `error` — the
+transport gate answered `text/plain` before 1.2.0, so one endpoint used to
+return two content types depending on which layer refused you. The
+orchestrator's dedicated metrics listener is the one exception and stays
+`text/plain`: an error should match the success format of the endpoint being
+called, and that one serves Prometheus text.
+
 Mint one for testing or from a shell with `undercroft assert-header <vault>`
 (reads `UNDERCROFT_ASSERTION_SECRET`); production callers reimplement the
 same one-line HMAC in their own stack.

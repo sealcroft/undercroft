@@ -1246,6 +1246,31 @@ if grep -q "401" <<<"$out"; then
 else
   echo "FAIL  http rejects missing token"; echo "$out" | head -3 | sed 's/^/      /'; FAIL=$((FAIL+1))
 fi
+# ROADMAP O64 — the SHAPE of that refusal, through the surface a client drives.
+# `$out` is the raw response, headers included, so these are read off the wire
+# rather than off a struct. Before the fix the gate answered `text/plain` with
+# no headers at all, so a JSON client on /v1 got text on the auth path and JSON
+# on every other failure — one endpoint, two content types, decided by which
+# layer rejected you.
+if grep -qi '^Content-Type: *application/json' <<<"$out"; then
+  echo "ok    a gate 401 is application/json"; PASS=$((PASS+1))
+else
+  echo "FAIL  a gate 401 is application/json"; echo "$out" | head -6 | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+# RFC 9110 §11.6.1 makes this a MUST, and it was absent from every 401 here.
+if grep -qi '^WWW-Authenticate: *Bearer' <<<"$out"; then
+  echo "ok    a gate 401 names its scheme"; PASS=$((PASS+1))
+else
+  echo "FAIL  a gate 401 names its scheme"; echo "$out" | head -6 | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+# And it still says NOTHING: `docs/remote-server.md` documents a bare 401 whose
+# reason is logged server-side and never returned. This is the half a helpful
+# future edit would break.
+if grep -q '{"error":"unauthorized"}' <<<"$out" && ! grep -qi 'class' <<<"$out"; then
+  echo "ok    a gate 401 stays bare"; PASS=$((PASS+1))
+else
+  echo "FAIL  a gate 401 stays bare"; echo "$out" | tail -3 | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
 out="$(http_req /mcp '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' $'Authorization: Bearer e2e-secret-token\r\n')"
 if grep -q "undercroft_kg_add" <<<"$out"; then
   echo "ok    http tools/list with token"; PASS=$((PASS+1))

@@ -2927,11 +2927,24 @@ fn parse_vector(body: &Value, key: &str) -> Result<Option<Vec<f32>>, RestError> 
 fn respond(req: Request, code: u16, body: &str, content_type: &str) {
     let header = Header::from_bytes(&b"Content-Type"[..], content_type.as_bytes())
         .expect("valid content-type header");
-    let _ = req.respond(
-        Response::from_string(body)
-            .with_status_code(code)
-            .with_header(header),
-    );
+    let mut resp = Response::from_string(body)
+        .with_status_code(code)
+        .with_header(header);
+    // RFC 9110 §11.6.1: a server generating 401 MUST send a challenge. It was
+    // absent from every 401 in this tree (ROADMAP O64) — engine and control
+    // plane alike — so a conformant client was never told HOW to authenticate
+    // and some stacks will not retry with credentials at all. Added HERE, at
+    // the one place every `/v1` response is written, rather than at the single
+    // `RestError::new(401, …)` call site, because the requirement is on the
+    // STATUS and a second 401 raised elsewhere would silently miss it.
+    // `Bearer` discloses only the scheme the caller already used, so the
+    // documented "bare 401, reason never returned" contract is untouched.
+    if code == 401 {
+        resp = resp.with_header(
+            Header::from_bytes(&b"WWW-Authenticate"[..], &b"Bearer"[..]).expect("static header"),
+        );
+    }
+    let _ = req.respond(resp);
 }
 
 // The read-time convention tests moved with `locale_from` into

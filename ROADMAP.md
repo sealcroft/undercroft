@@ -3990,7 +3990,7 @@ a suite needing no Rust build is nearly free in CI. This one is not in that
 class — it builds the engine image — so the cost argument stands, but it is
 now the only battery suite that would.
 
-### O64 — `/v1` answers a bare `unauthorized` body
+### O64 — CLOSED 2026-08-31: the gate answers JSON like everything else, and every 401 names its scheme
 
 Filed inside M8 and given a heading here. M8 fixed the CONSOLE: `GET /ui` now
 names the credential it needs from page load, and a 401 explains the usual
@@ -4032,6 +4032,55 @@ content types — whereas `tenant.rs` sits inside the JSON API.
 plain-text 401s to the JSON envelope, or leave them. Either way the body stays
 the single word `unauthorized` with no `class`, so the documented contract is
 untouched and an unauthenticated caller learns nothing new.
+
+**RESOLVED 2026-08-31, and the tree decided it rather than taste.** Asked
+whether best practice is to unify or to let each surface keep its own style,
+the answer turned out to be already written in this repository:
+`undercroft-orchestrator` answers `/t/*` and `/admin/*` refusals through
+`err_response` → `json_response`, i.e. `{"error": …}` as `application/json`,
+and the engine's own `/v1` errors do the same. **Two of the three API-plane
+401s already agreed; `http.rs`'s two gate sites were the outlier.** That is a
+drift by this file's own definition, not a second valid convention.
+
+**The decisive framing is not "consistency is nice".** It is that ONE endpoint
+answered in two content types depending on WHICH LAYER refused: `http.rs`'s
+gate sits at line 300 and `tenancy.handle` at 379, so `POST
+/v1/vaults/acme/search` returned `text/plain` for a bad bearer and
+`application/json` for a bad vault. A JSON client could not predict which, on
+the most common failure path a deployment has.
+
+**A bigger defect surfaced while grounding it, and it was in no filing.**
+`WWW-Authenticate` was **absent from the entire tree** — engine and control
+plane — and RFC 9110 §11.6.1 makes it a MUST on any 401. Without it a
+conformant client is never told how to authenticate, and some stacks will not
+retry with credentials at all. Every 401 on both binaries now sends
+`WWW-Authenticate: Bearer`, which discloses only the scheme the caller already
+used.
+
+**Where per-surface style IS right, kept deliberately.** The rule adopted is
+*an error should match the SUCCESS format of the endpoint being called* — not
+"one format everywhere". The orchestrator's dedicated metrics listener
+(`UNDERCROFT_ORCH_METRICS_ADDR`) therefore keeps a `text/plain` body: its only
+route serves Prometheus text, and a scraper keys on the status without reading
+the body. It gains the challenge header and nothing else.
+
+**Placement.** The header is added at the two response CHOKE POINTS —
+`tenant.rs::respond` and the orchestrator's `json_response` — keyed on the
+STATUS rather than at the `RestError::new(401, …)` / `err_response(401, …)`
+call sites, of which there are four. A fifth 401 raised later inherits the
+challenge instead of forgetting it.
+
+**What did not change, and is pinned.** The body is still one word, with no
+reason and no `class`: `docs/remote-server.md`'s documented "bare 401" contract
+is asserted by both the unit test and an e2e arm, so a future edit that
+helpfully explains why a bearer failed fails the build.
+
+**Verified.** A unit test on the response builder, counterfactualled — reverted
+to the pre-fix body it FAILS naming the two-content-types defect, restored it
+passes. Three e2e arms read the headers off the wire through `serve-http`, and
+one more asserts the challenge on the orchestrator's admin plane, which is the
+half that was genuinely missing there. `UPGRADING.md` carries the entry, since
+a client string-matching the plain-text body will notice.
 
 ### O67 — CLOSED 2026-08-21: the universe is derived, the partition is three-way, and eight unreachable capabilities are reachable
 

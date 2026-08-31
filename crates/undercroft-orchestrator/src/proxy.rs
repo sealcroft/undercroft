@@ -543,9 +543,20 @@ fn bearer(req: &tiny_http::Request) -> Option<String> {
 
 fn json_response(status: u16, body: &serde_json::Value) -> Response<std::io::Cursor<Vec<u8>>> {
     let bytes = body.to_string().into_bytes();
-    Response::from_data(bytes)
+    let resp = Response::from_data(bytes)
         .with_status_code(status)
-        .with_header(Header::from_bytes("Content-Type", "application/json").expect("header"))
+        .with_header(Header::from_bytes("Content-Type", "application/json").expect("header"));
+    // RFC 9110 §11.6.1 — see the twin in the engine's `tenant.rs::respond`.
+    // On the STATUS rather than at the `err_response(401, …)` call sites, of
+    // which this file has three (admin, and two tenant arms): a fourth added
+    // later inherits the challenge instead of forgetting it. This plane's
+    // BODIES were already right — `err_response` has always answered
+    // `{"error": …}` as JSON, which is why the engine's two plain-text gate
+    // sites were the outlier rather than a second valid convention.
+    if status == 401 {
+        return resp.with_header(Header::from_bytes("WWW-Authenticate", "Bearer").expect("header"));
+    }
+    resp
 }
 
 fn err_response(status: u16, msg: &str) -> Response<std::io::Cursor<Vec<u8>>> {
@@ -635,8 +646,21 @@ fn spawn_metrics_listener() -> anyhow::Result<()> {
             };
             if !authed {
                 undercroft_obs::orch_auth_rejected("metrics");
-                let _ =
-                    request.respond(Response::from_string("unauthorized").with_status_code(401));
+                // Body stays text/plain DELIBERATELY, and this is the one 401
+                // in the fleet that should not be JSON: this is the dedicated
+                // metrics listener (`UNDERCROFT_ORCH_METRICS_ADDR`), whose only
+                // route answers Prometheus text on success. The rule is that an
+                // error should match the SUCCESS format of the endpoint being
+                // called — not that one format wins everywhere — and a scraper
+                // keys on the status without reading the body at all. The
+                // challenge header is still required (RFC 9110 §11.6.1).
+                let _ = request.respond(
+                    Response::from_string("unauthorized")
+                        .with_status_code(401)
+                        .with_header(
+                            Header::from_bytes("WWW-Authenticate", "Bearer").expect("header"),
+                        ),
+                );
                 continue;
             }
             if request.url().split('?').next().unwrap_or("") != "/metrics" {
