@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — 1.2.0
+## 1.2.0 — 2026-09-01
 
 MINOR: new capability, backward compatible. Every item here adds a field or a
 value **beside** one that stays, because renaming any of them would be MAJOR

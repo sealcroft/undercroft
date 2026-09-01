@@ -1288,7 +1288,7 @@ touching anyone's existing corpus.
 integrity verdict, and two different model files must produce two different
 identities.
 
-## 1.2.0 — three round-four rows, all naming or reporting contracts, plus what closing them found
+## 1.2.0 — released 2026-09-01 — three round-four rows, all naming or reporting contracts, plus what closing them found
 
 MINOR: new capability, backward compatible. Each of these adds a field or a
 value beside one that stays, because **renaming any of them is MAJOR by this
