@@ -7,6 +7,62 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### the agent-facing read/write column is counted against the code that decides it (M57)
+
+**ROADMAP O86 CLOSED**, the gateable half of M55's class. `docs/AGENTS.md`
+§9 marks each MCP tool `W` for a write and leaves the column empty for a
+read. That column is the agent-facing answer to *will a `--read-only` server
+serve this*, and nothing compared it to `READ_TOOLS`/`WRITE_TOOLS` — the
+lists `refused_when_read_only` actually consults.
+
+The neighbours were all gated, which is what made this a gap rather than an
+oversight: `parity.rs` counts tool NAMES against `MCP_TOOLS` both ways, and a
+preflight compares the `/v1` route SETS in two documents against the
+dispatch. The marker sat between them, checked by no one — so O83's
+reclassification moved the code and both `/v1` references and left §9 saying
+the opposite, until one document contradicted itself, §9 against §10.
+
+**The code is the derived side**, never a second list — O80's lesson, that
+two inventories can agree with each other and be jointly wrong. Two axes
+(which tools exist, which are writes), both directions on each.
+
+**The notation was the work.** The extractor expands suffix abbreviations
+(`undercroft_kg_add` / `_kg_invalidate`), skips rows that are not tools
+(`undercroft_save` / `_add_drawer` *also take* `kind`), and reads a column
+that must be `W` or empty. Measured: **with the expansion line removed the
+doc parses 28 tools instead of 38**, and a gate without a probe would have
+reported a clean tree for the other ten. So the probe fires on a count floor
+AND on `undercroft_list_rooms` — a name that appears in that table only as
+`_list_rooms`, and therefore disappears the instant expansion breaks.
+
+**One row was fixed to make the parse total.** `undercroft_history` carried
+its parameters in the W column, under a header that reads `W`. They moved
+into the description, and the gate now REFUSES any marker that is neither
+`W` nor empty: a cell the gate cannot read is where the next drift hides,
+and this one was being counted as a read by accident.
+
+**Five counterfactuals, executed against the real script**, each behind an
+anchor probe so a missed edit could not print a pass — a read marked `W`
+(the M55 defect restored), a write with its marker removed, an unreadable
+marker, expansion broken, and the row matcher neutered. All fire. The last
+is caught by an existing empty-source gate that exits first, so this gate's
+own premise arm is proved by the expansion case instead; that is stated
+rather than claimed.
+
+**My own defect, found by reading the counterfactual's OUTPUT rather than its
+exit code:** the premise message printed *"the suffix expansion is not
+running — "* and stopped, because unescaped backticks in a double-quoted
+`echo` ran the tool name as a command. Fixed, the block re-scanned for
+others, and re-run to confirm the message names its subject. A gate whose
+failure message is empty is a gate that fires and tells you nothing.
+
+**No new `═══ preflight:` header, deliberately**, so the published count
+stays fourteen. It sits inside `prose figures` beside the `/v1` route-set
+comparison — also a set comparison rather than a figure, so that section is
+already broader than its name. Splitting it to insert a header would have
+moved two unrelated arms under the new heading; every arm prints its own
+`ok` line naming what it checked.
+
 ### eight doc blocks documenting the wrong item, and a destructive-operation guard that discarded the error making it work (M56)
 
 **The rest of the PR #123 review**, and the doc half is one mechanical defect

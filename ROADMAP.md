@@ -3682,7 +3682,7 @@ files, checked by decompressing rather than grepping.
 
 ---
 
-### O86 — the R/W column in `docs/AGENTS.md` is bound by attention alone
+### O86 — CLOSED 2026-09-01: the R/W column is counted against the code, both directions
 
 **Filed 2026-09-01 by M55, which found it wrong.** The MCP tool table in §9
 marks each tool `W` for a write and leaves the column empty for a read. That
@@ -3715,9 +3715,57 @@ take `kind` ``), so a naive regex silently matches a handful and reports a
 clean tree — this repo's most-recorded failure. The probe must assert the
 extractor found a known count on both sides before any zero is believed.
 
-**Not closed in M55** because building it is its own unit with its own
-counterfactual, and M55's scope was two defects found in review. The
-instance is fixed; the class is not.
+**CLOSED 2026-09-01 (M57), and the filing's own warning was the accurate
+part.** The gate is a preflight arm in `tests/battery.sh`, placed beside the
+`/v1` route-set arm exactly as the filing said. `READ_TOOLS`/`WRITE_TOOLS`
+are the derived side; the doc is compared to them on **two axes** (which
+tools exist, and which are writes), **both directions** on each.
+
+**The notation was the work, and the premise probe earned its place.** The
+extractor has to expand suffix abbreviations (`undercroft_kg_add` /
+`_kg_invalidate`), skip rows that are not tools (`undercroft_save` /
+`_add_drawer` *also take* `kind`), and read a column that must be `W` or
+empty. Measured: with the expansion line removed, the doc parses **28** tools
+instead of 38 and the comparison would have reported a clean tree for the
+other ten — so the probe fires on a count floor AND on
+`undercroft_list_rooms`, a name that exists in that table only as
+`_list_rooms` and therefore vanishes the moment expansion breaks.
+
+**One row had to be fixed to make the parse total.** `undercroft_history`
+carried its parameters in the W column, under a header that says `W`. The
+cell is now empty and the parameters moved into the description, and the gate
+REFUSES any marker that is neither `W` nor empty — an unreadable cell is
+where the next drift hides, and the gate that cannot read it would have
+reported the row as a read by accident.
+
+**Five counterfactuals, all executed against the real script**, each with an
+anchor probe so a missed edit could not print a pass: a read marked `W` (the
+M55 defect restored — fires), a write with its marker removed (fires, naming
+the tool), an unreadable marker (fires), expansion broken (both premise arms
+fire), and the row matcher neutered (caught, though by an existing
+empty-source gate that exits first — so my own premise arm is proved by the
+expansion case rather than this one, which is stated rather than claimed).
+
+**A defect of mine, found by reading the counterfactual's output rather than
+its exit code:** the premise message printed *"the suffix expansion is not
+running — "* and then nothing, because unescaped backticks inside a
+double-quoted `echo` ran `undercroft_list_rooms` as a command. Fixed, the
+block re-scanned for other unescaped backticks, and re-run to confirm the
+message names its subject.
+
+**It adds no new `═══ preflight:` header, deliberately**, so the published
+count stays fourteen. It lives inside the `prose figures` section beside the
+`/v1` route-set comparison, which is also a set comparison rather than a
+figure — that section is already broader than its name. Splitting it to
+insert a header would have put the route-count and platform-views arms under
+the new heading, which is worse than a loose grouping; every arm prints an
+`ok` line naming its own claim.
+
+**Residual, stated:** this gates the MCP tool table only. The `/v1` route
+table in §10 carries no R/W marker (the method is the classification, and the
+route SETS are already gated), and no other reference in the tree publishes a
+read/write column. If one is added, it needs its own arm — this gate derives
+its universe from `mcp.rs`, so it cannot see a claim made somewhere else.
 
 ---
 

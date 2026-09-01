@@ -1717,6 +1717,118 @@ if [ "$V1_FAIL" -ne 0 ]; then
 fi
 echo "ok    both /v1 route references match the dispatch exactly ($V1_N routes)"
 
+# ── the MCP tool table's R/W column, against the code that decides it ───────
+# ROADMAP O86. `docs/AGENTS.md` §9 marks each tool `W` for a write and leaves
+# the column empty for a read. That column is the agent-facing answer to *will
+# a `--read-only` server serve this*, and NOTHING compared it to the code.
+#
+# The neighbouring claims were all gated, which is what made this the gap
+# rather than an oversight: `parity.rs` counts tool NAMES against `MCP_TOOLS`
+# both ways, and the arm directly above counts the `/v1` route SETS. The
+# read/write MARKER sat between them, checked by no one — so O83's
+# reclassification of `index_status` moved the code and both `/v1` references
+# and left §9 saying the opposite, until the table contradicted itself, §9
+# against §10.
+#
+# ONE SIDE IS DERIVED FROM THE CODE, which is O80's lesson: two inventories
+# can agree with each other and be jointly wrong, so `READ_TOOLS` and
+# `WRITE_TOOLS` — the lists `refused_when_read_only` actually consults — are
+# the authority here, never a second doc.
+mcp_code_list() { # mcp_code_list <READ_TOOLS|WRITE_TOOLS>
+  awk "/const $1/,/^\];/" crates/undercroft-cli/src/mcp.rs \
+    | grep -oE '^ *"undercroft_[a-z_]+"' | tr -d '" ' | sort -u
+}
+MCP_CODE_W=$(mcp_code_list WRITE_TOOLS)
+MCP_CODE_R=$(mcp_code_list READ_TOOLS)
+MCP_CODE_ALL=$(printf '%s\n%s\n' "$MCP_CODE_R" "$MCP_CODE_W" | grep -c .)
+
+# The doc side, and the NOTATION is the hard part — a naive regex matches a
+# handful of rows and reports a clean tree, which is this repo's most-recorded
+# failure. Three shapes have to be handled: rows packing several tools behind
+# suffix abbreviations (`undercroft_kg_add` / `_kg_invalidate`), rows that are
+# not tools at all (`undercroft_save` / `_add_drawer` *also take* `kind`), and
+# the column itself, which must be `W` or empty and nothing else.
+mcp_doc_rows() { # emits "<tool> <W|.>" per tool, abbreviations expanded
+  awk -F'|' '/^\| `undercroft_/ {
+      c1 = $2; c2 = $3
+      if (c1 ~ /also takes?/) next          # a parameter row, not a tool row
+      gsub(/`/, "", c1); gsub(/[ \t]/, "", c2)
+      mark = (c2 == "W") ? "W" : (c2 == "" ? "." : "?")
+      n = split(c1, p, "/")
+      for (i = 1; i <= n; i++) {
+        t = p[i]; gsub(/^[ \t]+|[ \t]+$/, "", t)
+        if (t ~ /^_/) t = "undercroft" t     # the suffix form, expanded
+        if (t ~ /^undercroft_[a-z_]+$/) print t, mark
+      }
+    }' docs/AGENTS.md | sort -u
+}
+MCP_DOC=$(mcp_doc_rows)
+MCP_DOC_N=$(printf '%s\n' "$MCP_DOC" | grep -c . || true)
+
+# PREMISE, three arms. An extractor that read nothing agrees with everything,
+# and here it can also read SOME rows and look healthy.
+MCP_PREMISE=0
+if [ "${MCP_DOC_N:-0}" -lt 30 ] || [ "${MCP_CODE_ALL:-0}" -lt 30 ]; then
+  echo "FAIL  premise: parsed $MCP_DOC_N tool(s) from docs/AGENTS.md §9 and"
+  echo "      $MCP_CODE_ALL from mcp.rs; both should be dozens. A table or list"
+  echo "      was reshaped and this reader examined almost nothing."
+  MCP_PREMISE=1
+fi
+# The abbreviation arm: `undercroft_list_rooms` appears in that table ONLY as
+# the suffix `_list_rooms`, so if expansion breaks it vanishes silently and
+# every packed row collapses to its first tool.
+if ! printf '%s\n' "$MCP_DOC" | grep -q '^undercroft_list_rooms '; then
+  echo "FAIL  premise: the suffix expansion is not running — \`undercroft_list_rooms\`"
+  echo "      exists in §9 only as \`_list_rooms\`, so its absence means every"
+  echo "      multi-tool row collapsed to its first entry."
+  MCP_PREMISE=1
+fi
+if [ "$MCP_PREMISE" -ne 0 ]; then
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+
+MCP_FAIL=0
+# The column is a closed vocabulary: `W` or empty. Anything else (a parameter
+# list, a tick, prose) is a cell whose meaning this gate cannot read, and an
+# unreadable cell is where the next drift hides.
+BADMARK=$(printf '%s\n' "$MCP_DOC" | awk '$2=="?"{print $1}')
+if [ -n "$BADMARK" ]; then
+  echo "FAIL  docs/AGENTS.md §9: the W column must be \`W\` or empty; these rows"
+  echo "      carry something else, so their classification cannot be read:"
+  printf '        %s\n' $BADMARK
+  MCP_FAIL=1
+fi
+# Both directions, on both axes.
+for axis in "write:$(printf '%s\n' "$MCP_DOC" | awk '$2=="W"{print $1}')|$MCP_CODE_W" \
+            "tool:$(printf '%s\n' "$MCP_DOC" | awk '{print $1}' | sort -u)|$(printf '%s\n%s\n' "$MCP_CODE_R" "$MCP_CODE_W" | sort -u)"; do
+  name="${axis%%:*}"; rest="${axis#*:}"
+  docside="${rest%%|*}"; codeside="${rest#*|}"
+  only_code=$(comm -13 <(printf '%s\n' "$docside" | sort -u) <(printf '%s\n' "$codeside" | sort -u))
+  only_doc=$(comm -23 <(printf '%s\n' "$docside" | sort -u) <(printf '%s\n' "$codeside" | sort -u))
+  if [ -n "$only_code" ]; then
+    echo "FAIL  docs/AGENTS.md §9 does not mark these as $name, but mcp.rs does:"
+    printf '        %s\n' $only_code
+    MCP_FAIL=1
+  fi
+  if [ -n "$only_doc" ]; then
+    echo "FAIL  docs/AGENTS.md §9 marks these as $name, but mcp.rs does not:"
+    printf '        %s\n' $only_doc
+    MCP_FAIL=1
+  fi
+done
+if [ "$MCP_FAIL" -ne 0 ]; then
+  echo ""
+  echo "      The R/W column is the agent-facing answer to whether a --read-only"
+  echo "      server serves a tool. mcp.rs decides it; the table only reports it."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    the §9 tool table's R/W column matches READ_TOOLS/WRITE_TOOLS"
+echo "      ($MCP_DOC_N tools, $(printf '%s\n' "$MCP_CODE_W" | grep -c .) of them writes, both directions)"
+
 # The route COUNT in prose, which the set comparison above deliberately does
 # not check — "a count passes when one route is swapped for another" is why it
 # compares sets, and the cost of that correct choice is that the sentence
