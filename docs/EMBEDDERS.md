@@ -42,6 +42,10 @@ score noise.
 
 ```sh
 docker compose up -d embeddings embeddings-tls
+# Publish Caddy's PUBLIC CA root where a non-root client can read it. Caddy
+# writes its PKI as root (cert 0600 inside 0700 dirs) because that tree holds
+# the CA private key; `cli` and `mcp` run as uid 10001 and cannot read it.
+docker compose run --rm embed-tls-export
 # Once: fetch the model. `embed-pull` reads the SAME variable the client
 # does (default nomic-embed-text) — asking the client for a model nobody
 # pulled is the way this recipe fails.
@@ -51,7 +55,7 @@ UNDERCROFT_EMBED_MODEL=bge-m3 docker compose run --rm embed-pull
 #   -v undercroft_undercroft-embed-tls:/tls:ro
 UNDERCROFT_EMBEDDER=http
 UNDERCROFT_EMBED_URL=https://embeddings-tls
-UNDERCROFT_EMBED_CA=/tls/caddy/pki/authorities/local/root.crt
+UNDERCROFT_EMBED_CA=/tls/root.crt
 UNDERCROFT_EMBED_MODEL=bge-m3
 ```
 

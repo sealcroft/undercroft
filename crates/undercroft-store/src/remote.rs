@@ -42,7 +42,7 @@ use base64::Engine;
 use rusqlite::{params, OptionalExtension};
 use undercroft_index::{IndexRecord, VectorIndex};
 
-use crate::{PalaceStore, SearchHit, SearchOptions, StoreError};
+use crate::{Namespace, PalaceStore, SearchHit, SearchOptions, StoreError};
 use undercroft_vault::SecurityLevel;
 
 /// Raw index-push row: (id, wing, room, content, embedding).
@@ -281,8 +281,14 @@ impl PalaceStore {
         );
         let tag = self.vault.tag(canonical.as_bytes());
         let tx = self.conn.transaction()?;
-        let (head, writes) =
-            crate::chain_append(&tx, &self.vault, "egress/index-push", &tag, &now)?;
+        let (head, writes) = crate::chain_append(
+            &tx,
+            &self.vault,
+            Namespace::Egress,
+            "index-push",
+            &tag,
+            &now,
+        )?;
         tx.commit()?;
         self.vault.anchor_manifest(&head, writes)?;
         Ok(())
@@ -476,7 +482,6 @@ impl PalaceStore {
             opts.wing.as_deref(),
             opts.room.as_deref(),
             hits.len(),
-            self.is_sealed(),
         );
         self.record_read(
             crate::Read::Returned(crate::ReadOp::Search),
@@ -487,11 +492,38 @@ impl PalaceStore {
         Ok(hits)
     }
 
-    /// Remote index status: name + record count for this vault's collection.
-    pub fn index_status(&self, index: &mut dyn VectorIndex) -> Result<(String, u64), StoreError> {
+    /// The mirror's backend name and row count — **`None` when there is no
+    /// mirror**, and WITHOUT creating one (ROADMAP O83).
+    ///
+    /// This was `ensure()` then `count()`, and `ensure` CREATES: `PUT
+    /// /collections` on qdrant, a `CREATE EXTENSION` and `CREATE TABLE` pair
+    /// on pgvector, `POST /collections` on chroma, milvus and weaviate. That
+    /// was harmless while the only caller was the CLI's `index status`, run
+    /// by an operator on their own infrastructure. ROADMAP O68 then exposed
+    /// it as a `GET` on `/v1`, as an MCP read tool, and on the orchestrator's
+    /// TENANT data plane — at which point a *read* issued DDL against
+    /// operator infrastructure from a `--read-only` server and from a tenant
+    /// bearer. Found by the pre-release drift audit, and the exposure was one
+    /// day old.
+    ///
+    /// It was briefly reclassified as a WRITE — `POST` on `/v1`,
+    /// `WRITE_TOOLS` on MCP, operator plane on a fleet — which was the honest
+    /// short-term description of a call that really did write.
+    /// [`VectorIndex::status`] is the real answer: it creates on none of the
+    /// five backends, probed live one by one rather than inferred from
+    /// qdrant, so the classification goes back to what it always should have
+    /// been and `backends-e2e` proves non-creation by asking twice.
+    ///
+    /// **The `Option` is not decoration.** With `ensure` running first, "no
+    /// mirror exists" and "the mirror is empty" both answered `0`, so this
+    /// could not answer the question its own documentation said it existed
+    /// for.
+    pub fn index_status(
+        &self,
+        index: &mut dyn VectorIndex,
+    ) -> Result<(String, Option<u64>), StoreError> {
         let collection = self.index_collection();
-        index.ensure(&collection, self.embedder_dimension())?;
-        Ok((index.name().to_string(), index.count(&collection)?))
+        Ok((index.name().to_string(), index.status(&collection)?))
     }
 
     pub(crate) fn embedder_dimension(&self) -> usize {
@@ -529,6 +561,9 @@ mod tests {
         /// Every record as it went over the wire — what a backend operator
         /// actually receives, which is the only way to test C8's claim.
         pushed: Vec<IndexRecord>,
+        /// How many times `ensure` was called. A status call must not move
+        /// it (ROADMAP O83): `ensure` is the CREATE on every real backend.
+        ensured: u64,
     }
 
     impl EchoIndex {
@@ -542,7 +577,19 @@ mod tests {
             "echo"
         }
         fn ensure(&mut self, _collection: &str, _dim: usize) -> Result<(), IndexError> {
+            self.ensured += 1;
             Ok(())
+        }
+        /// **Records nothing and creates nothing** — which is the point of
+        /// the trait method, and what `ensured` lets a test assert
+        /// (ROADMAP O83). `None` until something is pushed, so an absent
+        /// mirror and an empty one are distinguishable here too.
+        fn status(&mut self, _collection: &str) -> Result<Option<u64>, IndexError> {
+            if self.ids.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(self.ids.len() as u64))
+            }
         }
         fn upsert(&mut self, _collection: &str, records: &[IndexRecord]) -> Result<(), IndexError> {
             if self.fail_after > 0 && self.accepted >= self.fail_after {
@@ -1153,5 +1200,58 @@ mod tests {
             s.search_with_index(&mut index, "anything", &SearchOptions::default()),
             Err(StoreError::ExternalVault)
         ));
+    }
+
+    /// **A status call creates nothing, and an ABSENT mirror is not an empty
+    /// one** (ROADMAP O83).
+    ///
+    /// `index_status` was `ensure()` then `count()`. `ensure` CREATES on all
+    /// five real backends — `PUT /collections` on qdrant, a `CREATE
+    /// EXTENSION` and `CREATE TABLE` pair on pgvector, `POST /collections`
+    /// on chroma, milvus and weaviate — so once O68 exposed this as a GET on `/v1`, an MCP read
+    /// tool and a tenant data-plane route, a READ issued DDL against operator
+    /// infrastructure from a `--read-only` server and from a tenant bearer.
+    ///
+    /// Two assertions, and the second is the half a "does it still work" test
+    /// would miss: with `ensure` running first, "there is no mirror" and "the
+    /// mirror is empty" both answered `0`, so the route could not answer the
+    /// question its own documentation said it existed for.
+    ///
+    /// `ensured` is the counter that makes the first assertion possible at
+    /// all — asserting on the RETURN VALUE cannot see a create.
+    #[test]
+    fn a_status_call_creates_nothing_and_absent_is_not_empty() {
+        let (_d, mut s) = store();
+        s.upsert(&drawer("w", "a local drawer nothing has mirrored", 0))
+            .unwrap();
+        let mut index = EchoIndex::default();
+
+        let (name, remote) = s.index_status(&mut index).unwrap();
+        assert_eq!(name, "echo");
+        assert_eq!(
+            remote, None,
+            "no mirror exists, and that must not be reported as a mirror holding zero"
+        );
+        assert_eq!(
+            index.ensured, 0,
+            "a status call must not create the collection it reports on — this is \
+             the counter, not the return value, because a create is invisible in \
+             the answer"
+        );
+
+        // Now push, and the same call reports a real count through the same
+        // path. Without this the assertion above passes on a `status` that
+        // always answers `None`.
+        s.index_push(&mut index, PlaintextPush::Refuse).unwrap();
+        let (_, remote) = s.index_status(&mut index).unwrap();
+        assert_eq!(
+            remote,
+            Some(1),
+            "a mirror that exists reports its rows: {remote:?}"
+        );
+        assert_eq!(
+            index.ensured, 1,
+            "…and the ONE create came from the push, which is allowed to make it"
+        );
     }
 }

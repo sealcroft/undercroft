@@ -69,6 +69,17 @@ body_has "orchestrator healthz"        '"ok":true'    -- "$O/healthz"
 body_has "/ui serves fleet console"    'Fleet Console' -- "$O/ui"
 code_is  "admin without token is 401"  401            -- "$O/admin/instances"
 code_is  "admin with wrong token 401"  401            -- -H "Authorization: Bearer wrong-token-aaaaaaaa" "$O/admin/instances"
+# ROADMAP O64 — RFC 9110 §11.6.1 makes a challenge header a MUST on any 401,
+# and it was missing from every 401 in the fleet. The control plane's BODIES
+# were already right (`err_response` has always answered JSON), which is what
+# made the engine's two plain-text gate sites the outlier rather than a second
+# valid convention — so this asserts the half that was actually absent here.
+hdrs="$(curl -s -D - -o /dev/null "$O/admin/instances")"
+if grep -qi '^WWW-Authenticate: *Bearer' <<<"$hdrs"; then
+  ok "an admin 401 names its scheme"
+else
+  fail "an admin 401 names its scheme" "no WWW-Authenticate in: $(tr -d '\r' <<<"$hdrs" | head -4 | tr '\n' ' ')"
+fi
 
 echo "== Instance registry =="
 body_has "register engine-a" '"added":"engine-a"' -- -X POST "${ADMIN[@]}" \
@@ -137,6 +148,30 @@ code_is  "tokenless is 401"        401 -- -X POST -d '{"query":"x"}' "$O/t/searc
 code_is  "vault root not routable" 404 -- -X DELETE "${AUTH_ACME[@]}" "$O/t/"
 code_is  "unknown subpath is 404"  404 -- -X POST "${AUTH_ACME[@]}" -d '{}' "$O/t/frobnicate"
 
+# ROADMAP O67. Eight of the engine's 28 per-vault subpaths were reachable from
+# NEITHER plane — not the ops plane, not here — so a tenant asking for their
+# own taxonomy or their own distilled facts got a bare "unknown route", which
+# reads as a capability the product does not have. These are the tenant's own
+# vault; `drawers` and `search` two blocks up already return its content.
+code_is  "taxonomy reaches the tenant"      200 -- "${AUTH_ACME[@]}" "$O/t/taxonomy"
+body_has "taxonomy names the tenant's wing" 'eng' -- "${AUTH_ACME[@]}" "$O/t/taxonomy"
+code_is  "kg/stats reaches the tenant"      200 -- "${AUTH_ACME[@]}" "$O/t/kg/stats"
+code_is  "kg/query reaches the tenant"      200 -- "${AUTH_ACME[@]}" "$O/t/kg/query?entity=nobody"
+code_is  "kg/entities reaches the tenant"   200 -- "${AUTH_ACME[@]}" "$O/t/kg/entities"
+code_is  "kg/timeline reaches the tenant"   200 -- "${AUTH_ACME[@]}" "$O/t/kg/timeline?entity=nobody"
+code_is  "kg/receipts reaches the tenant"   200 -- "${AUTH_ACME[@]}" "$O/t/kg/receipts"
+# And the one that must NOT: `kg/authority` is a WRITE and is in the engine's
+# OPERATOR_ONLY — promotion closes the previous canonical holder's window, so
+# a tenant token must never carry it. It went to the ops plane instead, and
+# the refusal must SAY that rather than 404ing as though it did not exist.
+code_is  "kg/authority refused on the data plane" 404 -- -X POST "${AUTH_ACME[@]}" \
+  -d '{"triple_id":"x","authority_class":"golden"}' "$O/t/kg/authority"
+body_has "kg/authority names the ops plane" 'operator route' -- -X POST "${AUTH_ACME[@]}" \
+  -d '{"triple_id":"x","authority_class":"golden"}' "$O/t/kg/authority"
+# The quarantine fence still applies to every widened route.
+code_is  "fence still covers kg/query" 404 -- "${AUTH_ACME[@]}" \
+  "$O/t/kg/query?entity=quarantine-pending"
+
 echo "== Cross-tenant isolation through the proxy =="
 GX_SEARCH="$(curl -s -X POST "${AUTH_GLOBEX[@]}" -d '{"query":"flux capacitor power"}' "$O/t/search")"
 grep -qF 'gigawatts' <<<"$GX_SEARCH" \
@@ -190,6 +225,15 @@ body_has "ops anchor"        '"anchored"'  -- -X POST "${ADMIN[@]}" "$O/admin/te
 body_has "ops supersessions" 'supersessions' -- "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/supersessions"
 body_has "ops admission list" 'pending'    -- "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/admission"
 body_has "ops trust list"    'assignments' -- "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/trust"
+# Backups on the OPERATOR plane (ROADMAP O68). They are `Absence::Boundary` on
+# MCP and must never reach the tenant data plane, so this is the only door a
+# fleet operator has — which is the entire justification for the routes.
+body_has "ops backup create" '"backup"'  -- -X POST "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/backups"
+body_has "ops backup list"   '"backups"' -- "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/backups"
+# The tenant plane must REFUSE them, and name the plane that holds them
+# rather than 404ing as though the capability did not exist.
+code_is  "backups are not on the tenant data plane" 404 -- \
+  -H "Authorization: Bearer $OPS_TOKEN" "$O/t/backups"
 body_has "ops trust assign"  '"trust":"trusted"' -- -X POST "${ADMIN[@]}"   -d '{"wing":"w","trust":"trusted"}' "$O/admin/tenants/$OPS_ID/ops/trust"
 body_has "ops retention list" 'policies'   -- "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/retention"
 body_has "ops retention set" '"days":3650' -- -X POST "${ADMIN[@]}"   -d '{"wing":"w","days":3650}' "$O/admin/tenants/$OPS_ID/ops/retention"
@@ -298,6 +342,38 @@ else
   fail "a configuration refusal exits 1, not the integrity code"
 fi
 rm -f "$BADCA"
+
+# ── the control plane's OWN tamper verdict reaches the exit code (M20) ──────
+# `instance-list` resolves each instance's sealed credential blob. Under a
+# DIFFERENT (valid-shaped) key those blobs will not open — which state.rs
+# calls "a tamper verdict or a wrong key, never a transient condition" — and
+# the command caught that error into a `refused=` note, stringified it, and
+# returned Ok(()). So the fleet's own integrity verdict printed on stdout and
+# **exited 0**, which is what a compliance script reads as fine. The exit-2
+# hook in `main` never fired because the error never escaped `run()`.
+#
+# Note this is the SAME command as the CA-pin arm above, and the two verdicts
+# must stay distinguishable: a configuration refusal is exit 1, a tamper
+# verdict is exit 2. Asserting them one after the other is what pins that.
+WRONGKEY="ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100"
+WK_OUT="$(UNDERCROFT_ORCH_KEY="$WRONGKEY" "$ORCH" --db "$UNDERCROFT_ORCH_DB" instance-list 2>&1)"
+WK_CODE=$?
+if [ $WK_CODE -eq 2 ]; then
+  ok "a credential blob that will not open exits 2, not 0"
+else
+  fail "a credential blob that will not open exits 2, not 0" "exit $WK_CODE: $WK_OUT"
+fi
+# A listing must still LIST — one unopenable blob must not hide the fleet.
+if grep -q 'engine-b' <<<"$WK_OUT"; then
+  ok "and the listing still names every instance"
+else
+  fail "and the listing still names every instance" "$WK_OUT"
+fi
+if grep -q 'INTEGRITY VERDICT' <<<"$WK_OUT"; then
+  ok "and it says the verdict is the control plane's own"
+else
+  fail "and it says the verdict is the control plane's own" "$WK_OUT"
+fi
 
 # **A usage error exits 1, not clap's default 2.** Exit 2 is reserved for an
 # integrity verdict on every command, so a typo reaching a compliance script

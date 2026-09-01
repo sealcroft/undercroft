@@ -29,7 +29,7 @@ cd "$(dirname "$0")/.."
 
 # Order matters: the cheap suites that fail fastest come first, so a broken
 # tree is reported in a minute instead of forty.
-ALL=(lint obs-config test e2e orchestrator-e2e e2e-telemetry backends-e2e site)
+ALL=(lint obs-config arch-check test e2e orchestrator-e2e e2e-telemetry backends-e2e site tls-pins)
 
 # `--preflight-only` exists so CI can run the host-side preflights without
 # Docker. They are host-side because no image carries `ROADMAP.md`, the
@@ -38,10 +38,19 @@ ALL=(lint obs-config test e2e orchestrator-e2e e2e-telemetry backends-e2e site)
 # script only inside comments. A gate that runs only where its author
 # remembers to run it is a gate the next person does not have.
 PREFLIGHT_ONLY=0
+NO_PREFLIGHT=0
 ARGS=()
 for a in "$@"; do
   case "$a" in
     --preflight-only) PREFLIGHT_ONLY=1 ;;
+    # `--no-preflight` is the mirror image, and it exists for CI. Each matrix
+    # leg runs ONE suite through this script rather than calling `docker
+    # compose run` itself, so that the post-run check-count comparison — which
+    # only a RUN can perform, and which therefore cannot be a preflight —
+    # happens on a pull request instead of only on the maintainer's machine.
+    # Without this flag every leg would re-run all thirteen preflights, which
+    # the dedicated `preflight` job already does once. ROADMAP M13.
+    --no-preflight) NO_PREFLIGHT=1 ;;
     # Exit 1, never 2. Exit 2 is this project's integrity verdict on every
     # command; a mistyped flag borrowing it is the defect T11 closed in the
     # binaries, and it would be no less wrong here.
@@ -54,6 +63,27 @@ if [ -z "${SUITES[0]:-}" ]; then SUITES=("${ALL[@]}"); fi
 
 declare -a NAMES=() CODES=()
 OVERALL=0
+
+# Suites that legitimately print no `<suite> results: N passed, M failed` line,
+# so the O27 reader's "this reader examined nothing" is the WRONG message for
+# them rather than a finding. `lint` is silent on success by construction;
+# `arch-check` has three verification stages rather than a countable
+# population, and inventing a metric so it could satisfy a reader is how a
+# figure stops meaning anything. Both also publish no check count, which is
+# consistent: nothing to compare, so nothing skipped silently.
+NO_SUMMARY_SUITES=(lint arch-check)
+
+if [ "$PREFLIGHT_ONLY" -eq 1 ] && [ "$NO_PREFLIGHT" -eq 1 ]; then
+  echo "--preflight-only and --no-preflight are contradictory" >&2
+  exit 1
+fi
+
+# Everything between here and the `--preflight-only` exit is the host-side
+# preflight block. It is wrapped rather than re-indented DELIBERATELY: shell
+# does not care about indentation, and re-indenting ~1,300 lines to add one
+# condition would bury this change in a diff nobody could read — which is the
+# hazard CLAUDE.md records about a 100-line edit showing as 1,415 lines.
+if [ "$NO_PREFLIGHT" -eq 0 ]; then
 
 # ── preflight: line endings over the WHOLE tree ─────────────────────────────
 # `.gitattributes` declares `* text=auto eol=lf` and says why: a CRLF shell
@@ -145,6 +175,16 @@ echo "ok    no CRLF outside crates/ (crates/ is gated by cargo test)"
 # `ROADMAP.md`, so a `cargo test` cannot read it. Cheap, and it makes "do not
 # forget" mechanical instead of remembered — which is this project's whole
 # position on inventories versus prose.
+fi  # pause the preflight block: the readers below are shared with the RUN
+
+# ---------------------------------------------------------------------------
+# THE SHARED READERS. Everything from here to `suite_count` is used by BOTH
+# the preflights above and the post-run comparison at the bottom, so it is
+# defined OUTSIDE the `--no-preflight` wrap. Leaving them inside was my own
+# defect and the run said so rather than the reading: `--no-preflight` printed
+# `suite_summary: command not found` and `suite_count: command not found`, and
+# the battery still exited 0 — the comparison silently examined nothing while
+# reporting exactly what a clean tree reports. ROADMAP M13.
 # ---------------------------------------------------------------------------
 # The `test` suite's count, read by PAIRING rather than by summing (ROADMAP
 # O15).
@@ -220,6 +260,46 @@ suite_summary() { # suite_summary <log>
     }' "$1" 2>/dev/null
 }
 
+# What a suite's check count is PUBLISHED as. Defined here, beside the reader
+# that measures it, because TWO phases ask the question and they used to ask
+# it with two different implementations: the `published figures` preflight
+# (do the surfaces agree with each other?) and the post-run comparison (does
+# the run agree with the surfaces?). The second grew its own compose-shaped
+# copy, so a host-side suite — `tls-pins`, published as
+# `bash tests/tls-pins.sh … (N checks)` — resolved to an empty string there
+# and was skipped: published, measured, and never compared. ROADMAP M13.
+#
+# `grep -oE` + `sed -E`, deliberately NOT awk's three-argument `match()`:
+# that is a GNU extension and Ubuntu's default awk is mawk, which lacks it.
+# CI runs this on ubuntu-latest, so the gawk form would read empty there.
+declare_suite_counts() {
+  # Compose-invoked suites, as CLAUDE.md publishes them.
+  grep -oE 'docker compose run --rm [a-z0-9-]+.*\([0-9]+ checks' CLAUDE.md 2>/dev/null \
+    | sed -E 's/docker compose run --rm ([a-z0-9-]+).*\(([0-9]+) checks/\1=\2/'
+  # Host-side suites publish the same figure and are INVOKED differently, so
+  # the reader above cannot see them. Both shapes or the gate is notation-
+  # shaped rather than coverage-shaped.
+  grep -oE 'bash tests/[a-z0-9-]+[.]sh.*[(][0-9]+ checks' CLAUDE.md 2>/dev/null \
+    | sed -E 's#bash tests/([a-z0-9-]+)[.]sh.*[(]([0-9]+) checks#\1=\2#'
+}
+SUITE_COUNTS=$(declare_suite_counts)
+suite_count() { grep -oE "^$1=[0-9]+" <<< "$SUITE_COUNTS" | head -1 | cut -d= -f2; }
+
+# **Defined OUT HERE for the reason the four readers above are** (M13, and
+# then O85 the hard way). It was set inside the preflight block and read by
+# the post-run figure comparison, which runs under `--no-preflight` — the
+# flag every CI suite leg uses. M13 moved the shared FUNCTIONS out of that
+# block and left this VARIABLE behind, and the miss was invisible because the
+# only line that reads it is reached exclusively when a cargo-test figure
+# MISMATCHES: on a green run the comparison short-circuits first. So it sat
+# for as long as the figures happened to agree, and then took a CI run down
+# with `LANDING: unbound variable` under `set -u` — at which point the
+# battery reported "PUBLISHED FIGURES ARE STALE" naming numbers that were
+# not stale.
+LANDING="website/landing/index.html"
+
+if [ "$NO_PREFLIGHT" -eq 0 ]; then  # resume the preflight block
+
 # The gate for it, run host-side because no image carries this script. Both
 # arms come from the filed shape: a log reports the same figure with and
 # without a duplicated tail, and the orphan is counted and NAMED.
@@ -253,6 +333,32 @@ esac
 case "$SUM_REPLAY" in
   *"PREMISE FAILURE: 1 orphan"*) ;;
   *) echo "FAIL  the replay was absorbed silently: $SUM_REPLAY"; SUM_FAIL=1 ;;
+esac
+# **And the post-run figure comparison must SEE that premise failure** (O85).
+#
+# It used to guard only on the count being NON-NUMERIC — and a replayed log
+# yields a perfectly numeric count over the wrong number of targets, so the
+# comparison ran, found a mismatch, and announced "PUBLISHED FIGURES ARE
+# STALE" naming figures that were correct. This asserts the two agree about
+# what a premise failure looks like: the guard down there matches on the same
+# substring this reader emits, and a rename of one without the other would
+# silently restore the defect.
+case "$SUM_REPLAY" in
+  *"PREMISE FAILURE"*) ;;
+  *)
+    echo "FAIL  the reader's premise-failure marker changed; the figure"
+    echo "      comparison guards on 'PREMISE FAILURE' and would compare a"
+    echo "      count this reader has already called untrustworthy: $SUM_REPLAY"
+    SUM_FAIL=1 ;;
+esac
+# The other direction: a CLEAN summary must NOT trip that guard, or the
+# comparison never runs and the figures stop being checked at all — a gate
+# that always declines to measure reports the same thing as one that passes.
+case "$SUM_CLEAN" in
+  *"PREMISE FAILURE"*)
+    echo "FAIL  a clean log trips the premise guard: the figure comparison"
+    echo "      would never run: $SUM_CLEAN"
+    SUM_FAIL=1 ;;
 esac
 # A reader that examined nothing must say so rather than print a clean zero.
 case "$SUM_EMPTY" in
@@ -425,6 +531,23 @@ ROADMAP_DRIFT=$(awk '
     }
   }
   /^### [A-Z][0-9]+/ { flush(); sec = $0; body = ""; next }
+  # ANY other heading at this level ENDS the current entry (ROADMAP M15). It
+  # used to fall through to the accumulator below, so the 15 non-id headings
+  # in this file were ABSORBED into whichever entry preceded them, along with
+  # everything under them until the next id or the next level-2 heading.
+  # Measured: the round-four accounting section was swallowed by O47, the
+  # entry whose whole subject is the limits of this very gate.
+  #
+  # That inflates a body, and closure-without-evidence searches the body for
+  # the words gate, counterfactual and test — so an entry could satisfy the
+  # evidence arm with words belonging to a section it merely sat above. The
+  # arm was weaker than it read, in a way no count of it could show.
+  #
+  # NOTE for the next editor: this awk program is inside a single-quoted
+  # shell string, so an apostrophe anywhere in these comments ends it and the
+  # script dies with a syntax error. That is how the first version of this
+  # comment broke the file.
+  /^### /             { flush(); sec = "";  body = ""; next }
   /^## /              { flush(); sec = "";  body = ""; next }
   { if (sec != "") body = body " " $0 }
   END {
@@ -550,13 +673,167 @@ echo "ok    all $COMPOSE_N compose files declare a project name"
 # (IRREGULAR pairs, paradigm counts). Those are a different question, and
 # widening a gate past what it can actually verify is how a check starts
 # reading as though it covered more than it does.
+# ── preflight: a declared CA pin must be READABLE by the engine ────────────
+# The shipped observability stack could not start. Caddy writes its whole PKI
+# as root — the CA cert 0600 inside directories at 0700, correctly, since that
+# tree also holds the CA PRIVATE key — and the engine image runs as
+# `USER undercroft` (uid 10001). So the declared pin was unreadable and the
+# engine REFUSED to start, forever:
+#
+#   Error: the OTLP collector: the declared trust root
+#   /tls/caddy/pki/authorities/local/root.crt could not be read:
+#   Permission denied (os error 13)
+#
+# The refusal is right — `undercroft-net` never falls back to the public roots
+# — so the defect is the PATH. Only the certificate needs sharing; the private
+# key must not move. The fix exports the public root to a readable path, and
+# this stops the deep path coming back.
+#
+# Host-side with its siblings: no image carries the compose files.
+#
+# **Scope, stated rather than implied.** This catches one class — a pin aimed
+# inside a root-only PKI tree — for services running the ENGINE image, which
+# is the only consumer with a non-root uid. The same deep path appears in
+# dev/test recipes that run as root and are fine; narrowing on the image is
+# what keeps this from failing them. It does NOT prove the stack starts; that
+# needs a real bring-up, which is filed (ROADMAP M7) with its argument rather
+# than pretended here.
+echo "═══ preflight: CA pins are readable by the engine ═══"
+CA_FAIL=0
+CA_SEEN=0
+for f in $(git ls-files '*docker-compose*.yml' 'deploy/**/*.yml' 2>/dev/null); do
+  [ -f "$f" ] || continue
+  # Only services that BUILD the engine image from this repo run as uid 10001.
+  grep -q 'context: \.\./\.\.' "$f" || continue
+  while IFS= read -r line; do
+    case "$line" in *"#"*) continue ;; esac
+    CA_SEEN=$((CA_SEEN + 1))
+    case "$line" in
+      *caddy/pki/*)
+        echo "FAIL  $f declares a CA pin inside Caddy's root-only PKI tree:"
+        echo "        $(echo "$line" | sed 's/^ *//')"
+        echo "      The engine runs as uid 10001; that tree is root:0600 inside"
+        echo "      0700 dirs, so the pin is unreadable and the engine refuses"
+        echo "      to start. Export the PUBLIC root to a readable path instead"
+        echo "      — the CA private key must not move."
+        CA_FAIL=1 ;;
+    esac
+  done <<EOF
+$(grep -nE 'UNDERCROFT_[A-Z0-9_]*_CA:' "$f" || true)
+EOF
+done
+# PREMISE. A scanner that matched no declaration at all reports exactly what a
+# correct tree reports, which is the failure this whole family is about.
+if [ "$CA_SEEN" -eq 0 ]; then
+  echo "FAIL  found no UNDERCROFT_*_CA declaration in any engine-building"
+  echo "      compose file. This scanner examined nothing, which is not the"
+  echo "      same as a tree with no pins."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+if [ "$CA_FAIL" -ne 0 ]; then
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    $CA_SEEN declared CA pin(s) on engine services, none inside a"
+echo "      root-only PKI tree"
+
+# ── preflight: a destructive compose teardown names the project it destroys ─
+# ROADMAP M12. A compose teardown carrying the volumes flag removes every
+# NAMED volume in the project it resolves to. With no `-p` and no `-f` that
+# project is whatever `./docker-compose.yml` declares — here, `undercroft`,
+# which is the developer's own — so the command reaches state that has nothing
+# to do with the suite asking for it. The battery's own backends reset did
+# exactly that: it destroyed the embedding model cache, the compose palace and
+# the embeddings CA on every run, none of which any backend needs fresh.
+#
+# This is ROADMAP M10's lesson generalised. M10 fixed `tests/tls-pins.sh` by
+# giving each stack a throwaway project after its first version destroyed a
+# live observability stack an hour after it was committed; the same file's
+# teardowns are the shape this gate ACCEPTS, and the battery's was the shape
+# it rejects. A scoped teardown is fine at any blast radius, because the
+# project name says what the radius is.
+#
+# SCOPE, stated rather than implied: `tests/*.sh` only. That is where this
+# repo drives docker from — no image carries these scripts, so no `cargo test`
+# can read them. It deliberately does NOT scan `deploy/` (those compose files
+# are declarations, not drivers) or the workflows (CI runs compose services,
+# never a teardown). A driver added anywhere else is outside this gate, and
+# that is a real limit rather than an oversight.
+echo "═══ preflight: destructive compose scope ═══"
+# The needle is ASSEMBLED so this gate does not match its own source. That is
+# the "a gate whose own text is part of what it measures" trap, this tree's
+# most-repeated gate defect — ROADMAP M1 is the most recent instance and
+# records four earlier ones for gates reading their own inventory FILE, M1
+# itself being the first for a gate reading the function it guards. No count
+# is asserted here beyond what M1 counted: the figure is in M1, and repeating
+# it in a second place is how a number in prose goes stale.
+# Written contiguously, the pattern below would match the line that defines it.
+TD_VERB="do""wn"
+# The arguments between `compose` and the verb are OPTIONAL, and getting that
+# wrong is how the first version of this gate passed on the very line it was
+# written to catch. Requiring a token there (`compose[[:space:]].*[[:space:]]`)
+# means the unscoped form — where the verb follows `compose` directly — never
+# matches, while every SCOPED form does, because `-p <proj> -f <file>` fills
+# the gap. The gate then reported "every teardown is scoped" having examined
+# only the teardowns that were already scoped. Caught by the counterfactual,
+# not by reading it: this is the tree's own "ask what a gate can SEE, not what
+# it asserts" rule landing on a gate written to enforce that rule.
+TD_SCAN=$(grep -nE "docker[[:space:]]+compose[[:space:]]+(.*[[:space:]]+)?${TD_VERB}([[:space:]]|\$)" \
+            tests/*.sh 2>/dev/null || true)
+# Only the ones that carry the volumes flag destroy named volumes; a plain
+# teardown removes containers and networks and is not this defect.
+TD_HITS=$(printf '%s\n' "$TD_SCAN" | grep -E '[[:space:]](-v|--volumes)([[:space:]]|$)' || true)
+TD_TOTAL=$(printf '%s\n' "$TD_HITS" | grep -c . || true)
+# PREMISE. A scanner that matched nothing reports exactly what a clean tree
+# reports — the failure this whole family is about, and the reason M7's CA
+# gate refuses to pass on zero declarations. `tests/tls-pins.sh` has carried
+# two scoped teardowns since M10, so zero here means the pattern broke, not
+# that the tree is clean.
+if [ "${TD_TOTAL:-0}" -lt 1 ]; then
+  echo "FAIL  the teardown scan matched no compose teardown anywhere in tests/."
+  echo "      tests/tls-pins.sh has carried two since ROADMAP M10, so this is a"
+  echo "      broken scanner rather than a clean tree — and a broken scanner"
+  echo "      reports what a clean tree reports."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+TD_FAIL=0
+while IFS= read -r hit; do
+  [ -z "$hit" ] && continue
+  # An explicit project scope is the whole discriminator: it is what makes the
+  # blast radius a stated one instead of an inherited one.
+  if ! printf '%s\n' "$hit" | grep -qE '[[:space:]](-p|--project-name)[[:space:]]'; then
+    echo "FAIL  this teardown destroys every named volume of whatever project it"
+    echo "      resolves to, and it names no project — so it inherits the one"
+    echo "      ./docker-compose.yml declares, which is the developer's own:"
+    printf '        %s\n' "$hit"
+    TD_FAIL=1
+  fi
+done <<< "$TD_HITS"
+if [ "$TD_FAIL" -ne 0 ]; then
+  echo ""
+  echo "      Scope it with -p <throwaway-project> as tests/tls-pins.sh does,"
+  echo "      or narrow it to the services you mean with 'rm -sfv <service>...',"
+  echo "      which takes their anonymous volumes and leaves named ones alone."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    $TD_TOTAL destructive compose teardown(s) in tests/, every one"
+echo "      scoped to a project it names"
+
 echo "═══ preflight: published figures ═══"
 
-LANDING="website/landing/index.html"
+# `LANDING` is set beside the shared readers above, OUTSIDE the preflight
+# block, because the post-run comparison reads it under `--no-preflight`.
 # label|class|source
 PUBLISHED_FIGURES=(
   "cargo tests|measured|test"
-  "e2e checks|measured|SUM:e2e,orchestrator-e2e,e2e-telemetry,backends-e2e"
+  "e2e checks|measured|SUM:e2e,orchestrator-e2e,e2e-telemetry,backends-e2e,tls-pins"
   "live backends|derived|BACKENDS"
   "mcp tools|derived|MCP_TOOLS"
   "bytes phoned home|claim|the local-first invariant — a promise, not a count"
@@ -641,17 +918,16 @@ fi
 # a confusing failure on a clean tree rather than as the portability bug it
 # is. A gate that only runs on its author's machine is the shape this whole
 # file exists to remove.
-declare_suite_counts() {
-  grep -oE 'docker compose run --rm [a-z0-9-]+.*\([0-9]+ checks' CLAUDE.md 2>/dev/null \
-    | sed -E 's/docker compose run --rm ([a-z0-9-]+).*\(([0-9]+) checks/\1=\2/'
-}
-SUITE_COUNTS=$(declare_suite_counts)
+# The reader itself is DEFINED ABOVE, beside `suite_summary`, because two
+# phases need it: this preflight (do the surfaces agree with each other?) and
+# the post-run comparison (does the run agree with the surfaces?). It lived
+# here, inside the preflight, and the post-run block therefore grew its own
+# second, compose-only copy — which could not see `tls-pins`. ROADMAP M13.
 if [ -z "$SUITE_COUNTS" ]; then
   echo "FAIL  no per-suite check counts found in CLAUDE.md — the reader is broken,"
   echo "      and a broken reader agrees with every page it cannot read"
   FIG_FAIL=1
 fi
-suite_count() { grep -oE "^$1=[0-9]+" <<< "$SUITE_COUNTS" | head -1 | cut -d= -f2; }
 
 # Any OTHER doc republishing a suite's count must match CLAUDE.md's.
 while IFS= read -r hit; do
@@ -749,6 +1025,14 @@ else
   fi
   # The prompt records the commit it describes. A clean tree whose handover
   # names a different commit is a handover that has already gone stale.
+  # `head -1` and the convention it depends on, stated rather than assumed
+  # (ROADMAP M15). SESSION_START.md keeps a marker per session section and
+  # those sections run NEWEST FIRST, so the first marker is the current one.
+  # Nothing enforces that ordering — but nothing needs to, and this is worth
+  # writing down because it reads like a latent bug and is not: a section
+  # appended at the BOTTOM leaves a stale first marker, which fails the
+  # comparison below loudly. The gate fails closed on the ordering it assumes.
+  ALL_MARKERS=$(grep -cE 'handover-head: [0-9a-f]{7,40}' "$HANDOVER_DIR/SESSION_START.md" 2>/dev/null || true)
   RECORDED=$(grep -oE 'handover-head: [0-9a-f]{7,40}' "$HANDOVER_DIR/SESSION_START.md" 2>/dev/null | awk '{print $2}' | head -1)
   HEAD_SHA=$(git rev-parse --short HEAD 2>/dev/null)
   if [ -z "$RECORDED" ]; then
@@ -763,11 +1047,17 @@ else
     echo "FAIL  the handover describes $RECORDED; HEAD is $HEAD_SHA."
     echo "      The tree is clean, so this is the moment it should be current."
     echo "      Update the three files under $HANDOVER_DIR/ and re-run."
+    if [ "${ALL_MARKERS:-1}" -gt 1 ]; then
+      echo "      NOTE: SESSION_START.md holds $ALL_MARKERS handover-head markers and"
+      echo "      this reads the FIRST. Sections run newest-first — if you added"
+      echo "      yours at the BOTTOM, move it to the top rather than editing the"
+      echo "      historical marker, which is a record of what HEAD was then."
+    fi
     echo ""
     echo "BATTERY FAILED — preflight"
     exit 1
   fi
-  echo "ok    handover is current with HEAD ($HEAD_SHA)"
+  echo "ok    handover is current with HEAD ($HEAD_SHA), first of $ALL_MARKERS marker(s)"
 fi
 
 # ── preflight: the CI verdict job depends on EVERY job ─────────────────────
@@ -1051,6 +1341,159 @@ echo "ok    every version surface agrees with the workspace ($WS_VERSION), over 
 # below pairs each suffix only with full names in ITS OWN row, and it was
 # cross-checked against an independent implementation in a second language
 # before being believed — both return 64 + 17 + 0.
+echo "═══ preflight: measured retrieval claims carry their configuration ═══"
+# ROADMAP O70 and O71 both landed a measured figure in docs/AGENTS.md, and both
+# entries state the same gate in different words: the claim must arrive with the
+# configuration it was taken under. An unqualified retrieval percentage is the
+# defect the `prose figures` preflight exists to catch one file over — a number
+# with no dataset, no embedder and no metric beside it reads as a property of
+# the engine when it is a property of one run.
+#
+# There is a second thing this guards and it is the sharper one. The tree holds
+# TWO room_cap measurements that point opposite ways: LongMemEval / room_cap=2 /
+# answer accuracy at -5.6pp (docs/LABELS.md, docs/CONSULTATION_REVIEW.md and the
+# architecture reference), and LoCoMo / room_cap=1 / evidence recall at +2.2.
+# They are evidence about different things and must never be read as one number,
+# so the reconciliation paragraph is load-bearing rather than decorative: drop it
+# and the published manual contradicts the published architecture page.
+#
+# Deliberately NOT gated here: the values themselves. Their source of truth is a
+# run under docs/research/, which is gitignored by the O75 ruling, so a fresh
+# clone cannot recompute them and a gate that pretended to would be checking a
+# file it cannot see. This checks that the qualifiers travel with the numbers,
+# which is what a reader needs and what rots first.
+
+MRC_DOC="docs/AGENTS.md"
+MRC_FAIL=0
+
+# Section slices. sed ranges rather than an awk state machine: the stop anchors
+# are the next heading, so a section that loses its terminator collapses to
+# nothing and the token check below fails loudly instead of silently widening.
+mrc_slice() { sed -n "$1" "$MRC_DOC"; }
+
+# $1 label, $2 text, $3.. required tokens. Prints every miss; returns 1 on any.
+mrc_requires() {
+  _label="$1"; _text="$2"; shift 2
+  _miss=0
+  for _tok in "$@"; do
+    case "$_text" in
+      *"$_tok"*) ;;
+      *) echo "FAIL  $_label omits the qualifier '$_tok'"; _miss=1;;
+    esac
+  done
+  return "$_miss"
+}
+
+MRC_RC=$(mrc_slice '/^### `room_cap` — what the knob does, measured$/,/^### Reading conventions/p')
+MRC_AS=$(mrc_slice '/^### 7\.2 Assembling the block/,/^### 7\.3 /p')
+
+# PREMISE. Both slices must be non-trivial before any pass is believed: a
+# renamed heading yields an empty slice, and an empty slice satisfies no token
+# check by being clean — it satisfies none by being absent, which is the same
+# transcript as a broken scanner.
+if [ "$(printf '%s' "$MRC_RC" | wc -l)" -lt 20 ]; then
+  echo "FAIL  the room_cap section of $MRC_DOC did not slice (heading renamed or removed)."
+  echo "      ROADMAP O71 requires its measurement to stay qualified wherever it lives."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+if [ "$(printf '%s' "$MRC_AS" | wc -l)" -lt 20 ]; then
+  echo "FAIL  section 7.2 of $MRC_DOC did not slice (heading renamed or removed)."
+  echo "      ROADMAP O70 requires its measured deltas to stay in place."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+
+# O71: dataset, embedder, scope, the metric it is NOT (recall, not accuracy),
+# and the reconciliation against the older opposite-signed result.
+mrc_requires "the room_cap section" "$MRC_RC" \
+  "locomo10" "undercroft-hash-v3" "wing-scoped" "evidence recall" \
+  "LongMemEval" "5.6" || MRC_FAIL=1
+
+# O70: dataset, embedder, the metric (these ARE judged answers, unlike O71's),
+# and the three arm figures the section exists to carry. The gate names the
+# numbers because the entry's own wording is "the measured deltas, not
+# adjectives" — prose that says "substantially better" passes every other check
+# in this file.
+mrc_requires "section 7.2" "$MRC_AS" \
+  "locomo10" "undercroft-hash-v3" "answer accuracy" \
+  "68.6" "80.8" "81.4" "20.9" "85.0" || MRC_FAIL=1
+
+# CALIBRATION. A checker that flags an artifact already verified by eye is wrong
+# about the checker, and one that passes a mutilated artifact is worse. Strip a
+# qualifier from a COPY and require the same predicate to notice; the real file
+# is never touched.
+MRC_MUT=$(printf '%s\n' "$MRC_RC" | grep -v 'undercroft-hash-v3' || true)
+if mrc_requires "calibration probe" "$MRC_MUT" "undercroft-hash-v3" >/dev/null 2>&1; then
+  echo "FAIL  the qualifier check passed a section with the embedder stripped out,"
+  echo "      so it cannot see what it claims to check."
+  MRC_FAIL=1
+fi
+
+if [ "$MRC_FAIL" -ne 0 ]; then
+  echo ""
+  echo "      A measured retrieval figure travels with the run that produced it:"
+  echo "      dataset, embedder, scope, and which metric it is. Recall and answer"
+  echo "      accuracy are different claims and this tree has both."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    both measured retrieval sections in $MRC_DOC carry their dataset,"
+echo "      embedder, scope and metric, and the room_cap reconciliation stands"
+
+echo "═══ preflight: lint parity (compose vs CI) ═══"
+# **`lint` is defined TWICE and the two can disagree** (ROADMAP O84).
+#
+# The battery runs `docker compose run --rm lint`; CI's `Lint` job runs cargo
+# DIRECTLY, in a rust container with no docker, so it cannot go through
+# `tests/battery.sh` the way M13 routed the suite legs. That is a real
+# constraint, not an oversight — and it means the two definitions are two
+# copies of one decision, which is the arrangement this project keeps finding
+# defects inside.
+#
+# It bit immediately: O84's fix added the telemetry clippy to the compose
+# service, which would have covered every local battery and NO pull request —
+# the exact failure O84's own gate requirement forbids.
+#
+# So: every clippy invocation in one must appear in the other. Compared as a
+# SET of normalised invocations, because a count passes when one is swapped
+# for another.
+LP_COMPOSE=$(awk '/^  lint:/ { inl = 1 } inl && /cargo clippy/ { print } inl && /^  [a-z0-9-]+:$/ && !/^  lint:/ { inl = 0 }' docker-compose.yml \
+  | grep -oE 'cargo clippy[^&"]*' | sed -e 's/[[:space:]]*$//' | sort -u)
+LP_CI=$(awk '/^  lint:/ { inl = 1 } inl && /cargo clippy/ { print } inl && /^  [a-z0-9_-]+:$/ && !/^  lint:/ { inl = 0 }' .github/workflows/ci.yml \
+  | grep -oE 'cargo clippy[^&"]*' | sed -e 's/[[:space:]]*$//' | sort -u)
+LP_CN=$(printf '%s\n' "$LP_COMPOSE" | grep -c . || true)
+LP_IN=$(printf '%s\n' "$LP_CI" | grep -c . || true)
+# PREMISE, both halves: either extractor returning nothing yields two agreeing
+# empty sets, which reads exactly like a tree that already agrees.
+if [ "${LP_CN:-0}" -lt 2 ] || [ "${LP_IN:-0}" -lt 2 ]; then
+  echo "FAIL  the lint scan found $LP_CN clippy invocation(s) in docker-compose.yml"
+  echo "      and $LP_IN in ci.yml; both carry at least two. The scanner is broken,"
+  echo "      or a 'lint' definition moved."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+if [ "$LP_COMPOSE" = "$LP_CI" ]; then
+  echo "ok    the compose lint and the CI lint job run the same $LP_CN clippy"
+  echo "      invocation(s) — a feature linted locally is linted on a PR"
+else
+  echo "FAIL  the compose lint service and the CI lint job disagree."
+  echo "      Only the CI job fails a pull request; only the compose one runs in"
+  echo "      the battery. A check in one and not the other is a check that does"
+  echo "      not run where it matters."
+  echo "      compose:"
+  printf '%s\n' "$LP_COMPOSE" | sed 's/^/        /'
+  echo "      ci.yml:"
+  printf '%s\n' "$LP_CI" | sed 's/^/        /'
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+
 echo "═══ preflight: prose figures ═══"
 
 pf_word() {
@@ -1111,6 +1554,12 @@ while IFS= read -r v; do
 done <<< "$PF_VARS"
 
 PF_PREFLIGHTS=$(grep -c '^echo "═══ preflight:' tests/battery.sh || true)
+# The ROADMAP heading gate's own coverage, which O47 stated in prose and which
+# had drifted by thirty-one entries by the time anyone re-counted (M15). Both
+# halves, because "78 of 93" is two claims: how many entries the gate examines,
+# and how many headings exist for it to have skipped.
+PF_RM_IDS=$(grep -cE '^### [A-Z][0-9]+' ROADMAP.md || true)
+PF_RM_H3=$(grep -cE '^### ' ROADMAP.md || true)
 PF_CRATES=$(find crates -mindepth 1 -maxdepth 1 -type d | grep -c . || true)
 PF_MCP=$(awk '/pub const MCP_TOOLS/,/^\];/' crates/undercroft-cli/src/parity.rs \
          | grep -cE '^\s*"undercroft_[a-z_]+",' || true)
@@ -1148,6 +1597,8 @@ PROSE_FIGURES=(
   "env vars written in full|CLAUDE.md|s/.*— \\*\\*([0-9]+)\\*\\* written out in.*/\\1/p|$PF_ENV_FULL"
   "env vars abbreviated|CLAUDE.md|s/.*plus \\*\\*([0-9]+)\\*\\* siblings abbreviated.*/\\1/p|$PF_ENV_ABBREV"
   "IRREGULAR pairs|CLAUDE.md|s/.*\\(\\*\\*([0-9]+) pairs.*/\\1/p|$PF_IRREGULAR"
+  "ROADMAP entries the heading gate examines|ROADMAP.md|s/.*\\*\\*([0-9]+)\\*\\* of the \\*\\*[0-9]+\\*\\*.*/\\1/p|$PF_RM_IDS"
+  "ROADMAP level-3 headings total|ROADMAP.md|s/.*\\*\\*[0-9]+\\*\\* of the \\*\\*([0-9]+)\\*\\*.*/\\1/p|$PF_RM_H3"
 )
 
 PROSE_FAIL=0
@@ -1230,8 +1681,7 @@ fi
 v1_doc_routes() { # v1_doc_routes <file> <extractor-regex>
   grep -ohE "$2" "$1" \
     | sed -E 's/^\| *//; s/ *\| *`/ /; s/`//g; s/^([A-Z]+) +/\1 /' \
-    | sed -e 's#/v1#v1#' -e 's#{drawer_id}#drawer_id#g' -e 's#{key}#key#g' \
-          -e 's#{id}#id#g' -e 's#{[a-z_]*}#X#g' \
+    | sed -e 's#/v1#v1#' -E -e 's#\{([a-z_]+)\}#\1#g' \
     | awk '{print $1" "$2}' | sort -u
 }
 V1_RS=$(v1_doc_routes docs/remote-server.md '^(GET|POST|PUT|PATCH|DELETE) +/v1/[a-z{}/_-]+')
@@ -1267,6 +1717,228 @@ if [ "$V1_FAIL" -ne 0 ]; then
 fi
 echo "ok    both /v1 route references match the dispatch exactly ($V1_N routes)"
 
+# ── the MCP tool table's R/W column, against the code that decides it ───────
+# ROADMAP O86. `docs/AGENTS.md` §9 marks each tool `W` for a write and leaves
+# the column empty for a read. That column is the agent-facing answer to *will
+# a `--read-only` server serve this*, and NOTHING compared it to the code.
+#
+# The neighbouring claims were all gated, which is what made this the gap
+# rather than an oversight: `parity.rs` counts tool NAMES against `MCP_TOOLS`
+# both ways, and the arm directly above counts the `/v1` route SETS. The
+# read/write MARKER sat between them, checked by no one — so O83's
+# reclassification of `index_status` moved the code and both `/v1` references
+# and left §9 saying the opposite, until the table contradicted itself, §9
+# against §10.
+#
+# ONE SIDE IS DERIVED FROM THE CODE, which is O80's lesson: two inventories
+# can agree with each other and be jointly wrong, so `READ_TOOLS` and
+# `WRITE_TOOLS` — the lists `refused_when_read_only` actually consults — are
+# the authority here, never a second doc.
+mcp_code_list() { # mcp_code_list <READ_TOOLS|WRITE_TOOLS>
+  awk "/const $1/,/^\];/" crates/undercroft-cli/src/mcp.rs \
+    | grep -oE '^ *"undercroft_[a-z_]+"' | tr -d '" ' | sort -u
+}
+MCP_CODE_W=$(mcp_code_list WRITE_TOOLS)
+MCP_CODE_R=$(mcp_code_list READ_TOOLS)
+MCP_CODE_ALL=$(printf '%s\n%s\n' "$MCP_CODE_R" "$MCP_CODE_W" | grep -c .)
+
+# The doc side, and the NOTATION is the hard part — a naive regex matches a
+# handful of rows and reports a clean tree, which is this repo's most-recorded
+# failure. Three shapes have to be handled: rows packing several tools behind
+# suffix abbreviations (`undercroft_kg_add` / `_kg_invalidate`), rows that are
+# not tools at all (`undercroft_save` / `_add_drawer` *also take* `kind`), and
+# the column itself, which must be `W` or empty and nothing else.
+mcp_doc_rows() { # emits "<tool> <W|.>" per tool, abbreviations expanded
+  awk -F'|' '/^\| `undercroft_/ {
+      c1 = $2; c2 = $3
+      if (c1 ~ /also takes?/) next          # a parameter row, not a tool row
+      gsub(/`/, "", c1); gsub(/[ \t]/, "", c2)
+      mark = (c2 == "W") ? "W" : (c2 == "" ? "." : "?")
+      n = split(c1, p, "/")
+      for (i = 1; i <= n; i++) {
+        t = p[i]; gsub(/^[ \t]+|[ \t]+$/, "", t)
+        if (t ~ /^_/) t = "undercroft" t     # the suffix form, expanded
+        if (t ~ /^undercroft_[a-z_]+$/) print t, mark
+      }
+    }' docs/AGENTS.md | sort -u
+}
+MCP_DOC=$(mcp_doc_rows)
+MCP_DOC_N=$(printf '%s\n' "$MCP_DOC" | grep -c . || true)
+
+# PREMISE, three arms. An extractor that read nothing agrees with everything,
+# and here it can also read SOME rows and look healthy.
+MCP_PREMISE=0
+if [ "${MCP_DOC_N:-0}" -lt 30 ] || [ "${MCP_CODE_ALL:-0}" -lt 30 ]; then
+  echo "FAIL  premise: parsed $MCP_DOC_N tool(s) from docs/AGENTS.md §9 and"
+  echo "      $MCP_CODE_ALL from mcp.rs; both should be dozens. A table or list"
+  echo "      was reshaped and this reader examined almost nothing."
+  MCP_PREMISE=1
+fi
+# The abbreviation arm: `undercroft_list_rooms` appears in that table ONLY as
+# the suffix `_list_rooms`, so if expansion breaks it vanishes silently and
+# every packed row collapses to its first tool.
+if ! printf '%s\n' "$MCP_DOC" | grep -q '^undercroft_list_rooms '; then
+  echo "FAIL  premise: the suffix expansion is not running — \`undercroft_list_rooms\`"
+  echo "      exists in §9 only as \`_list_rooms\`, so its absence means every"
+  echo "      multi-tool row collapsed to its first entry."
+  MCP_PREMISE=1
+fi
+if [ "$MCP_PREMISE" -ne 0 ]; then
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+
+MCP_FAIL=0
+# The column is a closed vocabulary: `W` or empty. Anything else (a parameter
+# list, a tick, prose) is a cell whose meaning this gate cannot read, and an
+# unreadable cell is where the next drift hides.
+BADMARK=$(printf '%s\n' "$MCP_DOC" | awk '$2=="?"{print $1}')
+if [ -n "$BADMARK" ]; then
+  echo "FAIL  docs/AGENTS.md §9: the W column must be \`W\` or empty; these rows"
+  echo "      carry something else, so their classification cannot be read:"
+  printf '        %s\n' $BADMARK
+  MCP_FAIL=1
+fi
+# Both directions, on both axes.
+for axis in "write:$(printf '%s\n' "$MCP_DOC" | awk '$2=="W"{print $1}')|$MCP_CODE_W" \
+            "tool:$(printf '%s\n' "$MCP_DOC" | awk '{print $1}' | sort -u)|$(printf '%s\n%s\n' "$MCP_CODE_R" "$MCP_CODE_W" | sort -u)"; do
+  name="${axis%%:*}"; rest="${axis#*:}"
+  docside="${rest%%|*}"; codeside="${rest#*|}"
+  only_code=$(comm -13 <(printf '%s\n' "$docside" | sort -u) <(printf '%s\n' "$codeside" | sort -u))
+  only_doc=$(comm -23 <(printf '%s\n' "$docside" | sort -u) <(printf '%s\n' "$codeside" | sort -u))
+  if [ -n "$only_code" ]; then
+    echo "FAIL  docs/AGENTS.md §9 does not mark these as $name, but mcp.rs does:"
+    printf '        %s\n' $only_code
+    MCP_FAIL=1
+  fi
+  if [ -n "$only_doc" ]; then
+    echo "FAIL  docs/AGENTS.md §9 marks these as $name, but mcp.rs does not:"
+    printf '        %s\n' $only_doc
+    MCP_FAIL=1
+  fi
+done
+if [ "$MCP_FAIL" -ne 0 ]; then
+  echo ""
+  echo "      The R/W column is the agent-facing answer to whether a --read-only"
+  echo "      server serves a tool. mcp.rs decides it; the table only reports it."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    the §9 tool table's R/W column matches READ_TOOLS/WRITE_TOOLS"
+echo "      ($MCP_DOC_N tools, $(printf '%s\n' "$MCP_CODE_W" | grep -c .) of them writes, both directions)"
+
+# The route COUNT in prose, which the set comparison above deliberately does
+# not check — "a count passes when one route is swapped for another" is why it
+# compares sets, and the cost of that correct choice is that the sentence
+# introducing the list is un-gated. It said 36 while the list beside it held
+# 37, from M17 (which added `POST …/repair` to the list and not to the
+# sentence) until 2026-08-21. A number in prose next to a gated list is the
+# un-gated part of a gated claim.
+V1_DOC_N=$(sed -nE 's/.*\*\*All ([0-9]+) routes\*\*.*/\1/p' docs/remote-server.md | head -1)
+if [ -z "$V1_DOC_N" ]; then
+  echo "FAIL  docs/remote-server.md: no '**All N routes**' sentence found."
+  echo "      Either it was reworded (update this reader) or deleted — a"
+  echo "      reader that matches nothing checks nothing."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+if [ "$V1_DOC_N" != "$V1_N" ]; then
+  echo "FAIL  docs/remote-server.md publishes $V1_DOC_N routes; tenant.rs dispatches $V1_N"
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    the published /v1 route count ($V1_DOC_N) is the dispatch's own"
+
+# ── the illustrative diagram set publishes figures too (ROADMAP O74) ────────
+#
+# `architecture/platform-views/` is a SECOND description of the same engine.
+# Its own gate (`platform-views/check.py`) cannot do this: `arch-check` mounts
+# `./architecture` alone, read-only, so that checker physically cannot see
+# `crates/` and cannot derive what the truth is. This is therefore the only
+# place the two can be joined, and it is the same join the rows above already
+# make for `CLAUDE.md` and `architecture/index.html`.
+#
+# WHAT THIS CANNOT SEE, stated because the limit is the point. It compares
+# COUNTS. The defect that prompted it was PROSE: the deployment diagram's
+# accessible description said `/ui` sat behind the palace bearer, and `/ui` is
+# served in FRONT of that gate as a secret-free shell. No count moves when a
+# relational claim goes wrong, so a figure gate sails straight past it. Claims
+# of that shape are still bound by attention alone — that is O74's residue,
+# narrowed rather than closed.
+PV_DIR="architecture/platform-views"
+PV_TXT=$(cat "$PV_DIR"/*.html | sed -e 's/<[^>]*>/ /g')
+# `pub(crate) const`, not `pub const` — anchoring on the visibility keyword is
+# how the first version of this line measured 0 and reported the SET wrong.
+PV_WRITES=$(awk '/const WRITE_TOOLS/,/^\];/' crates/undercroft-cli/src/mcp.rs \
+            | grep -coE '"undercroft_[a-z_]+"' || true)
+PV_CLIOPS=$(( $(awk '/pub const SURFACE_ABSENCES/,/^\];/' crates/undercroft-cli/src/parity.rs \
+                 | grep -oE '^    \("[^"]+"' | sort -u | grep -c . || true) \
+             + $(awk '/pub const SURFACE_COMPLETE/,/^\];/' crates/undercroft-cli/src/parity.rs \
+                 | grep -cE '^    "' || true) ))
+
+# name|regex capturing the number as \1|truth
+PV_FIGURES=(
+  "MCP tools|([0-9]+) (MCP agent tools|tools ·)|$PF_MCP"
+  "MCP write tools|· ([0-9]+) writes?|$PV_WRITES"
+  "/v1 routes|([0-9]+)[ -]routes? ?(·|HTTP)|$V1_N"
+  "CLI operations|([0-9]+) operations|$PV_CLIOPS"
+)
+PV_FAIL=0
+PV_SEEN=0
+for row in "${PV_FIGURES[@]}"; do
+  pv_name=${row%%|*}; pv_rest=${row#*|}
+  pv_re=${pv_rest%|*}; pv_truth=${pv_rest##*|}
+  # every occurrence, because the same figure is repeated across diagrams
+  pv_found=$(printf '%s' "$PV_TXT" | grep -oE "$pv_re" | grep -oE '[0-9]+' | sort -u)
+  pv_count=$(printf '%s\n' "$pv_found" | grep -c . || true)
+  if [ "$pv_count" -eq 0 ]; then
+    echo "FAIL  platform-views: found NO '$pv_name' figure to check."
+    echo "      Either the set stopped publishing it (drop this row) or the"
+    echo "      pattern rotted — a reader that matches nothing checks nothing."
+    PV_FAIL=1
+    continue
+  fi
+  PV_SEEN=$((PV_SEEN + pv_count))
+  for pv_v in $pv_found; do
+    if [ "$pv_v" != "$pv_truth" ]; then
+      echo "FAIL  platform-views publishes $pv_name = $pv_v; the tree measures $pv_truth"
+      PV_FAIL=1
+    fi
+  done
+done
+# The crate count is spelled as a WORD in this set, so it needs its own read.
+# Only words that are NUMBERS are claims: "three separate crates reach it" is
+# an ordinary sentence, and a first version that took the alphabetically-first
+# match read "separate" as the count and failed on a correct tree.
+PV_CRATE_SEEN=0
+for pv_w in $(printf '%s' "$PV_TXT" | grep -oiE '[a-z]+ (Rust )?crates' \
+              | awk '{print tolower($1)}' | sort -u); do
+  pv_n=$(pf_word "$pv_w")
+  case $pv_n in ''|*[!0-9]*) continue;; esac   # not a number word — not a claim
+  PV_CRATE_SEEN=$((PV_CRATE_SEEN + 1))
+  if [ "$pv_n" != "$PF_CRATES" ]; then
+    echo "FAIL  platform-views says '$pv_w crates'; the tree has $PF_CRATES"
+    PV_FAIL=1
+  fi
+done
+if [ "$PV_CRATE_SEEN" -eq 0 ]; then
+  echo "FAIL  platform-views: no '<number-word> crates' phrase found — pattern rotted."
+  PV_FAIL=1
+fi
+if [ "$PV_FAIL" -ne 0 ]; then
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    platform-views' $((PV_SEEN + 1)) published figures agree with the tree"
+echo "      (counts only — a relational claim in prose is NOT gated; see O74)"
+
+fi  # end of the host-side preflight block (`--no-preflight` skips it)
+
 if [ "$PREFLIGHT_ONLY" -eq 1 ]; then
   echo ""
   echo "preflights only — no suite was run, by request (--preflight-only)"
@@ -1277,12 +1949,55 @@ for suite in "${SUITES[@]}"; do
   # `tests/e2e-backends.sh` asserts exact record counts and therefore assumes
   # FRESH backends; a second run against warm volumes flakes. Documented in
   # CLAUDE.md, mechanised here so nobody has to remember it.
+  #
+  # The reset is NARROW, and that is the whole of ROADMAP M12. It used to be a
+  # project-wide teardown with the volumes flag and no `-p`/`-f`, so it
+  # resolved to ./docker-compose.yml — whose declared project is `undercroft`,
+  # i.e. the DEVELOPER'S OWN project — and removed every named volume that file
+  # declares. Three of the five were pure collateral: `undercroft-models` (the
+  # multi-GB weights of the four served embedders this project measures with),
+  # `undercroft-data` (the compose palace, i.e. any mined corpus), and
+  # `undercroft-embed-tls` (the embeddings CA that CLAUDE.md's own published
+  # pin recipe mounts — destroying it makes that recipe mount a fresh empty
+  # volume silently, which is the failure the recipe's own warning describes).
+  #
+  # None of that is state this suite needs fresh, and none of the five backends
+  # declares a named volume at all: qdrant, chroma, milvus and weaviate have no
+  # `volumes:` key, and pgvector's only mount is a read-only cert. Their data
+  # lives in ANONYMOUS volumes, which `rm -v` removes — so the narrow form
+  # delivers everything the wide one did for this suite, and nothing else.
+  #
+  # The terminator is recreated too, so it cannot serve a cached upstream
+  # address for a container that has just been replaced; its CA is a NAMED
+  # volume, which `rm -v` deliberately does not touch, so the pin the suite
+  # mounts survives and Caddy reuses it.
+  #
+  # ROADMAP M10 learned this for `tests/tls-pins.sh` — a private compose
+  # project name does not scope a shared host resource — and the lesson was
+  # not carried one file over to the battery's own teardown. Not silenced:
+  # a reset that fails leaves warm backends, and this suite's failure mode is
+  # then an unexplainable count assertion.
   if [ "$suite" = "backends-e2e" ]; then
-    docker compose down -v >/dev/null 2>&1 || true
+    docker compose rm -sfv \
+      qdrant chroma pgvector milvus weaviate backends-tls || true
   fi
 
   echo ""
   echo "═══ $suite ═══"
+  # `tls-pins` brings real Caddy terminators up and reads their volumes as
+  # the engine uid, so it DRIVES docker rather than running inside a
+  # container — the same reason this script is the one thing that runs on
+  # the host. As a compose service it would need docker-in-docker to check
+  # a permission question that needs no build at all.
+  if [ "$suite" = "tls-pins" ]; then
+    mkdir -p .battery
+    bash tests/tls-pins.sh 2>&1 | tee ".battery/$suite.log"
+    code=${PIPESTATUS[0]}
+    NAMES+=("$suite")
+    CODES+=("$code")
+    [ "$code" -eq 0 ] || OVERALL=1
+    continue
+  fi
   # No pipe. A pipeline's exit status is its LAST command's, which is how a
   # `| grep` or `| tail` silently turns a failing suite into a passing one —
   # the hazard CLAUDE.md records as "never let a pipeline's tail mask an exit
@@ -1312,16 +2027,19 @@ for i in "${!NAMES[@]}"; do
   # "0 passed" under a green battery. Harmless, and still a number that does
   # not measure what it appears to, which is the habit this file exists to
   # break. Summed instead.
-  if [ "$n" = "lint" ]; then
-    # **The one suite with no summary line, named rather than complained
-    # about.** `cargo fmt --check` and `clippy` are silent on success, so
-    # `lint` has never printed one — and the O27 reader below correctly
-    # answered "this reader examined nothing", beside a green run, every
-    # time. That is a message which misdescribes its own situation, and
-    # worse: it is the SAME string that is a real signal for the other seven
-    # suites, so printing it routinely here teaches the reader to skip it.
-    # An alarm nobody can distinguish from a real failure is the thing this
-    # project exists to remove.
+  if printf '%s\n' "${NO_SUMMARY_SUITES[@]}" | grep -qx "$n"; then
+    # **The suites with no summary line, NAMED rather than complained about.**
+    # `cargo fmt --check` and `clippy` are silent on success, so `lint` has
+    # never printed one — and the O27 reader below correctly answered "this
+    # reader examined nothing", beside a green run, every time. That is a
+    # message which misdescribes its own situation, and worse: it is the SAME
+    # string that is a real signal for every other suite, so printing it
+    # routinely teaches the reader to skip it. An alarm nobody can distinguish
+    # from a real failure is the thing this project exists to remove.
+    #
+    # A SET rather than a second `elif`, because `arch-check` joining the
+    # battery (ROADMAP M14) made this a class of two, and a class of two
+    # written as two special cases becomes a class of three written as three.
     detail=""
   elif [ "$n" = "test" ]; then
     detail=$(test_summary ".battery/$n.log")
@@ -1358,8 +2076,18 @@ echo "════════════════════════�
 FIGURE_DRIFT=""
 for i in "${!NAMES[@]}"; do
   n="${NAMES[$i]}"
-  published=$(grep -oE "docker compose run --rm $n .*\([0-9]+ checks" CLAUDE.md 2>/dev/null \
-              | sed -E 's/.*\(([0-9]+) checks/\1/' | head -1)
+  # ONE reader, shared with the preflight. This used to be a second,
+  # compose-shaped grep written out here — `docker compose run --rm $n` — so
+  # it could not see a suite INVOKED any other way. `tls-pins` is published as
+  # `bash tests/tls-pins.sh … (7 checks)`, so `published` came back empty and
+  # the `continue` below skipped it: published, measured, and never compared.
+  # M10's own entry claims "the published-count reader was widened to see
+  # host-side suites, or the figure would have been published, measured and
+  # never compared" — true of the PREFLIGHT reader it widened, and false of
+  # this one, which is the arm that catches the case the preflight cannot
+  # (every surface stale TOGETHER). Two implementations of one lookup, and
+  # only one of them got the fix. ROADMAP M13.
+  published=$(suite_count "$n")
   [ -z "$published" ] && continue
   line=$(suite_summary ".battery/$n.log")
   measured=$(sed -E 's/.*results: ([0-9]+) passed, ([0-9]+) failed.*/\1 \2/' <<< "$line")
@@ -1374,7 +2102,18 @@ for i in "${!NAMES[@]}"; do
     *" "*) measured=$(( ${measured%% *} + ${measured##* } )) ;;
     *)     continue ;;
   esac
-  [ "$measured" -eq 0 ] && continue
+  # A suite that printed a summary and counted ZERO is the LOUDEST case, not
+  # the quietest, and this skipped it. Reaching here means the summary parsed
+  # as two numbers (the `case` above diverts every other shape), so
+  # `0 passed, 0 failed` is a suite that ran and executed nothing — a checker
+  # that cannot run reporting exactly what a clean tree reports, which is the
+  # failure this whole file is about. It is reported as its own drift line
+  # rather than folded into the mismatch below, because "measured 0 against a
+  # published 370" is a different fact from "measured 369". ROADMAP M13.
+  if [ "$measured" -eq 0 ]; then
+    FIGURE_DRIFT="$FIGURE_DRIFT  $n: published $published, this run measured ZERO — the suite printed a summary having executed nothing\n"
+    continue
+  fi
   if [ "$measured" != "$published" ]; then
     FIGURE_DRIFT="$FIGURE_DRIFT  $n: CLAUDE.md publishes $published, this run measured $measured\n"
   fi
@@ -1391,9 +2130,25 @@ if printf '%s\n' "${NAMES[@]}" | grep -qx test; then
   tline=$(test_summary ".battery/test.log")
   tpass=$(sed -E 's/^([0-9]+) passed.*/\1/' <<< "$tline")
   tign=$(sed -E 's/.*, ([0-9]+) ignored.*/\1/' <<< "$tline")
+  # **A count the reader called untrustworthy must not be compared** (O85).
+  #
+  # `test_summary` embeds `** PREMISE FAILURE **` in the SAME line when it
+  # detects a replayed log tail (O15), and the guard below only rejected
+  # NON-NUMERIC output — so a replay produced a perfectly numeric count over
+  # the wrong number of targets, this block compared it to the published
+  # figure, and the battery announced "PUBLISHED FIGURES ARE STALE" naming
+  # numbers that were correct. That is worse than not checking: it sends the
+  # next person to edit a figure that was already right, and it turns an
+  # intermittent docker artifact into a doc-drift verdict.
+  #
+  # It still FAILS — a gate that cannot measure must not report clean, which
+  # is this file's oldest rule — but it fails saying what actually happened.
+  case "$tline" in
+    *"PREMISE FAILURE"*) FIGURE_UNVERIFIABLE="$tline" ;;
+  esac
   case "$tpass" in
     ''|*[!0-9]*) : ;;   # the reader said something else; it names its own failure
-    *)
+    *) if [ -n "${FIGURE_UNVERIFIABLE:-}" ]; then :; else
       cm_run=$(grep -oE 'integration tests \([0-9]+ run' CLAUDE.md | grep -oE '[0-9]+' | head -1)
       cm_comp=$(grep -oE '= [0-9]+ compiled' CLAUDE.md | grep -oE '[0-9]+' | head -1)
       tile=$(grep -oE 'data-count="[0-9]+">0</div><div class="l">cargo tests' "$LANDING" \
@@ -1408,8 +2163,21 @@ if printf '%s\n' "${NAMES[@]}" | grep -qx test; then
       if [ -n "$tile" ] && [ "$tile" != "$tpass" ]; then
         FIGURE_DRIFT="$FIGURE_DRIFT  cargo tests: the landing tile publishes $tile, this run measured $tpass\n"
       fi
+      fi
       ;;
   esac
+fi
+
+if [ -n "${FIGURE_UNVERIFIABLE:-}" ]; then
+  echo ""
+  echo "COUNT UNVERIFIABLE — the suites passed and the figures were NOT compared."
+  echo "The test-count reader reported a premise failure, so the number it"
+  echo "produced describes a replayed log rather than this run (ROADMAP O15):"
+  echo "  $FIGURE_UNVERIFIABLE"
+  echo "      This is NOT doc drift. Do not edit a published figure to match it."
+  echo "      Re-run the test suite; the replay is intermittent, and a clean log"
+  echo "      pairs every target header with exactly one result line."
+  OVERALL=1
 fi
 
 if [ -n "$FIGURE_DRIFT" ]; then
@@ -1418,7 +2186,8 @@ if [ -n "$FIGURE_DRIFT" ]; then
   echo "them did not. This is a doc-drift verdict, NOT a suite failure:"
   printf "$FIGURE_DRIFT"
   echo "      Update CLAUDE.md, then the landing page tile (its e2e figure is the"
-  echo "      SUM of the four e2e suites) and any doc republishing the count."
+  echo "      SUM of the FIVE e2e suites named in PUBLISHED_FIGURES) and any doc"
+  printf '%s\n' "      republishing the count."
   OVERALL=1
 fi
 

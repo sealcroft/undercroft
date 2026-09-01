@@ -121,13 +121,13 @@ enum Command {
     Ops {
         /// Tenant id
         id: String,
-        /// One of: verify, anchor, supersessions, admission, admission-rule,
-        /// trust, trust-set, retention, retention-set, retention-sweep,
-        /// forget, verify-forgetting
+        /// One of: verify, repair, anchor, supersessions, admission,
+        /// admission-rule, trust, trust-set, retention, retention-set,
+        /// retention-sweep, forget, verify-forgetting, authority
         op: String,
         /// JSON body for the operations that take one (rulings, trust and
-        /// retention assignment, forget, and the attestation document
-        /// verify-forgetting checks)
+        /// retention assignment, forget, the authority declaration, and the
+        /// attestation document verify-forgetting checks)
         #[arg(long)]
         body: Option<String>,
     },
@@ -383,6 +383,9 @@ fn run() -> Result<()> {
         }
         Command::InstanceList => {
             let orch = Orch::open(&cli.db, &orch_key()?)?;
+            // Instances whose credential blob would not open. Collected
+            // rather than raised inline so the listing completes (M20).
+            let mut integrity: Vec<String> = Vec::new();
             for i in orch.instance_list()? {
                 // A refusal is not an outage, and printing it as one sent
                 // operators to look at an engine that was fine. `healthy`
@@ -397,7 +400,26 @@ fn run() -> Result<()> {
                 // what they are.
                 let health = match orch.instance_creds(&i.name) {
                     Ok(c) => engine::health(&c.url),
-                    Err(e) => engine::Health::Refused(e.to_string()),
+                    Err(e) => {
+                        // **Remember the VERDICT before stringifying it**
+                        // (ROADMAP M20). The line below is right about the
+                        // display — a refusal is not an outage — and it was
+                        // the whole story, so an `Unsealable` was flattened
+                        // to a string, never escaped `run()`, and the exit-2
+                        // hook in `main` never fired. This command reported
+                        // the control plane's own tamper verdict and exited
+                        // **0**, which is the answer a compliance script
+                        // reads as "fine".
+                        //
+                        // The listing still lists — M18's rule, and the
+                        // reason this is not simply a `?` here: one bad blob
+                        // must not hide the other instances. The verdict is
+                        // raised after the walk instead.
+                        if e.is_integrity() {
+                            integrity.push(i.name.clone());
+                        }
+                        engine::Health::Refused(e.to_string())
+                    }
                 };
                 let note = match health.refusal() {
                     Some(why) => format!("\trefused={why}"),
@@ -410,6 +432,16 @@ fn run() -> Result<()> {
                     i.tenants,
                     health.is_healthy()
                 );
+            }
+            // The walk finished; now the verdict. Raised as the error itself
+            // so `main`'s existing exit-2 hook classifies it — one
+            // classifier, not a second exit path spelled differently here.
+            if !integrity.is_empty() {
+                eprintln!(
+                    "credential blob(s) that would not open: {}",
+                    integrity.join(", ")
+                );
+                return Err(state::StateError::Unsealable.into());
             }
             Ok(())
         }

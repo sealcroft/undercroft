@@ -195,20 +195,93 @@ grep -q "event: sample" /tmp/plain.sse && pass "stream emits sampler frame" || f
 grep -q '"wing":"eng"' /tmp/plain.sse && pass "hmac-only stream carries wing/room" \
   || fail "wing/room missing on hmac-only vault"
 
-# sealed vault: live events suppress wing/room names.
+# ROADMAP M6. A sealed vault's live frames CARRY wing/room to a subscriber
+# that proved per-vault authorization, and still carry no content.
+#
+# This block replaces one that asserted the opposite ("sealed stream
+# suppresses wing/room"), and the reversal is a deliberate ruling rather than
+# a drift: a subscription exists only after `Tenancy::authorize` (bearer +
+# per-vault assertion), `broadcast` fans a frame out to that vault's
+# subscribers only, and the same caller reads those names from
+# `GET /v1/<id>/stats`. Blanking them withheld nothing from an unauthorized
+# party; it blinded the vault's OWNER, who is who the live view is for.
+#
+# The boundary that did NOT move is asserted second, and it is the one that
+# matters: a name is metadata, the words are not.
 curl -s "${AUTH[@]}" -X POST "$BASE" -d '{"id":"sealed","level":"sealed"}' >/dev/null
 curl -sN --max-time 3 "${AUTH[@]}" "$BASE/sealed/stream" >/tmp/sealed.sse 2>/dev/null &
 C2=$!
 sleep 1
 curl -s "${AUTH[@]}" -X POST "$BASE/sealed/drawers" \
-  -d '{"text":"acquisition plan","wing":"topsecret","room":"boardroom"}' >/dev/null
+  -d '{"text":"acquisition plan SECRETWORD","wing":"topsecret","room":"boardroom"}' >/dev/null
 wait $C2 2>/dev/null
 grep -q "event: drawer-saved" /tmp/sealed.sse && pass "sealed stream emits drawer-saved" \
   || fail "no sealed drawer-saved frame"
-if grep -qE "topsecret|boardroom" /tmp/sealed.sse; then
-  fail "sealed stream leaked wing/room names" "$(cat /tmp/sealed.sse)"
+if grep -q '"wing":"topsecret"' /tmp/sealed.sse && grep -q '"room":"boardroom"' /tmp/sealed.sse; then
+  pass "sealed stream carries wing/room to an authorized subscriber"
 else
-  pass "sealed stream suppresses wing/room"
+  fail "sealed stream withheld wing/room from its owner" "$(cat /tmp/sealed.sse)"
+fi
+if grep -q "SECRETWORD" /tmp/sealed.sse; then
+  fail "sealed stream leaked drawer CONTENT" "$(cat /tmp/sealed.sse)"
+else
+  pass "sealed stream still carries no drawer content"
+fi
+
+# ROADMAP O82a — the stream's FAILURE replies, which this suite never drove.
+#
+# Every streaming check above uses a valid bearer, so the one arm that built
+# its own reply was never exercised: the SSE route is intercepted in front of
+# `Tenancy::handle`, so it never reached `respond`, and its error arm was
+# `Response::from_string("")` with a status and nothing else.
+#
+# **Which failure reaches that arm is the whole design of this block, and the
+# obvious choice is wrong.** A request with NO bearer never gets there — the
+# palace bearer gate answers it several hundred lines earlier, through
+# `unauthorized()`, which M43 already made JSON-with-a-challenge. Asserting
+# the envelope on a 401 therefore tests M43's gate and says NOTHING about this
+# route; measured, those assertions pass with the defect restored. An unknown
+# VAULT is the cheap failure that authenticates at the door and then fails
+# inside `authorize`, which is the arm in question.
+#
+# The assertion is a COMPARISON against the sibling route, deliberately: the
+# same failure on `.../stats` is the only definition of "the same envelope"
+# that does not go stale when the envelope changes.
+echo "== SSE failure replies use the /v1 envelope (O82a) =="
+
+sse_404="$(curl -s -o /tmp/sse404.body -D /tmp/sse404.hdr -w '%{http_code}'   --max-time 5 "${AUTH[@]}" "$BASE/nosuchvault/stream")"
+sib_404="$(curl -s -o /tmp/sib404.body -w '%{http_code}' --max-time 5   "${AUTH[@]}" "$BASE/nosuchvault/stats")"
+if [ "$sse_404" = "$sib_404" ]; then
+  pass "stream and stats agree on the status for an unknown vault ($sse_404)"
+else
+  fail "stream answered $sse_404 where stats answered $sib_404"
+fi
+if [ -s /tmp/sse404.body ] && grep -q '"error"' /tmp/sse404.body; then
+  pass "the stream's failure has a body at all (it was bodyless)"
+else
+  fail "the stream's failure reply is still empty" "$(cat /tmp/sse404.body)"
+fi
+if grep -qi '^Content-Type: *application/json' /tmp/sse404.hdr; then
+  pass "the stream's failure is application/json, like every other /v1 reply"
+else
+  fail "the stream's failure is not JSON" "$(cat /tmp/sse404.hdr)"
+fi
+if [ "$(cat /tmp/sse404.body)" = "$(cat /tmp/sib404.body)" ]; then
+  pass "stream and stats return the SAME body for the same failure"
+else
+  fail "stream and stats disagree on the body"     "stream: $(cat /tmp/sse404.body) / stats: $(cat /tmp/sib404.body)"
+fi
+
+# The palace bearer gate, at a CALL SITE rather than through the helper.
+# M43's own gate asserts `unauthorized()` in isolation; this asserts that the
+# reply a caller actually receives on a /v1 path carries the challenge. It is
+# a separate claim from the four above and is labelled as one — it does not
+# reach the stream's own error arm and must not be read as covering it.
+curl -s -o /dev/null -D /tmp/sse401.hdr --max-time 5 "$BASE/plain/stream"
+if grep -qi '^WWW-Authenticate:' /tmp/sse401.hdr; then
+  pass "an unauthenticated /v1 call is refused with a challenge (M43, at a call site)"
+else
+  fail "no WWW-Authenticate on the bearer gate's 401" "$(cat /tmp/sse401.hdr)"
 fi
 
 # history backfill endpoint returns the sample ring.
@@ -228,6 +301,119 @@ grep -q '"plain"' <<<"$vl" && grep -q '"sealed"' <<<"$vl" && pass "/v1/vaults li
 
 kill "$S3" 2>/dev/null
 wait "$S3" 2>/dev/null
+
+echo "== ROADMAP O62: a real tamper reaches a live subscriber, localized =="
+# M6 made the tamper frame carry the wing and room it concerns, so a monitor
+# can point at a row instead of flashing the whole palace red. The wire shape
+# was pinned by unit gates and verified by hand; what did not exist was an arm
+# driving a REAL tamper through a live SSE stream end to end. This is it.
+#
+# THE ORDER IS THE TEST. Stop the server, corrupt the row, restart, subscribe,
+# then read. Tampering underneath a running server proves nothing reliably:
+# SQLite would serve the row from a page cache the edit never touched, so the
+# arm would pass or fail on timing rather than on the HMAC. A flaky integrity
+# gate is worse than a stated gap — it teaches the reader to re-run it, which
+# is how a real failure gets waved through.
+#
+# hmac-only, deliberately: its content and metadata are plaintext on disk, so
+# a fixed-length substitution can reach the covered bytes. That is the same
+# primitive `tests/e2e-orchestrator.sh` uses, and same-length matters — it
+# keeps the SQLite file structurally valid so ONLY the record HMAC can object.
+TDB="$UNDERCROFT_HOME/vaults/tampered/palace.db"
+UNDERCROFT_MCP_HTTP_TOKEN="$TOKEN" \
+  "$BIN" serve-http --host 127.0.0.1 --port 8799 >/tmp/ttamper.log 2>&1 &
+S5=$!
+wait_up 8799 || fail "tamper server did not start" "$(cat /tmp/ttamper.log)"
+TBASE="http://127.0.0.1:8799/v1/vaults"
+curl -s "${AUTH[@]}" -X POST "$TBASE" -d '{"id":"tampered","level":"hmac-only"}' >/dev/null
+TID=$(curl -s "${AUTH[@]}" -X POST "$TBASE/tampered/drawers" \
+  -d '{"text":"the bearing was replaced in March","wing":"tamper","room":"decisions"}' \
+  | tr ',' '\n' | grep '"id"' | cut -d'"' -f4)
+# The server must let go before the file is touched.
+kill "$S5" 2>/dev/null
+wait "$S5" 2>/dev/null
+
+# WAL, and this is the step the first version of this arm was missing. SQLite
+# runs in WAL mode, so a row the server wrote lives in `palace.db-wal` and is
+# NOT in `palace.db` — measured on a probe: the main file sat at 4 KB with no
+# trace of the drawer while the WAL held it, so the substitution below matched
+# nothing and the premise check below correctly refused to call that a pass.
+#
+# Editing the WAL instead would be the WRONG fix. A WAL frame carries a
+# checksum, so a modified frame is treated as the end of the log and DISCARDED
+# — the row would VANISH rather than fail its HMAC, which is a different test
+# wearing this one's name.
+#
+# A clean CLI open/close checkpoints the WAL into the main file, and `verify`
+# is a read, so this one command does two jobs: it puts the row where an
+# out-of-band edit can reach it, and it establishes that the vault was intact
+# BEFORE the forgery — without which a later `hmac-fail` proves nothing about
+# the tamper.
+if "$BIN" verify --vault tampered >/dev/null 2>&1; then
+  pass "O62 premise: the vault verifies clean before the forgery"
+else
+  fail "O62 premise: the vault verifies clean before the forgery" \
+       "$("$BIN" verify --vault tampered 2>&1 | tail -5)"
+fi
+
+if [ -z "${TID:-}" ]; then
+  fail "O62 premise: the drawer was saved and returned an id" "$(cat /tmp/ttamper.log)"
+else
+  TBEFORE="$(md5sum "$TDB" | cut -d' ' -f1)"
+  # `tamper` -> `tamped`: six characters for six. The wing is inside the
+  # HMAC-covered meta, so this is a forgery the tag must catch, and the frame
+  # should report the row's OWN altered claim rather than the true wing.
+  perl -0777 -pi -e 's/"wing":"tamper"/"wing":"tamped"/' "$TDB"
+  TAFTER="$(md5sum "$TDB" | cut -d' ' -f1)"
+  if [ "$TBEFORE" = "$TAFTER" ]; then
+    # PREMISE. If the substitution matched nothing the file is untouched and
+    # every assertion below would be measuring an intact vault — a clean
+    # tree and a broken fixture producing the same transcript.
+    fail "O62 premise: the drawer row was forged on disk" \
+         "md5 unchanged ($TBEFORE); the anchor did not match, so nothing was tampered"
+  else
+    pass "O62 premise: the drawer row was forged on disk"
+
+    UNDERCROFT_MCP_HTTP_TOKEN="$TOKEN" \
+      "$BIN" serve-http --host 127.0.0.1 --port 8799 >/tmp/ttamper2.log 2>&1 &
+    S6=$!
+    if ! wait_up 8799; then
+      fail "tamper server restarted" "$(cat /tmp/ttamper2.log)"
+    else
+      curl -sN --max-time 4 "${AUTH[@]}" "$TBASE/tampered/stream" >/tmp/tampered.sse 2>/dev/null &
+      C5=$!
+      sleep 1
+      # Read the forged row by id: the lookup succeeds, the tag check does
+      # not, and that is the path that emits. A search is also driven, so the
+      # arm does not depend on one reader having been wired to the emitter.
+      curl -s "${AUTH[@]}" "$TBASE/tampered/drawers/$TID" >/dev/null 2>&1
+      curl -s "${AUTH[@]}" -X POST "$TBASE/tampered/search" -d '{"query":"bearing"}' >/dev/null 2>&1
+      wait $C5 2>/dev/null
+
+      if grep -q "event: hmac-fail" /tmp/tampered.sse; then
+        pass "a tampered row reaches the live stream as hmac-fail"
+      else
+        fail "a tampered row reaches the live stream as hmac-fail" "$(cat /tmp/tampered.sse)"
+      fi
+      if grep -q '"unverified":true' /tmp/tampered.sse; then
+        pass "the tamper frame is marked unverified"
+      else
+        fail "the tamper frame is marked unverified" "$(cat /tmp/tampered.sse)"
+      fi
+      # M6's whole point: the alarm names a row, not the palace. And what it
+      # names is the FORGED claim — `tamped`, the value the altered row makes
+      # about itself — which is exactly why the frame travels `unverified`.
+      if grep -q '"wing":"tamped"' /tmp/tampered.sse; then
+        pass "the tamper frame localizes to the row's own claimed wing"
+      else
+        fail "the tamper frame localizes to the row's own claimed wing" \
+             "$(cat /tmp/tampered.sse)"
+      fi
+    fi
+    kill "$S6" 2>/dev/null
+    wait "$S6" 2>/dev/null
+  fi
+fi
 
 echo "== drawer-quarantined frames (admission screening on) =="
 # A diverted write must be a drawer-quarantined frame on the live feed —
@@ -266,8 +452,8 @@ else
   pass "flagged text never reaches the stream"
 fi
 
-# Sealed vault: names are suppressed, the signal codes still ship — they
-# are a closed vocabulary, not names.
+# Sealed vault (M6): the intended location ships with the signal codes —
+# an operator watching a poisoning attempt needs to know where it was AIMED.
 curl -s "${AUTH[@]}" -X POST "$QBASE" -d '{"id":"qsealed","level":"sealed"}' >/dev/null
 curl -sN --max-time 3 "${AUTH[@]}" "$QBASE/qsealed/stream" >/tmp/quars.sse 2>/dev/null &
 C4=$!
@@ -276,8 +462,8 @@ curl -s "${AUTH[@]}" -X POST "$QBASE/qsealed/drawers" \
   -d "{\"text\":\"$POISON\",\"wing\":\"topsecret\",\"room\":\"boardroom\"}" >/dev/null
 wait $C4 2>/dev/null
 if grep -q "event: drawer-quarantined" /tmp/quars.sse \
-  && ! grep -qE "topsecret|boardroom" /tmp/quars.sse; then
-  pass "sealed quarantine frame suppresses names"
+  && grep -q '"intended_wing":"topsecret"' /tmp/quars.sse; then
+  pass "sealed quarantine frame names where the write was aimed"
 else
   fail "sealed quarantine frame wrong" "$(cat /tmp/quars.sse)"
 fi

@@ -80,11 +80,24 @@ drives ingest time.
 | `personamem` | `1M` | 2,674 | 1,966 | 156M ch | **mcq** | **exact letter — no judge** |
 | `lifebench` | `en` | 2,003 | 3,605 | 49M ch | open | LLM judge, pass/fail |
 | `beam` | `100k` | 400 | 170 | 12M ch | open | **rubric, continuous 0–1** |
+| `beam` | `500k` | 700 | 962 | 18M ch | open | **rubric, continuous 0–1** |
 | `beam` | `1m` | 700 | 1,830 | 162M ch | open | **rubric, continuous 0–1** |
 | `beam` | `10m` | 200 | 10 | 468M ch | open | **rubric, continuous 0–1** |
+| `sdebench` | `boltons` | 61 | 14,706 | 6.8M tok | **coding** | pytest solve-ness, **no judge** |
 
 Counts above were measured from a populated cache; re-measure rather than trust
 them if the clone differs.
+
+**This table has been short before, and the gap read as "that split does not
+exist."** `beam/500k` and `sdebench/boltons` were both cached and both absent
+from it until 2026-08-22 — found by enumerating `data/*/*/` rather than by
+reading the table. `sdebench` is a **sixth** dataset with its own adapter, and
+it is a different KIND: `task_type: "coding"`, scored by whether pytest passes
+(`runner.py`'s coding branch), with no answer model and no judge in the sense
+the rest of this document means. It is out of scope for this procedure, and
+that is a scoping decision rather than an oversight — but the row belongs here
+so the next reader does not rediscover it. Enumerate the cache; do not trust
+this table.
 
 Three of these are not interchangeable, and picking without reading this costs a
 whole run:
@@ -143,20 +156,73 @@ procedure on its first attempt.
   or more sessions. **Consuming the cached `queries.json.gz` avoids this
   entirely**, because the cache already holds AMB's computed value — which is
   the main reason to prefer the cache over re-deriving from raw data.
-* **Category integers are not intuitive.** For LoCoMo: `1` **multi-hop**,
-  `2` temporal, `3` **open-domain**, `4` **single-hop**, `5` adversarial.
-  Getting `1` and `4` backwards silently mislabels every per-category figure —
-  and this document had them backwards, in this very list, while warning about
-  exactly that. Two independent checks settle it: the **counts** (category 4 is
-  by far the largest) and the **evidence statistics** (category 1 carries ~3.1
-  evidence turns over ~2.7 distinct sessions; category 4 carries ~1.1 over
-  1.0 — a single-hop question cannot span three turns in three sessions).
+* **Category integers are not intuitive, and THE CLONE'S OWN MAP IS WRONG.**
+  For LoCoMo: `1` **multi-hop**, `2` temporal, `3` **open-domain**,
+  `4` **single-hop**, `5` adversarial. Getting `1` and `4` backwards silently
+  mislabels every per-category figure — and this document had them backwards,
+  in this very list, while warning about exactly that. Two independent checks
+  settle it: the **counts** (category 4 is by far the largest) and the
+  **evidence statistics** (category 1 carries ~3.1 evidence turns over ~2.7
+  distinct sessions; category 4 carries ~1.1 over 1.0 — a single-hop question
+  cannot span three turns in three sessions).
+  **Measured 2026-08-22 on the full split, which is what settles it**: cat 1 =
+  282 queries, **3.13** evidence turns over **2.67** sessions; cat 2 = 321,
+  1.17/1.10; cat 3 = 96, 2.08/1.62; cat 4 = **841**, **1.07/1.00**; cat 5 =
+  446, 1.03/1.00. Totals reconcile — 1,986 raw QA pairs − 446 adversarial =
+  the 1,540 the cache holds.
+  **`dataset/locomo.py`'s `_CATEGORY_NAMES` maps `1: single-hop`,
+  `3: multi-hop`, `4: open-domain`** — it rotates three of the five labels
+  against the evidence above. That is a defect in the external harness, not
+  here, and **it must not be "fixed" by editing this list to agree with their
+  code**: the drift-direction doctrine says provenance decides, and the
+  provenance is the data. Never patch their source (a hard constraint of this
+  procedure). Instead report the raw **integer** plus both labels, so a reader
+  can map a figure onto either convention. Scoring is unaffected — the skip
+  set keys on integer `5`, which is genuinely adversarial — but every
+  per-category axis, including `get_result_categories`, carries their labels.
 * **`gold_answers` is a list**, and judges may use only its first element.
 * **`retrieval_query`** falls back to the raw question when a dataset does not
   set it; where a dataset *does* set it, retrieving on the raw question is wrong.
 * **Empty context short-circuits.** The runner marks a query incorrect without
   calling the judge when retrieval returned nothing. Reproduce that, or the
-  score is inflated.
+  score is inflated. Note the check reads `answer_result.context` — the
+  `## Memory` string — **not** `raw_response`, so a provider returning a rich
+  payload for zero documents is still scored incorrect. Reproduce that too.
+
+* **THE CONTEXT CARRIES NO TIMESTAMPS, FOR ANY PROVIDER, AND IT IS THE
+  LARGEST SINGLE DETERMINANT OF THE SCORE.** `modes/rag.py` builds context as
+  `doc.content` alone, and AMB's own BM25 baseline constructs
+  `Document(id=..., content=chunk, user_id=...)` — dropping `Document.timestamp`
+  outright. So a session's date reaches the answer model **only** if the
+  provider puts it there, while `locomo`'s answer prompt simultaneously
+  instructs the model to *"pay special attention to the timestamps"*.
+  Measured 2026-08-22 on the full split: **244 of 321 temporal golds (76.0%)
+  are dates that appear nowhere in the retrieved text.** The answer model does
+  not fail these — it correctly extracts "yesterday" and correctly declines to
+  invent a calendar date, and the judge correctly marks it wrong.
+  This is not a detail to discover after a run. **Decide the context shape
+  BEFORE running and report it**, because AMB's own contract permits at least
+  three and they are not equivalent:
+  1. **content only** — the BM25-baseline shape. Comparable to that row.
+  2. **provider-chosen dated content** — the provider decides each
+     `Document.content`, so embedding the date is legal and is what
+     timestamp-carrying providers effectively do.
+  3. **`raw_response`** — return a dict as `retrieve()`'s second element and
+     `locomo.build_rag_prompt` replaces the context entirely with
+     `json.dumps(raw)`. This is the branch its own comment reserves for "the
+     reference impl".
+  Measured across all three on 1,540 queries with **one shared retrieval**
+  (0 ranking drift, so context construction was the only variable): temporal
+  went **20.9% → 85.0% / 81.3%** and overall **68.6% → 80.8% / 81.4%**.
+  Shapes 2 and 3 were statistically indistinguishable from each other
+  (McNemar p=0.55 overall, p=0.074 on temporal); both beat shape 1
+  overwhelmingly (p≈1e-22 and p≈1e-25; on temporal, 207 queries flip
+  wrong→right against 1 the other way). Two cautions earned the hard way:
+  a **pre-resolved** date structure showed no measurable advantage over simply
+  stating the anchor date and letting the model subtract, and shape 2 cost a
+  **significant** multi-hop regression (p=0.0036) whose mechanism is not
+  established — gold-list-item coverage fell 44.1% → 38.6% at unchanged answer
+  length. Report the shape with every figure; a number without it is unreadable.
 
 ---
 
@@ -300,6 +366,32 @@ Report per category and overall, and state plainly:
 
 If more than one of those moved between two runs, **no delta in the table is
 attributable to any single one of them.** Say so rather than implying a cause.
+
+**Test every delta before reporting it as one.** Arms run over the same
+queries produce *paired* binary outcomes, so the test is **McNemar** on the
+discordant pairs, not a comparison of two percentages. This is not pedantry:
+on 2026-08-22 a 3.7-point per-category difference and a 0.6-point overall
+difference were both written up as findings here, and McNemar refuted both
+(p=0.074 and p=0.55) while confirming the large ones at p≈1e-22 and below. A
+plausible number is harder to disbelieve than a plausible mechanism, which is
+exactly why the arithmetic has to run before the sentence is written.
+Report the discordant counts (`b`/`c`), not only the p — "207 flips one way
+against 1" says more than any p-value.
+
+**Verify the judge, and verify it against the ARMS you are comparing.**
+Independent blind re-judging of a stratified sample is the check; agreement
+with a unanimous blind majority was 95.2% / 100.0% / 93.5% across three arms
+on 63 items each. Two traps. A sample validates the **grader**, not the
+**ranking** — that same 63-item sample put the two upper arms 12 points apart
+when the full split had them within noise, and at n=63 that is ordinary
+sampling variation. And **grader leniency is not uniform across arms**: the
+arm whose answers abstain most also collects the most generous credits, so
+compare the abstention-graded-correct count per arm rather than assuming a
+shared standard. Here one arm took 15 credits where the gold was an absolute
+date and the answer stated none ("matches gold's 5 July 2023 in relative
+form") while the other two took zero — worth **0.9 points overall and 4.7 on
+temporal**, and always in the direction that flatters the weakest arm.
+Publish both the as-judged and the strict figure rather than choosing.
 
 ---
 

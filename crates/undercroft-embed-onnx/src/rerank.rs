@@ -82,11 +82,11 @@ impl OnnxReranker {
                 "{}",
                 undercroft_core::config::undeclared_model_identity(
                     "UNDERCROFT_RERANK_NAME",
-                    "onnx-reranker",
+                    undercroft_core::config::SHARED_RERANKER_IDENTITY,
                     &model,
                 )
             );
-            "onnx-reranker".into()
+            undercroft_core::config::SHARED_RERANKER_IDENTITY.into()
         });
         Self::load(
             std::path::Path::new(&model),

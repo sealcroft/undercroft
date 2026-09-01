@@ -15,8 +15,10 @@ export. It is built to preserve the project's stance:
   configured and never receive spans from is the harder failure to notice.
 - **Metadata only.** Every signal is a count, a rate, a latency, or an
   aggregate gauge. Drawer content, drawer names beyond what `stats`
-  already exposes, and key material are **never** emitted. Sealed vaults
-  expose only aggregate counts.
+  already exposes, and key material are **never** emitted. The security
+  LEVEL does not narrow that further: a sealed vault's wing and room names
+  travel like any other, to the authorized subscriber that asked for them
+  (see [the live stream](#live-stream-sse) below).
 
 The full opt-in pipeline — every edge exists only when its gate is set,
 and every signal is metadata/counts only:
@@ -247,8 +249,11 @@ pushes an [SSE](https://developer.mozilla.org/docs/Web/API/Server-sent_events)
 stream per vault — a periodic sample of aggregate counts plus discrete
 event pings as they happen. This is what the [Palace Monitor
 UI](#palace-monitor-ui) below consumes. Telemetry build + bearer
-required; sealed vaults stream only aggregates (wing/room names
-suppressed).
+required. **Wing and room names travel on every security level**, sealed
+included: a subscription is only created after the bearer and the per-vault
+assertion are verified, and that same caller reads those names from
+`GET /v1/vaults/<id>/stats`. Drawer content, offsets into it and key material
+never travel — which is what the suite pins.
 
 ```bash
 # live event stream (Ctrl-C to stop)
@@ -268,7 +273,7 @@ Frames:
   vaults with an active subscriber.
 - `event: drawer-saved` / `drawer-quarantined` / `drawer-deleted` /
   `search` / `kg-triple` / `chain-commit` — discrete pings carrying vault +
-  (for hmac-only vaults) wing/room. `drawer-quarantined` is a write the
+  wing/room, on every security level. `drawer-quarantined` is a write the
   admission screen DIVERTED: it carries the intended wing/room and the
   tier-1 signal codes (a closed vocabulary — never the flagged text, never
   its offsets), and it is deliberately not a `drawer-saved` into a wing
@@ -298,8 +303,11 @@ the id), and connect. An archivist files drawers into wings as writes land,
 searches pulse the wings, the audit chain stamps on each commit, and the
 **ambulance beacon** fires on a real HMAC-verify failure (tamper) — the same
 `hmac_verify_failures` signal, live. Until you connect it runs in demo mode
-with synthetic events. Sealed vaults stream aggregate counts only (wing/room
-names suppressed server-side).
+with synthetic events. A sealed vault draws its wings like any other — the
+names travel to the subscriber that proved per-vault authorization — and the
+beacon lands on the wing the failing row CLAIMS rather than flooding all of
+them. Against a server that sends no names (an older engine), the page falls
+back to one locked `◈ sealed` block and keeps working.
 
 The beacon is not decorative. Corrupt a single drawer's bytes on disk and the
 next read fails its HMAC; a genuine `hmac-fail` stream event floods the palace

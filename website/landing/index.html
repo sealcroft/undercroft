@@ -556,8 +556,9 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
        <code>GET /monitor</code>. Point it at a running palace and watch the archivist file
        drawers into wings, searches pulse the halls, the audit chain stamp every write — and
        the ambulance beacon fire the instant a record fails its HMAC. It reads the live
-       <b>server-sent event stream</b>: metadata only, never drawer contents, and sealed vaults
-       stream aggregate counts with wing names suppressed.</p>
+       <b>server-sent event stream</b>: metadata only, never drawer contents, on every
+       security level — a subscription exists only after the bearer and the per-vault
+       assertion are verified.</p>
 
     <div class="mon-shots">
       <figure class="mon-fig">
@@ -594,7 +595,8 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
       <div class="mon-note">
         <h3>Metadata only</h3>
         <p>The stream carries counts, rates, and wing/room labels — <b>never</b> drawer content or
-           keys. Sealed vaults stream aggregate totals with names suppressed server-side.</p>
+           keys. Sealed vaults are no exception: sealing protects the words, and a wing name is
+           metadata the vault already exposes at rest.</p>
       </div>
       <div class="mon-note">
         <h3>A beacon you can trust</h3>
@@ -833,7 +835,7 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
       </div>
       <div class="feat" data-glyph="VI">
         <h3>Agent-native</h3>
-        <p>34 MCP tools over stdio or team HTTP (bearer-enforced; <code>--read-only</code> is a
+        <p>38 MCP tools over stdio or team HTTP (bearer-enforced; <code>--read-only</code> is a
            posture on the whole process, not a filter on one port), auto-save hooks, per-agent
            diaries, transcript sweeps — memory that survives the gap between sessions. The
            tool list is an inventory the build counts itself against, in both directions.</p>
@@ -858,10 +860,10 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
       </div>
     </div>
     <div class="stats">
-      <div class="stat"><div class="n" data-count="754">0</div><div class="l">cargo tests</div></div>
-      <div class="stat"><div class="n" data-count="573">0</div><div class="l">e2e checks</div></div>
+      <div class="stat"><div class="n" data-count="785">0</div><div class="l">cargo tests</div></div>
+      <div class="stat"><div class="n" data-count="703">0</div><div class="l">e2e checks</div></div>
       <div class="stat"><div class="n" data-count="5">0</div><div class="l">live backends</div></div>
-      <div class="stat"><div class="n" data-count="34">0</div><div class="l">mcp tools</div></div>
+      <div class="stat"><div class="n" data-count="38">0</div><div class="l">mcp tools</div></div>
       <div class="stat"><div class="n" data-count="0">0</div><div class="l">bytes phoned home</div></div>
     </div>
   </section>
@@ -1220,7 +1222,7 @@ document.body.classList.add('js');
     { t: 'Ask it', p: 'Hybrid semantic + lexical + recency search returns your exact words (one typo tolerated). wake-up loads a session’s worth of identity and recent essentials.',
       c: 'undercroft search "why did we pick graphql"\nundercroft wake-up                    # L0 identity + L1 essential story\nundercroft kg query alice --as-of 2024-06-15',
       l: [['docs/retrieval.html','retrieval & scaling →']] },
-    { t: 'Wire an agent', p: 'The MCP stdio server exposes 34 tools — memory, taxonomy, tunnels and the knowledge graph. Operator capabilities (admission review, wing trust, retention, forgetting, rotation, and placing a fact on the authority tier) are deliberately absent: an agent must not rule on the queue that contains it. Hooks print ready-to-paste auto-save settings so every session files its own memories.',
+    { t: 'Wire an agent', p: 'The MCP stdio server exposes 38 tools — memory, taxonomy, tunnels and the knowledge graph. Operator capabilities (admission review, wing trust, retention, forgetting, rotation, and placing a fact on the authority tier) are deliberately absent: an agent must not rule on the queue that contains it. Hooks print ready-to-paste auto-save settings so every session files its own memories.',
       c: '# claude_desktop_config.json / .mcp.json\n{ "mcpServers": { "undercroft": {\n    "command": "undercroft", "args": ["serve-mcp"] } } }\n\nundercroft hooks claude-code          # auto-save hook snippet',
       l: [['docs/integrations.html','integrations →'],['docs/agents.html','agents guide →']] },
     { t: 'Share it', p: 'One server, a whole team — or a whole product. Bearer beyond loopback, per-vault assertions (enforced on /mcp as well as /v1), a process-wide read-only posture, and an orchestrator for fleets.',

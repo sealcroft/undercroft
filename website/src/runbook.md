@@ -96,7 +96,11 @@ forge the chain MAC).
    declined to repair is printed as a warning and readable afterwards on
    `undercroft stats` (and `GET /v1/vaults/{id}/stats`) as `unhealed` — during
    an incident, read it: "a torn `vault.json.next` was left in place" tells
-   you a rotation was in flight when the incident began.
+   you a rotation was in flight when the incident began. Since 1.2.0 the admin
+   console at `GET /ui` shows it too, as an UNHEALED panel that appears only
+   when there is something to say, beside a POSTURE gauge naming the role the
+   handle was opened under. Before that the console showed a clean, complete-
+   looking stats page for a replica with both conditions live.
 
    Two conditions refuse instead, both **409**, because serving through them
    would answer a question wrongly rather than partially: a manifest whose

@@ -200,6 +200,94 @@ LongMemEval and **93.8 → 94.6** on LoCoMo under BM25.
   their own harness implementation; our MiniLM inference runs tract
   (pure Rust) with 256-token truncation and mean pooling.
 
+## Levers that measured NEGATIVE, and the protocol each was measured under
+
+`docs/LABELS.md` and `docs/CONSULTATION_REVIEW.md` cite these figures as the
+evidence for a design rule. Until 2026-08-23 they cited them as "full rows in
+ROADMAP's failed table" — an entry that **no longer exists**, because that file
+holds open work rather than history, and their working data lives in gitignored
+directories. A fresh clone therefore carried the claims and none of their
+provenance. They are recorded here so the numbers have a tracked home.
+
+**They are not one experiment, and reading them as one ranked list is the
+mistake this table exists to prevent.** Two protocols are represented, with
+different corpora, different baselines and different metrics:
+
+| lever | result | protocol |
+|---|---|---|
+| `Fusion::Rrf` | 66.9% (**−7.3**) | LoCoMo session 20, **turn all-gold**, baseline 74.2% |
+| `Fusion::Legacy` | 66.0% (−8.2) | same |
+| per-query channel rescale to `[0,1]` | 64.8% (**−9.4**) | same |
+| per-**document** cap ≤1 | 56.7% (−17.5) | same |
+| per-**document** cap ≤2 | 72.4% (−1.8) | same |
+| per-**room** cap, `room_cap=2` | 70.0% (**−5.6**) | LongMemEval-S, **QA answer accuracy**, baseline 75.6% |
+
+Three things follow that are easy to get wrong:
+
+1. **A per-document cap and a per-room cap are different knobs.** A room is one
+   session, ticket or meeting; a document is a source file. The −17.5 and −1.8
+   rows above are the document axis and say nothing about `room_cap`.
+2. **The `room_cap` row is a different benchmark and a different question from
+   every row above it.** It scores whether the model ANSWERED correctly on
+   LongMemEval-S; the rows above score whether the evidence was RETRIEVED on
+   LoCoMo. A percentage-point delta from one is not comparable to the other.
+3. **A third protocol exists and points the other way.** Measured 2026-08-23 on
+   LoCoMo `locomo10` (sealed vault, `undercroft-hash-v3`, k=10, wing-scoped,
+   1,540 questions), `room_cap=1` moves all-gold **evidence recall** 83.0% →
+   85.2% overall and 43.4% → 51.6% multi-hop, with no category regressing —
+   documented in `docs/AGENTS.md` §6. That is recall, not answer accuracy, and
+   it is a cap of **one** rather than two. It neither confirms nor overturns the
+   −5.6 row; the two measure different things and must never be placed side by
+   side.
+
+### The `room_cap` sweep the doctrine never had (2026-08-23)
+
+The `-5.6pp` row above was **one run at one cap value with no sweep**, and it
+was cited for years as though it were a property of the knob. Measured here on
+LoCoMo `locomo10`, all **1,982** evaluable QA, sealed vault, hash embedder,
+turn units, `k=10`, **`--pool 10`** so the page is the pool — everything but the
+cap held identical (`undercroft-bench locomo … --room-cap N`):
+
+| `room_cap` | any-gold **session** R@10 | turn **all-gold**@10 | multi-hop (cat 1) |
+|---|---|---|---|
+| none | 91.6% | **52.5%** | 7.8% |
+| 1 | **94.0%** | 36.2% | 3.6% |
+| 2 | 92.0% | 46.3% | 7.1% |
+| 3 | 91.7% | 51.0% | 7.5% |
+
+**The knob is a monotone TRADE, not a win or a loss.** Tightening it buys
+distinct gold *units* and costs *complete* ones: +2.4 any-gold against -16.3
+all-gold at a cap of one, decaying smoothly to noise by three. Which sign you
+report is decided by which metric you chose.
+
+The mechanism is the one `findings/measurements.md` gave for the per-document
+cap and it reproduces here: evidence averages ~1.17 turns per session, so a cap
+of one blocks the second turn of the RIGHT session about as often as it admits
+a new session.
+
+**Two facts that change how the earlier figures should be read.**
+
+1. **Multi-hop moves the OPPOSITE way from the AMB run.** That run measured
+   `room_cap=1` at **+8.2** points of multi-hop evidence recall (512-token
+   chunks, wing-scoped, session-level units); this one measures **-4.2** on the
+   same dataset at turn level. Same knob, same corpus, opposite sign — decided
+   by chunking, unit and scope. **No single number is "what `room_cap` does".**
+2. **The soft cap is a NO-OP when the page greatly exceeds the room count.**
+   At `--pool 400` against ~19 sessions, caps of 1, 2 and 3 all returned
+   results *identical to the baseline to the decimal*: the cap fills one slot
+   per room and then refills the remaining 380-odd in score order, reproducing
+   the original ranking. This is not documented anywhere and it is easy to
+   mistake for "the flag does nothing".
+
+Reproduce with `undercroft-bench locomo <corpus> -k 10 --unit turn --pool 10
+--room-cap N`; the flag exists for this sweep and changes no shipped default.
+
+Whether a *selection-stage* cap belongs in the same category as the scoring
+changes above — `docs/LABELS.md` files them together as "score modifiers" —
+is an open question, filed as ROADMAP **O77**. The code puts `room_cap` in the
+page cut (`diversify_by_room`, after every score is final) where it reorders an
+index stream and touches no score.
+
 ## Retrieval performance: every lever, measured (run 2026-07-15/16, 24-core `avx512_vnni` host, inside Docker)
 
 The retrieval-quality track measured **every configurable lever** end to end.

@@ -11,9 +11,29 @@ re-deriving it.
 
 Labels used as **scopes, filters and exact keys** have all won here: wing
 scoping, `content_date`, declared language, the poison-positive date-filter
-design. Labels used as **score modifiers** have all lost: RRF −7.3pp,
-`room_cap` −5.6pp, per-query channel rescaling −9.4pp (full rows in
-ROADMAP's failed table). The rule:
+design. **Adjusting the calibrated scoring per query has lost every time it
+was tried**: RRF fusion **-7.3pp** and per-query channel rescaling **-9.4pp**
+(LoCoMo session 20, turn all-gold, baseline 74.2% — full rows in
+`benchmarks/RESULTS.md` under "Levers that measured NEGATIVE").
+
+**`room_cap` used to be cited here as a third instance and it has been removed,
+because measurement says it is not one** (ROADMAP O77). It touches no score:
+`diversify_by_room` reorders an already-scored, already-admitted list in the
+page cut. Swept on LoCoMo it is a monotone TRADE whose sign is set by the
+metric — +2.4 any-gold against -16.3 all-gold at a cap of one — and on the same
+corpus it moves multi-hop **-4.2** at turn level while an earlier run measured
+**+8.2** at session level. A knob whose sign flips with chunking is not
+evidence about scoring.
+
+Note what that leaves: neither surviving row involves a label either. RRF
+scores by rank and rescaling normalizes against the result set — both are
+result-set coupling, which the code names as its own class
+(`undercroft-store/src/lib.rs`, the script-disjoint reweight defends itself as
+having "no result-set coupling"). **So the rule below is argued from the poison
+invariant — a label is a claim, and a claim must not decide a score — and is
+not yet supported by a measured label-as-weight.** None has ever been run, and
+the benchmark corpora cannot host one: their only varying label is the unit
+being retrieved. Said plainly rather than left implied. The rule:
 
 > **A label may decide who competes. It may never adjust how they score.**
 
@@ -21,6 +41,14 @@ Within one query the order is fixed: the label filter constrains the
 candidate set, then the existing calibrated fusion ranks within it,
 untouched. "Filter after ranking" is refused — it spends the candidate pool
 on rows the caller excluded, which is the starvation defect restated.
+
+**Selection is a third stage, and this rule deliberately does not govern it.**
+A page cut that reorders already-scored, already-admitted hits — `room_cap` is
+the only one today — is neither a filter (nothing is excluded; the soft refill
+means the page is never short) nor a score adjustment. Its sign is a fact about
+the caller's corpus and the metric they care about, not about the engine, so
+the posture is: **declared per request, disclosed in the response, never a
+default.**
 
 ## Filters are not free: the starvation obligation
 

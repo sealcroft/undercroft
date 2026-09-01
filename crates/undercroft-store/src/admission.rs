@@ -30,7 +30,7 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use undercroft_core::Drawer;
 
-use crate::{chain_append, PalaceStore, StoreError};
+use crate::{chain_append, Namespace, PalaceStore, StoreError};
 
 /// The reserved wing flagged writes land in. Reserved by convention and
 /// guarded at the save surfaces: a caller cannot aim a save here
@@ -701,7 +701,8 @@ impl PalaceStore {
         let (head, writes) = chain_append(
             &tx,
             &self.vault,
-            &format!("admission/{id}/{verdict}"),
+            Namespace::Admission,
+            &format!("{id}/{verdict}"),
             &tag,
             &now,
         )?;

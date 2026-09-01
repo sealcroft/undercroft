@@ -52,6 +52,17 @@ deploy/observability/docker-compose.binary.yml
 benchmarks/vs.env
 benchmarks/logs/local/
 
+# Benchmark-run working sets and research artifacts (local only — never
+# committed). These hold a third-party benchmark's corpus content and its
+# rendered prompts VERBATIM, and that clone ships no LICENSE, so it is
+# all-rights-reserved by default: it must never enter this repo OR ITS
+# HISTORY. Gitignoring is what makes keeping the full run data safe —
+# the alternative is discarding evidence, which is worse. Aggregate
+# figures carrying no corpus content are published the normal way, in
+# benchmarks/logs/ and benchmarks/RESULTS.md, per that directory's own
+# standing rule ("never benchmark-corpus content").
+docs/research/
+
 # Promiscuity corpora, fetched not committed (hermitdave/FrequencyWords, MIT):
 #   curl -sSL https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018/ar/ar_50k.txt -o crates/undercroft-store/testdata/ar_50k.txt
 crates/undercroft-store/testdata/

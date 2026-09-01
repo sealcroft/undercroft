@@ -154,7 +154,7 @@ impl Exclusions {
     /// are different statements and the surfaces render them differently.
     pub fn measure(store: &PalaceStore, opts: &SearchOptions) -> Result<Self, StoreError> {
         let unlabeled = match opts.kind {
-            Some(_) => Some(store.unkinded_in_scope(opts.wing.as_deref(), opts.room.as_deref())?),
+            Some(_) => Some(store.unkinded_in_scope(opts)?),
             None => None,
         };
         // **The EFFECTIVE floor, not the declared one.** This read

@@ -221,10 +221,13 @@ pub const MCP_TOOLS: &[&str] = &[
     // Audit-chain history, `HistoryScope::Agent`. On MCP deliberately: an
     // agent that cannot ask "what happened to this memory" cannot audit its
     // own recall, and traceability is what this store sells. Fenced rather
-    // than raw — `manage::AGENT_FENCED_NAMESPACES` keeps the review queue,
-    // the trust map, retention, destructions, exports, read audits and
-    // rotations on the operator planes, which is why this is a tool and not
-    // an `OPERATOR_ONLY` entry.
+    // than raw — `Namespace::fenced_from_agent` keeps the review queue, the
+    // trust map, retention, destructions, exports, read audits, rotations and
+    // at-rest migrations on the operator planes, which is why this is a tool
+    // and not an `OPERATOR_ONLY` entry. What it does NOT fence is the agent's
+    // own work — its drawers, its facts and entities, and (ruled by ROADMAP
+    // O80) the tunnels it created, which `undercroft_list_tunnels` one line
+    // above already returns in full.
     "undercroft_history",
     "undercroft_delete_tunnel",
     "undercroft_list_hallways",
@@ -240,6 +243,11 @@ pub const MCP_TOOLS: &[&str] = &[
     "undercroft_kg_supersede",
     "undercroft_kg_stats",
     "undercroft_lookup_canonical",
+    // ROADMAP O68 (2026-08-31) — four reads that were CLI-only.
+    "undercroft_kg_rel",
+    "undercroft_kg_receipts",
+    "undercroft_check_erasure_receipt",
+    "undercroft_index_status",
 ];
 
 /// Capabilities that must NEVER appear on MCP. Not an oversight to be
@@ -293,6 +301,303 @@ pub const OPERATOR_ONLY: &[&str] = &[
     "refine",
 ];
 
+/// How a capability's absence from a surface is ruled (ROADMAP M16).
+///
+/// `CLAUDE.md`: *"A capability missing from one surface is a boundary or a
+/// drift, and which one has to be written down."* `OPERATOR_ONLY` does this
+/// for the MCP axis and `OPS_DELIBERATELY_ABSENT` for the orchestrator's ops
+/// plane. **Nothing did it for the CLI axis**, so every CLI-only capability
+/// was an unrecorded gap by construction — round-four #34.
+///
+/// Measured before this existed: **74** CLI operations (24 leaf `Command`
+/// variants plus 50 sub-actions across 14 action enums), of which `parity.rs`
+/// named **17**.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Absence {
+    /// Deliberate, with a reason that is an argument rather than a
+    /// restatement. The reason must say what would go wrong if the
+    /// capability were exposed there.
+    Boundary,
+    /// The capability cannot meaningfully exist on that surface — it opens no
+    /// vault, mints a local secret, or IS the process. Not a decision anyone
+    /// could make differently.
+    Structural,
+    /// A gap. Something that should be reachable and is not, with a target.
+    /// **Never a principled refusal wearing a reason**, which `CLAUDE.md`
+    /// forbids in as many words.
+    Drift,
+    /// Measured, not yet ruled. The honest state for a capability whose
+    /// absence is a PRODUCT decision rather than one the code or the doctrine
+    /// settles. A row here is not a smaller `Boundary`: it says nobody has
+    /// decided, and it carries the entry where the decision is filed.
+    ///
+    /// This variant exists because the alternative was inventing thirty-odd
+    /// reasons, and an inventory whose reasons were guessed reads as ruled
+    /// while being fiction — strictly worse than no inventory, because it
+    /// stops the next reader looking.
+    Unruled,
+}
+
+/// Every CLI operation that is NOT reachable from all three engine surfaces,
+/// with its ruling. `(cli_anchor, absent_from, kind, reason)`.
+///
+/// `cli_anchor` is the dispatch anchor in `main.rs` — `Command::Dedup`,
+/// `BackupAction::Restore` — on the `HAND_PROJECTED` precedent, because an
+/// anchor is derivable from source and a prose name is not. `absent_from` is
+/// `"mcp"`, `"v1"`, or `"mcp+v1"`.
+///
+/// Counted in BOTH directions by
+/// `every_cli_capability_is_reachable_or_ruled_absent`: a new `Command`
+/// variant fails the build until it is here or in `SURFACE_COMPLETE`, and a
+/// row naming an anchor `main.rs` no longer has fails it too.
+pub const SURFACE_ABSENCES: &[(&str, &str, Absence, &str)] = &[
+    // ---- Boundaries the MCP axis already recorded, restated on this axis --
+    // These are the `OPERATOR_ONLY` entries. They are repeated here rather
+    // than cross-referenced because this inventory must PARTITION the CLI
+    // surface: an anchor missing from both lists is what the gate catches,
+    // and "it is in another list" would be a hole in the arithmetic.
+    ("AdmissionAction::List", "mcp", Absence::Boundary,
+     "an agent must not read the queue that exists to contain its own diverted writes"),
+    ("AdmissionAction::Allow", "mcp", Absence::Boundary,
+     "ruling on quarantined evidence is the operator's; an agent allowing its own write defeats the screen"),
+    ("AdmissionAction::Deny", "mcp", Absence::Boundary,
+     "deny DESTROYS through forget_with_proof and hands back an attestation"),
+    ("TrustAction::Set", "mcp", Absence::Boundary,
+     "trust decides what a query may retrieve; an agent assigning it chooses its own floor"),
+    ("TrustAction::List", "mcp", Absence::Boundary,
+     "reading the trust map tells an agent exactly which wing to write into to be believed"),
+    ("RetentionAction::Set", "mcp", Absence::Boundary,
+     "a retention policy is a standing authorisation to destroy; declaring it is operator-only"),
+    ("RetentionAction::Clear", "mcp", Absence::Boundary,
+     "clearing a policy removes a destruction bound the operator set"),
+    ("RetentionAction::List", "mcp", Absence::Boundary,
+     "paired with Set: the surface that may not declare a policy has no business enumerating them"),
+    ("RetentionAction::Sweep", "mcp", Absence::Boundary,
+     "the sweep is the destruction itself, receipted per run"),
+    ("Command::Forget", "mcp", Absence::Boundary,
+     "attested destruction; the receipt is the product and an agent must not mint one"),
+    ("VaultAction::Rotate", "mcp", Absence::Boundary,
+     "the largest single mutation the engine performs, re-keying every sealed artifact"),
+    ("VaultAction::Anchor", "mcp", Absence::Boundary,
+     "it moves the out-of-database evidence a rollback is detected against (R3)"),
+    ("KgAction::Authority", "mcp", Absence::Boundary,
+     "promotion closes the previous canonical holder's window, so an agent could make its own fact the one answer lookup_canonical returns"),
+    ("Command::Export", "mcp", Absence::Boundary,
+     "egress. Chain-audited unconditionally, and an agent must not choose the recipient"),
+    ("Command::Import", "mcp", Absence::Boundary,
+     "an import writes a whole corpus past the surface an agent is scoped to"),
+    ("Command::Refine", "mcp", Absence::Boundary,
+     "distillation drives an LLM over vault content; the model is itself an injection target"),
+
+    // ---- Structural: not a decision anyone could make differently ---------
+    ("Command::Hooks", "mcp+v1", Absence::Structural,
+     "prints agent hook configuration to stdout and opens no vault"),
+    ("TranscriptAction::Render", "mcp+v1", Absence::Structural,
+     "renders a local file to text; it opens no vault, so there is nothing remote to expose"),
+    ("ConfigAction::Check", "mcp+v1", Absence::Structural,
+     "pre-flights THIS process's environment. A remote route would answer about the server's, which is a different question the server already answers by starting"),
+    ("Command::ConfigCheck", "mcp+v1", Absence::Structural,
+     "the legacy spelling of ConfigAction::Check, same dispatch arm"),
+    ("Command::ServeMcp", "mcp+v1", Absence::Structural,
+     "it IS the MCP surface; a surface cannot expose its own process mode"),
+    ("Command::ServeHttp", "mcp+v1", Absence::Structural,
+     "it IS the /v1 surface; a running server cannot expose the act of starting itself, and a route that spawned another would be a process manager rather than a memory engine"),
+    ("DaemonAction::Run", "mcp+v1", Absence::Structural,
+     "a process mode, not a capability"),
+    ("Command::AssertHeader", "mcp+v1", Absence::Boundary,
+     "mints a per-vault assertion from a local secret. A server that minted your credential for you would be the thing the assertion exists to prove against"),
+    ("Command::Init", "mcp+v1", Absence::Boundary,
+     "creates a palace on local disk. /v1 has vault-create for an EXISTING installation; bootstrapping the installation itself is not a remote act"),
+    ("VaultAction::Create", "mcp", Absence::Boundary,
+     "vault lifecycle is control-plane. An agent operates WITHIN a vault it was granted, and creating one is how it would escape that scope"),
+    ("VaultAction::List", "mcp", Absence::Boundary,
+     "enumerating vaults tells an agent what exists beyond its own"),
+
+    // ---- Boundaries this unit ruled, each with a citable argument ---------
+    ("Command::Mine", "mcp+v1", Absence::Boundary,
+     "reads a directory path the CALLER names. Remotely that is a caller directing server-side filesystem reads, which is a traversal primitive rather than a memory operation"),
+    ("Command::Sweep", "mcp+v1", Absence::Boundary,
+     "same as Mine: a caller-named path on the server's filesystem"),
+    ("IndexAction::Push", "mcp+v1", Absence::Boundary,
+     "EGRESS. Every push carries embeddings, which are plaintext-derived; an agent choosing when and where the corpus leaves is the decision undercroft-net exists to keep operator-side"),
+    ("BundleAction::Keygen", "mcp+v1", Absence::Boundary,
+     "mints a SECRET key. A server that generated your identity would hold the half only you may hold"),
+    ("BundleAction::SignKeygen", "mcp+v1", Absence::Boundary,
+     "mints a signing secret; same argument as Keygen"),
+    ("BundleAction::Recipient", "mcp+v1", Absence::Boundary,
+     "derives a public identity from a local secret file, which the surface does not have"),
+    ("BundleAction::Sender", "mcp+v1", Absence::Boundary,
+     "reads a local signing secret to attest a bundle"),
+    ("Command::Repair", "mcp", Absence::Boundary,
+     "operates ON the storage machinery rather than through it — it rewrites fingerprints, re-embeds and vacuums. Same shape as Rotate and Anchor, which are operator-only for the same reason"),
+    ("BackupAction::Restore", "mcp", Absence::Boundary,
+     "remove_dir_all on a live vault directory, replaced wholesale. The most destructive operation in the tree"),
+    ("BackupAction::Create", "mcp", Absence::Boundary,
+     "writes an archive to a caller-named server path, and gates on the verify verdict"),
+    ("BackupAction::List", "mcp", Absence::Boundary,
+     "enumerates archive paths on the server's filesystem"),
+
+    // ---- Drift: a gap with a target, not a refusal ------------------------
+    // The same anchor may appear twice under different surfaces, because the
+    // ruling genuinely differs per surface — that is the whole point of
+    // keying on (anchor, absent_from) rather than on the anchor alone.
+    // `Command::Repair` is the worked example: a Boundary on MCP, above, and
+    // it CARRIED a `Drift` row here for `/v1` until M17 closed it by adding
+    // `POST /v1/vaults/{id}/repair`. The row is gone because the absence is.
+    //
+    // **`Absence::Drift` had no instances when M16 wrote this inventory, and
+    // that was reported here as a result.** It is no longer true: M26 ruled
+    // all 21 remaining `Unruled` rows and every one came back `Drift`, so the
+    // variant is now the largest single verdict on this axis after
+    // `Boundary`. The sentence stood for a day and was found by re-verifying
+    // the filing that quoted it — a comment asserting a COUNT, in the file
+    // whose whole job is to stop counts being asserted.
+    //
+    // What survives of the original point: the variant exists because the
+    // doctrine's sentence is *"a boundary or a drift"*, and a vocabulary
+    // missing the word for the bad case cannot record the bad case. It is
+    // now carrying that weight rather than sitting unused.
+
+    // ---- RULED 2026-08-21 (M26): all of these came back `Drift` -----------
+    // This block was headed "Unruled: measured, and the decision is the
+    // maintainer's" until every row in it was ruled, and the header outlived
+    // the state by one commit — there are now ZERO `Unruled` rows in this
+    // file. Kept as a lesson rather than silently retitled: a section header
+    // is a claim about what is under it, and it goes stale the moment the
+    // rows do.
+    //
+    // Each row below is a capability reachable from the CLI and from MCP but
+    // NOT from `/v1`. That is the classic two-of-three shape, and whether the
+    // remote plane should carry the agent-facing memory surface is a PRODUCT
+    // decision rather than one the code or the doctrine settles. Filed as
+    // ROADMAP O66 — and `Unruled` is deliberately not a quiet `Boundary`.
+    //
+    // **The kg WRITE family interrupts this block and is NOT Unruled**, for
+    // the reason given at its own comment: a document already ruled it in the
+    // present tense, and the first pass recorded it as undecided anyway.
+    // Before adding a row here, check whether some surface has already said
+    // so — `Unruled` is for what nobody has decided, not for what nobody
+    // looked up.
+    // **RULED 2026-08-21 (ROADMAP O66): `/v1` carries the agent-facing
+    // memory surface.** The maintainer was given three readings — full agent
+    // surface, operator-and-search plane, or reads-yes-writes-no — and took
+    // the first. So every row below is a GAP, not a boundary, and
+    // `docs/remote-server.md`'s "for programmatic (non-MCP) callers" is kept
+    // as written because the ruling makes it true rather than aspirational.
+    //
+    // **Target: O68**, which is the scheduling decision, deliberately not a
+    // version. Ruling that something is a gap and deciding when it is closed
+    // are two questions; this file records the first and O68 holds the
+    // second. A `Drift` row MUST name a target — the variant's own doc says
+    // "with a target" — and `every_cli_capability_is_reachable_or_ruled_absent`
+    // enforces it, so a gap cannot become `Unruled` wearing a different
+    // variant by having nowhere to go.
+    // ---- The kg WRITE family: already ruled, by a document, in the present
+    // tense. `docs/AGENTS.md` says "/v1 has no DIRECT KG *write* routes
+    // except POST …/kg/authority … That is a present-tense boundary, not a
+    // future item." These three left `Unruled` on the reading that it ruled
+    // the FAMILY and not each capability — but a family boundary that names
+    // its one exception has decided every member, and treating a written
+    // ruling as undecided pushes a settled question back to the maintainer.
+    //
+    // The argument the doc states, restated as what would go wrong: a fact
+    // carries the EXTRACTOR IDENTITY inside its HMAC (canonical extension
+    // 0x1d), and the authority tier promotes facts into the one answer
+    // `lookup_canonical` returns. A caller-supplied subject/predicate/object
+    // over REST mints a fact attributable to a bearer rather than to a named
+    // extractor, under a plane whose token reaches every route. `refine` is
+    // the deliberate contrast and the reason "direct" is in the rule: it
+    // CREATES facts on this plane, from drawer text, through an extractor
+    // whose identity is recorded and HMAC-covered.
+    ("KgAction::Add", "v1", Absence::Boundary,
+     "a REST-asserted fact would carry a bearer as its provenance instead of a named extractor, and the extractor identity is inside the fact's HMAC; refine creates facts here and is attributable, which is the distinction (docs/AGENTS.md)"),
+    ("KgAction::Invalidate", "v1", Absence::Boundary,
+     "invalidating is asserting a fact is wrong, and it is audited against the asserter; the same provenance argument as Add, and /v1 carries no direct kg write except authority (docs/AGENTS.md)"),
+    ("KgAction::Supersede", "v1", Absence::Boundary,
+     "superseding CLOSES the previous holder's window, so a bearer could make its own fact the one answer lookup_canonical returns — which is why authority promotion is operator-only in the first place (docs/AGENTS.md)"),
+    // **RULED 2026-08-21 (ROADMAP O66), the four singletons.** Both READS
+    // (`kg rel`, `index status`) are gaps on the same reasoning as the block
+    // above: a read belongs on the surfaces that read. Both VERIFICATION
+    // reads (`kg receipts`, `verify-forgetting`) are gaps too — the shape
+    // that made them look like boundaries is the INVERSE of the operator-only
+    // one (present on `/v1`, absent from MCP), and the operator-only argument
+    // therefore never applied to them.
+    // **RULED 2026-08-21 (ROADMAP O66): all three backup operations reach
+    // `/v1`.** The maintainer took the full-parity option over keeping the
+    // destructive half on the engine host. Two consequences are recorded
+    // here because the ruling does not remove them, it schedules them:
+    //
+    // * These are PALACE-scoped filesystem operations on the palace root —
+    //   `list` opens no vault at all — so they do not fit `/v1/vaults/{id}/`
+    //   and need a new path family (`/v1/backups`). That is a shape decision
+    //   the route work owes, not a reason to leave them out.
+    // * `restore` calls `remove_dir_all` on a live vault directory. On Linux
+    //   that succeeds with a server holding an open SQLite handle, leaving
+    //   the process serving unlinked inodes and writing them back. A route
+    //   MUST close the handle first; O68 carries that as a blocker rather
+    //   than a detail.
+];
+
+/// CLI operations reachable from all three engine surfaces. The other half of
+/// the partition: together with `SURFACE_ABSENCES` this must account for every
+/// dispatch anchor in `main.rs`, which is what makes the gate both-directional
+/// rather than a list someone tops up.
+///
+/// A new `Command` variant belongs in exactly one of the two lists, and the
+/// build fails until its author says which. That is the whole mechanism —
+/// `CLAUDE.md`: *"a tool without a line fails the build and a line without a
+/// tool fails it too, which a hand-maintained doc table cannot do."*
+pub const SURFACE_COMPLETE: &[&str] = &[
+    // The last of O68, landed 2026-08-31. The four MCP additions are all
+    // READS; `index push` stays absent because it is EGRESS, which is a
+    // boundary its status sibling does not share. Backups are vault-scoped
+    // on `/v1` and OPERATOR-only on a fleet: they are MCP boundaries, and a
+    // palace-wide list would leak other tenants' vault ids — so the three
+    // backup anchors stay in SURFACE_ABSENCES on their `mcp` Boundary rows
+    // and only their `v1` Drift rows are gone. They are NOT complete.
+    "KgAction::Rel",
+    "KgAction::Receipts",
+    "Command::VerifyForgetting",
+    "IndexAction::Status",
+    // Drawer maintenance, landed on `/v1` by ROADMAP O68 (2026-08-31).
+    "Command::Dedup",
+    "DrawerAction::CheckDup",
+    "DrawerAction::DeleteBySource",
+    // Diary + session context, landed on `/v1` by ROADMAP O68 (2026-08-31).
+    // `wake-up` is the partial one and says so at its handler: the CLI's L0
+    // IDENTITY layer reads a per-INSTALLATION file, which a per-vault route
+    // proxying a tenant token must not return. The vault-scoped half is here.
+    "Command::WakeUp",
+    "Command::Closets",
+    "Command::Hallways",
+    "DiaryAction::Write",
+    "DiaryAction::Read",
+    "DiaryAction::Agents",
+    // The tunnel family, landed on `/v1` by ROADMAP O68 (2026-08-31). All
+    // five were `Absence::Drift` with `target O68`; they are reachable from
+    // CLI, MCP and `/v1` now, so they move here rather than being edited.
+    "TunnelAction::Create",
+    "TunnelAction::List",
+    "TunnelAction::Follow",
+    "TunnelAction::Delete",
+    "TunnelAction::Traverse",
+    "Command::Remember",
+    "Command::Search",
+    "Command::Stats",
+    "Command::Taxonomy",
+    "Command::History",
+    "Command::Verify",
+    "KgAction::Query",
+    "KgAction::Timeline",
+    "KgAction::Stats",
+    "KgAction::Canonical",
+    "DrawerAction::Get",
+    "DrawerAction::List",
+    "DrawerAction::Update",
+    "DrawerAction::Delete",
+    "VaultAction::Status",
+];
+
 /// Report structs the CLI projects **by hand**, and therefore the ones where
 /// adding a field silently fails to reach an operator.
 ///
@@ -335,7 +640,14 @@ pub const HAND_PROJECTED: &[(&str, &str, &str, &str)] = &[
         "undercroft-store/src/lib.rs",
         "VerifyReport",
         "undercroft-cli/src/tenant.rs",
-        "fn verify(&mut self",
+        // Was `fn verify(&mut self` until M17 gave `/v1` a `repair` route.
+        // Both routes answer the same verdict shape, so the projection moved
+        // into ONE function they share rather than being written out twice —
+        // and this gate is what said the anchor had gone stale, listing every
+        // field it could no longer see. That is the row doing its job: the
+        // fields did not stop being projected, they stopped being projected
+        // HERE, and only an anchor that follows them can tell the difference.
+        "fn verify_report_json",
     ),
     // **The FOURTH renderer, and the doctrine's four surfaces do not name
     // it.** `ui.html` is `include_str!`'d into every build and served at
@@ -375,6 +687,24 @@ pub const HAND_PROJECTED: &[(&str, &str, &str, &str)] = &[
         "PalaceStats",
         "undercroft-cli/src/tenant.rs",
         "fn stats(&mut self",
+    ),
+    // **And the FIFTH renderer** (M5). The entry four rows up added
+    // `ui.html` for `VerifyReport` and stopped there — so the console, which
+    // is a `/v1` CLIENT served at `GET /ui`, stayed outside the gate for the
+    // struct `CLAUDE.md` names as the FIRST one this drift class bit.
+    //
+    // Adding the row found four fields the console had never read:
+    // `unhealed`, `read_only`, `codebooks`, and `records` (which it showed
+    // only under the route's `drawers` alias). The first two are the ones an
+    // operator opens a console to find — `unhealed` exists on `stats` at all
+    // *"because a long-lived read-only server's start-up was hours ago"*,
+    // and this page is where that operator is looking. Same argument, same
+    // file, same shape: which is the argument for the row, made by the row.
+    (
+        "undercroft-store/src/manage.rs",
+        "PalaceStats",
+        "undercroft-cli/src/ui.html",
+        "async function loadOverview()",
     ),
     // MCP serializes `DedupReport` whole and the CLI hand-projects it, so
     // `dates_kept` — "the difference between collapsing text and losing
@@ -845,6 +1175,82 @@ mod tests {
         }
     }
 
+    /// **The Palace Monitor escapes wire data before it becomes HTML**
+    /// (ROADMAP M6).
+    ///
+    /// `log()` builds an `innerHTML` string, and its `text` argument carries
+    /// wing and room names straight off the SSE stream. `validate_name`
+    /// rejects control characters and path separators but NOT `<`, `>` or
+    /// quotes, so `<img src=x onerror=…>` is a legal wing name — and on a
+    /// tamper frame the location is read from a row whose HMAC has already
+    /// failed, i.e. from bytes an offline writer chose.
+    ///
+    /// This was reachable before M6 for any non-sealed vault; M6 carries
+    /// names on every level and therefore had to close it rather than widen
+    /// it. The gate reads the SINK, not the call sites: escaping per call
+    /// site is what a future ninth call site forgets.
+    #[test]
+    fn the_palace_monitor_escapes_what_it_puts_in_html() {
+        let src = include_str!("monitor.html");
+        // PREMISE: the sink still exists and is still an innerHTML build, or
+        // this test is asserting something about a file that moved on.
+        let at = src
+            .find("function log(kind, text, ts)")
+            .expect("monitor.html has no log() sink any more — stale gate");
+        let body = &src[at..at + 600];
+        assert!(
+            body.contains("row.innerHTML"),
+            "premise: log() no longer writes innerHTML, so this gate is \
+             guarding a sink that is gone: {body}"
+        );
+        assert!(
+            body.contains("${esc(text)}"),
+            "log() interpolates `text` into innerHTML unescaped. A wing name \
+             may legally contain `<`, and a tamper frame's location comes \
+             off a row that failed its own HMAC: {body}"
+        );
+        assert!(
+            src.contains("function esc(v)") && src.contains("replace(/&/g,'&amp;')"),
+            "the escaper itself is missing, so `esc(text)` above resolves to \
+             nothing and the gate would pass on a broken page"
+        );
+    }
+
+    /// **The console says what it wants before you can get it wrong.**
+    ///
+    /// `/ui` rendered a blank shell with an empty status line: no vaults, no
+    /// stats, and nothing saying a bearer was required. Reported as "I see
+    /// nothing", which is exactly what it looked like. And the server answers
+    /// a bare `unauthorized`, so even after pressing CONNECT the message
+    /// named neither what was rejected nor what to do.
+    ///
+    /// Both halves are asserted because they fail independently: a hint can
+    /// be deleted without touching the error path, and vice versa.
+    #[test]
+    fn the_console_names_the_credential_it_needs() {
+        let src = include_str!("ui.html");
+        assert!(
+            src.contains("paste the bearer"),
+            "the pre-connect state must say what it is waiting for — a blank \
+             page reads as broken, not as unauthenticated"
+        );
+        assert!(
+            src.contains("the bearer was rejected"),
+            "a 401 must name the credential; the server's own body is a bare \
+             `unauthorized`, which tells an operator nothing actionable"
+        );
+        // PREMISE: the 401 branch lives in the connect path, not in a comment
+        // that happens to quote it.
+        let at = src
+            .find("async function connect()")
+            .expect("connect() is not in ui.html any more — stale gate");
+        let window = &src[at..(at + 1800).min(src.len())];
+        assert!(
+            window.contains("401"),
+            "the 401 branch is not inside connect()"
+        );
+    }
+
     /// The MCP tool surface matches its inventory, in BOTH directions.
     ///
     /// A tool added to the server without a line here fails; a line here
@@ -881,6 +1287,187 @@ mod tests {
              not the surface, is broken"
         );
         found
+    }
+
+    /// Every dispatch anchor `main.rs` defines, DERIVED from its source.
+    ///
+    /// The enum bodies rather than the dispatch arms: an arm can be written
+    /// `Command::Kg { action }` and delegate, so arms under-count the leaves.
+    /// Variants are the operations a user can actually reach.
+    fn cli_anchors(src: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut current: Option<String> = None;
+        // Action enums seen. A `Command` variant that DELEGATES is a router,
+        // not an operation — its actions are the operations.
+        //
+        // Derived from the enum names rather than from the variant line, and
+        // that distinction is the whole of why the first version of this
+        // extractor was wrong: a router is written
+        //   `Kg {`  /  `#[command(subcommand)]`  /  `action: KgAction,`
+        // so the VARIANT line contains no "Action" at all and a substring test
+        // on it excluded nothing. The gate then reported all fourteen routers
+        // as unruled operations — correctly, by its own lights, which is how
+        // it said the extractor was broken.
+        let mut action_enums: Vec<String> = Vec::new();
+        for line in src.lines() {
+            if let Some(rest) = line.strip_prefix("enum ") {
+                let name = rest.trim_end_matches(" {").trim();
+                if name.ends_with("Action") {
+                    action_enums.push(name.to_string());
+                }
+                current = if name == "Command" || name.ends_with("Action") {
+                    Some(name.to_string())
+                } else {
+                    None
+                };
+                continue;
+            }
+            if line == "}" {
+                current = None;
+                continue;
+            }
+            let Some(en) = current.as_deref() else {
+                continue;
+            };
+            // A variant line is exactly four spaces then an uppercase ident.
+            let Some(rest) = line.strip_prefix("    ") else {
+                continue;
+            };
+            if rest.starts_with(' ') || rest.starts_with("//") || rest.starts_with('#') {
+                continue;
+            }
+            let ident: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric())
+                .collect();
+            if ident.is_empty() || !ident.starts_with(|c: char| c.is_ascii_uppercase()) {
+                continue;
+            }
+            out.push(format!("{en}::{ident}"));
+        }
+        // Drop the routers: `Command::Kg` exists only to reach `KgAction`.
+        out.retain(|a| {
+            let Some(v) = a.strip_prefix("Command::") else {
+                return true;
+            };
+            !action_enums.iter().any(|e| e == &format!("{v}Action"))
+        });
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// ROADMAP M16. The CLI axis had NO inventory, so every CLI-only
+    /// capability was an unrecorded gap by construction (round-four #34) —
+    /// while `OPERATOR_ONLY` did exactly this job for the MCP axis and
+    /// `OPS_DELIBERATELY_ABSENT` for the orchestrator's ops plane.
+    ///
+    /// Both directions, which is the property a doc table cannot have:
+    /// a new `Command` variant fails until it is ruled, and a row naming an
+    /// anchor `main.rs` no longer defines fails too.
+    #[test]
+    fn every_cli_capability_is_reachable_or_ruled_absent() {
+        let src = include_str!("main.rs");
+        let anchors = cli_anchors(src);
+
+        // PREMISE. An extractor that found nothing reports exactly what a
+        // fully-inventoried tree reports — the failure this whole file is
+        // about. The CLI has had dozens of operations for its whole life.
+        assert!(
+            anchors.len() > 50,
+            "premise: the anchor extractor found {} operations in main.rs, \
+             which is implausibly few — the extractor is broken, and a broken \
+             extractor agrees with any inventory",
+            anchors.len()
+        );
+
+        let ruled: std::collections::BTreeSet<&str> =
+            SURFACE_ABSENCES.iter().map(|(a, _, _, _)| *a).collect();
+        let complete: std::collections::BTreeSet<&str> = SURFACE_COMPLETE.iter().copied().collect();
+
+        // Direction 1: every operation is accounted for exactly once.
+        let unaccounted: Vec<&String> = anchors
+            .iter()
+            .filter(|a| !ruled.contains(a.as_str()) && !complete.contains(a.as_str()))
+            .collect();
+        assert!(
+            unaccounted.is_empty(),
+            "these CLI operations are in NEITHER inventory, so nobody has said \
+             whether their absence from MCP or /v1 is a boundary or a drift:\n  \
+             {unaccounted:#?}\nAdd each to SURFACE_ABSENCES with a ruling, or to \
+             SURFACE_COMPLETE if it is reachable from all three surfaces."
+        );
+
+        let both: Vec<&&str> = ruled.intersection(&complete).collect();
+        assert!(
+            both.is_empty(),
+            "these anchors claim to be BOTH absent from a surface and reachable \
+             from all three: {both:#?}"
+        );
+
+        // Direction 2: no row outlives its anchor. This is the half a
+        // hand-maintained table cannot do — a row naming a removed command
+        // reads as a ruling being enforced when nothing is.
+        let known: std::collections::BTreeSet<&str> = anchors.iter().map(|s| s.as_str()).collect();
+        let stale: Vec<&str> = ruled
+            .iter()
+            .chain(complete.iter())
+            .copied()
+            .filter(|a| !known.contains(a))
+            .collect();
+        assert!(
+            stale.is_empty(),
+            "these inventory rows name a dispatch anchor main.rs no longer \
+             defines: {stale:#?}"
+        );
+
+        // Every ruling must carry an argument. An empty reason is a row that
+        // looks decided and is not.
+        for (anchor, surface, kind, reason) in SURFACE_ABSENCES {
+            assert!(
+                matches!(*surface, "mcp" | "v1" | "mcp+v1"),
+                "{anchor}: absent_from must be mcp, v1 or mcp+v1, not {surface:?}"
+            );
+            assert!(
+                reason.len() > 30,
+                "{anchor} ({surface}): the reason is {} characters, which cannot \
+                 be an argument. A ruling must say what would go wrong",
+                reason.len()
+            );
+            // An `Unruled` row must name where the decision is filed, or it is
+            // just an absence with a shrug.
+            if *kind == Absence::Unruled {
+                assert!(
+                    reason.contains("ROADMAP"),
+                    "{anchor} ({surface}): an Unruled row must cite the entry the \
+                     decision is filed under"
+                );
+            }
+            // **A `Drift` row must name a TARGET**, because the variant's own
+            // doc says "with a target" and without one a gap is `Unruled`
+            // wearing a different variant — decided in name, parked in fact,
+            // and no longer visible to the reader who was told these are the
+            // undecided ones. The target may be a ROADMAP id or a version;
+            // what it may not be is absent.
+            //
+            // This arm arrived when 21 rows were ruled `Drift` in one pass
+            // (ROADMAP O66) with their scheduling deliberately deferred to a
+            // separate entry. Deferring the schedule is legitimate; leaving
+            // the row with nowhere to point is what this prevents.
+            if *kind == Absence::Drift {
+                let has_target = reason.contains("target ")
+                    || reason.contains("ROADMAP")
+                    || reason.contains("1.")
+                    || reason.contains("2.");
+                assert!(
+                    has_target,
+                    "{anchor} ({surface}): a Drift row names a gap and must say \
+                     where it is scheduled — a target release or the entry that \
+                     holds the scheduling decision. Without one it is Unruled \
+                     under another name"
+                );
+            }
+        }
     }
 
     #[test]
@@ -964,7 +1551,7 @@ mod tests {
     /// **With a premise probe.** A scanner that finds nothing reports
     /// exactly what a clean tree reports, and this project has shipped one
     /// that did. The needle is split with `concat!` so this file — which is
-    /// inside the scanned tree and lists all 78 names — cannot satisfy its
+    /// inside the scanned tree and lists all 81 names — cannot satisfy its
     /// own probe by accident; the probe requires a variable found in a
     /// DIFFERENT crate.
     #[test]
@@ -1158,6 +1745,128 @@ mod tests {
             offenders.is_empty(),
             "every outbound client must come from `undercroft_net` — TLS or \
              loopback, nothing else, no override. Found:\n{}",
+            offenders.join("\n")
+        );
+    }
+
+    /// **Both gates above are about the CLIENT. This one is about the
+    /// DECLARATION, and neither could see it** (ROADMAP O82c).
+    ///
+    /// `undercroft_net::agent_from_env` is documented as *"the one
+    /// constructor every hop that reads a `*_CA` variable should use"* — but
+    /// a hop that does not speak HTTP cannot use it, and the pgvector backend
+    /// is exactly that: it speaks the postgres wire protocol through
+    /// `tokio_postgres_rustls`. So it read `UNDERCROFT_INDEX_CA` with a bare
+    /// `std::env::var`, which meant ONE declaration got **two answers across
+    /// five backends** — the four HTTP ones trim it and refuse a
+    /// whitespace-only value through `declared_pin`, and this one did
+    /// neither — and it **re-read the PEM per construction**, which
+    /// `pin_from_env` caches deliberately because *"re-reading the file per
+    /// call makes the pin mutable at runtime … silent un-pinning by another
+    /// name"*. `index/status` is reachable per request, so of all five hops
+    /// it was the one where the stated restart-to-rotate property mattered
+    /// most and the one where it did not hold.
+    ///
+    /// The needle is the READ, not the client: a `*_CA` declaration resolved
+    /// anywhere but in the policy crate. That is the observable this class of
+    /// defect actually moves — the two gates above scan for `ureq`'s builder
+    /// and for a dependency edge, and a bare `env::var` moves neither.
+    #[test]
+    fn no_crate_but_undercroft_net_resolves_a_ca_declaration() {
+        // Split, for the reason the gate above splits its needle: this file
+        // is inside the scanned tree, and the engine's env-var inventory gate
+        // scans every `.rs` under `crates/` for quoted `UNDERCROFT_` literals
+        // and requires each to be a variable it knows. One gate's needle is
+        // another gate's input.
+        let env_read = concat!("env::", "var(");
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("crates/ is this crate's parent")
+            .to_path_buf();
+
+        // Two exemptions, each REQUIRED to be reached, so a rename cannot
+        // silently widen one.
+        //
+        // `undercroft-net` IS the policy.
+        //
+        // `undercroft-orchestrator` reads `UNDERCROFT_ORCH_ENGINE_CA` in
+        // `engine.rs` and is exempt DELIBERATELY rather than left unmatched.
+        // Its `resolve_engine_pin` is a second implementation of
+        // `declared_pin`'s empty-refusal, which the doctrine would normally
+        // forbid — but it is behaviourally identical, it resolves through
+        // `undercroft_net::resolve_pin`, it caches once per process in
+        // `ENGINE_PIN` exactly as `pin_from_env` does, and its message NAMES
+        // THE VARIABLE, which the shared resolver's does not and which
+        // `a_pin_that_cannot_be_honoured_refuses_rather_than_falling_back`
+        // asserts. Converging it on the shared resolver as things stand would
+        // regress an operator message that a test protects. The real
+        // convergence is to teach `declared_pin` to name the variable it
+        // came from; recorded here rather than left as an unexplained
+        // exemption, which is the shape this project calls a gap dressed up
+        // as a principled refusal.
+        let exempt = ["undercroft-net", "undercroft-orchestrator"];
+        let mut offenders = Vec::new();
+        let mut scanned = 0usize;
+        let mut exempted: Vec<&str> = Vec::new();
+        let mut stack = vec![crates.clone()];
+        while let Some(dir) = stack.pop() {
+            let owner = dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if let Some(name) = exempt.iter().find(|e| **e == owner) {
+                exempted.push(name);
+                continue;
+            }
+            for entry in std::fs::read_dir(&dir).expect("crates/ is readable") {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                    continue;
+                }
+                scanned += 1;
+                let text = std::fs::read_to_string(&path).unwrap();
+                for (n, line) in text.lines().enumerate() {
+                    let t = line.trim_start();
+                    if t.starts_with("//") || !t.contains(env_read) {
+                        continue;
+                    }
+                    // A CA declaration, named either literally or through the
+                    // backend's own `CA_VAR` const.
+                    if t.contains("CA_VAR") || t.contains("_CA\"") {
+                        offenders.push(format!("{}:{}: {t}", path.display(), n + 1));
+                    }
+                }
+            }
+        }
+        assert!(
+            scanned > 40,
+            "the walk found {scanned} files — the scan, not the tree, is broken"
+        );
+        exempted.sort_unstable();
+        let mut want = exempt;
+        want.sort_unstable();
+        assert_eq!(
+            exempted, want,
+            "the walk must reach and skip each exempt crate exactly once — a rename that \
+             stops matching silently widens the exemption"
+        );
+        // PREMISE, in the direction that matters: the needle must match where
+        // the legal resolution lives, or a zero above is a claim about the
+        // scanner rather than about the tree.
+        let policy = crates.join("undercroft-net/src/lib.rs");
+        let policy_src = std::fs::read_to_string(&policy).unwrap();
+        assert!(
+            policy_src
+                .lines()
+                .any(|l| l.contains(env_read) && l.contains("var")),
+            "premise: the needle must match inside the policy crate, or a clean result \
+             above means nothing"
+        );
+        assert!(
+            offenders.is_empty(),
+            "a `*_CA` declaration must be resolved through `undercroft_net` — one \
+             declaration, one answer, resolved once per process. Found:\n{}",
             offenders.join("\n")
         );
     }

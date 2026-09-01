@@ -781,7 +781,7 @@ fn cli_search_hands_back_an_id_and_a_continuation_it_can_be_asked_to_repeat() {
     let page1 = search_out(&home, &["harbour northern", "-n", "1"]);
     assert!(page1.contains("1. ["), "no rank 1 in:\n{page1}");
     assert!(
-        page1.contains("deeper results may exist"),
+        page1.contains("deeper results EXIST"),
         "a full page must name its continuation:\n{page1}"
     );
 
@@ -803,7 +803,7 @@ fn cli_search_hands_back_an_id_and_a_continuation_it_can_be_asked_to_repeat() {
     // rank as of. Repeating them verbatim continues the same ranking.
     let cont = page1
         .lines()
-        .find(|l| l.contains("deeper results may exist"))
+        .find(|l| l.contains("deeper results EXIST"))
         .unwrap()
         .to_string();
     let offset = cont

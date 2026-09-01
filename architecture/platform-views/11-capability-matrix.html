@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Undercroft — Capability Matrix</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:  #04080a;
+      --color-raise:  #071014;
+      --color-ink:    #d9f0ea;
+      --color-muted:  #7fa39c;
+      --color-accent: #35e0c2;
+      --font-sans:  -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --font-serif: Georgia, "Times New Roman", serif;
+      --font-mono:  ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1200px; width: 100%; }
+    .eyebrow {
+      font-family: var(--font-mono); font-size: 0.66rem; font-weight: 500;
+      letter-spacing: 0.18em; text-transform: uppercase;
+      color: var(--color-muted); margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400; letter-spacing: -0.02em; line-height: 1.15;
+      color: var(--color-ink); margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 900px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Capability matrix · 11 of 12 · Undercroft</p>
+    <h1>Which surface may do what</h1>
+
+    <svg viewBox="0 0 1200 724" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="capability-matrix-title capability-matrix-desc">
+      <title id="capability-matrix-title">Undercroft capability matrix</title>
+      <desc id="capability-matrix-desc">Eight Undercroft capabilities scored across four surfaces: saving or updating a drawer, searching, and reading or writing the knowledge graph are available directly from the command line, the MCP agent tools and the HTTP API, with the orchestrator reaching the write paths by proxy; admission rulings, trust assignment, retention and forgetting, and key rotation or anchoring are available on every surface except MCP, which refuses them outright because an agent must not rule on the queue that exists to contain it nor assign the trust class that decides what it may retrieve.</desc>
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7fa39c"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#35e0c2"/></marker>
+        <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#c9a961"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#04080a"/>
+
+      <!-- ============ ZONES (drawn first) ============ -->
+      <!-- Zone A — agent-reachable -->
+      <rect x="112" y="152" width="976" height="216" rx="8" fill="rgba(217,240,234,0.02)" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
+      <rect x="548" y="156" width="104" height="12" rx="2" fill="#04080a"/>
+      <text x="600" y="165" fill="rgba(217,240,234,0.40)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.14em">AGENT-REACHABLE</text>
+
+      <!-- Zone B — OPERATOR_ONLY (FOCAL) -->
+      <rect x="112" y="384" width="976" height="216" rx="8" fill="rgba(53,224,194,0.04)" stroke="#35e0c2" stroke-width="1"/>
+      <rect x="548" y="388" width="104" height="12" rx="2" fill="#04080a"/>
+      <text x="600" y="397" fill="#35e0c2" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.14em">OPERATOR_ONLY</text>
+
+      <!-- ============ NODES — header band ============ -->
+      <!-- corner cell -->
+      <rect x="120" y="72" width="288" height="64" rx="6" fill="#04080a"/>
+      <rect x="120" y="72" width="288" height="64" rx="6" fill="rgba(217,240,234,0.02)" stroke="rgba(217,240,234,0.12)" stroke-width="0.8"/>
+      <rect x="128" y="78" width="48" height="12" rx="2" fill="transparent" stroke="rgba(127,163,156,0.40)" stroke-width="0.8"/>
+      <text x="152" y="87" fill="rgba(127,163,156,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">MATRIX</text>
+      <text x="132" y="112" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">Capability</text>
+      <text x="132" y="128" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">8 capabilities · 4 surfaces</text>
+
+      <!-- CLI banner -->
+      <rect x="424" y="72" width="152" height="64" rx="6" fill="#04080a"/>
+      <rect x="424" y="72" width="152" height="64" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <rect x="432" y="78" width="28" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
+      <text x="446" y="87" fill="rgba(217,240,234,0.80)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">CLI</text>
+      <text x="500" y="112" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Command line</text>
+      <text x="500" y="128" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">74 operations</text>
+
+      <!-- MCP banner -->
+      <rect x="592" y="72" width="152" height="64" rx="6" fill="#04080a"/>
+      <rect x="592" y="72" width="152" height="64" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <rect x="600" y="78" width="28" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
+      <text x="614" y="87" fill="rgba(217,240,234,0.80)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">MCP</text>
+      <text x="668" y="112" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Agent tools</text>
+      <text x="668" y="128" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">38 tools · 12 write</text>
+
+      <!-- /v1 banner -->
+      <rect x="760" y="72" width="152" height="64" rx="6" fill="#04080a"/>
+      <rect x="760" y="72" width="152" height="64" rx="6" fill="#071014" stroke="#c9a961" stroke-width="1"/>
+      <rect x="768" y="78" width="32" height="12" rx="2" fill="transparent" stroke="rgba(201,169,97,0.40)" stroke-width="0.8"/>
+      <text x="784" y="87" fill="rgba(201,169,97,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">REST</text>
+      <text x="836" y="112" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">HTTP API</text>
+      <text x="836" y="128" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">56 routes · /v1</text>
+
+      <!-- Orchestrator banner -->
+      <rect x="928" y="72" width="152" height="64" rx="6" fill="#04080a"/>
+      <rect x="928" y="72" width="152" height="64" rx="6" fill="#071014" stroke="#c9a961" stroke-width="1"/>
+      <rect x="936" y="78" width="28" height="12" rx="2" fill="transparent" stroke="rgba(201,169,97,0.40)" stroke-width="0.8"/>
+      <text x="950" y="87" fill="rgba(201,169,97,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">OPS</text>
+      <text x="1004" y="112" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Control plane</text>
+      <text x="1004" y="128" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">/t/* · /admin/*</text>
+
+      <!-- ============ NODES — row 0 · Save / update drawer ============ -->
+      <rect x="120" y="176" width="288" height="40" rx="4" fill="#04080a"/>
+      <rect x="120" y="176" width="288" height="40" rx="4" fill="rgba(217,240,234,0.03)" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
+      <text x="132" y="200" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">Save / update drawer</text>
+      <text x="396" y="200" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="end">screened</text>
+
+      <rect x="424" y="176" width="152" height="40" rx="4" fill="#04080a"/>
+      <rect x="424" y="176" width="152" height="40" rx="4" fill="rgba(217,240,234,0.06)" stroke="rgba(217,240,234,0.14)" stroke-width="0.8"/>
+      <text x="500" y="200" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+      <rect x="592" y="176" width="152" height="40" rx="4" fill="#04080a"/>
+      <rect x="592" y="176" width="152" height="40" rx="4" fill="rgba(217,240,234,0.06)" stroke="rgba(217,240,234,0.14)" stroke-width="0.8"/>
+      <text x="668" y="200" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+      <rect x="760" y="176" width="152" height="40" rx="4" fill="#04080a"/>
+      <rect x="760" y="176" width="152" height="40" rx="4" fill="rgba(217,240,234,0.06)" stroke="rgba(217,240,234,0.14)" stroke-width="0.8"/>
+      <text x="836" y="200" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+      <rect x="928" y="176" width="152" height="40" rx="4" fill="#04080a"/>
+      <rect x="928" y="176" width="152" height="40" rx="4" fill="#04080a" stroke="rgba(217,240,234,0.12)" stroke-width="0.8"/>
+      <text x="1004" y="200" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">VIA PROXY</text>
+
+      <!-- ============ NODES — row 1 · Search ============ -->
+      <rect x="120" y="224" width="288" height="40" rx="4" fill="#04080a"/>
+      <rect x="120" y="224" width="288" height="40" rx="4" fill="rgba(217,240,234,0.03)" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
+      <text x="132" y="248" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">Search</text>
+      <text x="396" y="248" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="end">quarantine-fenced</text>
+
+      <rect x="424" y="224" width="152" height="40" rx="4" fill="#04080a"/>
+      <rect x="424" y="224" width="152" height="40" rx="4" fill="rgba(217,240,234,0.06)" stroke="rgba(217,240,234,0.14)" stroke-width="0.8"/>
+      <text x="500" y="248" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+      <rect x="592" y="224" width="152" height="40" rx="4" fill="#04080a"/>
+      <rect x="592" y="224" width="152" height="40" rx="4" fill="rgba(217,240,234,0.06)" stroke="rgba(217,240,234,0.14)" stroke-width="0.8"/>
+      <text x="668" y="248" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+      <rect x="760" y="224" width="152" height="40" rx="4" fill="#04080a"/>
+      <rect x="760" y="224" width="152" height="40" rx="4" fill="rgba(217,240,234,0.06)" stroke="rgba(217,240,234,0.14)" stroke-width="0.8"/>
+      <text x="836" y="248" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+      <rect x="928" y="224" width="152" height="40" rx="4" fill="#04080a"/>
+      <rect x="928" y="224" width="152" height="40" rx="4" fill="rgba(217,240,234,0.06)" stroke="rgba(217,240,234,0.14)" stroke-width="0.8"/>
+      <text x="1004" y="248" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+      <!-- ============ NODES — row 2 · Knowledge graph read ============ -->
+      <rect x="120" y="272" width="288" height="40" rx="4" fill="#04080a"/>
+      <rect x="120" y="272" width="288" height="40" rx="4" fill="rgba(217,240,234,0.03)" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
+      <text x="132" y="296" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">Knowledge graph read</text>
+      <text x="396" y="296" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="end">read-audited</text>
+
+      <rect x="424" y="272" width="152" height="40" rx="4" fill="#04080a"/>
+      <rect x="424" y="272" width="152" height="40" rx="4" fill="rgba(217,240,234,0.06)" stroke="rgba(217,240,234,0.14)" stroke-width="0.8"/>
+      <text x="500" y="296" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+      <rect x="592" y="272" width="152" height="40" rx="4" fill="#04080a"/>
+      <rect x="592" y="272" width="152" height="40" rx="4" fill="rgba(217,240,234,0.06)" stroke="rgba(217,240,234,0.14)" stroke-width="0.8"/>
+      <text x="668" y="296" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+      <rect x="760" y="272" width="152" height="40" rx="4" fill="#04080a"/>
+      <rect x="760" y="272" width="152" height="40" rx="4" fill="rgba(217,240,234,0.06)" stroke="rgba(217,240,234,0.14)" stroke-width="0.8"/>
+      <text x="836" y="296" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+      <rect x="928" y="272" width="152" height="40" rx="4" fill="#04080a"/>
+      <rect x="928" y="272" width="152" height="40" rx="4" fill="rgba(217,240,234,0.06)" stroke="rgba(217,240,234,0.14)" stroke-width="0.8"/>
+      <text x="1004" y="296" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+      <!-- ============ NODES — row 3 · Knowledge graph write ============ -->
+      <rect x="120" y="320" width="288" height="40" rx="4" fill="#04080a"/>
+      <rect x="120" y="320" width="288" height="40" rx="4" fill="rgba(217,240,234,0.03)" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
+      <text x="132" y="344" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">Knowledge graph write</text>
+      <text x="396" y="344" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="end">screened</text>
+
+      <rect x="424" y="320" width="152" height="40" rx="4" fill="#04080a"/>
+      <rect x="424" y="320" width="152" height="40" rx="4" fill="rgba(217,240,234,0.06)" stroke="rgba(217,240,234,0.14)" stroke-width="0.8"/>
+      <text x="500" y="344" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+      <rect x="592" y="320" width="152" height="40" rx="4" fill="#04080a"/>
+      <rect x="592" y="320" width="152" height="40" rx="4" fill="rgba(217,240,234,0.06)" stroke="rgba(217,240,234,0.14)" stroke-width="0.8"/>
+      <text x="668" y="344" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+      <rect x="760" y="320" width="152" height="40" rx="4" fill="#04080a"/>
+      <rect x="760" y="320" width="152" height="40" rx="4" fill="rgba(217,240,234,0.06)" stroke="rgba(217,240,234,0.14)" stroke-width="0.8"/>
+      <text x="836" y="344" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+      <rect x="928" y="320" width="152" height="40" rx="4" fill="#04080a"/>
+      <rect x="928" y="320" width="152" height="40" rx="4" fill="#04080a" stroke="rgba(217,240,234,0.12)" stroke-width="0.8"/>
+      <text x="1004" y="344" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">VIA PROXY</text>
+
+      <!-- ============ NODES — row 4 · Admission rulings ============ -->
+      <rect x="120" y="408" width="288" height="40" rx="4" fill="#04080a"/>
+      <rect x="120" y="408" width="288" height="40" rx="4" fill="rgba(217,240,234,0.03)" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
+      <text x="132" y="432" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">Admission rulings</text>
+      <text x="396" y="432" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="end">receipted</text>
+
+      <rect x="424" y="408" width="152" height="40" rx="4" fill="#04080a"/>
+      <rect x="424" y="408" width="152" height="40" rx="4" fill="rgba(217,240,234,0.06)" stroke="rgba(217,240,234,0.14)" stroke-width="0.8"/>
+      <text x="500" y="432" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+      <rect x="592" y="408" width="152" height="40" rx="4" fill="#04080a"/>
+      <rect x="592" y="408" width="152" height="40" rx="4" fill="rgba(255,93,115,0.10)" stroke="#ff5d73" stroke-width="1.2"/>
+      <text x="668" y="432" fill="#ff5d73" font-size="9" font-weight="600" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.10em">NEVER</text>
+
+      <rect x="760" y="408" width="152" height="40" rx="4" fill="#04080a"/>
+      <rect x="760" y="408" width="152" height="40" rx="4" fill="rgba(217,240,234,0.06)" stroke="rgba(217,240,234,0.14)" stroke-width="0.8"/>
+      <text x="836" y="432" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+      <rect x="928" y="408" width="152" height="40" rx="4" fill="#04080a"/>
+      <rect x="928" y="408" width="152" height="40" rx="4" fill="rgba(217,240,234,0.06)" stroke="rgba(217,240,234,0.14)" stroke-width="0.8"/>
+      <text x="1004" y="432" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+      <!-- ============ NODES — row 5 · Trust assignment ============ -->
+      <rect x="120" y="456" width="288" height="40" rx="4" fill="#04080a"/>
+      <rect x="120" y="456" width="288" height="40" rx="4" fill="rgba(217,240,234,0.03)" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
+      <text x="132" y="480" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">Trust assignment</text>
+      <text x="396" y="480" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="end">hmac-tagged</text>
+
+      <rect x="424" y="456" width="152" height="40" rx="4" fill="#04080a"/>
+      <rect x="424" y="456" width="152" height="40" rx="4" fill="rgba(217,240,234,0.06)" stroke="rgba(217,240,234,0.14)" stroke-width="0.8"/>
+      <text x="500" y="480" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+      <rect x="592" y="456" width="152" height="40" rx="4" fill="#04080a"/>
+      <rect x="592" y="456" width="152" height="40" rx="4" fill="rgba(255,93,115,0.10)" stroke="#ff5d73" stroke-width="1.2"/>
+      <text x="668" y="480" fill="#ff5d73" font-size="9" font-weight="600" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.10em">NEVER</text>
+
+      <rect x="760" y="456" width="152" height="40" rx="4" fill="#04080a"/>
+      <rect x="760" y="456" width="152" height="40" rx="4" fill="rgba(217,240,234,0.06)" stroke="rgba(217,240,234,0.14)" stroke-width="0.8"/>
+      <text x="836" y="480" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+      <rect x="928" y="456" width="152" height="40" rx="4" fill="#04080a"/>
+      <rect x="928" y="456" width="152" height="40" rx="4" fill="rgba(217,240,234,0.06)" stroke="rgba(217,240,234,0.14)" stroke-width="0.8"/>
+      <text x="1004" y="480" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+      <!-- ============ NODES — row 6 · Retention + forget ============ -->
+      <rect x="120" y="504" width="288" height="40" rx="4" fill="#04080a"/>
+      <rect x="120" y="504" width="288" height="40" rx="4" fill="rgba(217,240,234,0.03)" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
+      <text x="132" y="528" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">Retention + forget</text>
+      <text x="396" y="528" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="end">attested</text>
+
+      <rect x="424" y="504" width="152" height="40" rx="4" fill="#04080a"/>
+      <rect x="424" y="504" width="152" height="40" rx="4" fill="rgba(217,240,234,0.06)" stroke="rgba(217,240,234,0.14)" stroke-width="0.8"/>
+      <text x="500" y="528" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+      <rect x="592" y="504" width="152" height="40" rx="4" fill="#04080a"/>
+      <rect x="592" y="504" width="152" height="40" rx="4" fill="rgba(255,93,115,0.10)" stroke="#ff5d73" stroke-width="1.2"/>
+      <text x="668" y="528" fill="#ff5d73" font-size="9" font-weight="600" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.10em">NEVER</text>
+
+      <rect x="760" y="504" width="152" height="40" rx="4" fill="#04080a"/>
+      <rect x="760" y="504" width="152" height="40" rx="4" fill="rgba(217,240,234,0.06)" stroke="rgba(217,240,234,0.14)" stroke-width="0.8"/>
+      <text x="836" y="528" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+      <rect x="928" y="504" width="152" height="40" rx="4" fill="#04080a"/>
+      <rect x="928" y="504" width="152" height="40" rx="4" fill="rgba(217,240,234,0.06)" stroke="rgba(217,240,234,0.14)" stroke-width="0.8"/>
+      <text x="1004" y="528" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+      <!-- ============ NODES — row 7 · Key rotation / anchor ============ -->
+      <rect x="120" y="552" width="288" height="40" rx="4" fill="#04080a"/>
+      <rect x="120" y="552" width="288" height="40" rx="4" fill="rgba(217,240,234,0.03)" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
+      <text x="132" y="576" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">Key rotation / anchor</text>
+      <text x="396" y="576" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="end">chain-recorded</text>
+
+      <rect x="424" y="552" width="152" height="40" rx="4" fill="#04080a"/>
+      <rect x="424" y="552" width="152" height="40" rx="4" fill="rgba(217,240,234,0.06)" stroke="rgba(217,240,234,0.14)" stroke-width="0.8"/>
+      <text x="500" y="576" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+      <rect x="592" y="552" width="152" height="40" rx="4" fill="#04080a"/>
+      <rect x="592" y="552" width="152" height="40" rx="4" fill="rgba(255,93,115,0.10)" stroke="#ff5d73" stroke-width="1.2"/>
+      <text x="668" y="576" fill="#ff5d73" font-size="9" font-weight="600" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.10em">NEVER</text>
+
+      <rect x="760" y="552" width="152" height="40" rx="4" fill="#04080a"/>
+      <rect x="760" y="552" width="152" height="40" rx="4" fill="rgba(217,240,234,0.06)" stroke="rgba(217,240,234,0.14)" stroke-width="0.8"/>
+      <text x="836" y="576" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+      <rect x="928" y="552" width="152" height="40" rx="4" fill="#04080a"/>
+      <rect x="928" y="552" width="152" height="40" rx="4" fill="rgba(217,240,234,0.06)" stroke="rgba(217,240,234,0.14)" stroke-width="0.8"/>
+      <text x="1004" y="576" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+      <!-- ============ FOOTNOTE ============ -->
+      <text x="120" y="624" fill="rgba(217,240,234,0.40)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" letter-spacing="0.14em">OPERATOR_ONLY — ASSERTED BY THE SAME TEST AS THE PARITY INVENTORY, SO THE TWO CAN NEVER DISAGREE</text>
+      <text x="120" y="644" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">an agent must not rule on the queue that exists to contain it, nor assign the trust class that decides what it may retrieve.</text>
+
+      <!-- ============ LEGEND ============ -->
+      <line x1="120" y1="672" x2="1080" y2="672" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
+      <text x="120" y="692" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" letter-spacing="0.14em">LEGEND</text>
+
+      <rect x="228" y="684" width="16" height="10" rx="2" fill="rgba(217,240,234,0.06)" stroke="rgba(217,240,234,0.14)" stroke-width="1"/>
+      <text x="252" y="692" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">YES · DIRECT</text>
+
+      <rect x="340" y="684" width="16" height="10" rx="2" fill="#04080a" stroke="rgba(217,240,234,0.12)" stroke-width="1"/>
+      <text x="364" y="692" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">VIA PROXY</text>
+
+      <rect x="440" y="684" width="16" height="10" rx="2" fill="rgba(255,93,115,0.10)" stroke="#ff5d73" stroke-width="1"/>
+      <text x="464" y="692" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">NEVER · REFUSED AT THE TOOL GATE</text>
+
+      <rect x="672" y="684" width="16" height="10" rx="2" fill="rgba(53,224,194,0.04)" stroke="#35e0c2" stroke-width="1"/>
+      <text x="696" y="692" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">FOCAL BAND · OPERATOR_ONLY</text>
+    </svg>
+  </div>
+</body>
+</html>

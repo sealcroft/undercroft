@@ -179,6 +179,28 @@ fn data_subpath_ok(subpath: &str) -> bool {
     // local vault, not on a plane that proxies a tenant into someone else's
     // operator surface. `["stats", "history"]` below is unrelated — metrics
     // over time, not the audit chain.
+    //
+    // **The taxonomy and the knowledge-graph READS joined this list on
+    // 2026-08-21 (ROADMAP O67), and their absence was a defect rather than a
+    // boundary.** Eight of the engine's 28 per-vault subpaths were reachable
+    // from NEITHER plane: not here, and not through [`OPS_ROUTES`]. A tenant
+    // asking for their own taxonomy got a bare `"unknown route"` — not even
+    // the "operator route, one plane over" message, since `ops_route_ok` was
+    // false for them too. That is exactly the confusion the comment on that
+    // branch describes, happening to a capability that is nobody's operator
+    // business: a vault's wing→room tree and its distilled facts belong to
+    // the tenant whose drawers they came from, and `drawers` and `search`
+    // above already return that tenant's content.
+    //
+    // Checked before widening, not assumed: **a fact cannot come from a
+    // quarantined drawer.** `refine` reads through `recent()`, which excludes
+    // the reserved wing, and refuses outright when scoped to it — so opening
+    // the kg reads cannot become a door around admission control. The
+    // `request_names_reserved_wing` fence still applies to every one of them.
+    //
+    // `kg/authority` is deliberately NOT here and never can be: it is a
+    // WRITE, it is in the engine's `OPERATOR_ONLY`, and promotion closes the
+    // previous canonical holder's window. It went to [`OPS_ROUTES`] instead.
     matches!(
         segs.as_slice(),
         ["drawers"]
@@ -188,6 +210,66 @@ fn data_subpath_ok(subpath: &str) -> bool {
             | ["stats", "history"]
             | ["export"]
             | ["import"]
+            | ["taxonomy"]
+            | ["kg", "stats"]
+            | ["kg", "entities"]
+            | ["kg", "query"]
+            | ["kg", "timeline"]
+            | ["kg", "receipts"]
+            | ["kg", "canonical", _]
+            // ROADMAP O68 (2026-08-31). Fourteen engine capabilities reached
+            // `/v1` and this gate refused to let them be UNCLASSIFIED — it
+            // failed the build naming `dedup`, which is O67's design working:
+            // an omission and a boundary look identical from outside.
+            //
+            // All of these are on the TENANT plane, by the criterion the list
+            // above already uses: every one is reachable from MCP, i.e. the
+            // engine already treats it as agent-facing rather than operator
+            // business. A vault's tunnels, its agent diaries, its closet
+            // index and its co-occurrence pairs belong to the tenant whose
+            // drawers they were derived from, exactly as `taxonomy` and the
+            // kg reads do.
+            //
+            // `dedup` DESTROYS drawers under `{"apply":true}`, and it still
+            // belongs here: `undercroft_dedup` is an MCP write tool on the
+            // engine, and `["drawers", _]` above already carries DELETE of a
+            // single drawer. A tenant removing their own drawers is the
+            // existing model, not a new power.
+            //
+            // Not listed because they are already covered: `["drawers"]`
+            // carries the filtered `DELETE …?source=`, and `["drawers", _]`
+            // carries `POST …/drawers/check-duplicate`.
+            // `kg/rel` is the predicate-shaped kg READ, and it joins its
+            // entity-shaped siblings above for the same reason they are here:
+            // a vault's distilled facts belong to the tenant whose drawers
+            // they came from. `index/status` reports a mirror's record count
+            // beside the authoritative local one — the counts are the
+            // tenant's own, and the engine treats it as agent-facing;
+            // `index push` is EGRESS and is on neither plane, which is the
+            // boundary its status sibling does not share.
+            //
+            // It spent a day on `OPS_ROUTES` (O83): it ran `ensure`, which
+            // CREATES the collection on all five backends, so a tenant read
+            // issued DDL against operator infrastructure.
+            // `VectorIndex::status` creates on none of them — probed live per
+            // backend, not inferred — so the row comes back.
+            //
+            // Residual, stated: a tenant read still triggers an OUTBOUND call
+            // to operator-configured infrastructure. That is already true of
+            // a search on a vault with a remote index, and it is amplification
+            // rather than a boundary — the orchestrator counts that class
+            // (`undercroft_orch_*`) rather than forbidding it.
+            | ["index", "status"]
+            | ["kg", "rel"]
+            | ["dedup"]
+            | ["tunnels"]
+            | ["tunnels", _]
+            | ["tunnels", _, "drawers"]
+            | ["diary"]
+            | ["diary", "agents"]
+            | ["wake-up"]
+            | ["closets"]
+            | ["hallways"]
     )
 }
 
@@ -361,6 +443,19 @@ fn single_drawer_route(subpath: &str) -> bool {
 /// between `/v1` and MCP, one level up.
 const OPS_ROUTES: &[(&str, &str)] = &[
     ("POST", "verify"),
+    // **The remediation half of the line above** (ROADMAP M17), and it is the
+    // O14 lesson three lines down repeating verbatim: `verify` has been
+    // forwardable since this table was written, and the operation that FIXES
+    // what it finds was reachable from nowhere in a fleet — first because the
+    // engine had no route at all, and then, for as long as this row was
+    // missing, because the control plane did not forward it.
+    //
+    // Safe while the engine is serving, on the same test as `anchor` rather
+    // than the vault KEY rotation excluded in this module's own header: it
+    // rewrites rows through the engine's own handle. The engine refuses it for
+    // a vault that process ALSO serves over `/mcp`, so the narrow unsafe case
+    // is closed there rather than by omitting the row here.
+    ("POST", "repair"),
     ("GET", "supersessions"),
     ("POST", "forget"),
     // **Minting without checking is the asymmetry above, one step on**
@@ -377,11 +472,36 @@ const OPS_ROUTES: &[(&str, &str)] = &[
     ("POST", "retention/sweep"),
     ("GET", "trust"),
     ("POST", "trust"),
+    // Backups (ROADMAP O68, 2026-08-31). OPERATOR plane, never the tenant
+    // one: all three are `Absence::Boundary` on MCP in the engine's own
+    // inventory — they touch the server's filesystem, and `restore` is the
+    // most destructive operation in the tree.
+    //
+    // `restore` is NOT safe while the engine serves that vault, unlike
+    // `verify`/`repair`/`anchor` above, and it does not need to be: the
+    // engine takes an exclusive hold and answers **409** rather than
+    // unlinking a database a server still holds open (O69). So the row is
+    // safe to forward — the refusal happens at the engine, where the handle
+    // is, instead of being approximated by omitting the route here. The
+    // practical consequence is that a fleet restore is a maintenance-window
+    // operation, which is a property of the operation and not of this table.
+    ("POST", "backups"),
+    ("GET", "backups"),
+    ("POST", "backups/restore"),
     // Tightening the manifest rollback anchor (engine R3). Unlike the vault
     // KEY rotation two lines of prose up, this one is safe while the engine
     // is serving: it fsyncs a manifest that names the head the database
     // already committed, and the engine refuses it on a read-only handle.
     ("POST", "anchor"),
+    // **The golden-values authority tier** (ROADMAP O67, 2026-08-21). It is
+    // in the engine's `OPERATOR_ONLY` — an agent that could write it could
+    // make its own fact the one answer `lookup_canonical` returns — so it
+    // belongs on an operator plane and nowhere else. It was on neither:
+    // absent from this table, and correctly refused by the data plane, so in
+    // a fleet the authority tier was drivable from no door at all. The gate
+    // below could not say so, because the capability was missing from the
+    // hand-written universe it counted against, which is the defect O67 is.
+    ("POST", "kg/authority"),
 ];
 
 /// **What the ops plane deliberately does NOT reach, and why.**
@@ -452,6 +572,7 @@ pub(crate) const OPS_DELIBERATELY_ABSENT: &[(&str, &str)] = &[
 pub(crate) fn ops_alias(op: &str) -> Option<(&'static str, &'static str)> {
     Some(match op {
         "verify" => ("POST", "verify"),
+        "repair" => ("POST", "repair"),
         "anchor" => ("POST", "anchor"),
         "supersessions" => ("GET", "supersessions"),
         "admission" => ("GET", "admission"),
@@ -463,6 +584,20 @@ pub(crate) fn ops_alias(op: &str) -> Option<(&'static str, &'static str)> {
         "retention-sweep" => ("POST", "retention/sweep"),
         "forget" => ("POST", "forget"),
         "verify-forgetting" => ("POST", "verify-forgetting"),
+        // The golden-values authority tier (ROADMAP O67). Added WITH its
+        // route, because `every_ops_alias_is_an_allowed_route_and_every_route_has_an_alias`
+        // refused the route without it — "on the admin plane with no CLI
+        // alias, reachable by curl alone" — which is the same
+        // capability-on-one-surface question the whole drift audit exists to
+        // answer, enforced here rather than filed. It caught this omission on
+        // the battery, not in review.
+        "authority" => ("POST", "kg/authority"),
+        // Backups (ROADMAP O68). Added WITH their routes, for the reason the
+        // comment above records: a route on the admin plane with no CLI alias
+        // is reachable by curl alone.
+        "backup-create" => ("POST", "backups"),
+        "backups" => ("GET", "backups"),
+        "backup-restore" => ("POST", "backups/restore"),
         _ => return None,
     })
 }
@@ -483,9 +618,20 @@ fn bearer(req: &tiny_http::Request) -> Option<String> {
 
 fn json_response(status: u16, body: &serde_json::Value) -> Response<std::io::Cursor<Vec<u8>>> {
     let bytes = body.to_string().into_bytes();
-    Response::from_data(bytes)
+    let resp = Response::from_data(bytes)
         .with_status_code(status)
-        .with_header(Header::from_bytes("Content-Type", "application/json").expect("header"))
+        .with_header(Header::from_bytes("Content-Type", "application/json").expect("header"));
+    // RFC 9110 §11.6.1 — see the twin in the engine's `tenant.rs::respond`.
+    // On the STATUS rather than at the `err_response(401, …)` call sites, of
+    // which this file has three (admin, and two tenant arms): a fourth added
+    // later inherits the challenge instead of forgetting it. This plane's
+    // BODIES were already right — `err_response` has always answered
+    // `{"error": …}` as JSON, which is why the engine's two plain-text gate
+    // sites were the outlier rather than a second valid convention.
+    if status == 401 {
+        return resp.with_header(Header::from_bytes("WWW-Authenticate", "Bearer").expect("header"));
+    }
+    resp
 }
 
 fn err_response(status: u16, msg: &str) -> Response<std::io::Cursor<Vec<u8>>> {
@@ -503,6 +649,25 @@ fn err_response(status: u16, msg: &str) -> Response<std::io::Cursor<Vec<u8>>> {
 /// where it landed. The message is the error's own, so `Unsealable` —
 /// which names its remedy — survives instead of being flattened.
 fn state_error_response(e: &StateError) -> Response<std::io::Cursor<Vec<u8>>> {
+    // **And the CLASS, for the control plane's own verdicts** (ROADMAP M20).
+    // Until this line, `"class"` appeared exactly twice in this file, both
+    // inside `engine_response` — relaying a class an ENGINE had already
+    // decided. So the orchestrator could forward someone else's integrity
+    // verdict and could not state its own: `Unsealable` reached the wire as a
+    // bare 409, on every admin route and the data plane.
+    //
+    // A caller cannot recover it from the status. 409 is also `Conflict`
+    // here, which is the same reason the engine emits `class` rather than
+    // leaning on 409 — a co-resident refusal and a wrong read-only posture
+    // answer 409 too and must not page anyone. This binary already READS that
+    // vocabulary out of engine replies (`is_integrity_verdict`); it now
+    // writes it for the one verdict that is its own.
+    if e.is_integrity() {
+        return json_response(
+            e.status(),
+            &serde_json::json!({ "error": e.to_string(), "class": "integrity" }),
+        );
+    }
     err_response(e.status(), &e.to_string())
 }
 
@@ -556,8 +721,21 @@ fn spawn_metrics_listener() -> anyhow::Result<()> {
             };
             if !authed {
                 undercroft_obs::orch_auth_rejected("metrics");
-                let _ =
-                    request.respond(Response::from_string("unauthorized").with_status_code(401));
+                // Body stays text/plain DELIBERATELY, and this is the one 401
+                // in the fleet that should not be JSON: this is the dedicated
+                // metrics listener (`UNDERCROFT_ORCH_METRICS_ADDR`), whose only
+                // route answers Prometheus text on success. The rule is that an
+                // error should match the SUCCESS format of the endpoint being
+                // called — not that one format wins everywhere — and a scraper
+                // keys on the status without reading the body at all. The
+                // challenge header is still required (RFC 9110 §11.6.1).
+                let _ = request.respond(
+                    Response::from_string("unauthorized")
+                        .with_status_code(401)
+                        .with_header(
+                            Header::from_bytes("WWW-Authenticate", "Bearer").expect("header"),
+                        ),
+                );
                 continue;
             }
             if request.url().split('?').next().unwrap_or("") != "/metrics" {
@@ -638,9 +816,17 @@ pub fn serve(orch: &Orch, addr: &str, role: Role<'_>) -> anyhow::Result<()> {
         };
         let started = std::time::Instant::now();
         let response = route(orch, &role, &limiter, &request, &method, target, &body);
-        // A route CLASS from a closed set, never the URL: the forwarded query
-        // string carries `wing=` and `room=`, which is exactly what the
-        // engine's own telemetry suppresses for sealed vaults.
+        // A route CLASS from a closed set, never the URL. The reason is
+        // CARDINALITY, not confidentiality: the forwarded query string
+        // carries `wing=` and `room=`, whose value set is created BY USE, and
+        // this crate's own rule is that such an identifier belongs on a query
+        // surface rather than on a label — the same reason no series here
+        // carries a tenant.
+        //
+        // It used to say "which is exactly what the engine's own telemetry
+        // suppresses for sealed vaults". That stopped being true at M6, which
+        // carries wing/room on every level; the decision here is unchanged and
+        // was never resting on that premise.
         let route_class = if path == "/healthz" {
             "healthz"
         } else if path == "/ui" {
@@ -1472,7 +1658,35 @@ mod tests {
             "retention-sweep",
             "forget",
             "verify-forgetting",
+            "repair",
+            // ROADMAP O67, and it was added here because THIS TEST refused
+            // the route otherwise: "on the admin plane with no CLI alias —
+            // reachable by curl alone". The gate caught the omission on the
+            // battery rather than in review, which is the whole point of it.
+            "authority",
+            // Backups (ROADMAP O68), and this gate refused the routes until
+            // they were listed — the same catch it made for `authority`, two
+            // lines up, on the same battery rather than in review.
+            "backup-create",
+            "backups",
+            "backup-restore",
+            // `index-status` was here for one day. It left with its
+            // OPS_ROUTES row when O83 closed: `VectorIndex::status` creates
+            // nothing on any of the five backends, so the capability went
+            // back to the tenant data plane where O68 had put it, and an
+            // ops alias for a route the ops plane no longer carries would
+            // resolve to a pair `OPS_ROUTES` does not allow.
         ];
+        // RESIDUAL, stated rather than found later: this array is a
+        // hand-written literal, and `ops_alias` is a `match` that cannot be
+        // enumerated — so the direction below (every ROUTE has an alias) is
+        // real, while the reverse (every ALIAS is listed here) is not
+        // checked. An alias added to `ops_alias` and not to this array is
+        // simply untested; if it resolved to a pair `OPS_ROUTES` does not
+        // carry, the CLI would 404 against its own vocabulary and nothing
+        // here would say so. That is the same hand-written-universe shape
+        // O67 just removed from `engine_ops`, one function over, and closing
+        // it means making `ops_alias` a table rather than a match.
         let mut resolved = Vec::new();
         for a in aliases {
             let pair = ops_alias(a).unwrap_or_else(|| panic!("{a} has no alias"));
@@ -1511,31 +1725,100 @@ mod tests {
         // The engine's operator-plane subpaths, as `/v1` exposes them. This
         // list is what the two halves are counted against; a new engine
         // capability lands here first and then has to be classified.
-        let engine_ops = [
-            "verify",
-            "anchor",
-            "supersessions",
-            "forget",
-            // **Added with the engine route it names** (ROADMAP O14). This
-            // list is a hand-maintained literal, which means a new `/v1`
-            // operator route absent from it is counted in NEITHER direction
-            // — so the gate whose whole job is to force every capability
-            // into *reachable* or *recorded-as-absent* stays green over one
-            // nobody classified. That is the failure mode it exists to
-            // prevent, reachable through its own inventory.
-            "verify-forgetting",
-            "admission",
-            "retention",
-            "retention/sweep",
-            "trust",
-            "rotate",
-            "drawers",
-            "search",
-            "export",
-            "import",
-            "refine",
-            "history",
-        ];
+        //
+        // **DERIVED from the engine's dispatch since ROADMAP O67**, not a
+        // hand-written literal. The literal's own comment stated its defect
+        // exactly — "a new `/v1` operator route absent from it is counted in
+        // NEITHER direction, so the gate whose whole job is to force every
+        // capability into reachable or recorded-as-absent stays green over
+        // one nobody classified" — and it then happened twice, to
+        // `verify-forgetting` (O14) and to `repair` (M17), each caught by a
+        // human rather than by this test. Measured before the fix: the
+        // literal named 17 of the 28 subpaths `route()` defines.
+        //
+        // Read out of the engine's SOURCE, which is the only route two
+        // crates that deliberately do not link have — the same idiom
+        // `the_orchestrator_and_the_engine_agree_on_every_orch_variable`
+        // uses on `parity.rs`.
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../undercroft-cli/src/tenant.rs"
+        );
+        let src = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("cannot read the engine dispatch at {path}: {e}"));
+        // Matching `("GET", &["v1", "vaults", id, "stats", "history"]) =>`
+        // and taking everything after the vault id as the subpath. A `{}`
+        // path parameter is a binding rather than a literal in that match,
+        // so it reaches us unquoted; it becomes `_`, which is how both
+        // inventories below already spell `kg/canonical/{key}`.
+        let mut engine_ops: Vec<String> = Vec::new();
+        for line in src.lines() {
+            let line = line.trim();
+            let Some(rest) = line.strip_prefix("(\"") else {
+                continue;
+            };
+            let Some((_verb, rest)) = rest.split_once("\", &[") else {
+                continue;
+            };
+            let Some((args, _)) = rest.split_once(']') else {
+                continue;
+            };
+            let segs: Vec<&str> = args.split(',').map(|s| s.trim()).collect();
+            // `["v1", "vaults", id, …]` — anything shorter is the vault
+            // collection or its root, which is lifecycle, not a subpath.
+            if segs.len() < 4 || segs[0] != "\"v1\"" || segs[1] != "\"vaults\"" {
+                continue;
+            }
+            let sub: Vec<String> = segs[3..]
+                .iter()
+                .map(|s| {
+                    s.strip_prefix('"')
+                        .and_then(|s| s.strip_suffix('"'))
+                        .unwrap_or("_")
+                        .to_string()
+                })
+                .collect();
+            let sub = sub.join("/");
+            if !engine_ops.contains(&sub) {
+                engine_ops.push(sub);
+            }
+        }
+        // PREMISE. An extractor that read nothing agrees with any inventory,
+        // which is the failure this whole file is about. `route()` has had
+        // dozens of per-vault arms for its whole life; the count was 28 when
+        // this arm was written, and the floor is deliberately below it so an
+        // added route does not fail the premise instead of the check.
+        assert!(
+            engine_ops.len() > 20,
+            "premise: read {} per-vault subpath(s) out of {path}; the dispatch \
+             has dozens. The match block moved or was reshaped, and a broken \
+             extractor silently shrinks the universe to nothing",
+            engine_ops.len()
+        );
+        let engine_ops: Vec<&str> = engine_ops.iter().map(|s| s.as_str()).collect();
+
+        // **The THIRD category, and it is DERIVED too.** Roughly half of what
+        // the dispatch defines is not operator business at all: a tenant's
+        // own drawers, search, stats, taxonomy and knowledge-graph reads
+        // travel on the `/t/*` data plane under the tenant's own token.
+        // Recording each of those as "deliberately absent from the ops plane"
+        // would be true and useless, and would bury the entries that mean
+        // something. `data_subpath_ok` ALREADY defines that set, so it is
+        // asked rather than restated — a second copy is a second place for
+        // the two to disagree.
+        let via_data_plane = |cap: &str| data_subpath_ok(&cap.replace('_', "x"));
+        let data: std::collections::BTreeSet<&str> = engine_ops
+            .iter()
+            .copied()
+            .filter(|c| via_data_plane(c))
+            .collect();
+        assert!(
+            data.len() > 3,
+            "premise: the data-plane partition found {} subpath(s). A broken \
+             `data_subpath_ok` reclassifies every tenant read as unexamined \
+             and this gate then reports what a fully-classified tree reports",
+            data.len()
+        );
         let reachable: std::collections::BTreeSet<&str> =
             OPS_ROUTES.iter().map(|(_, p)| *p).collect();
         let absent: std::collections::BTreeSet<&str> =
@@ -1546,14 +1829,25 @@ mod tests {
             reachable.len(),
             absent.len()
         );
-        for cap in engine_ops {
+        // **A THREE-WAY partition, and every capability lands in exactly
+        // one part.** Before O67 there were two parts and a hand-written
+        // universe, so a capability in none of them was simply not looked at.
+        for cap in &engine_ops {
             let r = reachable.contains(cap);
             let a = absent.contains(cap);
+            let d = data.contains(cap);
             assert!(
-                r || a,
-                "{cap} is an engine operator capability that the ops plane neither reaches nor records as deliberately absent. Say which — an omission and a boundary look identical from outside."
+                r || a || d,
+                "{cap} is an engine capability the control plane neither reaches on the ops plane, records as deliberately absent from it, nor carries on the tenant data plane. Say which — an omission and a boundary look identical from outside, and this is how `kg/authority` came to be drivable from no door at all in a fleet."
             );
-            assert!(!(r && a), "{cap} is both reachable and recorded absent");
+            assert!(
+                !(r && a),
+                "{cap} is both reachable on the ops plane and recorded absent from it"
+            );
+            assert!(
+                !(r && d),
+                "{cap} is on the ops plane AND the tenant data plane. That is not a tidiness complaint: the two carry different tokens, and a capability reachable with an admin bearer and a tenant token has two different answers to who may drive it"
+            );
         }
         // And every recorded absence carries a reason, not an empty string.
         for (cap, why) in OPS_DELIBERATELY_ABSENT {
@@ -1564,6 +1858,15 @@ mod tests {
             assert!(
                 engine_ops.contains(cap),
                 "{cap} is recorded absent but is not an engine capability — a stale entry reads as a boundary being enforced"
+            );
+        }
+        // Same direction for the reachable half, which nothing checked: a row
+        // in `OPS_ROUTES` naming a subpath the engine no longer dispatches
+        // forwards to a 404 while reading as a live capability.
+        for (_verb, cap) in OPS_ROUTES {
+            assert!(
+                engine_ops.contains(cap),
+                "{cap} is forwarded by the ops plane but is not a subpath the engine dispatches — the proxy would relay a 404 from a route that reads as reachable here"
             );
         }
     }
@@ -2024,6 +2327,29 @@ mod tests {
         assert!(
             said.contains("UNDERCROFT_ORCH_KEY"),
             "the refusal names the remedy: {said}"
+        );
+        // **And it carries the CLASS** (ROADMAP M20). This test asserted the
+        // status and the message and never the marker, so it passed for the
+        // whole time the control plane could not state its own integrity
+        // verdict — 409 alone does not mean integrity here any more than it
+        // does on the engine, because `Conflict` is 409 too. A caller keying
+        // on the status would page on an ordinary conflict.
+        assert!(
+            said.contains(r#""class":"integrity""#),
+            "the control plane must state its OWN integrity verdict the way it \
+             already reads an engine's: {said}"
+        );
+
+        // The premise for that assertion, and the half that makes it mean
+        // something: a NON-integrity failure must NOT carry the marker.
+        // Without this, `class` on every response would satisfy the line
+        // above while destroying the distinction it exists to draw.
+        let conflict = admin_plane(&o, &Method::Delete, "/admin/instances/ghost", b"");
+        let mut plain = String::new();
+        conflict.into_reader().read_to_string(&mut plain).unwrap();
+        assert!(
+            !plain.contains("integrity"),
+            "an ordinary state failure must not be marked as a tamper verdict: {plain}"
         );
     }
 

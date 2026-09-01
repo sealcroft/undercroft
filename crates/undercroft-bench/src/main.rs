@@ -51,6 +51,12 @@ enum Command {
         /// Skip the first N questions (for sharded parallel runs)
         #[arg(long, default_value_t = 0)]
         skip: usize,
+        /// EXPERIMENT ONLY (ROADMAP O77): soft per-room cap on selection.
+        /// Absent = the shipped default, pure score order. Exists so the
+        /// cap can be SWEPT rather than argued about — the -5.6pp figure
+        /// the doctrine cites was one run at one cap value with no sweep.
+        #[arg(long)]
+        room_cap: Option<usize>,
         /// Report recall/ndcg at this k
         #[arg(short = 'k', long, default_value_t = 5)]
         k: usize,
@@ -265,6 +271,30 @@ enum Command {
         #[arg(long)]
         dataset: String,
     },
+    /// What a KG receipt walk COSTS, and which half of it is load-bearing
+    /// (ROADMAP O67). `kg_verify_receipts` decides two different things per
+    /// fact: whether the receipt was FORGED, which is one HMAC over
+    /// `receipt_canonical` and reads no drawer, and whether the cited source
+    /// has since CHANGED, which decrypts and HMAC-verifies the whole drawer.
+    /// Only the first decides `ok` — the field a scripted operator classifies
+    /// a 200 on — and the second is what makes the route O(corpus) per call.
+    ///
+    /// Deterministic and self-contained: no dataset, no LLM. That matters
+    /// because `refine` and this harness are the ONLY producers of receipted
+    /// facts in the tree, so before this instrument existed the route's cost
+    /// could not be exercised by any test at any scale — a 1-drawer e2e was
+    /// the whole of its coverage.
+    Receiptscale {
+        /// Facts to receipt, one per drawer. Comma-separated for a sweep.
+        #[arg(long, default_value = "500,2000,8000")]
+        facts: String,
+        #[arg(long, default_value = "sealed")]
+        level: String,
+        /// Repeat each timed walk this many times and report the median, so
+        /// one slow page-cache miss is not the measurement.
+        #[arg(long, default_value_t = 3)]
+        repeats: usize,
+    },
     /// Deterministic self-contained benchmark (no dataset needed)
     Synth {
         /// Number of fact documents
@@ -341,6 +371,12 @@ enum Command {
         /// unpinned repeat records what the host clock drifts.
         #[arg(long)]
         paging_contract: bool,
+        /// EXPERIMENT ONLY (ROADMAP O77): soft per-room cap on selection.
+        /// Absent = the shipped default, pure score order. Exists so the
+        /// cap can be SWEPT rather than argued about — the -5.6pp figure
+        /// the doctrine cites was one run at one cap value with no sweep.
+        #[arg(long)]
+        room_cap: Option<usize>,
     },
     /// Head-to-head vs external memory systems (competitive track C1.1):
     /// the LoCoMo protocol + scorer, driven through a system adapter —
@@ -723,6 +759,7 @@ fn run_longmemeval(
     k: usize,
     level: SecurityLevel,
     skip: usize,
+    room_cap: Option<usize>,
 ) -> Result<()> {
     let raw = std::fs::read_to_string(dataset)
         .with_context(|| format!("reading dataset {}", dataset.display()))?;
@@ -809,7 +846,7 @@ fn run_longmemeval(
                 wing: None,
                 room: None,
                 limit: k * 8,
-                room_cap: None,
+                room_cap,
                 ..Default::default()
             },
         )?;
@@ -1574,6 +1611,114 @@ fn rule_tag(text: &str) -> &'static str {
     } else {
         "statement"
     }
+}
+
+/// ROADMAP O67 — what a KG receipt walk costs, split by which half pays.
+///
+/// The route was put on the tenant data plane after measuring it against a
+/// vault with an EMPTY graph, where it answered in 4 ms. That is the
+/// empty-set answer, not a measurement, and this instrument exists so the
+/// question cannot be answered that way again.
+fn run_receiptscale(facts: &str, level: SecurityLevel, repeats: usize) -> Result<()> {
+    let repeats = repeats.max(1);
+    let sizes: Vec<usize> = facts
+        .split(',')
+        .filter_map(|s| s.trim().parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .collect();
+    if sizes.is_empty() {
+        anyhow::bail!("--facts needs at least one positive integer");
+    }
+
+    println!("receiptscale — cost of a KG receipt walk, by half (ROADMAP O67)");
+    println!("level: {level:?}   repeats: {repeats} (median reported)");
+    println!();
+    println!(
+        "{:>8}  {:>12}  {:>12}  {:>10}  {:>10}",
+        "facts", "full ms", "tamper ms", "full us/f", "tamp us/f"
+    );
+
+    for &n in &sizes {
+        let (_tmp, mut store) = fresh_store(level)?;
+
+        // One drawer per fact, so the walk's `get` has a real row to decrypt
+        // and the corpus grows with the graph — which is the shape a refined
+        // corpus actually has.
+        let mut batch: Vec<Drawer> = Vec::with_capacity(n);
+        for i in 0..n {
+            batch.push(Drawer::new(
+                "bench",
+                "notes",
+                format!(
+                    "on the {i}th review the platform team agreed that service-{} \
+                     would own the migration window and report weekly",
+                    i % 97
+                ),
+                None,
+                i as u32,
+                "bench",
+            ));
+        }
+        store.upsert_many(&batch)?;
+
+        for (i, d) in batch.iter().enumerate() {
+            store.kg_add_receipted(
+                &format!("service-{}", i % 97),
+                "owns",
+                &format!("migration-window-{i}"),
+                None,
+                None,
+                0.9,
+                (&d.id, &d.content),
+                Some("bench"),
+            )?;
+        }
+
+        // PREMISE. A walk over a graph that produced no rows costs nothing
+        // and would report a flattering number — which is exactly the
+        // mistake this instrument was written to stop repeating.
+        let probe = store.kg_verify_receipts()?;
+        anyhow::ensure!(
+            probe.len() >= n,
+            "premise: the walk returned {} row(s) for {n} receipted fact(s); \
+             it is measuring an empty or partial graph",
+            probe.len()
+        );
+
+        let mut full = Vec::with_capacity(repeats);
+        let mut tamper = Vec::with_capacity(repeats);
+        for _ in 0..repeats {
+            let t = Instant::now();
+            let rows = store.kg_verify_receipts()?;
+            full.push(t.elapsed().as_secs_f64() * 1000.0);
+            std::hint::black_box(&rows);
+
+            // The other half, in isolation: is any receipt FORGED. This is
+            // what `ok` reports, and it reads no drawer at all.
+            let t = Instant::now();
+            let any = store.kg_any_receipt_forged()?;
+            tamper.push(t.elapsed().as_secs_f64() * 1000.0);
+            std::hint::black_box(any);
+        }
+        full.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        tamper.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let fm = full[full.len() / 2];
+        let tm = tamper[tamper.len() / 2];
+        println!(
+            "{n:>8}  {fm:>12.1}  {tm:>12.1}  {:>10.1}  {:>10.1}",
+            fm * 1000.0 / n as f64,
+            tm * 1000.0 / n as f64
+        );
+    }
+
+    println!();
+    println!("The `full` column is what a caller pays today: one HMAC over the");
+    println!("receipt canonical PLUS one drawer decrypt per fact. The `tamper`");
+    println!("column is the HMAC alone — the half that decides `ok`, which is");
+    println!("the field a scripted operator classifies a 200 on. The drawer");
+    println!("read only separates verified / source_changed / dangling, which");
+    println!("no integrity decision reads.");
+    Ok(())
 }
 
 /// Every dialog turn in a LoCoMo-shaped json, wherever it nests.
@@ -2595,6 +2740,7 @@ fn locomo_eval(
     pool: usize,
     turn_units: bool,
     paging: bool,
+    room_cap: Option<usize>,
 ) -> Result<(f32, u32, CategoryScores, PhaseTiming, GoldRecall)> {
     let mut recall_sum = 0f32;
     let mut evaluated = 0u32;
@@ -2729,7 +2875,7 @@ fn locomo_eval(
                 wing: None,
                 room: None,
                 limit: if pool > 0 { pool } else { k * 6 },
-                room_cap: None,
+                room_cap,
                 ..Default::default()
             };
             let search_started = Instant::now();
@@ -4033,7 +4179,8 @@ fn main() -> Result<()> {
             k,
             level,
             skip,
-        } => run_longmemeval(&dataset, limit, k, level_of(&level), skip),
+            room_cap,
+        } => run_longmemeval(&dataset, limit, k, level_of(&level), skip, room_cap),
         Command::Synth { n, level, queries } => run_synth(n, level_of(&level), queries),
         Command::Pqscale {
             sizes,
@@ -4078,6 +4225,11 @@ fn main() -> Result<()> {
             llm_api,
         } => run_tagcost(&dataset, sample, llm_url.as_deref(), &llm_model, &llm_api),
         Command::Screenfp { dataset } => run_screenfp(&dataset),
+        Command::Receiptscale {
+            facts,
+            level,
+            repeats,
+        } => run_receiptscale(&facts, level_of(&level), repeats),
         Command::Tagvalue {
             keys,
             filler,
@@ -4115,6 +4267,7 @@ fn main() -> Result<()> {
             unit,
             pool,
             paging_contract,
+            room_cap,
         } => {
             let raw = std::fs::read_to_string(&dataset)
                 .with_context(|| format!("reading {}", dataset.display()))?;
@@ -4132,6 +4285,7 @@ fn main() -> Result<()> {
                 pool,
                 unit == "turn",
                 paging_contract,
+                room_cap,
             )?;
             // RAW line carries the exact numerator/denominator so sharded runs
             // (convos [start,end)) sum to the full R@k without rounding drift.
@@ -4516,7 +4670,7 @@ mod tests {
             // fixture too — asserted below, so the contract check itself
             // has coverage rather than existing only when an operator
             // passes the flag.
-            locomo_eval(&[sample], 5, "local", 800, 8000, 0, false, true).unwrap();
+            locomo_eval(&[sample], 5, "local", 800, 8000, 0, false, true, None).unwrap();
         assert_eq!(n, 1, "evidence-free QA must be skipped");
         assert_eq!(recall, 1.0, "evidence session must be retrieved");
         assert_eq!(per_cat.get("1").unwrap().1, 1);

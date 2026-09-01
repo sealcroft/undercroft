@@ -43,9 +43,22 @@ pub(crate) struct RefineOptions<'a> {
     pub fact_room: &'a str,
     /// Read at most this many drawers.
     pub limit: usize,
-    /// Extract and count, write nothing. The graph and the mirror are
+    /// Extract and count, write no FACTS. The graph and the mirror are
     /// both skipped — a dry run must not be half a refinement.
+    ///
+    /// **It does not skip the egress record**, and the distinction is the
+    /// point: a dry run POSTs every selected drawer's plaintext to the same
+    /// endpoint the real run does, so the corpus leaves either way and an
+    /// `egress/refine` trail that omitted half its egresses would not be one
+    /// (ROADMAP O79). The record carries this flag, so the trail says which
+    /// kind of run it was.
     pub dry_run: bool,
+    /// Which surface asked — `"cli"` or `"http"`, as `audit_export` takes.
+    ///
+    /// A REQUIRED field rather than a default, because this module is the
+    /// ONE implementation both surfaces drive and an egress record that
+    /// cannot say who initiated it answers half the operator's question.
+    pub surface: &'a str,
 }
 
 /// Counts only — the caller decides how to render them.
@@ -126,7 +139,7 @@ pub(crate) fn refine(
         .recent(
             opts.wing,
             opts.limit,
-            undercroft_store::Read::Internal(undercroft_store::InternalRead::WritePathLookup),
+            undercroft_store::Read::Internal(undercroft_store::InternalRead::RefineAudited),
         )?
         .into_iter()
         .filter(|d| d.meta.room != opts.fact_room)
@@ -259,6 +272,44 @@ pub(crate) fn refine(
             rep.facts += 1;
         }
     }
+    // **The egress, recorded here — once, at the one exit, on both paths**
+    // (ROADMAP O79). Every drawer above had its plaintext POSTed to
+    // `UNDERCROFT_LLM_URL`; under `UNDERCROFT_READ_AUDIT=chain`, declared for
+    // insider/exfil accounting, this whole loop appended nothing while a
+    // single `GET …/drawers/{id}` appended one record.
+    //
+    // It lives in this module rather than at each call site for the reason
+    // the quarantine refusal above does: this is the one implementation both
+    // surfaces drive, and a per-surface copy is how `/v1` and the CLI came to
+    // build two different vaults from one configuration.
+    //
+    // Recorded AFTER the loop with what was attempted, following
+    // `audit_export` and `index_push`, which both bind their counts after the
+    // fact. A run whose every extraction FAILED still records: the
+    // security-relevant event is that the corpus was aimed at a network
+    // endpoint, not whether the endpoint answered. Residual, shared with
+    // `index_push` and stated rather than discovered: a crash mid-loop leaves
+    // an egress that already happened unrecorded.
+    if store.is_read_only() {
+        // The replica precedent, in as many words as `/v1`'s export path
+        // uses it: a read-only handle must not write, so it serves and SAYS
+        // the egress went unaudited rather than pretending it did not occur.
+        undercroft_obs::diag_warn!(
+            "refine served read-only; egress to {} not chain-audited",
+            llm.destination()
+        );
+    } else {
+        store.audit_refine(
+            opts.surface,
+            &llm.destination(),
+            llm.model(),
+            opts.wing,
+            opts.room,
+            rep.sources,
+            rep.failed as usize,
+            opts.dry_run,
+        )?;
+    }
     Ok(rep)
 }
 
@@ -288,6 +339,7 @@ mod tests {
             fact_room: "facts",
             limit: 100,
             dry_run: false,
+            surface: "test",
         }
     }
 
@@ -311,6 +363,131 @@ mod tests {
             "premise: the screen diverted the poison into the queue"
         );
         (dir, store)
+    }
+
+    /// Count the `egress/refine` rows a store holds.
+    fn egress_records(store: &PalaceStore) -> Vec<String> {
+        store
+            .history(
+                undercroft_store::manage::HistoryScope::Operator,
+                None,
+                500,
+                0,
+            )
+            .unwrap()
+            .into_iter()
+            .map(|r| r.record_id)
+            .filter(|r| r == "egress/refine")
+            .collect()
+    }
+
+    /// **A distillation leaves a chain record, and a DRY RUN leaves the same
+    /// one** (ROADMAP O79).
+    ///
+    /// `refine` reads every selected drawer verbatim and POSTs its plaintext
+    /// to `UNDERCROFT_LLM_URL`. Under `UNDERCROFT_READ_AUDIT=chain` —
+    /// declared for insider/exfil accounting — the whole loop appended ZERO
+    /// records, while the same caller's single `GET …/drawers/{id}` appended
+    /// one. On `dry_run` nothing was written at all, so the corpus left and
+    /// no evidence of it existed anywhere.
+    ///
+    /// Driven through `refine()` itself rather than by calling
+    /// `audit_refine` directly: the defect was that the FUNCTION did not
+    /// record, and a test of the recorder alone passes on both trees. The
+    /// extractor is `dead_llm()`, so every drawer fails — which is the
+    /// deliberate second half of the assertion, because a run that delivered
+    /// nothing still aimed the corpus at a network endpoint, and that is the
+    /// event worth recording.
+    #[test]
+    fn a_refine_records_its_egress_on_both_paths() {
+        for dry in [false, true] {
+            let (_dir, mut store) = seeded();
+            assert!(
+                egress_records(&store).is_empty(),
+                "premise: a fresh vault has no refine egress"
+            );
+            let mut o = opts(None);
+            o.dry_run = dry;
+            let rep = refine(&mut store, &dead_llm(), &o).expect("refine runs");
+            assert!(
+                rep.sources > 0,
+                "premise: there is a drawer to distil, or nothing left the vault \
+                 and the assertion below would pass for the wrong reason"
+            );
+            assert_eq!(
+                rep.failed as usize, rep.sources,
+                "premise: the dead extractor fails every drawer"
+            );
+            assert_eq!(
+                egress_records(&store).len(),
+                1,
+                "exactly one egress/refine record, dry_run={dry}"
+            );
+            assert!(
+                store.verify().unwrap().ok(),
+                "the chain stays green through the egress record"
+            );
+        }
+    }
+
+    /// The record must DISTINGUISH a dry run from a real one, or the trail
+    /// says "the corpus left" twice and cannot say which run wrote facts.
+    ///
+    /// `record_id` is deliberately the same on both — it is a namespace plus
+    /// a subject, not a verdict — so the difference lives in the TAG, which
+    /// is what the chain actually authenticates. Two runs differing only in
+    /// `dry_run` must therefore produce different tags.
+    #[test]
+    fn the_egress_record_tells_a_dry_run_from_a_real_one() {
+        let tag_for = |dry: bool| {
+            let (_dir, mut store) = seeded();
+            store
+                .audit_refine("cli", "http://127.0.0.1:1", "m", None, None, 3, 0, dry)
+                .unwrap();
+            store
+                .history(
+                    undercroft_store::manage::HistoryScope::Operator,
+                    None,
+                    500,
+                    0,
+                )
+                .unwrap()
+                .into_iter()
+                .find(|r| r.record_id == "egress/refine")
+                .expect("the record is there")
+                .tag
+        };
+        assert_ne!(
+            tag_for(true),
+            tag_for(false),
+            "a dry run and a real run must not be indistinguishable in the chain"
+        );
+    }
+
+    /// **A credential in `UNDERCROFT_LLM_URL` never reaches the audit
+    /// record.** The variable is an operator-supplied URL and may carry
+    /// userinfo when pointed at a gateway that demands one; the trail's
+    /// question is which HOST received the corpus.
+    #[test]
+    fn the_destination_label_carries_no_credential() {
+        let c = LlmClient::new(
+            "https://user:sup3rsecret@gateway.example.com/v1",
+            "m",
+            ApiKind::OpenAi,
+        )
+        .unwrap();
+        let d = c.destination();
+        assert!(
+            !d.contains("sup3rsecret") && !d.contains("user"),
+            "the destination label leaked a credential: {d}"
+        );
+        assert!(
+            d.contains("gateway.example.com"),
+            "…and it must still name the host, or it answers nothing: {d}"
+        );
+        // The ordinary case is unchanged — no userinfo, nothing stripped.
+        let plain = LlmClient::new("http://127.0.0.1:11434", "m", ApiKind::Ollama).unwrap();
+        assert_eq!(plain.destination(), "http://127.0.0.1:11434");
     }
 
     /// `undercroft refine --wing quarantine-pending` was a door out of the

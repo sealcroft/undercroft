@@ -147,6 +147,64 @@ impl LlmClient {
         &self.model
     }
 
+    /// Where this client sends, **with any credential stripped** — the
+    /// destination an egress record names (ROADMAP O79).
+    ///
+    /// `UNDERCROFT_LLM_URL` is an operator-supplied URL and may legitimately
+    /// carry userinfo (`https://user:token@gateway/v1`) when pointed at a
+    /// gateway that demands one. The audit trail's question is *which host
+    /// received my corpus*, and a secret is never part of that answer — so
+    /// the authority's userinfo is dropped rather than hashed-and-hoped-about.
+    /// The canonical is HMAC'd rather than stored, which makes this
+    /// belt-and-braces; it is still the right shape, since the rule is about
+    /// what may be ASSEMBLED into an audit record at all.
+    ///
+    /// **The strip is scoped to the AUTHORITY, and that is the whole of the
+    /// correction.** It used to search the entire scheme-stripped remainder
+    /// for the last `@`, which is wrong because `@` is a legal path and query
+    /// character (RFC 3986 pchar): `…/v1/models/llama@latest` reported
+    /// `http://latest`, and `…/v1?contact=ops@example.com` reported
+    /// `https://example.com` — not garbled, but a DIFFERENT and entirely
+    /// plausible host, in the one field whose question is which host received
+    /// the corpus. The value is interpolated into `audit_refine`'s HMAC'd
+    /// canonical, so the chain authenticated a destination that was never
+    /// contacted and an auditor recomputing it from the true configuration
+    /// could not reproduce the tag. It never leaked a credential — it
+    /// over-stripped — so this is audit integrity, not disclosure.
+    ///
+    /// The old reasoning was right and applied to the wrong string: a
+    /// password may itself contain an `@`, so the LAST one *in the authority*
+    /// is the userinfo separator. The authority ends at the first `/`, `?` or
+    /// `#`.
+    ///
+    /// Residual, stated rather than implied: what follows the authority is
+    /// kept verbatim, so a credential an operator put in a PATH or QUERY
+    /// (`?api_key=…`) still reaches the record. That is unchanged behaviour
+    /// and out of this correction's scope — closing it means deciding whether
+    /// an egress destination should be a bare origin, which changes what the
+    /// canonical binds.
+    pub fn destination(&self) -> String {
+        let (scheme, rest) = match self.base.split_once("://") {
+            Some((s, r)) => (s, r),
+            None => ("", self.base.as_str()),
+        };
+        // The authority is what carries userinfo, and it ends at the first
+        // `/`, `?` or `#`. Everything after it is opaque here.
+        let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+        let (authority, tail) = rest.split_at(authority_end);
+        // `rsplit_once` and not `split_once`: a password may itself contain
+        // an `@`, and the LAST one in the authority is the separator.
+        let host = match authority.rsplit_once('@') {
+            Some((_credential, after)) => after,
+            None => authority,
+        };
+        if scheme.is_empty() {
+            format!("{host}{tail}")
+        } else {
+            format!("{scheme}://{host}{tail}")
+        }
+    }
+
     /// One chat completion, deterministic settings (temperature 0).
     pub fn complete(&self, system: &str, user: &str) -> Result<String, LlmError> {
         let (url, body) = match self.kind {
@@ -543,6 +601,90 @@ fn infer_api_kind(base_url: &str) -> ApiKind {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    /// **The destination names the host that received the corpus, and an `@`
+    /// anywhere after the authority must not move it.**
+    ///
+    /// The strip used to search the whole scheme-stripped remainder for the
+    /// last `@`. `@` is a legal path and query character (RFC 3986 pchar), so
+    /// three of the rows below reported a host that was never contacted — and
+    /// the query-string row is the worst, because it does not garble: it
+    /// names `example.com`, a different and entirely plausible host, in the
+    /// field an operator reads to answer *where did my corpus go*. The value
+    /// is interpolated into `audit_refine`'s HMAC'd canonical, so the chain
+    /// authenticated it.
+    ///
+    /// Rows 1, 2 and 5 are the ones that already passed and must keep
+    /// passing: without them this is a test that a rewrite satisfies by
+    /// breaking the ordinary case. Row 5 in particular pins the reasoning the
+    /// old code got right — a password may itself contain an `@`, so the LAST
+    /// one *in the authority* is the separator.
+    #[test]
+    fn a_destination_keeps_its_host_whatever_follows_the_authority() {
+        // (input, expected, what it pins)
+        let cases = [
+            (
+                "http://127.0.0.1:11434",
+                "http://127.0.0.1:11434",
+                "the ordinary local runtime, untouched",
+            ),
+            (
+                "https://user:sup3rsecret@gateway.example.com/v1",
+                "https://gateway.example.com/v1",
+                "userinfo stripped, host and path kept",
+            ),
+            (
+                "http://127.0.0.1:11434/v1/models/llama@latest",
+                "http://127.0.0.1:11434/v1/models/llama@latest",
+                "an @ in the PATH reported `http://latest` before",
+            ),
+            (
+                "https://gateway.example.com/v1?contact=ops@example.com",
+                "https://gateway.example.com/v1?contact=ops@example.com",
+                "an @ in the QUERY named a different, plausible host before",
+            ),
+            (
+                "https://user:p@ss@host.example.com/v1",
+                "https://host.example.com/v1",
+                "a password containing @: the LAST one in the authority wins",
+            ),
+            (
+                "https://user:secret@host.example.com/a@b",
+                "https://host.example.com/a@b",
+                "both at once: strip the credential, keep the host",
+            ),
+        ];
+        for (input, want, why) in cases {
+            let c = LlmClient::new(input, "m", ApiKind::OpenAi).expect("loopback/TLS is fine here");
+            assert_eq!(c.destination(), want, "{input}: {why}");
+        }
+    }
+
+    /// The half the row table cannot state: no case may emit the credential.
+    ///
+    /// Asserted separately because it is a different claim — the table above
+    /// pins exact strings, and a future rewrite could satisfy every row while
+    /// reintroducing userinfo on a shape nobody thought to tabulate.
+    #[test]
+    fn no_destination_carries_a_credential() {
+        for input in [
+            "https://user:sup3rsecret@gateway.example.com/v1",
+            "https://user:p@ss@host.example.com/v1",
+            "https://user:secret@host.example.com/a@b",
+        ] {
+            let d = LlmClient::new(input, "m", ApiKind::OpenAi)
+                .expect("constructs")
+                .destination();
+            assert!(
+                !d.contains("sup3rsecret") && !d.contains("secret") && !d.contains("user:"),
+                "the destination label leaked a credential: {input} -> {d}"
+            );
+            assert!(
+                d.contains("example.com"),
+                "…and it must still name the host, or it answers nothing: {d}"
+            );
+        }
+    }
 
     /// Stub LLM server: answers every chat request with a canned body.
     fn stub_server(reply: &'static str, kind: ApiKind) -> (String, Arc<tiny_http::Server>) {

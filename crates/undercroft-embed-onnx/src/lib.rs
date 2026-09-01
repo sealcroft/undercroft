@@ -180,11 +180,11 @@ pub fn from_env() -> Result<OnnxEmbedder, OnnxError> {
             "{}",
             undercroft_core::config::undeclared_model_identity(
                 "UNDERCROFT_ONNX_NAME",
-                "onnx-sentence",
+                undercroft_core::config::SHARED_MODEL_IDENTITY,
                 &model,
             )
         );
-        "onnx-sentence".into()
+        undercroft_core::config::SHARED_MODEL_IDENTITY.into()
     });
     OnnxEmbedder::load(
         std::path::Path::new(&model),

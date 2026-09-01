@@ -65,6 +65,316 @@ so rather than implying it checked them.
 
 ---
 
+## 1.2.0 (unreleased)
+
+### `UNDERCROFT_INDEX_CA` is read ONCE per process for pgvector, so rotating the file needs a restart
+
+**Who is affected:** a deployment using the **pgvector** index backend with a
+declared `UNDERCROFT_INDEX_CA`, that replaces that PEM on disk and expects
+running processes to pick it up. Nobody else: the other four backends
+(qdrant, chroma, milvus, weaviate) already behaved this way, and a deployment
+that restarts to rotate is unaffected.
+
+pgvector speaks the postgres wire protocol rather than HTTP, so it could not
+use `agent_from_env` — the constructor every other hop goes through. It read
+the variable with a bare `std::env::var` and built its own TLS config **per
+connection**, which meant the PEM was re-read and re-parsed every time, and
+`index/status` is reachable once per request. That is the only hop in the
+workspace where a mid-flight CA swap ever took effect.
+
+It now goes through the shared resolver, which caches the resolution once per
+process — the restart-to-rotate property the policy has always documented,
+and which the other four backends already had.
+
+**Symptom if it bites you:** after replacing the CA file, pgvector index
+operations keep trusting the OLD root until the process restarts. If the old
+root expires first, those hops begin failing TLS while a valid CA sits on
+disk.
+
+**Fix:** restart the process after replacing the file. There is no flag; the
+alternative is re-reading a trust root per connection, which the policy calls
+silent un-pinning by another name.
+
+**Two related tightenings on the same variable**, both making pgvector match
+the other four rather than changing a documented contract. The value is now
+**trimmed**, so a path with a trailing newline (`UNDERCROFT_INDEX_CA=$(cat
+…)`) works where it previously failed to open. And an **empty or
+whitespace-only** value now refuses with a typed error naming the variable,
+where it previously failed with a confusing file-not-found. Neither can turn
+a working deployment into a broken one.
+
+`undercroft config check` validates the variable, but **cannot detect this
+one**: the caching is runtime behaviour, not a malformed declaration. That is
+stated rather than implied.
+
+### A 401 from `serve-http` is now JSON, and every 401 carries `WWW-Authenticate`
+
+**Who is affected:** a client that string-matches the literal body
+`unauthorized`, or that assumes a `text/plain` 401, from `serve-http`'s
+transport gate. The STATUS is unchanged (401), the body still says the same
+single word, and nothing new is disclosed — only the envelope moved.
+
+`serve-http`'s two gate sites (the palace bearer, and the per-vault transport
+assertion in front of `/mcp`) answered with a bare `text/plain` body and **no
+headers at all**. Everything one layer deeper — every error raised inside
+`/v1` — answered `application/json`. So a single endpoint returned two content
+types depending on which layer rejected the caller: a bad bearer gave text, a
+bad vault gave JSON, and a JSON client could not predict which.
+
+They now answer `{"error":"unauthorized"}` with `Content-Type:
+application/json`, which is what the engine's own `/v1` errors and the
+orchestrator's `/t/*` and `/admin/*` refusals have always done. This is the
+outlier being corrected, not a new convention.
+
+Separately, **no 401 anywhere in this tree sent `WWW-Authenticate`**, which
+RFC 9110 §11.6.1 makes a MUST. Every 401 on both binaries now sends
+`WWW-Authenticate: Bearer`. Some HTTP stacks will not retry with credentials
+without it, so this can only turn a previously-stuck client into a working
+one.
+
+**What did NOT change, deliberately:** the body carries no reason and no
+`class`. `docs/remote-server.md`'s "Any failure is a bare 401 — the reason is
+logged server-side, never returned" is a documented contract and is pinned by
+test on both the unit and e2e sides. The orchestrator's dedicated metrics
+listener still answers `text/plain`, because an error should match the success
+format of the endpoint being called and that endpoint serves Prometheus text.
+
+**What to do:** if you match on the body, parse it as JSON and read `error`,
+or match on the status alone. Nothing else changes.
+
+### `undercroft backup restore` now REFUSES while the vault is in use (exit 1)
+
+**Who is affected:** any script or runbook that restores a backup without
+first stopping `serve-http` or `serve-mcp` on that vault.
+
+It used to succeed at exit 0. It also **destroyed the vault**. `restore`
+unlinks the vault directory and copies the backup over it; a running server
+keeps its file handles on the unlinked database, so it goes on serving and
+WRITING a file that no longer has a name, and the manifest it later anchors
+describes a database that is not there. The rollback detector then fires —
+correctly — on evidence the restore manufactured, and every later open reports
+`vault manifest failed integrity verification — possible tampering` at exit 2.
+Writes the server acknowledged with `{"created":true}` in that window are gone.
+
+So a pipeline that "worked" was silently producing an unopenable vault. It now
+takes an exclusive hold across the destroy-and-copy, or refuses:
+
+```
+Error: vault 'x' is in use by another process — refusing to restore over it.
+```
+
+**The fix:** stop the server, run the restore, start it again. There is no
+override flag, deliberately. The obvious worry is a false refusal stranding an
+operator mid-incident, and it was measured and does not happen: SQLite's locks
+belong to the PROCESS, so a server killed with SIGKILL leaves stale `-wal` and
+`-shm` files that hold nothing, and the restore proceeds normally. The refusal
+fires only while something genuinely has the vault open — which is exactly
+when a restore must not run.
+
+**Detectable before you upgrade?** No, and that is worth stating plainly:
+this is a behaviour change on a command, not a declaration, so
+`undercroft config check` cannot see it. Grep your runbooks and cron entries
+for `backup restore` and confirm each one stops the server first.
+
+### `undercroft-orchestrator instance-list` now exits 2 on an unopenable credential blob
+
+**Who is affected:** any script that runs `instance-list` and checks its exit
+code — a health cron, a compliance job, a CI step.
+
+It used to exit **0** whenever a tenant's sealed credential blob would not open
+under `UNDERCROFT_ORCH_KEY`. The row printed `refused=…` and the command
+reported success, so a wrong or rotated key, or a tampered blob, read as a
+healthy fleet. That is the control plane's own tamper verdict, and
+`state.rs` calls it "a tamper verdict or a wrong key, never a transient
+condition".
+
+It now exits **2** — this project's integrity code, on every command — while
+still listing every instance, so nothing is hidden either way.
+
+**Action:** if a script treats a non-zero `instance-list` as an outage, teach
+it the difference. **Exit 1 is a run failure** (a bad CA pin, a missing
+database); **exit 2 is an integrity verdict** and should page someone. If you
+see exit 2 immediately after rotating `UNDERCROFT_ORCH_KEY`, the blobs were
+sealed under the old key — that is the check working.
+
+### The `unlabeled` exclusion count on a search response excludes what the search already excluded
+
+**Who is affected:** anyone reading `unlabeled` from a `kind`-filtered search
+on any surface, or alerting on it.
+
+It counted every drawer with no declared `kind` in the wing/room scope — including
+drawers in the reserved review wing and in wings below the trust floor, which
+the search had already removed **before** candidates were drawn. So it reported
+rows the kind filter never saw as rows the kind filter passed over.
+
+The number can only go DOWN, and only on vaults that have quarantined drawers
+or a declared trust floor. On every other vault it is unchanged.
+
+**Action:** none, unless you have a threshold tuned to the old number.
+
+### `undercroft vault list` now exits 2 when a vault will not open
+
+**Who is affected:** any script that runs `vault list` and checks its exit code.
+
+Two changes land together and the pair is the point. It used to ABORT at the
+first vault that would not open, so one damaged vault hid every vault after it
+in the listing. It now lists them all, names the one it could not open
+(`<name>  unavailable: …`), and exits **2** if that failure was an integrity
+verdict — a manifest that fails its own MAC, or a database a manifest describes
+that is not there.
+
+**Action:** as above — exit 1 is a run failure, exit 2 should page someone. A
+script that treated any non-zero as fatal keeps working; one that parsed the
+listing now sees more lines than before, never fewer.
+
+### The embeddings-TLS recipe pins a readable path
+
+**Who is affected:** anyone following the served-embedder recipe in
+`docs/EMBEDDERS.md`, `CLAUDE.md` or `docker-compose.yml` **with the `cli` or
+`mcp` service**. With `bench` it always worked, which is why this went
+unnoticed.
+
+Those services build the runtime stage and run as uid 10001; `bench` and the
+other test services build the builder stage and run as root. The recipe
+pinned `UNDERCROFT_EMBED_CA` inside Caddy's PKI tree, which is root-owned
+`0600` inside `0700` directories because it holds the CA private key — so the
+same recipe started fine or died with `Permission denied (os error 13)`
+depending on which service you picked.
+
+**Action:** run the new export step once, and pin the exported path:
+
+```bash
+docker compose up -d embeddings embeddings-tls
+docker compose run --rm embed-tls-export      # new
+#   -e UNDERCROFT_EMBED_CA=/tls/root.crt      # was /tls/caddy/pki/authorities/local/root.crt
+```
+
+The old path still exists and is still root-only; nothing about the CA
+private key changes. If your client runs as root the old path keeps working,
+so this is not a break — it is a recipe that now works for both.
+
+### The `deploy/observability` stack starts again — it could not, since 1.1.0
+
+**Who is affected:** anyone who ran, or tried to run,
+`deploy/observability/docker-compose.observability.yml`. If you brought it up
+and saw an empty Grafana, this was why.
+
+The engine pinned its OTLP trust root at
+`/tls/caddy/pki/authorities/local/root.crt`. Caddy writes that tree as root —
+cert `0600`, directories `0700` — because it also holds the CA private key,
+and the engine image runs as uid 10001. The pin was unreadable, so the engine
+**refused to start** and restart-looped:
+
+```
+Error: the OTLP collector: the declared trust root
+/tls/caddy/pki/authorities/local/root.crt could not be read:
+Permission denied (os error 13)
+```
+
+That refusal is correct and has not changed — the engine never falls back to
+the public roots. What changed is the path: a `tls-export` service now
+publishes the PUBLIC root as `/tls/root.crt` (`0644`) and the engine pins
+that. The CA private key keeps `0600` and never moves.
+
+**Action: none, but destroy the volume if you tried before.** The exporter
+runs on every `up`, so a `docker compose up -d` is enough. If your earlier
+attempt left state you want gone, `docker compose -f
+deploy/observability/docker-compose.observability.yml down -v`.
+
+**If you worked around it** by chmod-ing the PKI tree or running the engine as
+root, undo that: the first exposes the CA private key to anything mounting the
+volume, and both are now unnecessary.
+
+**Two things that look like breakage and are not**, both now in the stack's
+README: a port already in use (Compose **merges** `ports:`, so a naive
+override appends and the collision survives — use `!override`), and the two
+headline gauges being demand-driven, so an idle deployment renders
+`undercroft_drawers` and `undercroft_audit_chain_height` empty until a stats
+call or a stream subscriber touches the vault.
+
+### A sealed vault's live telemetry now carries wing and room names to its authorized subscriber
+
+**Who is affected:** anyone running `--features telemetry` who watches a
+**sealed** vault through `GET /v1/vaults/{id}/stream`, `/stats/history`, or
+the Palace Monitor at `/monitor`. Nothing changes for hmac-only vaults, for
+`/metrics`, or for any default (non-telemetry) build, which emits nothing.
+
+Sealed vaults used to have `wings` blanked in every sample and the wing/room
+dropped from `drawer-saved`, `drawer-quarantined` and `search` frames. They
+now travel on every security level.
+
+**Why this is not a widening of who can see them.** A stream subscription is
+only created after `Tenancy::authorize` — the bearer **and**, when
+`UNDERCROFT_ASSERTION_SECRET` is set, a valid per-vault assertion — and a
+frame is fanned out only to subscribers of that same vault. That caller
+already reads every one of those names from `GET /v1/vaults/{id}/stats` and
+`/taxonomy`. The suppression withheld nothing from an unauthorized party; it
+blinded the vault's owner, who is who the live view exists for.
+
+**What has NOT changed, and is now pinned by its own check:** drawer content,
+offsets into content, and key material never travel on any frame, at any
+level.
+
+**The residual, stated plainly.** A `/v1/…/stats` call re-checks the
+assertion on every request; a stream is authorized **once** and then
+long-lived, so it outlives the window of the assertion that opened it. That
+was already true of every count it carried. If your deployment needs a
+tighter bound, terminate long-lived streams on a schedule at your proxy.
+
+**If you relied on the old behaviour** — e.g. a shared dashboard fed by a
+sealed vault's stream and shown to people who hold the bearer but should not
+see wing names — that arrangement was already leaking those names through
+`/v1/…/stats` to the same holders. Split the bearer, or put the vault behind
+per-vault assertions.
+
+### A tamper frame now names the row it caught and the location that row claims
+
+`hmac-fail` carried only `{vault, surface}`, so the Palace Monitor flashed
+**every** wing on every integrity failure — its branch for lighting a single
+wing read a field nothing ever sent. The frame now carries `id`, `wing`,
+`room` and `unverified: true`.
+
+**Treat the location as a claim, never a finding.** The record's HMAC is what
+just failed, so an offline writer who altered the row could have written that
+location too. It is a lead; `undercroft verify` is the answer, because it
+checks every record rather than believing one. The monitor renders it as
+`UNVERIFIED: claims <wing>/<room>` for exactly this reason.
+
+No action is needed. A consumer that parsed the old two-field frame keeps
+working — the fields are additive.
+
+
+### `POST /v1/vaults/{id}/anchor` now reports a lag its own open closed
+
+**Who is affected:** anyone with a monitoring rule keyed on this route's
+`behind_by`, on a server that anchors a vault it has not previously served.
+Nothing else changes — the CLI is untouched, and the second and later calls to
+any vault answer exactly as before.
+
+`store_for` OPENS a vault the process has not served yet, and that open runs
+the same reconciliation the call does. So the first `POST …/anchor` to such a
+vault healed a real window and then answered `"behind_by": 0` about it, while
+`undercroft vault anchor` reported the same lag correctly — two doors, one
+lag, two answers. The route now reports the open's verdict when THIS request
+caused the open.
+
+| call | before | now |
+|---|---|---|
+| first `POST …/anchor` to a vault the server has not served, with a real lag | `"behind_by": 0` | `"behind_by": <the lag>` |
+| the same call again, handle now cached | `"behind_by": 0` | `"behind_by": 0` (unchanged) |
+| any call on an already-served vault | unchanged | unchanged |
+
+**A rule keyed on `behind_by == 0` may start firing** where it never did —
+which is the point: it was reading a zero that meant "I already fixed it and
+will not say how much", not "there was nothing to fix". A rule keyed on
+`behind_by > 0` will see one alert per vault per server lifetime at most,
+because the value is reported once and not re-announced.
+
+**Nothing to detect before a restart**, and `config check` has no arm for it:
+no declaration changes and no value is refused. It is listed here because the
+number an existing caller reads changes, which is this file's bar rather than
+`config check`'s.
+
 ## 1.1.1 (released 2026-08-19)
 
 ### A tuning declaration that cannot be read is reported, and no longer clamped into one that can
@@ -162,11 +472,21 @@ What they can do is stop a **misconfigured** deployment at start-up, which is
 why every one is listed here and detectable in advance by
 `undercroft config check`.
 
-**FOUR entries are the exception to both sentences above, and they are
+**EIGHT entries are the exception to both sentences above, and they are
 called out here rather than left to be discovered inside them.** Each changes
 what a **running, correctly-configured** deployment returns, so none is a
 start-up refusal and `config check` can see none of them — there is no
 declaration that fails to parse.
+
+**This said FOUR until 2026-08-21, and the closing sentence below it — *"everything
+else in this section is a misconfiguration caught at start-up"* — was therefore
+false about four entries.** Counted rather than recalled: the section holds
+SIXTEEN entries; eight are start-up refusals a bad declaration triggers, and
+eight are not. The four that were missing are the last four bullets below, and
+they are the ones a script notices: two change an EXIT CODE, and one of those
+changes it on **every command**. A reader who ran `config check`, saw exit 0,
+and trusted the closing sentence would have concluded those four could not
+affect them.
 
 * *"`/metrics` carries no vault-labelled series when assertions are
   declared"* — a scrape that parsed those gauges will find them absent. Still
@@ -186,6 +506,18 @@ declaration that fails to parse.
   `UNDERCROFT_ADMISSION=quarantine`, a save whose wing or room name trips the
   detector now quarantines even when its text is clean; and `taxonomy`,
   `list_wings` and `PalaceStats.wings` no longer include the reserved wing.
+
+* *"A cleartext engine URL is refused at registration"* — the refusal happens
+  when `instance-add` runs, not at start-up, so a fleet whose config is
+  perfectly valid still sees a registration it used to accept rejected.
+* *"`instance-remove` of an unknown name exits non-zero"* — an idempotent
+  teardown script that removed the same instance twice used to see 0.
+* *"A forgetting attestation carrying a signature but no sender is refused"* —
+  a client presenting that document sees a refusal where it saw a verdict.
+* *"Usage errors now exit 1 rather than 2"* — **on every command**. A wrapper
+  that treated 2 as this project's integrity verdict was reading a typo as a
+  tamper alarm; correcting that changes what every mistyped invocation
+  returns.
 
 Everything else in this section is a misconfiguration caught at start-up, and
 for those, `config check` exiting 0 against your environment means none of

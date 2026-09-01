@@ -58,6 +58,23 @@ pub(crate) const READ_TOOLS: &[&str] = &[
     "undercroft_kg_timeline",
     "undercroft_kg_stats",
     "undercroft_lookup_canonical",
+    // ROADMAP O68. All four are READS, which is the whole reason they were
+    // drift rather than boundary: `kg_receipts` reports per-fact receipt
+    // verdicts an agent already learns the AGGREGATE of through
+    // `undercroft_verify`, `verify_forgetting` checks a caller-supplied
+    // document and mutates nothing, `kg_rel` is the one kg read shape
+    // neither agent surface had, and `index_status` asks a mirror for a
+    // count — unlike `index push`, which is egress and stays absent.
+    "undercroft_kg_receipts",
+    "undercroft_check_erasure_receipt",
+    "undercroft_kg_rel",
+    // Back here since O83 CLOSED. It briefly moved to `WRITE_TOOLS` because
+    // it ran `ensure`, which CREATES the collection on all five backends —
+    // an honest reclassification of a call that really did write.
+    // `VectorIndex::status` does not create on any of them (probed live, one
+    // by one), so the classification returns to what the capability always
+    // should have been.
+    "undercroft_index_status",
 ];
 
 /// Whether a read-only server must refuse this tool.
@@ -476,6 +493,15 @@ fn tool_definitions() -> Value {
         tool("undercroft_kg_stats", "Knowledge-graph counts.", json!({}), &[]),
         tool("undercroft_lookup_canonical", "The exact-authority door: the one active, approved, canonical fact for a key. Consult BEFORE semantic recall for exact or high-risk asks — an empty answer means no declared truth exists, never a guess.",
             json!({ "key": s("canonical key") }), &["key"]),
+        // --- ROADMAP O68: four reads that were reachable from the CLI alone ---
+        tool("undercroft_kg_rel", "Facts by PREDICATE (the edge label), e.g. every 'reports-to'. Not composable from kg_query, which is entity-shaped.",
+            json!({ "predicate": s("predicate to match"), "as_of": s("ISO date: facts active then") }), &["predicate"]),
+        tool("undercroft_kg_receipts", "Per-fact receipt verdicts against each cited verbatim source (verified|source_changed|dangling|unreceipted|tampered). undercroft_verify reports the AGGREGATE; this says WHICH.",
+            json!({ "problems_only": json!({ "type": "boolean", "description": "omit verified facts" }) }), &[]),
+        tool("undercroft_check_erasure_receipt", "Check a caller-supplied erasure attestation against this vault: verdict is 'verified', or 'recorded' when a key rotation destroyed the replay key — a narrower claim, NOT a tamper verdict.",
+            json!({ "attestation": s("the attestation document, as JSON") }), &["attestation"]),
+        tool("undercroft_index_status", "Remote vector-mirror status: the backend's record count beside the authoritative local one. A read — it creates nothing, and `remote_records` is null when no mirror exists, which is not the same as a mirror holding zero. Pushing is not offered here.",
+            json!({ "backend": s("backend name: qdrant|chroma|pgvector|milvus|weaviate") }), &["backend"]),
         // --- agent diaries ---
         tool("undercroft_diary_write", "Append a diary entry for an agent.",
             json!({ "agent": s("agent name"), "entry": s("diary text") }), &["agent", "entry"]),
@@ -592,7 +618,13 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                 offset,
                 ranked_at: Some(ranked_at),
             };
-            let hits = store.search(query, &opts)?;
+            // ROADMAP O73: the page variant, so the footer below can state
+            // what the engine knows instead of inferring it from the page
+            // being full.
+            let page = store.search_page(query, &opts)?;
+            let deeper = page.truncated;
+            let scope_size = page.scope;
+            let hits = page.hits;
             // What this request's own filters kept out of the competition
             // (docs/LABELS.md) — the unlabeled-kind count and the trust-floor
             // count, measured by the same helper every surface uses. The trust
@@ -704,14 +736,21 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                     h.drawer.content
                 ));
             }
-            // A full page may have more below it; say exactly how to continue.
-            // A short page means the ranking is exhausted and says nothing.
-            if hits.len() == limit {
+            // ROADMAP O73. This used to fire on `hits.len() == limit`, which
+            // is a GUESS: a page that exactly filled and a page that was cut
+            // are indistinguishable after the fact, so a full FINAL page
+            // advertised depth that did not exist. `truncated` is the engine's
+            // own answer, taken before the cut against the admitted ranking.
+            if deeper {
                 let echo = ranked_at
                     .format(&time::format_description::well_known::Rfc3339)
                     .unwrap_or_default();
+                let scope_note = match scope_size {
+                    Some(n) => format!(" (this scope holds {n} drawers)"),
+                    None => String::new(),
+                };
                 out.push_str(&format!(
-                    "— deeper results may exist: repeat this search with offset={} and ranked_at={echo}\n",
+                    "— deeper results EXIST{scope_note}: repeat this search with offset={} and ranked_at={echo}\n",
                     offset + hits.len(),
                 ));
             }
@@ -1029,6 +1068,116 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                 undercroft_store::Read::Returned(undercroft_store::ReadOp::KgTimeline),
             )?;
             Ok(serde_json::to_string_pretty(&tl)?)
+        }
+        // ---- ROADMAP O68 ----
+        "undercroft_kg_rel" => {
+            let predicate = req_str(args, "predicate")?;
+            let facts = store.kg_query_relationship(
+                predicate,
+                opt_str(args, "as_of"),
+                undercroft_store::Read::Returned(undercroft_store::ReadOp::KgQuery),
+            )?;
+            Ok(serde_json::to_string_pretty(&facts)?)
+        }
+        "undercroft_kg_receipts" => {
+            let problems_only = args
+                .get("problems_only")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            let receipts = store.kg_verify_receipts()?;
+            let rows: Vec<serde_json::Value> = receipts
+                .iter()
+                .filter(|r| {
+                    !problems_only
+                        || !matches!(r.verdict, undercroft_store::ReceiptVerdict::Verified)
+                })
+                .map(|r| {
+                    json!({
+                        "triple_id": r.triple_id,
+                        "source_drawer_id": r.source_drawer_id,
+                        // SERDE, not Debug-lowercased. `ReceiptVerdict` is
+                        // `rename_all = "snake_case"`, so `{:?}`.to_lowercase()
+                        // renders `SourceChanged` as `sourcechanged` — a
+                        // spelling no other surface uses and this tool's own
+                        // schema does not advertise. Four of five variants are
+                        // single words and round-trip identically, which is
+                        // why it read as fine: the ONE that diverges is the
+                        // one meaning "the source this fact cites has been
+                        // edited since", so an agent filtering on the
+                        // documented `source_changed` never matched and read a
+                        // drifted citation as sound.
+                        "verdict": serde_json::to_value(&r.verdict)
+                            .unwrap_or_else(|_| json!("unknown")),
+                    })
+                })
+                .collect();
+            // `ok` beside the list, for the reason `/v1` carries it: a
+            // caller exited 0 with a forged citation sitting in the body,
+            // unread, because nothing agreed to read it. The agent surface is
+            // where a caller is least able to re-derive it.
+            let tampered = receipts
+                .iter()
+                .filter(|r| matches!(r.verdict, undercroft_store::ReceiptVerdict::Tampered))
+                .count();
+            Ok(serde_json::to_string_pretty(&json!({
+                "receipts": rows,
+                "ok": tampered == 0,
+                "tampered": tampered,
+            }))?)
+        }
+        "undercroft_check_erasure_receipt" => {
+            // The document is the CALLER's, so a malformed one is THEIR
+            // error and must not read as a tamper verdict.
+            let raw = req_str(args, "attestation")?;
+            let att: undercroft_store::ForgetAttestation =
+                serde_json::from_str(raw).map_err(|e| {
+                    undercroft_store::StoreError::Invalid(format!("not an attestation: {e}"))
+                })?;
+            let verdict = store.verify_forget_attestation(&att)?;
+            // The SAME shape `/v1` answers in, field for field. A first
+            // version of this arm returned `verdict` plus a prose note, and
+            // that is precisely the drift a pre-release audit exists to
+            // catch: `signed` and `sender` are load-bearing, not decoration.
+            // `sender` AND `sig`, never `sig` alone — the sender is the
+            // public key the signature is checked against, so a document
+            // carrying one without the other is attributable to NOBODY, and
+            // an agent that cannot see that field cannot know it.
+            let signed = att.sender.is_some() && att.sig.is_some();
+            let mut out = json!({
+                "verdict": match verdict {
+                    undercroft_store::AttestationVerdict::Verified => "verified",
+                    undercroft_store::AttestationVerdict::Recorded { .. } => "recorded",
+                },
+                "drawers": att.drawers.len(),
+                "signed": signed,
+            });
+            if let undercroft_store::AttestationVerdict::Recorded { rotations_since } = verdict {
+                out["rotations_since"] = json!(rotations_since);
+                // The third verdict is NOT a tamper verdict (O13): the key
+                // that made these tombstones was destroyed by a rotation, so
+                // the replay is unavailable and the preserved audit trail
+                // carries them contiguously instead. A narrower claim.
+                out["keyed_replay"] = json!("unavailable");
+            }
+            if signed {
+                out["sender"] = json!(att.sender);
+            }
+            Ok(serde_json::to_string_pretty(&out)?)
+        }
+        "undercroft_index_status" => {
+            let backend = opt_str(args, "backend").unwrap_or("");
+            let local = store.count()?;
+            let collection = store.index_collection();
+            let mut index = crate::open_index(backend).map_err(|e| {
+                undercroft_store::StoreError::Invalid(format!("index backend: {e}"))
+            })?;
+            let (name, remote) = store.index_status(index.as_mut())?;
+            Ok(serde_json::to_string_pretty(&json!({
+                "backend": name,
+                "collection": collection,
+                "remote_records": remote,
+                "local_records": local,
+            }))?)
         }
         "undercroft_kg_stats" => {
             let st = store.kg_stats()?;

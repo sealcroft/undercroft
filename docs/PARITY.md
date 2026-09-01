@@ -26,7 +26,7 @@ see "License lineage" below), updated 2026-08-05.
 | Backups | `backup create/list/restore` (verifies before snapshot) |
 | Repair | `repair` (fingerprint backfill, re-embed, vacuum, verify) |
 | Export / migrate | `export` (JSONL) + `import` (undercroft & mempalace formats) |
-| MCP stdio server (~35 tools) | 34 tools (daemon/sync/session tools inapplicable — process management moved to the OS). The count is not maintained by hand: `crates/undercroft-cli/src/parity.rs` holds the inventory and the code is counted against it **in both directions**, so a tool added without a line fails the build and a line naming a tool that no longer exists fails too |
+| MCP stdio server (~35 tools) | 38 tools (daemon/sync/session tools inapplicable — process management moved to the OS). The count is not maintained by hand: `crates/undercroft-cli/src/parity.rs` holds the inventory and the code is counted against it **in both directions**, so a tool added without a line fails the build and a line naming a tool that no longer exists fails too |
 | MCP HTTP team server (`serve`) | `serve-http` (bearer token enforced; `--read-only` is a posture on the whole process — both stores opened read-only, the route gate in front of dispatch, failing closed) |
 | Daemon / jobs / start / stop / wait | `daemon run` + systemd/compose units (`deploy/`) — process management belongs to the OS |
 | `tools/render_jsonl.py` | `transcript render` |

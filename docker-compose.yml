@@ -54,8 +54,23 @@ services:
       context: .
       target: test
     entrypoint: ["sh", "-c"]
+    # The default build, then the TELEMETRY build (ROADMAP O84).
+    #
+    # `--all-targets` above lints default members with DEFAULT features, so
+    # everything behind `#[cfg(feature = "telemetry")]` was never linted by
+    # anything: CI runs that one line, and `e2e-telemetry` BUILDS the
+    # telemetry binary without linting it. Two dead one-line wrappers in
+    # `undercroft-obs` survived from O20 and O25 that way — not because they
+    # were hard to see, but because nothing looked.
+    #
+    # Here rather than in a new compose service on `onnx-build`'s precedent:
+    # `lint` already runs in the battery AND as its own CI job, so the check
+    # fails a pull request without adding a matrix leg or an inventory row,
+    # and this service publishes no check count so no figure moves. Both
+    # feature-bearing binaries are covered — the orchestrator has its own
+    # `telemetry` feature (O20) and inherits nothing from the engine.
     command:
-      - "rustup component add rustfmt clippy >/dev/null 2>&1 && cargo fmt --all --check && cargo clippy --all-targets -- -D warnings"
+      - "rustup component add rustfmt clippy >/dev/null 2>&1 && cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo clippy -p undercroft-cli --features telemetry --all-targets -- -D warnings && cargo clippy -p undercroft-orchestrator --features telemetry --all-targets -- -D warnings"
 
   e2e:
     build:
@@ -214,6 +229,38 @@ services:
       - ./deploy:/src/deploy:ro
       - ./tests/obs-config.sh:/src/tests/obs-config.sh:ro
 
+  # The architecture reference, VERIFIED rather than rebuilt (ROADMAP M14).
+  # `architecture/diagrams/` is the single source and everything else there is
+  # derived — the PDFs, the inlined copies in index.html, the heading ids and
+  # the sidebar — but for its whole life NOTHING invoked the script that
+  # derives them. No battery suite, no CI job, no compose service; every
+  # mention in the tree was prose telling a human to remember. So a stale
+  # inlined diagram, a reintroduced dark media query or a hand-added heading
+  # with no id could ship under a fully green battery.
+  #
+  # A stock python image and no build: `--check` only derives and compares
+  # STRINGS. Rendering needs librsvg plus the Noto families, and PDF bytes are
+  # not a stable comparison target, so what it verifies of `pdf/` is coverage
+  # in both directions rather than content — stated in build.sh's header.
+  #
+  # The mount is READ-ONLY, and that is an assertion rather than caution:
+  # `--check` must write nothing, and the old gate's real defect was that it
+  # wrote index.html BEFORE comparing, so a firing check left the file already
+  # mutated. Read-only makes "writes nothing" enforced instead of claimed.
+  # Two verifications over `architecture/`, one service and therefore one CI
+  # leg. `build.sh --check` proves index.html and the PDFs are what diagrams/
+  # derives to; `platform-views/check.py` gates the illustrative parallel set,
+  # which has NO build step — nothing derives those files, so a checker is the
+  # only thing that can keep them honest. Chained with `&&` so the exit code
+  # is the failing one. The mount stays READ-ONLY: both must write nothing,
+  # and the old arch gate's real defect was writing before it compared.
+  arch-check:
+    image: python:3.12-slim
+    working_dir: /a
+    entrypoint: ["sh", "-c", "sh build.sh --check && python3 platform-views/check.py"]
+    volumes:
+      - ./architecture:/a:ro
+
   bench:
     build:
       context: .
@@ -226,13 +273,14 @@ services:
   # (crates/undercroft-llm/src/embed.rs).
   #
   #   docker compose up -d embeddings embeddings-tls
+  #   docker compose run --rm embed-tls-export      # publish the readable CA
   #   docker compose run --rm embed-pull            # once: fetch the model
   #   # NB the volume must be named with the project prefix — a bare
   #   # `undercroft-embed-tls` mounts a fresh empty volume silently:
   #   docker compose run --rm -v undercroft_undercroft-embed-tls:/tls:ro \
   #     -e UNDERCROFT_EMBEDDER=http \
   #     -e UNDERCROFT_EMBED_URL=https://embeddings-tls \
-  #     -e UNDERCROFT_EMBED_CA=/tls/caddy/pki/authorities/local/root.crt \
+  #     -e UNDERCROFT_EMBED_CA=/tls/root.crt \
   #     -e UNDERCROFT_EMBED_MODEL=nomic-embed-text bench
   #
   # Why a container rather than a desktop runtime on the host: everything this
@@ -258,10 +306,13 @@ services:
   # The shipped TLS terminator (deploy/embeddings-tls/Caddyfile): Caddy's
   # internal CA signs a cert for `embeddings-tls`; the CA root lands on
   # the `undercroft-embed-tls` volume at
-  # /data/caddy/pki/authorities/local/root.crt, which clients mount
-  # read-only and PIN via UNDERCROFT_EMBED_CA (the declaration replaces
-  # the public roots — a pin, not an addition). This container is the
-  # only holder of the private key; the engine never needs one.
+  # /data/caddy/pki/authorities/local/root.crt — root-owned 0600 inside
+  # 0700 directories, because that tree also holds the CA PRIVATE key.
+  # Clients therefore pin the copy `embed-tls-export` publishes at
+  # /tls/root.crt (0644) rather than that path, via UNDERCROFT_EMBED_CA
+  # (the declaration replaces the public roots — a pin, not an addition).
+  # This container is the only holder of the private key; the engine never
+  # needs one, and only the certificate is ever exported.
   embeddings-tls:
     image: caddy:2.8
     depends_on:
@@ -269,6 +320,47 @@ services:
     volumes:
       - ./deploy/embeddings-tls/Caddyfile:/etc/caddy/Caddyfile:ro
       - undercroft-embed-tls:/data
+
+  # Export Caddy's PUBLIC CA root to a path any client can read.
+  #
+  # The twin of `tls-export` in deploy/observability (ROADMAP M7/M9). Caddy
+  # writes its whole PKI as root — cert 0600 inside directories at 0700 —
+  # because that tree holds the CA PRIVATE key. Anything running as the
+  # engine image's `USER undercroft` (uid 10001) therefore cannot read a pin
+  # aimed inside it, and refuses to start rather than silently un-pinning.
+  #
+  # That is not hypothetical here: the recipe above is published for
+  # "cli/bench", and of those two `bench` builds the BUILDER stage (root, so
+  # it works) while `cli` builds the RUNTIME stage (uid 10001, so it does
+  # not). One recipe, working or failing by which service you picked, with
+  # nothing saying why.
+  #
+  # Only the certificate is exported; the CA private key keeps its 0600 and
+  # never moves.
+  embed-tls-export:
+    image: alpine:3.20
+    depends_on:
+      - embeddings-tls
+    volumes:
+      - undercroft-embed-tls:/tls
+    # BOUNDED wait: Caddy generates the CA lazily, and an unbounded poll for
+    # a file that may never appear is a hang, not a wait.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        src=/tls/caddy/pki/authorities/local/root.crt
+        i=0
+        while [ ! -s "$$src" ]; do
+          i=$$((i + 1))
+          if [ "$$i" -gt 60 ]; then
+            echo "embed-tls-export: $$src never appeared after 60s" >&2
+            exit 1
+          fi
+          sleep 1
+        done
+        cp "$$src" /tls/root.crt
+        chmod 0644 /tls/root.crt
+        echo "embed-tls-export: published the public CA root as /tls/root.crt (0644)"
 
   # One-time model fetch into the shared volume. Separate from `embeddings` so
   # the download is an explicit act, not a side effect of starting a service.

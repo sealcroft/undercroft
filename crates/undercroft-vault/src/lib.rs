@@ -659,7 +659,11 @@ impl Vault {
             .map_err(|e| VaultError::CorruptManifest(e.to_string()))?;
         if verify_hmac(&self.manifest_key, &m.canonical(), &stored).is_err() {
             undercroft_obs::hmac_verify_failed("manifest");
-            undercroft_obs::event_hmac_fail(self.id(), "manifest");
+            undercroft_obs::event_hmac_fail(
+                self.id(),
+                "manifest",
+                undercroft_obs::TamperSite::default(),
+            );
             return Err(VaultError::ManifestTampered);
         }
         Ok(m.chain_head_hex)
@@ -833,7 +837,11 @@ impl VaultManager {
         if verify_hmac(&vault.manifest_key, &vault.manifest.canonical(), &stored).is_err() {
             let _ = expected;
             undercroft_obs::hmac_verify_failed("manifest");
-            undercroft_obs::event_hmac_fail(vault.id(), "manifest");
+            undercroft_obs::event_hmac_fail(
+                vault.id(),
+                "manifest",
+                undercroft_obs::TamperSite::default(),
+            );
             return Err(VaultError::ManifestTampered);
         }
         // Attach a pending rotation manifest (vault.json.next) for the

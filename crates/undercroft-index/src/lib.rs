@@ -83,6 +83,33 @@ pub trait VectorIndex {
     ) -> Result<Vec<Candidate>, IndexError>;
     fn count(&mut self, collection: &str) -> Result<u64, IndexError>;
     fn delete(&mut self, collection: &str, ids: &[String]) -> Result<(), IndexError>;
+
+    /// **How many rows the mirror holds, or `None` when there is no mirror —
+    /// WITHOUT creating one** (ROADMAP O83).
+    ///
+    /// `index_status` used to be `ensure()` followed by `count()`, and
+    /// `ensure` CREATES: `PUT /collections` on qdrant, a `CREATE EXTENSION`
+    /// and `CREATE TABLE` pair on pgvector, `POST /collections` on chroma,
+    /// milvus and weaviate. Harmless while the only caller was an operator's own CLI;
+    /// O68 then exposed it as a GET on `/v1`, an MCP read tool and a tenant
+    /// data-plane route, so a READ issued DDL against operator
+    /// infrastructure — from a `--read-only` server and from a tenant
+    /// bearer.
+    ///
+    /// **`Option<u64>` is the other half.** With `ensure` running first,
+    /// "no mirror exists" and "the mirror is empty" both answered `0`, so
+    /// the route could not answer the question its own documentation said it
+    /// existed for.
+    ///
+    /// Implementors must not create, and must not report ABSENT for a
+    /// backend they merely could not reach — see [`get_or_absent`], which
+    /// keeps those two apart. Every implementation here was probed against
+    /// the live backend rather than inferred from its neighbour, because
+    /// the five APIs disagree about this in ways documentation does not
+    /// advertise: chroma's collection path takes the NAME (an id 404s) while
+    /// its `/count` needs the ID, and milvus has an explicit
+    /// `collections/has` where the others rely on a 404.
+    fn status(&mut self, collection: &str) -> Result<Option<u64>, IndexError>;
 }
 
 /// The declared trust root for a self-signed backend terminator, as a PIN:
@@ -101,6 +128,35 @@ pub const CA_VAR: &str = "UNDERCROFT_INDEX_CA";
 /// invariant seals vectors at rest for precisely that reason.
 pub(crate) fn backend_agent(base_url: &str) -> Result<ureq::Agent, IndexError> {
     backend_agent_with(base_url, std::time::Duration::from_secs(30))
+}
+
+/// A GET whose **404 means ABSENT** and whose every other failure is still a
+/// failure (ROADMAP O83).
+///
+/// The distinction is the whole point of [`VectorIndex::status`]. *"There is
+/// no mirror"* and *"I could not reach the backend"* are different answers,
+/// and the existing `ensure` implementations conflate them deliberately —
+/// qdrant's is `if exists.is_ok() { return }` and weaviate's the same shape,
+/// so a network blip reads as "absent" and the next line CREATES. That is
+/// harmless when the next step is to create and dishonest when the next step
+/// is to REPORT: it would tell an operator their mirror is gone because a
+/// TLS handshake failed.
+///
+/// Shared because all three HTTP backends have byte-identical `call` error
+/// mapping, and a second copy of this decision is how the two would drift.
+pub(crate) fn get_or_absent(
+    agent: &ureq::Agent,
+    url: &str,
+) -> Result<Option<serde_json::Value>, IndexError> {
+    match agent.get(url).call() {
+        Ok(r) => Ok(Some(r.into_json().unwrap_or(serde_json::Value::Null))),
+        Err(ureq::Error::Status(404, _)) => Ok(None),
+        Err(ureq::Error::Status(code, r)) => Err(IndexError::Http(format!(
+            "GET {url} -> {code}: {}",
+            r.into_string().unwrap_or_default()
+        ))),
+        Err(e) => Err(IndexError::Http(e.to_string())),
+    }
 }
 
 pub(crate) fn backend_agent_with(
@@ -288,6 +344,15 @@ pub mod qdrant {
                 .collect())
         }
 
+        /// Probed against qdrant 1.x: absent -> 404, present -> 200.
+        fn status(&mut self, collection: &str) -> Result<Option<u64>, IndexError> {
+            let url = format!("{}/collections/{collection}", self.base);
+            if super::get_or_absent(&self.agent, &url)?.is_none() {
+                return Ok(None);
+            }
+            self.count(collection).map(Some)
+        }
+
         fn count(&mut self, collection: &str) -> Result<u64, IndexError> {
             let resp = self.call(
                 "POST",
@@ -447,6 +512,33 @@ pub mod chroma {
                 .collect())
         }
 
+        /// **Probed, because reasoning gets this one backwards.** In chroma
+        /// v2 the collection path segment is the NAME — `GET
+        /// /collections/{name}` answers 200 with the id, and the same path
+        /// with an ID answers 404 — while `/count` needs the ID and rejects
+        /// a name with `400 Collection ID is not a valid UUIDv4`. So this is
+        /// two calls, and neither is `POST /collections` with
+        /// `get_or_create: true`, which is what `collection_id` does and
+        /// what made a status call CREATE.
+        fn status(&mut self, collection: &str) -> Result<Option<u64>, IndexError> {
+            let url = format!("{}/collections/{collection}", self.base);
+            let Some(found) = super::get_or_absent(&self.agent, &url)? else {
+                return Ok(None);
+            };
+            let id = found
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| IndexError::BadResponse("collection lookup returned no id".into()))?
+                .to_string();
+            // Cache it: this resolved the same thing `collection_id` would
+            // have, without creating, so a later call need not ask again.
+            self.ids.insert(collection.to_string(), id.clone());
+            let resp = self.call("GET", &format!("/collections/{id}/count"), None)?;
+            resp.as_u64()
+                .map(Some)
+                .ok_or_else(|| IndexError::BadResponse("count not a number".into()))
+        }
+
         fn count(&mut self, collection: &str) -> Result<u64, IndexError> {
             let cid = self
                 .ids
@@ -560,11 +652,18 @@ pub mod pgvector {
                 )));
             }
             let client = if dsn_demands_tls(dsn) {
-                let cfg = match std::env::var(CA_VAR) {
-                    Ok(path) => undercroft_net::pinned_roots_from_file("the remote index", &path)
-                        .map_err(|e| IndexError::Transport(e.to_string()))?,
-                    Err(_) => undercroft_net::webpki_roots(),
-                };
+                // Through the shared resolver, NOT a bare `env::var` here
+                // (ROADMAP O82c). This hop cannot use `agent_from_env` — it
+                // speaks postgres, not HTTP — but it must not therefore
+                // answer the SAME declaration differently from the four
+                // backends that do: `declared_pin` trims and REFUSES a
+                // whitespace-only value, and the resolution is cached per
+                // process. Reading it here re-read the PEM on every
+                // construction, and `index/status` is reachable per request,
+                // so the restart-to-rotate property `pin_from_env` documents
+                // did not hold for the one backend where it mattered most.
+                let cfg = undercroft_net::rustls_config_from_env("the remote index", CA_VAR)
+                    .map_err(|e| IndexError::Transport(e.to_string()))?;
                 let tls = tokio_postgres_rustls::MakeRustlsConnect::new((*cfg).clone());
                 Client::connect(dsn, tls).map_err(|e| IndexError::Pg(e.to_string()))?
             } else {
@@ -691,6 +790,24 @@ pub mod pgvector {
                     score: row.get::<_, f64>(1) as f32,
                 })
                 .collect())
+        }
+
+        /// `to_regclass` is core postgres and answers NULL for an absent
+        /// relation — no `CREATE EXTENSION`, no `CREATE TABLE`. Probed both
+        /// directions against the live server.
+        fn status(&mut self, collection: &str) -> Result<Option<u64>, IndexError> {
+            let table = Self::table(collection);
+            let row = self
+                .client
+                .query_one(
+                    "SELECT to_regclass($1) IS NOT NULL",
+                    &[&format!("public.{table}")],
+                )
+                .map_err(|e| IndexError::Pg(e.to_string()))?;
+            if !row.get::<_, bool>(0) {
+                return Ok(None);
+            }
+            self.count(collection).map(Some)
         }
 
         fn count(&mut self, collection: &str) -> Result<u64, IndexError> {
@@ -823,6 +940,24 @@ pub mod milvus {
                     })
                 })
                 .collect())
+        }
+
+        /// Milvus is the one backend with an EXPLICIT existence call, probed
+        /// live: `POST /v2/vectordb/collections/has` answers
+        /// `{"code":0,"data":{"has":false}}` for an absent name. No 404 to
+        /// interpret, and no create.
+        fn status(&mut self, collection: &str) -> Result<Option<u64>, IndexError> {
+            let resp = self.call("/collections/has", json!({ "collectionName": collection }))?;
+            let has = resp
+                .pointer("/data/has")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| {
+                    IndexError::BadResponse("collections/has returned no `has`".into())
+                })?;
+            if !has {
+                return Ok(None);
+            }
+            self.count(collection).map(Some)
         }
 
         fn count(&mut self, collection: &str) -> Result<u64, IndexError> {
@@ -1017,6 +1152,19 @@ pub mod weaviate {
                     })
                 })
                 .collect())
+        }
+
+        /// Probed live: `GET /v1/schema/{class}` answers 404 for an absent
+        /// class. `ensure` already asks this question and then throws the
+        /// answer away by treating ANY error as absent; this one keeps the
+        /// distinction.
+        fn status(&mut self, collection: &str) -> Result<Option<u64>, IndexError> {
+            let class = Self::class_name(collection);
+            let url = format!("{}/v1/schema/{class}", self.base);
+            if super::get_or_absent(&self.agent, &url)?.is_none() {
+                return Ok(None);
+            }
+            self.count(collection).map(Some)
         }
 
         fn count(&mut self, collection: &str) -> Result<u64, IndexError> {

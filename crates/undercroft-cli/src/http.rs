@@ -49,6 +49,48 @@ fn bearer_matches(header: &str, expected: &str) -> bool {
     presented.len() == expected.len() && bool::from(presented.as_bytes().ct_eq(expected.as_bytes()))
 }
 
+/// The ONE refusal both transport gates answer with (ROADMAP O64).
+///
+/// **Why it is JSON.** These gates front `/mcp` (JSON-RPC) and `/v1` (a JSON
+/// API), and they used to answer with a bare `text/plain` body while every
+/// error raised one layer deeper — inside `Tenancy::handle` — answered
+/// `application/json`. So ONE endpoint returned two content types depending on
+/// which layer rejected the caller, and a JSON client could not predict which:
+/// a bad bearer gave text, a bad vault gave JSON. That is not two subsystems
+/// with their own styles, it is one contract that was not one.
+///
+/// The shape is not invented here. `undercroft-orchestrator` already answers
+/// `/t/*` and `/admin/*` refusals through `err_response` → `{"error": …}` with
+/// `application/json`, and the engine's own `/v1` errors do the same. This
+/// makes the two gate sites follow the pattern the rest of the fleet already
+/// had; it is the outlier being corrected, not a new convention.
+///
+/// **`WWW-Authenticate` is a MUST, and it was absent from the whole tree.**
+/// RFC 9110 §11.6.1: a server generating 401 *must* send a challenge. Without
+/// it a conformant client is not told how to authenticate, and some stacks
+/// will not retry with credentials at all. `Bearer` discloses only the scheme
+/// the caller already used.
+///
+/// **It still says nothing.** The body stays the single word `unauthorized`,
+/// with no `class` and no reason — `docs/remote-server.md`'s "Any failure is a
+/// bare 401 — the reason is logged server-side, never returned" is a documented
+/// contract and this does not touch it. Only the envelope changed.
+///
+/// The engine's `/metrics` shares this listener (the orchestrator gives its
+/// own metrics port a separate one), so a scraper with a bad token now sees a
+/// JSON 401. Harmless: a scraper keys on the status and never reads the body.
+/// Branching on the path here was rejected deliberately — it would make the
+/// authentication gate depend on routing it deliberately runs in front of.
+fn unauthorized(code: u16) -> Response<std::io::Cursor<Vec<u8>>> {
+    let ct =
+        Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).expect("static header");
+    let wa = Header::from_bytes(&b"WWW-Authenticate"[..], &b"Bearer"[..]).expect("static header");
+    Response::from_data(br#"{"error":"unauthorized"}"#.to_vec())
+        .with_status_code(code)
+        .with_header(ct)
+        .with_header(wa)
+}
+
 /// The declared bearer for `/mcp` and `/v1`. `None` when unset — the
 /// documented default, which a non-loopback bind then refuses outright.
 ///
@@ -305,8 +347,7 @@ pub fn serve_http(
                 .map(|h| bearer_matches(h.value.as_str(), expected))
                 .unwrap_or(false);
             if !ok {
-                let _ =
-                    request.respond(Response::from_string("unauthorized").with_status_code(401));
+                let _ = request.respond(unauthorized(401));
                 undercroft_obs::auth_rejected("bearer");
                 undercroft_obs::http_request("unauthorized", 401, start.elapsed());
                 continue;
@@ -365,8 +406,22 @@ pub fn serve_http(
                             undercroft_obs::run_sse(writer, vault);
                         });
                     }
-                    Err(code) => {
-                        let _ = request.respond(Response::from_string("").with_status_code(code));
+                    // Through `/v1`'s ONE error writer (ROADMAP O82a). This
+                    // arm built its own reply — `Response::from_string("")`
+                    // with a status and nothing else — because it is
+                    // intercepted in front of `Tenancy::handle` and so never
+                    // reached `respond`. The cost was not cosmetic: a
+                    // tampered vault answered `409` with
+                    // `{"error":…,"class":"integrity"}` on `…/stats` and a
+                    // bare, bodyless `409` here, and the 401 carried no
+                    // `WWW-Authenticate`, which is the RFC 9110 MUST M43
+                    // closed everywhere its sweep could see. It could not see
+                    // this one: that unit's gate asserts the `unauthorized()`
+                    // HELPER rather than its call sites, and the telemetry
+                    // e2e only ever streams with a valid bearer.
+                    Err(e) => {
+                        let code = e.code;
+                        crate::tenant::respond_err(request, e);
                         undercroft_obs::http_request("v1_stream", code, start.elapsed());
                     }
                 }
@@ -390,8 +445,7 @@ pub fn serve_http(
                 // is set to buy. Unset secret ⇒ this is a no-op.
                 let now = OffsetDateTime::now_utc().unix_timestamp();
                 if let Err(code) = tenancy.assert_transport(handler.vault_id(), &request, now) {
-                    let _ = request
-                        .respond(Response::from_string("unauthorized").with_status_code(code));
+                    let _ = request.respond(unauthorized(code));
                     undercroft_obs::http_request("mcp", code, start.elapsed());
                     continue;
                 }
@@ -441,6 +495,58 @@ pub fn serve_http(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **A 401 from the transport gate is JSON and carries a challenge**
+    /// (ROADMAP O64).
+    ///
+    /// Both halves would have failed before the fix, and they fail
+    /// independently, which is why they are asserted separately rather than
+    /// as one string compare: the body was `text/plain` `unauthorized` with
+    /// NO headers at all, so a JSON client on `/v1` got text on the auth path
+    /// and JSON on every other failure, and RFC 9110 §11.6.1's MUST-send
+    /// challenge was missing from every 401 in the tree.
+    ///
+    /// It also pins what must NOT change. The body stays the single word,
+    /// with no `class` and no reason, because `docs/remote-server.md`
+    /// documents "a bare 401 — the reason is logged server-side, never
+    /// returned". A future edit that helpfully explains WHY the bearer failed
+    /// breaks that contract, and this catches it.
+    #[test]
+    fn a_gate_401_is_json_and_names_its_scheme() {
+        let r = unauthorized(401);
+        assert_eq!(r.status_code().0, 401);
+
+        let hdr = |name: &'static str| {
+            r.headers()
+                .iter()
+                .find(|h| h.field.equiv(name))
+                .map(|h| h.value.as_str().to_string())
+        };
+        assert_eq!(
+            hdr("Content-Type").as_deref(),
+            Some("application/json"),
+            "the gate fronts /mcp and /v1; answering text/plain made ONE \
+             endpoint return two content types depending on which layer \
+             rejected the caller"
+        );
+        assert_eq!(
+            hdr("WWW-Authenticate").as_deref(),
+            Some("Bearer"),
+            "RFC 9110 §11.6.1 makes this a MUST on any 401, and it was absent \
+             from every 401 in this tree"
+        );
+
+        // The body is the contract: one word, no reason, no class.
+        let mut body = Vec::new();
+        let mut rdr = unauthorized(401).into_reader();
+        std::io::Read::read_to_end(&mut rdr, &mut body).expect("read body");
+        let body = String::from_utf8(body).expect("utf-8");
+        assert_eq!(body, r#"{"error":"unauthorized"}"#);
+        assert!(
+            !body.contains("class"),
+            "401 precedes any vault, so it has no vault-scoped class to carry"
+        );
+    }
 
     /// The palace-wide bearer is compared in constant time, and it still
     /// compares the *right thing*.

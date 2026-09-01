@@ -42,6 +42,32 @@ struct Cli {
     #[arg(long, global = true, env = "UNDERCROFT_HOME")]
     data_dir: Option<PathBuf>,
 
+    /// Open every vault READ-ONLY: heal nothing, migrate nothing, write
+    /// nothing. For inspecting a vault you do not want to touch.
+    ///
+    /// ROADMAP M18. A normal open is not passive — R4 records what it does:
+    /// it runs the embedder migration, fast-forwards the manifest anchor,
+    /// rebuilds the FTS index, performs the A10/U12 at-rest migrations, and
+    /// promotes or DELETES a writer's `vault.json.next`, which `CLAUDE.md`
+    /// calls "evidence destruction on the incident runbook's own path". That
+    /// is right for ordinary use and exactly wrong when you are looking at a
+    /// vault BECAUSE something went wrong with it.
+    ///
+    /// `serve-mcp` and `serve-http` have had `--read-only` since R4; no CLI
+    /// command had any way to ask for it, so the surface an operator reaches
+    /// for first during an incident was the one that could not stay off the
+    /// evidence.
+    ///
+    /// A read-only open DETECTS and REPORTS what it declined to heal
+    /// (`PalaceStats.unhealed`) instead of doing it, and runs under
+    /// `PRAGMA query_only=ON` — so a write this flag does not anticipate
+    /// fails loudly rather than happening quietly. A mutating subcommand
+    /// under this flag is therefore refused by SQLite rather than by a
+    /// classifier, which is deliberate: a list of "which commands write"
+    /// maintained by hand is the drift this project keeps closing.
+    #[arg(long, global = true)]
+    read_only: bool,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -1090,8 +1116,29 @@ enum Posture {
     ReadOnly,
 }
 
+impl Cli {
+    /// What `--read-only` means for every open this process performs.
+    ///
+    /// One place, so a command cannot forget it — the same reason
+    /// `serve-http --read-only` decides its posture once in FRONT of dispatch
+    /// rather than per handler.
+    fn posture(&self) -> Posture {
+        if self.read_only {
+            Posture::ReadOnly
+        } else {
+            Posture::ReadWrite
+        }
+    }
+}
+
+/// The posture EVERY ordinary CLI command opens with.
+///
+/// `Posture::ReadWrite` unless `--read-only` was declared (ROADMAP M18). It
+/// was unconditionally read-write, and `Posture::ReadOnly` had exactly two
+/// call sites in this file — both `serve-* --read-only` — so no CLI command
+/// could inspect a vault without healing it.
 fn open_store(cli: &Cli, vault: &str) -> Result<PalaceStore> {
-    open_store_as(cli, vault, Posture::ReadWrite)
+    open_store_as(cli, vault, cli.posture())
 }
 
 fn open_store_as(cli: &Cli, vault: &str, posture: Posture) -> Result<PalaceStore> {
@@ -1112,50 +1159,77 @@ fn open_store_as(cli: &Cli, vault: &str, posture: Posture) -> Result<PalaceStore
         Posture::ReadOnly => PalaceStore::open_read_only(v, e),
         Posture::ReadWrite => PalaceStore::open_with_embedder(v, e),
     };
-    let mut store = match std::env::var("UNDERCROFT_EMBEDDER").as_deref() {
-        Ok("onnx") => {
-            #[cfg(feature = "onnx")]
-            {
-                let embedder = undercroft_embed_onnx::from_env()
-                    .map_err(|e| anyhow::anyhow!("loading ONNX embedder: {e}"))?;
-                open(v, Box::new(embedder))?
-            }
-            #[cfg(not(feature = "onnx"))]
-            bail!(
-                "UNDERCROFT_EMBEDDER=onnx requires a build with the 'onnx' feature \
+    // **A vault's RECORDED identity outranks the declaration** — the same
+    // order `embedder_factory` uses for `/v1`, and the CLI did not have it
+    // (ROADMAP O81). A vault created `external:<name>@<dim>` through
+    // `POST /v1/vaults` was openable on `/v1` and UNOPENABLE here, so
+    // `verify`, `rotate`, `repair`, `backup create`, `export`, `forget` and
+    // `retention sweep` — the whole operator plane — were unreachable for a
+    // vault the multi-tenant server creates and serves. It failed as an
+    // `EmbedderMismatch`, which reads as a corrupted vault rather than as a
+    // surface that cannot open it.
+    //
+    // `recorded_embedder` opens the database read-only to read one meta row,
+    // so this costs one extra open on a path that is about to open it anyway.
+    let external: Option<Box<dyn undercroft_core::embed::Embedder + Send>> =
+        PalaceStore::recorded_embedder(&v)?.and_then(|(name, dim)| {
+            name.strip_prefix("external:").map(|bare| {
+                Box::new(undercroft_core::ExternalEmbedder::new(bare, dim))
+                    as Box<dyn undercroft_core::embed::Embedder + Send>
+            })
+        });
+    // One exit, deliberately: `attach_reranker`, `attach_retrieval` and
+    // `attach_admission_advisor` run below on EVERY opened store, so an early
+    // return here would silently open an external vault with no reranker, no
+    // declared retrieval tier and no admission advisor — and duplicating the
+    // three calls would be a second implementation of one decision.
+    let mut store = match external {
+        Some(e) => open(v, e)?,
+        None => match std::env::var("UNDERCROFT_EMBEDDER").as_deref() {
+            Ok("onnx") => {
+                #[cfg(feature = "onnx")]
+                {
+                    let embedder = undercroft_embed_onnx::from_env()
+                        .map_err(|e| anyhow::anyhow!("loading ONNX embedder: {e}"))?;
+                    open(v, Box::new(embedder))?
+                }
+                #[cfg(not(feature = "onnx"))]
+                bail!(
+                    "UNDERCROFT_EMBEDDER=onnx requires a build with the 'onnx' feature \
                  (cargo build -p undercroft-cli --features onnx)"
-            );
-        }
-        Ok("ort") => {
-            #[cfg(feature = "ort")]
-            {
-                let embedder = undercroft_embed_ort::embedder_from_env()
-                    .map_err(|e| anyhow::anyhow!("loading ORT embedder: {e}"))?;
+                );
+            }
+            Ok("ort") => {
+                #[cfg(feature = "ort")]
+                {
+                    let embedder = undercroft_embed_ort::embedder_from_env()
+                        .map_err(|e| anyhow::anyhow!("loading ORT embedder: {e}"))?;
+                    open(v, Box::new(embedder))?
+                }
+                #[cfg(not(feature = "ort"))]
+                bail!(
+                    "UNDERCROFT_EMBEDDER=ort requires a build with the 'ort' feature \
+                 (cargo build -p undercroft-cli --features ort)"
+                );
+            }
+            // A model served over HTTP — Ollama, llama.cpp server, LM Studio,
+            // vLLM, text-embeddings-inference. No feature gate: the client is
+            // `ureq`, which the LLM crate already links for `refine`.
+            Ok("http") => {
+                let embedder = undercroft_llm::HttpEmbedder::from_env()
+                    .map_err(|e| anyhow::anyhow!("connecting to the embeddings endpoint: {e}"))?;
                 open(v, Box::new(embedder))?
             }
-            #[cfg(not(feature = "ort"))]
-            bail!(
-                "UNDERCROFT_EMBEDDER=ort requires a build with the 'ort' feature \
-                 (cargo build -p undercroft-cli --features ort)"
-            );
-        }
-        // A model served over HTTP — Ollama, llama.cpp server, LM Studio,
-        // vLLM, text-embeddings-inference. No feature gate: the client is
-        // `ureq`, which the LLM crate already links for `refine`.
-        Ok("http") => {
-            let embedder = undercroft_llm::HttpEmbedder::from_env()
-                .map_err(|e| anyhow::anyhow!("connecting to the embeddings endpoint: {e}"))?;
-            open(v, Box::new(embedder))?
-        }
-        Ok("hash") | Ok("") | Err(_) => open(v, Box::new(undercroft_core::HashEmbedder))?,
-        Ok(other) => {
-            // The message comes from the SAME validator `config check` runs,
-            // so the pre-flight and the start-up can never disagree about
-            // what is legal. The named arms above matched every legal value,
-            // so this is an error by construction.
-            bail!(check_embedder(other)
-                .expect_err("every legal embedder name is matched by an arm above"))
-        }
+            Ok("hash") | Ok("") | Err(_) => open(v, Box::new(undercroft_core::HashEmbedder))?,
+            Ok(other) => {
+                // The message comes from the SAME validator `config check` runs,
+                // so the pre-flight and the start-up can never disagree about
+                // what is legal. The named arms above matched every legal value,
+                // so this is an error by construction.
+                bail!(check_embedder(other)
+                    .expect_err("every legal embedder name is matched by an arm above"))
+            }
+        },
     };
     attach_reranker(&mut store)?;
     attach_retrieval(&mut store)?;
@@ -1190,7 +1264,22 @@ pub(crate) fn attach_admission_advisor(store: &mut PalaceStore) -> Result<()> {
 /// opens nothing and makes no outbound call, and loading a model is both.
 pub(crate) fn check_embedder(raw: &str) -> Result<(), String> {
     match raw {
-        "" | "hash" | "http" | "external" => Ok(()),
+        // **`"external"` was in this set and is not a legal declaration**
+        // (ROADMAP O81). `open_store_as` has no arm for it, so its catch-all
+        // did `check_embedder(other).expect_err(...)` on an `Ok` and PANICKED
+        // at exit 101, while `config check` printed "This environment starts"
+        // — one declaration, three answers across three surfaces, and the
+        // pre-flight gave the wrong one for a `(Protects, Checked)` variable
+        // whose whole promise is that it runs the resolver the engine runs.
+        //
+        // It is not merely unimplemented: the declaration form carries no
+        // name and no dimension, so it could not identify a vector space even
+        // if an arm existed. An external vault is reached by its RECORDED
+        // identity (`external:<name>@<dim>`), which the opener below now
+        // consults — never by this variable. Every document already said the
+        // legal set is hash|http|onnx|ort, including this function's own
+        // error string below.
+        "" | "hash" | "http" => Ok(()),
         "onnx" if !cfg!(feature = "onnx") => Err(
             "UNDERCROFT_EMBEDDER=onnx requires a build with the 'onnx' feature \
              (cargo build -p undercroft-cli --features onnx)"
@@ -1346,7 +1435,7 @@ fn attach_reranker(store: &mut PalaceStore) -> Result<()> {
     }
 }
 
-fn open_index(backend: &str) -> Result<Box<dyn undercroft_index::VectorIndex>> {
+pub(crate) fn open_index(backend: &str) -> Result<Box<dyn undercroft_index::VectorIndex>> {
     Ok(undercroft_index::from_env(backend)?)
 }
 
@@ -1765,18 +1854,62 @@ fn run(cli: Cli) -> Result<()> {
             VaultAction::List => {
                 let mgr = manager(&cli)?;
                 let vaults = mgr.list()?;
+                // Vaults whose own stored evidence contradicts itself.
+                // Collected rather than raised inline so the listing
+                // completes, then raised so the exit code is true (M23).
+                let mut integrity: Vec<String> = Vec::new();
                 if vaults.is_empty() {
                     println!("No vaults. Run: undercroft init");
                 }
+                // **This loop BYPASSED the posture entirely** (ROADMAP M18).
+                // It called `mgr.unlock` and `PalaceStore::open` directly
+                // rather than going through `open_store_as`, so listing
+                // performed a full read-write unlock and open on EVERY vault
+                // on the host — including ones the operator was not asking
+                // about. R4 records what that does: promote or delete a
+                // writer's staging manifest, fast-forward the anchor, run the
+                // at-rest migrations. `undercroft vault list` is the most
+                // natural first command during an incident, and it was the
+                // one that touched everything.
                 for name in vaults {
-                    let v = mgr.unlock(&name)?;
-                    let store = PalaceStore::open(v)?;
+                    let store = match open_store_as(&cli, &name, cli.posture()) {
+                        Ok(s) => s,
+                        // A listing must LIST. A vault a read-only role would
+                        // have had to migrate refuses to open that way
+                        // (`ReadOnlyUnmigrated`), and an absent database
+                        // refuses outright — neither is a reason to abandon
+                        // the other vaults, which is what propagating here
+                        // would do. Named, and the walk continues.
+                        Err(e) => {
+                            // **The verdict outlives the loop** (ROADMAP
+                            // M23). Continuing here is right — a listing must
+                            // list, and one bad vault must not hide the rest
+                            // — but M18 shipped ONLY that half, so an
+                            // integrity failure was printed and then swallowed
+                            // and `vault list` exited 0. That is round-four
+                            // #30 verbatim, which M20 had just fixed in the
+                            // orchestrator: I applied "a listing must list"
+                            // and not "the verdict must still be true", in
+                            // the same session that wrote the second rule.
+                            if integrity_verdict(&e) {
+                                integrity.push(name.clone());
+                            }
+                            println!("{name:<20} unavailable: {e}");
+                            continue;
+                        }
+                    };
                     println!(
                         "{:<20} level={:<10} records={}",
                         name,
                         store.vault().level().to_string(),
                         store.count()?
                     );
+                }
+                if !integrity.is_empty() {
+                    anyhow::bail!(undercroft_store::StoreError::Integrity(format!(
+                        "vault(s) whose stored evidence contradicts itself: {}",
+                        integrity.join(", ")
+                    )));
                 }
             }
             VaultAction::Status { name } => {
@@ -2042,8 +2175,18 @@ fn run(cli: Cli) -> Result<()> {
                 offset: *offset,
                 ranked_at: Some(ranked_at),
             };
+            // ROADMAP O73. Only the local path can answer exactly: the page
+            // signals come off the engine's own cut. The remote path ranks
+            // through a backend's candidate loop, so it gets `None` and keeps
+            // the weaker footer below rather than claiming a precision it does
+            // not have.
+            let mut page_deeper: Option<bool> = None;
+            let mut page_scope: Option<usize> = None;
             let hits = if backend == "local" {
-                store.search(query, &opts)?
+                let page = store.search_page(query, &opts)?;
+                page_deeper = Some(page.truncated);
+                page_scope = page.scope;
+                page.hits
             } else {
                 // A remote index answers through the legacy fusion and its own
                 // candidate loop, which consults neither the declared
@@ -2111,16 +2254,30 @@ fn run(cli: Cli) -> Result<()> {
                 // else. See `search::evidence`.
                 println!("   {}", search::evidence(hit));
             }
-            // A full page may have more below it; say exactly how to continue,
-            // clock included. A short page means the ranking is exhausted and
-            // says nothing.
-            if hits.len() == *limit {
+            // ROADMAP O73. `page_deeper` is the engine's own verdict, taken
+            // before the cut against the ADMITTED ranking; `hits.len() ==
+            // limit` is the fallback guess and cannot separate a page that
+            // exactly filled from one that was cut, so it stays only on the
+            // remote path, which has no signal to offer.
+            let more = page_deeper.unwrap_or(hits.len() == *limit);
+            if more {
                 let echo = ranked_at
                     .format(&time::format_description::well_known::Rfc3339)
                     .unwrap_or_default();
+                let certainty = if page_deeper.is_some() {
+                    "EXIST"
+                } else {
+                    "may exist"
+                };
+                let scope_note = match page_scope {
+                    Some(n) => format!(" (this scope holds {n} drawers)"),
+                    None => String::new(),
+                };
                 println!(
-                    "— deeper results may exist: repeat with --offset {} --ranked-at {echo}",
-                    offset + hits.len()
+                    "— deeper results {}: repeat with --offset {} --ranked-at {echo}{}",
+                    certainty,
+                    offset + hits.len(),
+                    scope_note
                 );
             }
         }
@@ -3324,6 +3481,7 @@ fn run(cli: Cli) -> Result<()> {
                 fact_room,
                 limit: if *limit == 0 { 100_000 } else { *limit },
                 dry_run: *dry_run,
+                surface: "cli",
             };
             let rep = refine::refine(&mut store, &llm, &opts)?;
             if rep.sources == 0 {
@@ -3388,13 +3546,31 @@ fn run(cli: Cli) -> Result<()> {
             let st = store.stats()?;
             println!("vault:   {} (level: {})", store.vault().id(), st.level);
             println!("records: {}", st.records);
+            // M4: printed right under `records` and only when non-zero,
+            // because it exists to explain a discrepancy. `records` is the
+            // whole file; the wing list below excludes the review queue, so
+            // without this line the two disagree and nothing says why.
+            if st.quarantined > 0 {
+                println!(
+                    "  of which quarantined: {} (excluded from the wing list below)",
+                    st.quarantined
+                );
+            }
             println!("rooms:   {}", st.rooms);
             println!("tunnels: {}", st.tunnels);
             println!(
                 "kg:      {} triples ({} active)",
                 st.kg.triples, st.kg.active
             );
-            println!("writes:  {}", st.writes);
+            // **`writes` is the chain HEIGHT and has never counted writes
+            // alone** (M1): an export appends a record, and so does every
+            // content-returning read under `UNDERCROFT_READ_AUDIT=chain`.
+            // Both names are printed because both are on the wire and
+            // `writes` is not going away; the label says which is which so
+            // an operator reading this output does not have to know the
+            // history to interpret the number.
+            println!("writes:  {} (audit-chain height)", st.writes);
+            println!("chain records: {}", st.chain_records);
             // The committed audit-chain head. `/v1` and MCP have always
             // carried it and the CLI silently did not — the hand-projection
             // drift, on the struct CLAUDE.md names as the first one it bit.
@@ -3431,6 +3607,19 @@ fn run(cli: Cli) -> Result<()> {
             for note in &st.unhealed {
                 println!("unhealed: {note}");
             }
+            // ROADMAP O72. What the semantic half is actually set to, and
+            // whether anything measured it — an operator reading a gate value
+            // alone cannot tell a probed floor from a shipped constant, and
+            // only one of those means this vault's vector space was examined.
+            println!(
+                "semantic: gate {} · floor {:.3} · {}",
+                match st.semantic.gate {
+                    Some(g) => format!("{g:.3}"),
+                    None => "refused".to_string(),
+                },
+                st.semantic.floor,
+                st.semantic.gate_source
+            );
             println!("wings:");
             for (w, n) in st.wings {
                 println!("  {w:<24} {n}");
@@ -3556,17 +3745,77 @@ fn run(cli: Cli) -> Result<()> {
                     if !src.join("vault.json").exists() {
                         bail!("no backup named {name}");
                     }
-                    let vault_name = name.rsplitn(2, "-20").last().unwrap_or(name).to_string();
+                    // **The vault name comes from the backup's OWN manifest,
+                    // never from parsing its directory name** (ROADMAP O69).
+                    //
+                    // It used to be `name.rsplitn(2, "-20").last()`, which
+                    // splits at the RIGHTMOST "-20" in the directory name.
+                    // For `default-2026-08-21T18-19-28-204777797Z` that is
+                    // inside the NANOSECONDS, so the vault name came out as
+                    // `default-2026-08-21T18-19-28`: the restore then targeted
+                    // a vault that does not exist, took no exclusive hold,
+                    // removed nothing, and created a junk directory — while
+                    // reporting success. The real vault was never restored and
+                    // the operator was told it had been.
+                    //
+                    // It fired whenever the sub-second field began with "20"
+                    // (~1% of restores) and ALWAYS for any vault whose own
+                    // name contains "-20", such as `proj-2024`. Caught by the
+                    // e2e arm added for the exclusive hold, which happened to
+                    // run at such a timestamp — luck, not coverage, which is
+                    // why the arm below now pins the shape instead.
+                    let vault_name = read_backup_vault_id(&src)?;
                     let dst = root.join("vaults").join(&vault_name);
                     if dst.exists() && !force {
                         bail!(
                             "vault '{vault_name}' exists; pass --force to overwrite it with the backup"
                         );
                     }
+                    // **ROADMAP O69.** Hold the vault EXCLUSIVELY across the
+                    // destroy-and-copy, or refuse. Without this, a restore
+                    // beneath a running `serve-http` succeeded at exit 0 and
+                    // destroyed the vault: `remove_dir_all` unlinks the
+                    // database while the server keeps its handles on the
+                    // unlinked inodes, so it serves and WRITES a file that no
+                    // longer has a name, and the manifest it later anchors
+                    // describes a database that is not there. The rollback
+                    // detector then fires — correctly — on evidence the
+                    // restore manufactured, and the vault is unopenable for
+                    // good: `possible tampering`, exit 2, on every later open.
+                    //
+                    // The lock is HELD ACROSS the whole operation rather than
+                    // probed and released, because a probe-then-act leaves a
+                    // window in which a server opens the vault between the
+                    // two. While this connection holds it, another opener
+                    // gets SQLITE_BUSY; once the directory is unlinked the
+                    // lock refers to a dead inode, which is harmless because
+                    // by then there is nothing left to protect.
+                    let _hold = if dst.exists() {
+                        Some(undercroft_store::hold_vault_exclusively(&dst).map_err(|e| {
+                            anyhow::anyhow!(
+                                concat!(
+                                    "vault '{}' is in use by another process — refusing to ",
+                                    "restore over it.
+
+Restoring beneath a running server DESTROYS ",
+                                    "the vault: the server keeps writing to the database file this ",
+                                    "would unlink, and the vault becomes unopenable. Stop the server, ",
+                                    "then retry.
+
+SQLite reported: {}"
+                                ),
+                                vault_name,
+                                e
+                            )
+                        })?)
+                    } else {
+                        None
+                    };
                     if dst.exists() {
                         std::fs::remove_dir_all(&dst)?;
                     }
                     copy_dir(&src, &dst)?;
+                    drop(_hold);
                     println!("Restored {} -> vault '{}'", name, vault_name);
                 }
             }
@@ -3608,7 +3857,17 @@ fn run(cli: Cli) -> Result<()> {
                     let (name, count) = store.index_status(index.as_mut())?;
                     println!("backend:    {name}");
                     println!("collection: {}", store.index_collection());
-                    println!("records:    {count}");
+                    // ROADMAP O83: absent and empty are different answers.
+                    // They were both `0` while this call ran `ensure` first,
+                    // which CREATED the collection it then counted — so the
+                    // command could not report "there is no mirror" because
+                    // asking made one.
+                    match count {
+                        Some(n) => println!("records:    {n}"),
+                        None => println!(
+                            "records:    no mirror — nothing has been pushed to this backend"
+                        ),
+                    }
                     println!("local:      {}", store.count()?);
                 }
             }
@@ -3882,7 +4141,34 @@ fn collect_transcripts(path: &Path) -> Result<Vec<PathBuf>> {
     Ok(out)
 }
 
-fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
+/// The vault id a backup belongs to, read from the manifest INSIDE it.
+///
+/// ROADMAP O69. A backup directory is named `<vault>-<timestamp>`, and
+/// recovering `<vault>` by string-splitting that name is ambiguous in two
+/// ways at once: the timestamp contains the same separator the vault name
+/// does, and a vault name may itself contain it. `vault.json` states the id
+/// outright, so it is read rather than reconstructed — the manifest is the
+/// authority on which vault this is, exactly as it is for everything else.
+pub(crate) fn read_backup_vault_id(src: &Path) -> Result<String> {
+    let raw = std::fs::read_to_string(src.join("vault.json"))
+        .with_context(|| format!("reading {}", src.join("vault.json").display()))?;
+    let v: serde_json::Value = serde_json::from_str(&raw)
+        .with_context(|| format!("parsing {}", src.join("vault.json").display()))?;
+    let id = v
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    if id.is_empty() {
+        bail!(
+            "backup at {} has no vault id in its manifest",
+            src.display()
+        );
+    }
+    undercroft_core::validate_name(id, "vault")?;
+    Ok(id.to_string())
+}
+
+pub(crate) fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
     std::fs::create_dir_all(dst)?;
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;
@@ -3897,7 +4183,7 @@ fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-fn prune_backups(dir: &Path, vault: &str, keep: usize) -> Result<()> {
+pub(crate) fn prune_backups(dir: &Path, vault: &str, keep: usize) -> Result<()> {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return Ok(());
     };
@@ -4043,6 +4329,62 @@ mod tests {
     use super::*;
     use std::ffi::OsString;
     use tempfile::TempDir;
+
+    /// **`config check`'s OK-set and the opener's arms cannot disagree**
+    /// (ROADMAP O81).
+    ///
+    /// `check_embedder` blessed `"external"` while `open_store_as` had no arm
+    /// for it, so the catch-all called `.expect_err()` on an `Ok` and PANICKED
+    /// at exit 101 — while the pre-flight printed "This environment starts."
+    /// One declaration, three answers: `ok` from `config check`, a panic from
+    /// the CLI and `/mcp`, a clean 500 from `/v1`.
+    ///
+    /// This asserts the INVARIANT rather than the one bad string: every value
+    /// the validator accepts must be a value the opener can act on. The
+    /// opener's `hash`/`""`/`Err(_)` arm is total over the rest, so the test
+    /// is that the accepted set is exactly the arms that exist — which is why
+    /// it fails on a future `check_embedder` that grows a spelling nobody
+    /// implemented, not merely on this one.
+    #[test]
+    fn config_check_accepts_only_embedder_names_the_opener_implements() {
+        // The arms `open_store_as` actually has, read off the source so this
+        // cannot drift from the match it describes.
+        let src = include_str!("main.rs");
+        let opener = src
+            .split_once("fn open_store_as")
+            .expect("premise: open_store_as exists")
+            .1;
+        let opener = &opener[..opener
+            .find(
+                "
+}
+",
+            )
+            .unwrap_or(opener.len())];
+        for name in ["", "hash", "http", "onnx", "ort"] {
+            // Feature-gated names are still legal NAMES; `check_embedder`
+            // refuses them with a build hint, which is a different answer
+            // from "unknown".
+            let accepted = check_embedder(name).is_ok()
+                || check_embedder(name)
+                    .unwrap_err()
+                    .contains("requires a build with");
+            assert!(
+                accepted,
+                "{name:?} is an opener arm but check_embedder rejects it"
+            );
+        }
+        // The reverse, which is the direction that panicked: nothing the
+        // validator accepts may be absent from the opener.
+        for name in ["external", "openai", "cohere"] {
+            if check_embedder(name).is_ok() {
+                assert!(
+                    opener.contains(&format!("Ok(\"{name}\")")),
+                    "check_embedder accepts {name:?} but open_store_as has no arm for it, so its catch-all calls .expect_err() on that Ok and PANICS at exit 101 while `config check` reports the environment starts"
+                );
+            }
+        }
+    }
 
     /// **Every advertised subcommand carries its OWN help text, and the
     /// documented two-word `config check` runs.**

@@ -347,7 +347,7 @@ undercroft bundle sign-keygen|sender  # Ed25519 sender-attestation identities (e
 undercroft transcript render <f.jsonl># pretty-print an agent transcript
 undercroft daemon run [--watch --interval --once]  # background auto-save loop
 undercroft hooks claude-code          # auto-save hook settings snippet
-undercroft serve-mcp [--vault]        # MCP stdio server (34 tools)
+undercroft serve-mcp [--vault]        # MCP stdio server (38 tools)
 undercroft serve-mcp --read-only     # ...recall only: every write tool refused,
                                      #    and the vault opened read-only
 undercroft serve-http [--host --port --read-only]  # MCP /mcp + multi-tenant REST /v1
@@ -404,16 +404,16 @@ lag is observable. Design + surface:
 Palace location: `$UNDERCROFT_HOME` (default `~/.undercroft`; `/data` in Docker).
 Passphrase mode: set `UNDERCROFT_PASSPHRASE` before `init` and every command.
 
-## MCP tools (34)
+## MCP tools (38)
 
 | Category | Tools |
 |---|---|
 | Palace core | `save`, `search`, `wake_up`, `verify`, `status`, `history`, `get_closet_index` |
 | Drawers | `get_drawer`, `add_drawer`, `update_drawer`, `delete_drawer`, `list_drawers`, `delete_by_source`, `check_duplicate` |
 | Navigation | `list_wings`, `list_rooms`, `get_taxonomy`, `create_tunnel`, `list_tunnels`, `follow_tunnel`, `delete_tunnel`, `traverse`, `list_hallways` |
-| Knowledge graph | `kg_add`, `kg_query`, `kg_invalidate`, `kg_supersede`, `kg_timeline`, `kg_stats`, `lookup_canonical` |
+| Knowledge graph | `kg_add`, `kg_query`, `kg_invalidate`, `kg_supersede`, `kg_timeline`, `kg_stats`, `lookup_canonical`, `kg_rel`, `kg_receipts` |
 | Agent diaries | `diary_write`, `diary_read`, `list_agents` |
-| Maintenance | `dedup` |
+| Maintenance | `dedup`, `check_erasure_receipt`, `index_status` |
 
 Deliberately **absent** from MCP: admission rulings, wing trust, retention,
 forgetting, key rotation, and **placing a fact on the authority tier** —
@@ -448,7 +448,7 @@ docker compose run --rm obs-config        # alert rules + Alertmanager route (pr
 docker compose run --rm site              # build, assemble and check the website
 docker compose run --rm onnx-build        # compile check for the ONNX embedder feature
 
-bash tests/battery.sh                     # all eight suites, one tree, raw exit codes
+bash tests/battery.sh                     # all ten suites, one tree, raw exit codes
 ```
 
 The e2e suite drives the actual CLI the way a user would — help text, happy

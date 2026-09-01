@@ -43,7 +43,7 @@ use time::{Duration, OffsetDateTime};
 
 use crate::admission::QUARANTINE_WING;
 use crate::forget::ForgetAttestation;
-use crate::{chain_append, PalaceStore, StoreError};
+use crate::{chain_append, Namespace, PalaceStore, StoreError};
 
 /// One declared policy, as listed back to the operator.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -144,10 +144,10 @@ impl PalaceStore {
         let tag = self
             .vault
             .tag(retention_canonical(wing, room, max_age_days, &now).as_slice());
-        let record = if room.is_empty() {
-            format!("retention/{wing}")
+        let rest = if room.is_empty() {
+            wing.to_string()
         } else {
-            format!("retention/{wing}/{room}")
+            format!("{wing}/{room}")
         };
         let tx = self.conn.transaction()?;
         tx.execute(
@@ -158,7 +158,8 @@ impl PalaceStore {
                  assigned_at = excluded.assigned_at",
             params![wing, room, max_age_days, tag.as_slice(), now],
         )?;
-        let (head, writes) = chain_append(&tx, &self.vault, &record, &tag, &now)?;
+        let (head, writes) =
+            chain_append(&tx, &self.vault, Namespace::Retention, &rest, &tag, &now)?;
         tx.commit()?;
         self.vault.anchor_manifest(&head, writes)?;
         Ok(())
@@ -177,14 +178,21 @@ impl PalaceStore {
             )?;
             if n > 0 {
                 let now = now_rfc3339();
-                let record = if room.is_empty() {
-                    format!("retention-clear/{wing}")
+                let rest = if room.is_empty() {
+                    wing.to_string()
                 } else {
-                    format!("retention-clear/{wing}/{room}")
+                    format!("{wing}/{room}")
                 };
                 let canonical = format!("retention-clear\x1f{wing}\x1f{room}\x1f{now}");
                 let tag = self.vault.tag(canonical.as_bytes());
-                let (head, writes) = chain_append(&tx, &self.vault, &record, &tag, &now)?;
+                let (head, writes) = chain_append(
+                    &tx,
+                    &self.vault,
+                    Namespace::RetentionClear,
+                    &rest,
+                    &tag,
+                    &now,
+                )?;
                 tx.commit()?;
                 self.vault.anchor_manifest(&head, writes)?;
             }

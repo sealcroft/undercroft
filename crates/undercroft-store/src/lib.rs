@@ -29,7 +29,9 @@ mod rotate;
 pub use admission::{PendingAdmission, QUARANTINE_WING};
 pub use forget::{AttestationVerdict, ForgetAttestation, MirrorDelete};
 pub use kg::{KgStats, ReceiptStatus, ReceiptVerdict, SupersessionStatus, Triple, TripleExport};
-pub use manage::{DedupReport, DrawerSummary, Hallway, PalaceStats, Tunnel, UpdateOutcome};
+pub use manage::{
+    DedupReport, DrawerSummary, Hallway, Namespace, PalaceStats, Tunnel, UpdateOutcome,
+};
 pub use pqidx::WING_PQ_MIN_DEFAULT;
 pub use remote::PlaintextPush;
 pub use rotate::RotationReport;
@@ -322,6 +324,124 @@ pub fn check_declaration(name: &str, raw: &str) -> Result<Option<String>, String
     }
 }
 
+/// A live EXCLUSIVE hold on one vault's database. Dropping it releases.
+///
+/// Opaque on purpose: the caller needs to keep it alive across an operation,
+/// not to touch the connection. That also keeps `rusqlite` out of the CLI's
+/// dependency list, where a database driver has no business being — this
+/// crate owns SQLite and the lock is SQLite's.
+pub struct VaultHold(
+    // Never read, and that is the point: the VALUE is the lock this
+    // connection holds, and the lock lives exactly as long as the connection
+    // does. Reading it would be meaningless; dropping it is the whole API.
+    #[allow(dead_code)] rusqlite::Connection,
+);
+
+/// Take an exclusive hold on `dir`'s vault database, or say who has it.
+///
+/// **ROADMAP O69.** `backup restore` unlinks a vault directory and copies a
+/// backup over it. Run beneath a live `serve-http` that succeeded at exit 0
+/// and DESTROYED the vault: the server keeps its handles on the unlinked
+/// inodes, so it serves and writes a database with no name, and the manifest
+/// it later anchors describes a file that is not there. The rollback detector
+/// then fires — correctly — on evidence the restore manufactured, and the
+/// vault is unopenable afterwards (`possible tampering`, exit 2).
+///
+/// **Why an exclusive lock detects a holder at all**, given the store runs
+/// WAL precisely so readers and writers do not block each other: an open
+/// connection keeps the `-shm` index mapped and holds a slot in it, and
+/// `locking_mode=EXCLUSIVE` cannot take the file while another connection
+/// does. Measured on a real vault rather than assumed:
+///
+/// * no server running — acquires;
+/// * an **idle** `serve-http` holding the vault — busy, `database is locked`.
+///   Idle is the case that matters: no transaction is open and it is still
+///   detected;
+/// * after that server is **SIGKILLed**, with stale `-shm` and `-wal` left on
+///   disk — acquires.
+///
+/// The third case is why the caller needs no override flag. The standing
+/// objection to refusing is a false positive stranding an operator during an
+/// incident, and it does not occur: SQLite's locks belong to the PROCESS, so
+/// a crashed server releases them and leaves only files. The refusal fires
+/// when someone genuinely holds the vault, which is exactly when a
+/// destructive restore must not proceed.
+pub fn hold_vault_exclusively(dir: &std::path::Path) -> Result<VaultHold, StoreError> {
+    let db = dir.join("palace.db");
+    if !db.exists() {
+        // Opening would CREATE it, which for a directory about to be replaced
+        // is noise; and a vault with no database has no holder to find.
+        return Err(StoreError::Invalid(format!(
+            "vault directory {} has no palace.db",
+            dir.display()
+        )));
+    }
+    let conn = rusqlite::Connection::open(&db)?;
+    // Fail fast. An operator waiting on a silent command is worse off than
+    // one told immediately what holds the vault.
+    let _ = conn.busy_timeout(std::time::Duration::from_millis(500));
+    // **Read the mode back rather than trusting the call.** This was
+    // `let _ = conn.pragma_update(…)`, which discarded the result of the one
+    // statement that makes this function work at all: in WAL mode `BEGIN
+    // EXCLUSIVE` takes only the WRITE lock, and an idle reader holds no write
+    // lock — so without `locking_mode=EXCLUSIVE` the hold stops detecting
+    // precisely the holder the doc above calls "the case that matters", and
+    // `backup restore` goes on to unlink a database a live server is still
+    // writing to. That is M30, the data-loss defect this guard exists to
+    // prevent, returning silently.
+    //
+    // `PRAGMA locking_mode=…` RETURNS the resulting mode, so this applies it
+    // and verifies it in one statement. Asking whether the call "succeeded"
+    // is the weaker question and the wrong shape besides: a pragma that
+    // yields a row is not an `execute`, so a driver is entitled to report an
+    // error for a statement that nonetheless took effect. The MODE is the
+    // observable; ask for it.
+    let mode: String = conn.query_row("PRAGMA locking_mode = EXCLUSIVE", [], |r| r.get(0))?;
+    if !mode.eq_ignore_ascii_case("exclusive") {
+        return Err(StoreError::Invalid(format!(
+            "could not put {} into exclusive locking mode (sqlite reports {mode:?}). \
+             Refusing rather than proceeding: without it this hold cannot see an idle \
+             reader, and the operation it guards replaces the vault directory",
+            db.display()
+        )));
+    }
+    conn.execute_batch("BEGIN EXCLUSIVE")?;
+    Ok(VaultHold(conn))
+}
+
+/// `UNDERCROFT_PASSPHRASE`: derive the master key with Argon2id, so no key
+/// material is written to disk at all. Unset is the documented default — a
+/// random `master.key` at 0600.
+///
+/// **Set-but-empty REFUSES**, and this is the same defect as
+/// [`resolve_assertion_secret`] one level up in value. `passphrase()` used to
+/// be `env::var(..).ok().filter(|p| !p.is_empty())`, so an empty declaration
+/// became `None` and the palace silently fell back to writing a random key
+/// FILE — the precise opposite of what declaring a passphrase asks for. An
+/// operator whose `${SECRET}` failed to interpolate got key material on disk
+/// and no signal: `vault status` said `master.key`, and it is only wrong if
+/// you knew to look.
+///
+/// Whitespace-only counts as naming no secret, but the value itself is
+/// **never trimmed** — it is opaque payload, and trimming would change the
+/// KEY, silently making every existing vault underivable. That distinction is
+/// doctrine in `CLAUDE.md`, earned by this variable's sibling.
+pub fn resolve_passphrase(env: Option<&str>) -> Result<Option<String>, StoreError> {
+    let Some(v) = env else { return Ok(None) };
+    if v.trim().is_empty() {
+        return Err(StoreError::Invalid(
+            "UNDERCROFT_PASSPHRASE is set but names no passphrase (it is empty or only \
+             whitespace). It is most often an unset shell variable interpolated into a \
+             compose file or a systemd unit. Declaring it is what keeps key material OFF \
+             DISK, so there is no silent fallback — falling back writes a random \
+             master.key and hands you the opposite of what you asked for. Set a real \
+             passphrase, or unset the variable to use the on-disk master key deliberately"
+                .into(),
+        ));
+    }
+    Ok(Some(v.to_string()))
+}
+
 /// `UNDERCROFT_ASSERTION_SECRET`: the MAC key for per-vault assertions.
 ///
 /// **`Protects`, so a declaration that names no secret REFUSES rather than
@@ -360,39 +480,6 @@ pub fn check_declaration(name: &str, raw: &str) -> Result<Option<String>, String
 /// `UNDERCROFT_ADMISSION` may legitimately read empty as `off` (empty is a
 /// third spelling of a value in its vocabulary) while this one may not.
 /// Nothing in the tree encoded it, so each call site answered for itself.
-/// `UNDERCROFT_PASSPHRASE`: derive the master key with Argon2id, so no key
-/// material is written to disk at all. Unset is the documented default — a
-/// random `master.key` at 0600.
-///
-/// **Set-but-empty REFUSES**, and this is the same defect as
-/// [`resolve_assertion_secret`] one level up in value. `passphrase()` used to
-/// be `env::var(..).ok().filter(|p| !p.is_empty())`, so an empty declaration
-/// became `None` and the palace silently fell back to writing a random key
-/// FILE — the precise opposite of what declaring a passphrase asks for. An
-/// operator whose `${SECRET}` failed to interpolate got key material on disk
-/// and no signal: `vault status` said `master.key`, and it is only wrong if
-/// you knew to look.
-///
-/// Whitespace-only counts as naming no secret, but the value itself is
-/// **never trimmed** — it is opaque payload, and trimming would change the
-/// KEY, silently making every existing vault underivable. That distinction is
-/// doctrine in `CLAUDE.md`, earned by this variable's sibling.
-pub fn resolve_passphrase(env: Option<&str>) -> Result<Option<String>, StoreError> {
-    let Some(v) = env else { return Ok(None) };
-    if v.trim().is_empty() {
-        return Err(StoreError::Invalid(
-            "UNDERCROFT_PASSPHRASE is set but names no passphrase (it is empty or only \
-             whitespace). It is most often an unset shell variable interpolated into a \
-             compose file or a systemd unit. Declaring it is what keeps key material OFF \
-             DISK, so there is no silent fallback — falling back writes a random \
-             master.key and hands you the opposite of what you asked for. Set a real \
-             passphrase, or unset the variable to use the on-disk master key deliberately"
-                .into(),
-        ));
-    }
-    Ok(Some(v.to_string()))
-}
-
 pub fn resolve_assertion_secret(env: Option<&str>) -> Result<Option<String>, StoreError> {
     let Some(v) = env else { return Ok(None) };
     if v.trim().is_empty() {
@@ -570,13 +657,24 @@ pub(crate) const CODEBOOK_ARTIFACTS: [&str; 5] = [
 /// its data statements with exactly one `chain_append` in one transaction —
 /// the invariant that makes a crash unable to separate a record from its
 /// chain entry.
+///
+/// **The namespace is a required argument, not part of `rest`** (ROADMAP
+/// O80). Call sites used to compose the whole label inline, so the set of
+/// namespaces this store mints existed only as twenty scattered `format!`
+/// strings — and the inventory that claimed to classify them was a hand
+/// list whose gate never read the code, which is how `tunnel/` came to be
+/// minted, unclassified, and invisible to a green gate. Now a namespace has
+/// to be a [`Namespace`] variant, and a variant does not compile until
+/// somebody rules on whether the agent surface may see it.
 pub(crate) fn chain_append(
     conn: &rusqlite::Connection,
     vault: &Vault,
-    record_id: &str,
+    ns: Namespace,
+    rest: &str,
     tag: &[u8],
     at: &str,
 ) -> Result<(String, u64), StoreError> {
+    let record_id = ns.record(rest);
     conn.execute(
         "INSERT INTO audit (record_id, tag, at) VALUES (?1, ?2, ?3)",
         params![record_id, tag, at],
@@ -1522,6 +1620,28 @@ pub(crate) fn calibrated_semantic(floor: f32, cos: f32) -> f32 {
     (0.5 + 0.5 * (cos - floor) / (1.0 - floor)).clamp(0.0, 1.0)
 }
 
+/// The location a row CLAIMS, for a tamper frame only (ROADMAP M6).
+///
+/// Parsed from `meta_json` **without** verifying anything, because the
+/// caller is on the failure path: the row's HMAC has already been rejected,
+/// so its metadata is exactly as trustworthy as the rest of it — which is to
+/// say, not at all. It travels marked `unverified` so an owner can go and
+/// look, and it is deliberately NOT read from the clear `wing`/`room` mirror
+/// columns either: on this path both copies are equally unauthenticated, and
+/// reading the covered field keeps the one rule (A28) that a decision reads
+/// the HMAC-covered copy rather than the mirror, even when the decision is
+/// only "where should the alarm point".
+///
+/// Returns `(None, None)` for anything unparseable, which is the ordinary
+/// case when the tampering hit `meta_json` itself.
+pub(crate) fn claimed_site(meta_json: &str) -> (Option<String>, Option<String>) {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(meta_json) else {
+        return (None, None);
+    };
+    let pick = |k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string);
+    (pick("wing"), pick("room"))
+}
+
 pub(crate) fn canonical(id: &str, meta_json: &[u8], content_at_rest: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(id.len() + meta_json.len() + content_at_rest.len() + 2);
     out.extend_from_slice(id.as_bytes());
@@ -1553,6 +1673,34 @@ pub(crate) fn supersession_canonical(
     out.push(0x1f);
     out.extend_from_slice(source_fp);
     out
+}
+
+/// A page of results together with the two things only the engine can know
+/// about it: whether the ranking held more than this page returned, and how
+/// large the declared scope was.
+///
+/// ROADMAP O73. The engine ranks correctly and then the page ends — median
+/// rank of the first piece of evidence is 1, but p90 of evidence rank is 17,
+/// so a ten-row page cuts through the middle of the distribution. The caller
+/// cannot know that; at the moment it answers, the engine can.
+///
+/// Both fields are ADDITIVE: `search` still returns a bare `Vec<SearchHit>`
+/// and is byte-identical, so a caller that never asks for a page sees exactly
+/// the response it always did.
+#[derive(Debug, Clone)]
+pub struct SearchPage {
+    pub hits: Vec<SearchHit>,
+    /// The admitted ranking held more rows than `[offset, offset+limit)`
+    /// covered. Exact, not a guess: admission (`hits.retain`) runs BEFORE the
+    /// page cut, so this compares admitted candidates against the window
+    /// rather than testing `hits.len() == limit`, which cannot tell a page
+    /// that exactly filled from one that was cut.
+    pub truncated: bool,
+    /// How many rows the request's declared scope covers. `None` when the
+    /// request declared no NARROWING scope — a bare exclusion is the
+    /// complement of a small set, so its cardinality is the corpus wearing a
+    /// scope's name and is deliberately not reported as one.
+    pub scope: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -1759,6 +1907,20 @@ pub enum InternalRead {
     /// A whole-palace export, already recorded unconditionally by
     /// `audit_export` — auditing the rows again would double-count it.
     ExportAudited,
+    /// The corpus read for LLM distillation, already recorded
+    /// unconditionally by [`PalaceStore::audit_refine`] (ROADMAP O79).
+    ///
+    /// The variant above states the RULE this one instantiates: **a read
+    /// whose content leaves the vault is internal, and the leaving is what
+    /// gets recorded** — under `egress/`, unconditionally, rather than under
+    /// `read/`, which is opt-in and describes content returned to a CALLER.
+    /// `refine` hands its caller facts and never drawer text, so a `ReadOp`
+    /// would mis-describe it.
+    ///
+    /// It was `WritePathLookup` until O79 — a variant whose own doc says
+    /// *"the caller never asked to read this"*, about the one path where the
+    /// caller asked explicitly and sized the ask.
+    RefineAudited,
     /// A per-row read inside a bulk door that appends its own single
     /// record. The caller asked for the LIST, not for each row, so the
     /// trail should say "one list" and not "N gets".
@@ -2126,6 +2288,11 @@ pub struct PalaceStore {
     /// the fixed map compressed (the xlingual mixed-corpus finding). See
     /// [`Embedder::semantic_floor`].
     sem_floor: f32,
+    /// Where the semantic gate in force CAME FROM (ROADMAP O72), decided once
+    /// at open. An operator reading a gate value alone cannot tell a probed
+    /// floor from a shipped constant, and the two call for different actions:
+    /// a declared constant means nothing measured this vault's vector space.
+    sem_gate_source: &'static str,
     /// Whether flagged writes divert to the quarantine wing
     /// (`UNDERCROFT_ADMISSION=quarantine`; default off — admission changes
     /// what a save DOES, so it is the deployment's declaration).
@@ -3344,6 +3511,16 @@ impl PalaceStore {
             std::env::var("UNDERCROFT_SEMANTIC_GATE").ok().as_deref(),
         )?;
         let sem_floor = resolve_semantic_floor(embedder.as_ref());
+        // Provenance, not a second resolution: the value above already
+        // decided WHAT the gate is; this records WHERE it came from, which no
+        // amount of staring at the number recovers.
+        let sem_gate_source = match std::env::var("UNDERCROFT_SEMANTIC_GATE").ok() {
+            Some(v) if v.trim().eq_ignore_ascii_case("off") => "declared-off",
+            Some(v) if !v.trim().is_empty() => "declared",
+            _ if semantic_gate.is_none() => "refused",
+            _ if embedder.semantic_gate_is_measured() => "measured",
+            _ => "embedder-constant",
+        };
         let store = Self {
             conn,
             vault,
@@ -3352,6 +3529,7 @@ impl PalaceStore {
             late: None,
             emb_cache: std::cell::RefCell::new(None),
             semantic_gate,
+            sem_gate_source,
             fts: false,
             fts_min,
             fusion: Fusion::from_env(),
@@ -4074,7 +4252,6 @@ impl PalaceStore {
                     &drawer.meta.wing,
                     &drawer.meta.room,
                     deduped,
-                    self.is_sealed(),
                 );
             }
             // The purpose-built event, not a `drawer-saved` with the wing
@@ -4094,7 +4271,6 @@ impl PalaceStore {
                     intended_wing,
                     &drawer.meta.room,
                     &codes,
-                    self.is_sealed(),
                 );
             }
         }
@@ -4419,7 +4595,14 @@ impl PalaceStore {
                 now,
             ],
         )?;
-        let (head, writes) = chain_append(&self.conn, &self.vault, &drawer.id, &tag, &now)?;
+        let (head, writes) = chain_append(
+            &self.conn,
+            &self.vault,
+            Namespace::Drawer,
+            &drawer.id,
+            &tag,
+            &now,
+        )?;
         Ok((existing.is_none(), head, writes))
     }
 
@@ -4754,7 +4937,19 @@ impl PalaceStore {
                 .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
                 .map_err(|_| {
                     undercroft_obs::hmac_verify_failed("drawer");
-                    undercroft_obs::event_hmac_fail(self.vault.id(), "drawer");
+                    // M6: point the alarm at a row rather than at the whole
+                    // palace. Everything here is what the FAILING row claims
+                    // about itself and travels marked unverified.
+                    let (w, r) = claimed_site(&meta_json);
+                    undercroft_obs::event_hmac_fail(
+                        self.vault.id(),
+                        "drawer",
+                        undercroft_obs::TamperSite {
+                            id: Some(&id),
+                            wing: w.as_deref(),
+                            room: r.as_deref(),
+                        },
+                    );
                     StoreError::Integrity(id.clone())
                 })?;
             let drawer = self.decode(&id, &meta_json, &content_rest)?;
@@ -4981,7 +5176,19 @@ impl PalaceStore {
                     .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
                     .map_err(|_| {
                         undercroft_obs::hmac_verify_failed("drawer");
-                        undercroft_obs::event_hmac_fail(self.vault.id(), "drawer");
+                        // M6: point the alarm at a row rather than at the whole
+                        // palace. Everything here is what the FAILING row claims
+                        // about itself and travels marked unverified.
+                        let (w, r) = claimed_site(&meta_json);
+                        undercroft_obs::event_hmac_fail(
+                            self.vault.id(),
+                            "drawer",
+                            undercroft_obs::TamperSite {
+                                id: Some(&id),
+                                wing: w.as_deref(),
+                                room: r.as_deref(),
+                            },
+                        );
                         StoreError::Integrity(id.clone())
                     })?;
                 let drawer = self.decode(&id, &meta_json, &content_rest)?;
@@ -5106,7 +5313,19 @@ impl PalaceStore {
                 .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
                 .map_err(|_| {
                     undercroft_obs::hmac_verify_failed("drawer");
-                    undercroft_obs::event_hmac_fail(self.vault.id(), "drawer");
+                    // M6: point the alarm at a row rather than at the whole
+                    // palace. Everything here is what the FAILING row claims
+                    // about itself and travels marked unverified.
+                    let (w, r) = claimed_site(&meta_json);
+                    undercroft_obs::event_hmac_fail(
+                        self.vault.id(),
+                        "drawer",
+                        undercroft_obs::TamperSite {
+                            id: Some(&id),
+                            wing: w.as_deref(),
+                            room: r.as_deref(),
+                        },
+                    );
                     StoreError::Integrity(id.clone())
                 })?;
             let drawer = self.decode(&id, &meta_json, &content_rest)?;
@@ -5192,6 +5411,14 @@ impl PalaceStore {
     /// prefilter threshold first cut candidates to the FTS5 BM25 top-K
     /// (final scoring is unchanged — the index only narrows the scan).
     pub fn search(&self, query: &str, opts: &SearchOptions) -> Result<Vec<SearchHit>, StoreError> {
+        self.search_page(query, opts).map(|p| p.hits)
+    }
+
+    /// `search`, plus what only the engine knows about the page it just cut
+    /// (ROADMAP O73). `search` above is this call with the extra fields
+    /// dropped, so the old contract is preserved by construction rather than
+    /// by a second implementation that could drift from it.
+    pub fn search_page(&self, query: &str, opts: &SearchOptions) -> Result<SearchPage, StoreError> {
         if self.external_dim.is_some() {
             return Err(StoreError::ExternalVault);
         }
@@ -5209,6 +5436,17 @@ impl PalaceStore {
         qvec: Vec<f32>,
         opts: &SearchOptions,
     ) -> Result<Vec<SearchHit>, StoreError> {
+        self.search_page_with_vector(query, qvec, opts)
+            .map(|p| p.hits)
+    }
+
+    /// `search_with_vector`, plus the page signals (ROADMAP O73).
+    pub fn search_page_with_vector(
+        &self,
+        query: &str,
+        qvec: Vec<f32>,
+        opts: &SearchOptions,
+    ) -> Result<SearchPage, StoreError> {
         match self.external_dim {
             None => Err(StoreError::NotExternalVault),
             Some(dim) if qvec.len() != dim => Err(StoreError::EmbeddingDim {
@@ -5354,7 +5592,7 @@ impl PalaceStore {
         query: &str,
         qvec: Vec<f32>,
         opts: &SearchOptions,
-    ) -> Result<Vec<SearchHit>, StoreError> {
+    ) -> Result<SearchPage, StoreError> {
         let _span = undercroft_obs::scope("search", self.vault.id());
         let obs_start = std::time::Instant::now();
         let limit = if opts.limit == 0 { 10 } else { opts.limit };
@@ -5703,7 +5941,19 @@ impl PalaceStore {
                     .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
                     .map_err(|_| {
                         undercroft_obs::hmac_verify_failed("drawer");
-                        undercroft_obs::event_hmac_fail(vault.id(), "drawer");
+                        // M6: point the alarm at a row rather than at the whole
+                        // palace. Everything here is what the FAILING row claims
+                        // about itself and travels marked unverified.
+                        let (w, r) = claimed_site(&meta_json);
+                        undercroft_obs::event_hmac_fail(
+                            vault.id(),
+                            "drawer",
+                            undercroft_obs::TamperSite {
+                                id: Some(&id),
+                                wing: w.as_deref(),
+                                room: r.as_deref(),
+                            },
+                        );
                         StoreError::Integrity(id.clone())
                     })?;
                 let drawer = Self::decode_with(vault, &id, &meta_json, &content_rest)?;
@@ -5897,6 +6147,14 @@ impl PalaceStore {
         // without one it is a plain slice of score order. Either way the
         // result is ranks `[offset, offset + limit)` of the list a single
         // call with limit `depth` would return.
+        // ROADMAP O73. Counted BEFORE the cut, and it is the admitted count:
+        // `hits.retain` above has already dropped everything the gate refused,
+        // so this compares real candidates against the window `[offset,
+        // offset+limit)`. That is why it is exact where `hits.len() == limit`
+        // is a guess — a page that exactly filled and a page that was cut are
+        // indistinguishable after the fact, which is the same conflation O53
+        // removed from the scoped pool.
+        let admitted = hits.len();
         match opts.room_cap {
             Some(cap) if cap > 0 => {
                 hits = diversify_by_room(std::mem::take(&mut hits), opts.offset, limit, cap)
@@ -5908,6 +6166,7 @@ impl PalaceStore {
                 }
             }
         }
+        let page_truncated = admitted > depth;
 
         let fusion_label = match self.fusion {
             Fusion::Legacy => "legacy",
@@ -5924,7 +6183,6 @@ impl PalaceStore {
             opts.wing.as_deref(),
             opts.room.as_deref(),
             hits.len(),
-            self.is_sealed(),
         );
         self.record_read(
             Read::Returned(ReadOp::Search),
@@ -5932,7 +6190,25 @@ impl PalaceStore {
             ReadScope::from_opts(opts),
             hits.len(),
         )?;
-        Ok(hits)
+        Ok(SearchPage {
+            hits,
+            truncated: page_truncated,
+            // The narrowing's population. `scope_population` answers `None`
+            // for an exclusion by design, so an unscoped query reports no
+            // scope rather than reporting the corpus as one.
+            scope: scope_live,
+        })
+    }
+
+    /// The semantic channel as configured on this vault (ROADMAP O72).
+    /// Reads three values already resolved at open; it measures nothing here,
+    /// so `stats` stays a cheap call.
+    pub fn semantic_channel(&self) -> crate::manage::SemanticChannel {
+        crate::manage::SemanticChannel {
+            gate: self.semantic_gate,
+            floor: self.sem_floor,
+            gate_source: self.sem_gate_source,
+        }
     }
 
     /// Turn read auditing on or off programmatically (the env
@@ -6033,7 +6309,7 @@ impl PalaceStore {
         );
         let tag = self.vault.tag(canonical.as_bytes());
         let tx = self.conn.unchecked_transaction()?;
-        chain_append(&tx, &self.vault, &format!("read/{kind}"), &tag, &now)?;
+        chain_append(&tx, &self.vault, Namespace::Read, kind, &tag, &now)?;
         tx.commit()?;
         Ok(())
     }
@@ -6065,7 +6341,68 @@ impl PalaceStore {
         );
         let tag = self.vault.tag(canonical.as_bytes());
         let tx = self.conn.transaction()?;
-        let (head, writes) = chain_append(&tx, &self.vault, "egress/export", &tag, &now)?;
+        let (head, writes) =
+            chain_append(&tx, &self.vault, Namespace::Egress, "export", &tag, &now)?;
+        tx.commit()?;
+        self.vault.anchor_manifest(&head, writes)?;
+        Ok(())
+    }
+
+    /// **The distillation egress** — one `egress/refine` record per run,
+    /// unconditional on a writable store, binding where the corpus went and
+    /// how much of it (ROADMAP O79).
+    ///
+    /// `refine` reads every selected drawer VERBATIM and POSTs its plaintext
+    /// to `UNDERCROFT_LLM_URL`. Under `UNDERCROFT_READ_AUDIT=chain` —
+    /// declared for insider/exfil accounting — it appended **zero** records,
+    /// while the same caller's single `GET …/drawers/{id}` appended one. The
+    /// `/v1` route's `limit` defaults to a million.
+    ///
+    /// **It is an EGRESS and not a read, and the tree had already ruled
+    /// that**: `InternalRead::ExportAudited` exists for precisely this shape
+    /// — a read whose content leaves the vault, kept out of the `read/`
+    /// trail because an unconditional `egress/` record covers it. `refine`
+    /// returns facts to its caller, never drawer text, so it is not a
+    /// content-returning door and a `ReadOp` would mis-describe it. The
+    /// a fortiori argument is the tree's own: `index_push` mints
+    /// unconditionally for EMBEDDINGS, which are merely plaintext-derived,
+    /// and this ships the plaintext itself.
+    ///
+    /// **A dry run records too, and carries `dry_run` so the trail can tell
+    /// the two apart.** `dry_run` skips writing FACTS; the network egress is
+    /// byte-for-byte the same, and an egress trail that omits half the
+    /// egresses is not a trail. Before this, `{"dry_run": true}` shipped the
+    /// corpus and left no evidence anywhere.
+    ///
+    /// **`destination` must never carry a credential.** `UNDERCROFT_LLM_URL`
+    /// may embed userinfo, so callers pass `LlmClient::destination`, which
+    /// strips it. The canonical is HMAC'd rather than stored, but the rule
+    /// holds regardless: an audit trail is not a place to put a secret, and
+    /// the operator's question is *which host got my corpus*.
+    #[allow(clippy::too_many_arguments)]
+    pub fn audit_refine(
+        &mut self,
+        surface: &str,
+        destination: &str,
+        model: &str,
+        wing: Option<&str>,
+        room: Option<&str>,
+        sources: usize,
+        failed: usize,
+        dry_run: bool,
+    ) -> Result<(), StoreError> {
+        let now = OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .expect("rfc3339 now");
+        let canonical = format!(
+            "egress\u{1f}refine\u{1f}{surface}\u{1f}{destination}\u{1f}{model}\u{1f}{}\u{1f}{}\u{1f}{sources}\u{1f}{failed}\u{1f}{dry_run}\u{1f}{now}",
+            wing.unwrap_or(""),
+            room.unwrap_or(""),
+        );
+        let tag = self.vault.tag(canonical.as_bytes());
+        let tx = self.conn.transaction()?;
+        let (head, writes) =
+            chain_append(&tx, &self.vault, Namespace::Egress, "refine", &tag, &now)?;
         tx.commit()?;
         self.vault.anchor_manifest(&head, writes)?;
         Ok(())
@@ -6307,25 +6644,46 @@ impl PalaceStore {
     /// policy from docs/LABELS.md: a filter over a thinly-labeled corpus
     /// must say what it silently passed over, or an honest empty result is
     /// indistinguishable from a label-coverage gap.
-    pub fn unkinded_in_scope(
-        &self,
-        wing: Option<&str>,
-        room: Option<&str>,
-    ) -> Result<u64, StoreError> {
-        let mut clauses: Vec<&str> = vec!["kind IS NULL"];
-        let mut binds: Vec<&str> = Vec::new();
-        if let Some(w) = wing {
-            clauses.push("wing = ?");
-            binds.push(w);
+    /// **Under the SAME policy the search itself ran under** (ROADMAP M21).
+    ///
+    /// This counted `kind IS NULL` within the wing/room scope and nothing
+    /// else — no trust floor, no quarantine fence — while
+    /// [`Self::resolve_search_policy`] removes below-floor wings and the
+    /// reserved review wing BEFORE any candidate is drawn. So rows that were
+    /// never in the kind filter's competition were counted as though the kind
+    /// filter had passed over them, and reported to the caller as *"in-scope
+    /// drawers that carry no declared kind and were not considered"*.
+    ///
+    /// An honest-exclusion note inflated by rows a DIFFERENT exclusion had
+    /// already removed is worse than no note: its whole purpose is to let a
+    /// caller tell an empty result from a label-coverage gap, and it was
+    /// quietly reporting a third thing.
+    ///
+    /// It takes the whole `SearchOptions` now rather than two strings, which
+    /// is the fix rather than a tidy-up: the count cannot drift from the
+    /// search it annotates if it is resolved from the same input by the same
+    /// function. `TrustClause::sql` is documented as *"one implementation for
+    /// every read that narrows by trust"* and named three; this was a fourth
+    /// that did not use it.
+    pub fn unkinded_in_scope(&self, opts: &SearchOptions) -> Result<u64, StoreError> {
+        let mut sql = String::from("SELECT COUNT(*) FROM drawers WHERE kind IS NULL");
+        let mut binds: Vec<String> = Vec::new();
+        if let Some(w) = opts.wing.as_deref() {
+            binds.push(w.to_string());
+            sql.push_str(&format!(" AND wing = ?{}", binds.len()));
         }
-        if let Some(r) = room {
-            clauses.push("room = ?");
-            binds.push(r);
+        if let Some(r) = opts.room.as_deref() {
+            binds.push(r.to_string());
+            sql.push_str(&format!(" AND room = ?{}", binds.len()));
         }
-        let sql = format!(
-            "SELECT COUNT(*) FROM drawers WHERE {}",
-            clauses.join(" AND ")
-        );
+        // The one door. It folds the trust floor and the quarantine fence
+        // into a single clause, so this cannot re-derive either and cannot
+        // disagree with the search.
+        if let Some(clause) = self.resolve_search_policy(opts)? {
+            if let Some(frag) = clause.sql(&mut binds) {
+                sql.push_str(&format!(" AND {frag}"));
+            }
+        }
         let n: i64 = self
             .conn
             .query_row(&sql, rusqlite::params_from_iter(binds.iter()), |r| r.get(0))?;
@@ -6607,10 +6965,20 @@ impl PalaceStore {
             for label in labels {
                 // **A label with no `/` is a DRAWER id**, and it is the only
                 // bare namespace this store mints — every other label carries
-                // a prefix (`kg/`, `kg-entity/`, `del/`, `admission/`,
-                // `trust/`, `retention/`, `retention-clear/`, `egress/`,
-                // `read/`, `rotate/`, `migrate/`, `tunnel/`). Enumerated from
-                // every `chain_append` call site rather than assumed.
+                // a prefix. That is `Namespace::Drawer`, whose `prefix()` is
+                // the empty string, and the vocabulary beside it is the whole
+                // set; this comment used to enumerate the twelve by hand.
+                //
+                // Worth recording, because it is what O80 cost: that hand
+                // list was CORRECT and included `tunnel/`, while `MINTED` one
+                // file over — the inventory whose stated job was to classify
+                // every minted namespace — listed eleven and did not. Two
+                // enumerations of one fact, disagreeing, with nothing
+                // comparing them. It also described its own method as
+                // "enumerated from every `chain_append` call site", which
+                // could not have produced `rotate/`: that one is minted by
+                // `rotate.rs`'s own `INSERT INTO audit`, and a scan of
+                // `chain_append` callers cannot see it.
                 //
                 // The leg used to stop at the graph, and the reason on file
                 // was that "every other namespace has a legitimate path to an
@@ -6713,7 +7081,19 @@ impl PalaceStore {
                 .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
                 .map_err(|_| {
                     undercroft_obs::hmac_verify_failed("drawer");
-                    undercroft_obs::event_hmac_fail(self.vault.id(), "drawer");
+                    // M6: point the alarm at a row rather than at the whole
+                    // palace. Everything here is what the FAILING row claims
+                    // about itself and travels marked unverified.
+                    let (w, r) = claimed_site(&meta_json);
+                    undercroft_obs::event_hmac_fail(
+                        self.vault.id(),
+                        "drawer",
+                        undercroft_obs::TamperSite {
+                            id: Some(&id),
+                            wing: w.as_deref(),
+                            room: r.as_deref(),
+                        },
+                    );
                     StoreError::Integrity(id.clone())
                 })?;
             out.push(self.decode(&id, &meta_json, &content_rest)?);
@@ -8649,6 +9029,69 @@ fn recency_boost(filed_at: &str, now: OffsetDateTime) -> f32 {
 
 #[cfg(test)]
 mod tests {
+
+    /// **M6: a tamper names the row and the location that row CLAIMS.**
+    ///
+    /// Two gates, because they fail for different reasons. The first is the
+    /// parse: it must survive the ordinary case — the tampering hit
+    /// `meta_json` itself and there is nothing to read — rather than
+    /// panicking on the failure path, which is the one path that must not
+    /// have a second failure in it.
+    ///
+    /// The second is the one that matters, and it is the "someone forgot one
+    /// of N places" shape a scanner is right for: every DRAWER tamper site
+    /// must pass a real `TamperSite`, not `default()`. The alarm pointing at
+    /// the whole palace is what this unit exists to end, and a new read path
+    /// added later inherits nothing unless somebody checks.
+    #[test]
+    fn every_drawer_tamper_site_names_the_row_it_caught() {
+        // The parse, on both sides of its premise.
+        let (w, r) = crate::claimed_site(r#"{"wing":"eng","room":"decisions"}"#);
+        assert_eq!(
+            (w.as_deref(), r.as_deref()),
+            (Some("eng"), Some("decisions"))
+        );
+        assert_eq!(
+            crate::claimed_site("{ this is not json"),
+            (None, None),
+            "the ordinary case when the tampering landed in meta_json: no \
+             location, and above all no panic on the failure path"
+        );
+        assert_eq!(
+            crate::claimed_site(r#"{"room":"decisions"}"#).0,
+            None,
+            "a missing field is absent, never guessed"
+        );
+
+        // The inventory: read the sources and require a real site at every
+        // drawer-surface emit.
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut drawer_sites = 0usize;
+        for f in ["lib.rs", "manage.rs"] {
+            let src = std::fs::read_to_string(root.join(f)).expect("source is readable");
+            for (i, _) in src.match_indices("event_hmac_fail(") {
+                let call = &src[i..(i + 400).min(src.len())];
+                let Some(end) = call.find(");") else { continue };
+                let call = &call[..end];
+                if !call.contains("\"drawer\"") {
+                    continue;
+                }
+                drawer_sites += 1;
+                assert!(
+                    call.contains("TamperSite {"),
+                    "a drawer tamper in {f} still fires with no location, so \
+                     the alarm points at the whole palace: {call}"
+                );
+            }
+        }
+        // PREMISE. A scanner that matched nothing reports exactly what a
+        // fully-converted tree reports.
+        assert!(
+            drawer_sites >= 6,
+            "premise: found only {drawer_sites} drawer tamper sites; the \
+             scanner is broken, not the tree"
+        );
+    }
     use super::*;
     use tempfile::TempDir;
     use undercroft_vault::{SecurityLevel, VaultManager};
@@ -8658,6 +9101,72 @@ mod tests {
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", level).unwrap();
         (dir, PalaceStore::open(vault).unwrap())
+    }
+
+    /// ROADMAP O69. The hold must refuse while someone has the vault open,
+    /// and must succeed the moment they let go.
+    ///
+    /// Both arms are load-bearing. Without the first, `backup restore` unlinks
+    /// a database a live server is still writing to and the vault ends
+    /// unopenable — measured, at exit 0, before this existed. Without the
+    /// second, the guard is indistinguishable from one that always refuses,
+    /// which would make restore useless rather than safe.
+    #[test]
+    fn an_exclusive_hold_refuses_while_the_vault_is_open_and_grants_once_it_is_not() {
+        let (dir, store) = store(SecurityLevel::HmacOnly);
+        let vault_dir = dir.path().join("vaults/test");
+        assert!(
+            vault_dir.join("palace.db").exists(),
+            "premise: the vault has a database to hold"
+        );
+
+        // A live holder — exactly what `serve-http` is, from the file's point
+        // of view. SQLite locks are per-connection, so an open store in this
+        // same process is a faithful stand-in for another process.
+        let held = hold_vault_exclusively(&vault_dir);
+        assert!(
+            held.is_err(),
+            "a vault held by an open store must refuse an exclusive hold"
+        );
+
+        // Let go, and it must grant — otherwise the guard has simply broken
+        // restore for everyone.
+        drop(store);
+        let granted = hold_vault_exclusively(&vault_dir);
+        assert!(
+            granted.is_ok(),
+            "with no holder the exclusive hold must be granted: {:?}",
+            granted.err()
+        );
+
+        // And the hold is real: while it is alive, the next one is refused.
+        // This is what makes holding it ACROSS the destroy-and-copy close the
+        // window a probe-then-act would leave open.
+        let second = hold_vault_exclusively(&vault_dir);
+        assert!(
+            second.is_err(),
+            "a live hold must exclude the next one, or holding it across the \
+             operation protects nothing"
+        );
+        drop(granted);
+        assert!(
+            hold_vault_exclusively(&vault_dir).is_ok(),
+            "dropping the hold must release it"
+        );
+    }
+
+    /// A vault directory with no database has no holder to find, and opening
+    /// one would CREATE the file — noise for a directory about to be replaced.
+    #[test]
+    fn an_exclusive_hold_on_a_vault_with_no_database_is_refused_not_created() {
+        let dir = TempDir::new().unwrap();
+        let empty = dir.path().join("vaults/absent");
+        std::fs::create_dir_all(&empty).unwrap();
+        assert!(hold_vault_exclusively(&empty).is_err());
+        assert!(
+            !empty.join("palace.db").exists(),
+            "the probe must not have created the database it went looking for"
+        );
     }
 
     /// Build a hit with a known room and score — enough for the pure
@@ -8754,6 +9263,175 @@ mod tests {
         assert_eq!(capped.len(), 3, "capped search still fills the limit");
         // The cap can only change WHICH rooms appear, never how many hits.
         assert!(capped.iter().any(|h| h.drawer.meta.room == "quiet"));
+    }
+
+    /// ROADMAP O73. The page signals, and the ONE case that separates them
+    /// from the guess they replace.
+    ///
+    /// `hits.len() == limit` is what every surface used to infer "there may be
+    /// more". It cannot distinguish a page that was cut from one that exactly
+    /// filled, so a full FINAL page advertised depth that does not exist. The
+    /// decisive assertion here is the middle one: with the limit set to
+    /// exactly the number of admitted rows, the page is full and `truncated`
+    /// must still be FALSE.
+    #[test]
+    fn the_page_signals_are_exact_not_a_full_page_guess() {
+        // HmacOnly on purpose: the scope leg below is TIER-DEPENDENT, and this
+        // level engages the prefilter that materializes a membership set. See
+        // the scope assertions for what that means for callers.
+        let (_dir, mut s) = store(SecurityLevel::HmacOnly);
+        // Strong literal overlap, so admission keeps every one of them and the
+        // premise below is about the page cut rather than about the gate.
+        for i in 0..6u32 {
+            s.upsert(&drawer(
+                if i % 2 == 0 { "even" } else { "odd" },
+                "r",
+                &format!("harbour tide survey note number {i}"),
+                i,
+            ))
+            .unwrap();
+        }
+        let deep = s
+            .search_page(
+                "harbour tide survey",
+                &SearchOptions {
+                    limit: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        // PREMISE. Everything below reasons about how many rows were ADMITTED;
+        // if the gate dropped some, the counts under test mean something else.
+        let admitted = deep.hits.len();
+        assert_eq!(admitted, 6, "premise: every drawer must be admitted");
+        assert!(!deep.truncated, "a ranking that fits is not truncated");
+
+        // THE DISCRIMINATOR: the page is exactly full, and the old
+        // `hits.len() == limit` test would have said "there may be more".
+        let exact = s
+            .search_page(
+                "harbour tide survey",
+                &SearchOptions {
+                    limit: admitted,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(exact.hits.len(), admitted, "the page is full");
+        assert!(
+            !exact.truncated,
+            "a page that exactly filled the ranking is NOT truncated - the case the hits.len() == limit guess gets wrong"
+        );
+
+        let cut = s
+            .search_page(
+                "harbour tide survey",
+                &SearchOptions {
+                    limit: admitted - 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(cut.truncated, "a ranking deeper than the page is truncated");
+
+        // The scope leg. An unscoped request declares no NARROWING, so it
+        // reports no population rather than reporting the corpus as one.
+        assert_eq!(deep.scope, None, "unscoped queries report no scope");
+        let scoped = s
+            .search_page(
+                "harbour tide survey",
+                &SearchOptions {
+                    wing: Some("even".into()),
+                    limit: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(scoped.scope, Some(3), "the wing holds three drawers");
+
+        // And the old entry point is unchanged: same hits, no extra fields.
+        let plain = s
+            .search(
+                "harbour tide survey",
+                &SearchOptions {
+                    limit: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let a: Vec<&str> = plain.iter().map(|h| h.drawer.id.as_str()).collect();
+        let b: Vec<&str> = deep.hits.iter().map(|h| h.drawer.id.as_str()).collect();
+        assert_eq!(a, b, "search() must still answer exactly as it did");
+    }
+
+    /// ROADMAP O73, the caveat pinned rather than left in prose: `truncated`
+    /// answers on every security level, `scope` does NOT.
+    ///
+    /// The population is a by-product of the prefilter materializing a
+    /// membership set. A small sealed vault runs a bounded exact scan and
+    /// never builds one, so the field is absent — which is why absence must
+    /// be read as "the engine did not have it to hand", never as "no scope was
+    /// declared" and never as "the scope is empty". A caller that treats a
+    /// missing `scope_size` as zero would be badly wrong.
+    #[test]
+    fn truncated_answers_on_every_level_and_scope_is_tier_dependent() {
+        for level in [SecurityLevel::Sealed, SecurityLevel::HmacOnly] {
+            let (_dir, mut s) = store(level);
+            for i in 0..6u32 {
+                s.upsert(&drawer(
+                    if i % 2 == 0 { "even" } else { "odd" },
+                    "r",
+                    &format!("harbour tide survey note number {i}"),
+                    i,
+                ))
+                .unwrap();
+            }
+            let opts = SearchOptions {
+                wing: Some("even".into()),
+                limit: 1,
+                ..Default::default()
+            };
+            let page = s.search_page("harbour tide survey", &opts).unwrap();
+            // The signal this entry exists for holds regardless of level.
+            assert!(
+                page.truncated,
+                "{level:?}: three in-scope rows against a page of one is truncated"
+            );
+            // And the other one is allowed to be absent. Asserting the exact
+            // tier here would pin an implementation detail; asserting the
+            // CONTRACT — never a wrong number — is what a caller relies on.
+            if let Some(n) = page.scope {
+                assert_eq!(n, 3, "{level:?}: when reported, it must be right");
+            }
+        }
+    }
+
+    /// ROADMAP O72. The default vault's semantic gate is a DECLARED constant,
+    /// and that is the fact the number alone cannot carry.
+    ///
+    /// `0.56` looks like a measurement wherever it is printed. It is not one
+    /// for this vault: `HashEmbedder` overrides the probing default and
+    /// declares its gate precisely so the shipped configuration pays no
+    /// forward passes at open. An operator asking "is my semantic channel
+    /// doing anything?" needs to know that nothing examined this vector
+    /// space — separation between real evidence and everything else measured
+    /// +0.012 here against lexical's +0.064 — and `gate_source` is the only
+    /// field that says so.
+    #[test]
+    fn the_default_vaults_semantic_gate_is_declared_not_measured() {
+        let (_dir, s) = store(SecurityLevel::Sealed);
+        let sem = s.semantic_channel();
+        assert_eq!(
+            sem.gate_source, "embedder-constant",
+            "the hash embedder DECLARES its gate; reporting it as measured would tell an operator this vault's vector space was examined"
+        );
+        assert!(sem.gate.is_some(), "the default vault does gate");
+        // The floor is the hash declaration, which reproduces the shipped
+        // cosine map exactly — 0, not a probed value.
+        assert_eq!(sem.floor, 0.0);
+        // And the report is cheap: it reads what open already resolved, so
+        // `stats` never pays a forward pass for it.
+        assert_eq!(s.semantic_channel().gate, sem.gate);
     }
 
     /// The pagination contract: pages are slices of the one ranking a single
@@ -9975,13 +10653,77 @@ mod tests {
             // no caller vector to poison — stated rather than asserted with
             // a test that could not fail. What IS asserted is that the
             // guard sits at the statement level both paths share.
+            // STRUCTURAL, and the window is the FUNCTION rather than the file.
+            // This arm counted `is_finite())` across all of `lib.rs` and
+            // asserted `>= 1` while its message claimed the guard sits in
+            // `write_drawer_stmts` — a location no whole-file count can see.
+            // The regression that matters is not an accidental second
+            // occurrence; it is the guard MOVING BACK UP into `write_drawer`,
+            // which the guard's own comment records as having already happened
+            // once (2026-08-05). Under that move the count is still 1, the
+            // message still reads the same, and all three behavioural arms
+            // still pass, because every door they drive routes through
+            // `write_drawer`. Only `upsert_many` — which calls the statements
+            // directly, owning its own transaction — silently loses the guard.
+            // ROADMAP M13.
             let src = std::fs::read_to_string(
                 std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"),
             )
             .unwrap();
             let guard = concat!("is_finite", "())");
-            let sites = src.matches(guard).count();
-            assert!(sites >= 1, "the non-finite guard is in write_drawer_stmts");
+
+            // The window ends at the closing brace at METHOD indentation, so a
+            // neighbouring method's text cannot satisfy it.
+            let window_of = |sig: &str| -> String {
+                let at = src
+                    .find(sig)
+                    .unwrap_or_else(|| panic!("`{sig}` is not in lib.rs any more — stale gate"));
+                let body = &src[at..];
+                let end = body.find("\n    }\n").unwrap_or_else(|| {
+                    panic!("`{sig}` has no closing brace at method indentation")
+                });
+                // CODE only. A comment naming the guard is not the guard, and
+                // a gate whose own text is part of what it measures is this
+                // tree's most-repeated gate defect.
+                body[..end]
+                    .lines()
+                    .filter(|l| !l.trim_start().starts_with("//"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+
+            let stmts = window_of("fn write_drawer_stmts(");
+            let outer = window_of("fn write_drawer(");
+            // PREMISE, both windows. A boundary rule that produced an empty or
+            // truncated span would make every assertion below vacuous, and a
+            // vacuous assertion reports exactly what a correct tree reports.
+            assert!(
+                stmts.len() > 500 && outer.len() > 200,
+                "premise: the windows are {} and {} bytes, so the boundary rule \
+                 is wrong and the location checks below mean nothing",
+                stmts.len(),
+                outer.len()
+            );
+            assert!(
+                stmts.contains("INSERT INTO drawers"),
+                "premise: the comment stripper kept the code — it did not, so \
+                 this examined the wrong text"
+            );
+            assert_eq!(
+                stmts.matches(guard).count(),
+                1,
+                "the non-finite guard must be IN `write_drawer_stmts`, the \
+                 statement-level function both write paths share — `upsert_many` \
+                 reaches only this one"
+            );
+            assert!(
+                !outer.contains(guard),
+                "the non-finite guard has moved back up into `write_drawer`. \
+                 `upsert_many` does not call it, so the bulk path — every CLI \
+                 `import` and every sealed-bundle restore — has silently lost \
+                 the refusal. This exact regression is what the guard's own \
+                 comment says happened before 2026-08-05"
+            );
         }
     }
 
@@ -15292,7 +16034,71 @@ mod tests {
             )
             .is_err());
         // The unlabeled-rows count the policy requires.
-        assert_eq!(s.unkinded_in_scope(None, None).unwrap(), 1);
+        assert_eq!(s.unkinded_in_scope(&SearchOptions::default()).unwrap(), 1);
+    }
+
+    /// ROADMAP M21 (round-four `#51`). The honest-exclusion count must be
+    /// computed under the SAME policy as the search it annotates.
+    ///
+    /// It counted `kind IS NULL` within the wing/room scope and nothing else,
+    /// while `resolve_search_policy` removes the reserved review wing before
+    /// any candidate is drawn. So a quarantined, unlabeled drawer — never in
+    /// the kind filter's competition — was reported to the caller as an
+    /// in-scope row the kind filter had passed over. The note exists to let a
+    /// caller tell an empty result from a label-coverage gap, and it was
+    /// quietly reporting a third thing.
+    #[test]
+    fn the_unlabeled_count_excludes_what_the_search_policy_already_removed() {
+        let (_d, mut s) = store(SecurityLevel::HmacOnly);
+        // One ordinary unlabeled drawer: the count this SHOULD report.
+        s.upsert(&drawer("notes", "r", "an unlabeled note about turbines", 0))
+            .unwrap();
+        // And one unlabeled drawer in the reserved review wing, which every
+        // search excludes pre-candidate.
+        let mut quar = drawer(
+            crate::admission::QUARANTINE_WING,
+            "r",
+            "diverted text about turbines",
+            1,
+        );
+        quar.meta.wing = crate::admission::QUARANTINE_WING.to_string();
+        s.write_drawer(
+            &quar,
+            s.embedder_embed(&quar.content),
+            Screen::Bypass(BypassReason::AlreadyDiverted),
+        )
+        .unwrap();
+
+        // PREMISE: both rows really are unlabeled and really are present, so
+        // a count of 1 below is an exclusion rather than an empty corpus.
+        let raw: i64 = s
+            .conn
+            .query_row("SELECT COUNT(*) FROM drawers WHERE kind IS NULL", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(raw, 2, "premise: two unlabeled rows exist on disk");
+
+        assert_eq!(
+            s.unkinded_in_scope(&SearchOptions::default()).unwrap(),
+            1,
+            "the quarantined row was never in the kind filter's competition, \
+             so counting it tells the caller the filter passed over a row it \
+             never saw"
+        );
+
+        // The reviewer's own scope is the one place it counts: naming the
+        // reserved wing is how docs/LABELS.md says a reviewer opts back in,
+        // and the policy returns the trust clause unchanged for it.
+        let reviewing = SearchOptions {
+            wing: Some(crate::admission::QUARANTINE_WING.to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            s.unkinded_in_scope(&reviewing).unwrap(),
+            1,
+            "a reviewer scoped INTO the review wing sees its unlabeled row"
+        );
     }
 
     /// The kind filter cannot be starved by the corpus top-k — the same
