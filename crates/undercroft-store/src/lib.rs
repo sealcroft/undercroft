@@ -29,7 +29,9 @@ mod rotate;
 pub use admission::{PendingAdmission, QUARANTINE_WING};
 pub use forget::{AttestationVerdict, ForgetAttestation, MirrorDelete};
 pub use kg::{KgStats, ReceiptStatus, ReceiptVerdict, SupersessionStatus, Triple, TripleExport};
-pub use manage::{DedupReport, DrawerSummary, Hallway, PalaceStats, Tunnel, UpdateOutcome};
+pub use manage::{
+    DedupReport, DrawerSummary, Hallway, Namespace, PalaceStats, Tunnel, UpdateOutcome,
+};
 pub use pqidx::WING_PQ_MIN_DEFAULT;
 pub use remote::PlaintextPush;
 pub use rotate::RotationReport;
@@ -631,13 +633,24 @@ pub(crate) const CODEBOOK_ARTIFACTS: [&str; 5] = [
 /// its data statements with exactly one `chain_append` in one transaction —
 /// the invariant that makes a crash unable to separate a record from its
 /// chain entry.
+///
+/// **The namespace is a required argument, not part of `rest`** (ROADMAP
+/// O80). Call sites used to compose the whole label inline, so the set of
+/// namespaces this store mints existed only as twenty scattered `format!`
+/// strings — and the inventory that claimed to classify them was a hand
+/// list whose gate never read the code, which is how `tunnel/` came to be
+/// minted, unclassified, and invisible to a green gate. Now a namespace has
+/// to be a [`Namespace`] variant, and a variant does not compile until
+/// somebody rules on whether the agent surface may see it.
 pub(crate) fn chain_append(
     conn: &rusqlite::Connection,
     vault: &Vault,
-    record_id: &str,
+    ns: Namespace,
+    rest: &str,
     tag: &[u8],
     at: &str,
 ) -> Result<(String, u64), StoreError> {
+    let record_id = ns.record(rest);
     conn.execute(
         "INSERT INTO audit (record_id, tag, at) VALUES (?1, ?2, ?3)",
         params![record_id, tag, at],
@@ -4544,7 +4557,14 @@ impl PalaceStore {
                 now,
             ],
         )?;
-        let (head, writes) = chain_append(&self.conn, &self.vault, &drawer.id, &tag, &now)?;
+        let (head, writes) = chain_append(
+            &self.conn,
+            &self.vault,
+            Namespace::Drawer,
+            &drawer.id,
+            &tag,
+            &now,
+        )?;
         Ok((existing.is_none(), head, writes))
     }
 
@@ -6251,7 +6271,7 @@ impl PalaceStore {
         );
         let tag = self.vault.tag(canonical.as_bytes());
         let tx = self.conn.unchecked_transaction()?;
-        chain_append(&tx, &self.vault, &format!("read/{kind}"), &tag, &now)?;
+        chain_append(&tx, &self.vault, Namespace::Read, kind, &tag, &now)?;
         tx.commit()?;
         Ok(())
     }
@@ -6283,7 +6303,8 @@ impl PalaceStore {
         );
         let tag = self.vault.tag(canonical.as_bytes());
         let tx = self.conn.transaction()?;
-        let (head, writes) = chain_append(&tx, &self.vault, "egress/export", &tag, &now)?;
+        let (head, writes) =
+            chain_append(&tx, &self.vault, Namespace::Egress, "export", &tag, &now)?;
         tx.commit()?;
         self.vault.anchor_manifest(&head, writes)?;
         Ok(())
@@ -6846,10 +6867,20 @@ impl PalaceStore {
             for label in labels {
                 // **A label with no `/` is a DRAWER id**, and it is the only
                 // bare namespace this store mints — every other label carries
-                // a prefix (`kg/`, `kg-entity/`, `del/`, `admission/`,
-                // `trust/`, `retention/`, `retention-clear/`, `egress/`,
-                // `read/`, `rotate/`, `migrate/`, `tunnel/`). Enumerated from
-                // every `chain_append` call site rather than assumed.
+                // a prefix. That is `Namespace::Drawer`, whose `prefix()` is
+                // the empty string, and the vocabulary beside it is the whole
+                // set; this comment used to enumerate the twelve by hand.
+                //
+                // Worth recording, because it is what O80 cost: that hand
+                // list was CORRECT and included `tunnel/`, while `MINTED` one
+                // file over — the inventory whose stated job was to classify
+                // every minted namespace — listed eleven and did not. Two
+                // enumerations of one fact, disagreeing, with nothing
+                // comparing them. It also described its own method as
+                // "enumerated from every `chain_append` call site", which
+                // could not have produced `rotate/`: that one is minted by
+                // `rotate.rs`'s own `INSERT INTO audit`, and a scan of
+                // `chain_append` callers cannot see it.
                 //
                 // The leg used to stop at the graph, and the reason on file
                 // was that "every other namespace has a legitimate path to an

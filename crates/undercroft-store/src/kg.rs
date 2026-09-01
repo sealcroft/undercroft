@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
-use crate::{chain_append, PalaceStore, StoreError};
+use crate::{chain_append, Namespace, PalaceStore, StoreError};
 
 // The screened-field inventory moved to `admission::SCREENED_FIELDS` in O29
 // and gained an owner key, because it had to span two tables: it was scoped
@@ -542,7 +542,7 @@ fn ensure_entity_in(
         "INSERT INTO kg_entities (id, name, etype, tag, created_at, name_rest)          VALUES (?1, ?2, 'unknown', ?3, ?4, ?5)",
         params![id, name_at_rest, tag.as_slice(), at, name_rest],
     )?;
-    let state = chain_append(tx, vault, &format!("kg-entity/{id}"), &tag, at)?;
+    let state = chain_append(tx, vault, Namespace::KgEntity, &id, &tag, at)?;
     Ok(Some(state))
 }
 
@@ -1065,7 +1065,7 @@ impl PalaceStore {
         let canonical =
             format!("migrate\u{1f}{kind}\u{1f}{version}\u{1f}{at}\u{1f}{moved}\u{1f}{skipped}");
         let tag = vault.tag(canonical.as_bytes());
-        crate::chain_append(conn, vault, &format!("migrate/{kind}"), &tag, at)
+        crate::chain_append(conn, vault, Namespace::Migrate, kind, &tag, at)
     }
 
     /// Move a pre-A10 sealed graph onto the blind index, once.
@@ -2168,7 +2168,7 @@ impl PalaceStore {
                 terms.as_deref(),
             ],
         )?;
-        let (head, writes) = chain_append(&tx, &self.vault, &format!("kg/{id}"), &tag, &now)?;
+        let (head, writes) = chain_append(&tx, &self.vault, Namespace::Kg, &id, &tag, &now)?;
         tx.commit()?;
         self.vault.anchor_manifest(&head, writes)?;
         if entity.is_some() {
@@ -2591,7 +2591,7 @@ impl PalaceStore {
                 terms.as_deref(),
             ],
         )?;
-        let (head, writes) = chain_append(&tx, &self.vault, &format!("kg/{id}"), &tag, &now)?;
+        let (head, writes) = chain_append(&tx, &self.vault, Namespace::Kg, &id, &tag, &now)?;
         tx.commit()?;
         self.vault.anchor_manifest(&head, writes)?;
         if entity.is_some() {
@@ -2683,7 +2683,8 @@ impl PalaceStore {
                     anchor = Some(chain_append(
                         &tx,
                         &self.vault,
-                        &format!("kg-entity/{id}"),
+                        Namespace::KgEntity,
+                        &id,
                         &tag,
                         &now,
                     )?);
@@ -2768,7 +2769,7 @@ impl PalaceStore {
                 params![ended, tag.as_slice(), held.id],
             )?;
             let (head, writes) =
-                chain_append(&tx, &self.vault, &format!("kg/{}", held.id), &tag, &ended)?;
+                chain_append(&tx, &self.vault, Namespace::Kg, &held.id, &tag, &ended)?;
             tx.commit()?;
             self.vault.anchor_manifest(&head, writes)?;
             undercroft_obs::kg_write(undercroft_obs::KgKind::Supersede);
@@ -2860,7 +2861,8 @@ impl PalaceStore {
         let (head, writes) = chain_append(
             &tx,
             &self.vault,
-            &format!("kg/{triple_id}/authority"),
+            Namespace::Kg,
+            &format!("{triple_id}/authority"),
             &tag,
             &now,
         )?;
@@ -3163,13 +3165,8 @@ impl PalaceStore {
                     terms.as_deref()
                 ],
             )?;
-            let (head, writes) = chain_append(
-                &tx,
-                &self.vault,
-                &format!("kg/{}", t.id),
-                &tag,
-                &now_rfc3339(),
-            )?;
+            let (head, writes) =
+                chain_append(&tx, &self.vault, Namespace::Kg, &t.id, &tag, &now_rfc3339())?;
             tx.commit()?;
             self.vault.anchor_manifest(&head, writes)?;
             undercroft_obs::kg_write(undercroft_obs::KgKind::Supersede);

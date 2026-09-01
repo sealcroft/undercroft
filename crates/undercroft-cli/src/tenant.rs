@@ -2532,7 +2532,8 @@ impl Tenancy {
     ///
     /// Operator scope here — the whole chain, every namespace. The agent
     /// surface gets the same capability fenced; see
-    /// `manage::AGENT_FENCED_NAMESPACES`.
+    /// `manage::Namespace::fenced_from_agent`, which is where every namespace
+    /// is ruled on and the only place it can be.
     ///
     /// A READ: `&self` on the store, no mutating call, so a `--read-only`
     /// server serves it. Query: `subject` (a drawer, fact or entity id, or a

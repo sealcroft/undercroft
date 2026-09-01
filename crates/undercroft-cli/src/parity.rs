@@ -221,10 +221,13 @@ pub const MCP_TOOLS: &[&str] = &[
     // Audit-chain history, `HistoryScope::Agent`. On MCP deliberately: an
     // agent that cannot ask "what happened to this memory" cannot audit its
     // own recall, and traceability is what this store sells. Fenced rather
-    // than raw — `manage::AGENT_FENCED_NAMESPACES` keeps the review queue,
-    // the trust map, retention, destructions, exports, read audits and
-    // rotations on the operator planes, which is why this is a tool and not
-    // an `OPERATOR_ONLY` entry.
+    // than raw — `Namespace::fenced_from_agent` keeps the review queue, the
+    // trust map, retention, destructions, exports, read audits, rotations and
+    // at-rest migrations on the operator planes, which is why this is a tool
+    // and not an `OPERATOR_ONLY` entry. What it does NOT fence is the agent's
+    // own work — its drawers, its facts and entities, and (ruled by ROADMAP
+    // O80) the tunnels it created, which `undercroft_list_tunnels` one line
+    // above already returns in full.
     "undercroft_history",
     "undercroft_delete_tunnel",
     "undercroft_list_hallways",

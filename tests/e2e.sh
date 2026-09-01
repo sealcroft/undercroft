@@ -893,6 +893,30 @@ else
   echo "FAIL  premise: the agent history answers"; echo "$AGENT_HIST" | sed 's/^/      /'; FAIL=$((FAIL+1))
 fi
 
+# ROADMAP O80: `tunnel/` is RULED OPEN, and this is the surface that ruling is
+# about. It was in neither `MINTED` nor the fence list, and the fence excludes
+# only what is LISTED — so these rows already reached agents with nobody
+# having decided they should. The ruling ratifies that (a tunnel is the
+# agent's own work, `undercroft_list_tunnels` already returns strictly more
+# than the audit row, and the reserved review wing cannot be a tunnel
+# endpoint), and this pins it where a caller can see it rather than leaving it
+# to whether someone remembered to add a string to a list.
+TUN_ID="$("$BIN" tunnel list 2>/dev/null | head -1 | awk '{print $1}')"
+# NOT `tr -dc 'a-f0-9'` over `tunnel create`'s sentence: that harvests hex
+# letters out of "Tunnel", the wing names and the label, and yields a
+# 32-character string for a 24-character id.
+if [ "${#TUN_ID}" -eq 24 ]; then
+  echo "ok    premise: a tunnel id to look for ($TUN_ID)"; PASS=$((PASS+1))
+else
+  echo "FAIL  premise: tunnel id is ${#TUN_ID} chars, expected 24"; FAIL=$((FAIL+1))
+fi
+if grep -qF "tunnel/$TUN_ID" <<<"$AGENT_HIST"; then
+  echo "ok    the agent surface sees the tunnel it created (O80 ruling)"; PASS=$((PASS+1))
+else
+  echo "FAIL  the agent surface sees the tunnel it created (O80 ruling)"; FAIL=$((FAIL+1))
+fi
+check "operator history sees tunnel/" 0 "tunnel/$TUN_ID"              -- "$BIN" history --limit 200
+
 echo "== Transcripts: render, import, daemon =="
 T_DIR="$(mktemp -d)"
 cat > "$T_DIR/session-x.jsonl" <<'JSONL'

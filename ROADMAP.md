@@ -3673,39 +3673,95 @@ thirteen read doors.
 
 ---
 
-### O80 — the audit-namespace gate compares two lists to each other, and `tunnel/` is in neither
+### O80 — CLOSED 2026-09-01: the vocabulary is a type, and `tunnel/` is ruled open
 
-**Found by the pre-release drift audit, 2026-08-31.**
+**Found by the pre-release drift audit, 2026-08-31. Closed 2026-09-01 (M49),
+both halves — and the filing's prescribed fix turned out not to work.**
 
-`manage.rs`'s `MINTED` inventory claims *"Every audit namespace the store MINTS
-is classified here"* and lists eleven: `admission/ trust/ retention/
+`manage.rs`'s `MINTED` inventory claimed *"Every audit namespace the store
+MINTS is classified here"* and listed eleven: `admission/ trust/ retention/
 retention-clear/ del/ egress/ read/ rotate/ migrate/ kg/ kg-entity/`.
-Measured, `chain_append` also mints **`tunnel/{id}`**, which is on neither
+Measured, `chain_append` also mints **`tunnel/{id}`**, which was on neither
 that list nor `AGENT_FENCED_NAMESPACES`.
 
-**The gate cannot see it.** Its own docstring says it *"counts the emitted
-prefixes against the two lists"* — precisely because *"it cannot see a
-namespace nobody added, which is exactly how `migrate/` reached the agent
-surface."* It does not do that. It iterates the two constants and compares
-them **to each other**, so a namespace the code emits and nobody listed is
-invisible by construction. The gate is green today while the invariant it
-states is false — the *ask what a gate can SEE* rule, on the gate written from
-that rule.
+**The gate could not see it.** Its docstring said it *"counts the emitted
+prefixes against the two lists"*. It iterated the two constants and compared
+them **to each other**, so a namespace the code emits and nobody listed was
+invisible by construction — both-directional, green, and structurally unable
+to answer the one question it existed for. Two lists are a closed system: they
+can be perfectly consistent and jointly wrong.
 
-**Live exposure is low and should not be overstated:** `tunnel/{id}` reaches
-`HistoryScope::Agent` unfenced, but an agent can already enumerate tunnels via
-`undercroft_list_tunnels`, so nothing is learned that was hidden. The defect
-is that **nobody ruled**, and the mechanism that was supposed to force a
-ruling does not.
+**The fix is a choke point, on `ReadOp`'s precedent.** `chain_append` takes a
+`manage::Namespace`, so the vocabulary is a TYPE and an unclassified namespace
+is **unrepresentable** rather than undetected. `prefix()` states each spelling
+once; `fenced_from_agent()` is the single place a namespace is ruled on. Both
+are exhaustive, so a new variant does not compile until someone has stated the
+spelling AND made the ruling — which is the forcing function this entry says
+was missing. `AGENT_FENCED_NAMESPACES` is gone; `agent_fenced_namespaces()`
+derives the fence from the vocabulary, so the two can no longer disagree
+because there is no longer a second list.
 
-**Not fixed here** because the fix has two halves and the second needs a
-ruling: read the emitted prefixes out of the source (the gate's stated design)
-AND decide whether `tunnel/` is agent-fenced. Adding it to a list without
-ruling would be the omission this entry is about, one line over.
+**The prescribed fix would have failed, and finding out took reading rather
+than trusting.** This entry asked for a gate reading the emitted prefixes out
+of the source, scoped to `chain_append`. Three of the twelve are outside that
+scope: `rotate/` is minted by `rotate.rs`'s own `INSERT INTO audit` — a second
+writer, which computes the chain head over preserved bytes and therefore
+cannot call `chain_append` — and `retention/`/`retention-clear/` reach the
+function through a VARIABLE built fourteen lines earlier, which no regex
+follows. Such a gate would have failed on three correct entries as
+listed-but-unminted, which is the documented calibration trap.
 
-**Gate:** the corrected check must fail on a namespace present in
-`chain_append` and absent from `MINTED` — proven by a counterfactual that adds
-one, not by observing the current tree passes.
+**A second enumeration of the same fact already existed and was correct.**
+`VerifyReport::orphan_labels`' comment in `lib.rs` lists **twelve** namespaces
+including `tunnel/`, beside `MINTED`'s eleven, with nothing comparing them. It
+also described its own method as *"enumerated from every `chain_append` call
+site"* — which cannot produce `rotate/`. Right answer, by a method that does
+not yield it.
+
+**The ruling: `tunnel/` is OPEN, and it RATIFIES.** The fence excludes only
+LISTED prefixes, so these rows already reached `HistoryScope::Agent`; nothing
+moves, and no `UPGRADING.md` entry is owed. Four grounds agree: the fence's own
+criterion is *"the same reason its capability is in `OPERATOR_ONLY`"* and
+`tunnel` is not there (`undercroft_create_tunnel`, `_list_tunnels`,
+`_follow_tunnel`, `_delete_tunnel` are agent tools); it is the agent's own
+work, as `kg/` is; `list_tunnels` already returns strictly more than the audit
+row does; and the `del/` counter-precedent does not reach it, `del/` being
+fenced because it MIXES agent deletions with operator-attested destruction
+while `tunnel/` has one minting site and tunnel deletions land in
+`del/tunnel/{id}`, still fenced. The reserved review wing cannot be a tunnel
+endpoint — refused at creation and again at read — so no quarantined evidence
+hides behind these rows.
+
+**Counterfactuals, both executed against the artifact.** Adding a variant with
+no ruling fails to compile with two `non-exhaustive patterns:
+Namespace::Diary not covered` errors, one per decision. Removing `Tunnel` from
+`Namespace::ALL` while `create_tunnel` still mints it fails the driver naming
+the row: *"tunnel/1a495610f4cfd36f40869e6d matches no namespace in the
+vocabulary"* — the defect this entry describes, now detected. Both restored
+from scoped file copies.
+
+**Byte-identity proved rather than assumed.** Twenty call sites moved, and
+`audit.record_id` is a durable label (A10) held by attestations, `forget.rs`'s
+`strip_prefix("del/")`, the graph's `strip_prefix("kg/")`, the orphan-label leg
+and the fence's `LIKE`. The chain hashes `tag` and never `record_id`, so a
+mistyped prefix verifies clean and breaks those readers silently — so
+`every_namespace_composes_the_record_id_it_always_did` compares each
+composition against a hand-written literal.
+
+**Found while closing it:** a fenced namespace with an EMPTY prefix would
+fence the whole chain (`Drawer`'s prefix is `""`, the fence builds
+`NOT LIKE '{prefix}%'`), and an empty agent history is indistinguishable from
+a vault nothing has happened to. Gated with a premise arm.
+
+**Measured on a real corpus:** 2,337 LoCoMo drawers across eight sealed wings —
+`verify` green, zero orphan labels, operator scope carrying all six reachable
+namespaces, agent scope fenced from three and still returning its drawers,
+facts, entities and, live over MCP, the tunnel it created.
+
+**Residual, stated:** `Namespace::ALL` is not compiler-enforced complete — a
+variant with both arms and no `ALL` entry is possible, and would be caught only
+when something mints it (the driver resolves every observed label against
+`ALL`). Same shape as `ReadOp::ALL`.
 
 ---
 

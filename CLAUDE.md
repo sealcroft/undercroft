@@ -816,6 +816,27 @@ Consequences that are binding, not advisory:
   ways past it. Residual, stated: a new `pub` STORE reader on `all_triples`
   reusing an existing `ReadOp` still passes the namespace gate — the drawer
   funnel carries the same residual for a reader that avoids `get`/`recent`),
+  **the audit-namespace vocabulary** (`manage::Namespace`, ROADMAP O80,
+  2026-09-01) — the third choke point, and `chain_append` requires one, so
+  the set of namespaces this store mints is a TYPE rather than twenty
+  scattered `format!` strings. `prefix()` states the spelling once and
+  `fenced_from_agent()` is the single place a namespace is ruled on for
+  `HistoryScope::Agent`; both are exhaustive, so a new variant does not
+  compile until someone has done both — which is what "nobody was forced to
+  rule" cost when `tunnel/` was minted by `create_tunnel`, classified
+  nowhere, and reached the agent surface because the fence excludes only
+  what is LISTED. Two things it is worth knowing. **`rotate/` is minted by
+  `rotate.rs`'s own `INSERT INTO audit`, not by `chain_append`** — it
+  computes the head over preserved bytes itself — so any gate scoped to
+  `chain_append` call sites is blind to it, and two of the others
+  (`retention/`, `retention-clear/`) reached that function through a
+  VARIABLE, which no source scan can follow. And **the record id is
+  `prefix()` + the caller's rest, byte for byte what the call sites used to
+  build**, pinned against hand-written literals rather than against "the
+  suite still passes": the chain hashes `tag` and never `record_id`, so a
+  mistyped prefix verifies perfectly clean while `forget.rs`'s
+  `strip_prefix("del/")`, the graph's `strip_prefix("kg/")` and the fence's
+  own `LIKE` all stop matching in silence,
   read/egress auditing (the consultation-filed gap, closed 2026-08-04:
   **exports chain-audited unconditionally on every surface** —
   `audit_export`, one `egress/export` record binding surface + recipient
@@ -1444,8 +1465,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (774 run,
-                                      # 4 #[ignore]d = 778 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (777 run,
+                                      # 4 #[ignore]d = 781 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1528,7 +1549,7 @@ docker compose run --rm test          # cargo unit + integration tests (774 run,
                                       # onnx crate's own ignored test is outside
                                       # default-members and never in this count)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (430 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (433 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (127 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (48 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate
@@ -2348,7 +2369,26 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   `admission::save_event`. Where it is arithmetic, an **inventory the code
   is counted against in both directions** (`cli/parity.rs`) — a tool
   without a line fails the build and a line without a tool fails it too,
-  which a hand-maintained doc table cannot do. Deliberate absences are
+  which a hand-maintained doc table cannot do.
+  **"Against THE CODE" is the load-bearing half of that sentence, and two
+  inventories agreeing with each other is not it** (ROADMAP O80). The
+  audit-namespace gate iterated `MINTED` and `AGENT_FENCED_NAMESPACES` and
+  compared them to one another while its own docstring claimed it *"counts
+  the emitted prefixes"* — so it was both-directional, green, and
+  structurally unable to see the one thing it existed for: a namespace the
+  code mints and neither list names. Two lists are a closed system; they can
+  be perfectly consistent and jointly wrong. Ask, of any inventory gate,
+  *which side of this comparison is derived from the code* — and if the
+  answer is neither, it is measuring agreement rather than truth. This is
+  *ask what a gate can SEE* with the second list mistaken for the tree.
+  Applied backwards it reclassifies exactly one gate, the one it was written
+  for, and CONFIRMS the rest — `parity.rs` derives its universe from
+  `MCP_TOOLS`, `SURFACE_ABSENCES` from `main.rs`'s dispatch, `ReadOp::ALL`
+  from audit rows a driver really wrote, `GAUGE_NAMES` from the emit sites,
+  `READ_SCHEMA` from the ADD COLUMN lists. One instance, and it is the
+  existing rule being SHARPENED rather than a new one: the tree already said
+  "against the code" and this is what the phrase costs when it is read
+  loosely. Deliberate absences are
   entries in `OPERATOR_ONLY` carrying their reason (an agent must not rule
   on the queue that exists to contain it, nor assign the trust class that
   decides what it may retrieve), asserted by the same test as the parity,

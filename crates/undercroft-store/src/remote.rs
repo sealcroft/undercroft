@@ -42,7 +42,7 @@ use base64::Engine;
 use rusqlite::{params, OptionalExtension};
 use undercroft_index::{IndexRecord, VectorIndex};
 
-use crate::{PalaceStore, SearchHit, SearchOptions, StoreError};
+use crate::{Namespace, PalaceStore, SearchHit, SearchOptions, StoreError};
 use undercroft_vault::SecurityLevel;
 
 /// Raw index-push row: (id, wing, room, content, embedding).
@@ -281,8 +281,14 @@ impl PalaceStore {
         );
         let tag = self.vault.tag(canonical.as_bytes());
         let tx = self.conn.transaction()?;
-        let (head, writes) =
-            crate::chain_append(&tx, &self.vault, "egress/index-push", &tag, &now)?;
+        let (head, writes) = crate::chain_append(
+            &tx,
+            &self.vault,
+            Namespace::Egress,
+            "index-push",
+            &tag,
+            &now,
+        )?;
         tx.commit()?;
         self.vault.anchor_manifest(&head, writes)?;
         Ok(())

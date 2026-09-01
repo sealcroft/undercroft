@@ -7,6 +7,110 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### the inventory that counted itself, and the namespace nobody had ruled on (M49)
+
+**ROADMAP O80 CLOSED**, both halves — the gate, and the ruling it existed to
+force.
+
+**A gate that compares two lists to each other is a closed system.**
+`manage.rs`'s `MINTED` claimed *"Every audit namespace the store MINTS is
+classified here"* and its test's own docstring said it *"counts the emitted
+prefixes against the two lists"*. It did not. Both loops iterated `MINTED` and
+`AGENT_FENCED_NAMESPACES` and compared them **to one another**, so a namespace
+the code emitted and neither list named was invisible by construction. It was
+both-directional, green on every CI run, and structurally blind to the one
+thing it was written for. `tunnel/{id}`, minted by `create_tunnel` since
+tunnels existed, was exactly that — and the fence excludes only what is
+LISTED, so those rows had been reaching `HistoryScope::Agent` all along with
+nobody having decided they should.
+
+**The fix is a choke point, not a better scan** — `ReadOp`'s mechanism one
+funnel over. `chain_append` now takes a `Namespace`, so the vocabulary is a
+TYPE: a namespace nobody classified is **unrepresentable** rather than merely
+undetected. `prefix()` states each spelling once and `fenced_from_agent()` is
+the single place a namespace is ruled on; both are exhaustive, so a new
+variant does not compile until someone has done both. Counterfactual,
+executed: adding a variant without a ruling fails with two
+`non-exhaustive patterns: Namespace::Diary not covered` errors, one per
+decision.
+
+**Why the filing's own prescription would not have worked**, found by reading
+rather than by trusting it. O80 asks for a gate that *"reads the emitted
+prefixes out of the source"*, scoped to `chain_append` call sites. Measured,
+that scope misses three of the twelve: `rotate/` is minted by `rotate.rs`'s
+own `INSERT INTO audit` — a **second writer**, which computes the chain head
+over preserved bytes itself and so cannot call `chain_append` — and
+`retention/` and `retention-clear/` reach it through a **variable** built
+fourteen lines earlier, which no regex can follow. A source scan would have
+reported those three as listed-but-never-minted and failed on three correct
+entries, which is the calibration trap this project already names: *a check
+that flags the artifact you confirmed with your own eyes is wrong about the
+check*.
+
+**The tree already held the right answer, in the wrong file.**
+`VerifyReport::orphan_labels`' comment in `lib.rs` enumerates **twelve**
+namespaces including `tunnel/`, while `MINTED` — the inventory whose stated
+job was to classify every one of them — listed eleven. Two enumerations of one
+fact, disagreeing, with nothing comparing them. That comment also described
+its own method as *"enumerated from every `chain_append` call site"*, which
+could not have produced `rotate/`; it got the right answer by a method that
+does not yield it.
+
+**The ruling: `tunnel/` is OPEN, and it RATIFIES rather than changes.** Those
+rows already reached agents, so no behaviour moves and no `UPGRADING.md` entry
+is owed. Four grounds agree. The fence's own criterion is *"the same reason
+its capability is in `OPERATOR_ONLY`"*, and `tunnel` is not there —
+`undercroft_create_tunnel`, `_list_tunnels`, `_follow_tunnel` and
+`_delete_tunnel` are all agent tools. It is the agent's own work, exactly as
+`kg/` is. Nothing is learned: `list_tunnels` already returns the id, both
+wings, the label and the creation time, against an audit row carrying
+`tunnel/{id}`, a tag and a timestamp. And the `del/` counter-precedent does
+not reach it — `del/` is fenced because it MIXES agent deletions with
+`forget_with_proof`'s operator-attested destruction, while `tunnel/` has one
+minting site and no operator-only writer, and tunnel DELETIONS land in
+`del/tunnel/{id}`, which stays fenced. The reserved review wing cannot be a
+tunnel endpoint, refused at creation and again at read, so no quarantined
+evidence hides behind one of these rows.
+
+**Byte-identity was proved, not assumed.** Twenty call sites were rewritten,
+and `audit.record_id` is a durable label (A10) held by attestations, by
+`forget.rs`'s `strip_prefix("del/")`, by the graph's `strip_prefix("kg/")`, by
+the orphan-label leg and by the fence's `LIKE`. The chain hashes `tag` and
+never `record_id`, so a mistyped prefix would verify **perfectly clean** and
+break those readers in silence — the one failure mode the suite cannot report.
+`every_namespace_composes_the_record_id_it_always_did` compares each
+composition to a hand-written literal, which is a different claim from
+"the tests still pass".
+
+**Also fixed: a fenced namespace with an empty prefix would have fenced the
+whole chain.** `Namespace::Drawer`'s prefix is `""` and the fence builds
+`record_id NOT LIKE '{prefix}%'`, so one wrong ruling would render every
+agent's history empty — and an empty history reads exactly like a vault
+nothing has happened to. Gated, with a premise arm so it cannot pass by
+examining nothing.
+
+**Driven through a real corpus**: 2,337 LoCoMo drawers across eight wings,
+sealed. `verify` green, zero orphan labels, the operator scope carrying all
+six reachable namespaces and the agent scope fenced from three of them while
+still returning its own drawers, facts, entities and — live over MCP — the
+tunnel it created. The first run of that instrument reported a false failure:
+`tr -dc 'a-f0-9'` over `tunnel create`'s sentence harvests hex letters out of
+"Tunnel", "wing0", "wing1" and the label, producing a 32-character string for
+a 24-character id. The instrument was wrong, not the code, and the corrected
+extraction is in the script with that reason written beside it.
+
+Gates: `every_minted_namespace_is_in_the_vocabulary_and_classified` (a real
+store driven through ten of the thirteen variants, both fence directions, with
+the three it cannot cheaply reach — `Read`, `Rotate`, `Migrate` — NAMED rather
+than silently absent), `every_namespace_composes_the_record_id_it_always_did`,
+`a_fenced_namespace_always_has_a_prefix`, `the_prefixes_are_distinct`.
+
+Residual, stated: `Namespace::ALL` is not compiler-enforced to be complete —
+a variant could exist with `prefix()` and `fenced_from_agent()` arms and no
+`ALL` entry. It would be caught the moment anything mints it (the driver
+resolves every observed label against `ALL` and fails naming it), which is the
+same shape `ReadOp::ALL` carries, and is recorded rather than implied.
+
 ### a declaration that made the CLI panic, and the operator plane that could not open its own vaults (M48)
 
 **ROADMAP O81 CLOSED**, and the filing's central question — *remove the

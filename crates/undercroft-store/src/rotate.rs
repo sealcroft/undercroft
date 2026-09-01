@@ -737,7 +737,7 @@ impl PalaceStore {
             tx.execute(
                 "INSERT INTO audit (record_id, tag, at) VALUES (?1, ?2, ?3)",
                 params![
-                    format!("rotate/{}", &next.keycheck_hex()[..16]),
+                    crate::manage::Namespace::Rotate.record(&next.keycheck_hex()[..16]),
                     rotate_tag,
                     rotated_at
                 ],
