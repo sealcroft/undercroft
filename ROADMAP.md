@@ -1116,7 +1116,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**112** of the **127** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**113** of the **128** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4035,6 +4035,72 @@ that must stay fast; the honest statement is that one feature gained a lint
 here and two others still have none.
 
 ---
+
+### O85 — CLOSED 2026-09-01: the battery reported stale figures that were correct, and died reading a variable it had skipped
+
+**Found by CI going red on `91571ea` (M52), which the local battery had passed
+at the same tree.** Two latent defects in `tests/battery.sh`, both
+PRE-EXISTING — `LANDING` dates to `87b9f4d` and is at line 792 of `293e7d0`,
+this session's starting commit — and both reachable only through a condition
+that had not occurred before.
+
+**What CI actually reported was three things, and only the first was true.**
+Every test passed: 782 over 20 targets, digit-for-digit what the tree
+publishes. Then:
+
+* `PREMISE FAILURE: 1 orphan result line(s) — the log tail was replayed`, the
+  documented O15 condition, INTERMITTENT and a `docker compose run` streaming
+  artifact rather than anything about the tree. It made the reader count
+  **740 over 19 targets**.
+* `PUBLISHED FIGURES ARE STALE — CLAUDE.md publishes 782 run, this run
+  measured 740`. **False.** The figures were right; the measurement was not.
+* `tests/battery.sh: line 1987: LANDING: unbound variable`, killing the script
+  under `set -u`.
+
+**Defect one: a count the reader had already called untrustworthy was
+compared anyway.** `test_summary` embeds `** PREMISE FAILURE **` in the same
+line as the count, and the comparison's guard rejected only NON-NUMERIC
+output — so a replay yields a perfectly numeric count over the wrong number of
+targets and sails through. That is worse than not checking: it sends the next
+person to edit a figure that was already correct. The guard now matches the
+marker and reports **COUNT UNVERIFIABLE**, a verdict distinct from doc drift,
+saying re-run and explicitly saying *do not edit a published figure to match
+this*. It still FAILS, because a gate that cannot measure must not report
+clean — and the cost is stated: an intermittent docker artifact reds a CI run
+that a re-run clears.
+
+**Defect two is M13's, on the surface M13 missed.** M13 moved the shared
+READERS (`test_summary`, `suite_summary`, `declare_suite_counts`,
+`suite_count`) outside the `--no-preflight` block precisely so CI's suite legs
+could call them. `LANDING` is a VARIABLE serving the same post-run code and
+stayed inside. It survived because **the only line that reads it runs solely
+when a cargo-test figure MISMATCHES** — on a green run the comparison
+short-circuits first — so the two defects are one trap: the first manufactures
+a mismatch, and the mismatch reaches the second.
+
+**Reproduced locally before fixing, on CI's exact path**: publishing a wrong
+figure and running `bash tests/battery.sh --no-preflight test` gives
+`LANDING: unbound variable` at the same line. After the fix the same command
+reports the real drift and exits 1.
+
+**Gate:** the reader's own self-test preflight gained two arms, both
+directions — a replayed summary must carry the marker the comparison guards
+on, and a CLEAN summary must NOT, since a guard that always trips means the
+figures stop being compared at all and a gate that always declines to measure
+reports what a passing one reports.
+
+**Residual, stated:** the end-to-end premise path is gated at the MARKER, not
+by running a full battery over a replayed log — the battery writes that log
+itself, so a test cannot hand it one without modifying the artifact under
+test. The marker agreement is the part that can silently drift; the
+end-to-end behaviour was observed once, in the CI run that found this.
+
+**And the honest note about the trigger:** the replay is intermittent and
+CLAUDE.md already says so — *"two batteries the same hour on the same tree
+produced one duplicated log and one clean one, which is worse than a constant
+error"*. This unit does not stop it happening. It stops it being reported as
+something it is not.
+
 ---
 
 ### O78 — CLOSED 2026-08-30: the platform-views set fetched a font from Google, and the option list was wrong

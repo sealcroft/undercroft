@@ -7,6 +7,64 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### the battery called correct figures stale, then died reading a variable it had skipped (M53)
+
+**ROADMAP O85 CLOSED.** Found by CI going red on `91571ea` (M52) — which the
+local battery had passed at the same tree, which is the whole shape of it.
+
+**Every test passed.** 782 over 20 targets, digit-for-digit what the tree
+publishes. CI then reported three things and only the first was true:
+
+* `PREMISE FAILURE: 1 orphan result line(s) — the log tail was replayed`, the
+  documented O15 condition — INTERMITTENT, and a `docker compose run`
+  streaming artifact rather than anything about the tree. It made the reader
+  count **740 over 19 targets**.
+* `PUBLISHED FIGURES ARE STALE — CLAUDE.md publishes 782 run, this run
+  measured 740`. **False.** The figures were right; the measurement was not.
+* `tests/battery.sh: line 1987: LANDING: unbound variable`, killing the
+  script under `set -u`.
+
+**A count the reader had already called untrustworthy was compared anyway.**
+`test_summary` embeds `** PREMISE FAILURE **` in the SAME line as the count,
+and the comparison guarded only on the count being NON-NUMERIC — so a replay
+yields a perfectly numeric count over the wrong number of targets and sails
+through. That is worse than not checking: it sends the next reader to edit a
+figure that was already correct. The guard matches the marker now and reports
+**COUNT UNVERIFIABLE**, a verdict distinct from doc drift, which says re-run
+and says explicitly *do not edit a published figure to match this*. It still
+FAILS — a gate that cannot measure must not report clean — and the cost is
+stated rather than hidden: an intermittent docker artifact reds a CI run that
+a re-run clears.
+
+**The second defect is M13's, on the surface M13 missed.** M13 moved the
+shared READERS out of the `--no-preflight` block precisely so CI's suite legs
+could call them; `LANDING` is a VARIABLE serving the same post-run code and
+stayed inside. It survived because **the only line that reads it runs solely
+when a cargo-test figure MISMATCHES** — on a green run the comparison
+short-circuits first. So the two defects are one trap: the first manufactures
+a mismatch, and the mismatch reaches the second. Both PRE-EXISTING — `LANDING`
+dates to `87b9f4d` and sits at line 792 of `293e7d0`, this session's starting
+commit — and neither was reachable until an intermittent condition arrived.
+
+**Reproduced on CI's exact path before fixing**: publishing a deliberately
+wrong figure and running `bash tests/battery.sh --no-preflight test` gives
+`LANDING: unbound variable` at the same line. After the fix, the same command
+reports the real drift and exits 1.
+
+Gate: the reader's own self-test preflight gained two arms, both directions —
+a replayed summary must carry the marker the comparison guards on, and a CLEAN
+summary must NOT, since a guard that always trips means the figures stop being
+compared at all, and a gate that always declines to measure reports what a
+passing one reports.
+
+**Residual, stated:** the end-to-end premise path is gated at the MARKER
+rather than by running a full battery over a replayed log — the battery writes
+that log itself, so a test cannot hand it one without modifying the artifact
+under test. The marker agreement is the part that can silently drift; the
+end-to-end behaviour was observed once, in the CI run that found this.
+
+No published figure moved: the suites are unchanged at 782/438/127/53/57/10/7/13.
+
 ### the whole corpus left for a network endpoint and the chain said nothing (M52)
 
 **ROADMAP O79 CLOSED.** The filing said it needed *"a ruling on whether a dry

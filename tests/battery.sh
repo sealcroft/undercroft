@@ -285,6 +285,19 @@ declare_suite_counts() {
 SUITE_COUNTS=$(declare_suite_counts)
 suite_count() { grep -oE "^$1=[0-9]+" <<< "$SUITE_COUNTS" | head -1 | cut -d= -f2; }
 
+# **Defined OUT HERE for the reason the four readers above are** (M13, and
+# then O85 the hard way). It was set inside the preflight block and read by
+# the post-run figure comparison, which runs under `--no-preflight` — the
+# flag every CI suite leg uses. M13 moved the shared FUNCTIONS out of that
+# block and left this VARIABLE behind, and the miss was invisible because the
+# only line that reads it is reached exclusively when a cargo-test figure
+# MISMATCHES: on a green run the comparison short-circuits first. So it sat
+# for as long as the figures happened to agree, and then took a CI run down
+# with `LANDING: unbound variable` under `set -u` — at which point the
+# battery reported "PUBLISHED FIGURES ARE STALE" naming numbers that were
+# not stale.
+LANDING="website/landing/index.html"
+
 if [ "$NO_PREFLIGHT" -eq 0 ]; then  # resume the preflight block
 
 # The gate for it, run host-side because no image carries this script. Both
@@ -320,6 +333,32 @@ esac
 case "$SUM_REPLAY" in
   *"PREMISE FAILURE: 1 orphan"*) ;;
   *) echo "FAIL  the replay was absorbed silently: $SUM_REPLAY"; SUM_FAIL=1 ;;
+esac
+# **And the post-run figure comparison must SEE that premise failure** (O85).
+#
+# It used to guard only on the count being NON-NUMERIC — and a replayed log
+# yields a perfectly numeric count over the wrong number of targets, so the
+# comparison ran, found a mismatch, and announced "PUBLISHED FIGURES ARE
+# STALE" naming figures that were correct. This asserts the two agree about
+# what a premise failure looks like: the guard down there matches on the same
+# substring this reader emits, and a rename of one without the other would
+# silently restore the defect.
+case "$SUM_REPLAY" in
+  *"PREMISE FAILURE"*) ;;
+  *)
+    echo "FAIL  the reader's premise-failure marker changed; the figure"
+    echo "      comparison guards on 'PREMISE FAILURE' and would compare a"
+    echo "      count this reader has already called untrustworthy: $SUM_REPLAY"
+    SUM_FAIL=1 ;;
+esac
+# The other direction: a CLEAN summary must NOT trip that guard, or the
+# comparison never runs and the figures stop being checked at all — a gate
+# that always declines to measure reports the same thing as one that passes.
+case "$SUM_CLEAN" in
+  *"PREMISE FAILURE"*)
+    echo "FAIL  a clean log trips the premise guard: the figure comparison"
+    echo "      would never run: $SUM_CLEAN"
+    SUM_FAIL=1 ;;
 esac
 # A reader that examined nothing must say so rather than print a clean zero.
 case "$SUM_EMPTY" in
@@ -789,7 +828,8 @@ echo "      scoped to a project it names"
 
 echo "═══ preflight: published figures ═══"
 
-LANDING="website/landing/index.html"
+# `LANDING` is set beside the shared readers above, OUTSIDE the preflight
+# block, because the post-run comparison reads it under `--no-preflight`.
 # label|class|source
 PUBLISHED_FIGURES=(
   "cargo tests|measured|test"
@@ -1978,9 +2018,25 @@ if printf '%s\n' "${NAMES[@]}" | grep -qx test; then
   tline=$(test_summary ".battery/test.log")
   tpass=$(sed -E 's/^([0-9]+) passed.*/\1/' <<< "$tline")
   tign=$(sed -E 's/.*, ([0-9]+) ignored.*/\1/' <<< "$tline")
+  # **A count the reader called untrustworthy must not be compared** (O85).
+  #
+  # `test_summary` embeds `** PREMISE FAILURE **` in the SAME line when it
+  # detects a replayed log tail (O15), and the guard below only rejected
+  # NON-NUMERIC output — so a replay produced a perfectly numeric count over
+  # the wrong number of targets, this block compared it to the published
+  # figure, and the battery announced "PUBLISHED FIGURES ARE STALE" naming
+  # numbers that were correct. That is worse than not checking: it sends the
+  # next person to edit a figure that was already right, and it turns an
+  # intermittent docker artifact into a doc-drift verdict.
+  #
+  # It still FAILS — a gate that cannot measure must not report clean, which
+  # is this file's oldest rule — but it fails saying what actually happened.
+  case "$tline" in
+    *"PREMISE FAILURE"*) FIGURE_UNVERIFIABLE="$tline" ;;
+  esac
   case "$tpass" in
     ''|*[!0-9]*) : ;;   # the reader said something else; it names its own failure
-    *)
+    *) if [ -n "${FIGURE_UNVERIFIABLE:-}" ]; then :; else
       cm_run=$(grep -oE 'integration tests \([0-9]+ run' CLAUDE.md | grep -oE '[0-9]+' | head -1)
       cm_comp=$(grep -oE '= [0-9]+ compiled' CLAUDE.md | grep -oE '[0-9]+' | head -1)
       tile=$(grep -oE 'data-count="[0-9]+">0</div><div class="l">cargo tests' "$LANDING" \
@@ -1995,8 +2051,21 @@ if printf '%s\n' "${NAMES[@]}" | grep -qx test; then
       if [ -n "$tile" ] && [ "$tile" != "$tpass" ]; then
         FIGURE_DRIFT="$FIGURE_DRIFT  cargo tests: the landing tile publishes $tile, this run measured $tpass\n"
       fi
+      fi
       ;;
   esac
+fi
+
+if [ -n "${FIGURE_UNVERIFIABLE:-}" ]; then
+  echo ""
+  echo "COUNT UNVERIFIABLE — the suites passed and the figures were NOT compared."
+  echo "The test-count reader reported a premise failure, so the number it"
+  echo "produced describes a replayed log rather than this run (ROADMAP O15):"
+  echo "  $FIGURE_UNVERIFIABLE"
+  echo "      This is NOT doc drift. Do not edit a published figure to match it."
+  echo "      Re-run the test suite; the replay is intermittent, and a clean log"
+  echo "      pairs every target header with exactly one result line."
+  OVERALL=1
 fi
 
 if [ -n "$FIGURE_DRIFT" ]; then
