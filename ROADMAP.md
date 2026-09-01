@@ -1116,7 +1116,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**116** of the **131** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**117** of the **132** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -1288,7 +1288,10 @@ touching anyone's existing corpus.
 integrity verdict, and two different model files must produce two different
 identities.
 
-## 1.2.0 — released 2026-09-01 — three round-four rows, all naming or reporting contracts, plus what closing them found
+## 1.2.0 — released 2026-09-01
+
+Three round-four rows, all naming or reporting contracts, plus what closing
+them found — which came to fifty-seven units.
 
 MINOR: new capability, backward compatible. Each of these adds a field or a
 value beside one that stays, because **renaming any of them is MAJOR by this
@@ -5769,6 +5772,61 @@ which is the same defect as a count in prose one level up. So: O6 is the click,
 O7 is the naming decision that needs a MAJOR, and O23 sits here as a filed cost
 with the argument for leaving it. Releasable work with no target release now
 has its own section above.
+
+### O87 — CLOSED 2026-09-01: the post-1.2.0 sweep, run against O61's own findings
+
+**The same question O61 asked, one release later**, and deliberately run
+against O61's list rather than from scratch — a sweep that re-derives its own
+scope finds what it happens to think of. Documents only: no code, no version
+surface moves. Three findings, and the interesting result is which of O61's
+did **not** recur.
+
+**O61's headline defect did NOT recur, and that is a real answer rather than
+a lucky one.** It found a `ROADMAP` pointer reading *"described in CHANGELOG
+under `## Unreleased`"* which cutting a release had silently broken. Searched
+again: the five surviving mentions of `## Unreleased` are all inside O61's own
+entry and the corrected 1.1.0 pointer — historical narrative *about* the
+defect, not live pointers. The `1.2.0` section names no CHANGELOG heading, so
+there was nothing for the rename to break.
+
+**1. `UPGRADING.md` still said `## 1.2.0 (unreleased)`.** It had just been
+released. The section one down reads `## 1.1.1 (released 2026-08-19)`, so the
+convention was already there to follow. This is the plainest form of the class
+this entry is named for.
+
+**2. The `ROADMAP` heading for `1.2.0` diverged from its own convention.**
+Release prep set `## 1.2.0 — released 2026-09-01 — three round-four rows,
+…`, appending the old descriptive tail after a second em-dash; `1.1.0` and
+`1.1.1` are `## X.Y.Z — released DATE` with the description in the body
+paragraph. Normalised, description moved into the body. **O61 is why this was
+looked for at all**: it records that the two files use DIFFERENT conventions
+(`ROADMAP` writes `— released DATE`, `CHANGELOG` writes `— DATE`) and that
+*the first attempt at O61's own fix produced a second broken pointer* by
+mixing them. Checked both this time: the CHANGELOG heading is
+`## 1.2.0 — 2026-09-01`, which is correct.
+
+**3. `docs/PARITY.md`'s as-of note had gone stale in its own arithmetic** —
+the note O61 ADDED. It read *"Two releases have shipped since"*; three have.
+Updated, and `1.2.0` assessed the same way its siblings were. **The label
+stays at `v1.0.0`**, because no full re-read of its 225 lines was done and
+moving it would assert one — the rule that note itself sets.
+
+**The 1.2.0 assessment is labelled as WEAKER than the other two, deliberately.**
+`1.1.1` argues from the definition of a PATCH and `1.1.0` was small enough to
+enumerate; `1.2.0` is fifty-seven units, and the claim that it introduced no
+new *category* is a judgement that all of them stayed inside five existing
+headings — checked at category level, not line by line. Saying so is the point:
+the failure this document keeps recording is a claim stronger than its
+evidence.
+
+**No gate is proposed.** A release renaming a heading that prose points at is
+real, but the pointers are prose in arbitrary files and the only check that
+would catch them is *"every backtick-quoted `## Heading` resolves"* — which
+O61 already established is unbuildable, because `git grep` finds such strings
+inside the paragraphs DESCRIBING the defect. That reasoning is unchanged and
+is cited rather than re-derived.
+
+---
 
 ### O61 — CLOSED 2026-08-19: a release breaks pointers that were true when written
 

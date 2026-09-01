@@ -48,12 +48,23 @@ this project, which is why the two codebases share concepts but not code
 > **The `v1.0.0` label is deliberate, and it was examined on 2026-08-19 rather
 > than ignored.** It is an *as-of* claim: moving it asserts that someone
 > re-read this document against the code, and the `version surfaces` preflight
-> therefore refuses to bump it with a release. Two releases have shipped since.
+> therefore refuses to bump it with a release. **Three** releases have shipped
+> since.
 > What was checked: `1.1.1` is a PATCH, so by definition it adds no capability
 > here; `1.1.0` was a MINOR whose entries are all fix-shaped — it hardened and
 > corrected **within** the categories below (a `/v1` route for a check the CLI
 > already had, control-plane telemetry, audit closures) and introduced no new
-> category. So the content is believed current and the label is not moved,
+> category. `1.2.0` is a much larger MINOR — fifty-seven units — and was
+> checked the same way on 2026-09-01, at the level of CATEGORY rather than
+> line: its read-audit choke point and `egress/refine` record extend the audit
+> chain already described under *Security layer*; `backup restore`'s exclusive
+> hold, the JSON 401 and the non-creating mirror status sit under
+> *Operations*; and the `/v1` expansion from 37 to 56 routes and MCP from 34
+> to 38 tools makes the surfaces under *Multi-tenancy & fleet operation*
+> broader without making them new. **That is a weaker check than the other
+> two and is labelled as one** — a PATCH argues from its own definition, and
+> `1.1.0` was small enough to enumerate; this is a judgement that fifty-seven
+> units stayed inside five headings. So the content is believed current and the label is not moved,
 > because a full re-read of all 225 lines against the code has **not** been
 > done and saying otherwise would be a claim stronger than its evidence —
 > which is the defect ROADMAP `O56` and `O6` both record. The next person to
