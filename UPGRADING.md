@@ -67,6 +67,46 @@ so rather than implying it checked them.
 
 ## 1.2.0 (unreleased)
 
+### `UNDERCROFT_INDEX_CA` is read ONCE per process for pgvector, so rotating the file needs a restart
+
+**Who is affected:** a deployment using the **pgvector** index backend with a
+declared `UNDERCROFT_INDEX_CA`, that replaces that PEM on disk and expects
+running processes to pick it up. Nobody else: the other four backends
+(qdrant, chroma, milvus, weaviate) already behaved this way, and a deployment
+that restarts to rotate is unaffected.
+
+pgvector speaks the postgres wire protocol rather than HTTP, so it could not
+use `agent_from_env` — the constructor every other hop goes through. It read
+the variable with a bare `std::env::var` and built its own TLS config **per
+connection**, which meant the PEM was re-read and re-parsed every time, and
+`index/status` is reachable once per request. That is the only hop in the
+workspace where a mid-flight CA swap ever took effect.
+
+It now goes through the shared resolver, which caches the resolution once per
+process — the restart-to-rotate property the policy has always documented,
+and which the other four backends already had.
+
+**Symptom if it bites you:** after replacing the CA file, pgvector index
+operations keep trusting the OLD root until the process restarts. If the old
+root expires first, those hops begin failing TLS while a valid CA sits on
+disk.
+
+**Fix:** restart the process after replacing the file. There is no flag; the
+alternative is re-reading a trust root per connection, which the policy calls
+silent un-pinning by another name.
+
+**Two related tightenings on the same variable**, both making pgvector match
+the other four rather than changing a documented contract. The value is now
+**trimmed**, so a path with a trailing newline (`UNDERCROFT_INDEX_CA=$(cat
+…)`) works where it previously failed to open. And an **empty or
+whitespace-only** value now refuses with a typed error naming the variable,
+where it previously failed with a confusing file-not-found. Neither can turn
+a working deployment into a broken one.
+
+`undercroft config check` validates the variable, but **cannot detect this
+one**: the caching is runtime behaviour, not a malformed declaration. That is
+stated rather than implied.
+
 ### A 401 from `serve-http` is now JSON, and every 401 carries `WWW-Authenticate`
 
 **Who is affected:** a client that string-matches the literal body

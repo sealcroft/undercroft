@@ -382,11 +382,11 @@ impl Tenancy {
             // routes on a fleet and are on the orchestrator's OPS plane, never
             // its tenant data plane.
             ("GET", &["v1", "vaults", id, "kg", "rel"]) => self.kg_rel(id, req, now),
-            // POST, not GET: this CREATES the collection it reports on
-            // (`ensure`), and `mutates()` never refuses a GET — so a GET here
-            // meant a `--read-only` server issuing DDL. See O83.
-            // GET again since O83: `VectorIndex::status` no longer creates,
-            // so this is a read and the read-only gate is right to allow it.
+            // A GET since O83: `VectorIndex::status` creates on none of the
+            // five backends, so this is a read and the read-only gate is
+            // right to allow it. It was briefly a POST because the call ran
+            // `ensure`, which CREATES — and `mutates()` never refuses a GET,
+            // so a GET then meant a `--read-only` server issuing DDL.
             ("GET", &["v1", "vaults", id, "index", "status"]) => self.index_status(id, req, now),
             ("POST", &["v1", "vaults", id, "backups"]) => self.backup_create(id, req, now),
             ("GET", &["v1", "vaults", id, "backups"]) => self.backup_list(id, req, now),
@@ -1946,11 +1946,6 @@ impl Tenancy {
         ))
     }
 
-    /// `POST /v1/vaults/{id}/trust` — assign a wing's trust class
-    /// (`{wing, trust}`; closed vocabulary, 400 if unknown). The receiving
-    /// principal's declaration: an OPERATOR surface, deliberately absent
-    /// from MCP — an agent that writes content must not be able to raise
-    /// its own standing (docs/LABELS.md). Audited through the chain.
     /// `GET /v1/vaults/{id}/kg/rel?predicate=&as_of=` — facts by PREDICATE
     /// (ROADMAP O68).
     ///
@@ -2513,6 +2508,11 @@ impl Tenancy {
         Ok((200, Body::Json(json!({ "start": start, "reached": rows }))))
     }
 
+    /// `POST /v1/vaults/{id}/trust` — assign a wing's trust class
+    /// (`{wing, trust}`; closed vocabulary, 400 if unknown). The receiving
+    /// principal's declaration: an OPERATOR surface, deliberately absent
+    /// from MCP — an agent that writes content must not be able to raise
+    /// its own standing (docs/LABELS.md). Audited through the chain.
     fn set_trust(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
         self.assert_or_401(id, req, now)?;
         let body = parse_json(body)?;

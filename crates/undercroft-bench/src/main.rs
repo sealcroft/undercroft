@@ -1613,7 +1613,6 @@ fn rule_tag(text: &str) -> &'static str {
     }
 }
 
-/// Every dialog turn in a LoCoMo-shaped json, wherever it nests.
 /// ROADMAP O67 — what a KG receipt walk costs, split by which half pays.
 ///
 /// The route was put on the tenant data plane after measuring it against a
@@ -1722,6 +1721,7 @@ fn run_receiptscale(facts: &str, level: SecurityLevel, repeats: usize) -> Result
     Ok(())
 }
 
+/// Every dialog turn in a LoCoMo-shaped json, wherever it nests.
 fn collect_turns(v: &Value, out: &mut Vec<String>) {
     match v {
         Value::Object(m) => {

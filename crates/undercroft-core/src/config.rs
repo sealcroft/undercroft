@@ -235,6 +235,18 @@ pub fn one_of(
 ///
 /// So the defect's SILENCE is what gets fixed here: 67 of round four's 70
 /// findings produced no signal at all, and that is the property being closed.
+pub fn undeclared_model_identity(var: &str, shared_default: &str, model_path: &str) -> String {
+    format!(
+        "{var} is not set, so this model records the shared identity \
+         {shared_default:?} (loaded from {model_path:?}). A DIFFERENT model \
+         loaded later without {var} records the SAME identity, and the store \
+         cannot then tell the vector space changed — searches would silently \
+         rank new queries against vectors from the old model. Set {var} to \
+         something that names this model, and change it whenever the model \
+         file changes."
+    )
+}
+
 /// The identity an ONNX-family embedder records when nobody declares one.
 ///
 /// **One constant, because it was two** (ROADMAP M22, round-four `#27`).
@@ -260,18 +272,6 @@ pub const SHARED_MODEL_IDENTITY: &str = "onnx-sentence";
 pub const SHARED_RERANKER_IDENTITY: &str = "onnx-reranker";
 /// The ColBERT late-interaction encoder's undeclared identity.
 pub const SHARED_COLBERT_IDENTITY: &str = "colbert";
-
-pub fn undeclared_model_identity(var: &str, shared_default: &str, model_path: &str) -> String {
-    format!(
-        "{var} is not set, so this model records the shared identity \
-         {shared_default:?} (loaded from {model_path:?}). A DIFFERENT model \
-         loaded later without {var} records the SAME identity, and the store \
-         cannot then tell the vector space changed — searches would silently \
-         rank new queries against vectors from the old model. Set {var} to \
-         something that names this model, and change it whenever the model \
-         file changes."
-    )
-}
 
 #[cfg(test)]
 mod tests {

@@ -2179,22 +2179,6 @@ impl PalaceStore {
         Ok(id)
     }
 
-    /// Verify every fact that carries a receipt against its cited verbatim
-    /// source. Returns one [`ReceiptStatus`] per receipted fact:
-    /// `Verified` (citation intact, source unchanged), `SourceChanged`
-    /// (source edited since distillation), `Dangling` (source deleted),
-    /// `Unreceipted` (a citation that was never bound — an import whose
-    /// payload did not carry the cited drawer), or `Tampered` (the receipt
-    /// binding failed its HMAC). Facts that cite no drawer at all are
-    /// skipped — they never claimed a provable citation.
-    ///
-    /// **The walk selects on the CITATION, not on the receipt.** It used to
-    /// select `WHERE receipt_tag IS NOT NULL`, which meant a fact claiming a
-    /// source it had no binding for simply vanished from the report rather
-    /// than being reported as unbound. U12 made that state reachable (an
-    /// import whose source drawer is absent), and `verify_supersessions` —
-    /// the same walk one level down — had always selected on the link for
-    /// exactly this reason.
     /// **Is any fact's receipt FORGED** — the integrity half of
     /// [`kg_verify_receipts`], without the corpus-sized half.
     ///
@@ -2245,6 +2229,22 @@ impl PalaceStore {
         Ok(false)
     }
 
+    /// Verify every fact that carries a receipt against its cited verbatim
+    /// source. Returns one [`ReceiptStatus`] per receipted fact:
+    /// `Verified` (citation intact, source unchanged), `SourceChanged`
+    /// (source edited since distillation), `Dangling` (source deleted),
+    /// `Unreceipted` (a citation that was never bound — an import whose
+    /// payload did not carry the cited drawer), or `Tampered` (the receipt
+    /// binding failed its HMAC). Facts that cite no drawer at all are
+    /// skipped — they never claimed a provable citation.
+    ///
+    /// **The walk selects on the CITATION, not on the receipt.** It used to
+    /// select `WHERE receipt_tag IS NOT NULL`, which meant a fact claiming a
+    /// source it had no binding for simply vanished from the report rather
+    /// than being reported as unbound. U12 made that state reachable (an
+    /// import whose source drawer is absent), and `verify_supersessions` —
+    /// the same walk one level down — had always selected on the link for
+    /// exactly this reason.
     pub fn kg_verify_receipts(&self) -> Result<Vec<ReceiptStatus>, StoreError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, source_drawer_id, source_fp, receipt_tag
@@ -4706,19 +4706,6 @@ mod tests {
         assert_eq!(after.tampered_receipts(), 0, "{after:?}");
     }
 
-    /// **`verify()` must SEE a forged receipt, not merely be able to.**
-    ///
-    /// The test above proves `kg_verify_receipts` detects the forgery, and
-    /// that was true the whole time the defect existed: nothing inside
-    /// `verify()` called it, so `VerifyReport::ok()` — the verdict every
-    /// surface prints and `backup create` gates on — returned TRUE over this
-    /// exact vault. A test that exercises the detector without exercising
-    /// the verdict is the shape that let it ship.
-    ///
-    /// Both arms are asserted so this cannot pass for the wrong reason: the
-    /// same vault verifies clean before the forgery and fails after, and the
-    /// failure is attributed to the receipts leg specifically rather than to
-    /// any of the other five.
     /// ROADMAP O67. **The cheap door must read NO DRAWERS**, proved
     /// structurally rather than by timing.
     ///
@@ -4874,6 +4861,19 @@ mod tests {
         assert_eq!(s2.verify().unwrap().tampered_receipts(), 1);
     }
 
+    /// **`verify()` must SEE a forged receipt, not merely be able to.**
+    ///
+    /// The test above proves `kg_verify_receipts` detects the forgery, and
+    /// that was true the whole time the defect existed: nothing inside
+    /// `verify()` called it, so `VerifyReport::ok()` — the verdict every
+    /// surface prints and `backup create` gates on — returned TRUE over this
+    /// exact vault. A test that exercises the detector without exercising
+    /// the verdict is the shape that let it ship.
+    ///
+    /// Both arms are asserted so this cannot pass for the wrong reason: the
+    /// same vault verifies clean before the forgery and fails after, and the
+    /// failure is attributed to the receipts leg specifically rather than to
+    /// any of the other five.
     #[test]
     fn a_forged_fact_receipt_fails_the_vault_verdict() {
         let (dir, mut s) = store(SecurityLevel::Sealed);

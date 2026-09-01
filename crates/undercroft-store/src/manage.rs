@@ -1216,12 +1216,9 @@ impl PalaceStore {
         })
     }
 
-    /// Repair pass: re-fingerprint rows missing `fp`, re-embed every drawer
-    /// with the current embedder (recording its identity — this is the
-    /// second half of a forced model swap), vacuum, and re-verify.
-    /// Returns (report, rows_backfilled).
     /// Backfill fingerprints, re-embed, drop the stale index, re-stamp the
-    /// embedder identity, record the run, VACUUM, and re-verify.
+    /// embedder identity, record the run, VACUUM, and re-verify — the second
+    /// half of a forced model swap. Returns `(report, rows_backfilled)`.
     ///
     /// **ONE transaction over everything that changes the vault** (ROADMAP
     /// M19). It used to run every statement in autocommit, which round-four

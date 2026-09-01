@@ -324,61 +324,6 @@ pub fn check_declaration(name: &str, raw: &str) -> Result<Option<String>, String
     }
 }
 
-/// `UNDERCROFT_ASSERTION_SECRET`: the MAC key for per-vault assertions.
-///
-/// **`Protects`, so a declaration that names no secret REFUSES rather than
-/// falling back.** Unset is not a declaration and leaves assertions off — a
-/// single-tenant deployment that never declared one sees no change at all.
-///
-/// **An empty or whitespace-only value IS a declaration and names no secret,
-/// so it refuses**, which is `undercroft_net::declared_pin`'s ruling applied
-/// to the payload variables it was never extended to. It closes TWO holes
-/// that point in OPPOSITE directions, and only the first was filed:
-///
-/// * `""` — the old filter was `!s.is_empty()`, so an empty value became
-///   `None` and every `/v1` assertion gate plus the `POST /mcp` transport
-///   gate turned into a no-op **silently**: the start-up banner did not say
-///   "assertions off", it merely omitted the clause that says they are on.
-///   `docs/remote-server.md` ships `UNDERCROFT_ASSERTION_SECRET:
-///   ${ASSERTION_SECRET}` in its recommended compose file, and an unset
-///   shell variable interpolates to empty rather than absent — so the
-///   isolation boundary ceased to exist in a configuration the shipped
-///   documentation produces.
-/// * `" "` — worse, and invisible to a fix that only maps empty to absent:
-///   `" ".is_empty()` is FALSE, so a whitespace-only value was accepted as a
-///   REAL secret. Assertions were enforced, the banner truthfully said so,
-///   and the key was one guessable byte.
-///
-/// **The value is NOT trimmed, and that is the opposite of what the closed-
-/// vocabulary variables do.** `UPGRADING.md` records that those are trimmed
-/// so a trailing newline from `$(cat …)` stops changing their meaning —
-/// correct there, because the value is a WORD from a fixed set. Here the
-/// value is opaque PAYLOAD: trimming changes the KEY, which would silently
-/// invalidate every header already minted by a deployment whose secret
-/// really does end in whitespace. So whitespace-only refuses, and content
-/// with real characters is taken byte for byte.
-///
-/// That distinction — closed vocabulary versus opaque payload — is why
-/// `UNDERCROFT_ADMISSION` may legitimately read empty as `off` (empty is a
-/// third spelling of a value in its vocabulary) while this one may not.
-/// Nothing in the tree encoded it, so each call site answered for itself.
-/// `UNDERCROFT_PASSPHRASE`: derive the master key with Argon2id, so no key
-/// material is written to disk at all. Unset is the documented default — a
-/// random `master.key` at 0600.
-///
-/// **Set-but-empty REFUSES**, and this is the same defect as
-/// [`resolve_assertion_secret`] one level up in value. `passphrase()` used to
-/// be `env::var(..).ok().filter(|p| !p.is_empty())`, so an empty declaration
-/// became `None` and the palace silently fell back to writing a random key
-/// FILE — the precise opposite of what declaring a passphrase asks for. An
-/// operator whose `${SECRET}` failed to interpolate got key material on disk
-/// and no signal: `vault status` said `master.key`, and it is only wrong if
-/// you knew to look.
-///
-/// Whitespace-only counts as naming no secret, but the value itself is
-/// **never trimmed** — it is opaque payload, and trimming would change the
-/// KEY, silently making every existing vault underivable. That distinction is
-/// doctrine in `CLAUDE.md`, earned by this variable's sibling.
 /// A live EXCLUSIVE hold on one vault's database. Dropping it releases.
 ///
 /// Opaque on purpose: the caller needs to keep it alive across an operation,
@@ -435,11 +380,52 @@ pub fn hold_vault_exclusively(dir: &std::path::Path) -> Result<VaultHold, StoreE
     // Fail fast. An operator waiting on a silent command is worse off than
     // one told immediately what holds the vault.
     let _ = conn.busy_timeout(std::time::Duration::from_millis(500));
-    let _ = conn.pragma_update(None, "locking_mode", "EXCLUSIVE");
+    // **Read the mode back rather than trusting the call.** This was
+    // `let _ = conn.pragma_update(…)`, which discarded the result of the one
+    // statement that makes this function work at all: in WAL mode `BEGIN
+    // EXCLUSIVE` takes only the WRITE lock, and an idle reader holds no write
+    // lock — so without `locking_mode=EXCLUSIVE` the hold stops detecting
+    // precisely the holder the doc above calls "the case that matters", and
+    // `backup restore` goes on to unlink a database a live server is still
+    // writing to. That is M30, the data-loss defect this guard exists to
+    // prevent, returning silently.
+    //
+    // `PRAGMA locking_mode=…` RETURNS the resulting mode, so this applies it
+    // and verifies it in one statement. Asking whether the call "succeeded"
+    // is the weaker question and the wrong shape besides: a pragma that
+    // yields a row is not an `execute`, so a driver is entitled to report an
+    // error for a statement that nonetheless took effect. The MODE is the
+    // observable; ask for it.
+    let mode: String = conn.query_row("PRAGMA locking_mode = EXCLUSIVE", [], |r| r.get(0))?;
+    if !mode.eq_ignore_ascii_case("exclusive") {
+        return Err(StoreError::Invalid(format!(
+            "could not put {} into exclusive locking mode (sqlite reports {mode:?}). \
+             Refusing rather than proceeding: without it this hold cannot see an idle \
+             reader, and the operation it guards replaces the vault directory",
+            db.display()
+        )));
+    }
     conn.execute_batch("BEGIN EXCLUSIVE")?;
     Ok(VaultHold(conn))
 }
 
+/// `UNDERCROFT_PASSPHRASE`: derive the master key with Argon2id, so no key
+/// material is written to disk at all. Unset is the documented default — a
+/// random `master.key` at 0600.
+///
+/// **Set-but-empty REFUSES**, and this is the same defect as
+/// [`resolve_assertion_secret`] one level up in value. `passphrase()` used to
+/// be `env::var(..).ok().filter(|p| !p.is_empty())`, so an empty declaration
+/// became `None` and the palace silently fell back to writing a random key
+/// FILE — the precise opposite of what declaring a passphrase asks for. An
+/// operator whose `${SECRET}` failed to interpolate got key material on disk
+/// and no signal: `vault status` said `master.key`, and it is only wrong if
+/// you knew to look.
+///
+/// Whitespace-only counts as naming no secret, but the value itself is
+/// **never trimmed** — it is opaque payload, and trimming would change the
+/// KEY, silently making every existing vault underivable. That distinction is
+/// doctrine in `CLAUDE.md`, earned by this variable's sibling.
 pub fn resolve_passphrase(env: Option<&str>) -> Result<Option<String>, StoreError> {
     let Some(v) = env else { return Ok(None) };
     if v.trim().is_empty() {
@@ -456,6 +442,44 @@ pub fn resolve_passphrase(env: Option<&str>) -> Result<Option<String>, StoreErro
     Ok(Some(v.to_string()))
 }
 
+/// `UNDERCROFT_ASSERTION_SECRET`: the MAC key for per-vault assertions.
+///
+/// **`Protects`, so a declaration that names no secret REFUSES rather than
+/// falling back.** Unset is not a declaration and leaves assertions off — a
+/// single-tenant deployment that never declared one sees no change at all.
+///
+/// **An empty or whitespace-only value IS a declaration and names no secret,
+/// so it refuses**, which is `undercroft_net::declared_pin`'s ruling applied
+/// to the payload variables it was never extended to. It closes TWO holes
+/// that point in OPPOSITE directions, and only the first was filed:
+///
+/// * `""` — the old filter was `!s.is_empty()`, so an empty value became
+///   `None` and every `/v1` assertion gate plus the `POST /mcp` transport
+///   gate turned into a no-op **silently**: the start-up banner did not say
+///   "assertions off", it merely omitted the clause that says they are on.
+///   `docs/remote-server.md` ships `UNDERCROFT_ASSERTION_SECRET:
+///   ${ASSERTION_SECRET}` in its recommended compose file, and an unset
+///   shell variable interpolates to empty rather than absent — so the
+///   isolation boundary ceased to exist in a configuration the shipped
+///   documentation produces.
+/// * `" "` — worse, and invisible to a fix that only maps empty to absent:
+///   `" ".is_empty()` is FALSE, so a whitespace-only value was accepted as a
+///   REAL secret. Assertions were enforced, the banner truthfully said so,
+///   and the key was one guessable byte.
+///
+/// **The value is NOT trimmed, and that is the opposite of what the closed-
+/// vocabulary variables do.** `UPGRADING.md` records that those are trimmed
+/// so a trailing newline from `$(cat …)` stops changing their meaning —
+/// correct there, because the value is a WORD from a fixed set. Here the
+/// value is opaque PAYLOAD: trimming changes the KEY, which would silently
+/// invalidate every header already minted by a deployment whose secret
+/// really does end in whitespace. So whitespace-only refuses, and content
+/// with real characters is taken byte for byte.
+///
+/// That distinction — closed vocabulary versus opaque payload — is why
+/// `UNDERCROFT_ADMISSION` may legitimately read empty as `off` (empty is a
+/// third spelling of a value in its vocabulary) while this one may not.
+/// Nothing in the tree encoded it, so each call site answered for itself.
 pub fn resolve_assertion_secret(env: Option<&str>) -> Result<Option<String>, StoreError> {
     let Some(v) = env else { return Ok(None) };
     if v.trim().is_empty() {

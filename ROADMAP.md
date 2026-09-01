@@ -1116,7 +1116,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**115** of the **130** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**116** of the **131** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -3028,6 +3028,56 @@ a gated claim.**
 third-category decision and O65's house-page choice are product rulings the
 maintainer holds. Inventing them is exactly what `Absence::Unruled` exists to
 prevent, and doing it here would have made this entry the defect it is about.
+
+---
+
+### M56 — CLOSED 2026-09-01: eight doc blocks documenting the wrong item, and a guard that discarded the error making it work
+
+**The rest of the PR #123 review.** M55 took the two defects with a live
+consequence; these are the remainder, and the doc half is ONE mechanical
+defect repeated eight times: an insertion landed inside an existing doc block
+rather than before it, so one block became two items' documentation and the
+original owner was left with none.
+
+Six of the eight moved a `pub` item's documentation onto its neighbour.
+`parity.rs` was the worst — the cut fell mid-clause at *"`RotationReport`
+gained"*, destroying the worked example that justifies the `HAND_PROJECTED`
+inventory and leaving the remainder heading that constant with no subject.
+`store/lib.rs` was three blocks deep: O69's `VaultHold` was inserted between
+two resolvers' docs and their functions. All restored to their owners;
+`manage.rs`'s milder duplicate-summary case folded into one.
+
+**No gate can see this class, and it is recorded as a gap rather than
+closed.** There is no `missing_docs` and no `deny` in the workspace, and
+rustfmt does not reformat doc comments. `#![warn(missing_docs)]` would catch
+only the lost-its-doc half and would demand docs for every public item in
+thirteen crates. A heuristic gate was TRIED and rejected on evidence: the
+detector written for this review flagged ordinary line-wrapped prose, and in
+its first form returned zero because it read the last commit rather than the
+working tree — a gate that noisy trains people to ignore it. This is the O61
+shape (*sometimes the right answer is NO gate, with the reason
+demonstrated*). The `docs/AGENTS.md` half of the class is gateable and is
+**O86**.
+
+**`hold_vault_exclusively` discarded the pragma that makes it work.**
+`let _ = conn.pragma_update(None, "locking_mode", "EXCLUSIVE")`. In WAL mode
+`BEGIN EXCLUSIVE` takes only the write lock and an idle reader holds none, so
+without the pragma the hold stops seeing the holder its own doc calls *"the
+case that matters"* — and `backup restore` unlinks a database a live server is
+writing to, which is M30 returning silently. Now issued through `query_row`,
+which applies the pragma and reads the resulting mode back in one statement,
+refusing if it is not `exclusive`. Asking the driver whether the call
+succeeded is the weaker question: a pragma that yields a row is not an
+`execute`, so a driver may report an error for a statement that took effect.
+
+*Stated honestly:* no counterfactual is possible, because the pragma applies
+today — which the change itself proves, since the mode check now runs and the
+existing behavioural test still passes. This converts a silent degradation
+into a refusal; that test is the regression guard and is labelled as one.
+
+**`UPGRADING.md` gained the pgvector CA entry** the release flow owes, with
+the note that `undercroft config check` cannot detect it — the caching is
+runtime behaviour, not a malformed declaration.
 
 ---
 

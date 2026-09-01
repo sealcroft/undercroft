@@ -7,6 +7,87 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### eight doc blocks documenting the wrong item, and a destructive-operation guard that discarded the error making it work (M56)
+
+**The rest of the PR #123 review**, and the doc half is one mechanical defect
+repeated: an insertion landed INSIDE an existing doc block instead of before
+it, so one block became two items' documentation — the upper item keeping a
+summary about something else, the lower item losing its docs entirely.
+
+**Six of the eight displaced a `pub` item's documentation onto its
+neighbour**, and in each case the original owner was left with none:
+
+| the doc | had been | ended up on |
+|---|---|---|
+| `HAND_PROJECTED`'s rationale | `parity.rs` | `pub enum Absence` |
+| `undeclared_model_identity` | `core/config.rs` | `SHARED_MODEL_IDENTITY` |
+| `resolve_passphrase` | `store/lib.rs` | `pub struct VaultHold` |
+| `resolve_assertion_secret` | `store/lib.rs` | `pub struct VaultHold` |
+| `set_trust` (the `/v1` route) | `cli/tenant.rs` | `fn kg_rel` |
+| `kg_verify_receipts` | `store/kg.rs` | `kg_any_receipt_forged` |
+| `a_forged_fact_receipt_fails_the_vault_verdict` | `store/kg.rs` | the cheap-door test |
+| `collect_turns` | `bench/main.rs` | `fn run_receiptscale` |
+
+`parity.rs` was the worst: the insertion cut its sentence mid-clause at
+*"`RotationReport` gained"*, so the worked example justifying the whole
+inventory was destroyed, and the remainder — *"`wing_trusts` and
+`retention_policies` … omitted both"* — was left heading `HAND_PROJECTED`
+with no subject. Both halves restored to one block. `store/lib.rs` was
+THREE blocks deep: O69's `VaultHold` was inserted between two resolvers'
+docs and their functions, so a struct about a SQLite lock was documented by
+a paragraph about why a secret is never trimmed.
+
+`manage.rs` is the mild case and is treated as one: both halves really were
+about `repair`, so it had two summaries and a `Returns` clause stranded
+between them. Folded into one.
+
+**No gate can see this class, and that is stated rather than fixed.** There
+is no `missing_docs` and no `deny` anywhere in the workspace, and rustfmt
+does not reformat doc comments, so a block documenting the wrong item is
+invisible by construction. Adding `#![warn(missing_docs)]` would catch only
+the *lost-its-doc* half and would demand documentation for every public item
+in thirteen crates — disproportionate, and a different decision from this
+one. A heuristic gate was tried and rejected on evidence: the detector
+written for this review flagged ordinary line-wrapped prose as collisions
+and, in its first form, returned zero because it read the last commit rather
+than the working tree. A gate that noisy trains people to ignore it. The
+`docs/AGENTS.md` half of the same class IS gateable and is filed as **O86**.
+
+**`hold_vault_exclusively` discarded the error from the pragma that makes it
+work.** `let _ = conn.pragma_update(None, "locking_mode", "EXCLUSIVE")`, one
+line above `BEGIN EXCLUSIVE`. In WAL mode `BEGIN EXCLUSIVE` takes only the
+WRITE lock, and an idle reader holds no write lock — so without the pragma
+the hold stops detecting exactly the holder its own doc calls *"the case
+that matters"*, and `backup restore` proceeds to unlink a database a live
+server is still writing to. That is M30, the data-loss defect this guard
+exists to prevent, returning silently.
+
+Now `PRAGMA locking_mode = EXCLUSIVE` is issued through `query_row`, which
+applies it and **reads the resulting mode back** in one statement, refusing
+if it is not `exclusive`. Asking the driver whether the call "succeeded" is
+the weaker question and the wrong shape: a pragma that yields a row is not
+an `execute`, so a driver may report an error for a statement that took
+effect. The mode is the observable.
+
+*Honest about the evidence:* no counterfactual is possible, because the
+pragma DOES apply today — which the change itself proves, since the mode
+check now runs and `an_exclusive_hold_refuses_while_the_vault_is_open_and_
+grants_once_it_is_not` still passes. This converts a silent degradation into
+a refusal; the existing behavioural test is the regression guard, and it is
+labelled as one rather than counted as proof.
+
+**`UPGRADING.md` gained the pgvector CA entry** the release flow owes.
+O82c's caching fix is right — restart-to-rotate is the documented contract
+and pgvector was the outlier violating it — but pgvector was also the one
+hop where a mid-flight CA swap ever took effect, so replacing that file now
+needs a restart. The entry says so, with symptom and fix, and states plainly
+that `undercroft config check` **cannot** detect it: the caching is runtime
+behaviour, not a malformed declaration.
+
+Also cleared: the route-table comment above `("GET", … "index", "status")`
+still opened *"POST, not GET: this CREATES the collection"* — the M55 claim
+one file over, on the read-only gate's own reasoning.
+
 ### an audit record named a host nobody contacted, and a rustdoc argued with the code beside it (M55)
 
 **Both found by reviewing PR #123 rather than by a gate**, and neither is

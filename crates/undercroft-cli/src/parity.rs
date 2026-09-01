@@ -301,15 +301,6 @@ pub const OPERATOR_ONLY: &[&str] = &[
     "refine",
 ];
 
-/// Report structs the CLI projects **by hand**, and therefore the ones where
-/// adding a field silently fails to reach an operator.
-///
-/// `/v1` serializes these whole (`serde_json::to_value(&report)`), so a new
-/// field reaches the wire for free there. The CLI prints named fields one by
-/// one — so the two surfaces drift the moment a struct grows, in the one
-/// direction nothing complains about. CLAUDE.md already records this as "a
-/// hand-projected handler: adding a struct field does not reach the wire",
-/// and it happened again on 2026-08-06: `RotationReport` gained
 /// How a capability's absence from a surface is ruled (ROADMAP M16).
 ///
 /// `CLAUDE.md`: *"A capability missing from one surface is a boundary or a
@@ -607,6 +598,15 @@ pub const SURFACE_COMPLETE: &[&str] = &[
     "VaultAction::Status",
 ];
 
+/// Report structs the CLI projects **by hand**, and therefore the ones where
+/// adding a field silently fails to reach an operator.
+///
+/// `/v1` serializes these whole (`serde_json::to_value(&report)`), so a new
+/// field reaches the wire for free there. The CLI prints named fields one by
+/// one — so the two surfaces drift the moment a struct grows, in the one
+/// direction nothing complains about. CLAUDE.md already records this as "a
+/// hand-projected handler: adding a struct field does not reach the wire",
+/// and it happened again on 2026-08-06: `RotationReport` gained
 /// `wing_trusts` and `retention_policies` and `undercroft vault rotate`
 /// omitted both, in the same unit that existed to fix forgotten sweeps.
 ///
