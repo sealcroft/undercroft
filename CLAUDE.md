@@ -1567,7 +1567,16 @@ docker compose run --rm test          # cargo unit + integration tests (779 run,
                                       # those two lists are fetched; the
                                       # onnx crate's own ignored test is outside
                                       # default-members and never in this count)
-docker compose run --rm lint          # rustfmt --check + clippy -D warnings
+docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on the
+                                      # default build AND the TELEMETRY build of
+                                      # both feature-bearing binaries (O84).
+                                      # `--all-targets` alone lints default
+                                      # members with DEFAULT features, so
+                                      # everything behind
+                                      # `#[cfg(feature = "telemetry")]` was linted
+                                      # by nothing and two dead wrappers survived
+                                      # from O20 and O25. Publishes no check count
+                                      # deliberately
 docker compose run --rm e2e           # e2e UI/UX suite against the release binary (433 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (127 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (53 checks)
@@ -1759,7 +1768,7 @@ own teardown was the place it had not been applied. Gated by the
 `destructive compose scope` preflight, which requires every compose teardown
 in `tests/` to name the project it destroys; `tests/tls-pins.sh`'s two scoped
 teardowns are the accepted shape. Logs land in `.battery/` (gitignored).
-**`bash tests/battery.sh --preflight-only` runs the thirteen host-side preflights
+**`bash tests/battery.sh --preflight-only` runs the fourteen host-side preflights
 and no suite**, which is what CI invokes. (This sentence said "seven" while
 the tree ran eight, and nothing could say so — and then "ten" while the tree
 ran eleven, which the gate caught inside the very unit that caused it.
@@ -1784,7 +1793,7 @@ code — including the post-run comparison of each suite's MEASURED check count
 against the figure `CLAUDE.md` publishes for it. That comparison needs a RUN
 and therefore cannot be a preflight, so until M13 it ran nowhere on a pull
 request and a leg dropping from 370 checks to 3 was green. The flag skips the
-thirteen preflights because the dedicated `preflight` job already runs them
+fourteen preflights because the dedicated `preflight` job already runs them
 once. **The shared readers — `test_summary`, `suite_summary`,
 `declare_suite_counts`, `suite_count` — are deliberately defined OUTSIDE the
 skipped block**, and that is not tidiness: with them inside, `--no-preflight`
@@ -1932,7 +1941,19 @@ images either; mount the repo instead:
 `docker run --rm -v "<repo>:/src" -w /src rust:1.90-slim-bookworm sh -c "rustup component add rustfmt; cargo fmt --all"`
 
 CI runs `cargo fmt --all --check` + `cargo clippy --all-targets -- -D warnings`
-(no `--workspace`, so the excluded onnx crate is fmt'd but not clippy'd in CI).
+(no `--workspace`, so the excluded onnx crate is fmt'd but not clippy'd in CI),
+**plus the same two telemetry-feature clippy runs the `lint` compose service
+does** (O84).
+**That job runs cargo DIRECTLY, not the compose service, and the two
+definitions can disagree** — a fact worth knowing before adding a check to
+either. It is not an oversight to route around: the job runs in a
+`rust:1.90-slim-bookworm` container with no docker, so it cannot go through
+`tests/battery.sh` the way M13 routed the suite legs. It bit immediately —
+O84's first fix added the telemetry lint to the compose service alone, which
+would have covered every local battery and NO pull request, i.e. exactly what
+that entry's own gate requirement forbids. The `lint parity` preflight now
+compares the two as SETS of clippy invocations, both directions, with a
+premise arm on each extractor.
 **Eight compose suites run as a `fail-fast: false` MATRIX** — eight since
 `arch-check` joined (M14), and `tls-pins` is host-side and gets its own job
 rather than a matrix leg, so CI runs TEN jobs of which the matrix is one.

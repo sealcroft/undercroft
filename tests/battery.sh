@@ -1404,6 +1404,56 @@ fi
 echo "ok    both measured retrieval sections in $MRC_DOC carry their dataset,"
 echo "      embedder, scope and metric, and the room_cap reconciliation stands"
 
+echo "═══ preflight: lint parity (compose vs CI) ═══"
+# **`lint` is defined TWICE and the two can disagree** (ROADMAP O84).
+#
+# The battery runs `docker compose run --rm lint`; CI's `Lint` job runs cargo
+# DIRECTLY, in a rust container with no docker, so it cannot go through
+# `tests/battery.sh` the way M13 routed the suite legs. That is a real
+# constraint, not an oversight — and it means the two definitions are two
+# copies of one decision, which is the arrangement this project keeps finding
+# defects inside.
+#
+# It bit immediately: O84's fix added the telemetry clippy to the compose
+# service, which would have covered every local battery and NO pull request —
+# the exact failure O84's own gate requirement forbids.
+#
+# So: every clippy invocation in one must appear in the other. Compared as a
+# SET of normalised invocations, because a count passes when one is swapped
+# for another.
+LP_COMPOSE=$(awk '/^  lint:/ { inl = 1 } inl && /cargo clippy/ { print } inl && /^  [a-z0-9-]+:$/ && !/^  lint:/ { inl = 0 }' docker-compose.yml \
+  | grep -oE 'cargo clippy[^&"]*' | sed -e 's/[[:space:]]*$//' | sort -u)
+LP_CI=$(awk '/^  lint:/ { inl = 1 } inl && /cargo clippy/ { print } inl && /^  [a-z0-9_-]+:$/ && !/^  lint:/ { inl = 0 }' .github/workflows/ci.yml \
+  | grep -oE 'cargo clippy[^&"]*' | sed -e 's/[[:space:]]*$//' | sort -u)
+LP_CN=$(printf '%s\n' "$LP_COMPOSE" | grep -c . || true)
+LP_IN=$(printf '%s\n' "$LP_CI" | grep -c . || true)
+# PREMISE, both halves: either extractor returning nothing yields two agreeing
+# empty sets, which reads exactly like a tree that already agrees.
+if [ "${LP_CN:-0}" -lt 2 ] || [ "${LP_IN:-0}" -lt 2 ]; then
+  echo "FAIL  the lint scan found $LP_CN clippy invocation(s) in docker-compose.yml"
+  echo "      and $LP_IN in ci.yml; both carry at least two. The scanner is broken,"
+  echo "      or a 'lint' definition moved."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+if [ "$LP_COMPOSE" = "$LP_CI" ]; then
+  echo "ok    the compose lint and the CI lint job run the same $LP_CN clippy"
+  echo "      invocation(s) — a feature linted locally is linted on a PR"
+else
+  echo "FAIL  the compose lint service and the CI lint job disagree."
+  echo "      Only the CI job fails a pull request; only the compose one runs in"
+  echo "      the battery. A check in one and not the other is a check that does"
+  echo "      not run where it matters."
+  echo "      compose:"
+  printf '%s\n' "$LP_COMPOSE" | sed 's/^/        /'
+  echo "      ci.yml:"
+  printf '%s\n' "$LP_CI" | sed 's/^/        /'
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+
 echo "═══ preflight: prose figures ═══"
 
 pf_word() {

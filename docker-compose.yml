@@ -54,8 +54,23 @@ services:
       context: .
       target: test
     entrypoint: ["sh", "-c"]
+    # The default build, then the TELEMETRY build (ROADMAP O84).
+    #
+    # `--all-targets` above lints default members with DEFAULT features, so
+    # everything behind `#[cfg(feature = "telemetry")]` was never linted by
+    # anything: CI runs that one line, and `e2e-telemetry` BUILDS the
+    # telemetry binary without linting it. Two dead one-line wrappers in
+    # `undercroft-obs` survived from O20 and O25 that way — not because they
+    # were hard to see, but because nothing looked.
+    #
+    # Here rather than in a new compose service on `onnx-build`'s precedent:
+    # `lint` already runs in the battery AND as its own CI job, so the check
+    # fails a pull request without adding a matrix leg or an inventory row,
+    # and this service publishes no check count so no figure moves. Both
+    # feature-bearing binaries are covered — the orchestrator has its own
+    # `telemetry` feature (O20) and inherits nothing from the engine.
     command:
-      - "rustup component add rustfmt clippy >/dev/null 2>&1 && cargo fmt --all --check && cargo clippy --all-targets -- -D warnings"
+      - "rustup component add rustfmt clippy >/dev/null 2>&1 && cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo clippy -p undercroft-cli --features telemetry --all-targets -- -D warnings && cargo clippy -p undercroft-orchestrator --features telemetry --all-targets -- -D warnings"
 
   e2e:
     build:

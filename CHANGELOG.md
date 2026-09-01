@@ -7,6 +7,64 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### a feature nothing linted, and a fix that would not have run where it mattered (M51)
+
+**ROADMAP O84 CLOSED** — filed by M50 the same day, from my own work, and
+closed here.
+
+**Two dead one-line wrappers, each superseded by its own sibling.**
+`imp::init()` passed `"undercroft"` to `imp::init_as` and was dead the moment
+O20 introduced the parameter — `lib.rs`'s public `init()` calls the public
+`init_as`, never this module's. `imp::render_prometheus()` passed `false` to
+`imp::render_prometheus_filtered` and was dead the moment O25 introduced
+*that* parameter, because the public `render_prometheus()` goes through
+`render_prometheus_scoped`. Deleted, each with the reason recorded where it
+stood.
+
+**Neither was hard to see; nothing looked.** `cargo clippy --all-targets`
+lints default members with DEFAULT features, so every line behind
+`#[cfg(feature = "telemetry")]` sat outside every lint in the tree.
+`e2e-telemetry` BUILDS the telemetry binary and does not lint it, and
+`dead_code` is a warning, not a build failure. `ort-build` exists for exactly
+this reason one feature over — the precedent was there and this feature never
+got it.
+
+**The fix's first version would have failed this entry's own gate, and that is
+the unit's real content.** It added the telemetry clippy to the `lint` compose
+service, which the battery runs. **CI's `Lint` job does not use that
+service** — it runs cargo directly, in a `rust:1.90-slim-bookworm` container.
+So the check would have covered every local battery and **no pull request**,
+while O84's gate requirement reads *"must run somewhere that fails a pull
+request"*. Found by asking where the check actually runs rather than assuming
+one definition; M13's lesson, on a surface M13 did not reach.
+
+**Routing CI's lint job through `tests/battery.sh` — M13's own fix — is not
+available**, and the reason is recorded rather than left to be rediscovered:
+that job runs in a container with no docker, so it cannot drive compose. The
+two definitions therefore stay two, and the new **`lint parity` preflight**
+compares them as SETS of clippy invocations in both directions, with a premise
+arm on each extractor — either returning nothing yields two agreeing empty
+sets, which reads exactly like a tree that agrees.
+
+**Both feature-bearing binaries are covered**, not only the one the error came
+from: `undercroft-orchestrator` has its own `telemetry` feature (O20) and
+inherits nothing from the engine. Measured after the deletion — engine,
+orchestrator and `undercroft-obs` all lint clean under the feature.
+
+**Counterfactual, executed:** restoring `imp::init` fails `docker compose run
+--rm lint` at *"function `init` is never used"*, exit 101. Restored from a
+scoped file copy.
+
+The host-side preflight count moves thirteen → fourteen; the `prose figures`
+gate caught its own arrival here, as it did at O42.
+
+**Residual, stated:** `lint` now covers the `telemetry` feature and NOT `onnx`
+or `ort`. Those have compile-check services (`onnx-build` in the CI matrix,
+`ort-build` run by neither — the gap CLAUDE.md already records), and pulling
+heavy ML dependencies into a job that must stay fast is the wrong trade. One
+feature gained a lint; two still have none, and that is stated rather than
+implied.
+
 ### three routes around a shared policy, and a counterfactual that only half fired (M50)
 
 **ROADMAP O82 CLOSED** — all three findings, each with a gate and an executed

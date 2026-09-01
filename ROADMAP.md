@@ -3935,33 +3935,64 @@ copies.
 
 ---
 
-### O84 — `clippy --features telemetry` fails, and nothing gates that build
+### O84 — CLOSED 2026-09-01: the telemetry build is linted, on the surface that fails a pull request
 
-**Found 2026-09-01 while closing O82, and it is PRE-EXISTING** — verified by
-running the same command against `HEAD` in a detached worktree with its own
-target dir, where it fails identically. Reported as a finding, not as
-something this unit caused.
+**Filed and closed the same day (M51), the filing being mine from M50.**
 
 `cargo clippy -p undercroft-cli --features telemetry --all-targets -- -D
-warnings` exits 101 with two dead-code errors in `undercroft-obs`:
-`imp::init` and `imp::render_prometheus` are never used in that feature
-combination.
+warnings` exited 101 with two dead-code errors in `undercroft-obs`. Both were
+real and both were **one-line wrappers superseded by their own siblings**:
+`imp::init()` passed `"undercroft"` to `imp::init_as` and was dead the moment
+O20 introduced the parameter, because `lib.rs`'s public `init()` calls the
+public `init_as`; `imp::render_prometheus()` passed `false` to
+`imp::render_prometheus_filtered` and was dead the moment O25 introduced
+*that* parameter, because `lib.rs`'s public `render_prometheus()` goes through
+`render_prometheus_scoped`. Deleted, with the reason recorded where each
+stood.
 
-**Nothing runs it.** CI runs `cargo clippy --all-targets -- -D warnings` over
-default members with default features, and `ort-build` clippies the ort-gated
-code explicitly for exactly this reason — a feature nobody lints is a feature
-whose warnings accumulate unseen. `e2e-telemetry` BUILDS the telemetry binary
-and does not lint it.
+**Neither was hard to see. Nothing looked.** `--all-targets` lints default
+members with DEFAULT features, so every line behind `#[cfg(feature =
+"telemetry")]` was outside every lint in the tree; `e2e-telemetry` BUILDS the
+telemetry binary and does not lint it, and a `dead_code` warning is not a
+build failure. `ort-build` exists for exactly this reason one feature over —
+the precedent was there and this feature never got it.
 
-**Shape of the fix:** decide whether the two functions are dead in every
-build (delete them) or reachable in one nothing exercises (say which, and
-gate it). Then add a lint leg for the telemetry feature, on `ort-build`'s
-precedent.
+**The fix's first version would have failed this entry's own gate, and
+catching that is the unit's real content.** It added the telemetry clippy to
+the `lint` compose service — which the battery runs. **CI's `Lint` job does
+not use that service**: it runs cargo directly, in a `rust:1.90-slim-bookworm`
+container. So the check would have covered every local battery and **no pull
+request**, while this entry's gate requirement reads *"must make a lint of the
+telemetry build run somewhere that fails a pull request"*. Found by asking
+where the check actually runs rather than assuming one definition, which is
+M13's lesson on a surface M13 did not reach.
 
-**Gate:** the closing change must make a lint of the telemetry build run
-somewhere that fails a pull request — the defect here is not the two
-functions, it is that no gate looks.
+**Routing CI's lint job through `tests/battery.sh` — M13's fix — is not
+available here**, and the reason is worth writing down rather than
+rediscovering: that job runs inside a rust container with no docker, so it
+cannot drive compose. The two definitions therefore stay two, and the
+`lint parity` preflight compares them as SETS of clippy invocations in both
+directions, with a premise arm on each extractor (either returning nothing
+yields two agreeing empty sets, which reads exactly like a tree that agrees).
 
+**Both feature-bearing binaries are covered**, not just the one the error came
+from: `undercroft-orchestrator` has its own `telemetry` feature (O20) and
+inherits nothing from the engine. Measured after the deletion — the engine,
+the orchestrator and `undercroft-obs` all lint clean under the feature.
+
+**Counterfactual, executed against the artifact.** Restoring `imp::init` —
+the edit asserted applied before the run — fails `docker compose run --rm
+lint` at *"function `init` is never used"*, exit 101. Restored from a scoped
+file copy.
+
+**Residual, stated:** `lint` covers the `telemetry` feature and NOT `onnx` or
+`ort`, which have their own compile-check services (`onnx-build` in the CI
+matrix, `ort-build` run by neither — the standing gap CLAUDE.md already
+records). Adding those to `lint` would pull heavy ML dependencies into a job
+that must stay fast; the honest statement is that one feature gained a lint
+here and two others still have none.
+
+---
 ---
 
 ### O78 — CLOSED 2026-08-30: the platform-views set fetched a font from Google, and the option list was wrong

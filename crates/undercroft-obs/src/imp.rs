@@ -207,22 +207,25 @@ impl opentelemetry_http::HttpClient for PolicedOtlpClient {
     }
 }
 
-/// Bring up telemetry, or say why it cannot come up.
+/// Bring up telemetry, or say why it cannot come up, with the service name's
+/// DEFAULT supplied by the caller.
 ///
 /// Fallible since the OTLP endpoint is an OUTWARD PATH: under this project's
 /// configuration doctrine a declaration that turns one on must REFUSE rather
 /// than fall back, because a silent fallback removes exactly what the
 /// operator asked for.
-pub(crate) fn init() -> Result<(), String> {
-    init_as("undercroft")
-}
-
-/// As [`init`], with the service name's DEFAULT supplied by the caller.
 ///
 /// `UNDERCROFT_SERVICE_NAME` still wins when declared. The parameter exists
 /// because two binaries shipped from this workspace both defaulted to
 /// `"undercroft"`, so a fleet running an engine and a control plane under one
 /// env file produced traces that could not be told apart (ROADMAP O20).
+///
+/// **There was a `pub(crate) fn init()` above this** — a one-line wrapper
+/// passing `"undercroft"` — kept when O20 introduced the parameter, and dead
+/// from that moment: `lib.rs`'s public `init()` calls the public `init_as`,
+/// never this module's. Nothing reported it for as long as it existed,
+/// because no gate in the tree lints a `--features telemetry` build
+/// (ROADMAP O84). Removed here.
 pub(crate) fn init_as(default_service: &str) -> Result<(), String> {
     static ONCE: Once = Once::new();
     // The verdict is memoized beside the `Once`, so a second call gets the
@@ -386,12 +389,15 @@ fn register_gauges() {
     }
 }
 
-pub(crate) fn render_prometheus() -> Option<String> {
-    render_prometheus_filtered(false)
-}
-
 /// The exposition, optionally with every **vault-labelled** series removed
 /// (ROADMAP O25).
+///
+/// **There was a `pub(crate) fn render_prometheus()` above this** — a
+/// one-line wrapper passing `false` — kept when O25 introduced the parameter,
+/// and dead from that moment: `lib.rs`'s public `render_prometheus()` goes
+/// through `render_prometheus_scoped`, which calls this directly. Same shape
+/// as `init`/`init_as` twenty lines up, same cause, and nothing reported
+/// either for the same reason (ROADMAP O84).
 ///
 /// `/metrics` is served after the palace bearer and BEFORE per-vault
 /// assertion — the route addresses no single vault, so the per-vault gate does

@@ -32,6 +32,20 @@ jobs:
         run: cargo fmt --all --check
       - name: clippy (warnings are errors)
         run: cargo clippy --all-targets -- -D warnings
+      # The TELEMETRY build (ROADMAP O84). The line above lints default
+      # members with DEFAULT features, so everything behind
+      # `#[cfg(feature = "telemetry")]` was linted by nothing — two dead
+      # wrappers in `undercroft-obs` survived from O20 and O25 that way.
+      #
+      # Repeated here rather than only in the `lint` compose service because
+      # THIS job is what fails a pull request: it runs cargo directly, in a
+      # rust container with no docker, so it cannot go through
+      # `tests/battery.sh` the way M13 routed the suite legs. The two copies
+      # are counted against each other by the `lint parity` preflight.
+      - name: clippy (telemetry feature)
+        run: |
+          cargo clippy -p undercroft-cli --features telemetry --all-targets -- -D warnings
+          cargo clippy -p undercroft-orchestrator --features telemetry --all-targets -- -D warnings
 
   audit:
     name: Dependency audit (RustSec)
