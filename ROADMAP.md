@@ -3593,41 +3593,69 @@ these 15 by id, not on an aggregate that can absorb them.
 
 ---
 
-### O83 — a genuinely read-only mirror status needs a non-creating lookup on five backends
+### O83 — CLOSED 2026-09-01: five non-creating lookups, probed one by one, and absent stops meaning empty
 
-**Found by the pre-release drift audit, 2026-08-31, on code O68 had shipped
-the day before.** The exposure is FIXED; what is filed here is the better
-version of the capability.
+**Filed 2026-08-31 by the pre-release drift audit, closed 2026-09-01 (M54).**
+The exposure was already fixed by reclassifying the call as a WRITE; what was
+owed was the capability — *"a per-backend `exists`/`count` path that does not
+create — five backends, five APIs — plus a ruling on what 'no mirror'
+answers"*.
 
-`PalaceStore::index_status` calls `index.ensure(…)`, which **CREATES**: `PUT
-/collections` on qdrant, `CREATE EXTENSION` + `CREATE TABLE` on pgvector,
-`POST /collections` on chroma, milvus and weaviate. That was harmless while
-the only caller was an operator's own CLI. O68 exposed it as a **GET** on
-`/v1`, an MCP **`READ_TOOL`**, and on the orchestrator's **tenant** data plane
-— so a read issued DDL against operator infrastructure from a `--read-only`
-server and from a tenant bearer.
+**`VectorIndex::status(&mut self, collection) -> Result<Option<u64>>`** is
+both halves in one signature. `None` is "there is no mirror" and `Some(0)` is
+"the mirror is empty"; with `ensure` running first both answered `0`, so the
+route could not answer the question its own documentation said it existed for.
 
-**Removing `ensure` was tried first and the backends suite refused it in one
-line**: chroma's `count` needs the collection id that `ensure` resolves, and
-chroma resolves it with `get_or_create: true`. There is no non-creating lookup
-on that client, nor on the other four.
+**Every backend was PROBED against the live server, which the entry demanded
+and which reasoning would have got wrong twice.**
 
-**So the CLASSIFICATION was the error, not the call.** An operation that
-creates state is a WRITE, and it is one now: `POST` on `/v1` (a GET is never
-refused by the read-only gate), `WRITE_TOOLS` on MCP, and `OPS_ROUTES` rather
-than the tenant plane on a fleet. The surfaces were wrong; the call is honest.
+| backend | non-creating existence | measured |
+|---|---|---|
+| qdrant | `GET /collections/{c}` | 404 absent, 200 present |
+| chroma | `GET /collections/{NAME}` | 200 returns the id; **an ID 404s**, and `/count` rejects a name with `400 Collection ID is not a valid UUIDv4` |
+| pgvector | `SELECT to_regclass($1) IS NOT NULL` | `f` absent, `t` present; core postgres, no extension |
+| milvus | `POST /collections/has` | `{"code":0,"data":{"has":false}}` — the only backend with an explicit call |
+| weaviate | `GET /v1/schema/{class}` | 404 absent |
 
-**What is still owed**, and why it is filed rather than folded in: a genuinely
-read-only status needs a per-backend `exists`/`count` path that does not
-create — five backends, five APIs — plus a ruling on what "no mirror" answers.
-Today, because `ensure` runs first, **"no mirror exists" and "the mirror is
-empty" both return `0`**, so the route cannot answer the question its own doc
-says it exists for.
+Chroma is the one a reader would assume symmetric and it is not: the
+collection path takes the NAME while `/count` needs the ID, which is exactly
+the pair `collection_id` used to resolve with `get_or_create: true`.
 
-**Gate:** the closing change must make `index_status` reachable as a GET/read
-again ONLY once no backend writes on that path — proven per backend, not
-inferred from qdrant — and must distinguish an absent mirror from an empty
-one.
+**`get_or_absent` keeps ABSENT apart from UNREACHABLE**, and that distinction
+is new. Both `ensure` implementations that already ask this question throw the
+answer away — qdrant's is `if exists.is_ok() { return }` and weaviate's the
+same shape — so any error reads as "absent" and the next line CREATES. Correct
+when the next step is to create; dishonest when the next step is to REPORT,
+because it would tell an operator their mirror is gone when a TLS handshake
+failed.
+
+**The classification goes back to what it should always have been**, which
+this entry's gate permits only now: `GET` on `/v1`, `READ_TOOLS` on MCP, and
+the orchestrator's tenant data plane rather than `OPS_ROUTES` — restoring
+O68's ruling, whose only defect was the creation. The ops alias and its
+subcommand row left with it, and the both-directions
+`every_ops_alias_is_an_allowed_route_and_every_route_has_an_alias` gate caught
+the half I forgot: *"index-status has no alias"*.
+
+**Gates.** A store unit test asserts `None` on a never-pushed vault AND that
+`ensure` was never called — through a counter on the mock, because a create is
+invisible in the return value — then pushes and asserts the same call reports
+a real count, so the first assertion cannot pass on a `status` that always
+answers `None`. And `backends-e2e` proves non-creation **per backend on the
+live server by asking twice**: the second call must still say "no mirror",
+which it could not if the first had made one. Fifteen new checks, five
+backends, on a uniquely-named probe vault so the assertion does not depend on
+what a previous suite run left in a shared container.
+
+**Counterfactual, executed:** restoring `ensure` + `Some(count)` fails the
+unit test at `left: Some(0), right: None` — the defect this entry names, in
+the assertion that names it.
+
+**Residual, stated:** a tenant read still triggers an OUTBOUND call to
+operator-configured infrastructure. That is already true of a search against a
+vault with a remote index; it is amplification rather than a boundary, and the
+orchestrator counts that class (`undercroft_orch_*`) rather than forbidding
+it. Recorded where the tenant-plane row is, not only here.
 
 ---
 

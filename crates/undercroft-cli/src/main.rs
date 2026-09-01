@@ -3857,7 +3857,17 @@ SQLite reported: {}"
                     let (name, count) = store.index_status(index.as_mut())?;
                     println!("backend:    {name}");
                     println!("collection: {}", store.index_collection());
-                    println!("records:    {count}");
+                    // ROADMAP O83: absent and empty are different answers.
+                    // They were both `0` while this call ran `ensure` first,
+                    // which CREATED the collection it then counted — so the
+                    // command could not report "there is no mirror" because
+                    // asking made one.
+                    match count {
+                        Some(n) => println!("records:    {n}"),
+                        None => println!(
+                            "records:    no mirror — nothing has been pushed to this backend"
+                        ),
+                    }
                     println!("local:      {}", store.count()?);
                 }
             }

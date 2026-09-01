@@ -385,7 +385,9 @@ impl Tenancy {
             // POST, not GET: this CREATES the collection it reports on
             // (`ensure`), and `mutates()` never refuses a GET — so a GET here
             // meant a `--read-only` server issuing DDL. See O83.
-            ("POST", &["v1", "vaults", id, "index", "status"]) => self.index_status(id, req, now),
+            // GET again since O83: `VectorIndex::status` no longer creates,
+            // so this is a read and the read-only gate is right to allow it.
+            ("GET", &["v1", "vaults", id, "index", "status"]) => self.index_status(id, req, now),
             ("POST", &["v1", "vaults", id, "backups"]) => self.backup_create(id, req, now),
             ("GET", &["v1", "vaults", id, "backups"]) => self.backup_list(id, req, now),
             ("POST", &["v1", "vaults", id, "backups", "restore"]) => {

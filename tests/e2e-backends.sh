@@ -116,6 +116,20 @@ run_backend_suite() { # run_backend_suite <backend>
     "The rollout plan targets canary users first, then 10 percent daily" --wing ops --room rollout
   check "[$be] remember 2"      0 "Filed drawer"        -- "$BIN" remember \
     "Sourdough needs a 12 hour cold proof for open crumb" --wing kitchen
+  # ROADMAP O83, proven PER BACKEND rather than inferred from qdrant: a
+  # status call on a vault nothing has pushed must report NO MIRROR, and must
+  # not create one. **The SECOND call is what proves the non-creation** —
+  # before O83 this ran `ensure` first, so the first call CREATED the
+  # collection and then reported `records:    0`, and "there is no mirror"
+  # was unsayable on every backend.
+  #
+  # A fresh, uniquely-named vault deliberately: these backends are shared
+  # containers that outlive a suite run, so asking about `default` would
+  # depend on whether a previous run left a collection behind.
+  local probe="o83${be}$$"
+  check "[$be] probe vault"        0 "Created vault"  -- "$BIN" vault create "$probe" --level sealed
+  check "[$be] absent is not zero" 0 "no mirror"      -- "$BIN" index status "$be" --vault "$probe"
+  check "[$be] status creates none" 0 "no mirror"     -- "$BIN" index status "$be" --vault "$probe"
   check "[$be] push"            0 "Pushed 2 sealed record(s)" -- "$BIN" index push "$be"
   # C8: the transport policy is enforced at CONSTRUCTION, so pointing the
   # same backend at cleartext beyond loopback refuses before a byte moves.

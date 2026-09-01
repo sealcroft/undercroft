@@ -244,9 +244,22 @@ fn data_subpath_ok(subpath: &str) -> bool {
             // a vault's distilled facts belong to the tenant whose drawers
             // they came from. `index/status` reports a mirror's record count
             // beside the authoritative local one — the counts are the
-            // tenant's own, and the engine now treats it as agent-facing;
+            // tenant's own, and the engine treats it as agent-facing;
             // `index push` is EGRESS and is on neither plane, which is the
             // boundary its status sibling does not share.
+            //
+            // It spent a day on `OPS_ROUTES` (O83): it ran `ensure`, which
+            // CREATES the collection on all five backends, so a tenant read
+            // issued DDL against operator infrastructure.
+            // `VectorIndex::status` creates on none of them — probed live per
+            // backend, not inferred — so the row comes back.
+            //
+            // Residual, stated: a tenant read still triggers an OUTBOUND call
+            // to operator-configured infrastructure. That is already true of
+            // a search on a vault with a remote index, and it is amplification
+            // rather than a boundary — the orchestrator counts that class
+            // (`undercroft_orch_*`) rather than forbidding it.
+            | ["index", "status"]
             | ["kg", "rel"]
             | ["dedup"]
             | ["tunnels"]
@@ -475,9 +488,6 @@ const OPS_ROUTES: &[(&str, &str)] = &[
     ("POST", "backups"),
     ("GET", "backups"),
     ("POST", "backups/restore"),
-    // Moved OFF the tenant data plane 2026-08-31: it CREATES the collection
-    // it reports on, so it is operator business, not a tenant read (O83).
-    ("POST", "index/status"),
     // Tightening the manifest rollback anchor (engine R3). Unlike the vault
     // KEY rotation two lines of prose up, this one is safe while the engine
     // is serving: it fsyncs a manifest that names the head the database
@@ -588,7 +598,6 @@ pub(crate) fn ops_alias(op: &str) -> Option<(&'static str, &'static str)> {
         "backup-create" => ("POST", "backups"),
         "backups" => ("GET", "backups"),
         "backup-restore" => ("POST", "backups/restore"),
-        "index-status" => ("POST", "index/status"),
         _ => return None,
     })
 }
@@ -1661,7 +1670,12 @@ mod tests {
             "backup-create",
             "backups",
             "backup-restore",
-            "index-status",
+            // `index-status` was here for one day. It left with its
+            // OPS_ROUTES row when O83 closed: `VectorIndex::status` creates
+            // nothing on any of the five backends, so the capability went
+            // back to the tenant data plane where O68 had put it, and an
+            // ops alias for a route the ops plane no longer carries would
+            // resolve to a pair `OPS_ROUTES` does not allow.
         ];
         // RESIDUAL, stated rather than found later: this array is a
         // hand-written literal, and `ops_alias` is a `match` that cannot be

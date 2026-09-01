@@ -1043,9 +1043,13 @@ Consequences that are binding, not advisory:
   a `--read-only` server re-embedded every drawer at start-up and appended
   a read-audit record per `/mcp` search; mcp.rs: MCP stdio — **38 tools (incl. `undercroft_history`, the audit chain
   at `HistoryScope::Agent` — fenced by namespace and by the reserved review
-  wing, so a diverted write cannot read its own evidence back), 13
-  of them writes** (`index_status` joined them 2026-08-31: it CREATES the
-  collection it reports on, so it was never a read — O83) — the read-only gate is `READ_TOOLS` and it FAILS
+  wing, so a diverted write cannot read its own evidence back), 12
+  of them writes** (`index_status` was the thirteenth for one day: it ran
+  `ensure`, which CREATES the collection it reports on, so it was never a
+  read — and `VectorIndex::status` creates on none of the five backends, so
+  it went back to `READ_TOOLS` when O83 closed. Non-creation is proved per
+  backend by `backends-e2e`, which asks twice, rather than inferred from
+  qdrant) — the read-only gate is `READ_TOOLS` and it FAILS
   CLOSED (`refused_when_read_only` = not-a-read), because
   `WRITE_TOOLS.contains(name)` served any tool nobody had classified yet and
   its compensating parity heuristic was blind to `_merge`, `_move`,
@@ -1504,8 +1508,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (782 run,
-                                      # 4 #[ignore]d = 786 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (783 run,
+                                      # 4 #[ignore]d = 787 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1600,7 +1604,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
 docker compose run --rm e2e           # e2e UI/UX suite against the release binary (438 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (127 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (53 checks)
-docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate
+docker compose run --rm backends-e2e  # five live vector DBs over TLS (72 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
                                       # answers HTTP before its Raft leader exists)
 bash tests/tls-pins.sh                # CA pins readable + the stack starts (13 checks).

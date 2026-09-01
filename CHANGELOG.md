@@ -7,6 +7,70 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### five non-creating lookups, probed one by one, and "no mirror" stops meaning "empty" (M54)
+
+**ROADMAP O83 CLOSED** — the last piece of ordinary engineering on the open
+list. The exposure was already fixed by reclassifying the call as a WRITE;
+what was owed was the capability.
+
+**`VectorIndex::status(&mut self, collection) -> Result<Option<u64>>`** is
+both halves in one signature. `None` is *there is no mirror*, `Some(0)` is
+*the mirror is empty* — and with `ensure` running first both answered `0`, so
+`index status` could not answer the question its own documentation said it
+existed for. `ensure` CREATES on all five backends, which is why asking made
+the answer.
+
+**Every backend was probed against the live server, which O83 demanded
+("proven per backend, not inferred from qdrant") and which reasoning would
+have got wrong twice.**
+
+| backend | non-creating existence | measured |
+|---|---|---|
+| qdrant | `GET /collections/{c}` | 404 absent, 200 present |
+| chroma | `GET /collections/{NAME}` | 200 returns the id; **an ID 404s**, and `/count` rejects a name with `400 Collection ID is not a valid UUIDv4` |
+| pgvector | `SELECT to_regclass($1) IS NOT NULL` | `f` absent, `t` present — core postgres, no extension |
+| milvus | `POST /collections/has` | `{"code":0,"data":{"has":false}}`, the only explicit one |
+| weaviate | `GET /v1/schema/{class}` | 404 absent |
+
+Chroma is the one a reader would assume symmetric and it is not: the
+collection path takes the NAME while `/count` needs the ID — exactly the pair
+`collection_id` used to resolve with `get_or_create: true`.
+
+**`get_or_absent` keeps ABSENT apart from UNREACHABLE, and that distinction is
+new.** Both `ensure` implementations that already ask this question throw the
+answer away — qdrant's is `if exists.is_ok() { return }`, weaviate's the same
+shape — so any error reads as absent and the next line CREATES. Correct when
+the next step is to create; dishonest when the next step is to REPORT, because
+it would tell an operator their mirror is gone when a TLS handshake failed.
+
+**The classification returns to what it should always have been**, which O83's
+gate permits only now: `GET` on `/v1`, `READ_TOOLS` on MCP, and the
+orchestrator's tenant data plane rather than `OPS_ROUTES` — restoring O68's
+ruling, whose only defect was the creation. MCP write tools go 13 → 12. The
+ops alias and its subcommand row left with the route, and the both-directions
+`every_ops_alias_is_an_allowed_route_and_every_route_has_an_alias` gate caught
+the half I forgot: *"index-status has no alias"*.
+
+**Gates.** A store unit test asserts `None` on a never-pushed vault AND that
+`ensure` was never called — through a counter on the mock, because a create is
+invisible in the return value — then pushes and asserts the same call reports
+a real count, so the first assertion cannot pass on a `status` that always
+answers `None`. `backends-e2e` proves non-creation **per backend on the live
+server by asking twice**: the second call must still say "no mirror", which it
+could not if the first had made one. Fifteen new checks (57 → 72), on a
+uniquely-named probe vault so the assertion does not depend on what a previous
+run left in a shared container.
+
+**Counterfactual, executed:** restoring `ensure` + `Some(count)` fails at
+`left: Some(0), right: None` — the defect this entry names, in the assertion
+that names it.
+
+**Residual, stated:** a tenant read still triggers an outbound call to
+operator-configured infrastructure. That is already true of a search against a
+vault with a remote index; it is amplification rather than a boundary, and the
+orchestrator counts that class rather than forbidding it. Recorded at the
+tenant-plane row, not only in the ROADMAP.
+
 ### the battery called correct figures stale, then died reading a variable it had skipped (M53)
 
 **ROADMAP O85 CLOSED.** Found by CI going red on `91571ea` (M52) — which the

@@ -110,8 +110,10 @@ GET    /v1/vaults/{id}/kg/canonical/{key}   the one active approved fact
 POST   /v1/vaults/{id}/kg/authority     declare authority_class / review_state
 GET    /v1/vaults/{id}/supersessions    drawer supersession links + verdicts
 GET    /v1/vaults/{id}/kg/rel            facts by PREDICATE (predicate, as_of?)
-POST   /v1/vaults/{id}/index/status      remote mirror vs local counts. A WRITE:
-                                        it CREATES the collection it reports on
+GET    /v1/vaults/{id}/index/status      remote mirror vs local counts. A read:
+                                        creates nothing, and remote_records is
+                                        null when NO mirror exists — which is
+                                        not the same as a mirror holding zero
 POST   /v1/vaults/{id}/tunnels          connect two wings {from,to,label}
 GET    /v1/vaults/{id}/tunnels          list tunnels (wing?)
 GET    /v1/vaults/{id}/tunnels/traverse wings reachable from start (start, depth?)
