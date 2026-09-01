@@ -65,7 +65,7 @@ so rather than implying it checked them.
 
 ---
 
-## 1.2.0 (unreleased)
+## 1.2.0 (released 2026-09-01)
 
 ### `UNDERCROFT_INDEX_CA` is read ONCE per process for pgvector, so rotating the file needs a restart
 
