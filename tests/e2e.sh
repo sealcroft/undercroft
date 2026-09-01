@@ -395,6 +395,53 @@ check "closets show counts"       0 "n="                             -- "$BIN" c
 check "fuzzy search one typo"     0 "eng/decisions"                  -- "$BIN" search "migrated the serch stack"
 check "refine needs llm url"      1 "UNDERCROFT_LLM_URL"              -- "$BIN" refine
 
+# ROADMAP O79 — a distillation is an EGRESS and leaves a chain record.
+#
+# `refine` reads every selected drawer VERBATIM and POSTs its plaintext to
+# UNDERCROFT_LLM_URL. Under UNDERCROFT_READ_AUDIT=chain, declared for
+# insider/exfil accounting, the whole loop appended ZERO records while the
+# same caller's single `GET .../drawers/{id}` appended one — and on a dry run
+# nothing was written at all, so the corpus left and no evidence existed.
+#
+# Driven with an unreachable LOOPBACK endpoint: the transport policy permits
+# loopback, every extraction fails, and the run still reaches its exit. That
+# is the deliberate shape — a refine that delivered nothing still aimed the
+# whole corpus at a network endpoint, which is the event worth recording.
+# The suite cannot reach a model, and it does not need one to test this.
+UNDERCROFT_LLM_URL="http://127.0.0.1:1" "$BIN" refine --dry-run >/dev/null 2>&1 || true
+if "$BIN" history --limit 200 2>/dev/null | grep -qF "egress/refine"; then
+  echo "ok    a dry-run refine records its egress"; PASS=$((PASS+1))
+else
+  echo "FAIL  a dry-run refine records its egress"; FAIL=$((FAIL+1))
+fi
+UNDERCROFT_LLM_URL="http://127.0.0.1:1" "$BIN" refine >/dev/null 2>&1 || true
+REFINE_EGRESS="$("$BIN" history --limit 200 2>/dev/null | grep -cF "egress/refine" || true)"
+if [ "${REFINE_EGRESS:-0}" -ge 2 ]; then
+  echo "ok    a real refine records one too ($REFINE_EGRESS total)"; PASS=$((PASS+1))
+else
+  echo "FAIL  a real refine records one too (saw ${REFINE_EGRESS:-0})"; FAIL=$((FAIL+1))
+fi
+check "chain green after the egress" 0 "VERIFY OK"                     -- "$BIN" verify
+
+# ...and a READ-ONLY handle must not write, so it warns and serves — the
+# replica precedent `/v1`'s export path states in as many words. Reachable:
+# `--read-only` is a global flag and `refine --dry-run` is a legitimate thing
+# to want against a vault you do not intend to touch.
+RO_BEFORE="$("$BIN" history --limit 200 2>/dev/null | grep -cF "egress/refine" || true)"
+UNDERCROFT_LLM_URL="http://127.0.0.1:1" "$BIN" --read-only refine --dry-run   >/tmp/ro-refine.txt 2>&1 || true
+RO_AFTER="$("$BIN" history --limit 200 2>/dev/null | grep -cF "egress/refine" || true)"
+if [ "$RO_BEFORE" = "$RO_AFTER" ]; then
+  echo "ok    a read-only refine appends nothing"; PASS=$((PASS+1))
+else
+  echo "FAIL  a read-only refine wrote to the chain"; FAIL=$((FAIL+1))
+fi
+if grep -qi "not chain-audited" /tmp/ro-refine.txt; then
+  echo "ok    ...and says the egress went unaudited"; PASS=$((PASS+1))
+else
+  echo "FAIL  a read-only refine must say the egress went unaudited"
+  sed 's/^/      /' /tmp/ro-refine.txt; FAIL=$((FAIL+1))
+fi
+
 echo "== Key rotation =="
 # Declared BEFORE the rotation, read back AFTER it. Both tables carry a
 # vault-MAC tag that is verified on read, and rotation swept neither until

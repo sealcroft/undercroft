@@ -841,7 +841,27 @@ Consequences that are binding, not advisory:
   **exports chain-audited unconditionally on every surface** —
   `audit_export`, one `egress/export` record binding surface + recipient
   + counts + the export's own manifest digest; read-only replicas warn
-  and serve; **reads audited under `UNDERCROFT_READ_AUDIT=chain`** —
+  and serve; **and `refine` is an egress too, since O79** —
+  `audit_refine`, one `egress/refine` per run binding surface +
+  destination host (credentials stripped) + model + scope + counts +
+  `dry_run`. It read the whole corpus verbatim, POSTed each drawer's
+  plaintext to `UNDERCROFT_LLM_URL`, and appended NOTHING — under a
+  declaration whose stated purpose is insider/exfil accounting, while the
+  same caller's single `GET …/drawers/{id}` appended one, and with the
+  `/v1` `limit` defaulting to a million. **Egress rather than a `ReadOp`,
+  and the tree had already ruled it**: `InternalRead::ExportAudited`
+  exists for exactly this shape — a read whose content leaves the vault,
+  kept out of the opt-in `read/` trail because an unconditional `egress/`
+  record covers it — and `refine` hands its caller facts, never drawer
+  text, so a content-returning door would mis-describe it. The a fortiori
+  argument is the tree's own: `index_push` records unconditionally for
+  EMBEDDINGS, which are merely plaintext-derived. **A dry run records
+  too**, because `dry_run` skips writing FACTS and the network egress is
+  byte-identical; the documented "write nothing" was about the triples
+  and now says so. The record lives in `refine.rs` — the one
+  implementation both surfaces drive — not at each call site, which is
+  why the read-only warn-and-serve reaches the CLI as well as `/v1`;
+  **reads audited under `UNDERCROFT_READ_AUDIT=chain`** —
   `audit_read` at the search_inner + remote tails covers every path, one
   record per READ (per search until O50/O51) with a KEYED subject
   fingerprint (never text, pinned
@@ -1484,8 +1504,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (779 run,
-                                      # 4 #[ignore]d = 783 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (782 run,
+                                      # 4 #[ignore]d = 786 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1577,7 +1597,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # by nothing and two dead wrappers survived
                                       # from O20 and O25. Publishes no check count
                                       # deliberately
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (433 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (438 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (127 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (53 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate

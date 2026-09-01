@@ -2669,6 +2669,7 @@ impl Tenancy {
                 fact_room,
                 limit,
                 dry_run,
+                surface: "http",
             },
         )
         .map_err(store_err)?;

@@ -1883,6 +1883,20 @@ pub enum InternalRead {
     /// A whole-palace export, already recorded unconditionally by
     /// `audit_export` — auditing the rows again would double-count it.
     ExportAudited,
+    /// The corpus read for LLM distillation, already recorded
+    /// unconditionally by [`PalaceStore::audit_refine`] (ROADMAP O79).
+    ///
+    /// The variant above states the RULE this one instantiates: **a read
+    /// whose content leaves the vault is internal, and the leaving is what
+    /// gets recorded** — under `egress/`, unconditionally, rather than under
+    /// `read/`, which is opt-in and describes content returned to a CALLER.
+    /// `refine` hands its caller facts and never drawer text, so a `ReadOp`
+    /// would mis-describe it.
+    ///
+    /// It was `WritePathLookup` until O79 — a variant whose own doc says
+    /// *"the caller never asked to read this"*, about the one path where the
+    /// caller asked explicitly and sized the ask.
+    RefineAudited,
     /// A per-row read inside a bulk door that appends its own single
     /// record. The caller asked for the LIST, not for each row, so the
     /// trail should say "one list" and not "N gets".
@@ -6305,6 +6319,66 @@ impl PalaceStore {
         let tx = self.conn.transaction()?;
         let (head, writes) =
             chain_append(&tx, &self.vault, Namespace::Egress, "export", &tag, &now)?;
+        tx.commit()?;
+        self.vault.anchor_manifest(&head, writes)?;
+        Ok(())
+    }
+
+    /// **The distillation egress** — one `egress/refine` record per run,
+    /// unconditional on a writable store, binding where the corpus went and
+    /// how much of it (ROADMAP O79).
+    ///
+    /// `refine` reads every selected drawer VERBATIM and POSTs its plaintext
+    /// to `UNDERCROFT_LLM_URL`. Under `UNDERCROFT_READ_AUDIT=chain` —
+    /// declared for insider/exfil accounting — it appended **zero** records,
+    /// while the same caller's single `GET …/drawers/{id}` appended one. The
+    /// `/v1` route's `limit` defaults to a million.
+    ///
+    /// **It is an EGRESS and not a read, and the tree had already ruled
+    /// that**: `InternalRead::ExportAudited` exists for precisely this shape
+    /// — a read whose content leaves the vault, kept out of the `read/`
+    /// trail because an unconditional `egress/` record covers it. `refine`
+    /// returns facts to its caller, never drawer text, so it is not a
+    /// content-returning door and a `ReadOp` would mis-describe it. The
+    /// a fortiori argument is the tree's own: `index_push` mints
+    /// unconditionally for EMBEDDINGS, which are merely plaintext-derived,
+    /// and this ships the plaintext itself.
+    ///
+    /// **A dry run records too, and carries `dry_run` so the trail can tell
+    /// the two apart.** `dry_run` skips writing FACTS; the network egress is
+    /// byte-for-byte the same, and an egress trail that omits half the
+    /// egresses is not a trail. Before this, `{"dry_run": true}` shipped the
+    /// corpus and left no evidence anywhere.
+    ///
+    /// **`destination` must never carry a credential.** `UNDERCROFT_LLM_URL`
+    /// may embed userinfo, so callers pass `LlmClient::destination`, which
+    /// strips it. The canonical is HMAC'd rather than stored, but the rule
+    /// holds regardless: an audit trail is not a place to put a secret, and
+    /// the operator's question is *which host got my corpus*.
+    #[allow(clippy::too_many_arguments)]
+    pub fn audit_refine(
+        &mut self,
+        surface: &str,
+        destination: &str,
+        model: &str,
+        wing: Option<&str>,
+        room: Option<&str>,
+        sources: usize,
+        failed: usize,
+        dry_run: bool,
+    ) -> Result<(), StoreError> {
+        let now = OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .expect("rfc3339 now");
+        let canonical = format!(
+            "egress\u{1f}refine\u{1f}{surface}\u{1f}{destination}\u{1f}{model}\u{1f}{}\u{1f}{}\u{1f}{sources}\u{1f}{failed}\u{1f}{dry_run}\u{1f}{now}",
+            wing.unwrap_or(""),
+            room.unwrap_or(""),
+        );
+        let tag = self.vault.tag(canonical.as_bytes());
+        let tx = self.conn.transaction()?;
+        let (head, writes) =
+            chain_append(&tx, &self.vault, Namespace::Egress, "refine", &tag, &now)?;
         tx.commit()?;
         self.vault.anchor_manifest(&head, writes)?;
         Ok(())

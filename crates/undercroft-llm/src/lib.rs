@@ -147,6 +147,35 @@ impl LlmClient {
         &self.model
     }
 
+    /// Where this client sends, **with any credential stripped** — the
+    /// destination an egress record names (ROADMAP O79).
+    ///
+    /// `UNDERCROFT_LLM_URL` is an operator-supplied URL and may legitimately
+    /// carry userinfo (`https://user:token@gateway/v1`) when pointed at a
+    /// gateway that demands one. The audit trail's question is *which host
+    /// received my corpus*, and a secret is never part of that answer — so
+    /// everything between the scheme and the last `@` is dropped rather than
+    /// hashed-and-hoped-about. The canonical is HMAC'd rather than stored,
+    /// which makes this belt-and-braces; it is still the right shape, since
+    /// the rule is about what may be ASSEMBLED into an audit record at all.
+    pub fn destination(&self) -> String {
+        let (scheme, rest) = match self.base.split_once("://") {
+            Some((s, r)) => (s, r),
+            None => ("", self.base.as_str()),
+        };
+        // `rsplit_once` and not `split_once`: a password may itself contain
+        // an `@`, and the LAST one is the authority separator.
+        let hostish = match rest.rsplit_once('@') {
+            Some((_credential, after)) => after,
+            None => rest,
+        };
+        if scheme.is_empty() {
+            hostish.to_string()
+        } else {
+            format!("{scheme}://{hostish}")
+        }
+    }
+
     /// One chat completion, deterministic settings (temperature 0).
     pub fn complete(&self, system: &str, user: &str) -> Result<String, LlmError> {
         let (url, body) = match self.kind {

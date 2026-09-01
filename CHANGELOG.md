@@ -7,6 +7,84 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### the whole corpus left for a network endpoint and the chain said nothing (M52)
+
+**ROADMAP O79 CLOSED.** The filing said it needed *"a ruling on whether a dry
+run that leaks the corpus without writing a fact is a read, an egress, or both
+… a security verdict"*. **No ruling was owed** — the tree had already made
+every one of these decisions, and establishing that took reading rather than
+asking.
+
+`refine` read every selected drawer VERBATIM and POSTed its plaintext to
+`UNDERCROFT_LLM_URL`, appending **zero** chain records. Under
+`UNDERCROFT_READ_AUDIT=chain` — declared for insider/exfil accounting — the
+same caller's single `GET …/drawers/{id}` appended one, and the `/v1` route's
+`limit` defaults to **1,000,000**. On `{"dry_run": true}` nothing was written
+at all, so the corpus left and no evidence of it existed anywhere.
+
+**Egress, not a read, and `InternalRead::ExportAudited` had already ruled
+it.** That variant exists for exactly this shape: *"a whole-palace export,
+already recorded unconditionally by `audit_export` — auditing the rows again
+would double-count it."* A read whose content leaves the vault is INTERNAL,
+and the leaving is recorded under `egress/`, unconditionally — not under
+`read/`, which is opt-in and describes content returned to a CALLER. `refine`
+hands its caller facts, never drawer text, so a `ReadOp` would mis-describe it
+and inflate `ReadOp::ALL`, whose every variant is a content-returning door.
+The a fortiori argument is the tree's own: `index_push` records
+unconditionally for EMBEDDINGS, which are merely plaintext-*derived*.
+
+**A dry run records too**, which follows from what `egress/` means rather than
+from taste: `dry_run` skips writing FACTS and the network egress is
+byte-identical. The record carries the flag, pinned by a test asserting the
+two runs produce different TAGS — `record_id` is a namespace plus a subject
+and never a verdict. `docs/AGENTS.md`'s "write nothing" was about the triples
+and now says so.
+
+**The read-only case was ruled too, in as many words**, at `/v1`'s export
+path: *"a read-only replica must not write, so it serves the export and SAYS
+the egress went unaudited — the replica precedent: warn and serve."*
+`undercroft --read-only refine --dry-run` is reachable, so it warns and
+serves. That lives in `refine.rs`, the one implementation both surfaces drive,
+so the CLI inherits it — `/v1` had the export version in its own handler.
+
+**The witness was a false statement.** `refine` read with
+`InternalRead::WritePathLookup`, whose own doc says *"a lookup performed to
+decide a WRITE … the caller never asked to read this"*, about the one path
+where the caller asked explicitly and sized the ask. `RefineAudited` states
+the truth and names the rule `ExportAudited` instantiates.
+
+**A credential never reaches the record.** `UNDERCROFT_LLM_URL` may carry
+userinfo when pointed at a gateway that demands one, so
+`LlmClient::destination` strips everything before the LAST `@` — the last,
+because a password may contain one — and the record names the host. The
+canonical is HMAC'd rather than stored, so this is belt-and-braces; the rule
+is about what may be ASSEMBLED into an audit record at all.
+
+**Recorded after the loop with what was ATTEMPTED**, following `audit_export`
+and `index_push`. A run whose every extraction failed still records: the
+security-relevant event is that the corpus was aimed at a network endpoint,
+not whether the endpoint answered — which is also what makes the gates
+drivable without a model, against an unreachable loopback port.
+
+**Counterfactual, executed:** removing the `audit_refine` call fails
+`a_refine_records_its_egress_on_both_paths` at *"exactly one egress/refine
+record, dry_run=false"*. Restored from a scoped file copy.
+
+Gates: three unit tests driving `refine()` ITSELF (both paths, the
+dry-run/real tag distinction, the credential strip) — through the function
+rather than by calling `audit_refine`, because the defect was that the
+function did not record and a test of the recorder alone passes on both trees
+— plus three `e2e` checks driving the real binary and reading `undercroft
+history`.
+
+**Deliberately not done: a `ReadOp` for `refine`.** The filing offered it as
+an alternative; it would claim refine returns content to its caller, which it
+does not.
+
+**Residual, stated:** a crash mid-loop leaves an egress that already happened
+unrecorded — the record is written after the loop, as both sibling egresses
+are. Shared with `index_push` and accepted there.
+
 ### a feature nothing linted, and a fix that would not have run where it mattered (M51)
 
 **ROADMAP O84 CLOSED** — filed by M50 the same day, from my own work, and

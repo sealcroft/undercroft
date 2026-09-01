@@ -3481,6 +3481,7 @@ fn run(cli: Cli) -> Result<()> {
                 fact_room,
                 limit: if *limit == 0 { 100_000 } else { *limit },
                 dry_run: *dry_run,
+                surface: "cli",
             };
             let rep = refine::refine(&mut store, &llm, &opts)?;
             if rep.sources == 0 {
