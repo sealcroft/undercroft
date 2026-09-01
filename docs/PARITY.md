@@ -2,7 +2,7 @@
 
 Feature-by-feature comparison against `MemPalace/mempalace` (the Python
 project whose concepts this one reimplements; no source code is shared,
-see "License lineage" below), updated 2026-08-05.
+see "License lineage" below), updated 2026-09-02.
 
 ## Ported (Rust equivalent exists)
 
@@ -17,14 +17,14 @@ see "License lineage" below), updated 2026-08-05.
 | Conversation miner (`--mode convos`) | `mine --mode convos` |
 | Sweep (per-message drawers) | `sweep` (idempotent via keyed fingerprints) |
 | Wake-up layers L0/L1 | `wake-up` (identity.txt + essential story) |
-| Knowledge graph (temporal, validity windows) | `kg add/query/rel/invalidate/supersede/timeline/stats` |
+| Knowledge graph (temporal, validity windows) | `kg add/query/rel/invalidate/supersede/timeline/stats`, plus three with no upstream equivalent: `kg receipts` (per-fact citation verdicts), `kg authority` and `kg canonical` (the golden-values tier) |
 | Tunnels (cross-wing) | `tunnel create/list/follow/delete/traverse` |
 | Hallways (entity co-occurrence) | `hallways` (computed on demand; never persisted) |
 | Drawer CRUD, delete-by-source, dup check | `drawer …`, keyed fingerprints |
 | Agent diaries + list_agents | `diary write/read/agents` |
 | Dedup / stats / taxonomy | `dedup`, `stats`, `taxonomy` |
 | Backups | `backup create/list/restore` (verifies before snapshot) |
-| Repair | `repair` (fingerprint backfill, re-embed, vacuum, verify) |
+| Repair | `repair` (fingerprint backfill, re-embed, drop the stale index, re-stamp the embedder identity, record the run, vacuum, verify — all of it inside **one transaction**, so an abort cannot leave a mixed vector space reporting itself as pure) |
 | Export / migrate | `export` (JSONL) + `import` (undercroft & mempalace formats) |
 | MCP stdio server (~35 tools) | 38 tools (daemon/sync/session tools inapplicable — process management moved to the OS). The count is not maintained by hand: `crates/undercroft-cli/src/parity.rs` holds the inventory and the code is counted against it **in both directions**, so a tool added without a line fails the build and a line naming a tool that no longer exists fails too |
 | MCP HTTP team server (`serve`) | `serve-http` (bearer token enforced; `--read-only` is a posture on the whole process — both stores opened read-only, the route gate in front of dispatch, failing closed) |
@@ -38,37 +38,41 @@ see "License lineage" below), updated 2026-08-05.
 | Deploy (compose server, systemd) | `deploy/` |
 | Docs / examples | `docs/`, `examples/` |
 
-## What exists only here (updated for v1.0.0)
+## What exists only here (updated for v1.2.0)
 
 Everything below has **no upstream equivalent** — it is original work of
 this project, which is why the two codebases share concepts but not code
 (and why this project's license is independent of upstream's; see the
 "License lineage" section at the end).
 
-> **The `v1.0.0` label is deliberate, and it was examined on 2026-08-19 rather
-> than ignored.** It is an *as-of* claim: moving it asserts that someone
-> re-read this document against the code, and the `version surfaces` preflight
-> therefore refuses to bump it with a release. **Three** releases have shipped
-> since.
-> What was checked: `1.1.1` is a PATCH, so by definition it adds no capability
-> here; `1.1.0` was a MINOR whose entries are all fix-shaped — it hardened and
-> corrected **within** the categories below (a `/v1` route for a check the CLI
-> already had, control-plane telemetry, audit closures) and introduced no new
-> category. `1.2.0` is a much larger MINOR — fifty-seven units — and was
-> checked the same way on 2026-09-01, at the level of CATEGORY rather than
-> line: its read-audit choke point and `egress/refine` record extend the audit
-> chain already described under *Security layer*; `backup restore`'s exclusive
-> hold, the JSON 401 and the non-creating mirror status sit under
-> *Operations*; and the `/v1` expansion from 37 to 56 routes and MCP from 34
-> to 38 tools makes the surfaces under *Multi-tenancy & fleet operation*
-> broader without making them new. **That is a weaker check than the other
-> two and is labelled as one** — a PATCH argues from its own definition, and
-> `1.1.0` was small enough to enumerate; this is a judgement that fifty-seven
-> units stayed inside five headings. So the content is believed current and the label is not moved,
-> because a full re-read of all 225 lines against the code has **not** been
-> done and saying otherwise would be a claim stronger than its evidence —
-> which is the defect ROADMAP `O56` and `O6` both record. The next person to
-> re-read it moves the label; nobody else should.
+> **The `v1.2.0` label was earned on 2026-09-02, not bumped.** It is an
+> *as-of* claim — moving it asserts that someone re-read this document
+> against the code — which is why the `version surfaces` preflight refuses
+> to move it with a release and why it sat at `v1.0.0` through three of them.
+> That deferral was correct each time and had become its own stale: the rule
+> is *re-verify it, then move it*, and only the first half was being applied.
+>
+> **What the re-read covered:** all 252 lines, with every checkable claim
+> put against the code rather than read for plausibility — the CLI's real
+> subcommand surface (`--help` on a freshly built binary, not the source),
+> the MCP tool count against `parity.rs`, the `/v1` route count against
+> `tenant.rs`'s dispatch, and each capability bullet against the crate that
+> implements it. **Four drifts came back**, all of them things `1.2.0`
+> moved and this file had not: the `kg` command list was missing
+> `receipts`, `authority` and `canonical`; `repair` was described without
+> the stale-index drop, the identity re-stamp, the run record or the single
+> transaction; the read-audit bullet described `search`-only auditing, which
+> is exactly the defect `1.2.0` closed across thirteen doors; and the `/v1`
+> bullet predated the agent-facing surface landing there. All four are
+> fixed above.
+>
+> **What it did NOT cover, stated so the label is not read as more than it
+> is:** the measured figures — recall percentages, latencies, benchmark
+> deltas — were not re-measured. They cite their instruments
+> (`benchmarks/RESULTS.md`, `RETRIEVAL_SCALING.md`) and re-running them is a
+> different job from re-reading this document. A claim here of the form
+> *"this capability exists and works this way"* was checked; a claim of the
+> form *"it measured N"* was not.
 
 
 
@@ -128,8 +132,18 @@ this project, which is why the two codebases share concepts but not code
   assigns (never MCP), HMAC-tagged so a flip fails verification, consumed
   as a candidate-set floor resolved before candidates are drawn.
 - **Read and egress auditing** — exports are chain-audited unconditionally
-  on every surface; reads are audited under `UNDERCROFT_READ_AUDIT=chain`
-  with a **keyed fingerprint of the query, never its text**.
+  on every surface, and so is **LLM distillation**, which reads the corpus
+  and POSTs it to a network endpoint: one `egress/refine` record per run,
+  binding surface, destination host (credentials stripped), model, scope
+  and counts, written on a dry run too because the corpus leaves
+  identically either way. Reads are audited under
+  `UNDERCROFT_READ_AUDIT=chain` across **thirteen doors** — nine that
+  return drawer content and four knowledge-graph readers — one record per
+  read, with a **keyed fingerprint of the subject, never its text**. The
+  declaration is for insider/exfil accounting, and until `1.2.0` it
+  covered `search` alone: every by-id and bulk read returned verbatim
+  content and appended nothing, so walking the drawer list and then
+  fetching each id left zero records where one search left one.
 - Keyed duplicate fingerprints, token-mandatory non-loopback HTTP bind,
   per-vault request assertions, read-only serving posture.
 
@@ -164,11 +178,15 @@ this project, which is why the two codebases share concepts but not code
 
 **Multi-tenancy & fleet operation:**
 
-- Versioned `/v1` REST engine: per-vault assertions, external
-  embeddings, dedup-refresh, lossless export/import (vectors + token
-  artifacts ride along — restore is a copy, not a re-embed), and
-  operator-plane routes (wing trust, admission review, retention +
-  sweep, attested forgetting) that are deliberately absent from MCP.
+- Versioned `/v1` REST engine, **56 routes**: per-vault assertions,
+  external embeddings, dedup-refresh, lossless export/import (vectors +
+  token artifacts ride along — restore is a copy, not a re-embed), the
+  full agent-facing memory surface (diary, tunnels, closets, hallways,
+  wake-up, backups, drawer maintenance — 37 routes until `1.2.0` ruled
+  every remaining absence and closed the ones that were drift rather than
+  boundary), and operator-plane routes (wing trust, admission review,
+  retention + sweep, attested forgetting) that are deliberately absent
+  from MCP.
   Import re-stamps the writing surface and is admission-screened, so a
   restore or a tenant migration is not a route around the screen.
 - `undercroft-orchestrator`: a separate control plane (instance registry
