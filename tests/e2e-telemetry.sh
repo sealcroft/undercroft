@@ -228,6 +228,62 @@ else
   pass "sealed stream still carries no drawer content"
 fi
 
+# ROADMAP O82a — the stream's FAILURE replies, which this suite never drove.
+#
+# Every streaming check above uses a valid bearer, so the one arm that built
+# its own reply was never exercised: the SSE route is intercepted in front of
+# `Tenancy::handle`, so it never reached `respond`, and its error arm was
+# `Response::from_string("")` with a status and nothing else.
+#
+# **Which failure reaches that arm is the whole design of this block, and the
+# obvious choice is wrong.** A request with NO bearer never gets there — the
+# palace bearer gate answers it several hundred lines earlier, through
+# `unauthorized()`, which M43 already made JSON-with-a-challenge. Asserting
+# the envelope on a 401 therefore tests M43's gate and says NOTHING about this
+# route; measured, those assertions pass with the defect restored. An unknown
+# VAULT is the cheap failure that authenticates at the door and then fails
+# inside `authorize`, which is the arm in question.
+#
+# The assertion is a COMPARISON against the sibling route, deliberately: the
+# same failure on `.../stats` is the only definition of "the same envelope"
+# that does not go stale when the envelope changes.
+echo "== SSE failure replies use the /v1 envelope (O82a) =="
+
+sse_404="$(curl -s -o /tmp/sse404.body -D /tmp/sse404.hdr -w '%{http_code}'   --max-time 5 "${AUTH[@]}" "$BASE/nosuchvault/stream")"
+sib_404="$(curl -s -o /tmp/sib404.body -w '%{http_code}' --max-time 5   "${AUTH[@]}" "$BASE/nosuchvault/stats")"
+if [ "$sse_404" = "$sib_404" ]; then
+  pass "stream and stats agree on the status for an unknown vault ($sse_404)"
+else
+  fail "stream answered $sse_404 where stats answered $sib_404"
+fi
+if [ -s /tmp/sse404.body ] && grep -q '"error"' /tmp/sse404.body; then
+  pass "the stream's failure has a body at all (it was bodyless)"
+else
+  fail "the stream's failure reply is still empty" "$(cat /tmp/sse404.body)"
+fi
+if grep -qi '^Content-Type: *application/json' /tmp/sse404.hdr; then
+  pass "the stream's failure is application/json, like every other /v1 reply"
+else
+  fail "the stream's failure is not JSON" "$(cat /tmp/sse404.hdr)"
+fi
+if [ "$(cat /tmp/sse404.body)" = "$(cat /tmp/sib404.body)" ]; then
+  pass "stream and stats return the SAME body for the same failure"
+else
+  fail "stream and stats disagree on the body"     "stream: $(cat /tmp/sse404.body) / stats: $(cat /tmp/sib404.body)"
+fi
+
+# The palace bearer gate, at a CALL SITE rather than through the helper.
+# M43's own gate asserts `unauthorized()` in isolation; this asserts that the
+# reply a caller actually receives on a /v1 path carries the challenge. It is
+# a separate claim from the four above and is labelled as one — it does not
+# reach the stream's own error arm and must not be read as covering it.
+curl -s -o /dev/null -D /tmp/sse401.hdr --max-time 5 "$BASE/plain/stream"
+if grep -qi '^WWW-Authenticate:' /tmp/sse401.hdr; then
+  pass "an unauthenticated /v1 call is refused with a challenge (M43, at a call site)"
+else
+  fail "no WWW-Authenticate on the bearer gate's 401" "$(cat /tmp/sse401.hdr)"
+fi
+
 # history backfill endpoint returns the sample ring.
 hist=$(curl -s "${AUTH[@]}" "$BASE/plain/stats/history")
 grep -q '"drawers"' <<<"$hist" && pass "stats/history returns samples" \

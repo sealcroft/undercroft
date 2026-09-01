@@ -305,6 +305,34 @@ pub fn pin_from_env(what: &'static str, var: &str) -> Result<Option<Pin>, NetErr
     resolved
 }
 
+/// The resolved trust roots for a hop that does **not** speak through `ureq`,
+/// taken from `var` and resolved once per process.
+///
+/// [`agent_from_env`] is the constructor for every hop that does. The
+/// pgvector backend is the one that cannot use it: it speaks the postgres
+/// wire protocol through `tokio_postgres_rustls`, which wants a
+/// `rustls::ClientConfig` rather than an agent. So it read `UNDERCROFT_INDEX_CA`
+/// with a bare `std::env::var` and built its own config — which meant one
+/// declaration got **two answers across five backends** (the other four trim
+/// the value and refuse a whitespace-only one through [`declared_pin`]; this
+/// did neither) and, worse, **re-read the PEM per connection**, so the
+/// restart-to-rotate property [`pin_from_env`] documents above did not hold
+/// for the one hop reachable per request (ROADMAP O82c).
+///
+/// Returning the config from INSIDE this crate is what keeps [`Pin`]'s
+/// guarantee intact — its field stays private, so no caller can assemble a
+/// `ClientConfig` that skipped [`pinned_roots`]' refusals; it can only
+/// receive one that did not.
+pub fn rustls_config_from_env(
+    what: &'static str,
+    var: &str,
+) -> Result<Arc<rustls::ClientConfig>, NetError> {
+    Ok(match pin_from_env(what, var)? {
+        Some(pin) => pin.0.clone(),
+        None => webpki_roots(),
+    })
+}
+
 /// [`agent_pinned`] with the pin taken from `var`, resolved once per process.
 ///
 /// The one constructor every hop that reads a `*_CA` variable should use.

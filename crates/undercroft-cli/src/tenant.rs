@@ -181,8 +181,8 @@ enum Body {
 }
 
 /// A REST error carrying an HTTP status code and a safe message.
-struct RestError {
-    code: u16,
+pub(crate) struct RestError {
+    pub(crate) code: u16,
     message: String,
     /// A machine-readable class for the errors whose STATUS is ambiguous.
     ///
@@ -328,11 +328,7 @@ impl Tenancy {
                 // not allowed here". The engine's own CLI has always made
                 // this distinction (exit 2 vs 1); every other `/v1` client
                 // had to guess from the message text.
-                let payload = match e.class {
-                    Some(c) => json!({ "error": e.message, "class": c }),
-                    None => json!({ "error": e.message }),
-                };
-                respond(req, e.code, &payload.to_string(), "application/json")
+                respond_err(req, e)
             }
         }
     }
@@ -654,9 +650,17 @@ impl Tenancy {
     /// (cache) the store so the sampler can read it. Returns whether the
     /// vault is sealed, or the HTTP status to reject with. `telemetry` only.
     #[cfg(feature = "telemetry")]
-    pub fn authorize(&mut self, id: &str, req: &Request, now: i64) -> Result<bool, u16> {
-        self.assert_or_401(id, req, now).map_err(|e| e.code)?;
-        let store = self.store_for(id).map_err(|e| e.code)?;
+    /// **Returns the error, not a bare status** (ROADMAP O82a).
+    ///
+    /// This used to be `Result<bool, u16>`, and the SSE route — its only
+    /// caller — could therefore answer nothing but a number. `.map_err(|e|
+    /// e.code)` discarded the message AND the integrity `class`, so a
+    /// tampered vault answered `409 {"error":…,"class":"integrity"}` on
+    /// `…/stats` and a bare, bodyless `409` on `…/stream`: one condition,
+    /// two shapes, decided by which route the caller happened to be on.
+    pub fn authorize(&mut self, id: &str, req: &Request, now: i64) -> Result<bool, RestError> {
+        self.assert_or_401(id, req, now)?;
+        let store = self.store_for(id)?;
         Ok(matches!(store.vault().level(), SecurityLevel::Sealed))
     }
 
@@ -3541,6 +3545,22 @@ fn parse_vector(body: &Value, key: &str) -> Result<Option<Vec<f32>>, RestError> 
         }
         Some(_) => Err(RestError::new(400, "vector must be an array of numbers")),
     }
+}
+
+/// **The one place a `/v1` error becomes a reply.**
+///
+/// Extracted from `handle` by ROADMAP O82a so the routes intercepted BEFORE
+/// `Tenancy::handle` — today the SSE stream, which hijacks the connection
+/// onto its own thread — render the same envelope as everything else instead
+/// of a bodyless status. `class` is what made this matter: it is how a client
+/// tells "the vault contradicts itself" from "that request was not allowed
+/// here", both of which are 409.
+pub(crate) fn respond_err(req: Request, e: RestError) {
+    let payload = match e.class {
+        Some(c) => json!({ "error": e.message, "class": c }),
+        None => json!({ "error": e.message }),
+    };
+    respond(req, e.code, &payload.to_string(), "application/json")
 }
 
 fn respond(req: Request, code: u16, body: &str, content_type: &str) {

@@ -1749,6 +1749,128 @@ mod tests {
         );
     }
 
+    /// **Both gates above are about the CLIENT. This one is about the
+    /// DECLARATION, and neither could see it** (ROADMAP O82c).
+    ///
+    /// `undercroft_net::agent_from_env` is documented as *"the one
+    /// constructor every hop that reads a `*_CA` variable should use"* — but
+    /// a hop that does not speak HTTP cannot use it, and the pgvector backend
+    /// is exactly that: it speaks the postgres wire protocol through
+    /// `tokio_postgres_rustls`. So it read `UNDERCROFT_INDEX_CA` with a bare
+    /// `std::env::var`, which meant ONE declaration got **two answers across
+    /// five backends** — the four HTTP ones trim it and refuse a
+    /// whitespace-only value through `declared_pin`, and this one did
+    /// neither — and it **re-read the PEM per construction**, which
+    /// `pin_from_env` caches deliberately because *"re-reading the file per
+    /// call makes the pin mutable at runtime … silent un-pinning by another
+    /// name"*. `index/status` is reachable per request, so of all five hops
+    /// it was the one where the stated restart-to-rotate property mattered
+    /// most and the one where it did not hold.
+    ///
+    /// The needle is the READ, not the client: a `*_CA` declaration resolved
+    /// anywhere but in the policy crate. That is the observable this class of
+    /// defect actually moves — the two gates above scan for `ureq`'s builder
+    /// and for a dependency edge, and a bare `env::var` moves neither.
+    #[test]
+    fn no_crate_but_undercroft_net_resolves_a_ca_declaration() {
+        // Split, for the reason the gate above splits its needle: this file
+        // is inside the scanned tree, and the engine's env-var inventory gate
+        // scans every `.rs` under `crates/` for quoted `UNDERCROFT_` literals
+        // and requires each to be a variable it knows. One gate's needle is
+        // another gate's input.
+        let env_read = concat!("env::", "var(");
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("crates/ is this crate's parent")
+            .to_path_buf();
+
+        // Two exemptions, each REQUIRED to be reached, so a rename cannot
+        // silently widen one.
+        //
+        // `undercroft-net` IS the policy.
+        //
+        // `undercroft-orchestrator` reads `UNDERCROFT_ORCH_ENGINE_CA` in
+        // `engine.rs` and is exempt DELIBERATELY rather than left unmatched.
+        // Its `resolve_engine_pin` is a second implementation of
+        // `declared_pin`'s empty-refusal, which the doctrine would normally
+        // forbid — but it is behaviourally identical, it resolves through
+        // `undercroft_net::resolve_pin`, it caches once per process in
+        // `ENGINE_PIN` exactly as `pin_from_env` does, and its message NAMES
+        // THE VARIABLE, which the shared resolver's does not and which
+        // `a_pin_that_cannot_be_honoured_refuses_rather_than_falling_back`
+        // asserts. Converging it on the shared resolver as things stand would
+        // regress an operator message that a test protects. The real
+        // convergence is to teach `declared_pin` to name the variable it
+        // came from; recorded here rather than left as an unexplained
+        // exemption, which is the shape this project calls a gap dressed up
+        // as a principled refusal.
+        let exempt = ["undercroft-net", "undercroft-orchestrator"];
+        let mut offenders = Vec::new();
+        let mut scanned = 0usize;
+        let mut exempted: Vec<&str> = Vec::new();
+        let mut stack = vec![crates.clone()];
+        while let Some(dir) = stack.pop() {
+            let owner = dir.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if let Some(name) = exempt.iter().find(|e| **e == owner) {
+                exempted.push(name);
+                continue;
+            }
+            for entry in std::fs::read_dir(&dir).expect("crates/ is readable") {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                    continue;
+                }
+                scanned += 1;
+                let text = std::fs::read_to_string(&path).unwrap();
+                for (n, line) in text.lines().enumerate() {
+                    let t = line.trim_start();
+                    if t.starts_with("//") || !t.contains(env_read) {
+                        continue;
+                    }
+                    // A CA declaration, named either literally or through the
+                    // backend's own `CA_VAR` const.
+                    if t.contains("CA_VAR") || t.contains("_CA\"") {
+                        offenders.push(format!("{}:{}: {t}", path.display(), n + 1));
+                    }
+                }
+            }
+        }
+        assert!(
+            scanned > 40,
+            "the walk found {scanned} files — the scan, not the tree, is broken"
+        );
+        exempted.sort_unstable();
+        let mut want = exempt;
+        want.sort_unstable();
+        assert_eq!(
+            exempted, want,
+            "the walk must reach and skip each exempt crate exactly once — a rename that \
+             stops matching silently widens the exemption"
+        );
+        // PREMISE, in the direction that matters: the needle must match where
+        // the legal resolution lives, or a zero above is a claim about the
+        // scanner rather than about the tree.
+        let policy = crates.join("undercroft-net/src/lib.rs");
+        let policy_src = std::fs::read_to_string(&policy).unwrap();
+        assert!(
+            policy_src
+                .lines()
+                .any(|l| l.contains(env_read) && l.contains("var")),
+            "premise: the needle must match inside the policy crate, or a clean result \
+             above means nothing"
+        );
+        assert!(
+            offenders.is_empty(),
+            "a `*_CA` declaration must be resolved through `undercroft_net` — one \
+             declaration, one answer, resolved once per process. Found:\n{}",
+            offenders.join("\n")
+        );
+    }
+
     /// The gate above scans SOURCE for `ureq`'s builder token — which is
     /// precisely the observable round-four #8 did not move. The OTLP span
     /// exporter was a second outbound HTTP client built by *someone else's*

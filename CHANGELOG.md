@@ -7,6 +7,102 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### three routes around a shared policy, and a counterfactual that only half fired (M50)
+
+**ROADMAP O82 CLOSED** — all three findings, each with a gate and an executed
+counterfactual. None needed a ruling: in every case the tree already promised
+the behaviour and the code did not keep it, which is the *documents lead* half
+of the drift-direction doctrine.
+
+**(a) The SSE stream bypassed the `/v1` error envelope.** `GET
+/v1/vaults/{id}/stream` is intercepted in `http.rs` BEFORE `Tenancy::handle`,
+so it never reached `respond`; its error arm was `Response::from_string("")`
+with a status and nothing else. `authorize` returned `Result<bool, u16>` and
+threw the message and the integrity `class` away — so a tampered vault
+answered `409 {"error":…,"class":"integrity"}` on `…/stats` and a bare,
+bodyless `409` on `…/stream`: one condition, two shapes, decided by which
+route the caller was on. `authorize` now returns the `RestError`, and
+`respond_err` is the ONE place a `/v1` error becomes a reply, called by
+`handle` and by the intercepted route alike.
+
+**The counterfactual fired on ONE of six checks, and that was the finding.**
+The obvious way to drive a stream failure — omit the bearer — never reaches
+that arm at all: the palace bearer gate answers it several hundred lines
+earlier through `unauthorized()`, which M43 had already made
+JSON-with-a-challenge. Four of the six assertions therefore passed **with the
+defect restored**, measuring M43's gate and saying nothing about this route.
+An unknown VAULT is the failure that authenticates at the door and then fails
+inside `authorize`. The block was rebuilt around it and re-counterfactualled:
+three checks now fail on the defect, the status check correctly stays green
+(404 either way), and the challenge check is kept, relabelled, and explicitly
+scoped to the gate it actually covers.
+
+**(b) The orchestrator's `config check` was blind to declarations that stop
+its own `serve` — six of them, not the two filed.** `main` calls
+`undercroft_obs::init_as` on every subcommand; failure is FATAL for `serve`
+and warn-and-continue under the pre-flight, so `config check` printed one
+warning and *"serve would start in this environment"*, exit 0, for an
+environment where `serve` refuses. That is O21's defect one binary over.
+`ORCH_ENV_VARS` claims *"every declaration THIS binary reads"* and listed
+eight; measured against what `undercroft-obs` actually reads, six were
+missing — `UNDERCROFT_LOG`, `_LOG_FORMAT`, `_SERVICE_NAME`, `_OTLP_HEADERS`,
+`_OTLP_ENDPOINT` and `_OTLP_CA`. The two `Protects` ones are pre-flighted
+through the SAME `undercroft-net` resolvers the engine's `check_declaration`
+runs, so the two commands cannot answer differently about one declaration.
+
+**The cross-crate join could not see any of it**, by construction: it matched
+only lines beginning `("UNDERCROFT_ORCH_`, so a declaration read through a
+LIBRARY was outside the question it asked. It compares full names now, with
+direction 1 still scoped to the ORCH family (the engine reads eighty-one and
+this binary is not expected to know most of them). A second gate reads
+`undercroft-obs`'s source and requires every declaration it reads to be in the
+inventory, both directions — the mechanism that would have caught this.
+
+**(c) pgvector resolved `UNDERCROFT_INDEX_CA` outside the shared helper.** It
+cannot use `agent_from_env` — it speaks postgres through
+`tokio_postgres_rustls`, not HTTP — so it read the variable with a bare
+`std::env::var`. One declaration, two answers across five backends: the other
+four trim it and refuse a whitespace-only value through `declared_pin`, and
+this did neither. Worse, it **re-read the PEM per construction**, which
+`pin_from_env` caches deliberately because *"re-reading the file per call
+makes the pin mutable at runtime … silent un-pinning by another name"* — and
+`index/status` is reachable per request, so of the five hops this was the one
+where the stated restart-to-rotate property mattered most and the one where it
+did not hold. `undercroft_net::rustls_config_from_env` is the shared door for
+a hop that is not `ureq`; `Pin`'s field stays private, so nothing outside the
+policy crate can still assemble a config that skipped its refusals.
+
+**The gates for (c) are about the DECLARATION, which neither existing
+transport gate could see** — one scans for `ureq`'s builder token, the other
+reads a dependency edge out of `Cargo.lock`, and a bare `env::var` moves
+neither. The new one flags a `*_CA` declaration resolved anywhere but the
+policy crate.
+
+**A second instance found by grepping for the pattern rather than trusting
+the filing.** `undercroft-orchestrator`'s `resolve_engine_pin` is also a
+second implementation of `declared_pin`'s empty-refusal. It is exempt
+DELIBERATELY and the reason is written at the exemption: it is behaviourally
+identical, resolves through `undercroft_net::resolve_pin`, caches once per
+process exactly as `pin_from_env` does, and its message NAMES THE VARIABLE —
+which the shared resolver's does not, and which an existing test asserts.
+Converging it as things stand would regress an operator message a test
+protects; the real convergence is to teach `declared_pin` to name the variable
+it came from, recorded rather than left as an unexplained exemption.
+
+**Also changed: a premise arm that was a hand-maintained figure.**
+`every_protects_variable_is_pre_flighted` asserted `protects == 6` and tripped
+for the healthiest possible reason — six became eight because the binary
+learned about two declarations it had always read. It is a floor now,
+matching the engine's own `protects >= 20` precedent: a premise arm's job is
+to prove the loop examined something, and an exact count additionally makes it
+a published number somebody has to hand-edit.
+
+**Filed, not fixed:** `cargo clippy -p undercroft-cli --features telemetry`
+fails with two dead-code errors in `undercroft-obs`. **Pre-existing** —
+verified by running it against `HEAD` in a detached worktree with its own
+target dir, where it fails identically — and nothing gates that feature
+combination. ROADMAP O84.
+
 ### the inventory that counted itself, and the namespace nobody had ruled on (M49)
 
 **ROADMAP O80 CLOSED**, both halves — the gate, and the ruling it existed to

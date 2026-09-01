@@ -1116,7 +1116,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**111** of the **126** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**112** of the **127** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -3846,51 +3846,121 @@ survives, an `Absence` row must record the CLI gap or close it.
 
 ---
 
-### O82 — three smaller findings from the same audit, filed rather than folded in
+### O82 — CLOSED 2026-09-01: three routes around a shared policy, each gated and counterfactualled
 
-Each is evidenced and none is fixed, because each needs a ruling or touches a
-contract.
+**Found by the pre-release drift audit, 2026-08-31. Closed 2026-09-01 (M50).**
+Filed as *"each needs a ruling or touches a contract"* — measured, **none
+needed a ruling**: in all three the tree already promised the behaviour and
+the code did not keep it, which is the *documents lead* half of the
+drift-direction doctrine. What each needed was a gate that could SEE it.
 
-**(a) `GET /v1/vaults/{id}/stream` bypasses the `/v1` error envelope.** The SSE
-route is intercepted in `http.rs` BEFORE `Tenancy::handle`, so it never reaches
-`respond` — the one place that stamps `WWW-Authenticate` and renders `class`.
-`authorize` does `.map_err(|e| e.code)`, discarding both the message and the
-integrity class, and the reply is `Response::from_string("")` with no headers.
-So a tampered vault answers `409 {"error":…,"class":"integrity"}` on
-`…/stats` and a bare, bodyless `409` on `…/stream` — and the 401 there carries
-no challenge, which is the defect M43 closed everywhere the sweep could see.
-It could not see this one: the unit gate asserts the `unauthorized()` HELPER,
-not its call sites, and the telemetry e2e only ever streams WITH a valid
-bearer. Telemetry-only route.
+**(a) `GET /v1/vaults/{id}/stream` bypassed the `/v1` error envelope.**
+Intercepted in `http.rs` before `Tenancy::handle`, so it never reached
+`respond`; `authorize` returned `Result<bool, u16>`, discarding the message
+and the integrity `class`, and the arm answered `Response::from_string("")`.
+A tampered vault therefore answered `409 {"error":…,"class":"integrity"}` on
+`…/stats` and a bare, bodyless `409` on `…/stream`. `authorize` returns the
+`RestError` now and `respond_err` is the one place a `/v1` error becomes a
+reply, called by `handle` and by the intercepted route alike.
 
-**(b) The orchestrator's `config check` is blind to the telemetry
-declarations that stop its own `serve` from starting.** `ORCH_ENV_VARS` claims
-to hold *"every declaration THIS binary reads"* and lists eight, all
-`UNDERCROFT_ORCH_*`. Under `--features telemetry` the binary also reads
-`UNDERCROFT_OTLP_ENDPOINT` and `UNDERCROFT_OTLP_CA` — both `(Protects,
-Checked)` in the engine's inventory — through `undercroft_obs::init_as`, which
-is FATAL for `serve` and warn-and-continue under the pre-flight. So
-`config check` prints one warning and *"serve would start in this
-environment"*, exit 0, for an environment where `serve` refuses. This is O21's
-defect one binary over; the cross-crate gate cannot see it because it matches
-only lines beginning `("UNDERCROFT_ORCH_`.
+**The general gate this entry proposed was considered and NOT built, and the
+reason is worth keeping.** A source scan for "every `/v1` reply goes through
+one writer" has to decide which route a `Response::` construction belongs to,
+which is block-scoped and brittle; `http.rs` legitimately builds replies for
+`/healthz`, `/ui`, `/monitor`, `/metrics` and `/mcp`. What shipped instead is
+a **comparison against the sibling route** in `e2e-telemetry`: the same
+failure on `…/stats` is the only definition of "the same envelope" that does
+not go stale when the envelope changes.
 
-**(c) pgvector resolves `UNDERCROFT_INDEX_CA` outside the shared helper.** The
-other four backends go through `undercroft_net::agent_from_env`, documented as
-*"the one constructor every hop that reads a `*_CA` variable should use"*.
-pgvector reads the variable itself, so it neither trims nor refuses
-whitespace-only (one declaration, two answers across five backends) and it
-**re-reads the PEM per construction** — which `pin_from_env` caches
-deliberately, because *"re-reading the file per call makes the pin mutable at
-runtime … silent un-pinning by another name"*. `index/status` is reachable
-per-request, so for this hop the stated restart-to-rotate property does not
-hold. The `no_crate_but_undercroft_net_builds_its_own_http_client` gate scans
-for ureq's builder token; this is `tokio_postgres_rustls`, so it cannot see it
-— the same shape as the OTLP defect that gate was written for.
+**Its counterfactual fired on ONE of six checks, and that is the entry's real
+lesson.** Omitting the bearer never reaches the stream's error arm — the
+palace bearer gate answers it first, through `unauthorized()`, which M43 had
+already made JSON-with-a-challenge. Four assertions passed **with the defect
+restored**. Rebuilt around an unknown VAULT, which authenticates at the door
+and fails inside `authorize`: three checks now fail on the defect, the status
+check correctly stays green (404 either way), and the challenge check is kept
+but relabelled and scoped to the gate it actually covers.
 
-**Gate:** each needs its own, and (a) suggests the general one — a check that
-every `/v1` reply, including routes intercepted before `Tenancy::handle`, goes
-through one response writer.
+**(b) The orchestrator's `config check` was blind to six declarations that
+stop its own `serve`, not the two filed.** `main` calls
+`undercroft_obs::init_as` on every subcommand — FATAL for `serve`,
+warn-and-continue under the pre-flight — so `config check` printed one warning
+and *"serve would start in this environment"*, exit 0, for an environment
+where `serve` refuses. `ORCH_ENV_VARS` claims *"every declaration THIS binary
+reads"*; measured against `undercroft-obs`'s source, `UNDERCROFT_LOG`,
+`_LOG_FORMAT`, `_SERVICE_NAME`, `_OTLP_HEADERS`, `_OTLP_ENDPOINT` and
+`_OTLP_CA` were all absent. The two `Protects` ones now run the SAME
+`undercroft-net` resolvers the engine's `check_declaration` runs.
+
+The cross-crate join matched only `("UNDERCROFT_ORCH_`, so a declaration read
+through a LIBRARY was outside the question it asked; it compares full names
+now, direction 1 still scoped to the ORCH family. A second gate reads
+`undercroft-obs`'s source and requires every declaration it reads to be in the
+inventory, both directions — the mechanism that would have caught this.
+
+**(c) pgvector resolved `UNDERCROFT_INDEX_CA` outside the shared helper.** One
+declaration, two answers across five backends — the four HTTP backends trim
+and refuse a whitespace-only value through `declared_pin`, this did neither —
+and it **re-read the PEM per construction**, which `pin_from_env` caches
+deliberately because re-reading per call is *"silent un-pinning by another
+name"*. `index/status` is reachable per request, so this was the hop where the
+stated restart-to-rotate property mattered most and did not hold.
+`undercroft_net::rustls_config_from_env` is the shared door for a hop that is
+not `ureq`; `Pin`'s field stays private, so the policy crate is still the only
+place a `ClientConfig` can be assembled.
+
+**A second instance, found by grepping for the pattern rather than trusting
+the filing** — the sweep discipline O52 earned. `undercroft-orchestrator`'s
+`resolve_engine_pin` is also a second implementation of `declared_pin`'s
+empty-refusal. Exempt DELIBERATELY, with the reason at the exemption: it is
+behaviourally identical, resolves through `undercroft_net::resolve_pin`,
+caches once per process as `pin_from_env` does, and its message NAMES THE
+VARIABLE, which the shared resolver's does not and which an existing test
+asserts. Converging it as things stand would regress an operator message a
+test protects.
+
+**Residual, stated:** the convergence above is real work nobody has done — the
+shared resolver should name the variable a pin came from, after which both
+call sites collapse into it and the exemption can go. Small, and recorded
+rather than left implicit in an exemption comment.
+
+**Gates:** `no_crate_but_undercroft_net_resolves_a_ca_declaration` (source
+walk, exemptions required to be reached, premise probe on the policy crate),
+`every_declaration_undercroft_obs_reads_is_in_this_inventory` (both
+directions, two premise arms), the widened
+`the_orchestrator_and_the_engine_agree_on_every_orch_variable`, and five
+`e2e-telemetry` checks comparing the stream's failure reply to its sibling's.
+Every one counterfactualled against the artifact, restored from scoped file
+copies.
+
+---
+
+### O84 — `clippy --features telemetry` fails, and nothing gates that build
+
+**Found 2026-09-01 while closing O82, and it is PRE-EXISTING** — verified by
+running the same command against `HEAD` in a detached worktree with its own
+target dir, where it fails identically. Reported as a finding, not as
+something this unit caused.
+
+`cargo clippy -p undercroft-cli --features telemetry --all-targets -- -D
+warnings` exits 101 with two dead-code errors in `undercroft-obs`:
+`imp::init` and `imp::render_prometheus` are never used in that feature
+combination.
+
+**Nothing runs it.** CI runs `cargo clippy --all-targets -- -D warnings` over
+default members with default features, and `ort-build` clippies the ort-gated
+code explicitly for exactly this reason — a feature nobody lints is a feature
+whose warnings accumulate unseen. `e2e-telemetry` BUILDS the telemetry binary
+and does not lint it.
+
+**Shape of the fix:** decide whether the two functions are dead in every
+build (delete them) or reachable in one nothing exercises (say which, and
+gate it). Then add a lint leg for the telemetry feature, on `ort-build`'s
+precedent.
+
+**Gate:** the closing change must make a lint of the telemetry build run
+somewhere that fails a pull request — the defect here is not the two
+functions, it is that no gate looks.
 
 ---
 

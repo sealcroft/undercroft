@@ -560,11 +560,18 @@ pub mod pgvector {
                 )));
             }
             let client = if dsn_demands_tls(dsn) {
-                let cfg = match std::env::var(CA_VAR) {
-                    Ok(path) => undercroft_net::pinned_roots_from_file("the remote index", &path)
-                        .map_err(|e| IndexError::Transport(e.to_string()))?,
-                    Err(_) => undercroft_net::webpki_roots(),
-                };
+                // Through the shared resolver, NOT a bare `env::var` here
+                // (ROADMAP O82c). This hop cannot use `agent_from_env` — it
+                // speaks postgres, not HTTP — but it must not therefore
+                // answer the SAME declaration differently from the four
+                // backends that do: `declared_pin` trims and REFUSES a
+                // whitespace-only value, and the resolution is cached per
+                // process. Reading it here re-read the PEM on every
+                // construction, and `index/status` is reachable per request,
+                // so the restart-to-rotate property `pin_from_env` documents
+                // did not hold for the one backend where it mattered most.
+                let cfg = undercroft_net::rustls_config_from_env("the remote index", CA_VAR)
+                    .map_err(|e| IndexError::Transport(e.to_string()))?;
                 let tls = tokio_postgres_rustls::MakeRustlsConnect::new((*cfg).clone());
                 Client::connect(dsn, tls).map_err(|e| IndexError::Pg(e.to_string()))?
             } else {

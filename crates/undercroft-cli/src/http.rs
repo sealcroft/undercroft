@@ -406,8 +406,22 @@ pub fn serve_http(
                             undercroft_obs::run_sse(writer, vault);
                         });
                     }
-                    Err(code) => {
-                        let _ = request.respond(Response::from_string("").with_status_code(code));
+                    // Through `/v1`'s ONE error writer (ROADMAP O82a). This
+                    // arm built its own reply — `Response::from_string("")`
+                    // with a status and nothing else — because it is
+                    // intercepted in front of `Tenancy::handle` and so never
+                    // reached `respond`. The cost was not cosmetic: a
+                    // tampered vault answered `409` with
+                    // `{"error":…,"class":"integrity"}` on `…/stats` and a
+                    // bare, bodyless `409` here, and the 401 carried no
+                    // `WWW-Authenticate`, which is the RFC 9110 MUST M43
+                    // closed everywhere its sweep could see. It could not see
+                    // this one: that unit's gate asserts the `unauthorized()`
+                    // HELPER rather than its call sites, and the telemetry
+                    // e2e only ever streams with a valid bearer.
+                    Err(e) => {
+                        let code = e.code;
+                        crate::tenant::respond_err(request, e);
                         undercroft_obs::http_request("v1_stream", code, start.elapsed());
                     }
                 }

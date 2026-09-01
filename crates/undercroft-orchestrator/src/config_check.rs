@@ -83,6 +83,28 @@ pub(crate) const ORCH_ENV_VARS: &[(&str, ConfigClass, Parse)] = &[
     ("UNDERCROFT_ORCH_METRICS_ADDR", Protects, Checked),
     ("UNDERCROFT_ORCH_METRICS_TOKEN", Protects, Checked),
     ("UNDERCROFT_ORCH_RATE_LIMIT", Protects, Checked),
+    // **The six this binary reads through `undercroft-obs`, and did not
+    // know it read** (ROADMAP O82b). Under `--features telemetry` `main`
+    // calls `undercroft_obs::init_as`, whose failure is FATAL for `serve`
+    // and warn-and-continue under this pre-flight — so `config check`
+    // printed one warning and "serve would start in this environment",
+    // exit 0, for an environment where `serve` refuses. O21's defect, one
+    // binary over.
+    //
+    // Listed UNCONDITIONALLY, matching the engine, which lists them the same
+    // way for a binary that also only reads them under the feature. A
+    // cfg-conditional inventory would make the cross-crate join below
+    // compare different sets depending on how each side was built, which is
+    // the drift it exists to prevent.
+    //
+    // The filing named TWO of these. Measured against what `undercroft-obs`
+    // actually reads, there are six.
+    ("UNDERCROFT_LOG", Tunes, Opaque),
+    ("UNDERCROFT_LOG_FORMAT", Tunes, Opaque),
+    ("UNDERCROFT_OTLP_CA", Protects, Checked),
+    ("UNDERCROFT_OTLP_ENDPOINT", Protects, Checked),
+    ("UNDERCROFT_OTLP_HEADERS", Tunes, Opaque),
+    ("UNDERCROFT_SERVICE_NAME", Tunes, Opaque),
 ];
 
 /// What checking one declaration found.
@@ -171,8 +193,28 @@ fn check_one(name: &str, raw: &str) -> Finding {
                 })
                 .map_err(|e| e.to_string()),
         ),
+        // The traces hop, through the SAME two `undercroft-net` resolvers the
+        // engine's `check_declaration` runs, so the two pre-flights cannot
+        // tell an operator different things about one declaration. Both are
+        // `Protects`, so a bad value is FATAL here — which is what `serve`
+        // does with it, and the agreement is the whole point.
+        "UNDERCROFT_OTLP_ENDPOINT" => Some(
+            undercroft_net::declared_endpoint("the OTLP collector", Some(raw))
+                .map(|_| "traces export to this collector".to_string())
+                .map_err(|e| e.to_string()),
+        ),
+        "UNDERCROFT_OTLP_CA" => Some(
+            undercroft_net::declared_pin("the OTLP collector", Some(raw))
+                .map(|p| match p {
+                    Some(_) => "traces hop pinned to this root (public roots replaced)".into(),
+                    None => "no pin".to_string(),
+                })
+                .map_err(|e| e.to_string()),
+        ),
         // A listen address and a database path have no parse this command can
         // run without binding or opening. Reported as seen, never as checked.
+        // So are the log knobs and the service name: a level string and a
+        // label, both consumed by `tracing` itself.
         _ => None,
     };
     match result {
@@ -253,10 +295,19 @@ mod tests {
             }
         }
         // PREMISE. A filter that matched nothing would report a clean tree.
-        assert_eq!(
-            protects, 6,
-            "premise failed: expected 6 Protects variables, found {protects} — the \
-             inventory is not being read"
+        //
+        // A FLOOR, not an equality, and that is the engine's precedent rather
+        // than a loosening: `every_protects_variable_is_pre_flighted_or_exempt`
+        // guards the same trap with `protects >= 20`. The premise arm's job is
+        // to prove this loop examined something; an exact count additionally
+        // makes it a published figure somebody has to hand-edit, and O82b
+        // tripped it for the healthiest possible reason — six Protects
+        // declarations became eight because this binary learned about two it
+        // had always read.
+        assert!(
+            protects >= 6,
+            "premise failed: found {protects} Protects variable(s) — the inventory is \
+             not being read"
         );
         assert!(
             unchecked.is_empty(),
@@ -343,7 +394,7 @@ mod tests {
         let mut engine: Vec<(String, ConfigClass, Parse)> = Vec::new();
         for line in src.lines() {
             let line = line.trim();
-            let Some(rest) = line.strip_prefix(concat!('(', '"', "UNDER", "CROFT_ORCH_")) else {
+            let Some(rest) = line.strip_prefix(concat!('(', '"', "UNDER", "CROFT_")) else {
                 continue;
             };
             let Some((name_tail, class_part)) = rest.split_once("\", ") else {
@@ -369,7 +420,11 @@ mod tests {
                      `parity::Parse` in O52; if it is gone, remove it here too."
                 );
             };
-            engine.push((format!("UNDERCROFT_ORCH_{name_tail}"), class, parse));
+            engine.push((
+                format!(concat!("UNDER", "CROFT_{}"), name_tail),
+                class,
+                parse,
+            ));
         }
 
         // PREMISE. A parser that matched nothing reports two agreeing empty
@@ -391,7 +446,14 @@ mod tests {
             .map(|(n, c, p)| (n.as_str(), (*c, *p)))
             .collect();
 
-        for (name, (class, parse)) in &theirs {
+        // Direction 1 stays scoped to the ORCH family: the engine reads
+        // eighty-one declarations and this binary is not expected to know
+        // most of them. What it MUST know is every `UNDERCROFT_ORCH_*` one,
+        // which is its own namespace.
+        for (name, (class, parse)) in theirs
+            .iter()
+            .filter(|(n, _)| n.starts_with(concat!("UNDER", "CROFT_ORCH_")))
+        {
             match mine.get(name) {
                 None => panic!(
                     "{name} is in the engine's ENGINE_ENV_VARS and not in ORCH_ENV_VARS — \
@@ -417,6 +479,106 @@ mod tests {
                 theirs.contains_key(name),
                 "{name} is in ORCH_ENV_VARS and not in the engine's ENGINE_ENV_VARS — that \
                  inventory is what `architecture/index.html` and the env-count gate gate"
+            );
+        }
+    }
+
+    /// **Every declaration `undercroft-obs` reads is one THIS binary reads,
+    /// and the inventory has to say so** (ROADMAP O82b).
+    ///
+    /// The gate above joins the two `UNDERCROFT_ORCH_*` inventories, which is
+    /// the only namespace it can reason about. It is structurally unable to
+    /// notice a declaration this binary reads through a LIBRARY — and that is
+    /// how six of them came to be missing at once. `main` calls
+    /// `undercroft_obs::init_as` on every subcommand; its failure is FATAL for
+    /// `serve` and warn-and-continue here, so `config check` printed one
+    /// warning and *"serve would start in this environment"*, exit 0, for an
+    /// environment where `serve` refuses.
+    ///
+    /// The link is unconditional — `init_as` exists in both builds, a no-op
+    /// shim without the feature — so the obligation is unconditional too, and
+    /// the inventory lists these six the same way the engine does.
+    ///
+    /// Reading the other crate's SOURCE is the same mechanism the join above
+    /// uses, and for the same reason: two crates that do not link each other
+    /// have no other route. Both directions, so an inventory row for a
+    /// variable `undercroft-obs` stopped reading fails too — a declaration
+    /// nothing reads is a pre-flight validating an environment nobody has.
+    #[test]
+    fn every_declaration_undercroft_obs_reads_is_in_this_inventory() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("crates/ is this crate's parent")
+            .join("undercroft-obs/src");
+
+        // Split for the reason the join above splits its needle: written
+        // contiguously this declares a variable called by the bare prefix,
+        // which the engine's own env-var inventory gate scans for and
+        // rejects.
+        let prefix = concat!("UNDER", "CROFT_");
+        let mut reads: std::collections::BTreeSet<String> = Default::default();
+        let mut scanned = 0usize;
+        for entry in std::fs::read_dir(&dir).expect("undercroft-obs/src is readable") {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            scanned += 1;
+            for line in std::fs::read_to_string(&path).unwrap().lines() {
+                let t = line.trim_start();
+                if t.starts_with("//") {
+                    continue;
+                }
+                // Quoted literals only: `"UNDER…CROFT_X"`.
+                let mut rest = t;
+                while let Some(at) = rest.find(&format!("\"{prefix}")) {
+                    let tail = &rest[at + 1..];
+                    let end = tail
+                        .find('"')
+                        .expect("a quoted literal on a non-comment line closes");
+                    reads.insert(tail[..end].to_string());
+                    rest = &tail[end..];
+                }
+            }
+        }
+        // PREMISE, both halves. A walk that read no files, or a needle that
+        // matched nothing, reports agreement with an empty set — which is
+        // exactly what a clean tree reports.
+        assert!(
+            scanned >= 2,
+            "the walk read {scanned} file(s) in undercroft-obs/src — the scan is broken"
+        );
+        assert!(
+            reads.len() >= 5,
+            "found {} declaration(s) in undercroft-obs — the needle matched nothing, \
+             which is not the same as this crate reading nothing",
+            reads.len()
+        );
+
+        let mine: std::collections::BTreeSet<&str> =
+            ORCH_ENV_VARS.iter().map(|(n, _, _)| *n).collect();
+        for name in &reads {
+            assert!(
+                mine.contains(name.as_str()),
+                "{name} is read by undercroft-obs, which this binary links on every \
+                 subcommand, and ORCH_ENV_VARS does not list it — so `config check` \
+                 cannot tell an operator their declaration is unreadable before the \
+                 restart that refuses"
+            );
+        }
+        // The other direction, scoped to the family this gate owns: an
+        // inventory row for a non-ORCH variable that `undercroft-obs` no
+        // longer reads is a pre-flight checking a declaration this binary
+        // does not consult.
+        for name in mine
+            .iter()
+            .filter(|n| !n.starts_with(concat!("UNDER", "CROFT_ORCH_")))
+        {
+            assert!(
+                reads.contains(*name),
+                "{name} is in ORCH_ENV_VARS and is neither an ORCH declaration nor one \
+                 undercroft-obs reads — if this binary gained another library that reads \
+                 it, widen this gate; if it stopped reading it, drop the row"
             );
         }
     }

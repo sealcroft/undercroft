@@ -895,7 +895,26 @@ Consequences that are binding, not advisory:
   one hop out. `is_loopback` delegates to the transport's own `url` parser
   rather than re-deriving the host, because a hand-rolled predicate
   inverted this gate twice (`http://127.0.0.1:8080@evil.com/` read as
-  loopback)
+  loopback).
+  **The policy covers the DECLARATION as well as the client, and for two
+  releases it only covered the client** (ROADMAP O82c). `agent_from_env` is
+  documented as "the one constructor every hop that reads a `*_CA` variable
+  should use" — but a hop that does not speak HTTP cannot use it, and
+  pgvector is exactly that: `tokio_postgres_rustls`, which wants a
+  `rustls::ClientConfig`. So it read `UNDERCROFT_INDEX_CA` with a bare
+  `std::env::var`, and ONE declaration got **two answers across five
+  backends** (the other four trim it and refuse a whitespace-only value
+  through `declared_pin`) while **re-reading the PEM per construction**,
+  which `pin_from_env` caches deliberately because re-reading per call is
+  "silent un-pinning by another name" — on `index/status`, the one hop
+  reachable per request. `rustls_config_from_env` is the door for a non-`ureq`
+  hop; `Pin`'s field stays private, so the policy crate remains the only
+  place a `ClientConfig` can be assembled. **Both existing transport gates
+  were blind to it by construction**: one scans source for ureq's builder
+  token, the other reads a dependency edge out of `Cargo.lock`, and a bare
+  `env::var` moves neither — so the third gate matches the READ, which is the
+  observable this class actually moves. Fourth instance of *ask what a gate
+  can SEE*
 - **The OTLP traces hop was the one outbound client that never obeyed any of
   this, and the gate could not see it (round-four #8).** `undercroft-obs`
   built its span exporter on `opentelemetry-otlp`'s `reqwest-blocking-client`
@@ -1465,8 +1484,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (777 run,
-                                      # 4 #[ignore]d = 781 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (779 run,
+                                      # 4 #[ignore]d = 783 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1551,7 +1570,7 @@ docker compose run --rm test          # cargo unit + integration tests (777 run,
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings
 docker compose run --rm e2e           # e2e UI/UX suite against the release binary (433 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (127 checks)
-docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (48 checks)
+docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (53 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (57 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
                                       # answers HTTP before its Raft leader exists)
@@ -2674,6 +2693,24 @@ had and was still bypassable on the surface most deployments use.
    examined were structural (a required argument, an inventory row) and had
    no alternative shape to get wrong. **One instance, untested by history,
    and this is its first application.**
+   **And when a counterfactual fires on only SOME of your checks, the ones
+   that stayed green are the finding** — they passed with the defect present,
+   so they are measuring something else, and on a clean tree they read
+   exactly like coverage. O82a is the worked example: six checks on the SSE
+   route's failure reply, of which four drove a request with no bearer — which
+   never reaches that route's error arm at all, because the palace bearer gate
+   answers it several hundred lines earlier through a helper M43 had already
+   fixed. Restoring the defect passed four of six, and the correct reading was
+   not "mostly covered" but "four of these test a different gate". The rebuilt
+   block drives an unknown VAULT, which authenticates at the door and fails
+   inside `authorize`; the challenge check is kept, relabelled and scoped to
+   what it does cover, because deleting it would lose a real assertion at a
+   call site. So: **a partial counterfactual is a diagnostic, not a partial
+   pass** — read every green in it as a claim that needs its own reason. This
+   sharpens item 2's existing "cannot pass for the wrong reason" rather than
+   adding a rule; applied backwards it reclassifies nothing, because no
+   earlier counterfactual in this tree was ever run and found to fire
+   partially. One instance, and it is this one.
 3. **Drift check.** If the change touches a capability reachable from more
    than one of {CLI, MCP, `/v1`, orchestrator}, verify EVERY one of them —
    by reading the other surfaces' code, not by assuming symmetry. `cargo test`
