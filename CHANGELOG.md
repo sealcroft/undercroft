@@ -7,6 +7,64 @@ value **beside** one that stays, because renaming any of them would be MAJOR
 by this project's own test — a documented value that stops being accepted.
 Nothing that shipped is removed, and no existing field changes its value.
 
+### an audit record named a host nobody contacted, and a rustdoc argued with the code beside it (M55)
+
+**Both found by reviewing PR #123 rather than by a gate**, and neither is
+visible to one: a full battery and a green 17/17 CI passed over both.
+
+**`LlmClient::destination` searched the whole URL for the last `@`.** The
+authority is what carries userinfo, and it ends at the first `/`, `?` or
+`#` — but the strip ran over everything after the scheme, and `@` is a legal
+path and query character (RFC 3986 pchar). So
+`…/v1/models/llama@latest` reported `http://latest`, and
+`…/v1?contact=ops@example.com` reported `https://example.com`. The second is
+the worse half: it does not garble, it names a **different and entirely
+plausible host** in the one field whose question is *which host received my
+corpus*. `audit_refine` interpolates the value into its HMAC'd canonical, so
+the chain authenticated a destination that was never contacted, and an
+auditor recomputing the canonical from the true configuration could not
+reproduce the tag. It never leaked a credential — it over-stripped — so this
+is audit integrity, not disclosure. The old reasoning was right and applied
+to the wrong string.
+
+Residual, stated rather than implied: what follows the authority is kept
+verbatim, so a credential an operator puts in a PATH or QUERY (`?api_key=…`)
+still reaches the record. Unchanged behaviour, and out of this correction's
+scope — closing it means deciding whether an egress destination should be a
+bare origin, which changes what the canonical binds.
+
+**Counterfactual, executed:** the old body restored in place (premise probed
+— `grep -c authority_end` = 0 before the run), both new tests FAIL naming
+`http://latest` and `https://b`, then restored from a scoped file copy and
+verified byte-identical. Gates: a six-row table pinning host preservation
+(three rows are the ordinary cases that must keep passing, so a rewrite
+cannot satisfy it by breaking them), plus a separate credential assertion —
+separate because the table pins exact strings and could be satisfied while
+reintroducing userinfo on a shape nobody tabulated.
+
+**`index_status`'s rustdoc asserted the opposite of the code beside it.**
+Three doc blocks had stacked up on one `pub fn`: the original one-liner, the
+O83 rewrite, and — between them — the superseded block still saying
+*"**`ensure` STAYS**"*, *"filed as **O83** rather than half-landed here"*, and
+*"So this is a WRITE, and it is classified as one now: `POST` on `/v1` …
+`WRITE_TOOLS` on MCP, and the operator plane"*. Every clause is false: O83 is
+closed, `ensure` is gone from the body, the route is a `GET` and the tool is
+in `READ_TOOLS`.
+
+**The same superseded claim had reached the published agent contract**, which
+is why this is a drift and not a typo. `docs/AGENTS.md` §9 marked
+`undercroft_index_status` **`W`** and told agents *"a read-only server
+refuses it"* — while §10 of the same document correctly called the route a
+read that creates nothing. One document, two answers, and the wrong one was
+the one an agent reads to decide what a read-only server will serve. The
+route table was right; the tool table is now too.
+
+Nothing gates the R/W marker in that table against `READ_TOOLS`/`WRITE_TOOLS`
+— tool NAMES are counted both ways by `parity.rs` and the `/v1` route SETS by
+a preflight, but the classification column is bound by attention alone. That
+is a gap, recorded as one rather than closed here, because building the gate
+is its own unit with its own premise probe.
+
 ### five non-creating lookups, probed one by one, and "no mirror" stops meaning "empty" (M54)
 
 **ROADMAP O83 CLOSED** — the last piece of ordinary engineering on the open
@@ -177,10 +235,12 @@ the truth and names the rule `ExportAudited` instantiates.
 
 **A credential never reaches the record.** `UNDERCROFT_LLM_URL` may carry
 userinfo when pointed at a gateway that demands one, so
-`LlmClient::destination` strips everything before the LAST `@` — the last,
-because a password may contain one — and the record names the host. The
-canonical is HMAC'd rather than stored, so this is belt-and-braces; the rule
-is about what may be ASSEMBLED into an audit record at all.
+`LlmClient::destination` strips the AUTHORITY's userinfo — the last `@`
+*within the authority*, because a password may contain one — and the record
+names the host. The canonical is HMAC'd rather than stored, so this is
+belt-and-braces; the rule is about what may be ASSEMBLED into an audit record
+at all. (This paragraph said *"strips everything before the LAST `@`"* and
+that was the shipped behaviour and a defect; see M55.)
 
 **Recorded after the loop with what was ATTEMPTED**, following `audit_export`
 and `index_push`. A run whose every extraction failed still records: the

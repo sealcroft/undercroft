@@ -492,49 +492,32 @@ impl PalaceStore {
         Ok(hits)
     }
 
-    /// Remote index status: name + record count for this vault's collection.
-    /// Remote mirror status — **read-only, and that is a correction.**
-    ///
-    /// This used to call `index.ensure(…)` first, which CREATES: `PUT
-    /// /collections` on qdrant, `CREATE EXTENSION` + `CREATE TABLE` on
-    /// pgvector, `POST /collections` on chroma, milvus and weaviate. That was
-    /// harmless while the only caller was the CLI's `index status`, run by an
-    /// operator on their own infrastructure. ROADMAP O68 then exposed it as a
-    /// `GET` on `/v1`, as an MCP READ_TOOL, and on the orchestrator's TENANT
-    /// data plane — at which point a *read* issued DDL against operator
-    /// infrastructure from a `--read-only` server and from a tenant bearer.
-    /// Found by the pre-release drift audit, and the exposure was one day old.
-    ///
-    /// It also could not answer its own question: `ensure` MANUFACTURED the
-    /// mirror it was asked to report on, so "no mirror exists" and "the mirror
-    /// is empty" both came back as `0`.
-    ///
-    /// **`ensure` STAYS, and the exposure was reclassified instead.** Removing
-    /// it was tried first and the backends suite refused it in one line:
-    /// chroma's `count` needs the collection id that `ensure` resolves, and
-    /// chroma resolves it with `get_or_create: true` — there is no
-    /// non-creating lookup on that client, nor on the other four. A genuinely
-    /// read-only status therefore needs a new per-backend `exists`/`count`
-    /// path across five backends plus a ruling on what "no mirror" answers,
-    /// which is filed as **O83** rather than half-landed here.
-    ///
-    /// So this is a WRITE, and it is classified as one now: `POST` on `/v1`
-    /// (a GET is never refused by the read-only gate), `WRITE_TOOLS` on MCP,
-    /// and the operator plane rather than the tenant one on a fleet. That is
-    /// the honest description — the surfaces were wrong, not the call.
     /// The mirror's backend name and row count — **`None` when there is no
     /// mirror**, and WITHOUT creating one (ROADMAP O83).
     ///
-    /// This was `ensure()` then `count()`. `ensure` CREATES on all five
-    /// backends, so once O68 exposed this as a GET on `/v1`, an MCP read
-    /// tool and a tenant data-plane route, a READ issued DDL against
-    /// operator infrastructure — from a `--read-only` server and from a
-    /// tenant bearer. It was reclassified as a WRITE as the honest
-    /// short-term answer; `VectorIndex::status` is the real one, and the
-    /// classification goes back to what it should always have been.
+    /// This was `ensure()` then `count()`, and `ensure` CREATES: `PUT
+    /// /collections` on qdrant, a `CREATE EXTENSION` and `CREATE TABLE` pair
+    /// on pgvector, `POST /collections` on chroma, milvus and weaviate. That
+    /// was harmless while the only caller was the CLI's `index status`, run
+    /// by an operator on their own infrastructure. ROADMAP O68 then exposed
+    /// it as a `GET` on `/v1`, as an MCP read tool, and on the orchestrator's
+    /// TENANT data plane — at which point a *read* issued DDL against
+    /// operator infrastructure from a `--read-only` server and from a tenant
+    /// bearer. Found by the pre-release drift audit, and the exposure was one
+    /// day old.
     ///
-    /// The `Option` is not decoration. With `ensure` running first, "no
-    /// mirror exists" and "the mirror is empty" both answered `0`.
+    /// It was briefly reclassified as a WRITE — `POST` on `/v1`,
+    /// `WRITE_TOOLS` on MCP, operator plane on a fleet — which was the honest
+    /// short-term description of a call that really did write.
+    /// [`VectorIndex::status`] is the real answer: it creates on none of the
+    /// five backends, probed live one by one rather than inferred from
+    /// qdrant, so the classification goes back to what it always should have
+    /// been and `backends-e2e` proves non-creation by asking twice.
+    ///
+    /// **The `Option` is not decoration.** With `ensure` running first, "no
+    /// mirror exists" and "the mirror is empty" both answered `0`, so this
+    /// could not answer the question its own documentation said it existed
+    /// for.
     pub fn index_status(
         &self,
         index: &mut dyn VectorIndex,

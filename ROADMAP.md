@@ -1116,7 +1116,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**113** of the **128** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**115** of the **130** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -3031,12 +3031,74 @@ prevent, and doing it here would have made this entry the defect it is about.
 
 ---
 
+### M55 — CLOSED 2026-09-01: an audit record named a host nobody contacted, and a rustdoc argued with the code beside it
+
+**Found by reviewing PR #123, not by a gate**, and neither defect is visible
+to one: the full battery and a green 17/17 CI passed over both. Filed here
+with no O-item because neither was ever filed — they are defects in this
+branch's own work, found on the way to a tag.
+
+**1. `LlmClient::destination` searched the whole URL for the last `@`.**
+Userinfo lives in the AUTHORITY, which ends at the first `/`, `?` or `#`;
+the strip ran over everything after the scheme, and `@` is a legal path and
+query character (RFC 3986 pchar). Measured against the exact logic:
+`…/v1/models/llama@latest` gave `http://latest`, and
+`…/v1?contact=ops@example.com` gave `https://example.com` — the second being
+the worse half, because it does not garble but names a **different and
+entirely plausible host** in the one field asking which host received the
+corpus. `audit_refine` interpolates it into the HMAC'd canonical, so the
+chain authenticated a destination never contacted and an auditor recomputing
+from the true configuration could not reproduce the tag. It over-stripped
+rather than under-stripped, so no credential leaked: this is audit
+integrity, not disclosure.
+
+Fixed by scoping the strip to the authority. The old reasoning — *the last
+`@` wins, because a password may contain one* — was right and applied to the
+wrong string; it is preserved, scoped to the authority.
+
+*Residual, stated:* what follows the authority is kept verbatim, so a
+credential in a PATH or QUERY (`?api_key=…`) still reaches the record.
+Unchanged behaviour and out of scope — closing it means ruling whether an
+egress destination should be a bare origin, which changes what the canonical
+binds.
+
+*Counterfactual, executed:* old body restored in place, premise probed
+(`grep -c authority_end` = 0), both new tests fail naming `http://latest`
+and `https://b`; restored from a scoped file copy and verified
+byte-identical. *Gate:* a six-row table pinning host preservation — three
+rows are the ordinary cases, so a rewrite cannot satisfy it by breaking them
+— plus a separate credential assertion, separate because the table pins
+exact strings and could be satisfied while reintroducing userinfo on an
+untabulated shape.
+
+**2. `index_status`'s rustdoc asserted the opposite of the code beside it,
+and so did the published agent contract.** Three doc blocks had stacked on
+one `pub fn`, the middle one still saying *"**`ensure` STAYS**"*, *"filed as
+**O83** rather than half-landed here"* and *"So this is a WRITE, and it is
+classified as one now: `POST` on `/v1` … `WRITE_TOOLS` on MCP, and the
+operator plane"*. Every clause is false after O83.
+
+The drift check is what made this more than a typo: `docs/AGENTS.md` §9
+marked `undercroft_index_status` **`W`** and told agents *"a read-only
+server refuses it"*, while §10 of the SAME document correctly called the
+route a read that creates nothing. One document, two answers, and the wrong
+one was the one an agent reads to decide what a read-only server serves.
+
+*No gate could see either.* `grep -rn 'missing_docs|#!\[warn|#!\[deny'` over
+the crate roots returns nothing, rustfmt does not reformat doc comments, and
+clippy without `missing_docs` is silent — so a contradictory rustdoc is
+invisible by construction. The `AGENTS.md` half is filed as **O86**.
+
+---
+
 ## Open — releasable work, filed and not yet scheduled
 
-**This section exists because of where these four were living.** Three of them
-were filed during `1.2.0` and recorded only INSIDE the body of an entry whose
-heading says `CLOSED`; the fourth was found by round four, recorded in a
-gitignored file, and never filed at all. Both are the same failure and this
+**This section exists because of where its first four were living.** Three of
+them were filed during `1.2.0` and recorded only INSIDE the body of an entry
+whose heading says `CLOSED`; the fourth was found by round four, recorded in a
+gitignored file, and never filed at all. (O86 joined them on 2026-09-01, filed
+straight to a heading here — which is the arrangement working rather than
+failing.) Both are the same failure and this
 file names it: *"A newly OPENED item gets a heading here, so an open item is
 always resolvable"*, and, one paragraph later, *"an entry lives in this file
 only while the item is OPEN … when it closes, the entry leaves."* So at
@@ -3045,8 +3107,8 @@ deleted as part of tidying away finished work, which is the most expensive
 place a live item can be.
 
 They are NOT in `## Unversioned` below: that section is for work a release
-cannot contain (a web-UI click, a naming decision). All four of these are
-ordinary releasable work with no target release yet.
+cannot contain (a web-UI click, a naming decision). All of these are ordinary
+releasable work with no target release yet.
 
 **The heading gate could not have caught this**, and that is worth stating
 rather than assuming someone will notice. Its three arms —
@@ -3567,6 +3629,45 @@ semantically relevant to the query — the test itself stays.
 If AMB support is ever built into `undercroft-bench`, the `no-trace` scanner's
 rule still applies — no third-party prompt text or corpus content in tracked
 files, checked by decompressing rather than grepping.
+
+---
+
+### O86 — the R/W column in `docs/AGENTS.md` is bound by attention alone
+
+**Filed 2026-09-01 by M55, which found it wrong.** The MCP tool table in §9
+marks each tool `W` for a write and leaves the column empty for a read. That
+classification is the agent-facing contract for *"will a `--read-only` server
+serve this"* — and **nothing compares it to `READ_TOOLS`/`WRITE_TOOLS`**.
+
+The neighbouring claims ARE gated, which is what makes this the gap rather
+than an oversight: `parity.rs` counts tool NAMES against `MCP_TOOLS` in both
+directions and enforces `OPERATOR_ONLY`, and a `tests/battery.sh` preflight
+compares the `/v1` route SETS in `docs/AGENTS.md` §10 and
+`docs/remote-server.md` against the dispatch. The read/write MARKER sits
+between them and is checked by no one, so O83's reclassification moved the
+code and both `/v1` references and left §9 saying the opposite — for long
+enough that the same document contradicted itself, §9 against §10.
+
+**Shape of the fix.** A preflight, host-side beside the `/v1` route-set arm
+it would sit next to: parse `^\| \`undercroft_[a-z_]+\` \| W? \|` out of §9
+into a set of write-marked names, parse `READ_TOOLS`/`WRITE_TOOLS` out of
+`crates/undercroft-cli/src/mcp.rs`, and compare **both directions** — a
+`W`-marked tool that is a `READ_TOOLS` entry fails, and a `WRITE_TOOLS` entry
+with an empty marker fails. It must derive one side from the CODE and not
+from a second list, which is O80's lesson: two inventories can agree with
+each other and be jointly wrong.
+
+**Its premise probe is not optional and is the reason this is a unit rather
+than a line.** The table packs several tools into one row
+(`` `undercroft_kg_add` / `_kg_invalidate` / `_kg_supersede` ``) and adds
+rows that are not tools at all (`` `undercroft_save` / `_add_drawer` also
+take `kind` ``), so a naive regex silently matches a handful and reports a
+clean tree — this repo's most-recorded failure. The probe must assert the
+extractor found a known count on both sides before any zero is believed.
+
+**Not closed in M55** because building it is its own unit with its own
+counterfactual, and M55's scope was two defects found in review. The
+instance is fixed; the class is not.
 
 ---
 
