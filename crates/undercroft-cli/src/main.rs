@@ -492,7 +492,9 @@ enum Command {
         #[arg(long)]
         apply: bool,
     },
-    /// Repair: backfill fingerprints, vacuum, re-verify
+    /// Repair: backfill fingerprints, re-embed, drop the stale index, re-stamp
+    /// the embedder identity, record the run, vacuum, re-verify — in one
+    /// transaction
     Repair {
         #[arg(long, default_value = "default")]
         vault: String,

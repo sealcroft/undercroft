@@ -1116,7 +1116,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**117** of the **132** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**118** of the **133** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -5773,6 +5773,63 @@ O7 is the naming decision that needs a MAJOR, and O23 sits here as a filed cost
 with the argument for leaving it. Releasable work with no target release now
 has its own section above.
 
+### O88 — CLOSED 2026-09-02: the parity document re-verified, and the label moved because it was earned
+
+**The maintainer's correction, and it lands on my reasoning rather than on a
+missed file.** Asked to leave no stales, I reported `docs/PARITY.md`'s
+`v1.0.0` as-of label as *correctly* left alone. The doctrine says
+**"Re-verify it, then move it."** I had been quoting the first clause as if it
+were the whole rule — which turns a deferral into a permanent excuse, and had
+done so across three releases. Deferring once is defensible; the third time it
+is the stale.
+
+**The re-read covered all 252 lines**, with every checkable claim put against
+the CODE rather than read for plausibility: the CLI's real subcommand surface
+from `--help` on a freshly built binary (not from the source, which is what
+`table_for_test` exists to stop people doing), the MCP count against
+`parity.rs`, the `/v1` count against `tenant.rs`'s dispatch, each capability
+bullet against the crate implementing it.
+
+**Four drifts, all of them things `1.2.0` moved and this file had not:**
+
+* the `kg` command list gave seven subcommands; there are **ten** —
+  `receipts`, `authority` and `canonical` were missing, and the last two are
+  the golden-values tier, which has no upstream equivalent at all;
+* `repair` was described as *"fingerprint backfill, re-embed, vacuum,
+  verify"*, omitting the stale-index drop, the identity re-stamp, the run
+  record and — the load-bearing part — that M19 put all of it in ONE
+  transaction;
+* the read-audit bullet described **`search`-only** auditing with a keyed
+  query fingerprint. That is precisely the defect O50/O51 closed across
+  thirteen doors, plus O79's `egress/refine`. **The parity document was
+  describing the pre-`1.2.0` state of the thing `1.2.0` was about**, which is
+  the sharpest available argument against deferring a re-read;
+* the `/v1` bullet predated O68 putting the agent-facing memory surface
+  there — 37 routes, now 56.
+
+**What the re-read did NOT cover is written into the document itself**, so
+the label cannot be read as more than was done: the measured figures — recall
+percentages, latencies, benchmark deltas — were **not** re-measured. They
+cite their own instruments and re-running those is a different job. A claim of
+the form *"this capability exists and works this way"* was checked; *"it
+measured N"* was not. Without that sentence the moved label would assert more
+than the work behind it, which is the `O56`/`O6` defect wearing the opposite
+coat.
+
+**One stale found on the way and fixed:** the CLI's own `--help` for `repair`
+was behind that function's doc comment, in the same four ways. No test pinned
+the string.
+
+**No gate**, and the reason is O87's, cited rather than re-derived: an as-of
+label going stale is a judgement about whether a document still matches a
+codebase, and nothing mechanical can hold that. What CAN be gated already is —
+the `version surfaces` preflight refuses to bump this label with a release,
+which is exactly why it survived three of them, and that refusal is correct.
+The gap it leaves is human and the answer is the doctrine sentence, applied
+whole.
+
+---
+
 ### O87 — CLOSED 2026-09-01: the post-1.2.0 sweep, run against O61's own findings
 
 **The same question O61 asked, one release later**, and deliberately run
@@ -5862,6 +5919,15 @@ content is believed current — and the label stays at `v1.0.0` because a full
 re-read of its 225 lines against the code has not been done, and moving it
 would assert a verification nobody performed. That is the `O56`/`O6` defect,
 and declining to repeat it is the point.
+
+> **SUPERSEDED the next day by O88, and the maintainer's correction is the
+> reason.** Everything above is sound as far as it goes, and that turned out
+> to be the problem: the rule is *re-verify it, THEN move it*, and this entry
+> applied only the first half — for the third release running. Deferring is
+> defensible once and is a stale by the third time, which is what *"no stale
+> is supposed to be left"* means. O88 did the re-read and moved the label; it
+> found four drifts, one of them this file describing the `search`-only read
+> auditing that `1.2.0` had just replaced.
 
 **NO GATE, and this time the reason is demonstrated rather than argued.** A
 mechanical check — every backtick-quoted `## Heading` in a tracked `.md` must
