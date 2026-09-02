@@ -6055,9 +6055,28 @@ nothing — there is no surface-level A33 check at all.
 3053` calls the embedder factory before `open_read_only` at `:3059`, and
 `embedder_factory` (`main.rs:1451`) makes the same `recorded_embedder` call.
 
+**Corroborated from in-repo evidence alone**, without needing rusqlite's
+source: `connect_read_only` passes
+`OpenFlags::SQLITE_OPEN_READ_ONLY | SQLITE_OPEN_NO_MUTEX` **explicitly**
+(`lib.rs:3247-3248`), which is only necessary if the default differs — and
+`lib.rs:1519-1520` states outright that it does.
+
+**UNSETTLED RESIDUAL, and it would make this worse rather than merely
+untidy.** The connection at `lib.rs:4012` is READ-WRITE and is dropped at the
+end of the function. SQLite checkpoints and removes the `-wal` when the last
+connection to a WAL database closes. If that fires here, then
+`undercroft --read-only` does not merely create an empty file — it collapses a
+crashed writer's hot WAL before an operator has inspected it, which is
+evidence destruction rather than evidence fabrication, on the same path.
+**This needs a RUN, not a reading, and was not executed**: open a vault, kill
+the writer mid-transaction to leave a hot `-wal`, then stat `palace.db-wal`
+before and after any `--read-only` command. Recorded as unsettled rather than
+asserted either way.
+
 **Fix shape.** `recorded_embedder` must open with
 `SQLITE_OPEN_READ_ONLY` — it reads one meta row and has no business creating
-anything — which also makes its own doc true. Then the posture question
+anything — which also makes its own doc true, and which closes the residual
+above as a side effect rather than needing its own remedy. Then the posture question
 disappears rather than being answered per call site. Residual to state either
 way: a read-only open of a genuinely absent database must keep answering
 `DatabaseMissing`, not a bare SQLite error.
