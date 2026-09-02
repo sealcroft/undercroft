@@ -4008,8 +4008,37 @@ impl PalaceStore {
     /// opening a full store — lets a caller (e.g. the multi-tenant server)
     /// pick the right embedder before opening. `None` if nothing is
     /// recorded yet (a fresh, never-written vault).
+    ///
+    /// **This opens READ-ONLY, and creates nothing** (ROADMAP O91). It used
+    /// to be a bare `Connection::open`, which carries `SQLITE_OPEN_CREATE` —
+    /// as [`StoreError::DatabaseMissing`]'s own doc says. O81 then called
+    /// this from `open_store_as` BEFORE the posture dispatch, so it ran on
+    /// `Posture::ReadOnly` too: `undercroft --read-only` FABRICATED a
+    /// zero-length `palace.db`, `vault.database_exists()` became true, and
+    /// A33's guard in [`Self::open_read_only`] could no longer fire. A
+    /// missing database stopped being an integrity verdict (409 +
+    /// `class:"integrity"`, exit 2) and became an ordinary unmigrated-schema
+    /// failure (exit 1) — on the incident path `--read-only` exists for, and
+    /// against `CLAUDE.md`'s own words about evidence destruction there.
+    ///
+    /// **The absent case returns `None` without opening at all**, which is
+    /// what keeps the contract above true for a writable caller on a fresh
+    /// vault: nothing is recorded, so `None` is the honest answer, and the
+    /// store's own `open` still creates the database a moment later. A
+    /// read-only caller then reaches A33 with the file still absent, which
+    /// is the whole point.
+    ///
+    /// It also closes O91's residual by construction rather than by care: a
+    /// `SQLITE_OPEN_READ_ONLY` connection cannot run a checkpoint, so this
+    /// can no longer collapse a crashed writer's hot `-wal` on drop.
     pub fn recorded_embedder(vault: &Vault) -> Result<Option<(String, usize)>, StoreError> {
-        let conn = Connection::open(vault.db_path())?;
+        if !vault.database_exists() {
+            return Ok(None);
+        }
+        let conn = Connection::open_with_flags(
+            vault.db_path(),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
         let name: Option<String> = conn
             .query_row(
                 "SELECT value FROM meta WHERE key = 'embedder_name'",
@@ -18085,6 +18114,59 @@ mod tests {
         drop(PalaceStore::open(mgr.unlock("test").unwrap()).unwrap());
         assert!(db.exists());
         assert!(ro(&mgr, "test").is_ok(), "and it opens read-only after");
+    }
+
+    /// **O91: the step that runs BEFORE the posture is chosen must create
+    /// nothing.**
+    ///
+    /// `recorded_embedder` is called by `open_store_as` and by the
+    /// multi-tenant server's embedder factory ahead of the read-only branch,
+    /// so if it creates the database then A33 — the test directly above —
+    /// can never fire on the surface an operator actually drives. It used to
+    /// be a bare `Connection::open`, which carries `SQLITE_OPEN_CREATE`.
+    ///
+    /// The second assertion is the one that failed before the fix; the first
+    /// passed either way, because a fabricated database has no `meta` row and
+    /// the reads are `.optional()`. **A test asserting only the return value
+    /// would have been green over the defect** — which is why the file's
+    /// existence is asserted separately, and why this test exists beside the
+    /// A33 one rather than inside it.
+    #[test]
+    fn reading_the_recorded_embedder_never_creates_the_database() {
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
+        let db = vault.db_path();
+        assert!(!db.exists(), "premise: create() writes no database");
+
+        let got = PalaceStore::recorded_embedder(&vault).expect("absent is not an error");
+        assert_eq!(got, None, "nothing is recorded on a vault with no database");
+        assert!(
+            !db.exists(),
+            "reading the recorded embedder must not have created the database"
+        );
+
+        // And A33 still fires on the surface, which is the property the
+        // creation was defeating.
+        drop(vault);
+        assert!(
+            matches!(ro(&mgr, "test"), Err(StoreError::DatabaseMissing { .. })),
+            "a read-only open must still refuse an absent database"
+        );
+        assert!(!db.exists(), "…and still not create it");
+
+        // Premise: once a database exists this really does read the identity,
+        // so the None above is about absence and not about a reader that
+        // always answers None.
+        let mut s = PalaceStore::open(mgr.unlock("test").unwrap()).unwrap();
+        s.upsert(&drawer("w", "r", "a drawer, so an identity is recorded", 0))
+            .unwrap();
+        drop(s);
+        let v = mgr.unlock("test").unwrap();
+        let (name, dim) = PalaceStore::recorded_embedder(&v)
+            .unwrap()
+            .expect("an identity is recorded once the store has been opened");
+        assert!(!name.is_empty() && dim > 0, "got {name:?}/{dim}");
     }
 
     /// **`READ_SCHEMA` names every column a writable open would ADD.**

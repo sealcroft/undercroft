@@ -1,5 +1,51 @@
 # Changelog
 
+## Unreleased — 1.2.1
+
+PATCH: a fix whose only observable change is that a defect is gone. The exit
+code and the `class` field it restores are the ones this project's own
+documentation has published throughout; `1.2.0` is the only release that ever
+answered otherwise, and it did so by regression rather than by decision.
+
+### `--read-only` no longer creates the database it is forbidden to create, nor collapses a crashed writer's WAL (O91)
+
+**ROADMAP O91 CLOSED.** A released defect, found by round six, and it landed
+on the one path the flag exists for.
+
+O81 inserted `PalaceStore::recorded_embedder(&v)?` ahead of the posture
+dispatch, so it ran under `Posture::ReadOnly` too — and it opened with a bare
+`Connection::open`, which carries `SQLITE_OPEN_CREATE`. Two consequences, the
+second worse than the first and not established until it was measured:
+
+* **It fabricated a database.** On a vault with a manifest and no `palace.db`,
+  the first act of `--read-only` was to write one. `database_exists()` then
+  answered true, so A33's `DatabaseMissing` guard could no longer fire and the
+  verdict degraded from an integrity failure (**exit 2**, and `409` with
+  `class: "integrity"` on `/v1`) to an ordinary one (**exit 1**, `409` with no
+  class).
+* **It rewrote an existing one.** The connection was read-write and dropped at
+  the end of the function, and SQLite checkpoints the `-wal` into the main
+  database when the last connection closes. Measured on a killed writer: a
+  **41,232-byte hot WAL collapsed to 0 and `palace.db`'s digest changed**,
+  under `--read-only`. That is evidence destruction rather than evidence
+  fabrication — on the incident runbook's own path, which `main.rs` justifies
+  the flag by citing.
+
+`recorded_embedder` now returns early when the database is absent and opens
+`SQLITE_OPEN_READ_ONLY` otherwise. It reads one meta row and has no business
+creating anything, so the fix is in the shared function rather than at either
+call site — which is what closes the older `/v1` half, where `tenant.rs`
+builds the embedder before `open_read_only`, at the same time.
+
+**Why nothing saw it.** The only A33 test calls `open_read_only` **directly**
+and never goes through `open_store_as`, so the pre-step O81 added sits outside
+the question it asks — measured, that test stays green over the defect. There
+was no surface-level A33 check at all. There are ten now, across the store,
+the CLI and `/v1`, of which **six fail over the restored defect** and four are
+premises that gate the rest: a comparison of an absent file with an absent
+file passes vacuously, so the WAL checks are refused rather than reported when
+no hot WAL was staged.
+
 ## 1.2.0 — 2026-09-01
 
 MINOR: new capability, backward compatible. Every item here adds a field or a

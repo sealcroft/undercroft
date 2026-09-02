@@ -442,6 +442,141 @@ else
   sed 's/^/      /' /tmp/ro-refine.txt; FAIL=$((FAIL+1))
 fi
 
+# ROADMAP O91. A `--read-only` open must not CREATE the database it is
+# forbidden to create. O81 called `recorded_embedder` from `open_store_as`
+# ahead of the posture dispatch, and it opened with a bare `Connection::open`
+# — which carries SQLITE_OPEN_CREATE — so the flag's first act was to write to
+# the vault, `database_exists()` became true, and A33's guard could no longer
+# fire: a missing database stopped being an integrity verdict (exit 2) and
+# became an ordinary failure (exit 1), on the incident path the flag is for.
+#
+# THIS BELONGS AT THE SURFACE and cannot be a store unit test: the store's own
+# A33 test calls `open_read_only` DIRECTLY, so the pre-step is outside the
+# question it asks — measured, it stays green over the defect. Only a run
+# through the real binary reaches `open_store_as`.
+RO_VAULT="$UNDERCROFT_HOME/vaults/default"
+cp "$RO_VAULT/palace.db" /tmp/o91-palace.db
+rm -f "$RO_VAULT/palace.db" "$RO_VAULT/palace.db-wal" "$RO_VAULT/palace.db-shm"
+if [ -f "$RO_VAULT/vault.json" ] && [ ! -f "$RO_VAULT/palace.db" ]; then
+  echo "ok    premise: manifest present, database absent"; PASS=$((PASS+1))
+else
+  echo "FAIL  premise: could not stage a manifest-without-database vault"; FAIL=$((FAIL+1))
+fi
+"$BIN" --read-only stats >/tmp/o91.txt 2>&1; O91_RC=$?
+if [ "$O91_RC" -eq 2 ]; then
+  echo "ok    a read-only open of an absent database is an integrity verdict (exit 2)"; PASS=$((PASS+1))
+else
+  echo "FAIL  --read-only stats exited $O91_RC, wanted 2 (the A33 verdict)"
+  sed 's/^/      /' /tmp/o91.txt; FAIL=$((FAIL+1))
+fi
+# The assertion that actually fails over the defect. The exit code alone does
+# not: a fabricated database answers ReadOnlyUnmigrated, which is also non-zero.
+if [ ! -f "$RO_VAULT/palace.db" ]; then
+  echo "ok    ...and the refusal created no database on the way out"; PASS=$((PASS+1))
+else
+  echo "FAIL  --read-only FABRICATED palace.db — A33 is defeated"; FAIL=$((FAIL+1))
+fi
+cp /tmp/o91-palace.db "$RO_VAULT/palace.db"
+check "the vault is intact after the O91 probe" 0 "VERIFY OK"          -- "$BIN" verify
+
+# ROADMAP O91, the SECOND and worse half — measured, not reasoned about. The
+# read-write connection was DROPPED at function end, and SQLite checkpoints the
+# `-wal` into the main database when the last connection closes. So the defect
+# did not merely create a database that was absent: on a vault that EXISTS it
+# rewrote one, collapsing a crashed writer's hot WAL. Counterfactual, measured
+# against THIS arm in its final form: 41,232 bytes -> 0 and the main db's md5
+# changed, under `--read-only`. That is A32's evidence destruction, on the
+# incident-runbook path the flag exists for, and nothing in the tree could see
+# it. (An earlier draft measured 444,992 because its staging POST silently
+# failed and the server's own table creation filled the WAL instead — the
+# counterfactual fired on schema pages. It was re-run after the fix.)
+#
+# Deliberately NOT a subshell: PASS/FAIL are compared against the figure
+# CLAUDE.md publishes for this suite, and a subshell's increments are lost.
+E2E_HOME="$UNDERCROFT_HOME"
+export UNDERCROFT_HOME=/tmp/o91-wal
+rm -rf "$UNDERCROFT_HOME"; mkdir -p "$UNDERCROFT_HOME"
+WV="$UNDERCROFT_HOME/vaults/default"
+"$BIN" init >/dev/null 2>&1
+"$BIN" remember --wing notes --room r "a drawer to give the wal some pages" >/dev/null 2>&1
+# A crashed writer: serve-http holds the handle, SIGKILL leaves the -wal hot
+# exactly as a power loss would. A clean exit checkpoints and proves nothing.
+"$BIN" serve-http --host 127.0.0.1 --port 18991 >/dev/null 2>&1 &
+WSRV=$!
+for _ in $(seq 1 40); do curl -sf http://127.0.0.1:18991/healthz >/dev/null 2>&1 && break; sleep 0.25; done
+WPOST=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:18991/v1/vaults/default/drawers -H 'content-type: application/json' -d '{"text":"a hot write that must survive in the wal","wing":"notes","room":"r"}')
+kill -9 $WSRV 2>/dev/null; wait $WSRV 2>/dev/null
+WAL_B=$(stat -c%s "$WV/palace.db-wal" 2>/dev/null || echo 0)
+DB_B=$(md5sum "$WV/palace.db" 2>/dev/null | cut -d' ' -f1)
+if [ "$WAL_B" -gt 0 ]; then
+  echo "ok    premise: a crashed writer left a hot wal ($WAL_B bytes)"; PASS=$((PASS+1)); WAL_STAGED=1
+else
+  echo "FAIL  premise: no hot wal staged (the write POST said $WPOST) — the O91 wal probe proves nothing"
+  FAIL=$((FAIL+1)); WAL_STAGED=0
+fi
+"$BIN" --read-only stats >/dev/null 2>&1 || true
+WAL_A=$(stat -c%s "$WV/palace.db-wal" 2>/dev/null || echo 0)
+DB_A=$(md5sum "$WV/palace.db" 2>/dev/null | cut -d' ' -f1)
+# Both comparisons pass VACUOUSLY when the premise failed — 0 equals 0, and an
+# untouched absent file has the same md5 as an untouched present one. A check
+# that examined nothing must not read like a clean one, so the premise gates
+# them rather than merely being reported beside them.
+if [ "$WAL_STAGED" -eq 0 ]; then
+  echo "FAIL  hot-wal preservation NOT VERIFIED — no premise to test it against"; FAIL=$((FAIL+1))
+elif [ "$WAL_B" = "$WAL_A" ]; then
+  echo "ok    ...a read-only open leaves a crashed writer's hot wal intact"; PASS=$((PASS+1))
+else
+  echo "FAIL  a read-only open COLLAPSED the hot wal ($WAL_B -> $WAL_A)"; FAIL=$((FAIL+1))
+fi
+if [ "$WAL_STAGED" -eq 0 ]; then
+  echo "FAIL  palace.db immutability NOT VERIFIED — no premise to test it against"; FAIL=$((FAIL+1))
+elif [ "$DB_B" = "$DB_A" ]; then
+  echo "ok    ...and does not rewrite palace.db"; PASS=$((PASS+1))
+else
+  echo "FAIL  a read-only open REWROTE palace.db"; FAIL=$((FAIL+1))
+fi
+export UNDERCROFT_HOME="$E2E_HOME"
+
+# O91's `/v1` half, which is OLDER than the CLI one and predates R4/A33:
+# `tenant.rs` builds the embedder (and so calls `recorded_embedder`) before
+# `open_read_only`. The fix is in the shared function rather than at either
+# call site, so this surface is closed by the same change — but "the same
+# function serves it" is an assumption until a request is driven through it.
+# The per-request open is the shape that matters: a HEALTHY default beside a
+# broken second vault, so the server starts and the refusal is a response
+# rather than a failure to boot.
+export UNDERCROFT_HOME=/tmp/o91-v1
+rm -rf "$UNDERCROFT_HOME"; mkdir -p "$UNDERCROFT_HOME"
+"$BIN" init >/dev/null 2>&1
+"$BIN" remember --wing notes --room r "healthy default" >/dev/null 2>&1
+"$BIN" vault create broken >/dev/null 2>&1
+UNDERCROFT_VAULT=broken "$BIN" remember --wing notes --room r "doomed" >/dev/null 2>&1
+BV="$UNDERCROFT_HOME/vaults/broken"
+rm -f "$BV/palace.db" "$BV/palace.db-wal" "$BV/palace.db-shm"
+"$BIN" serve-http --host 127.0.0.1 --port 18994 --read-only >/dev/null 2>&1 &
+VSRV=$!
+for _ in $(seq 1 40); do curl -sf http://127.0.0.1:18994/healthz >/dev/null 2>&1 && break; sleep 0.25; done
+V_OK=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18994/v1/vaults/default/stats)
+V_CODE=$(curl -s -o /tmp/o91-v1.json -w '%{http_code}' http://127.0.0.1:18994/v1/vaults/broken/stats)
+kill $VSRV 2>/dev/null; wait $VSRV 2>/dev/null
+if [ "$V_OK" = "200" ]; then
+  echo "ok    premise: the read-only server serves a healthy vault beside the broken one"; PASS=$((PASS+1))
+else
+  echo "FAIL  premise: read-only server did not serve the healthy vault (HTTP $V_OK)"; FAIL=$((FAIL+1))
+fi
+if [ "$V_CODE" = "409" ] && grep -qF '"class":"integrity"' /tmp/o91-v1.json; then
+  echo "ok    /v1 calls an absent database an integrity verdict (409 + class)"; PASS=$((PASS+1))
+else
+  echo "FAIL  /v1 answered $V_CODE without class integrity"
+  sed 's/^/      /' /tmp/o91-v1.json; echo; FAIL=$((FAIL+1))
+fi
+if [ ! -f "$BV/palace.db" ]; then
+  echo "ok    ...and serving that refusal created no database"; PASS=$((PASS+1))
+else
+  echo "FAIL  /v1 FABRICATED palace.db under --read-only"; FAIL=$((FAIL+1))
+fi
+export UNDERCROFT_HOME="$E2E_HOME"
+
 echo "== Key rotation =="
 # Declared BEFORE the rotation, read back AFTER it. Both tables carry a
 # vault-MAC tag that is verified on read, and rotation swept neither until
