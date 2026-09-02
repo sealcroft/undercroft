@@ -1126,6 +1126,20 @@ Consequences that are binding, not advisory:
   `chain_meta`, fast-forwards no anchor, rebuilds no FTS index, and does
   not promote or delete a writer's `vault.json.next` — the operation
   A32 called evidence destruction on the incident runbook's own path. It
+  **Every one of those claims is about `open_read_only`, and O91 is what
+  that scoping costs (2026-09-02): O81 added a `recorded_embedder` call
+  ahead of the posture dispatch, so the FIRST thing `--read-only` did was
+  open the database read-write — creating it where it was absent, and
+  checkpointing away a crashed writer's hot `-wal` where it was present
+  (measured, 41,232 bytes to 0, `palace.db` rewritten). Every sentence
+  above stayed true and the posture was still violated, because the
+  violation was in a call made BEFORE the function they describe. The only
+  A33 test called `open_read_only` directly, so it was blind by
+  construction and stayed green over the defect. **A posture is a property
+  of the PATH, not of the function at the end of it** — ask what runs
+  before the function whose contract you are quoting, and gate the path,
+  which is why the ten O91 checks drive `open_store_as` and the two
+  surfaces rather than the store call. It
   reaches the UNLOCK as well (`unlock_as(Access::ReadOnly)`), because
   unlocking deletes a staging manifest it cannot authenticate and stating
   the posture one call later was already too late. Each of those is
@@ -1511,8 +1525,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (785 run,
-                                      # 4 #[ignore]d = 789 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (786 run,
+                                      # 4 #[ignore]d = 790 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1604,7 +1618,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # by nothing and two dead wrappers survived
                                       # from O20 and O25. Publishes no check count
                                       # deliberately
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (438 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (448 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (127 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (53 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (72 checks; weaviate

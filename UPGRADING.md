@@ -65,6 +65,47 @@ so rather than implying it checked them.
 
 ---
 
+## 1.2.1 (unreleased)
+
+### a read-only open of a vault with no database exits **2** again, not 1
+
+**Who is affected:** anyone whose scripts or monitoring distinguish
+`undercroft`'s exit codes, or read the `class` field on a `/v1` error, and who
+runs a read-only command or `serve-http --read-only` against a vault whose
+`palace.db` is missing while its manifest is present — a half-copied backup,
+an interrupted transfer, a snapshot taken mid-write. Nobody else: a healthy
+vault is unaffected in every respect.
+
+`1.2.0` regressed this (ROADMAP O91). A call added ahead of the posture
+dispatch opened the database read-write, which **created** it, so the
+`DatabaseMissing` guard could no longer fire and the condition was reported as
+an unmigrated schema instead of a missing database:
+
+| condition | 1.1.1 and earlier | 1.2.0 | 1.2.1 |
+|---|---|---|---|
+| CLI `--read-only`, manifest present, `palace.db` absent | exit **2** | exit **1** | exit **2** |
+| same over `/v1` | 409 + `class: "integrity"` | 409, **no class** | 409 + `class: "integrity"` |
+
+**Symptom if it bites you:** a script written against `1.2.0`'s behaviour that
+treats exit 2 as fatal and exit 1 as retryable will now stop where it used to
+retry. That is the intended reading — a missing database beside a manifest is
+an integrity condition, not a transient one — and it is what every other
+version and every published document says. Exit 2 is documented as the
+integrity verdict throughout; `1.2.0` is the only release that answered 1.
+
+**No action is required**, and there is nothing for `undercroft config check`
+to detect: this is a per-vault on-disk condition, not a declaration, so the
+pre-flight cannot see it. Check instead that nothing keys on exit 1 here:
+
+```bash
+undercroft --read-only stats; echo "exit $?"
+```
+
+A related fix needs no action at all and is pure gain: the same call used to
+**checkpoint away a crashed writer's hot `-wal`** on every read-only command
+(measured: 41,232 bytes to 0, with `palace.db` rewritten). It no longer opens
+a writable connection, so a hot WAL now survives inspection.
+
 ## 1.2.0 (released 2026-09-01)
 
 ### `UNDERCROFT_INDEX_CA` is read ONCE per process for pgvector, so rotating the file needs a restart

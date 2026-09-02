@@ -6039,7 +6039,7 @@ spelling against a live container.
 
 ---
 
-### O91 — O81 re-opened A33: `--read-only` CREATES the database it is forbidden to create, and demotes an integrity verdict
+### O91 — CLOSED 2026-09-02: O81 re-opened A33, `--read-only` CREATED the database it is forbidden to create — and collapsed a crashed writer's WAL
 
 **Round six, error/status dimension. Verified link by link. This shipped in
 `1.2.0`.**
@@ -6111,6 +6111,72 @@ way: a read-only open of a genuinely absent database must keep answering
 `open_read_only` — against a manifest with no `palace.db`, asserting
 `DatabaseMissing` **and** that `palace.db` still does not exist afterwards.
 The second assertion is the one that fails today; the first would too.
+
+---
+
+**CLOSED 2026-09-02.** `recorded_embedder` returns early when the database is
+absent and opens `SQLITE_OPEN_READ_ONLY` otherwise — the prescribed fix, in the
+shared function rather than at either call site, so the `/v1` half above closes
+with it. Driven through `/v1` to confirm that rather than assume it: a broken
+vault beside a healthy default answers **409 + `class:"integrity"`** and
+fabricates nothing, while the healthy one still answers 200.
+
+**THE RESIDUAL WAS REAL, and it was settled by the run this entry asked for
+rather than by the reading that would have sufficed to close the entry.** The
+filed remedy said the fix closes it *"as a side effect"*, which is a prediction,
+and the doc comment written with the fix asserted it — a doc claim, which this
+project does not accept as verification. Measured both ways on a killed writer,
+using the counterfactual binary:
+
+| | hot `-wal` | `palace.db` digest |
+|---|---|---|
+| defect restored | **41,232 → 0** | **changed** |
+| fixed | 41,232 → 41,232 | unchanged |
+
+So `--read-only` was destroying a crashed writer's WAL on every invocation, not
+merely fabricating an empty file — the worse of the two readings, and the one
+the entry declined to assert without a run.
+
+**Gates: ten checks, and the four that stay green are the interesting ones.**
+One store unit test (`reading_the_recorded_embedder_never_creates_the_database`)
+plus nine e2e checks across the CLI and `/v1`. Six fail over the restored
+defect; the other four are premises. That split is deliberate — two of the WAL
+checks compare an absent file to an absent file and **pass vacuously** when no
+hot WAL was staged, which is indistinguishable from a clean tree, so the premise
+now GATES them and they report *not verified* rather than *ok*. That was not
+hypothetical: the first version of the arm staged its WAL with a POST whose body
+field was wrong, and the premise probe is the only thing that said so.
+
+**A method note this unit earned.** The first counterfactual ran against a WAL
+made of schema pages, because the staging command silently failed and the
+server's own table creation filled the WAL instead. It fired, and it would have
+been reported as proof. The gate was then re-staged with a real write and the
+counterfactual **re-run against the artifact in its final form** — a
+counterfactual that exercised an earlier version of the check proves something
+about that version and nothing about the one that ships.
+
+**Driven through a real corpus**, which for this change means asking whether a
+read-only open still costs what it did and whether the WAL property survives a
+vault of consequence. Two runs. The LoCoMo feed across eight wings (88 drawers)
+answered `--read-only stats` in 5 ms and `--read-only search` in 23 ms, and a
+killed `serve-http` mid-ingest left a **1,755,152-byte** hot WAL that survived
+two read-only commands byte for byte, after which the writer recovered it and
+answered `VERIFY OK` with the uncheckpointed writes searchable. Then the repo's
+own source and docs mined into three wings — **364,843 drawers, 822 MB** —
+where `--read-only stats` took 281 ms and `--read-only search` 24.2 s against a
+writable **22.8 s**, i.e. inside the noise of the same query on the same vault,
+which is the comparison that matters: the change adds one `meta` lookup on an
+already-open path and must not show up. A 2,793,392-byte hot WAL was preserved
+there too, with `palace.db` byte-identical.
+
+**Drift check.** `docs/AGENTS.md:218` already said *"this one is an integrity
+verdict (exit 2)"*, and `docs/PARITY.md`, `THREAT_MODEL.md` and
+`architecture/index.html` say nothing about it — so the document was right and
+the code was wrong for one release. That is the **documents-lead** direction of
+the drift doctrine, and no documentation change is owed by the fix itself. What
+moved instead is arithmetic: `e2e` 438 → 448, `test` 785 → 786, the landing
+`cargo tests` tile and its `e2e checks` sum (703 → 713), and the house page,
+which republishes the test count.
 
 ---
 
