@@ -148,6 +148,40 @@ run_backend_suite pgvector
 run_backend_suite milvus
 run_backend_suite weaviate
 
+echo "== pgvector DSN spellings (O90) =="
+# The cleartext refusal is guarded by `dsn_is_loopback`, which USED TO FAIL
+# OPEN: it scanned whitespace-split fields for a literal `host=` prefix and
+# ended `saw_host || !d.is_empty()`, so any DSN spelling its host another way
+# read as loopback and skipped a refusal whose own text says "There is no
+# override" — pushing plaintext-derived embeddings over the network.
+#
+# THIS ARM MEASURES THE REFUSAL, NOT THE PREDICATE'S OPINION. Both fixtures
+# name the REAL pgvector container, so under the defect they do not merely
+# mis-answer: they connect and the push SUCCEEDS, which is the leak. The
+# per-backend cleartext check above cannot see this class — it runs one DSN
+# spelling.
+PGIP="$(getent hosts pgvector | awk '{print $1}' | head -1)"
+if [ -n "$PGIP" ]; then
+  echo "ok    premise: pgvector resolves to $PGIP, so a bypass would really connect"
+  PASS=$((PASS+1))
+else
+  echo "FAIL  premise: could not resolve pgvector — the O90 arms would prove nothing"
+  FAIL=$((FAIL+1))
+fi
+check "[pgvector] hostaddr= is not loopback" 1 "no override" -- env   UNDERCROFT_PGVECTOR_DSN="hostaddr=$PGIP dbname=undercroft user=undercroft password=undercroft"   "$BIN" index push pgvector
+check "[pgvector] host with spaces is not loopback" 1 "no override" -- env   UNDERCROFT_PGVECTOR_DSN="host = pgvector dbname=undercroft user=undercroft password=undercroft"   "$BIN" index push pgvector
+# Premise the other way: the guard must not simply refuse everything. A
+# loopback DSN gets PAST the transport gate — it then fails to connect,
+# because nothing serves postgres on 127.0.0.1 in this container, and that
+# failure must not be the transport refusal.
+LOOPOUT="$(env UNDERCROFT_PGVECTOR_DSN="host=127.0.0.1 dbname=undercroft" "$BIN" index push pgvector 2>&1 || true)"
+if printf '%s' "$LOOPOUT" | grep -qF "no override"; then
+  echo "FAIL  a loopback DSN was refused by the transport gate — the guard refuses everything"
+  FAIL=$((FAIL+1))
+else
+  echo "ok    ...and a loopback DSN still passes the transport gate"; PASS=$((PASS+1))
+fi
+
 echo "== Transport policy (C8) =="
 # An hmac-only vault's at-rest content IS the plaintext, so pushing it is a
 # decision the operator has to state. Premise first: the same vault pushes

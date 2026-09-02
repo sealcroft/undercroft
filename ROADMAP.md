@@ -5965,7 +5965,7 @@ already concluded for relational claims.
 
 ---
 
-### O90 — `dsn_is_loopback` fails OPEN, so pgvector embeddings can cross the network in the clear
+### O90 — CLOSED 2026-09-03: `dsn_is_loopback` failed OPEN, so pgvector embeddings could cross the network in the clear
 
 **Round six, config/search dimensions. Verified by reading and by reproducing
 the predicate.** `crates/undercroft-index/src/lib.rs:587-610` ends:
@@ -6036,6 +6036,56 @@ predicate's opinion, and **it fails today on the predicate alone**, which is
 precisely why the unsettled connector question does not gate the finding.
 Note the existing `backends-e2e` cannot catch this class: it runs one DSN
 spelling against a live container.
+
+---
+
+**CLOSED 2026-09-03.** Fixed by delegation, as the entry's better option
+proposed: the predicate parses with `tokio_postgres::Config` — the exact type
+`postgres::Client::connect` builds, that call being
+`params.parse::<Config>()?.connect(tls)` — and requires every host AND every
+`hostaddr` to be loopback. A comma list is a list; `hostaddr` is what gets
+dialed when both keys are present; a DSN that does not parse is not loopback,
+which is the direction the old doc claimed and the old body did not take. An
+empty DSN keeps its pre-O90 answer of `false`: a failed interpolation is not a
+declaration that the database is local.
+
+**THE UNSETTLED HALF IS NOW SETTLED, AND IT RESOLVED AGAINST US.** This entry
+recorded that it had not read `tokio-postgres`'s parser — the audit was
+read-only and the registry lives in a container volume — and that a reader who
+found the connector rejecting a spelling would have narrowed the exploit
+rather than refuted the defect. Read now, from the locked 0.7.18 source:
+`parameter()` runs `skip_ws()` / `eat('=')` / `skip_ws()`, so whitespace around
+`=` is legal, and `"hostaddr"` is a recognised key at `config.rs:610` that
+`host` never covers. **Both bypasses reach the connector**, so this was
+exploitable end to end and not merely a guard defect. The honest reading of
+that: the entry's caution was right to file the defect anyway, and the
+narrowing it left open would have gone the other way.
+
+**Reaching `hostaddr` cost a dependency EDGE, and the reason is worth
+recording.** `postgres::Config` exposes `get_hosts()` but no
+`get_hostaddrs()`, holds its inner `tokio_postgres::Config` in a private field
+with no accessor, and the crate re-exports neither. So `hostaddr=` is
+invisible from the `postgres` API surface — a guard written against it
+*cannot* see the key that defeats it. `tokio-postgres` is now a direct
+dependency of `undercroft-index`: no new crate in the binary (it is already
+there at 0.7.18 via `postgres` and `tokio-postgres-rustls`), just an edge to
+the type that makes the question answerable.
+
+**Both gate halves are in, and the second is the one that matters.** A 15-row
+table names both bypasses, asserts the safe direction, and carries a premise
+that the fixture set exercises BOTH answers so a predicate refusing everything
+cannot pass it; a second test pins that an unparseable DSN is not loopback —
+and its own premise caught that `"="` is *not* unparseable (it reads as an
+empty key with an empty value), so asserting on it would have proved nothing.
+Then the live half in `backends-e2e`: two pushes at the REAL pgvector
+container, one per bypass spelling, requiring the refusal. Under the defect
+those do not merely mis-answer — they connect and the push **succeeds**, which
+is the leak itself. A fourth arm pins the other direction, that a loopback DSN
+still passes the transport gate, so the suite cannot go green by refusing
+everything.
+
+**This predicate had no test at all before today**, which is how a guard whose
+refusal says *"There is no override"* shipped failing open.
 
 ---
 

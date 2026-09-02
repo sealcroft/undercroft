@@ -579,34 +579,69 @@ pub mod pgvector {
 
     /// Is this DSN pointed at this machine?
     ///
-    /// A libpq DSN is not a URL unless it is written as one, so both
-    /// spellings are read: the `postgres://` URL form goes through the same
-    /// parser the transport policy uses everywhere else, and the key/value
-    /// form (`host=... port=...`) is read by key. Anything unrecognised is
-    /// NOT loopback — the safe direction, matching `is_loopback`.
+    /// **Asks the parser the CONNECTOR uses, and does not read the string by
+    /// hand (ROADMAP O90).** `postgres::Client::connect` is literally
+    /// `params.parse::<Config>()?.connect(tls)`, and `postgres::Config`'s
+    /// `FromStr` delegates to `tokio_postgres::Config` — the type parsed
+    /// here. Both DSN spellings, URL and key/value, go through it, so this
+    /// predicate cannot disagree with where the connection actually goes.
+    ///
+    /// **It used to fail OPEN, and the gate it guards has no override.** The
+    /// old body scanned whitespace-split fields for a literal `host=` prefix
+    /// and ended `saw_host || !d.is_empty()`, which conflates *"there is no
+    /// host"* with *"I did not parse the host that is there"*. Every DSN
+    /// whose host is spelled another way therefore read as loopback and
+    /// skipped the cleartext refusal, sending plaintext-derived embeddings
+    /// across the network:
+    ///
+    /// | DSN | old | now |
+    /// |---|---|---|
+    /// | `host=10.0.0.5 dbname=x` | refuses | refuses |
+    /// | `hostaddr=10.0.0.5 dbname=x` | **loopback** | refuses |
+    /// | `host = 10.0.0.5 dbname=x` | **loopback** | refuses |
+    ///
+    /// Both bypasses reach the connector — verified by reading its parser,
+    /// which the filing had left open: `parameter()` runs
+    /// `skip_ws()`/`eat('=')`/`skip_ws()`, so whitespace around `=` is legal,
+    /// and `hostaddr` is a recognised key that `host` does not cover.
+    ///
+    /// `hostaddr` is what the connection actually dials when both are
+    /// present (`host` then serves verification), so **every** host and every
+    /// hostaddr must be loopback — a comma list is a list, and one remote
+    /// entry is enough to refuse. A DSN that does not parse is NOT loopback,
+    /// which is the direction the old doc claimed and the old body did not.
     pub(crate) fn dsn_is_loopback(dsn: &str) -> bool {
         let d = dsn.trim();
-        if d.starts_with("postgres://") || d.starts_with("postgresql://") {
-            return undercroft_net::is_loopback(d);
+        // An empty DSN is a failed interpolation, not a declaration that the
+        // database is local. Refusing keeps the pre-O90 answer for this case.
+        if d.is_empty() {
+            return false;
         }
-        let mut saw_host = false;
-        for field in d.split_whitespace() {
-            if let Some(host) = field.strip_prefix("host=") {
-                saw_host = true;
-                let ok = host == "localhost"
-                    || host
-                        .parse::<std::net::IpAddr>()
-                        .map(|ip| ip.is_loopback())
-                        .unwrap_or(false)
-                    // A unix socket path never leaves the machine.
-                    || host.starts_with('/');
-                if !ok {
-                    return false;
+        let Ok(cfg) = d.parse::<tokio_postgres::Config>() else {
+            return false;
+        };
+        let hosts = cfg.get_hosts();
+        let addrs = cfg.get_hostaddrs();
+        // Neither key given: libpq's default really is the local socket.
+        if hosts.is_empty() && addrs.is_empty() {
+            return true;
+        }
+        addrs.iter().all(|ip| ip.is_loopback())
+            && hosts.iter().all(|h| match h {
+                // A unix socket never leaves the machine.
+                tokio_postgres::config::Host::Unix(_) => true,
+                tokio_postgres::config::Host::Tcp(name) => {
+                    name == "localhost"
+                        || name
+                            .parse::<std::net::IpAddr>()
+                            .map(|ip| ip.is_loopback())
+                            .unwrap_or(false)
+                        // `Config::host` only maps a leading `/` to `Unix`
+                        // under `cfg(unix)`; off it, a socket path arrives
+                        // here as a `Tcp` name that can never resolve.
+                        || name.starts_with('/')
                 }
-            }
-        }
-        // No host at all means libpq's default, which is the local socket.
-        saw_host || !d.is_empty()
+            })
     }
 
     /// Does this DSN ask for TLS?
@@ -1193,6 +1228,124 @@ pub mod weaviate {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **The pgvector DSN predicate must fail CLOSED (ROADMAP O90).**
+    ///
+    /// It had no test at all, which is how it shipped failing open: the old
+    /// body looked for a literal `host=` prefix in whitespace-split fields
+    /// and ended `saw_host || !d.is_empty()`, so *"I found no `host=`
+    /// token"* and *"there is no host"* were the same answer. Any DSN whose
+    /// host is spelled another way read as loopback and skipped a cleartext
+    /// refusal that says, in its own words, *"There is no override"* —
+    /// sending plaintext-derived embeddings across the network.
+    ///
+    /// Both bypass rows are reachable at the CONNECTOR, not just at this
+    /// predicate: `tokio_postgres`'s key/value parser runs
+    /// `skip_ws()`/`eat('=')`/`skip_ws()`, so whitespace around `=` is legal,
+    /// and `hostaddr` is a key of its own that `host` never covers.
+    ///
+    /// The `true` rows are load-bearing: without them a predicate that
+    /// simply refused everything would pass.
+    #[test]
+    fn a_dsn_is_loopback_only_when_every_host_in_it_is() {
+        // (dsn, is_loopback, what it pins)
+        let cases: &[(&str, bool, &str)] = &[
+            ("host=localhost dbname=x", true, "the ordinary local DSN"),
+            ("host=127.0.0.1 dbname=x", true, "a loopback literal"),
+            ("host=::1 dbname=x", true, "the v6 loopback literal"),
+            (
+                "dbname=x user=u",
+                true,
+                "no host key: libpq's default IS the local socket",
+            ),
+            (
+                "host=/var/run/postgresql dbname=x",
+                true,
+                "a unix socket never leaves the machine",
+            ),
+            (
+                "postgres://localhost/x",
+                true,
+                "the URL spelling of the same thing",
+            ),
+            (
+                "hostaddr=127.0.0.1 dbname=x",
+                true,
+                "hostaddr may legitimately BE loopback",
+            ),
+            (
+                "host=10.0.0.5 dbname=x",
+                false,
+                "the one spelling the old code caught",
+            ),
+            (
+                "hostaddr=10.0.0.5 dbname=x",
+                false,
+                "O90: a standard libpq key the old scan did not know — read as LOOPBACK",
+            ),
+            (
+                "host = 10.0.0.5 dbname=x",
+                false,
+                "O90: libpq allows whitespace around `=`, and so does the connector",
+            ),
+            (
+                "host=db.internal dbname=x",
+                false,
+                "a name we cannot resolve is not loopback",
+            ),
+            (
+                "postgres://10.0.0.5/x",
+                false,
+                "the URL spelling of a remote host",
+            ),
+            (
+                "host=localhost,10.0.0.5 dbname=x",
+                false,
+                "a comma list is a LIST: one remote entry is enough to refuse",
+            ),
+            (
+                "host=localhost hostaddr=10.0.0.5 dbname=x",
+                false,
+                "hostaddr is what gets dialed when both are given",
+            ),
+            (
+                "",
+                false,
+                "an empty DSN is a failed interpolation, not a local database",
+            ),
+        ];
+        // Premise: the table must exercise BOTH answers, or a constant
+        // predicate passes it.
+        assert!(
+            cases.iter().any(|c| c.1) && cases.iter().any(|c| !c.1),
+            "premise: the fixture set is degenerate"
+        );
+        for (dsn, want, why) in cases {
+            assert_eq!(pgvector::dsn_is_loopback(dsn), *want, "{dsn:?}: {why}");
+        }
+    }
+
+    /// A DSN the connector cannot parse is NOT loopback.
+    ///
+    /// Separate from the table because it is a different claim, and because
+    /// the fixture has to be verified to be unparseable rather than assumed
+    /// — a string that quietly parses would make this assert nothing.
+    #[test]
+    fn an_unparseable_dsn_is_not_loopback() {
+        // `"="` looks unparseable and is NOT — it reads as an empty key with
+        // an empty value — which the premise arm below caught. Every fixture
+        // here is one the connector really rejects.
+        for dsn in ["host", "host=localhost bogus", "host=localhost '"] {
+            assert!(
+                dsn.parse::<tokio_postgres::Config>().is_err(),
+                "premise: {dsn:?} must actually fail to parse"
+            );
+            assert!(
+                !pgvector::dsn_is_loopback(dsn),
+                "an unparseable DSN must take the safe direction: {dsn:?}"
+            );
+        }
+    }
 
     #[test]
     fn qdrant_point_id_shape() {

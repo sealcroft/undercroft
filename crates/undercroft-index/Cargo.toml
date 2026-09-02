@@ -18,5 +18,14 @@ postgres = "0.19"
 # that backend at all (ROADMAP C8). rustls rather than native-tls: it is the
 # stack every other client here already uses, so one set of trust roots and
 # one pin format cover the whole product.
+# The DSN parser `postgres::Client::connect` itself uses: it does
+# `params.parse::<Config>()?.connect(tls)`, and `postgres::Config::from_str`
+# delegates straight to this one. `dsn_is_loopback` asks it rather than
+# hand-reading the string, for the reason `undercroft_net::is_loopback` asks
+# `url` (ROADMAP O90). Direct edge to a crate already in the lock at this
+# version via `postgres` and `tokio-postgres-rustls`; `postgres` re-exports
+# neither the crate nor `get_hostaddrs`, which is the accessor that makes
+# `hostaddr=` visible at all.
+tokio-postgres = "0.7"
 tokio-postgres-rustls = "0.13"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
