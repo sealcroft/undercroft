@@ -493,8 +493,8 @@ enum Command {
         apply: bool,
     },
     /// Repair: backfill fingerprints, re-embed, drop the stale index, re-stamp
-    /// the embedder identity, record the run, vacuum, re-verify — in one
-    /// transaction
+    /// the embedder identity and record the run — those in one transaction —
+    /// then vacuum and re-verify outside it
     Repair {
         #[arg(long, default_value = "default")]
         vault: String,
