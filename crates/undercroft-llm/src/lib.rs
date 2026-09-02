@@ -53,6 +53,31 @@ pub struct LlmClient {
     agent: ureq::Agent,
 }
 
+/// What [`LlmClient::destination`] would record if the configured base URL did
+/// not parse.
+///
+/// **Unreachable through every public constructor, and that is asserted
+/// rather than assumed** — see `an_unparseable_base_never_reaches_a_client`.
+/// `new`, `with_key` and `from_env` all funnel into `with_key`, which builds
+/// its agent through [`undercroft_net::agent_from_env`]; that gate decides
+/// with the PARSER (`is_cleartext` treats an unparseable URL as cleartext,
+/// `is_loopback` treats it as remote — both the safe direction), so such a
+/// base is refused before a client exists.
+///
+/// I first wrote this constant's doc claiming the opposite, reasoning from
+/// `with_key`'s own `base.starts_with("https://")` — a prefix test, not a
+/// parse. That test is an early check, not the boundary, and the test written
+/// to exercise this branch failed on its own premise, which is the only
+/// reason the false claim did not ship. **The gate is the one further down.**
+///
+/// It exists because [`LlmClient::destination`] returns `String` and has no
+/// error channel. An `unwrap` here would turn a future caller that builds a
+/// client some other way into a panic; naming a host would be a claim about a
+/// dial that never happened; echoing the base could put userinfo into an
+/// audit record, which is the one thing that function exists to prevent. A
+/// marker that cannot be mistaken for a host is the honest third answer.
+const UNPARSEABLE_DESTINATION: &str = "<unparseable base url>";
+
 impl LlmClient {
     pub fn new(base_url: &str, model: &str, kind: ApiKind) -> Result<Self, LlmError> {
         Self::with_key(base_url, model, kind, "")
@@ -159,23 +184,38 @@ impl LlmClient {
     /// belt-and-braces; it is still the right shape, since the rule is about
     /// what may be ASSEMBLED into an audit record at all.
     ///
-    /// **The strip is scoped to the AUTHORITY, and that is the whole of the
-    /// correction.** It used to search the entire scheme-stripped remainder
-    /// for the last `@`, which is wrong because `@` is a legal path and query
-    /// character (RFC 3986 pchar): `…/v1/models/llama@latest` reported
-    /// `http://latest`, and `…/v1?contact=ops@example.com` reported
-    /// `https://example.com` — not garbled, but a DIFFERENT and entirely
-    /// plausible host, in the one field whose question is which host received
-    /// the corpus. The value is interpolated into `audit_refine`'s HMAC'd
-    /// canonical, so the chain authenticated a destination that was never
-    /// contacted and an auditor recomputing it from the true configuration
-    /// could not reproduce the tag. It never leaked a credential — it
-    /// over-stripped — so this is audit integrity, not disclosure.
+    /// **This asks the parser the transport uses, and does not hand-parse the
+    /// string (ROADMAP O92).** Two corrections led here and the second is the
+    /// one that matters.
     ///
-    /// The old reasoning was right and applied to the wrong string: a
-    /// password may itself contain an `@`, so the LAST one *in the authority*
-    /// is the userinfo separator. The authority ends at the first `/`, `?` or
-    /// `#`.
+    /// M55 first scoped an over-eager strip: the code searched the entire
+    /// scheme-stripped remainder for the last `@`, which is wrong because `@`
+    /// is a legal path and query character (RFC 3986 pchar), so
+    /// `…/v1/models/llama@latest` reported `http://latest` and
+    /// `…/v1?contact=ops@example.com` reported `https://example.com` — a
+    /// DIFFERENT and entirely plausible host, in the one field whose question
+    /// is which host received the corpus.
+    ///
+    /// **That fix then hand-parsed the authority, and enumerated the wrong
+    /// set of separators.** It ended the authority at the first `/`, `?` or
+    /// `#` — the three I thought of. For a **special scheme** the WHATWG
+    /// parser terminates it on a fourth, `\`, so
+    /// `https://evil.com\@127.0.0.1/v1` is dialed at `evil.com` while an
+    /// `@`-split of the hand-found authority reads `127.0.0.1`. The record
+    /// named loopback while the corpus went to an attacker-chosen host: the
+    /// precise harm this function exists to prevent, inverted into the
+    /// adversarial direction. This repo documents that exact string two
+    /// crates away, in [`undercroft_net::is_loopback`], whose own doc says
+    /// *"Hand-parsing this string is how the predicate came to disagree with
+    /// ureq twice"* — and it was written so that nobody would hand-parse a
+    /// URL again. Third instance.
+    ///
+    /// So the property is now **agreement with the connector** rather than a
+    /// correct list of characters: the host comes from `url::Url`, which is
+    /// what `ureq` resolves with. The value is interpolated into
+    /// `audit_refine`'s HMAC'd canonical, so a wrong host means the chain
+    /// authenticates a destination that was never contacted and an auditor
+    /// recomputing it from the true configuration cannot reproduce the tag.
     ///
     /// Residual, stated rather than implied: what follows the authority is
     /// kept verbatim, so a credential an operator put in a PATH or QUERY
@@ -184,25 +224,40 @@ impl LlmClient {
     /// an egress destination should be a bare origin, which changes what the
     /// canonical binds.
     pub fn destination(&self) -> String {
-        let (scheme, rest) = match self.base.split_once("://") {
-            Some((s, r)) => (s, r),
-            None => ("", self.base.as_str()),
+        // Ask the parser the TRANSPORT uses. `ureq` resolves the host with
+        // this same `url` crate, so reading the host from it is what makes
+        // this function structurally unable to name somewhere else.
+        let Ok(u) = url::Url::parse(&self.base) else {
+            return UNPARSEABLE_DESTINATION.to_string();
         };
-        // The authority is what carries userinfo, and it ends at the first
-        // `/`, `?` or `#`. Everything after it is opaque here.
-        let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-        let (authority, tail) = rest.split_at(authority_end);
-        // `rsplit_once` and not `split_once`: a password may itself contain
-        // an `@`, and the LAST one in the authority is the separator.
-        let host = match authority.rsplit_once('@') {
-            Some((_credential, after)) => after,
-            None => authority,
+        let Some(host) = u.host_str() else {
+            return UNPARSEABLE_DESTINATION.to_string();
         };
-        if scheme.is_empty() {
-            format!("{host}{tail}")
-        } else {
-            format!("{scheme}://{host}{tail}")
+        let mut out = format!("{}://{host}", u.scheme());
+        // `port()` and not `port_or_known_default()`: an implicit 443 was
+        // never in the string an operator configured, and adding one would
+        // move every existing canonical for no gain.
+        if let Some(port) = u.port() {
+            out.push(':');
+            out.push_str(&port.to_string());
         }
+        // The base is trimmed of trailing slashes at construction, so a path
+        // of exactly `/` is the parser's normalization of "no path" and is
+        // dropped — that keeps the ordinary local-runtime rendering, and so
+        // every canonical built from it, byte-identical to what shipped.
+        let path = u.path();
+        if !(path == "/" && u.query().is_none() && u.fragment().is_none()) {
+            out.push_str(path);
+        }
+        if let Some(q) = u.query() {
+            out.push('?');
+            out.push_str(q);
+        }
+        if let Some(f) = u.fragment() {
+            out.push('#');
+            out.push_str(f);
+        }
+        out
     }
 
     /// One chat completion, deterministic settings (temperature 0).
@@ -653,6 +708,11 @@ mod tests {
                 "https://host.example.com/a@b",
                 "both at once: strip the credential, keep the host",
             ),
+            (
+                "https://evil.com\\@127.0.0.1/v1",
+                "https://evil.com/@127.0.0.1/v1",
+                "O92: a backslash ends the authority, so the host is evil.com",
+            ),
         ];
         for (input, want, why) in cases {
             let c = LlmClient::new(input, "m", ApiKind::OpenAi).expect("loopback/TLS is fine here");
@@ -684,6 +744,91 @@ mod tests {
                 "…and it must still name the host, or it answers nothing: {d}"
             );
         }
+    }
+
+    /// **The durable half: the destination must name the host the TRANSPORT
+    /// will dial, and the only way to know that is to ask the same parser.**
+    ///
+    /// ROADMAP O92. The row table above enumerates separators — `/`, `?`, `#`
+    /// — which is a test of the enumeration, and the enumeration was missing
+    /// one. For a **special scheme** the WHATWG parser also terminates the
+    /// authority on `\`, so `https://evil.com\@127.0.0.1/v1` is dialed at
+    /// `evil.com` while an `@`-split of a hand-found authority reads
+    /// `127.0.0.1`. The audit record named loopback while the corpus went to
+    /// an attacker-chosen host — the precise harm M55 was written to remove,
+    /// inverted.
+    ///
+    /// This asserts a PROPERTY instead: whatever `destination()` says, its
+    /// host equals `Url::parse(base)`'s host — the parser `ureq` itself uses.
+    /// A future separator nobody has thought of cannot break it, because it
+    /// is not a list.
+    #[test]
+    fn the_destination_names_the_host_the_transport_will_dial() {
+        for input in [
+            // the ordinary shapes
+            "http://127.0.0.1:11434",
+            "https://gateway.example.com/v1",
+            "https://user:sup3rsecret@gateway.example.com/v1",
+            "https://user:p@ss@host.example.com/v1",
+            "http://127.0.0.1:11434/v1/models/llama@latest",
+            "https://gateway.example.com/v1?contact=ops@example.com",
+            // O92: the separator the enumeration missed, both slopes
+            "https://evil.com\\@127.0.0.1/v1",
+            "https://evil.com\\@127.0.0.1",
+            "https://evil.com\\user:pw@127.0.0.1/v1",
+            // and the two spellings that inverted `is_loopback` twice
+            "https://127.0.0.1:8080@evil.com/v1",
+            "https://user@evil.com\\@127.0.0.1/v1",
+            // ipv6 and an explicit port must survive the round trip
+            "http://[::1]:11434",
+            "http://[::1]:11434/v1",
+        ] {
+            let c = LlmClient::new(input, "m", ApiKind::OpenAi).expect("constructs");
+            let said = c.destination();
+            let dialed = url::Url::parse(input)
+                .expect("fixture must parse — it is what ureq will dial")
+                .host_str()
+                .map(str::to_string);
+            let named = url::Url::parse(&said)
+                .ok()
+                .and_then(|u| u.host_str().map(str::to_string));
+            assert_eq!(
+                named, dialed,
+                "{input} -> {said}: the record names a host the transport never dialed"
+            );
+        }
+    }
+
+    /// **An unparseable base never reaches a client at all**, which is what
+    /// makes `UNPARSEABLE_DESTINATION` unreachable rather than merely
+    /// unlikely.
+    ///
+    /// Worth pinning because the reasoning is easy to get wrong in the
+    /// dangerous direction: `with_key`'s own TLS test is
+    /// `base.starts_with("https://")`, a prefix test that ACCEPTS this
+    /// fixture. The refusal comes from further down — `agent_from_env`,
+    /// which decides with the parser. If anyone ever loosens that gate, the
+    /// marker starts appearing in audit records and this test says so first.
+    #[test]
+    fn an_unparseable_base_never_reaches_a_client() {
+        let bad = "https://[not-an-address";
+        assert!(
+            url::Url::parse(bad).is_err(),
+            "premise: the fixture must actually be unparseable"
+        );
+        assert!(
+            bad.starts_with("https://"),
+            "premise: the prefix test accepts it, so the refusal is the parser's"
+        );
+        assert!(
+            LlmClient::new(bad, "m", ApiKind::OpenAi).is_err(),
+            "a base the transport cannot parse must be refused at construction"
+        );
+        // And the marker itself must never read as a URL naming some host.
+        assert!(
+            url::Url::parse(UNPARSEABLE_DESTINATION).is_err(),
+            "the marker must not parse as a URL: {UNPARSEABLE_DESTINATION}"
+        );
     }
 
     /// Stub LLM server: answers every chat request with a canned body.

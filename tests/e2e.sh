@@ -442,6 +442,34 @@ else
   sed 's/^/      /' /tmp/ro-refine.txt; FAIL=$((FAIL+1))
 fi
 
+# ROADMAP O92. That warning NAMES the destination, which makes it the one
+# place the CLI shows what `audit_refine` HMACs. The label must be the host
+# the transport DIALS, not one a hand-parse found.
+#
+# The fixture dials LOOPBACK on purpose: a backslash ends the authority for a
+# special scheme, so `url` — and therefore ureq — resolve 127.0.0.1, and
+# nothing external is contacted. The old hand-parse ended the authority at the
+# first `/` and took the last `@` of that, reporting `http://169.254.169.254`
+# — the cloud metadata address, a host that was never contacted, written into
+# a chain-authenticated record.
+UNDERCROFT_LLM_URL='http://127.0.0.1:1\@169.254.169.254/v1'   "$BIN" --read-only refine --dry-run >/tmp/o92-refine.txt 2>&1 || true
+O92_DEST=$(grep -o "egress to [^ ]*" /tmp/o92-refine.txt | head -1 | sed 's/^egress to //')
+if [ -n "$O92_DEST" ]; then
+  echo "ok    premise: the read-only refine names a destination ($O92_DEST)"; PASS=$((PASS+1))
+else
+  echo "FAIL  premise: no destination in the refine warning — nothing to check"
+  sed 's/^/      /' /tmp/o92-refine.txt; FAIL=$((FAIL+1))
+fi
+case "$O92_DEST" in
+  http://127.0.0.1:1/*)
+    echo "ok    the egress label names the host the transport dials"; PASS=$((PASS+1)) ;;
+  *169.254.169.254*)
+    echo "FAIL  the egress label names 169.254.169.254, which was never dialed: $O92_DEST"
+    FAIL=$((FAIL+1)) ;;
+  *)
+    echo "FAIL  unexpected egress label: $O92_DEST"; FAIL=$((FAIL+1)) ;;
+esac
+
 # ROADMAP O91. A `--read-only` open must not CREATE the database it is
 # forbidden to create. O81 called `recorded_embedder` from `open_store_as`
 # ahead of the posture dispatch, and it opened with a bare `Connection::open`

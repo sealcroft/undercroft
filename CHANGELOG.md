@@ -7,6 +7,39 @@ code and the `class` field it restores are the ones this project's own
 documentation has published throughout; `1.2.0` is the only release that ever
 answered otherwise, and it did so by regression rather than by decision.
 
+### the refine egress record names the host that was actually dialed (O92)
+
+**ROADMAP O92 CLOSED.** A defect in `1.2.0`'s own fix, and mine.
+
+M55 corrected an over-eager userinfo strip by scoping it to the authority,
+and took the authority to end at the first `/`, `?` or `#` — the three
+separators I thought of. For a **special scheme** the WHATWG parser
+terminates it on a fourth, `\`. So for `https://evil.com\@127.0.0.1/v1`
+the TLS gate passes, `ureq` dials **evil.com**, and `LlmClient::destination`
+returned **`https://127.0.0.1/v1`** — a value interpolated into
+`audit_refine`'s HMAC'd canonical, so the chain authenticated loopback while
+the corpus went to an attacker-chosen host. The precise harm M55 was written
+to remove, inverted into the adversarial direction.
+
+`destination()` no longer hand-parses. It reads the host, port, path, query
+and fragment from `url::Url` — the parser `ureq` itself resolves with — so it
+is structurally unable to disagree with the connector rather than depending on
+an enumeration being complete. The ordinary rendering is byte-identical
+(`http://127.0.0.1:11434` stays exactly that: an explicit port is kept, an
+implicit 443 is not added, and the parser's normalization of "no path" to `/`
+is dropped), so no existing canonical moves.
+
+**The gate is the durable half.** Beside the new `\` row, a test asserts a
+PROPERTY over adversarial spellings — `destination()`'s host equals
+`Url::parse(base)`'s host — so the claim is *agreement with the parser* rather
+than a list of characters someone remembered. It is asserted again at the
+call site that HMACs the value, because that is where it matters.
+
+This repo already documented that exact string two crates away, in
+`undercroft_net::is_loopback`, whose doc says *"Hand-parsing this string is
+how the predicate came to disagree with ureq twice"* — written so nobody would
+hand-parse a URL again. **Third instance.**
+
 ### `--read-only` no longer creates the database it is forbidden to create, nor collapses a crashed writer's WAL (O91)
 
 **ROADMAP O91 CLOSED.** A released defect, found by round six, and it landed

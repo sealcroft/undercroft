@@ -490,6 +490,39 @@ mod tests {
         assert_eq!(plain.destination(), "http://127.0.0.1:11434");
     }
 
+    /// **The label must name the host that was DIALED, not one a hand-parse
+    /// found (ROADMAP O92).**
+    ///
+    /// This is the surface half. `destination()` is gated in its own crate
+    /// against the parser `ureq` uses, but the value only matters because
+    /// THIS function interpolates it into `audit_refine`'s HMAC'd canonical
+    /// — so the claim is asserted where the record is built, not only where
+    /// the string is made.
+    ///
+    /// `\` terminates the authority for a special scheme, so ureq dials
+    /// `evil.com`. The old hand-parse ended the authority at the first `/`,
+    /// `?` or `#`, took the last `@` of what it found, and recorded
+    /// `https://127.0.0.1/v1` — the chain authenticating loopback while the
+    /// corpus went to an attacker-chosen host.
+    #[test]
+    fn the_audit_destination_names_the_host_that_was_dialed() {
+        let hostile = "https://evil.com\\@127.0.0.1/v1";
+        let c = LlmClient::new(hostile, "m", ApiKind::OpenAi).unwrap();
+        let recorded = c.destination();
+        // The parser-agreement PROPERTY lives in `undercroft-llm`, where the
+        // `url` crate is a dependency and the comparison can be made against
+        // ureq's own parse. Here the claim is concrete, because this is the
+        // call site whose output is HMAC'd.
+        assert!(
+            recorded.starts_with("https://evil.com/"),
+            "the audit record must name the host ureq dials: {recorded}"
+        );
+        assert!(
+            !recorded.starts_with("https://127.0.0.1"),
+            "the record named loopback while the corpus went elsewhere: {recorded}"
+        );
+    }
+
     /// `undercroft refine --wing quarantine-pending` was a door out of the
     /// review queue: `recent` opts back into the reserved wing the moment one
     /// is named, so the drawers the screen withheld were handed to the

@@ -6180,7 +6180,7 @@ which republishes the test count.
 
 ---
 
-### O92 — `LlmClient::destination` still names a host that was never contacted, because it hand-parses the authority
+### O92 — CLOSED 2026-09-02: `LlmClient::destination` named a host that was never contacted, because it hand-parsed the authority
 
 **Round six, audit-chain dimension. This is a defect in M55's own fix, and it
 is mine.** Verified by reproducing the parse.
@@ -6217,6 +6217,51 @@ connector rather than enumerating separators correctly.
 test asserting `destination()`'s host EQUALS `Url::parse(base).host_str()` over
 a corpus of adversarial spellings, so the property is *agreement with the
 parser* rather than a list of characters someone remembered.
+
+---
+
+**CLOSED 2026-09-02.** Fixed as prescribed: `destination()` reads host, port,
+path, query and fragment from `url::Url` and reassembles, so it cannot
+disagree with the connector. Both gate halves are in — the `\` row, and the
+property test over eleven adversarial spellings — plus a third at the call
+site in `refine.rs` that HMACs the value, because the llm crate's test proves
+the string and the surface test proves the record.
+
+**The ordinary rendering is byte-identical**, which was a design constraint
+rather than a happy accident: this value goes into an HMAC'd canonical, so a
+gratuitous change would move every future tag for no gain and make old records
+irreproducible from configuration. Three decisions carry it — an explicit port
+is kept and an implicit 443 is NOT added (`port()`, not
+`port_or_known_default()`), and the parser's normalization of "no path" to `/`
+is dropped, the base being trimmed of trailing slashes at construction. The
+pre-existing six-row table passing unchanged is what proves it.
+
+**Counterfactual: three of the four tests fire, and the two that stay green
+are the diagnostic.** Restoring M55's hand-parse fails the new row, the
+property test and the surface test. `no_destination_carries_a_credential` and
+its CLI twin stay green — correctly, because O92 is a WRONG-HOST defect and
+never leaked a credential, and those tests say so in their own docs. Read
+under the round-six rule, a green there is not partial coverage; it is a test
+measuring a different claim, and it does.
+
+**A false claim was caught by a failing premise, not by review.** The fix
+needs an answer for a base that does not parse, and `destination()` returns
+`String` with no error channel, so it returns a marker. I documented that
+branch as REACHABLE, reasoning from `with_key`'s own
+`base.starts_with("https://")` — a prefix test, not a parse. The test written
+to exercise it failed on its own premise: `with_key` builds its agent through
+`undercroft_net::agent_from_env`, which decides with the parser and refuses an
+unparseable base before a client exists. **The early check is not the gate;
+the one further down is.** The constant is now documented as unreachable and
+the test pins the refusal — so if anyone loosens that gate, the marker starting
+to appear in audit records is reported rather than discovered.
+
+**Not filed as a sibling finding, deliberately.** That prefix test is a second
+hand-parse, but it errs SAFE for the decision it makes: a string starting
+`https://` has scheme https if it parses at all, and `HTTPS://x` is refused
+where the parser would allow it. It admits only unparseable input, which the
+downstream gate then refuses. Recording it as a defect would be filing a
+finding I had just measured to be harmless.
 
 ---
 
