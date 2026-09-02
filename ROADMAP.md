@@ -5998,6 +5998,25 @@ URL (`undercroft-net/src/lib.rs:69-71`); this hand-rolled sibling does not.
 That is the third instance of *hand-parsing a connection string* in this tree,
 after the two `is_loopback` inversions its own doc records.
 
+**THE FINDING DOES NOT DEPEND ON THE CONNECTOR, and that boundary is worth
+stating so it is neither dismissed nor overstated.** Two halves:
+
+* **Asserted, fully evidenced in our own code:** the predicate is fail-open.
+  It returns `true` whenever its whitespace-split parser does not recognise a
+  `host=` token, conflating *"there is no host"* with *"I did not parse the
+  host that is there"* — in a function whose own doc claims the safe
+  direction. That is true regardless of what any connector does.
+* **NOT settled:** whether `tokio-postgres 0.7.18` accepts the specific
+  spellings that reach it. libpq documents all three (`host = ` with
+  whitespace, `hostaddr=`, a comma host list); tokio-postgres aims for that
+  grammar; its parser was not read, because there is no cargo registry on the
+  host — the registry lives in a container volume under this project's
+  Docker-only policy, and the audit was read-only.
+
+So a reader who discovers that one spelling is rejected by the connector has
+narrowed the exploit, not refuted the defect: a guard that fails open is a
+defect at the guard.
+
 **Fix shape.** Fail closed: return `false` when no host key is recognised, and
 recognise the keys libpq actually accepts (`host`, `hostaddr`), splitting on
 `=` with surrounding whitespace trimmed rather than on a literal prefix. Better
@@ -6005,11 +6024,18 @@ still, delegate: `tokio_postgres::Config::from_str` parses both DSN forms and
 exposes `.get_hosts()`, so the predicate can ask the same parser the connector
 uses — which is exactly why `is_loopback` delegates to `url`.
 
-**Gate.** A table test over DSN spellings asserting the SAFE direction for every
-unrecognised shape, with `hostaddr=` and the whitespace form as named rows, plus
-a premise arm that a known-loopback DSN still passes (or the test passes by
-refusing everything). Note `backends-e2e` cannot catch this class: it runs one
-DSN spelling against a live container.
+**Gate — and prefer the one that measures the OBSERVABLE over the one that
+measures our intent.** A unit table over DSN spellings is the cheap half:
+assert the safe direction for every unrecognised shape, with `hostaddr=` and
+the whitespace form as named rows, plus a premise arm that a known-loopback DSN
+still passes (or the test passes by refusing everything). The better half is a
+live arm in `tests/e2e-backends.sh` constructing `PgVectorIndex` with
+`UNDERCROFT_PGVECTOR_DSN="host = <non-loopback> dbname=x"` and asserting it is
+**refused** — that measures the refusal actually firing rather than the
+predicate's opinion, and **it fails today on the predicate alone**, which is
+precisely why the unsettled connector question does not gate the finding.
+Note the existing `backends-e2e` cannot catch this class: it runs one DSN
+spelling against a live container.
 
 ---
 
