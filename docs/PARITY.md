@@ -66,13 +66,22 @@ this project, which is why the two codebases share concepts but not code
 > bullet predated the agent-facing surface landing there. All four are
 > fixed above.
 >
-> **What it did NOT cover, stated so the label is not read as more than it
-> is:** the measured figures — recall percentages, latencies, benchmark
-> deltas — were not re-measured. They cite their instruments
-> (`benchmarks/RESULTS.md`, `RETRIEVAL_SCALING.md`) and re-running them is a
-> different job from re-reading this document. A claim here of the form
-> *"this capability exists and works this way"* was checked; a claim of the
-> form *"it measured N"* was not.
+> **The measured figures were a second job, done 2026-09-02 (O89), and it
+> is only PARTLY complete — which is stated here rather than left to
+> inference.** Three LoCoMo arms were re-run on this tree under the recorded
+> protocol: the base is **better** than published (94.6 → **95.51%** hash,
+> **95.36%** MiniLM) and ColBERT reproduced at **96.92%**, which means its
+> lift shrank from +2.2 pts to **+1.4** because the base moved and it did
+> not.
+>
+> **Still carried at their July values, and each says why above:** the
+> cross-encoder arm (no export available here), the served-model deltas (the
+> weights are multi-GB and absent), and the FLORES cross-script figures
+> (parallel corpora carry their own licences and never enter this repo).
+> **Every latency is deliberately not re-measured** — the July runs were on
+> different hardware, and a ms/q from this machine would neither confirm nor
+> refute one from that one. Full protocol and the reasoning in
+> [benchmarks/RESULTS.md](https://github.com/sealcroft/undercroft/blob/main/benchmarks/RESULTS.md).
 
 
 
@@ -152,10 +161,18 @@ this project, which is why the two codebases share concepts but not code
 - Hybrid semantic + lexical (BM25) + recency fusion with typo tolerance.
 - Optional ONNX embedders on two runtimes (pure-Rust tract, or ONNX
   Runtime at ~2.5×/forward with int8) selected by env at runtime.
-- Cross-encoder reranking (measured LoCoMo R@10 94.6 → 97.7%).
+- Cross-encoder reranking (measured LoCoMo R@10 94.6 → 97.7% in 2026-07).
+  **The base has since been re-measured at 95.5%**, so the lift that figure
+  represents is smaller than it reads; the reranked arm itself has not been
+  re-run (no cross-encoder export is available here) and is carried at its
+  July value rather than restated.
 - ColBERT late interaction: encode-at-ingest token matrices
-  (PQ-compressed ~16 B/token), one query forward + MaxSim at search
-  (~96.5–96.8% at a flat ~70–93 ms/q independent of core count).
+  (PQ-compressed ~16 B/token), one query forward + MaxSim at search —
+  **96.9% re-measured 2026-09-02**, at a flat ~70–93 ms/q independent of
+  core count (the latency is the 2026-07 figure on that run's hardware and
+  is not re-measured here). Its **lift over fusion is now +1.4 pts, not the
+  +2.2 recorded**: the stage reproduced to within three questions while the
+  base underneath it improved by eighteen.
 - Bounded-RAM candidate tiers: PQ/IVF prefilter (~48 B/vector, recall
   flat in corpus size, sealed at rest with a decrypt-once slab cache, with
   an optional per-wing codebook/IVF tier) and MUVERA FDE token-aware

@@ -679,8 +679,11 @@ Two gaps, stated rather than glossed:
 
 **Second stage** (`UNDERCROFT_RERANKER`): `onnx`/`ort` = cross-encoder
 re-scoring of the top `UNDERCROFT_RERANK_TOP_N` (default 50) — measured
-LoCoMo R@10 94.6→97.7%; `colbert`/`colbert-ort` = late interaction: encode
-once at ingest, **one** query forward + MaxSim at search — ~96.5–96.8% at
+LoCoMo R@10 94.6→97.7% in 2026-07, against a base since re-measured at
+95.5% — the reranked arm has not been re-run, so that lift now reads wider
+than it is; `colbert`/`colbert-ort` = late interaction: encode
+once at ingest, **one** query forward + MaxSim at search — **96.9%**
+(re-measured 2026-09-02, a +1.4 lift over the current base) at
 a flat ~93 ms/q (tract) or ~70 ms/q (ort), independent of core count.
 Model paths via `UNDERCROFT_RERANK_*` / `UNDERCROFT_COLBERT_*`. BERT-family
 models only (tract cannot run DeBERTa rerankers).

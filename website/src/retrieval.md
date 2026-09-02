@@ -51,7 +51,7 @@ Hash embedder, no reranker, all fusion modes measured:
 
 | Fusion | R@10 | Latency/query |
 |---|---|---|
-| **BM25 (default)** | **94.6%** | ~6 ms |
+| **BM25 (default)** | **95.5%** | ~6 ms |
 | legacy | 92.7% | ~5 ms |
 | rrf (removed) | 92.5% | ~6 ms |
 
@@ -64,8 +64,8 @@ its row stays as the record of why.
 
 | Embedder (BM25) | R@10 | Query embed | Ingest (full corpus) |
 |---|---|---|---|
-| hash (zero-model) | 94.6% | ~6 ms | ~9 s |
-| MiniLM-L6 (ONNX) | 94.6% | ~128 ms | ~221 s |
+| hash (zero-model) | 95.5% | ~6 ms | ~9 s |
+| MiniLM-L6 (ONNX) | 95.4% | ~128 ms | ~221 s |
 
 On LoCoMo, MiniLM adds **~128 ms/query and ~24× ingest for no accuracy gain**
 under BM25. This page used to generalise that row into "the embedder is a
@@ -314,7 +314,7 @@ query-time forwards**:
   passage tokens once **at ingest** (PQ-compressed on disk; sealed vaults
   AEAD-seal every matrix — the first encrypted-at-rest derived store) and,
   per query, does **one** forward + a cheap MaxSim (no transformer per
-  candidate). **Measured on LoCoMo (full 1,982 QA):** 94.6 → **96.77% R@10
+  candidate). **Measured on LoCoMo (full 1,982 QA):** 95.5 → **96.9% R@10
   at a flat 92.7 ms/query** on pure-Rust tract, **70.3 ms/query** with the
   opt-in ONNX Runtime forwards + token-PQ LUT (recall identical across
   runtimes; ingest 3.3× faster too) — the same on 4 cores or 24, while the
@@ -377,7 +377,7 @@ Concrete configurations with the measured expectations:
 
 | Deployment | Recipe | Expected |
 |---|---|---|
-| **Personal palace** (default) | hash + bm25, no reranker | ~6 ms/query, 94.6% R@10 |
+| **Personal palace** (default) | hash + bm25, no reranker | ~6 ms/query, 95.5% R@10 |
 | **Accuracy-critical, many-core** | + reranker `top_n=20`, `ort` + int8, pool = cores | ~330 ms/query, ~98% |
 | **Fast + accurate compromise** | + reranker `top_n=5–10`, `ort` + int8 | ~100–170 ms/query, ~98% |
 | **4-core / edge, large corpus** | **PQ prefilter** (sealed or hmac-only — both tiers ship); reranker `pool=1` or off | bounded RAM, ~ms retrieval |

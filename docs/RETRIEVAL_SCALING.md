@@ -5,6 +5,21 @@ the architecture for scaling to large corpora **without** trading one problem
 for another. Local-first and the sealed-vault invariants constrain the design
 throughout: sealed vaults never persist a plaintext-derived index to disk.
 
+> **Every LoCoMo R@10 in this document is the 2026-07 run, and is kept as
+> recorded.** Re-measured on the `1.2.0` tree 2026-09-02 (ROADMAP O89): the
+> base is **95.5%** (hash) and **95.4%** (MiniLM), and ColBERT **96.9%** — so
+> ColBERT's lift over fusion is **+1.4 pts, not the +2.2** these tables show.
+> The stage reproduced to within three questions; the base improved eighteen
+> underneath it.
+>
+> The rows are NOT restated because they are internally consistent with each
+> other, with their host, and with the archived logs they cite — and because
+> the arms that were not re-run (cross-encoder, `ort` ColBERT, HNSW parity)
+> would then be paired against a base measured on a different day. **No
+> latency here is re-measured**: these runs were on different hardware, and a
+> ms/q from another machine neither confirms nor refutes one from this one.
+> Current figures and full protocol: `benchmarks/RESULTS.md`.
+
 ## The pipeline today
 
 `search` runs four stages:
