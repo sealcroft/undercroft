@@ -338,7 +338,9 @@ single shared model:
 
 Reranking is CPU-bound and single-threaded (tract), so on a single instance
 it bounds throughput; `UNDERCROFT_RERANK_TOP_N` (default 50) bounds
-per-query latency. Measured lift: LoCoMo R@10 94.6 → **97.68** (see
+per-query latency. Measured lift (2026-07): LoCoMo R@10 94.6 → **97.68**.
+The base has since been re-measured at **95.5%** and the reranked arm has
+not been re-run, so the true lift is smaller (see
 [benchmarks/RESULTS.md](../benchmarks/RESULTS.md)).
 
 ## The orchestrator

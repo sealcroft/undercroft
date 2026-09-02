@@ -1116,7 +1116,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**118** of the **133** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**119** of the **134** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -5772,6 +5772,75 @@ which is the same defect as a count in prose one level up. So: O6 is the click,
 O7 is the naming decision that needs a MAJOR, and O23 sits here as a filed cost
 with the argument for leaving it. Releasable work with no target release now
 has its own section above.
+
+### O89 — CLOSED 2026-09-02: the measured figures re-run, and a second stage's lift shrank without regressing
+
+**O88's stated residual, closed the same day.** O88 re-verified the parity
+document's *capability* claims and said plainly that its *measured* ones were
+a different job. This is that job — as far as this machine can take it.
+
+**Three LoCoMo arms, identical protocol and dataset, 1,982 evaluable QA:**
+
+| arm (session R@10) | 2026-07 | 2026-09-02 | |
+|---|---|---|---|
+| hash + BM25 (base) | 94.6% (1875) | **95.51%** (1893) | +18 q |
+| MiniLM + BM25 | 94.6% (1875) | **95.36%** (1890) | +15 q |
+| + ColBERT | 96.77% (1918) | **96.92%** (1921) | +3 q |
+
+**The finding is in the delta, and it is invisible to re-running one arm.**
+ColBERT reproduced to within three questions while the base moved eighteen,
+so its lift over fusion is now **+1.4 pts, not the recorded +2.2**. Nothing
+about the second stage regressed; the first stage improved underneath it. A
+second stage is worth the difference between itself and what it re-ranks, and
+that difference is not a property of the stage alone.
+
+The convergence claim survives intact: model and zero-model hash are three
+questions apart (95.51 vs 95.36).
+
+**Comparability, since it is the whole basis for calling these the same
+measurement.** Recall is hardware-independent, so July's Apple host and this
+Docker-for-Windows one are comparable on R@k. **Latency is not**, and no ms/q
+anywhere was re-measured or restated — a figure from another machine neither
+confirms nor refutes one from that machine, and overwriting would make those
+documents less true, not more.
+
+**Not re-measured, each stated where it is cited rather than left to
+inference:** the cross-encoder arm (no `reranker/model.onnx` export exists
+here — the embedder and ColBERT exports do), the served-model deltas (the
+weights volume is empty and they are multi-GB downloads), the FLORES
+cross-script figures (parallel corpora carry their own licences and never
+enter this repo), and the 131k→1M scale rows (hours of compute).
+
+**Nine surfaces carried the old figure, and they took THREE different
+treatments — which is the part a sweep would have destroyed.**
+
+* **Updated**, being live product claims: `README.md`, `website/landing/
+  index.html` (bar VALUES and bar WIDTHS, plus the derived *"+5.7 over their
+  best"* → **+6.5**), `website/src/retrieval.md`, `docs/AGENTS.md`,
+  `docs/MULTI_TENANCY.md`.
+* **Annotated with rows kept**, being measurement documents whose tables are
+  internally consistent and cite archived logs: `benchmarks/RESULTS.md`
+  (dated section, July rows intact), `docs/RETRIEVAL_SCALING.md`
+  (document-level banner, so it covers the HNSW-parity and `ort` rows a
+  section banner would have missed), `docs/BENCHMARKS_VS.md`.
+* **Deliberately untouched**, and these are the ones a regex would have got
+  wrong: `benchmarks/logs/README.md` DESCRIBES WHAT IS INSIDE AN ARCHIVED
+  LOG, so editing it would make the description false; the landing's `96.5`
+  vs-mem0 row is *MiniLM + ColBERT via `colbert-ort` at v0.23.0*, a different
+  configuration from the hash+ColBERT run and therefore not mine to restate;
+  and `docs/CONSULTATION_REVIEW.md`'s `66.9% vs 94.6%` with its `−27.7pp` is
+  a head-to-head whose competitor side was not re-run — **moving one side of
+  a head-to-head while the other stands is exactly what that document's
+  fairness contract exists to prevent.**
+
+**No gate.** A benchmark figure going stale is not mechanically detectable:
+nothing can know whether a recorded number still describes the tree without
+running the benchmark, which is the job itself. What IS worth carrying is the
+rule this unit ran on — **a measured figure is only comparable to one taken
+under the same protocol AND the same hardware class**, which is why recall
+moved here and latency did not.
+
+---
 
 ### O88 — CLOSED 2026-09-02: the parity document re-verified, and the label moved because it was earned
 

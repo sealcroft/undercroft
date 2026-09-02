@@ -229,16 +229,20 @@ DeBERTa-based rerankers) and set `UNDERCROFT_RERANKER=onnx` (tract) or
 pool + a session-pool fan-out, `--features ort`). Pairs with either
 embedder; `UNDERCROFT_RERANK_TOP_N` (default 50) bounds the added latency.
 Applies to `search`, `serve-mcp`, the daemon, and the multi-tenant `/v1`
-surface (one shared model across vaults). Measured: LoCoMo R@10 94.6 →
-**97.68%** at 101–327 ms/query on 24 cores (ONNX Runtime backend + int8).
+surface (one shared model across vaults). Measured 2026-07: LoCoMo R@10
+94.6 → **97.68%** at 101–327 ms/query on 24 cores (ONNX Runtime backend +
+int8). The base has since been re-measured at **95.5%**, so the lift is
+smaller than those two numbers read; the reranked arm has not been re-run.
 
 ### ColBERT late interaction (optional, `onnx` feature; `ort` runtime available)
 
 The core-count-independent second stage: drawers are encoded **once at
 ingest** into per-token matrices (PQ-compressed to ~16 bytes/token on disk,
 AEAD-sealed in sealed vaults) and a search runs **one** query forward plus a
-MaxSim re-score — no transformer per candidate. Measured: LoCoMo R@10 94.6 →
-**96.5–96.8%** at a flat ~93 ms/query on *any* core count with the pure-Rust
+MaxSim re-score — no transformer per candidate. Measured: LoCoMo R@10
+**95.5 → 96.9%** (re-measured 2026-09-02; +1.4 pts, where the 2026-07 run
+recorded 94.6 → 96.77 and a +2.2 lift — the stage reproduced, the base
+improved under it) at a flat ~93 ms/query on *any* core count with the pure-Rust
 tract runtime, **~70 ms/query** (and 3.3× faster ingest) on the opt-in ONNX
 Runtime backend — recall identical across runtimes. Set
 `UNDERCROFT_RERANKER=colbert` (tract) or `colbert-ort` (ONNX Runtime,
@@ -515,10 +519,10 @@ library; the bundled SQLite store fills that role).
 Full methodology and reproduce commands: [benchmarks/RESULTS.md](https://github.com/sealcroft/undercroft/blob/main/benchmarks/RESULTS.md).
 All figures below are under the **shipped default** (`bm25` fusion).
 Matched-model conditions (all-MiniLM-L6-v2, the class MemPalace used):
-**LoCoMo session R@10 94.6%** (MemPalace: 60.3% raw / 88.9% hybrid) and
+**LoCoMo session R@10 95.4%** (MemPalace: 60.3% raw / 88.9% hybrid) and
 **LongMemEval-S R@5 99.4%** on the full 500 — clearing not just MemPalace's
 raw 96.6% but their tuned hybrid 98.4%. The zero-model hash embedder — no
-download, ~95x faster — holds **94.6% / 95.0%** respectively, converging
+download, ~95x faster — holds **95.5% / 95.0%** respectively, converging
 with the model on LoCoMo. An optional cross-encoder reranker lifts LoCoMo
 to 97.68% (1936/1982).
 

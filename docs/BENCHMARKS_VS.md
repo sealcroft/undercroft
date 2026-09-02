@@ -96,6 +96,12 @@ off-machine call; that is the ground rule, not a differentiator. The
 while extraction-based systems invoke a local LLM + embedder on every
 write — their architecture, reported as such.
 
+> **Re-measured 2026-09-02 (O89):** this engine's native hash row is now
+> **95.5%** (1893/1982). The table is NOT restated, deliberately — every
+> row cites its own archived log and the competitor rows were not re-run,
+> and moving one side of a head-to-head while the other stands is the
+> failure this document's fairness contract exists to prevent.
+
 | System | Config | Corpus | R@10 | search ms/q | Sealed at rest | Model runtime | Notes |
 |---|---|---|---|---|---|---|---|
 | **undercroft** (native) | sealed vault, default offline hash embedder, BM25+cosine fusion | LoCoMo full (10 convos, 1982 QA) | **94.6%** (1875/1982) | 5.5 | **yes** | **none** | zero-setup row; ingest 16.5 s / 1271 chunks; log [`benchmarks/logs/vs_native_locomo.log`](../benchmarks/logs/vs_native_locomo.log) |

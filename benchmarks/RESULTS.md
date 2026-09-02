@@ -184,6 +184,59 @@ security-level-independent (it re-ranks already-HMAC-verified candidates),
 and the lift carries to the model: MiniLM went **97.4 → 99.4** on
 LongMemEval and **93.8 → 94.6** on LoCoMo under BM25.
 
+## Re-measurement, 2026-09-02 (ROADMAP O89) — the base moved, the second stage did not
+
+**The rows above are kept as the record of what was true in July**, not
+overwritten. This section is what the same commands produce on the `1.2.0`
+tree, and the two are only comparable because **recall is
+hardware-independent**: the July runs were on Apple hardware, these on Docker
+for Windows. Latency is NOT re-measured here for exactly that reason — a
+ms/q from a different machine neither confirms nor refutes one from the
+July host, and replacing it would make this file less true, not more.
+
+Identical protocol, identical dataset, identical **1,982 evaluable QA**:
+
+| arm (session R@10) | 2026-07 | 2026-09-02 | questions |
+|---|---|---|---|
+| hash + BM25 (base) | 94.6% | **95.51%** | 1875 → **1893** |
+| MiniLM + BM25 | 94.6% | **95.36%** | 1875 → **1890** |
+| + ColBERT late interaction | 96.77% | **96.92%** | 1918 → **1921** |
+
+```
+undercroft-bench locomo locomo10.json --k 10                       # base
+UNDERCROFT_EMBEDDER=onnx UNDERCROFT_ONNX_MODEL=model.onnx \
+  UNDERCROFT_ONNX_TOKENIZER=tokenizer.json UNDERCROFT_FUSION=bm25 …  # MiniLM
+UNDERCROFT_RERANKER=colbert UNDERCROFT_COLBERT_MODEL=colbert/model.d256.onnx \
+  UNDERCROFT_COLBERT_QUERY_MODEL=colbert/model.q32.onnx \
+  UNDERCROFT_COLBERT_TOKENIZER=colbert/tokenizer.json …              # ColBERT
+```
+
+**Two findings, and the second is the one that matters.**
+
+The base is **better than published** — +18 questions on hash, +15 on MiniLM
+— which is unsurprising after fifty-seven units of retrieval and lexical
+work, and is why a stale measurement is not automatically a flattering one to
+leave alone. The qualitative claim survives intact: the model and the
+zero-model hash embedder still **converge**, now 95.51 vs 95.36, a
+three-question gap.
+
+**The ColBERT stage reproduced almost exactly (+3 questions) while the base
+moved +18, so its marginal value SHRANK: the recorded `+2.2 pts` over fusion
+is now `+1.4 pts`.** A second stage is worth the difference between itself
+and the first stage, and the first stage improved underneath it. Nothing
+about ColBERT regressed; the thing it was being credited against got better.
+That is the reading a re-measurement exists to produce, and it is invisible
+to re-running the second stage alone.
+
+**Not re-measured, and why** — stated rather than left to inference:
+
+| figure | status |
+|---|---|
+| cross-encoder **97.68%** | **unverified.** No `reranker/model.onnx` is available here; the embedder and ColBERT exports are, the cross-encoder is not |
+| served-model deltas (**+3.2–4.2pp**) | **unverified.** Needs four served models; the weights volume is empty and they are multi-GB downloads |
+| FLORES cross-script (**36–44 → 95–100%**) | **unverified.** Parallel corpora carry their own licences and deliberately never enter this repo |
+| all ms/q, and the 131k→1M scale rows | **not attempted.** Hardware-dependent, or hours of compute; see the note above |
+
 ## Honest reading
 
 - **Matched-model conditions (the fair comparison):** with the same model
