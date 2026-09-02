@@ -3571,6 +3571,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "tokio-postgres",
  "tokio-postgres-rustls",
  "undercroft-net",
  "ureq 2.12.1",

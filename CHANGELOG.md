@@ -7,6 +7,47 @@ code and the `class` field it restores are the ones this project's own
 documentation has published throughout; `1.2.0` is the only release that ever
 answered otherwise, and it did so by regression rather than by decision.
 
+### the pgvector DSN guard fails closed, so embeddings cannot cross the network in the clear (O90)
+
+**ROADMAP O90 CLOSED.** A security defect in a guard whose own refusal says
+*"There is no override"*.
+
+`dsn_is_loopback` scanned whitespace-split fields for a literal `host=` prefix
+and ended `saw_host || !d.is_empty()` — conflating *"there is no host"* with
+*"I did not parse the host that is there"*. So **any DSN spelling its host
+another way read as loopback**, skipped the cleartext refusal, and
+`PgVectorIndex::new` took the `NoTls` arm: every pushed embedding, which is
+plaintext-derived, left the machine unencrypted.
+
+| DSN | before | now |
+|---|---|---|
+| `host=10.0.0.5 dbname=x` | refuses | refuses |
+| `hostaddr=10.0.0.5 dbname=x` | **loopback → cleartext** | refuses |
+| `host = 10.0.0.5 dbname=x` | **loopback → cleartext** | refuses |
+
+**The filing left one half unsettled and it is now settled: both bypasses
+reach the connector.** Its parser was unread because the audit was read-only.
+Reading it: `parameter()` runs `skip_ws()` / `eat('=')` / `skip_ws()`, so
+whitespace around `=` is legal, and `hostaddr` is a key of its own that `host`
+never covers. The exploit was reachable end to end, not merely a guard defect.
+
+The predicate now parses the DSN with `tokio_postgres::Config` — the exact
+type `postgres::Client::connect` builds, since that call is
+`params.parse::<Config>()?.connect(tls)` — and requires every host **and**
+every `hostaddr` to be loopback. `hostaddr` is what gets dialed when both are
+given, a comma list is a list, and a DSN that does not parse is not loopback:
+the direction the old doc comment claimed and the old body did not take.
+
+**It had no test at all**, which is how it shipped. It now has a 15-row table
+covering both bypasses and asserting the safe direction, an unparseable-DSN
+test, and — the half that measures the observable rather than our intent —
+live arms in `backends-e2e` that push at the real pgvector container under
+both spellings and require the refusal. Under the defect those do not
+mis-answer, they **connect and succeed**, which is the leak.
+
+Third instance of the hand-parsing class, after the two `is_loopback`
+inversions its own doc records and O92 one release later.
+
 ### the refine egress record names the host that was actually dialed (O92)
 
 **ROADMAP O92 CLOSED.** A defect in `1.2.0`'s own fix, and mine.

@@ -930,6 +930,20 @@ Consequences that are binding, not advisory:
   easily, because a list of separators looks exhaustive until someone names
   the one missing from it; the durable test is a PROPERTY (this host equals
   the parser's host), never a longer table.
+  **A FOURTH instance was the pgvector DSN (O90), and it adds the sharpest
+  lesson of the three**: `dsn_is_loopback` scanned for a literal `host=`
+  prefix and ended `saw_host || !d.is_empty()`, so a host spelled `hostaddr=`
+  or `host = ` (whitespace libpq allows) read as LOOPBACK and skipped a
+  cleartext refusal whose own text says *"There is no override"* — pushing
+  plaintext-derived embeddings over the network. It had **no test at all**.
+  The lesson is about the API you reason against: `postgres::Config` exposes
+  `get_hosts()` and NO `get_hostaddrs()`, keeps its inner
+  `tokio_postgres::Config` private, and the crate re-exports neither — so the
+  key that defeats the guard is **invisible from the surface a guard author
+  naturally reads**, and no amount of care with that surface would have found
+  it. Ask which type the connector actually builds (`Client::connect` is
+  `params.parse::<Config>()?.connect(tls)`) and parse with THAT, even when it
+  costs a dependency edge.
   **The policy covers the DECLARATION as well as the client, and for two
   releases it only covered the client** (ROADMAP O82c). `agent_from_env` is
   documented as "the one constructor every hop that reads a `*_CA` variable
@@ -1536,8 +1550,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (789 run,
-                                      # 4 #[ignore]d = 793 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (791 run,
+                                      # 4 #[ignore]d = 795 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1632,7 +1646,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
 docker compose run --rm e2e           # e2e UI/UX suite against the release binary (450 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (127 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (53 checks)
-docker compose run --rm backends-e2e  # five live vector DBs over TLS (72 checks; weaviate
+docker compose run --rm backends-e2e  # five live vector DBs over TLS (76 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
                                       # answers HTTP before its Raft leader exists)
 bash tests/tls-pins.sh                # CA pins readable + the stack starts (13 checks).
