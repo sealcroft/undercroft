@@ -1116,7 +1116,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**119** of the **134** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**130** of the **145** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -5772,6 +5772,562 @@ which is the same defect as a count in prose one level up. So: O6 is the click,
 O7 is the naming decision that needs a MAJOR, and O23 sits here as a filed cost
 with the argument for leaving it. Releasable work with no target release now
 has its own section above.
+
+### O98 — CLOSED 2026-09-02: the three units that closed the doc-drift class introduced five instances of it
+
+**Round six, docs-vs-code dimension. Every one of these is mine, from M56, O88
+and O89 — the units whose subject was doc-vs-code drift.** Verified by reading
+both sides.
+
+**1. O88 published a claim SQLite makes impossible.** `docs/PARITY.md:27` and
+the `--help` string O88 "fixed" (`crates/undercroft-cli/src/main.rs:495-497`)
+both say `repair` does *"…record the run, vacuum, verify — all of it inside
+**one transaction**"*. `crates/undercroft-store/src/manage.rs:1241` says the
+opposite, and says why: *"`VACUUM` **stays OUTSIDE** — SQLite refuses it
+inside a transaction — and after the commit."* Five of the seven listed steps
+are inside `BEGIN IMMEDIATE`; vacuum and verify are outside.
+
+I copied the enumeration out of `repair`'s doc comment and dropped the
+exclusion stated two paragraphs below it — **reading part of a doc block,
+which is M56's class, committed by the unit that closed M56's siblings.**
+
+**2. O89 moved base figures in `website/src/retrieval.md` and left every
+figure derived from them.** That file is the one O89 listed as UPDATED; the
+ones it ANNOTATED stayed self-consistent.
+
+| line | claim | its own inputs | truth |
+|---|---|---|---|
+| `:58` | "BM25 buys **+1.9 pts**" | `:54` 95.5, `:55` 92.7 | **+2.8** |
+| `:388` | "free **+1.9 pts**" | same table | **+2.8** |
+| `:389` | "the reranker is the accuracy lever (**+3 pts**)" | 97.68 vs `:68` 95.4 | **+2.3**, and that arm was not re-run |
+
+`+1.9` and `+3` are exactly `94.6−92.7` and `97.68−94.6`. And
+`grep -c "2026-09-02\|re-measured"` on that file is **0** — no date, no
+provenance, so September and July numbers sit unlabelled together, without the
+reranker caveat O89 added to the other four surfaces.
+
+**3. O89 broke a head-to-head by the rule O89 itself states.**
+`website/landing/index.html:770` now reads **95.5** for *"undercroft · no model
+at all, sealed"*, while `docs/BENCHMARKS_VS.md:107` — linked from directly
+under that chart — keeps **94.6** under a banner written in the same commit:
+*"moving one side of a head-to-head while the other stands is the failure this
+document's fairness contract exists to prevent."* The chart's competitor row
+(66.9) was left. **I did the thing I had just written down as forbidden, one
+file over, in one commit.**
+
+The distinction that should have governed it: the MemPalace rows on the other
+chart are third-party PUBLISHED figures being cited, so re-measuring our own
+side is legitimate; the mem0 row came from OUR paired run, so both sides move
+together or neither does.
+
+**4. O89 left an unbalanced parenthesis on the live landing page.**
+`website/landing/index.html:704`: *"…measured 97.68 (1936/1982) against the
+older 94.6 base**)**"*.
+
+**5. M56 missed a three-deep pileup in `parity.rs`, the file it repaired** —
+270 lines above the `Absence` block it fixed. `:27-28` (the MCP tool
+inventory), `:29-42` (every `UNDERCROFT_*` variable) and `:43+` (how a
+declaration behaves) all stack onto `pub enum ConfigClass` at `:69`, leaving
+**`ENGINE_ENV_VARS` (`:108`) and `MCP_TOOLS` (`:199`) with no doc at all**;
+`:43-45` is additionally truncated mid-clause with an unterminated `**`.
+
+**Items 1-4 are FIXED in this unit**, since each was a live falsehood on a
+published surface and the correction is a line:
+
+* `docs/PARITY.md:27` and `main.rs:495-497` now name the five steps that ARE
+  in the transaction and say vacuum and re-verify run outside it, because
+  SQLite refuses a `VACUUM` inside one.
+* `website/src/retrieval.md` recomputes `+1.9 → +2.8` (twice) and
+  `+3 → +2.3` from the table directly above them, carries the caveat that the
+  reranked arm was not re-run, and gains the provenance line the other four
+  surfaces already had.
+* `website/landing/index.html:770` goes back to **94.6**, restoring the
+  pairing with `docs/BENCHMARKS_VS.md:107` that O89's own banner demands. The
+  distinction, now written down: the MemPalace rows on the other chart are
+  third-party PUBLISHED figures being cited, so re-measuring our side is
+  legitimate; the mem0 row came from OUR paired run, so both sides move or
+  neither does.
+* the unbalanced paren is closed.
+
+**Item 5 is NOT fixed here** — it is an instance of the general class and is
+the first row of **O99**'s table, where the remedy and the gate question
+belong. Splitting it out would have made this entry look complete while its
+class stayed open.
+
+**Gate.** None proposed for 1-4: these are arithmetic and prose, and O89's own
+entry already records that no mechanical check can see a relational claim. The
+honest control is the one that found them — an independent reader, which is
+what found them. The arithmetic half of item 2 is the one genuinely gateable
+piece and it is folded into **O100**'s proposal.
+
+---
+
+### O99 — the misplaced-doc-block class is NOT closed: twelve further instances, and one is affirmatively false
+
+**Round six, docs-vs-code dimension.** M56 fixed nine sites found by scanning
+the DIFF. A sweep of the whole tree — 2,395 doc blocks across 66 files — found
+twelve more `pub`-item instances, of which the auditor verified six line by
+line:
+
+| doc block | now sits on | left undocumented |
+|---|---|---|
+| `cli/parity.rs:27-67` | `pub enum ConfigClass` `:69` | `ENGINE_ENV_VARS`, `MCP_TOOLS` |
+| `cli/http.rs:94-127` (34 lines on the bearer) | `DEFAULT_SAMPLE_INTERVAL_MS` `:130` | `resolve_mcp_token` `:170` |
+| `store/lib.rs:5460-5474` (the A28 rationale) | `verified_meta_admits` `:5507` | `resolve_search_policy` `:5526` |
+| `store/lib.rs:735-740` | `DEFAULT_FUSION_WEIGHT` `:750` | `resolve_late_top_n` `:1328` |
+| `store/pqidx.rs:405-415` (a **setter's** doc) | `trust_floor` `:416` (the getter) | `set_trust_floor` `:419` |
+| `store/lib.rs:6470-6474` | `resolve_scope` `:6504` | `resolve_seq_filter` `:6562` |
+
+**The worst is `crates/undercroft-vault/src/lib.rs:408`** — *"Advance the audit
+chain for one write **and persist the manifest**."* — heading
+`pub fn chain_next_hex` (`:415`), which is pure (`hex::decode` → `chain_next`,
+no I/O) and whose own next line points at `anchor_manifest` for "the
+out-of-database half". That stranded summary is **affirmatively false about the
+function it heads**, not merely displaced — a reader could reasonably conclude
+this call persists the anchor.
+
+Six further Tier-1 instances (`orchestrator/engine.rs:258`,
+`orchestrator/proxy.rs:681` and `:1425`, `store/lib.rs:8749`,
+`store/latestage.rs:450`) plus nine test/bench instances are listed in
+`.handover/SWEEP6_FINDINGS.md` and were NOT individually verified — treat them
+as candidates.
+
+**Why M56 missed them.** Its detector read `git diff main...HEAD`, so it could
+only see blocks whose collision was introduced on that branch. These are older.
+**A defect class found by a diff-scoped sweep is bounded by the diff, and
+saying "nine sites" implied a completeness the method never had.**
+
+**Fix shape.** Split each block and restore ownership, as M56 did. Then decide
+the general question M56 deferred: nothing mechanical detects this — no
+`missing_docs`, no `deny`, and rustfmt does not touch doc comments — and M56's
+own heuristic detector was rejected for flagging line-wrapped prose. A
+`#![warn(missing_docs)]` on the library crates would catch the *orphaned* half
+(an item left with no doc) without trying to judge prose, at the cost of
+documenting every public item. That is a real trade and it is the maintainer's.
+
+**Gate.** `#![warn(missing_docs)]` is the only mechanical option identified and
+it is half a gate — it sees the orphan, never the misattribution. Recorded as a
+decision to take, not an omission.
+
+---
+
+### O100 — six published counts are stale, and four scoped security claims lost their scope
+
+**Round six, docs-vs-code dimension.** All verified against code by the auditor
+and spot-checked here. None is gated: the `prose figures` preflight covers ten
+figures and none of these.
+
+**Counts that no longer match the tree:**
+
+| claim | published on | truth |
+|---|---|---|
+| the read-only allowlist is a *"two-entry"* list | `tenant.rs:3256`'s own rustdoc + `THREAT_MODEL.md:247`, `security.md:119`, `remote-server.md:196`, `AGENTS.md:204`, `MULTI_TENANCY.md:89,92`, `architecture/index.html:1829` | **three** — `search`, `verify`, `verify-forgetting` (`tenant.rs:3271-3285`) |
+| *"the four `UNDERCROFT_ORCH_*`"* | `UPGRADING.md:19,36`, `AGENTS.md:1259`, `MULTI_TENANCY.md:472`, `architecture/index.html:1852` | **eight**; `architecture/index.html:1920` contradicts itself by listing all eight |
+| *"the four `*_CA` pins"* | `AGENTS.md:1288` | **five** (EMBED, INDEX, LLM, ORCH_ENGINE, OTLP) |
+| *"the three declarations they share"* | `UPGRADING.md:45` | **five** (`undercroft-config/src/lib.rs`) |
+| *"62 rows over 59 anchors, plus 15"* | `CLAUDE.md:2466` | **41 / 41 / 33**; only the total 74 survives, and its worked example (`repair` as a `/v1` Drift) was deleted by M17 |
+| *"`Drift` … the largest single verdict after `Boundary`"* | `parity.rs:448` | **zero** Drift rows — and that same comment block already records having been wrong about this once |
+
+`UNDERCROFT_ORCH_METRICS_ADDR`/`_TOKEN` appear **nowhere** in `docs/AGENTS.md`,
+in full or suffix form — and both are `Protects`/`Checked`, so a bad value
+refuses to start, which is exactly what an env reference is for.
+
+**Security claims that lost their scope** — each has a correctly-scoped sibling
+elsewhere in the tree, which is what makes these drifts rather than positions:
+
+* *"Nothing content-derived is written to disk in plaintext"* (`README.md:71`,
+  `security.md:23`) — refuted by the tree's own at-rest test
+  (`store/lib.rs:11159`), which REQUIRES a resolved date to be findable in the
+  raw bytes via the unsealed `meta_json`. `THREAT_MODEL.md:119` and
+  `MULTI_TENANCY.md:204` scope it correctly.
+* *"records **each search**"* (`THREAT_MODEL.md:415`) — the pre-1.2.0 state.
+  `:465` of the same file is correct. This is precisely the drift O88 found in
+  `PARITY.md` and fixed there, left standing one document over.
+* *"exports are chain-audited **unconditionally on every surface**"*
+  (`PARITY.md:143`) — false on the read-only posture (`tenant.rs:2791`);
+  `audit_export`'s own doc says *"unconditional on a **writable** store"*. The
+  document just re-read end to end is the one that dropped the exception.
+* *"A migration file never exists in plaintext"* (`landing/index.html:908`) —
+  the default `export` writes the payload to stdout and `/v1`'s export has no
+  recipient parameter. `security.md:86` states it correctly scoped to
+  `export --to`.
+
+**Fix shape.** Correct each; they are one-line edits. The count claims should
+where possible be folded into the `prose figures` preflight, which already
+counts ten figures against the tree and could count these — the allowlist size
+and the `*_CA` set in particular are cheap to derive.
+
+**Gate.** Extend `PROSE_FIGURES` with the derivable ones (read-only allowlist
+arms, `*_CA` count, `UNDERCROFT_ORCH_*` count, shared-resolver count). The
+scoped-claim half is not gateable — a qualifier that goes missing moves no
+count — and is recorded here as bound by attention, which is what O89's entry
+already concluded for relational claims.
+
+---
+
+### O90 — `dsn_is_loopback` fails OPEN, so pgvector embeddings can cross the network in the clear
+
+**Round six, config/search dimensions. Verified by reading and by reproducing
+the predicate.** `crates/undercroft-index/src/lib.rs:587-610` ends:
+
+```rust
+// No host at all means libpq's default, which is the local socket.
+saw_host || !d.is_empty()
+```
+
+`saw_host` is set only by `field.strip_prefix("host=")`. So *"I found no
+`host=` token"* and *"there is no host"* are conflated, and **any non-empty
+DSN whose host is spelled another way reads as loopback**:
+
+| DSN | verdict |
+|---|---|
+| `host=10.0.0.5 dbname=x` | correctly refuses |
+| `hostaddr=10.0.0.5 dbname=x` | **loopback → refusal skipped** |
+| `host = 10.0.0.5 dbname=x` (libpq allows spaces around `=`) | **loopback → refusal skipped** |
+
+`hostaddr` is a standard libpq parameter. What the refusal it bypasses says
+(`:648-652`): *"the pgvector DSN points at a non-loopback host without TLS.
+Embeddings are plaintext-derived and would cross the network in the clear …
+There is no override."* With the predicate returning `true`, `PgVectorIndex::
+new` takes the `NoTls` arm and every pushed embedding leaves unencrypted.
+
+**The doc directly above the function claims the opposite** (`:585-586`):
+*"Anything unrecognised is NOT loopback — the safe direction, matching
+`is_loopback`."* `is_loopback` genuinely does fail closed on an unparseable
+URL (`undercroft-net/src/lib.rs:69-71`); this hand-rolled sibling does not.
+That is the third instance of *hand-parsing a connection string* in this tree,
+after the two `is_loopback` inversions its own doc records.
+
+**Fix shape.** Fail closed: return `false` when no host key is recognised, and
+recognise the keys libpq actually accepts (`host`, `hostaddr`), splitting on
+`=` with surrounding whitespace trimmed rather than on a literal prefix. Better
+still, delegate: `tokio_postgres::Config::from_str` parses both DSN forms and
+exposes `.get_hosts()`, so the predicate can ask the same parser the connector
+uses — which is exactly why `is_loopback` delegates to `url`.
+
+**Gate.** A table test over DSN spellings asserting the SAFE direction for every
+unrecognised shape, with `hostaddr=` and the whitespace form as named rows, plus
+a premise arm that a known-loopback DSN still passes (or the test passes by
+refusing everything). Note `backends-e2e` cannot catch this class: it runs one
+DSN spelling against a live container.
+
+---
+
+### O91 — O81 re-opened A33: `--read-only` CREATES the database it is forbidden to create, and demotes an integrity verdict
+
+**Round six, error/status dimension. Verified link by link. This shipped in
+`1.2.0`.**
+
+O81 inserted `PalaceStore::recorded_embedder(&v)?` at
+`crates/undercroft-cli/src/main.rs:1177` — **before** the posture dispatch, so
+it runs on `Posture::ReadOnly` too. That function opens with a bare
+`Connection::open` (`crates/undercroft-store/src/lib.rs:4012`), and the tree
+states the consequence itself at `lib.rs:1519-1520`: *"A writable open CREATES
+it — `Connection::open` carries `SQLITE_OPEN_CREATE`."*
+
+A33's guard is `if !vault.database_exists()` (`lib.rs:3194`). So on a vault with
+a manifest and no `palace.db`, a read-only CLI open fabricates a zero-length
+database, `database_exists()` becomes true, `DatabaseMissing` can no longer
+fire, and the verdict degrades:
+
+| condition | before O81 | now |
+|---|---|---|
+| manifest present, `palace.db` absent, CLI `--read-only` | `DatabaseMissing` → **exit 2** (integrity) | `ReadOnlyUnmigrated` → **exit 1** |
+| same via `serve-http --read-only` | 409 + `class:"integrity"` | 409, **no class** |
+
+**The comment justifying the call is false about the code it introduces**
+(`main.rs:1174`): *"`recorded_embedder` opens the database read-only to read
+one meta row."* It does not.
+
+This lands on the path the flag exists for. `main.rs:50-59` justifies
+`--read-only` as *"exactly wrong when you are looking at a vault BECAUSE
+something went wrong with it"* and cites CLAUDE.md's *"evidence destruction on
+the incident runbook's own path"* — and the first thing the flag now does is
+write to the vault.
+
+**Why no gate saw it.** The only A33 test
+(`lib.rs:18060`) constructs the vault and calls `PalaceStore::open_read_only`
+**directly**; it never goes through `open_store_as`, so the new pre-step is
+outside the question it asks. `grep -rn "DatabaseMissing" tests/` returns
+nothing — there is no surface-level A33 check at all.
+
+**The `/v1` half is older and equally live**, and predates R4/A33: `tenant.rs:
+3053` calls the embedder factory before `open_read_only` at `:3059`, and
+`embedder_factory` (`main.rs:1451`) makes the same `recorded_embedder` call.
+
+**Fix shape.** `recorded_embedder` must open with
+`SQLITE_OPEN_READ_ONLY` — it reads one meta row and has no business creating
+anything — which also makes its own doc true. Then the posture question
+disappears rather than being answered per call site. Residual to state either
+way: a read-only open of a genuinely absent database must keep answering
+`DatabaseMissing`, not a bare SQLite error.
+
+**Gate.** A test driving `open_store_as(Posture::ReadOnly)` — not
+`open_read_only` — against a manifest with no `palace.db`, asserting
+`DatabaseMissing` **and** that `palace.db` still does not exist afterwards.
+The second assertion is the one that fails today; the first would too.
+
+---
+
+### O92 — `LlmClient::destination` still names a host that was never contacted, because it hand-parses the authority
+
+**Round six, audit-chain dimension. This is a defect in M55's own fix, and it
+is mine.** Verified by reproducing the parse.
+
+M55 scoped the userinfo strip to the authority, taking the authority to end at
+the first `/`, `?` or `#` (`crates/undercroft-llm/src/lib.rs:193`). For a
+**special scheme** the WHATWG parser terminates the authority on a fourth
+character, `\`. This repo documents that exact string two crates over
+(`crates/undercroft-net/src/lib.rs:60-62`) and pins it in a test (`:413`):
+
+> `http://evil.com\@127.0.0.1/v1` — for a special scheme the WHATWG parser
+> treats `\` as a path separator, so the host is `evil.com` while an
+> `@`-split reads `127.0.0.1`.
+
+So for `https://evil.com\@127.0.0.1/v1`: the TLS gate passes (it starts
+`https://`), ureq — same `url` crate — connects to **evil.com**, and
+`destination()` returns **`https://127.0.0.1/v1`**. That value is interpolated
+into `audit_refine`'s HMAC'd canonical, so the chain authenticates a
+destination that was never contacted, pointing at loopback while the corpus
+went to an attacker-chosen host. It is the precise harm M55 was written to
+remove, inverted into the adversarial direction.
+
+**The class is the point.** `is_loopback`'s doc says *"Hand-parsing this string
+is how the predicate came to disagree with ureq twice"* and exists so nobody
+hand-parses a URL again. M55 hand-parsed one. Third instance, and its test
+enumerated `/`, `?` and `#` — the separators I thought of — with no `\` row.
+
+**Fix shape.** Do not hand-parse. `undercroft-net` already depends on `url`;
+parse and read `.host_str()`/`.port()`, which is the same parser ureq uses, and
+reassemble. That makes the function structurally unable to disagree with the
+connector rather than enumerating separators correctly.
+
+**Gate.** Add the `\` row to the existing table, and — the durable half — a
+test asserting `destination()`'s host EQUALS `Url::parse(base).host_str()` over
+a corpus of adversarial spellings, so the property is *agreement with the
+parser* rather than a list of characters someone remembered.
+
+---
+
+### O93 — a request-supplied `min_trust` REPLACES the operator's declared floor and can lower it from an agent surface
+
+**Round six, operational-capabilities dimension. Verified by reading the
+selection and the clause.**
+
+`crates/undercroft-store/src/lib.rs:5548-5553`:
+
+```rust
+let effective_floor = match (opts.min_trust.as_deref(), opts.wing.as_deref()) {
+    (Some(t), _) => Some(t),                       // request wins, unconditionally
+    (None, Some(_)) => None,
+    (None, None) => self.trust_floor.as_deref(),   // the operator's declaration
+};
+```
+
+`TRUST_VOCAB` is `["quarantined", "standard", "trusted"]`
+(`undercroft-core/src/lib.rs:143`), so `trust_rank("quarantined") == 0`, and
+`trust_clause` returns `Ok(None)` — **no exclusion at all** — for a rank-0
+floor (`manage.rs:437-443`).
+
+So on a vault opened with `UNDERCROFT_TRUST_FLOOR=trusted`, an MCP call
+`undercroft_search {"query":"…","min_trust":"quarantined"}` passes
+`validate_trust` (it is in the vocabulary) and removes the deployment's floor
+for that query. Same on `/v1` (`tenant.rs:849`).
+
+**Three surfaces state the opposite.** `lib.rs:2069-2072` says it *"**Composes**
+with the vault-level `UNDERCROFT_TRUST_FLOOR`"* — it replaces.
+`docs/AGENTS.md:1133` says *"Reading with a floor is **self-protection** and
+always allowed."* And `parity.rs:365-366` justifies keeping trust ASSIGNMENT
+operator-only because *"an agent assigning it chooses its own floor"* — which
+is the harm `min_trust` already permits.
+
+**Proportion, stated rather than left to the reader.** The reserved quarantine
+WING is separately and unconditionally excluded (`lib.rs:5563-5590`), so
+screened-and-diverted content is **not** reachable this way. The exposure is
+wings an operator deliberately classed `standard` or `quarantined`. An explicit
+`wing` scope also bypasses the vault floor by design — but that confines the
+answer to one named wing, where this lifts the floor corpus-wide.
+
+**Fix shape needs a RULING, not a patch, and the options differ in what they
+break.** (a) Compose — take the stricter of the two ranks, which makes the
+rustdoc true and cannot be lowered; the cost is that a caller can no longer
+widen below the deployment's floor even where that is legitimate. (b) Keep
+replacement but clamp to the vault floor when one is declared. (c) Declare the
+current behaviour intended and fix all three documents instead. **The tree does
+not settle this** — the doctrine says a deployment-assigned floor is what an
+agent must not choose, which argues (a)/(b); the parameter's own doc argues it
+is self-protection, which argues (c).
+
+**Gate.** A test opening a vault with a declared floor and issuing a search
+with a LOWER `min_trust`, asserting whichever ruling lands — and asserting it
+on BOTH surfaces. Nothing exercises the two together today: `tests/e2e.sh:550`
+covers the vault floor, `lib.rs:15667` covers the request floor.
+
+---
+
+### O94 — `wing_trust` and `retention_policy` are keyed claims with no `VerifyReport` leg, and a DELETED row lifts a floor silently
+
+**Round six, audit-chain dimension. Verified: zero occurrences of either table
+in `verify()`'s body (`crates/undercroft-store/src/lib.rs:6796-7060`).**
+
+This is the rule that grew `verify` to six legs — *a keyed claim living in
+columns no drawer HMAC and no chain step covers must have a leg, or nothing
+sees it* — unapplied one table over.
+
+* A **flip** raises `StoreError::Integrity` from `wing_trusts()`
+  (`manage.rs:412-427`), so the retrieval path fails closed. But `verify` still
+  answers OK on all four renderers, and `backup create` gates on that verdict.
+* A **deletion** does not fail closed. With the row gone, `trust_clause`
+  finds an empty exclusion list and returns `Ok(None)` — *no floor active* — so
+  a wing the operator classed `quarantined` becomes retrievable under a
+  `standard` floor. Nothing anywhere reports it.
+
+**The evidence to detect it already exists and is not consulted.**
+`chain_append(&tx, .., Namespace::Trust, wing, &tag, &now)` (`manage.rs:403`)
+writes the *same* tag that goes into the row, and audit is append-only and
+rotation-preserved. `orphan_labels` cannot reach it: `lib.rs:7005-7015` maps
+every prefixed label that is not `kg-entity/` through
+`strip_prefix("kg/").unwrap_or_default()` → empty → `continue`. And that leg's
+own exclusion rationale (`lib.rs:2137-2143`) justifies skipping `del/`,
+`retention-clear/`, `read/`, `egress/` and `rotate/` because each has a
+legitimate path to an absent subject — **it never mentions `trust/`, which is
+the one prefix with no such path.** Applying the leg's stated reasoning
+includes `trust/`; the code excludes it by falling through a default.
+
+**Fix shape.** Either extend `orphan_labels` to `trust/` (its own reasoning
+already implies it) or add a seventh leg comparing each `wing_trust` row's tag
+to the `trust/{wing}` chain record. The second is stronger — it catches a
+deletion, which an orphan-label check by itself does not.
+
+**Gate.** Delete a `wing_trust` row behind the store's back and assert
+`verify().ok()` is false; then flip one and assert the same. Both fail today.
+
+---
+
+### O95 — `refine` records no egress on its error paths, and the residual excusing that cites a precedent which fixed it
+
+**Round six, audit-chain dimension. Verified by reading both functions.**
+
+`crates/undercroft-cli/src/refine.rs` has three `?` exits **inside** the loop
+(`:240`, `:254`, `:268`), all after drawer plaintext has been POSTed to
+`UNDERCROFT_LLM_URL`. `audit_refine` is at `:302`, after the loop. Any of them
+returns `Err` and **no egress record is written for a corpus prefix that
+already left the process.**
+
+Reachable rather than theoretical: `kg_add_grounded` → `screen_kg_record`
+refuses when `UNDERCROFT_ADMISSION=quarantine` is on and a distilled triple
+trips the tier-1 screen (`admission.rs:326-338`), and
+`refuse_rewriting_a_canonical_holder` (`kg.rs:2074`) refuses on an ordinary
+second run. So one drawer whose *distilled* object trips the screen aborts the
+run and suppresses the record for everything read before it — an
+audit-suppression primitive driven by corpus content, in the deployment the
+trail exists for.
+
+**The filing is wrong about the tree.** `refine.rs:290-292` and the O79 entry
+state the residual as *"shared with `index_push`"*. `index_push` does not share
+it — it fixed it, and names this exact mistake (`remote.rs:127-139`):
+
+> *"The audit call used to sit after the last batch, on the success path only —
+> so a push that shipped 9,000 of 10,000 drawers and then hit a network error
+> recorded ZERO, and the chain said no egress had happened … So the error path
+> records what actually left before it propagates."*
+
+O79 shipped the pre-fix shape of its own cited precedent and cited that
+precedent as licence for it.
+
+**Fix shape** is already written at `remote.rs:161-209`: record what left on
+the error path, log rather than `?` the audit failure so the original error
+survives, then propagate.
+
+**Second, smaller half — over-reporting.** A run selecting ZERO drawers still
+records (`refine.rs:156` iterates an empty `sources`, `:302` fires
+unconditionally). On the CLI this is visible in one command: `main.rs:3488`
+calls `refine()`, then `:3489` bails *"no drawers to refine"* — the operator is
+told the command failed while the chain says the corpus was aimed at a network
+endpoint. O51's rule is that over-reporting an exfil trail is a false claim,
+not a conservative one. A `sources > 0 || dry_run` guard settles it.
+
+**Gate.** Drive `refine` with an extractor that fails mid-loop and assert the
+record exists with the count that actually left; and drive it against an empty
+scope and assert no record.
+
+---
+
+### O96 — one `UNDERCROFT_INDEX_CA` declaration still gets two answers, because O82c left the `if tls` guard around it
+
+**Round six, config dimension. Verified.**
+
+O82c moved pgvector's CA read into the policy crate, but the call sits INSIDE
+`if dsn_demands_tls(dsn)` (`crates/undercroft-index/src/lib.rs:654-665`). The
+four HTTP backends reach `agent_from_env`, which calls `pin_from_env`
+**unconditionally** after the transport check
+(`crates/undercroft-net/src/lib.rs:348-350`). So:
+
+| `UNDERCROFT_INDEX_CA="   "` | result |
+|---|---|
+| qdrant / chroma / milvus / weaviate on loopback | **refuses** |
+| pgvector on a loopback or non-TLS DSN | **starts silently, declaration ignored** |
+
+And `check_declaration` validates that variable
+(`undercroft-store/src/lib.rs:259`), so `undercroft config check` calls a bad
+value FATAL while the pgvector run ignores it — a pre-flight disagreeing with
+the run about one `(Protects, Checked)` declaration, which is the property both
+config-check modules exist to provide.
+
+**This is not a new class.** `parity.rs:1665-1670` records it verbatim for
+`undercroft-llm`: *"applied a declared pin only `if tls`, so a loopback-http
+base never validated the CA file while the shared path did. One declaration,
+checked on one hop and not another."* O82c fixed the mechanism and kept the
+guard.
+
+**Fix shape.** Hoist the resolution above the `if`, discarding it on the
+`NoTls` arm — the ordering `agent_from_env` already uses.
+
+**Gate.** The existing transport gate matches the PRESENCE of a resolution
+(`parity.rs:1775`), never its REACHABILITY, which is why it is green. A gate
+that can see this asserts the resolver is called on every construction path —
+or, more cheaply, a test that a whitespace-only `UNDERCROFT_INDEX_CA` refuses
+for **each of the five backends**, which is the observable the defect moves.
+
+---
+
+### O97 — O85's `COUNT UNVERIFIABLE` guards the cargo reader only; the shell-suite consumer strips the same marker and compares anyway
+
+**Round six, gates dimension (D11).**
+
+`suite_summary` emits the same untrustworthy-count marker for a doubled
+shell-suite log (`tests/battery.sh:257-259`). The post-run consumer then strips
+it:
+
+```
+2092:  line=$(suite_summary ".battery/$n.log")
+2093:  measured=$(sed -E 's/.*results: ([0-9]+) passed, ([0-9]+) failed.*/\1 \2/' <<< "$line")
+```
+
+The trailing `.*` eats the marker, so a doubled log yields a number and the
+comparison proceeds. The `FIGURE_UNVERIFIABLE` guard exists only at
+`tests/battery.sh:2146-2148`, inside `if … grep -qx test`.
+
+**The triggering condition has been observed in this repo** — the comment at
+`tests/battery.sh:246-248` records a real `backends-e2e` log carrying both
+`56 passed, 1 failed` and `54 passed, 3 failed`. Effect: an intermittent docker
+replay on a CI suite leg reports **PUBLISHED FIGURES ARE STALE** naming figures
+that are correct, which is O85's defect verbatim, one reader over. O85's
+`Residual, stated` paragraph does not mention the shell arm, so this is not a
+recorded residual.
+
+O85's own new self-tests are asymmetric in the same way: `:337-352` asserts the
+cargo consumer SEES the marker; `:414-417` asserts only that `suite_summary`
+EMITS its own. Nothing asserts anyone guards on it.
+
+**Fix shape.** Make the shell arm set `FIGURE_UNVERIFIABLE` on the same
+condition, and match the marker before stripping rather than after.
+
+**Gate.** Extend O85's existing self-test to assert the shell consumer's
+verdict on a synthetic doubled log — the arm that exists for cargo and not for
+the other seven suites.
+
+---
 
 ### O89 — CLOSED 2026-09-02: the measured figures re-run, and a second stage's lift shrank without regressing
 

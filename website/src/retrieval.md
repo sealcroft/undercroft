@@ -47,7 +47,10 @@ synthetic corpora for the pure scaling curves.
 
 ### Fusion is a free accuracy win
 
-Hash embedder, no reranker, all fusion modes measured:
+Hash embedder, no reranker, all fusion modes measured. **R@10 figures on this
+page were re-measured 2026-09-02** (ROADMAP O89); latencies are the 2026-07
+run on that run's hardware and are not comparable across machines.
+
 
 | Fusion | R@10 | Latency/query |
 |---|---|---|
@@ -55,7 +58,7 @@ Hash embedder, no reranker, all fusion modes measured:
 | legacy | 92.7% | ~5 ms |
 | rrf (removed) | 92.5% | ~6 ms |
 
-BM25 buys **+1.9 pts at zero latency cost** — it re-ranks already-verified
+BM25 buys **+2.8 pts at zero latency cost** — it re-ranks already-verified
 candidates and is embedder-independent. The rrf mode measured below both
 score blends (rank fusion discards score magnitude) and has been removed;
 its row stays as the record of why.
@@ -385,9 +388,10 @@ Concrete configurations with the measured expectations:
 | **Huge corpus, RAM-rich** | HNSW (tune `ef` with N) or PQ+IVF (shipped) | 300+ q/s (HNSW) / bounded RAM (PQ+IVF) |
 
 Rules of thumb from the measurements: **BM25 fusion is always on** (free
-+1.9 pts); **MiniLM is not worth 20× latency under BM25, but a modern served
++2.8 pts); **MiniLM is not worth 20× latency under BM25, but a modern served
 embedder is** (+3.2–4.2pp of turn all-gold, and the *only* way to retrieve
-across languages at all); **the reranker is the accuracy lever** (+3 pts) and is
+across languages at all); **the reranker is the accuracy lever** (+2.3 pts against the current base,
+though that arm was last measured in 2026-07 and has not been re-run) and is
 now affordable (`top_n=20`, ort+int8); **PQ is the bounded-RAM index whose
 recall holds at scale** — 100.0% R@5 measured at every checkpoint from 131k to
 1M drawers; **remote vector DBs never make a small palace faster** — they are

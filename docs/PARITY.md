@@ -24,7 +24,7 @@ see "License lineage" below), updated 2026-09-02.
 | Agent diaries + list_agents | `diary write/read/agents` |
 | Dedup / stats / taxonomy | `dedup`, `stats`, `taxonomy` |
 | Backups | `backup create/list/restore` (verifies before snapshot) |
-| Repair | `repair` (fingerprint backfill, re-embed, drop the stale index, re-stamp the embedder identity, record the run, vacuum, verify — all of it inside **one transaction**, so an abort cannot leave a mixed vector space reporting itself as pure) |
+| Repair | `repair` (fingerprint backfill, re-embed, drop the stale index, re-stamp the embedder identity, record the run — those five **in one transaction**, so an abort cannot leave a mixed vector space reporting itself as pure — then vacuum and re-verify *outside* it, SQLite refusing a `VACUUM` inside a transaction) |
 | Export / migrate | `export` (JSONL) + `import` (undercroft & mempalace formats) |
 | MCP stdio server (~35 tools) | 38 tools (daemon/sync/session tools inapplicable — process management moved to the OS). The count is not maintained by hand: `crates/undercroft-cli/src/parity.rs` holds the inventory and the code is counted against it **in both directions**, so a tool added without a line fails the build and a line naming a tool that no longer exists fails too |
 | MCP HTTP team server (`serve`) | `serve-http` (bearer token enforced; `--read-only` is a posture on the whole process — both stores opened read-only, the route gate in front of dispatch, failing closed) |
