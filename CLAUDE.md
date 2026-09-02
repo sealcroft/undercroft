@@ -919,6 +919,17 @@ Consequences that are binding, not advisory:
   rather than re-deriving the host, because a hand-rolled predicate
   inverted this gate twice (`http://127.0.0.1:8080@evil.com/` read as
   loopback).
+  **A third instance landed in an AUDIT RECORD rather than in a gate (O92)**:
+  `LlmClient::destination` hand-parsed the authority to strip userinfo,
+  ending it at the first `/`, `?` or `#` — and for a special scheme the
+  parser also ends it on a backslash, so the refine egress record named
+  loopback while the corpus went to an attacker-chosen host, inside an HMAC'd
+  canonical. So the rule is wider than a predicate: **anything that must know
+  WHICH HOST a request reaches — to gate it, or to write it down — asks the
+  parser the transport uses.** Note that the enumerating fix passes review
+  easily, because a list of separators looks exhaustive until someone names
+  the one missing from it; the durable test is a PROPERTY (this host equals
+  the parser's host), never a longer table.
   **The policy covers the DECLARATION as well as the client, and for two
   releases it only covered the client** (ROADMAP O82c). `agent_from_env` is
   documented as "the one constructor every hop that reads a `*_CA` variable
@@ -1525,8 +1536,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (786 run,
-                                      # 4 #[ignore]d = 790 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (789 run,
+                                      # 4 #[ignore]d = 793 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1618,7 +1629,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # by nothing and two dead wrappers survived
                                       # from O20 and O25. Publishes no check count
                                       # deliberately
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (448 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (450 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (127 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (53 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (72 checks; weaviate
