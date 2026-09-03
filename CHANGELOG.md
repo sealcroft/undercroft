@@ -14,6 +14,42 @@ it previously passed. `backup create` gates on that verdict, so such a vault
 also stops being archivable until the tampering is resolved. See
 `UPGRADING.md`.
 
+### a request `min_trust` can raise the deployment's trust floor, never lower it (O93)
+
+**ROADMAP O93 CLOSED**, by maintainer ruling on three written-out options.
+
+`min_trust` won unconditionally over `UNDERCROFT_TRUST_FLOOR`. Since
+`trust_rank("quarantined") == 0` makes `trust_clause` return `Ok(None)` — no
+exclusion at all — an agent could send `min_trust: "quarantined"`, a value in
+the vocabulary that validates cleanly, and remove the deployment's floor
+corpus-wide for that query, on MCP or `/v1`.
+
+The two floors now compose and the stricter wins. **Raising is untouched** —
+self-protection is always allowed — and an explicit `wing` scope still
+bypasses the vault floor, because naming a wing confines the answer to that
+wing rather than lifting the floor across the corpus.
+
+**Proportion:** the reserved quarantine wing was never reachable this way; it
+is excluded unconditionally on a separate path. The exposure was wings an
+operator deliberately classed `standard` or `quarantined`.
+
+**One implementation, which is most of the fix.** The precedence existed
+twice — in the store and again in `cli/search.rs`, which needs it to disclose
+how many wings a floor kept out. Clamping only the store would have made the
+reply say *0 wings excluded* while the store excluded several: an exclusion
+nobody can see, which is exactly what that disclosure exists to prevent. Both
+now call `effective_trust_floor`, and an e2e check drives the disclosure
+specifically.
+
+Three documents already described the fixed behaviour, including this
+parameter's own rustdoc (*"Composes with the vault-level
+`UNDERCROFT_TRUST_FLOOR`"*); `docs/AGENTS.md` is corrected here, and
+`parity.rs`'s reason for keeping trust ASSIGNMENT off MCP — *"an agent
+assigning it chooses its own floor"* — becomes true rather than undermined.
+
+`min_trust: "quarantined"` stays accepted: the clamp makes rejecting it
+pointless, and removing a documented value would be MAJOR.
+
 ### verify sees the two keyed policy tables it never looked at (O94)
 
 **ROADMAP O94 CLOSED.** The rule that grew this report to six legs — *a keyed

@@ -212,6 +212,58 @@ pub(crate) fn now_rfc3339() -> String {
         .expect("rfc3339 now")
 }
 
+/// Which trust floor a search actually applies, given the request's declared
+/// `min_trust`, whether an explicit `wing` scope was named, and the vault's
+/// `UNDERCROFT_TRUST_FLOOR`.
+///
+/// **THE ONE implementation of this precedence (ROADMAP O93).** It existed
+/// twice — here in the store, and again in `cli/search.rs`, which needs it to
+/// disclose how many wings a floor kept out. That second copy was written
+/// deliberately and carries a comment saying reading it differently *"would
+/// disclose an exclusion that did not happen, or miss one that did"*, which is
+/// exactly the risk of two copies of one decision. Changing the rule below
+/// without changing both would have made the reply say *0 wings excluded*
+/// while the store excluded several — an exclusion nobody can see, and the
+/// failure mode that disclosure exists to prevent.
+///
+/// **A request floor may RAISE the vault's, never lower it.** It used to win
+/// unconditionally, so on a vault started with
+/// `UNDERCROFT_TRUST_FLOOR=trusted` an agent could send
+/// `min_trust: "quarantined"` — which is in the vocabulary, so it validates —
+/// and `trust_clause` would return `Ok(None)`: no exclusion at all, the
+/// deployment's floor removed corpus-wide from an agent surface. Three
+/// surfaces already described the fixed behaviour, including this parameter's
+/// own rustdoc (*"Composes with the vault-level `UNDERCROFT_TRUST_FLOOR`"*),
+/// which is the drift doctrine's breadth test pointing at the code.
+///
+/// **An explicit `wing` scope still bypasses the VAULT floor**, unchanged:
+/// naming a wing is self-scoping and confines the answer to that wing, where
+/// the defect was a corpus-wide lift. Tightening that too was considered and
+/// rejected — it would break a promise the tree defends on purpose, and the
+/// clamp already closes the exposure.
+///
+/// Note this makes rejecting `min_trust: "quarantined"` unnecessary: with a
+/// vault floor it clamps up to it, and without one it names the default. The
+/// value stays accepted, which also keeps it out of MAJOR territory — a
+/// documented value that stops being accepted is this project's test for a
+/// breaking change.
+pub fn effective_trust_floor<'a>(
+    request: Option<&'a str>,
+    wing: Option<&str>,
+    vault: Option<&'a str>,
+) -> Option<&'a str> {
+    match (request, wing) {
+        // Self-scoping: the vault floor is out of the picture, so a request
+        // floor applies on its own and an absent one means no floor.
+        (r, Some(_)) => r,
+        (Some(r), None) => match vault {
+            Some(v) if undercroft_core::trust_rank(v) > undercroft_core::trust_rank(r) => Some(v),
+            _ => Some(r),
+        },
+        (None, None) => vault,
+    }
+}
+
 /// The wing-set restriction a trust floor resolves to — applied to scope
 /// resolution and the bounding SQL alike, BEFORE candidates are drawn
 /// (docs/LABELS.md: a filter combined with a prefilter inherits the
@@ -3777,6 +3829,158 @@ mod tests {
         s.set_retention("w", Some("r"), 30).unwrap();
         assert_eq!(s.wing_trusts().unwrap().len(), 1);
         assert_eq!(s.retention_policies().unwrap().len(), 1);
+    }
+
+    /// **A request `min_trust` may RAISE the vault's floor and never lower it
+    /// (ROADMAP O93).**
+    ///
+    /// It used to win unconditionally, so on a vault started with
+    /// `UNDERCROFT_TRUST_FLOOR=trusted` an agent could send
+    /// `min_trust: "quarantined"` — in the vocabulary, so it validates — and
+    /// `trust_clause` returned `Ok(None)`: no exclusion at all, the
+    /// deployment's floor removed corpus-wide from an agent surface.
+    ///
+    /// The table is the whole ruling, both directions, so a future change
+    /// that only clamps DOWNWARD (and quietly stops honouring a raise) fails
+    /// here rather than passing as "still safe".
+    #[test]
+    fn a_request_floor_raises_the_vault_floor_and_never_lowers_it() {
+        use super::effective_trust_floor as f;
+        /// (request, wing, vault, expected, what it pins) — named because
+        /// clippy calls the bare tuple a very complex type, and it is right:
+        /// four `Option<&str>` in a row is exactly the shape a reader
+        /// mis-orders.
+        type Case = (
+            Option<&'static str>,
+            Option<&'static str>,
+            Option<&'static str>,
+            Option<&'static str>,
+            &'static str,
+        );
+        let cases: &[Case] = &[
+            (
+                Some("quarantined"),
+                None,
+                Some("trusted"),
+                Some("trusted"),
+                "O93: the lift that removed the floor entirely",
+            ),
+            (
+                Some("standard"),
+                None,
+                Some("trusted"),
+                Some("trusted"),
+                "a partial lift is still a lift",
+            ),
+            (
+                Some("trusted"),
+                None,
+                Some("standard"),
+                Some("trusted"),
+                "RAISING is untouched — self-protection is always allowed",
+            ),
+            (
+                Some("standard"),
+                None,
+                None,
+                Some("standard"),
+                "with no vault floor the request stands alone",
+            ),
+            (
+                None,
+                None,
+                Some("trusted"),
+                Some("trusted"),
+                "the vault floor still applies when nothing is declared",
+            ),
+            (None, None, None, None, "no floor anywhere"),
+            (
+                None,
+                Some("w"),
+                Some("trusted"),
+                None,
+                "an explicit wing scope still bypasses the VAULT floor",
+            ),
+            (
+                Some("standard"),
+                Some("w"),
+                Some("trusted"),
+                Some("standard"),
+                "...and with a wing named the vault floor is out of the picture, so the \
+              request stands unclamped — the bypass is preserved, not widened",
+            ),
+        ];
+        // Premise: the fixture set must exercise both a raise and a clamp, or
+        // a function that simply returned the vault floor would pass.
+        assert!(
+            cases
+                .iter()
+                .any(|c| c.3 == Some("trusted") && c.0 != Some("trusted"))
+                && cases.iter().any(|c| c.3 == c.0 && c.0.is_some()),
+            "premise: the table is degenerate"
+        );
+        for (req, wing, vault, want, why) in cases {
+            assert_eq!(
+                f(*req, *wing, *vault),
+                *want,
+                "{req:?}/{wing:?}/{vault:?}: {why}"
+            );
+        }
+    }
+
+    /// **The two floors, exercised TOGETHER through a real search** — which
+    /// O93 records as untested: `tests/e2e.sh` covered the vault floor and a
+    /// unit test covered the request floor, and nothing put them in one
+    /// query, which is the only place the defect lived.
+    #[test]
+    fn a_lowered_request_floor_cannot_widen_a_floored_vault() {
+        let (_d, mut s) = store();
+        s.upsert(&drawer(
+            "secret",
+            "r",
+            "the kelp harvest quota is confidential",
+            0,
+        ))
+        .unwrap();
+        s.upsert(&drawer(
+            "open",
+            "r",
+            "an ordinary note about the kelp quota",
+            1,
+        ))
+        .unwrap();
+        s.set_wing_trust("secret", "quarantined").unwrap();
+        s.set_wing_trust("open", "trusted").unwrap();
+        s.trust_floor = Some("trusted".into());
+
+        let hits = |min: Option<&str>| -> Vec<String> {
+            let opts = crate::SearchOptions {
+                limit: 10,
+                min_trust: min.map(str::to_string),
+                ..Default::default()
+            };
+            s.search("kelp quota", &opts)
+                .unwrap()
+                .into_iter()
+                .map(|h| h.drawer.meta.wing.clone())
+                .collect()
+        };
+        let floored = hits(None);
+        assert!(
+            !floored.iter().any(|w| w == "secret"),
+            "premise: the vault floor keeps the quarantined wing out: {floored:?}"
+        );
+        assert!(
+            floored.iter().any(|w| w == "open"),
+            "premise: and the trusted wing is still reachable: {floored:?}"
+        );
+        for lowering in ["quarantined", "standard"] {
+            let got = hits(Some(lowering));
+            assert!(
+                !got.iter().any(|w| w == "secret"),
+                "min_trust={lowering:?} lifted the deployment's floor: {got:?}"
+            );
+        }
     }
 
     /// **A FLIPPED trust column fails verify (ROADMAP O94).**

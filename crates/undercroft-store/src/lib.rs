@@ -30,7 +30,8 @@ pub use admission::{PendingAdmission, QUARANTINE_WING};
 pub use forget::{AttestationVerdict, ForgetAttestation, MirrorDelete};
 pub use kg::{KgStats, ReceiptStatus, ReceiptVerdict, SupersessionStatus, Triple, TripleExport};
 pub use manage::{
-    DedupReport, DrawerSummary, Hallway, Namespace, PalaceStats, Tunnel, UpdateOutcome,
+    effective_trust_floor, DedupReport, DrawerSummary, Hallway, Namespace, PalaceStats, Tunnel,
+    UpdateOutcome,
 };
 pub use pqidx::WING_PQ_MIN_DEFAULT;
 pub use remote::PlaintextPush;
@@ -5618,12 +5619,11 @@ impl PalaceStore {
         if let Some(t) = opts.min_trust.as_deref() {
             undercroft_core::validate_trust(t).map_err(|e| StoreError::Invalid(e.to_string()))?;
         }
-        let effective_floor: Option<&str> = match (opts.min_trust.as_deref(), opts.wing.as_deref())
-        {
-            (Some(t), _) => Some(t),
-            (None, Some(_)) => None,
-            (None, None) => self.trust_floor.as_deref(),
-        };
+        let effective_floor: Option<&str> = crate::manage::effective_trust_floor(
+            opts.min_trust.as_deref(),
+            opts.wing.as_deref(),
+            self.trust_floor.as_deref(),
+        );
         let trust = match effective_floor {
             Some(f) => self.trust_clause(f)?,
             None => None,
