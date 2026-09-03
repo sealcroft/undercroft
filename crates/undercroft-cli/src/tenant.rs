@@ -1368,6 +1368,7 @@ impl Tenancy {
             "chain_ok": report.chain_ok,
             "orphan_labels": report.orphan_labels,
             "mirror_drift": report.mirror_drift,
+            "policy_drift": report.policy_drift,
             "supersessions": {
                 "verified": count(V::Verified),
                 "source_changed": count(V::SourceChanged),

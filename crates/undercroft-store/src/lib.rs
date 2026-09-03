@@ -2200,6 +2200,49 @@ pub struct VerifyReport {
     /// words. One walk, one verdict; a surface cannot assemble a narrower one
     /// by forgetting a call, because there is no second call to forget.
     pub receipts: Vec<crate::kg::ReceiptStatus>,
+    /// Declared policy rows that disagree with the chain that recorded them.
+    ///
+    /// **The seventh leg (ROADMAP O94), and it is the rule that grew this
+    /// struct applied one table over**: *a keyed claim living in columns no
+    /// drawer HMAC and no chain step covers must have a leg, or nothing sees
+    /// it.* `wing_trust` and `retention_policy` are exactly that — operator
+    /// declarations, HMAC-tagged, outside every drawer's coverage — and
+    /// `verify()` did not mention either table.
+    ///
+    /// **A flip and a DELETION fail differently, and only one of them failed
+    /// at all.** A flipped `trust` column makes `wing_trusts()` raise
+    /// `Integrity`, so the retrieval path fails closed — but `verify`
+    /// answered OK on all four renderers, and `backup create` gates on that
+    /// verdict, so a tampered vault archived clean. A DELETED row does not
+    /// fail closed anywhere: `trust_clause` finds an empty exclusion list and
+    /// returns `Ok(None)` — *no floor active* — so a wing an operator classed
+    /// `quarantined` becomes retrievable under a `standard` floor, silently.
+    ///
+    /// **The evidence already existed and nothing consulted it.** Each
+    /// assignment appends `trust/{wing}` (or `retention/{wing}[/{room}]`)
+    /// carrying the SAME tag that goes in the row, and `audit` is append-only
+    /// and rotation-preserved. `orphan_labels` cannot reach it: it maps every
+    /// prefixed label that is not `kg-entity/` through
+    /// `strip_prefix("kg/").unwrap_or_default()`, which yields empty and
+    /// `continue`s.
+    ///
+    /// **Absence discriminates for trust and not for retention**, which is
+    /// why they are checked by the same leg with different rules. Nothing in
+    /// this crate has a `DELETE FROM wing_trust` — assignment is
+    /// insert-or-update only — so a `trust/` record with no row is
+    /// unambiguous, the same choke-point argument `orphan_labels` makes for a
+    /// bare drawer id. `retention_policy` IS deletable, through
+    /// `clear_retention`, which appends `retention-clear/` in the same
+    /// transaction; so a missing retention row is legitimate exactly when a
+    /// `retention-clear/` record for the same key is NEWER than the
+    /// `retention/` one, and a finding otherwise.
+    ///
+    /// Both directions are compared: a row whose tag no longer matches the
+    /// chain's, and a row that exists with no assignment behind it at all.
+    /// Reported separately from `bad_records` because no drawer record is
+    /// corrupt — this is a policy claim that stopped matching its own audit
+    /// trail.
+    pub policy_drift: Vec<String>,
 }
 
 impl VerifyReport {
@@ -2211,6 +2254,7 @@ impl VerifyReport {
             && self.orphan_labels.is_empty()
             && self.mirror_drift.is_empty()
             && self.tampered_receipts() == 0
+            && self.policy_drift.is_empty()
     }
 
     /// Supersession links whose keyed receipt failed its HMAC. The other
@@ -7085,6 +7129,141 @@ impl PalaceStore {
             }
             orphan_labels.sort();
         }
+
+        // ── The seventh leg: declared policy vs the chain that recorded it.
+        //
+        // ONE ordered pass over `audit` and nothing per-row, for the reason
+        // the comment above gives: `audit` has no index on `record_id`, so a
+        // correlated `MAX(seq)` subquery would be a full scan per policy and
+        // this is the third scan of that table rather than the Nth.
+        let mut policy_drift: Vec<String> = Vec::new();
+        {
+            use std::collections::HashMap;
+            // **Seq only, and NOT the tag — the tag cannot survive a rotation
+            // and comparing it made this leg alarm on every rotated vault.**
+            // Rotation re-tags `wing_trust`/`retention_policy` with the new
+            // keys and PRESERVES audit tags verbatim as historical evidence
+            // (the same asymmetry O13 records for forgetting attestations: a
+            // keyed replay has a shorter lifetime than the document it
+            // checks). So row-tag == chain-tag holds only until the first
+            // rotation, and asserting it is a false alarm on the routine
+            // path — which is exactly how a leg gets ignored and then
+            // removed. What DOES survive is what this now uses: the row's own
+            // tag recomputed under the CURRENT key (rotation re-tags, so a
+            // flip still fails), and the EXISTENCE of the record id (rotation
+            // preserves those verbatim, so a deletion still shows).
+            let mut latest: HashMap<String, i64> = HashMap::new();
+            {
+                let mut stmt = self.conn.prepare(concat!(
+                    "SELECT seq, record_id FROM audit ",
+                    "WHERE record_id LIKE 'trust/%' ",
+                    "OR record_id LIKE 'retention/%' ",
+                    "OR record_id LIKE 'retention-clear/%' ",
+                    "ORDER BY seq",
+                ))?;
+                let rows =
+                    stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+                for row in rows {
+                    let (seq, id) = row?;
+                    latest.insert(id, seq);
+                }
+            }
+
+            // Trust. Every row must recompute (a flip moves the canonical,
+            // not the tag) AND must match the assignment that recorded it.
+            let mut seen_trust: Vec<String> = Vec::new();
+            {
+                let mut stmt = self.conn.prepare(
+                    "SELECT wing, trust, tag, assigned_at FROM wing_trust ORDER BY wing",
+                )?;
+                let rows: Vec<(String, String, Vec<u8>, String)> = stmt
+                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+                    .collect::<Result<_, _>>()?;
+                for (wing, trust, tag, at) in rows {
+                    let key = format!("trust/{wing}");
+                    seen_trust.push(key.clone());
+                    if self
+                        .vault
+                        .verify_tag(
+                            crate::manage::wing_trust_canonical(&wing, &trust, &at).as_slice(),
+                            &tag,
+                        )
+                        .is_err()
+                    {
+                        policy_drift.push(format!("{key}: row does not verify"));
+                        continue;
+                    }
+                    if !latest.contains_key(&key) {
+                        policy_drift.push(format!("{key}: assigned in no chain record"));
+                    }
+                }
+            }
+            // ...and every assignment must still have its row. No
+            // `DELETE FROM wing_trust` exists in this crate, so absence here
+            // has no legitimate path.
+            for key in latest.keys() {
+                if key.starts_with("trust/") && !seen_trust.contains(key) {
+                    policy_drift.push(format!("{key}: assigned in the chain, row is gone"));
+                }
+            }
+
+            // Retention. Same shape, plus the one legitimate absence: a
+            // `retention-clear/` record NEWER than the assignment.
+            let mut seen_ret: Vec<String> = Vec::new();
+            {
+                let mut stmt = self.conn.prepare(concat!(
+                    "SELECT wing, room, max_age_days, tag, assigned_at ",
+                    "FROM retention_policy ORDER BY wing, room",
+                ))?;
+                let rows: Vec<(String, String, u32, Vec<u8>, String)> = stmt
+                    .query_map([], |r| {
+                        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+                    })?
+                    .collect::<Result<_, _>>()?;
+                for (wing, room, days, tag, at) in rows {
+                    let rest = if room.is_empty() {
+                        wing.clone()
+                    } else {
+                        format!("{wing}/{room}")
+                    };
+                    let key = format!("retention/{rest}");
+                    seen_ret.push(key.clone());
+                    if self
+                        .vault
+                        .verify_tag(
+                            crate::retention::retention_canonical(&wing, &room, days, &at)
+                                .as_slice(),
+                            &tag,
+                        )
+                        .is_err()
+                    {
+                        policy_drift.push(format!("{key}: row does not verify"));
+                        continue;
+                    }
+                    if !latest.contains_key(&key) {
+                        policy_drift.push(format!("{key}: declared in no chain record"));
+                    }
+                }
+            }
+            for (key, seq) in latest.iter() {
+                let Some(rest) = key.strip_prefix("retention/") else {
+                    continue;
+                };
+                if seen_ret.contains(key) {
+                    continue;
+                }
+                // Cleared is the legitimate absence, and only when the clear
+                // is NEWER — an older one belongs to a policy since redeclared.
+                let cleared = latest
+                    .get(&format!("retention-clear/{rest}"))
+                    .is_some_and(|cseq| cseq > seq);
+                if !cleared {
+                    policy_drift.push(format!("{key}: declared in the chain, row is gone"));
+                }
+            }
+            policy_drift.sort();
+        }
+
         Ok(VerifyReport {
             records_checked: checked,
             bad_records: bad,
@@ -7093,6 +7272,7 @@ impl PalaceStore {
             orphan_labels,
             mirror_drift,
             receipts,
+            policy_drift,
         })
     }
 

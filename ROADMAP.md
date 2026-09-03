@@ -6655,7 +6655,7 @@ covers the vault floor, `lib.rs:15667` covers the request floor.
 
 ---
 
-### O94 — `wing_trust` and `retention_policy` are keyed claims with no `VerifyReport` leg, and a DELETED row lifts a floor silently
+### O94 — CLOSED 2026-09-03: `wing_trust` and `retention_policy` had no `VerifyReport` leg, and a DELETED row lifted a floor silently
 
 **Round six, audit-chain dimension. Verified: zero occurrences of either table
 in `verify()`'s body (`crates/undercroft-store/src/lib.rs:6796-7060`).**
@@ -6691,6 +6691,76 @@ deletion, which an orphan-label check by itself does not.
 
 **Gate.** Delete a `wing_trust` row behind the store's back and assert
 `verify().ok()` is false; then flip one and assert the same. Both fail today.
+
+---
+
+**CLOSED 2026-09-03.** Took the stronger of the two options offered: a
+**seventh leg**, `VerifyReport.policy_drift`, comparing each declared policy
+row to the chain record that assigned it. Extending `orphan_labels` to
+`trust/` was the weaker one and the entry said why — it catches a relabel, not
+a deletion.
+
+**Absence discriminates for trust and not for retention, and that asymmetry is
+the design.** There is no `DELETE FROM wing_trust` in the crate — assignment is
+insert-or-update only — so an orphaned `trust/` record is unambiguous, which is
+the choke-point argument `orphan_labels` already makes for a bare drawer id.
+`retention_policy` IS deletable, through `clear_retention`, which appends
+`retention-clear/` in the same transaction; so a missing retention row is
+legitimate exactly when that record is NEWER than the assignment. Comparing
+seq rather than mere existence is what stops a stale clear from excusing a row
+deleted after it — pinned by its own test.
+
+One ordered pass over `audit` and nothing per-row, because that table has no
+index on `record_id` — the cost lesson the orphan-label leg above it already
+paid, applied rather than re-learned. `ok()` counts the leg, without which it
+would be decorative: `backup create` gates on that verdict.
+
+**THE FIRST VERSION ALARMED ON EVERY ROTATED VAULT, and that is the mistake
+worth recording.** It compared the row's tag to the tag in the chain record —
+the obvious check, and wrong. Rotation re-tags `wing_trust` and
+`retention_policy` under the new keys while PRESERVING audit tags verbatim,
+because those are historical evidence; so row-tag == chain-tag holds only
+until the first rotation. This is O13's asymmetry one table over — *a keyed
+replay has a shorter lifetime than the document it checks* — and I wrote *"a
+leg that alarms on ordinary operation is how a leg gets ignored and then
+removed"* in the doc comment of the thing that did it. The battery caught it:
+`e2e` failed `verify ok after rotate — exit 2`, sixteen checks in that suite
+and one unit test.
+
+**The leg now asserts only what SURVIVES a rotation.** The row's own tag,
+recomputed under the CURRENT key — rotation re-tags, so a flip still fails —
+and the EXISTENCE of the record id, which rotation preserves verbatim, so a
+deletion still shows. The discarded tag comparison caught nothing the other
+two do not, except an insider who already holds the vault key. `seq` is still
+read, for the clear-ordering rule alone. A fifth test now guards the rotation
+case at unit speed rather than leaving it to a container.
+
+**The exposure, measured rather than argued.** Three drawers in a wing classed
+`quarantined`, one in an open wing, one query under a `standard` floor:
+
+| | hits |
+|---|---|
+| trust row present | **1** |
+| row deleted behind the store's back | **4** |
+
+All three quarantined drawers became retrievable, and before this leg `verify`
+answered `VERIFY OK`. It now exits 2 with
+`POLICY: trust/secret: assigned in the chain, row is gone`.
+
+**Four tests, and they are SPLIT on purpose.** The flip and the deletion began
+as one test with sequential assertions, and the counterfactual exposed why that
+is wrong: breaking the leg failed at the flip assertion and **never reached the
+deletion arm at all**, so the case the entry calls out as the silent one went
+unexercised while the transcript looked like a firing counterfactual. Split,
+all four fire independently with attributable messages. The fourth is the
+control — a policy cleared through the supported path is NOT drift — without
+which the leg would alarm on ordinary operation, which is how a leg gets
+ignored and then removed.
+
+Rendered on all four surfaces. `parity.rs::HAND_PROJECTED` enforced that by
+refusing to build, naming `policy_drift` as reaching `/v1` for free and
+stopping at the operator surface — the gate doing exactly what the `ui.html`
+entry above it was added for.
 
 ---
 

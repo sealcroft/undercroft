@@ -65,6 +65,51 @@ so rather than implying it checked them.
 
 ---
 
+## 1.3.0 (unreleased)
+
+### a vault with an edited or deleted trust/retention row now FAILS verify
+
+**Who is affected:** any deployment whose `wing_trust` or `retention_policy`
+rows have been changed outside the engine — an offline `UPDATE`, a `DELETE`, a
+hand-repaired database, or a restore that dropped those tables. Nobody else: a
+vault whose policies were only ever set through `undercroft trust` /
+`undercroft retention` (or their `/v1` routes) is unaffected, because those
+paths write the row and its chain record in one transaction.
+
+`verify` gained a seventh leg (ROADMAP O94). It compares each declared policy
+row against the `trust/{wing}` or `retention/{wing}[/{room}]` chain record that
+assigned it. Two conditions that used to pass now fail:
+
+* a row whose tag no longer matches its own contents — previously this failed
+  closed on the *retrieval* path (`wing_trusts()` raised `Integrity`) while
+  `verify` still answered OK;
+* a row that is **gone** while its assignment record remains — previously this
+  failed nowhere at all, and silently lifted the floor it declared.
+
+**Symptom if it bites you:** `undercroft verify` exits 2 with
+`policy drift: N` and a `POLICY:` line naming the wing; `/v1` answers
+`{"ok": false}` with a `policy_drift` array. **`backup create` gates on that
+verdict**, so it will refuse to archive the vault until this is resolved —
+which is the intended behaviour, not a regression: archiving a vault whose
+retrieval floor no longer matches its audit trail is what the gate exists to
+prevent.
+
+**Fix:** re-declare the policy through the supported path, which writes a
+fresh row and a fresh chain record together:
+
+```bash
+undercroft trust set <wing> <class>
+```
+
+To remove a retention policy, use `undercroft retention clear` rather than
+deleting the row — it appends the `retention-clear/` record that makes the
+absence legitimate. There is no supported removal for a trust assignment;
+re-assign it instead.
+
+**This is not detectable by `undercroft config check`** — it is per-vault
+on-disk state, not a declaration. Run `undercroft verify` before upgrading if
+you want to know in advance.
+
 ## 1.2.2 (released 2026-09-03)
 
 ### if you install on Windows, use 1.2.2 — 1.2.1 has no Windows binary

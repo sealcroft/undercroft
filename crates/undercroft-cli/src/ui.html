@@ -1098,12 +1098,14 @@ async function runVerify() {
                 (k.unreceipted || 0) + (k.tampered || 0);
     const orphans = r.orphan_labels || [];
     const drift = r.mirror_drift || [];
+    const policy = r.policy_drift || [];
     $("verifyReport").textContent =
       "records checked: " + r.records_checked +
       "\nchain ok:        " + r.chain_ok +
       "\nbad records:     " + (r.bad_records.length ? "\n  " + r.bad_records.join("\n  ") : "none") +
       "\norphan labels:   " + (orphans.length ? "\n  ORPHANED: " + orphans.join("\n  ORPHANED: ") : "none") +
       "\nmirror drift:    " + (drift.length ? "\n  MIRROR: " + drift.join("\n  MIRROR: ") : "none") +
+      "\npolicy drift:    " + (policy.length ? "\n  POLICY: " + policy.join("\n  POLICY: ") : "none") +
       (sup ? "\nsupersessions:   " + (s.verified || 0) + " verified · " + (s.source_changed || 0) +
              " source-changed · " + (s.dangling || 0) + " dangling · " + (s.unreceipted || 0) +
              " unreceipted · " + (s.tampered || 0) + " tampered" +
