@@ -629,6 +629,14 @@ pub mod pgvector {
         addrs.iter().all(|ip| ip.is_loopback())
             && hosts.iter().all(|h| match h {
                 // A unix socket never leaves the machine.
+                //
+                // `#[cfg(unix)]` because the VARIANT is: `Host::Unix` does not
+                // exist off unix, so naming it unconditionally does not compile
+                // for `x86_64-pc-windows-msvc` — which is a target this project
+                // ships a binary for, and which nothing but `release.yml`
+                // builds. The `Tcp` arm below already handles the non-unix
+                // case, where a socket path arrives as an unresolvable name.
+                #[cfg(unix)]
                 tokio_postgres::config::Host::Unix(_) => true,
                 tokio_postgres::config::Host::Tcp(name) => {
                     name == "localhost"

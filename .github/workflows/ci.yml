@@ -47,6 +47,29 @@ jobs:
           cargo clippy -p undercroft-cli --features telemetry --all-targets -- -D warnings
           cargo clippy -p undercroft-orchestrator --features telemetry --all-targets -- -D warnings
 
+  # NOTHING IN THIS PROJECT COMPILED FOR WINDOWS ON A PULL REQUEST, and
+  # `release.yml` — which does — only runs on a TAG. So a Windows-only compile
+  # error was invisible until the one moment it can no longer be fixed without
+  # a new version. That is not hypothetical: `1.2.1` shipped 16 assets instead
+  # of 20 because O90's fix named `tokio_postgres::config::Host::Unix`, a
+  # variant that is `#[cfg(unix)]` and does not exist off unix. The battery and
+  # all seventeen other jobs run in Linux containers and were green.
+  #
+  # `cargo check` and not a build: the defect class is cfg-gated code that does
+  # not COMPILE for the target, and checking catches every one of those in a
+  # fraction of the time. Linking is `release.yml`'s job.
+  #
+  # The whole workspace minus the two heavy ML crates, matching what
+  # `release.yml` actually builds for this target.
+  windows-check:
+    name: Windows target compiles
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cargo check (x86_64-pc-windows-msvc)
+        run: cargo check --workspace --all-targets --exclude undercroft-embed-onnx --exclude undercroft-embed-ort
+
   audit:
     name: Dependency audit (RustSec)
     runs-on: ubuntu-latest
@@ -202,7 +225,7 @@ jobs:
   verdict:
     name: CI verdict
     runs-on: ubuntu-latest
-    needs: [preflight, lint, audit, trivy-fs, suites, site, trivy-image, tls-pins, house-figures]
+    needs: [preflight, lint, audit, trivy-fs, suites, site, trivy-image, tls-pins, house-figures, windows-check]
     if: always()
     steps:
       - name: Every job must have passed
@@ -218,8 +241,8 @@ jobs:
           # to `needs:`) is unreachable from here, because a workflow cannot
           # enumerate its own jobs; `tests/battery.sh`'s CI-inventory preflight
           # reads the file and closes it.
-          if [ "$n" -lt 9 ]; then
-            echo "the verdict covers only $n job(s) and must cover 9 —"
+          if [ "$n" -lt 10 ]; then
+            echo "the verdict covers only $n job(s) and must cover 10 —"
             echo "someone narrowed needs:, which is how a green tick stops meaning anything"
             exit 1
           fi

@@ -65,6 +65,29 @@ so rather than implying it checked them.
 
 ---
 
+## 1.2.2 (released 2026-09-03)
+
+### if you install on Windows, use 1.2.2 — 1.2.1 has no Windows binary
+
+**Who is affected:** anyone installing the `x86_64-pc-windows-msvc` binary.
+Nobody else: Linux and macOS binaries and all four container images were
+published normally for `1.2.1`, and an already-installed deployment is
+unaffected on every platform.
+
+`1.2.1`'s release page carries **16 assets instead of 20**. Its Windows build
+failed — `undercroft-index` named a `tokio-postgres` enum variant that is
+`#[cfg(unix)]` and does not exist off unix — so
+`undercroft-v1.2.1-x86_64-pc-windows-msvc.zip` and its `-ort` sibling, plus
+both `.sha256` files, do not exist.
+
+**Symptom if it bites you:** a download or install script pinned to `v1.2.1`
+gets a 404 for the Windows asset. It is not a transient failure and retrying
+will not help.
+
+**Fix:** install `1.2.2`, which restores all twenty assets. Nothing else
+differs between the two releases — `1.2.2` contains this build fix and a CI
+job so the class cannot recur, and no engine behaviour changed.
+
 ## 1.2.1 (released 2026-09-03)
 
 ### a read-only open of a vault with no database exits **2** again, not 1

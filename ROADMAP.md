@@ -1116,7 +1116,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**130** of the **145** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**131** of the **146** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -1287,6 +1287,71 @@ touching anyone's existing corpus.
 **Gate:** a vault written under the old constant must still open without an
 integrity verdict, and two different model files must produce two different
 identities.
+
+## 1.2.2 — released 2026-09-03
+
+One unit, and it exists because the release before it was incomplete.
+
+PATCH: no documented contract moves. `1.2.1` shipped **16 release assets
+instead of 20** — both Windows binaries failed to build — and this restores
+them plus closes the gap that hid it.
+
+### O102 — CLOSED 2026-09-03: `1.2.1` shipped without Windows binaries, because nothing here compiled for Windows on a pull request
+
+**Mine, from O90, and caught by the release rather than by any gate.**
+
+O90's fix matched on `tokio_postgres::config::Host::Unix`. That variant is
+`#[cfg(unix)]` and **does not exist off unix**, so `undercroft-index` failed to
+compile for `x86_64-pc-windows-msvc` with
+`error[E0599]: no variant or associated item named 'Unix'`, and both Windows
+binary jobs died. Linux, both macOS pairs and all four GHCR images published
+normally, so the release *looked* successful: 16 assets where `1.2.0` had 20.
+
+**I had written the reason three lines below the defect.** The `Tcp` arm
+carries a comment saying *"`Config::host` only maps a leading `/` to `Unix`
+under `cfg(unix)`; off it, a socket path arrives here as a `Tcp` name"* — the
+cfg difference was understood and the arm above it still named the variant
+unconditionally.
+
+**Why nothing saw it, which is the finding.** The ten-suite battery runs in
+Linux containers. All seventeen other CI checks run in Linux containers.
+`release.yml` is the ONLY thing in this tree that compiles for Windows, and it
+runs **only on a tag** — so this class of defect is invisible until the exact
+moment it can no longer be fixed without a new version number. `ci.yml`
+mentioned Windows **zero** times.
+
+**Fix.** The arm is `#[cfg(unix)]`-gated; the `Tcp` arm already handles the
+non-unix case, where a socket path arrives as an unresolvable name.
+
+**Gate: a `windows-check` CI job**, `cargo check --workspace --all-targets` on
+`windows-latest` (excluding the two heavy ML crates, matching what
+`release.yml` builds for that target), wired into the verdict's `needs:` AND
+into its asserted job count, 9 → 10 — both, or the count assertion would pass
+over a job nobody wired in. The `tests/battery.sh` CI-inventory preflight
+confirms the other direction: *"verdict needs all 10 other job(s) of 11"*.
+`cargo check` rather than a build, deliberately: the class is code that does
+not COMPILE for the target, checking catches all of it, and linking stays
+`release.yml`'s job.
+
+**Counterfactual, run on a non-unix target** — `x86_64-pc-windows-gnu` under
+mingw, because the variant is gated on `unix` rather than on MSVC and the
+MSVC target cannot be checked from a Linux container (a C build script wants
+`lib.exe`). With the gate removed it reproduces the release's exact error;
+with it, the crate checks clean. **And the same tree checks green on Linux
+either way**, which is the blind spot measured rather than asserted.
+
+**The rule this earns: a target you SHIP is a target that must be compiled on
+a pull request.** It is *ask what a gate can SEE* applied to the platform axis
+— every gate here could see everything except the one platform none of them
+ran on. Applied backwards it reclassifies nothing (no earlier defect in this
+tree was platform-specific) and adds one case; that is the whole history it
+has, and this is its first application.
+
+**Residual, stated.** `windows-check` compiles; it does not RUN the suites on
+Windows. A behaviour difference that compiles on both platforms and diverges
+at runtime is still uncovered, and the engine is deployed on Linux, so that
+is a deliberate boundary rather than an oversight. macOS has the same shape
+and the same argument.
 
 ## 1.2.1 — released 2026-09-03
 
