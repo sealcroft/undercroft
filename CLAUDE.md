@@ -7,13 +7,22 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
 
 Published by **Sealcroft** at `github.com/sealcroft/undercroft`, site at
 `https://sealcroft.com/undercroft/`, house page at `https://sealcroft.com/`
-(repo `sealcroft/sealcroft.github.io`). Current release **1.2.0** — a MINOR
-over `1.1.1`, which was a PATCH over `1.1.0`, itself a MINOR over the `1.0.0`
-that reset the version when the project was renamed (every earlier tag
-belonged to it under its former name and was withdrawn). MINOR is right by
-this file's own test: every unit in it adds a field or a value **beside** one
-that stays, and nothing documented stopped being accepted. **The tree carries
-`1.2.0` only once the release PR merges; the TAG is a separate, explicit
+(repo `sealcroft/sealcroft.github.io`). Current release **1.2.1** — a PATCH
+over `1.2.0`, which was a MINOR over `1.1.1`, itself a PATCH over `1.1.0` and
+that a MINOR over the `1.0.0` that reset the version when the project was
+renamed (every earlier tag belonged to it under its former name and was
+withdrawn). PATCH is right by this file's own test — **a documented contract
+that changes** is what makes a MAJOR, and nothing here changes one. All three
+units are defects going away: a `--read-only` open that created the database
+it is forbidden to create and collapsed a crashed writer's WAL (O91, which
+shipped in `1.2.0`), an egress record naming a host that was never dialed
+(O92), and a pgvector DSN guard that failed OPEN and let plaintext-derived
+embeddings cross the network (O90). The one observable an operator could key
+on — a read-only open of an absent database exiting **2** rather than 1 —
+RESTORES what every document in this tree has published throughout, so it is a
+fix rather than a break; it can still stop a script written against `1.2.0`,
+which is why it has an `UPGRADING.md` entry. **The tree carries
+`1.2.1` only once the release PR merges; the TAG is a separate, explicit
 step** — a build reporting a version it was never tagged as is worse
 than one reporting the last release. `main` is branch
 protected on both repos: force pushes and deletions blocked, admins exempt.

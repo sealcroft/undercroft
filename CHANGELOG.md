@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — 1.2.1
+## 1.2.1 — 2026-09-03
 
 PATCH: a fix whose only observable change is that a defect is gone. The exit
 code and the `class` field it restores are the ones this project's own

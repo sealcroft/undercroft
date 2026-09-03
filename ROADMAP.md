@@ -1288,6 +1288,644 @@ touching anyone's existing corpus.
 integrity verdict, and two different model files must produce two different
 identities.
 
+## 1.2.1 — released 2026-09-03
+
+Round six's first three fixes, plus the post-release sweep that preceded them.
+
+PATCH: the only observable change is that a defect is gone. **No documented
+contract moves**, which is this file's test for MAJOR — and the one observable
+an operator could key on, a read-only open of an absent database exiting `2`
+rather than `1`, RESTORES what every document in this tree has published
+throughout. `1.2.0` is the only release that ever answered otherwise, and it
+did so by regression rather than by decision. It can still stop a script
+written against `1.2.0`, so it carries an `UPGRADING.md` entry.
+
+**One of these shipped in `1.2.0` and one is a security fix.** O91 made
+`--read-only` create the database it is forbidden to create AND checkpoint away
+a crashed writer's hot WAL — evidence destruction on the incident path the flag
+exists for. O90 made the pgvector DSN guard fail OPEN, sending
+plaintext-derived embeddings across the network against a refusal whose own
+text says *"There is no override"*.
+
+**Three of them are the same mistake wearing different clothes**, which is the
+finding worth carrying: each asked a question one step short of the thing that
+decides. O91 asked what `open_read_only` does rather than what runs BEFORE it;
+O92 asked which separators end an authority rather than what the parser says;
+O90 asked what `postgres::Config` exposes rather than what the connector
+BUILDS. In O90's case the key that defeated the guard — `hostaddr` — is
+invisible from the API surface a guard author naturally reads.
+
+**Two false claims of mine were caught by FAILING PREMISES, not by review** —
+a doc comment asserting O91's WAL residual, and one asserting an O92 branch was
+reachable. Both would have read as confident and correct.
+
+
+### O98 — CLOSED 2026-09-02: the three units that closed the doc-drift class introduced five instances of it
+
+**Round six, docs-vs-code dimension. Every one of these is mine, from M56, O88
+and O89 — the units whose subject was doc-vs-code drift.** Verified by reading
+both sides.
+
+**1. O88 published a claim SQLite makes impossible.** `docs/PARITY.md:27` and
+the `--help` string O88 "fixed" (`crates/undercroft-cli/src/main.rs:495-497`)
+both say `repair` does *"…record the run, vacuum, verify — all of it inside
+**one transaction**"*. `crates/undercroft-store/src/manage.rs:1241` says the
+opposite, and says why: *"`VACUUM` **stays OUTSIDE** — SQLite refuses it
+inside a transaction — and after the commit."* Five of the seven listed steps
+are inside `BEGIN IMMEDIATE`; vacuum and verify are outside.
+
+I copied the enumeration out of `repair`'s doc comment and dropped the
+exclusion stated two paragraphs below it — **reading part of a doc block,
+which is M56's class, committed by the unit that closed M56's siblings.**
+
+**2. O89 moved base figures in `website/src/retrieval.md` and left every
+figure derived from them.** That file is the one O89 listed as UPDATED; the
+ones it ANNOTATED stayed self-consistent.
+
+| line | claim | its own inputs | truth |
+|---|---|---|---|
+| `:58` | "BM25 buys **+1.9 pts**" | `:54` 95.5, `:55` 92.7 | **+2.8** |
+| `:388` | "free **+1.9 pts**" | same table | **+2.8** |
+| `:389` | "the reranker is the accuracy lever (**+3 pts**)" | 97.68 vs `:68` 95.4 | **+2.3**, and that arm was not re-run |
+
+`+1.9` and `+3` are exactly `94.6−92.7` and `97.68−94.6`. And
+`grep -c "2026-09-02\|re-measured"` on that file is **0** — no date, no
+provenance, so September and July numbers sit unlabelled together, without the
+reranker caveat O89 added to the other four surfaces.
+
+**3. O89 broke a head-to-head by the rule O89 itself states.**
+`website/landing/index.html:770` now reads **95.5** for *"undercroft · no model
+at all, sealed"*, while `docs/BENCHMARKS_VS.md:107` — linked from directly
+under that chart — keeps **94.6** under a banner written in the same commit:
+*"moving one side of a head-to-head while the other stands is the failure this
+document's fairness contract exists to prevent."* The chart's competitor row
+(66.9) was left. **I did the thing I had just written down as forbidden, one
+file over, in one commit.**
+
+The distinction that should have governed it: the MemPalace rows on the other
+chart are third-party PUBLISHED figures being cited, so re-measuring our own
+side is legitimate; the mem0 row came from OUR paired run, so both sides move
+together or neither does.
+
+**4. O89 left an unbalanced parenthesis on the live landing page.**
+`website/landing/index.html:704`: *"…measured 97.68 (1936/1982) against the
+older 94.6 base**)**"*.
+
+**5. M56 missed a three-deep pileup in `parity.rs`, the file it repaired** —
+270 lines above the `Absence` block it fixed. `:27-28` (the MCP tool
+inventory), `:29-42` (every `UNDERCROFT_*` variable) and `:43+` (how a
+declaration behaves) all stack onto `pub enum ConfigClass` at `:69`, leaving
+**`ENGINE_ENV_VARS` (`:108`) and `MCP_TOOLS` (`:199`) with no doc at all**;
+`:43-45` is additionally truncated mid-clause with an unterminated `**`.
+
+**Items 1-4 are FIXED in this unit**, since each was a live falsehood on a
+published surface and the correction is a line:
+
+* `docs/PARITY.md:27` and `main.rs:495-497` now name the five steps that ARE
+  in the transaction and say vacuum and re-verify run outside it, because
+  SQLite refuses a `VACUUM` inside one.
+* `website/src/retrieval.md` recomputes `+1.9 → +2.8` (twice) and
+  `+3 → +2.3` from the table directly above them, carries the caveat that the
+  reranked arm was not re-run, and gains the provenance line the other four
+  surfaces already had.
+* `website/landing/index.html:770` goes back to **94.6**, restoring the
+  pairing with `docs/BENCHMARKS_VS.md:107` that O89's own banner demands. The
+  distinction, now written down: the MemPalace rows on the other chart are
+  third-party PUBLISHED figures being cited, so re-measuring our side is
+  legitimate; the mem0 row came from OUR paired run, so both sides move or
+  neither does.
+* the unbalanced paren is closed.
+
+**Item 5 is NOT fixed here** — it is an instance of the general class and is
+the first row of **O99**'s table, where the remedy and the gate question
+belong. Splitting it out would have made this entry look complete while its
+class stayed open.
+
+**Gate.** None proposed for 1-4: these are arithmetic and prose, and O89's own
+entry already records that no mechanical check can see a relational claim. The
+honest control is the one that found them — an independent reader, which is
+what found them. The arithmetic half of item 2 is the one genuinely gateable
+piece and it is folded into **O100**'s proposal.
+
+### O92 — CLOSED 2026-09-02: `LlmClient::destination` named a host that was never contacted, because it hand-parsed the authority
+
+**Round six, audit-chain dimension. This is a defect in M55's own fix, and it
+is mine.** Verified by reproducing the parse.
+
+M55 scoped the userinfo strip to the authority, taking the authority to end at
+the first `/`, `?` or `#` (`crates/undercroft-llm/src/lib.rs:193`). For a
+**special scheme** the WHATWG parser terminates the authority on a fourth
+character, `\`. This repo documents that exact string two crates over
+(`crates/undercroft-net/src/lib.rs:60-62`) and pins it in a test (`:413`):
+
+> `http://evil.com\@127.0.0.1/v1` — for a special scheme the WHATWG parser
+> treats `\` as a path separator, so the host is `evil.com` while an
+> `@`-split reads `127.0.0.1`.
+
+So for `https://evil.com\@127.0.0.1/v1`: the TLS gate passes (it starts
+`https://`), ureq — same `url` crate — connects to **evil.com**, and
+`destination()` returns **`https://127.0.0.1/v1`**. That value is interpolated
+into `audit_refine`'s HMAC'd canonical, so the chain authenticates a
+destination that was never contacted, pointing at loopback while the corpus
+went to an attacker-chosen host. It is the precise harm M55 was written to
+remove, inverted into the adversarial direction.
+
+**The class is the point.** `is_loopback`'s doc says *"Hand-parsing this string
+is how the predicate came to disagree with ureq twice"* and exists so nobody
+hand-parses a URL again. M55 hand-parsed one. Third instance, and its test
+enumerated `/`, `?` and `#` — the separators I thought of — with no `\` row.
+
+**Fix shape.** Do not hand-parse. `undercroft-net` already depends on `url`;
+parse and read `.host_str()`/`.port()`, which is the same parser ureq uses, and
+reassemble. That makes the function structurally unable to disagree with the
+connector rather than enumerating separators correctly.
+
+**Gate.** Add the `\` row to the existing table, and — the durable half — a
+test asserting `destination()`'s host EQUALS `Url::parse(base).host_str()` over
+a corpus of adversarial spellings, so the property is *agreement with the
+parser* rather than a list of characters someone remembered.
+
+---
+
+**CLOSED 2026-09-02.** Fixed as prescribed: `destination()` reads host, port,
+path, query and fragment from `url::Url` and reassembles, so it cannot
+disagree with the connector. Both gate halves are in — the `\` row, and the
+property test over eleven adversarial spellings — plus a third at the call
+site in `refine.rs` that HMACs the value, because the llm crate's test proves
+the string and the surface test proves the record.
+
+**The ordinary rendering is byte-identical**, which was a design constraint
+rather than a happy accident: this value goes into an HMAC'd canonical, so a
+gratuitous change would move every future tag for no gain and make old records
+irreproducible from configuration. Three decisions carry it — an explicit port
+is kept and an implicit 443 is NOT added (`port()`, not
+`port_or_known_default()`), and the parser's normalization of "no path" to `/`
+is dropped, the base being trimmed of trailing slashes at construction. The
+pre-existing six-row table passing unchanged is what proves it.
+
+**Counterfactual: three of the four tests fire, and the two that stay green
+are the diagnostic.** Restoring M55's hand-parse fails the new row, the
+property test and the surface test. `no_destination_carries_a_credential` and
+its CLI twin stay green — correctly, because O92 is a WRONG-HOST defect and
+never leaked a credential, and those tests say so in their own docs. Read
+under the round-six rule, a green there is not partial coverage; it is a test
+measuring a different claim, and it does.
+
+**A false claim was caught by a failing premise, not by review.** The fix
+needs an answer for a base that does not parse, and `destination()` returns
+`String` with no error channel, so it returns a marker. I documented that
+branch as REACHABLE, reasoning from `with_key`'s own
+`base.starts_with("https://")` — a prefix test, not a parse. The test written
+to exercise it failed on its own premise: `with_key` builds its agent through
+`undercroft_net::agent_from_env`, which decides with the parser and refuses an
+unparseable base before a client exists. **The early check is not the gate;
+the one further down is.** The constant is now documented as unreachable and
+the test pins the refusal — so if anyone loosens that gate, the marker starting
+to appear in audit records is reported rather than discovered.
+
+**Not filed as a sibling finding, deliberately.** That prefix test is a second
+hand-parse, but it errs SAFE for the decision it makes: a string starting
+`https://` has scheme https if it parses at all, and `HTTPS://x` is refused
+where the parser would allow it. It admits only unparseable input, which the
+downstream gate then refuses. Recording it as a defect would be filing a
+finding I had just measured to be harmless.
+
+### O91 — CLOSED 2026-09-02: O81 re-opened A33, `--read-only` CREATED the database it is forbidden to create — and collapsed a crashed writer's WAL
+
+**Round six, error/status dimension. Verified link by link. This shipped in
+`1.2.0`.**
+
+O81 inserted `PalaceStore::recorded_embedder(&v)?` at
+`crates/undercroft-cli/src/main.rs:1177` — **before** the posture dispatch, so
+it runs on `Posture::ReadOnly` too. That function opens with a bare
+`Connection::open` (`crates/undercroft-store/src/lib.rs:4012`), and the tree
+states the consequence itself at `lib.rs:1519-1520`: *"A writable open CREATES
+it — `Connection::open` carries `SQLITE_OPEN_CREATE`."*
+
+A33's guard is `if !vault.database_exists()` (`lib.rs:3194`). So on a vault with
+a manifest and no `palace.db`, a read-only CLI open fabricates a zero-length
+database, `database_exists()` becomes true, `DatabaseMissing` can no longer
+fire, and the verdict degrades:
+
+| condition | before O81 | now |
+|---|---|---|
+| manifest present, `palace.db` absent, CLI `--read-only` | `DatabaseMissing` → **exit 2** (integrity) | `ReadOnlyUnmigrated` → **exit 1** |
+| same via `serve-http --read-only` | 409 + `class:"integrity"` | 409, **no class** |
+
+**The comment justifying the call is false about the code it introduces**
+(`main.rs:1174`): *"`recorded_embedder` opens the database read-only to read
+one meta row."* It does not.
+
+This lands on the path the flag exists for. `main.rs:50-59` justifies
+`--read-only` as *"exactly wrong when you are looking at a vault BECAUSE
+something went wrong with it"* and cites CLAUDE.md's *"evidence destruction on
+the incident runbook's own path"* — and the first thing the flag now does is
+write to the vault.
+
+**Why no gate saw it.** The only A33 test
+(`lib.rs:18060`) constructs the vault and calls `PalaceStore::open_read_only`
+**directly**; it never goes through `open_store_as`, so the new pre-step is
+outside the question it asks. `grep -rn "DatabaseMissing" tests/` returns
+nothing — there is no surface-level A33 check at all.
+
+**The `/v1` half is older and equally live**, and predates R4/A33: `tenant.rs:
+3053` calls the embedder factory before `open_read_only` at `:3059`, and
+`embedder_factory` (`main.rs:1451`) makes the same `recorded_embedder` call.
+
+**Corroborated from in-repo evidence alone**, without needing rusqlite's
+source: `connect_read_only` passes
+`OpenFlags::SQLITE_OPEN_READ_ONLY | SQLITE_OPEN_NO_MUTEX` **explicitly**
+(`lib.rs:3247-3248`), which is only necessary if the default differs — and
+`lib.rs:1519-1520` states outright that it does.
+
+**UNSETTLED RESIDUAL, and it would make this worse rather than merely
+untidy.** The connection at `lib.rs:4012` is READ-WRITE and is dropped at the
+end of the function. SQLite checkpoints and removes the `-wal` when the last
+connection to a WAL database closes. If that fires here, then
+`undercroft --read-only` does not merely create an empty file — it collapses a
+crashed writer's hot WAL before an operator has inspected it, which is
+evidence destruction rather than evidence fabrication, on the same path.
+**This needs a RUN, not a reading, and was not executed**: open a vault, kill
+the writer mid-transaction to leave a hot `-wal`, then stat `palace.db-wal`
+before and after any `--read-only` command. Recorded as unsettled rather than
+asserted either way.
+
+**Fix shape.** `recorded_embedder` must open with
+`SQLITE_OPEN_READ_ONLY` — it reads one meta row and has no business creating
+anything — which also makes its own doc true, and which closes the residual
+above as a side effect rather than needing its own remedy. Then the posture question
+disappears rather than being answered per call site. Residual to state either
+way: a read-only open of a genuinely absent database must keep answering
+`DatabaseMissing`, not a bare SQLite error.
+
+**Gate.** A test driving `open_store_as(Posture::ReadOnly)` — not
+`open_read_only` — against a manifest with no `palace.db`, asserting
+`DatabaseMissing` **and** that `palace.db` still does not exist afterwards.
+The second assertion is the one that fails today; the first would too.
+
+---
+
+**CLOSED 2026-09-02.** `recorded_embedder` returns early when the database is
+absent and opens `SQLITE_OPEN_READ_ONLY` otherwise — the prescribed fix, in the
+shared function rather than at either call site, so the `/v1` half above closes
+with it. Driven through `/v1` to confirm that rather than assume it: a broken
+vault beside a healthy default answers **409 + `class:"integrity"`** and
+fabricates nothing, while the healthy one still answers 200.
+
+**THE RESIDUAL WAS REAL, and it was settled by the run this entry asked for
+rather than by the reading that would have sufficed to close the entry.** The
+filed remedy said the fix closes it *"as a side effect"*, which is a prediction,
+and the doc comment written with the fix asserted it — a doc claim, which this
+project does not accept as verification. Measured both ways on a killed writer,
+using the counterfactual binary:
+
+| | hot `-wal` | `palace.db` digest |
+|---|---|---|
+| defect restored | **41,232 → 0** | **changed** |
+| fixed | 41,232 → 41,232 | unchanged |
+
+So `--read-only` was destroying a crashed writer's WAL on every invocation, not
+merely fabricating an empty file — the worse of the two readings, and the one
+the entry declined to assert without a run.
+
+**Gates: ten checks, and the four that stay green are the interesting ones.**
+One store unit test (`reading_the_recorded_embedder_never_creates_the_database`)
+plus nine e2e checks across the CLI and `/v1`. Six fail over the restored
+defect; the other four are premises. That split is deliberate — two of the WAL
+checks compare an absent file to an absent file and **pass vacuously** when no
+hot WAL was staged, which is indistinguishable from a clean tree, so the premise
+now GATES them and they report *not verified* rather than *ok*. That was not
+hypothetical: the first version of the arm staged its WAL with a POST whose body
+field was wrong, and the premise probe is the only thing that said so.
+
+**A method note this unit earned.** The first counterfactual ran against a WAL
+made of schema pages, because the staging command silently failed and the
+server's own table creation filled the WAL instead. It fired, and it would have
+been reported as proof. The gate was then re-staged with a real write and the
+counterfactual **re-run against the artifact in its final form** — a
+counterfactual that exercised an earlier version of the check proves something
+about that version and nothing about the one that ships.
+
+**Driven through a real corpus**, which for this change means asking whether a
+read-only open still costs what it did and whether the WAL property survives a
+vault of consequence. Two runs. The LoCoMo feed across eight wings (88 drawers)
+answered `--read-only stats` in 5 ms and `--read-only search` in 23 ms, and a
+killed `serve-http` mid-ingest left a **1,755,152-byte** hot WAL that survived
+two read-only commands byte for byte, after which the writer recovered it and
+answered `VERIFY OK` with the uncheckpointed writes searchable. Then the repo's
+own source and docs mined into three wings — **364,843 drawers, 822 MB** —
+where `--read-only stats` took 281 ms and `--read-only search` 24.2 s against a
+writable **22.8 s**, i.e. inside the noise of the same query on the same vault,
+which is the comparison that matters: the change adds one `meta` lookup on an
+already-open path and must not show up. A 2,793,392-byte hot WAL was preserved
+there too, with `palace.db` byte-identical.
+
+**Drift check.** `docs/AGENTS.md:218` already said *"this one is an integrity
+verdict (exit 2)"*, and `docs/PARITY.md`, `THREAT_MODEL.md` and
+`architecture/index.html` say nothing about it — so the document was right and
+the code was wrong for one release. That is the **documents-lead** direction of
+the drift doctrine, and no documentation change is owed by the fix itself. What
+moved instead is arithmetic: `e2e` 438 → 448, `test` 785 → 786, the landing
+`cargo tests` tile and its `e2e checks` sum (703 → 713), and the house page,
+which republishes the test count.
+
+### O90 — CLOSED 2026-09-03: `dsn_is_loopback` failed OPEN, so pgvector embeddings could cross the network in the clear
+
+**Round six, config/search dimensions. Verified by reading and by reproducing
+the predicate.** `crates/undercroft-index/src/lib.rs:587-610` ends:
+
+```rust
+// No host at all means libpq's default, which is the local socket.
+saw_host || !d.is_empty()
+```
+
+`saw_host` is set only by `field.strip_prefix("host=")`. So *"I found no
+`host=` token"* and *"there is no host"* are conflated, and **any non-empty
+DSN whose host is spelled another way reads as loopback**:
+
+| DSN | verdict |
+|---|---|
+| `host=10.0.0.5 dbname=x` | correctly refuses |
+| `hostaddr=10.0.0.5 dbname=x` | **loopback → refusal skipped** |
+| `host = 10.0.0.5 dbname=x` (libpq allows spaces around `=`) | **loopback → refusal skipped** |
+
+`hostaddr` is a standard libpq parameter. What the refusal it bypasses says
+(`:648-652`): *"the pgvector DSN points at a non-loopback host without TLS.
+Embeddings are plaintext-derived and would cross the network in the clear …
+There is no override."* With the predicate returning `true`, `PgVectorIndex::
+new` takes the `NoTls` arm and every pushed embedding leaves unencrypted.
+
+**The doc directly above the function claims the opposite** (`:585-586`):
+*"Anything unrecognised is NOT loopback — the safe direction, matching
+`is_loopback`."* `is_loopback` genuinely does fail closed on an unparseable
+URL (`undercroft-net/src/lib.rs:69-71`); this hand-rolled sibling does not.
+That is the third instance of *hand-parsing a connection string* in this tree,
+after the two `is_loopback` inversions its own doc records.
+
+**THE FINDING DOES NOT DEPEND ON THE CONNECTOR, and that boundary is worth
+stating so it is neither dismissed nor overstated.** Two halves:
+
+* **Asserted, fully evidenced in our own code:** the predicate is fail-open.
+  It returns `true` whenever its whitespace-split parser does not recognise a
+  `host=` token, conflating *"there is no host"* with *"I did not parse the
+  host that is there"* — in a function whose own doc claims the safe
+  direction. That is true regardless of what any connector does.
+* **NOT settled:** whether `tokio-postgres 0.7.18` accepts the specific
+  spellings that reach it. libpq documents all three (`host = ` with
+  whitespace, `hostaddr=`, a comma host list); tokio-postgres aims for that
+  grammar; its parser was not read, because there is no cargo registry on the
+  host — the registry lives in a container volume under this project's
+  Docker-only policy, and the audit was read-only.
+
+So a reader who discovers that one spelling is rejected by the connector has
+narrowed the exploit, not refuted the defect: a guard that fails open is a
+defect at the guard.
+
+**Fix shape.** Fail closed: return `false` when no host key is recognised, and
+recognise the keys libpq actually accepts (`host`, `hostaddr`), splitting on
+`=` with surrounding whitespace trimmed rather than on a literal prefix. Better
+still, delegate: `tokio_postgres::Config::from_str` parses both DSN forms and
+exposes `.get_hosts()`, so the predicate can ask the same parser the connector
+uses — which is exactly why `is_loopback` delegates to `url`.
+
+**Gate — and prefer the one that measures the OBSERVABLE over the one that
+measures our intent.** A unit table over DSN spellings is the cheap half:
+assert the safe direction for every unrecognised shape, with `hostaddr=` and
+the whitespace form as named rows, plus a premise arm that a known-loopback DSN
+still passes (or the test passes by refusing everything). The better half is a
+live arm in `tests/e2e-backends.sh` constructing `PgVectorIndex` with
+`UNDERCROFT_PGVECTOR_DSN="host = <non-loopback> dbname=x"` and asserting it is
+**refused** — that measures the refusal actually firing rather than the
+predicate's opinion, and **it fails today on the predicate alone**, which is
+precisely why the unsettled connector question does not gate the finding.
+Note the existing `backends-e2e` cannot catch this class: it runs one DSN
+spelling against a live container.
+
+---
+
+**CLOSED 2026-09-03.** Fixed by delegation, as the entry's better option
+proposed: the predicate parses with `tokio_postgres::Config` — the exact type
+`postgres::Client::connect` builds, that call being
+`params.parse::<Config>()?.connect(tls)` — and requires every host AND every
+`hostaddr` to be loopback. A comma list is a list; `hostaddr` is what gets
+dialed when both keys are present; a DSN that does not parse is not loopback,
+which is the direction the old doc claimed and the old body did not take. An
+empty DSN keeps its pre-O90 answer of `false`: a failed interpolation is not a
+declaration that the database is local.
+
+**THE UNSETTLED HALF IS NOW SETTLED, AND IT RESOLVED AGAINST US.** This entry
+recorded that it had not read `tokio-postgres`'s parser — the audit was
+read-only and the registry lives in a container volume — and that a reader who
+found the connector rejecting a spelling would have narrowed the exploit
+rather than refuted the defect. Read now, from the locked 0.7.18 source:
+`parameter()` runs `skip_ws()` / `eat('=')` / `skip_ws()`, so whitespace around
+`=` is legal, and `"hostaddr"` is a recognised key at `config.rs:610` that
+`host` never covers. **Both bypasses reach the connector**, so this was
+exploitable end to end and not merely a guard defect. The honest reading of
+that: the entry's caution was right to file the defect anyway, and the
+narrowing it left open would have gone the other way.
+
+**Reaching `hostaddr` cost a dependency EDGE, and the reason is worth
+recording.** `postgres::Config` exposes `get_hosts()` but no
+`get_hostaddrs()`, holds its inner `tokio_postgres::Config` in a private field
+with no accessor, and the crate re-exports neither. So `hostaddr=` is
+invisible from the `postgres` API surface — a guard written against it
+*cannot* see the key that defeats it. `tokio-postgres` is now a direct
+dependency of `undercroft-index`: no new crate in the binary (it is already
+there at 0.7.18 via `postgres` and `tokio-postgres-rustls`), just an edge to
+the type that makes the question answerable.
+
+**Both gate halves are in, and the second is the one that matters.** A 15-row
+table names both bypasses, asserts the safe direction, and carries a premise
+that the fixture set exercises BOTH answers so a predicate refusing everything
+cannot pass it; a second test pins that an unparseable DSN is not loopback —
+and its own premise caught that `"="` is *not* unparseable (it reads as an
+empty key with an empty value), so asserting on it would have proved nothing.
+Then the live half in `backends-e2e`: two pushes at the REAL pgvector
+container, one per bypass spelling, requiring the refusal. Under the defect
+those do not merely mis-answer — they connect and the push **succeeds**, which
+is the leak itself. A fourth arm pins the other direction, that a loopback DSN
+still passes the transport gate, so the suite cannot go green by refusing
+everything.
+
+**This predicate had no test at all before today**, which is how a guard whose
+refusal says *"There is no override"* shipped failing open.
+
+### O89 — CLOSED 2026-09-02: the measured figures re-run, and a second stage's lift shrank without regressing
+
+**O88's stated residual, closed the same day.** O88 re-verified the parity
+document's *capability* claims and said plainly that its *measured* ones were
+a different job. This is that job — as far as this machine can take it.
+
+**Three LoCoMo arms, identical protocol and dataset, 1,982 evaluable QA:**
+
+| arm (session R@10) | 2026-07 | 2026-09-02 | |
+|---|---|---|---|
+| hash + BM25 (base) | 94.6% (1875) | **95.51%** (1893) | +18 q |
+| MiniLM + BM25 | 94.6% (1875) | **95.36%** (1890) | +15 q |
+| + ColBERT | 96.77% (1918) | **96.92%** (1921) | +3 q |
+
+**The finding is in the delta, and it is invisible to re-running one arm.**
+ColBERT reproduced to within three questions while the base moved eighteen,
+so its lift over fusion is now **+1.4 pts, not the recorded +2.2**. Nothing
+about the second stage regressed; the first stage improved underneath it. A
+second stage is worth the difference between itself and what it re-ranks, and
+that difference is not a property of the stage alone.
+
+The convergence claim survives intact: model and zero-model hash are three
+questions apart (95.51 vs 95.36).
+
+**Comparability, since it is the whole basis for calling these the same
+measurement.** Recall is hardware-independent, so July's Apple host and this
+Docker-for-Windows one are comparable on R@k. **Latency is not**, and no ms/q
+anywhere was re-measured or restated — a figure from another machine neither
+confirms nor refutes one from that machine, and overwriting would make those
+documents less true, not more.
+
+**Not re-measured, each stated where it is cited rather than left to
+inference:** the cross-encoder arm (no `reranker/model.onnx` export exists
+here — the embedder and ColBERT exports do), the served-model deltas (the
+weights volume is empty and they are multi-GB downloads), the FLORES
+cross-script figures (parallel corpora carry their own licences and never
+enter this repo), and the 131k→1M scale rows (hours of compute).
+
+**Nine surfaces carried the old figure, and they took THREE different
+treatments — which is the part a sweep would have destroyed.**
+
+* **Updated**, being live product claims: `README.md`, `website/landing/
+  index.html` (bar VALUES and bar WIDTHS, plus the derived *"+5.7 over their
+  best"* → **+6.5**), `website/src/retrieval.md`, `docs/AGENTS.md`,
+  `docs/MULTI_TENANCY.md`.
+* **Annotated with rows kept**, being measurement documents whose tables are
+  internally consistent and cite archived logs: `benchmarks/RESULTS.md`
+  (dated section, July rows intact), `docs/RETRIEVAL_SCALING.md`
+  (document-level banner, so it covers the HNSW-parity and `ort` rows a
+  section banner would have missed), `docs/BENCHMARKS_VS.md`.
+* **Deliberately untouched**, and these are the ones a regex would have got
+  wrong: `benchmarks/logs/README.md` DESCRIBES WHAT IS INSIDE AN ARCHIVED
+  LOG, so editing it would make the description false; the landing's `96.5`
+  vs-mem0 row is *MiniLM + ColBERT via `colbert-ort` at v0.23.0*, a different
+  configuration from the hash+ColBERT run and therefore not mine to restate;
+  and `docs/CONSULTATION_REVIEW.md`'s `66.9% vs 94.6%` with its `−27.7pp` is
+  a head-to-head whose competitor side was not re-run — **moving one side of
+  a head-to-head while the other stands is exactly what that document's
+  fairness contract exists to prevent.**
+
+**No gate.** A benchmark figure going stale is not mechanically detectable:
+nothing can know whether a recorded number still describes the tree without
+running the benchmark, which is the job itself. What IS worth carrying is the
+rule this unit ran on — **a measured figure is only comparable to one taken
+under the same protocol AND the same hardware class**, which is why recall
+moved here and latency did not.
+
+### O88 — CLOSED 2026-09-02: the parity document re-verified, and the label moved because it was earned
+
+**The maintainer's correction, and it lands on my reasoning rather than on a
+missed file.** Asked to leave no stales, I reported `docs/PARITY.md`'s
+`v1.0.0` as-of label as *correctly* left alone. The doctrine says
+**"Re-verify it, then move it."** I had been quoting the first clause as if it
+were the whole rule — which turns a deferral into a permanent excuse, and had
+done so across three releases. Deferring once is defensible; the third time it
+is the stale.
+
+**The re-read covered all 252 lines**, with every checkable claim put against
+the CODE rather than read for plausibility: the CLI's real subcommand surface
+from `--help` on a freshly built binary (not from the source, which is what
+`table_for_test` exists to stop people doing), the MCP count against
+`parity.rs`, the `/v1` count against `tenant.rs`'s dispatch, each capability
+bullet against the crate implementing it.
+
+**Four drifts, all of them things `1.2.0` moved and this file had not:**
+
+* the `kg` command list gave seven subcommands; there are **ten** —
+  `receipts`, `authority` and `canonical` were missing, and the last two are
+  the golden-values tier, which has no upstream equivalent at all;
+* `repair` was described as *"fingerprint backfill, re-embed, vacuum,
+  verify"*, omitting the stale-index drop, the identity re-stamp, the run
+  record and — the load-bearing part — that M19 put all of it in ONE
+  transaction;
+* the read-audit bullet described **`search`-only** auditing with a keyed
+  query fingerprint. That is precisely the defect O50/O51 closed across
+  thirteen doors, plus O79's `egress/refine`. **The parity document was
+  describing the pre-`1.2.0` state of the thing `1.2.0` was about**, which is
+  the sharpest available argument against deferring a re-read;
+* the `/v1` bullet predated O68 putting the agent-facing memory surface
+  there — 37 routes, now 56.
+
+**What the re-read did NOT cover is written into the document itself**, so
+the label cannot be read as more than was done: the measured figures — recall
+percentages, latencies, benchmark deltas — were **not** re-measured. They
+cite their own instruments and re-running those is a different job. A claim of
+the form *"this capability exists and works this way"* was checked; *"it
+measured N"* was not. Without that sentence the moved label would assert more
+than the work behind it, which is the `O56`/`O6` defect wearing the opposite
+coat.
+
+**One stale found on the way and fixed:** the CLI's own `--help` for `repair`
+was behind that function's doc comment, in the same four ways. No test pinned
+the string.
+
+**No gate**, and the reason is O87's, cited rather than re-derived: an as-of
+label going stale is a judgement about whether a document still matches a
+codebase, and nothing mechanical can hold that. What CAN be gated already is —
+the `version surfaces` preflight refuses to bump this label with a release,
+which is exactly why it survived three of them, and that refusal is correct.
+The gap it leaves is human and the answer is the doctrine sentence, applied
+whole.
+
+### O87 — CLOSED 2026-09-01: the post-1.2.0 sweep, run against O61's own findings
+
+**The same question O61 asked, one release later**, and deliberately run
+against O61's list rather than from scratch — a sweep that re-derives its own
+scope finds what it happens to think of. Documents only: no code, no version
+surface moves. Three findings, and the interesting result is which of O61's
+did **not** recur.
+
+**O61's headline defect did NOT recur, and that is a real answer rather than
+a lucky one.** It found a `ROADMAP` pointer reading *"described in CHANGELOG
+under `## Unreleased`"* which cutting a release had silently broken. Searched
+again: the five surviving mentions of `## Unreleased` are all inside O61's own
+entry and the corrected 1.1.0 pointer — historical narrative *about* the
+defect, not live pointers. The `1.2.0` section names no CHANGELOG heading, so
+there was nothing for the rename to break.
+
+**1. `UPGRADING.md` still said `## 1.2.0 (unreleased)`.** It had just been
+released. The section one down reads `## 1.1.1 (released 2026-08-19)`, so the
+convention was already there to follow. This is the plainest form of the class
+this entry is named for.
+
+**2. The `ROADMAP` heading for `1.2.0` diverged from its own convention.**
+Release prep set `## 1.2.0 — released 2026-09-01 — three round-four rows,
+…`, appending the old descriptive tail after a second em-dash; `1.1.0` and
+`1.1.1` are `## X.Y.Z — released DATE` with the description in the body
+paragraph. Normalised, description moved into the body. **O61 is why this was
+looked for at all**: it records that the two files use DIFFERENT conventions
+(`ROADMAP` writes `— released DATE`, `CHANGELOG` writes `— DATE`) and that
+*the first attempt at O61's own fix produced a second broken pointer* by
+mixing them. Checked both this time: the CHANGELOG heading is
+`## 1.2.0 — 2026-09-01`, which is correct.
+
+**3. `docs/PARITY.md`'s as-of note had gone stale in its own arithmetic** —
+the note O61 ADDED. It read *"Two releases have shipped since"*; three have.
+Updated, and `1.2.0` assessed the same way its siblings were. **The label
+stays at `v1.0.0`**, because no full re-read of its 225 lines was done and
+moving it would assert one — the rule that note itself sets.
+
+**The 1.2.0 assessment is labelled as WEAKER than the other two, deliberately.**
+`1.1.1` argues from the definition of a PATCH and `1.1.0` was small enough to
+enumerate; `1.2.0` is fifty-seven units, and the claim that it introduced no
+new *category* is a judgement that all of them stayed inside five existing
+headings — checked at category level, not line by line. Saying so is the point:
+the failure this document keeps recording is a claim stronger than its
+evidence.
+
+**No gate is proposed.** A release renaming a heading that prose points at is
+real, but the pointers are prose in arbitrary files and the only check that
+would catch them is *"every backtick-quoted `## Heading` resolves"* — which
+O61 already established is unbuildable, because `git grep` finds such strings
+inside the paragraphs DESCRIBING the defect. That reasoning is unchanged and
+is cited rather than re-derived.
+
 ## 1.2.0 — released 2026-09-01
 
 Three round-four rows, all naming or reporting contracts, plus what closing
@@ -5761,6 +6399,26 @@ is the field that exists because a migration has to ask for it. Both are fixed.
 These are not releasable work. Kept out of the version sections deliberately,
 so a release plan is not padded with things a release cannot contain.
 
+**FILED 2026-09-03 (O101): that first sentence is false about most of this
+section's contents, and cutting `1.2.1` is what surfaced it.** The `O` series
+has accumulated here since round four, and the overwhelming majority of it is
+CLOSED, releasable ENGINE work — O1, O3, O4, O8-O45 and on. The convention is
+real and is applied: `1.1.1` holds O54-O61 physically, O46 leaves a *"MOVED
+to"* stub behind, and `1.2.1` took O87-O92 and O98 out of here today. It has
+simply never been applied to the backlog, so a section whose header says *"not
+releasable work"* is where nearly all the releasable work sits.
+
+Two things follow, both left as decisions rather than acted on inside a
+release. **The open round-six items still here — O93, O94, O95, O96, O97, O99,
+O100 — are releasable work with no target release, which is exactly what the
+`Open` section above is for**; they are here because the round-six filing
+followed the `O`-series habit rather than the section headers. And the ~50
+closed ones need either a migration into their release sections or an honest
+rewrite of this header. Migrating is mechanical and verifiable (extract by
+heading, assert the heading multiset is unchanged — which is how today's seven
+moved), but it is a ~4,000-line diff that belongs in its own unit, not in a
+release PR.
+
 **This paragraph used to say "two are clicks in a web UI … and one is a naming
 decision", and it described the section as it was, not as it is** (corrected
 2026-08-20). Half of O6 — the org avatar — was found already done in 2026-08-10,
@@ -5772,95 +6430,6 @@ which is the same defect as a count in prose one level up. So: O6 is the click,
 O7 is the naming decision that needs a MAJOR, and O23 sits here as a filed cost
 with the argument for leaving it. Releasable work with no target release now
 has its own section above.
-
-### O98 — CLOSED 2026-09-02: the three units that closed the doc-drift class introduced five instances of it
-
-**Round six, docs-vs-code dimension. Every one of these is mine, from M56, O88
-and O89 — the units whose subject was doc-vs-code drift.** Verified by reading
-both sides.
-
-**1. O88 published a claim SQLite makes impossible.** `docs/PARITY.md:27` and
-the `--help` string O88 "fixed" (`crates/undercroft-cli/src/main.rs:495-497`)
-both say `repair` does *"…record the run, vacuum, verify — all of it inside
-**one transaction**"*. `crates/undercroft-store/src/manage.rs:1241` says the
-opposite, and says why: *"`VACUUM` **stays OUTSIDE** — SQLite refuses it
-inside a transaction — and after the commit."* Five of the seven listed steps
-are inside `BEGIN IMMEDIATE`; vacuum and verify are outside.
-
-I copied the enumeration out of `repair`'s doc comment and dropped the
-exclusion stated two paragraphs below it — **reading part of a doc block,
-which is M56's class, committed by the unit that closed M56's siblings.**
-
-**2. O89 moved base figures in `website/src/retrieval.md` and left every
-figure derived from them.** That file is the one O89 listed as UPDATED; the
-ones it ANNOTATED stayed self-consistent.
-
-| line | claim | its own inputs | truth |
-|---|---|---|---|
-| `:58` | "BM25 buys **+1.9 pts**" | `:54` 95.5, `:55` 92.7 | **+2.8** |
-| `:388` | "free **+1.9 pts**" | same table | **+2.8** |
-| `:389` | "the reranker is the accuracy lever (**+3 pts**)" | 97.68 vs `:68` 95.4 | **+2.3**, and that arm was not re-run |
-
-`+1.9` and `+3` are exactly `94.6−92.7` and `97.68−94.6`. And
-`grep -c "2026-09-02\|re-measured"` on that file is **0** — no date, no
-provenance, so September and July numbers sit unlabelled together, without the
-reranker caveat O89 added to the other four surfaces.
-
-**3. O89 broke a head-to-head by the rule O89 itself states.**
-`website/landing/index.html:770` now reads **95.5** for *"undercroft · no model
-at all, sealed"*, while `docs/BENCHMARKS_VS.md:107` — linked from directly
-under that chart — keeps **94.6** under a banner written in the same commit:
-*"moving one side of a head-to-head while the other stands is the failure this
-document's fairness contract exists to prevent."* The chart's competitor row
-(66.9) was left. **I did the thing I had just written down as forbidden, one
-file over, in one commit.**
-
-The distinction that should have governed it: the MemPalace rows on the other
-chart are third-party PUBLISHED figures being cited, so re-measuring our own
-side is legitimate; the mem0 row came from OUR paired run, so both sides move
-together or neither does.
-
-**4. O89 left an unbalanced parenthesis on the live landing page.**
-`website/landing/index.html:704`: *"…measured 97.68 (1936/1982) against the
-older 94.6 base**)**"*.
-
-**5. M56 missed a three-deep pileup in `parity.rs`, the file it repaired** —
-270 lines above the `Absence` block it fixed. `:27-28` (the MCP tool
-inventory), `:29-42` (every `UNDERCROFT_*` variable) and `:43+` (how a
-declaration behaves) all stack onto `pub enum ConfigClass` at `:69`, leaving
-**`ENGINE_ENV_VARS` (`:108`) and `MCP_TOOLS` (`:199`) with no doc at all**;
-`:43-45` is additionally truncated mid-clause with an unterminated `**`.
-
-**Items 1-4 are FIXED in this unit**, since each was a live falsehood on a
-published surface and the correction is a line:
-
-* `docs/PARITY.md:27` and `main.rs:495-497` now name the five steps that ARE
-  in the transaction and say vacuum and re-verify run outside it, because
-  SQLite refuses a `VACUUM` inside one.
-* `website/src/retrieval.md` recomputes `+1.9 → +2.8` (twice) and
-  `+3 → +2.3` from the table directly above them, carries the caveat that the
-  reranked arm was not re-run, and gains the provenance line the other four
-  surfaces already had.
-* `website/landing/index.html:770` goes back to **94.6**, restoring the
-  pairing with `docs/BENCHMARKS_VS.md:107` that O89's own banner demands. The
-  distinction, now written down: the MemPalace rows on the other chart are
-  third-party PUBLISHED figures being cited, so re-measuring our side is
-  legitimate; the mem0 row came from OUR paired run, so both sides move or
-  neither does.
-* the unbalanced paren is closed.
-
-**Item 5 is NOT fixed here** — it is an instance of the general class and is
-the first row of **O99**'s table, where the remedy and the gate question
-belong. Splitting it out would have made this entry look complete while its
-class stayed open.
-
-**Gate.** None proposed for 1-4: these are arithmetic and prose, and O89's own
-entry already records that no mechanical check can see a relational claim. The
-honest control is the one that found them — an independent reader, which is
-what found them. The arithmetic half of item 2 is the one genuinely gateable
-piece and it is folded into **O100**'s proposal.
-
----
 
 ### O99 — the misplaced-doc-block class is NOT closed: twelve further instances, and one is affirmatively false
 
@@ -5962,356 +6531,6 @@ arms, `*_CA` count, `UNDERCROFT_ORCH_*` count, shared-resolver count). The
 scoped-claim half is not gateable — a qualifier that goes missing moves no
 count — and is recorded here as bound by attention, which is what O89's entry
 already concluded for relational claims.
-
----
-
-### O90 — CLOSED 2026-09-03: `dsn_is_loopback` failed OPEN, so pgvector embeddings could cross the network in the clear
-
-**Round six, config/search dimensions. Verified by reading and by reproducing
-the predicate.** `crates/undercroft-index/src/lib.rs:587-610` ends:
-
-```rust
-// No host at all means libpq's default, which is the local socket.
-saw_host || !d.is_empty()
-```
-
-`saw_host` is set only by `field.strip_prefix("host=")`. So *"I found no
-`host=` token"* and *"there is no host"* are conflated, and **any non-empty
-DSN whose host is spelled another way reads as loopback**:
-
-| DSN | verdict |
-|---|---|
-| `host=10.0.0.5 dbname=x` | correctly refuses |
-| `hostaddr=10.0.0.5 dbname=x` | **loopback → refusal skipped** |
-| `host = 10.0.0.5 dbname=x` (libpq allows spaces around `=`) | **loopback → refusal skipped** |
-
-`hostaddr` is a standard libpq parameter. What the refusal it bypasses says
-(`:648-652`): *"the pgvector DSN points at a non-loopback host without TLS.
-Embeddings are plaintext-derived and would cross the network in the clear …
-There is no override."* With the predicate returning `true`, `PgVectorIndex::
-new` takes the `NoTls` arm and every pushed embedding leaves unencrypted.
-
-**The doc directly above the function claims the opposite** (`:585-586`):
-*"Anything unrecognised is NOT loopback — the safe direction, matching
-`is_loopback`."* `is_loopback` genuinely does fail closed on an unparseable
-URL (`undercroft-net/src/lib.rs:69-71`); this hand-rolled sibling does not.
-That is the third instance of *hand-parsing a connection string* in this tree,
-after the two `is_loopback` inversions its own doc records.
-
-**THE FINDING DOES NOT DEPEND ON THE CONNECTOR, and that boundary is worth
-stating so it is neither dismissed nor overstated.** Two halves:
-
-* **Asserted, fully evidenced in our own code:** the predicate is fail-open.
-  It returns `true` whenever its whitespace-split parser does not recognise a
-  `host=` token, conflating *"there is no host"* with *"I did not parse the
-  host that is there"* — in a function whose own doc claims the safe
-  direction. That is true regardless of what any connector does.
-* **NOT settled:** whether `tokio-postgres 0.7.18` accepts the specific
-  spellings that reach it. libpq documents all three (`host = ` with
-  whitespace, `hostaddr=`, a comma host list); tokio-postgres aims for that
-  grammar; its parser was not read, because there is no cargo registry on the
-  host — the registry lives in a container volume under this project's
-  Docker-only policy, and the audit was read-only.
-
-So a reader who discovers that one spelling is rejected by the connector has
-narrowed the exploit, not refuted the defect: a guard that fails open is a
-defect at the guard.
-
-**Fix shape.** Fail closed: return `false` when no host key is recognised, and
-recognise the keys libpq actually accepts (`host`, `hostaddr`), splitting on
-`=` with surrounding whitespace trimmed rather than on a literal prefix. Better
-still, delegate: `tokio_postgres::Config::from_str` parses both DSN forms and
-exposes `.get_hosts()`, so the predicate can ask the same parser the connector
-uses — which is exactly why `is_loopback` delegates to `url`.
-
-**Gate — and prefer the one that measures the OBSERVABLE over the one that
-measures our intent.** A unit table over DSN spellings is the cheap half:
-assert the safe direction for every unrecognised shape, with `hostaddr=` and
-the whitespace form as named rows, plus a premise arm that a known-loopback DSN
-still passes (or the test passes by refusing everything). The better half is a
-live arm in `tests/e2e-backends.sh` constructing `PgVectorIndex` with
-`UNDERCROFT_PGVECTOR_DSN="host = <non-loopback> dbname=x"` and asserting it is
-**refused** — that measures the refusal actually firing rather than the
-predicate's opinion, and **it fails today on the predicate alone**, which is
-precisely why the unsettled connector question does not gate the finding.
-Note the existing `backends-e2e` cannot catch this class: it runs one DSN
-spelling against a live container.
-
----
-
-**CLOSED 2026-09-03.** Fixed by delegation, as the entry's better option
-proposed: the predicate parses with `tokio_postgres::Config` — the exact type
-`postgres::Client::connect` builds, that call being
-`params.parse::<Config>()?.connect(tls)` — and requires every host AND every
-`hostaddr` to be loopback. A comma list is a list; `hostaddr` is what gets
-dialed when both keys are present; a DSN that does not parse is not loopback,
-which is the direction the old doc claimed and the old body did not take. An
-empty DSN keeps its pre-O90 answer of `false`: a failed interpolation is not a
-declaration that the database is local.
-
-**THE UNSETTLED HALF IS NOW SETTLED, AND IT RESOLVED AGAINST US.** This entry
-recorded that it had not read `tokio-postgres`'s parser — the audit was
-read-only and the registry lives in a container volume — and that a reader who
-found the connector rejecting a spelling would have narrowed the exploit
-rather than refuted the defect. Read now, from the locked 0.7.18 source:
-`parameter()` runs `skip_ws()` / `eat('=')` / `skip_ws()`, so whitespace around
-`=` is legal, and `"hostaddr"` is a recognised key at `config.rs:610` that
-`host` never covers. **Both bypasses reach the connector**, so this was
-exploitable end to end and not merely a guard defect. The honest reading of
-that: the entry's caution was right to file the defect anyway, and the
-narrowing it left open would have gone the other way.
-
-**Reaching `hostaddr` cost a dependency EDGE, and the reason is worth
-recording.** `postgres::Config` exposes `get_hosts()` but no
-`get_hostaddrs()`, holds its inner `tokio_postgres::Config` in a private field
-with no accessor, and the crate re-exports neither. So `hostaddr=` is
-invisible from the `postgres` API surface — a guard written against it
-*cannot* see the key that defeats it. `tokio-postgres` is now a direct
-dependency of `undercroft-index`: no new crate in the binary (it is already
-there at 0.7.18 via `postgres` and `tokio-postgres-rustls`), just an edge to
-the type that makes the question answerable.
-
-**Both gate halves are in, and the second is the one that matters.** A 15-row
-table names both bypasses, asserts the safe direction, and carries a premise
-that the fixture set exercises BOTH answers so a predicate refusing everything
-cannot pass it; a second test pins that an unparseable DSN is not loopback —
-and its own premise caught that `"="` is *not* unparseable (it reads as an
-empty key with an empty value), so asserting on it would have proved nothing.
-Then the live half in `backends-e2e`: two pushes at the REAL pgvector
-container, one per bypass spelling, requiring the refusal. Under the defect
-those do not merely mis-answer — they connect and the push **succeeds**, which
-is the leak itself. A fourth arm pins the other direction, that a loopback DSN
-still passes the transport gate, so the suite cannot go green by refusing
-everything.
-
-**This predicate had no test at all before today**, which is how a guard whose
-refusal says *"There is no override"* shipped failing open.
-
----
-
-### O91 — CLOSED 2026-09-02: O81 re-opened A33, `--read-only` CREATED the database it is forbidden to create — and collapsed a crashed writer's WAL
-
-**Round six, error/status dimension. Verified link by link. This shipped in
-`1.2.0`.**
-
-O81 inserted `PalaceStore::recorded_embedder(&v)?` at
-`crates/undercroft-cli/src/main.rs:1177` — **before** the posture dispatch, so
-it runs on `Posture::ReadOnly` too. That function opens with a bare
-`Connection::open` (`crates/undercroft-store/src/lib.rs:4012`), and the tree
-states the consequence itself at `lib.rs:1519-1520`: *"A writable open CREATES
-it — `Connection::open` carries `SQLITE_OPEN_CREATE`."*
-
-A33's guard is `if !vault.database_exists()` (`lib.rs:3194`). So on a vault with
-a manifest and no `palace.db`, a read-only CLI open fabricates a zero-length
-database, `database_exists()` becomes true, `DatabaseMissing` can no longer
-fire, and the verdict degrades:
-
-| condition | before O81 | now |
-|---|---|---|
-| manifest present, `palace.db` absent, CLI `--read-only` | `DatabaseMissing` → **exit 2** (integrity) | `ReadOnlyUnmigrated` → **exit 1** |
-| same via `serve-http --read-only` | 409 + `class:"integrity"` | 409, **no class** |
-
-**The comment justifying the call is false about the code it introduces**
-(`main.rs:1174`): *"`recorded_embedder` opens the database read-only to read
-one meta row."* It does not.
-
-This lands on the path the flag exists for. `main.rs:50-59` justifies
-`--read-only` as *"exactly wrong when you are looking at a vault BECAUSE
-something went wrong with it"* and cites CLAUDE.md's *"evidence destruction on
-the incident runbook's own path"* — and the first thing the flag now does is
-write to the vault.
-
-**Why no gate saw it.** The only A33 test
-(`lib.rs:18060`) constructs the vault and calls `PalaceStore::open_read_only`
-**directly**; it never goes through `open_store_as`, so the new pre-step is
-outside the question it asks. `grep -rn "DatabaseMissing" tests/` returns
-nothing — there is no surface-level A33 check at all.
-
-**The `/v1` half is older and equally live**, and predates R4/A33: `tenant.rs:
-3053` calls the embedder factory before `open_read_only` at `:3059`, and
-`embedder_factory` (`main.rs:1451`) makes the same `recorded_embedder` call.
-
-**Corroborated from in-repo evidence alone**, without needing rusqlite's
-source: `connect_read_only` passes
-`OpenFlags::SQLITE_OPEN_READ_ONLY | SQLITE_OPEN_NO_MUTEX` **explicitly**
-(`lib.rs:3247-3248`), which is only necessary if the default differs — and
-`lib.rs:1519-1520` states outright that it does.
-
-**UNSETTLED RESIDUAL, and it would make this worse rather than merely
-untidy.** The connection at `lib.rs:4012` is READ-WRITE and is dropped at the
-end of the function. SQLite checkpoints and removes the `-wal` when the last
-connection to a WAL database closes. If that fires here, then
-`undercroft --read-only` does not merely create an empty file — it collapses a
-crashed writer's hot WAL before an operator has inspected it, which is
-evidence destruction rather than evidence fabrication, on the same path.
-**This needs a RUN, not a reading, and was not executed**: open a vault, kill
-the writer mid-transaction to leave a hot `-wal`, then stat `palace.db-wal`
-before and after any `--read-only` command. Recorded as unsettled rather than
-asserted either way.
-
-**Fix shape.** `recorded_embedder` must open with
-`SQLITE_OPEN_READ_ONLY` — it reads one meta row and has no business creating
-anything — which also makes its own doc true, and which closes the residual
-above as a side effect rather than needing its own remedy. Then the posture question
-disappears rather than being answered per call site. Residual to state either
-way: a read-only open of a genuinely absent database must keep answering
-`DatabaseMissing`, not a bare SQLite error.
-
-**Gate.** A test driving `open_store_as(Posture::ReadOnly)` — not
-`open_read_only` — against a manifest with no `palace.db`, asserting
-`DatabaseMissing` **and** that `palace.db` still does not exist afterwards.
-The second assertion is the one that fails today; the first would too.
-
----
-
-**CLOSED 2026-09-02.** `recorded_embedder` returns early when the database is
-absent and opens `SQLITE_OPEN_READ_ONLY` otherwise — the prescribed fix, in the
-shared function rather than at either call site, so the `/v1` half above closes
-with it. Driven through `/v1` to confirm that rather than assume it: a broken
-vault beside a healthy default answers **409 + `class:"integrity"`** and
-fabricates nothing, while the healthy one still answers 200.
-
-**THE RESIDUAL WAS REAL, and it was settled by the run this entry asked for
-rather than by the reading that would have sufficed to close the entry.** The
-filed remedy said the fix closes it *"as a side effect"*, which is a prediction,
-and the doc comment written with the fix asserted it — a doc claim, which this
-project does not accept as verification. Measured both ways on a killed writer,
-using the counterfactual binary:
-
-| | hot `-wal` | `palace.db` digest |
-|---|---|---|
-| defect restored | **41,232 → 0** | **changed** |
-| fixed | 41,232 → 41,232 | unchanged |
-
-So `--read-only` was destroying a crashed writer's WAL on every invocation, not
-merely fabricating an empty file — the worse of the two readings, and the one
-the entry declined to assert without a run.
-
-**Gates: ten checks, and the four that stay green are the interesting ones.**
-One store unit test (`reading_the_recorded_embedder_never_creates_the_database`)
-plus nine e2e checks across the CLI and `/v1`. Six fail over the restored
-defect; the other four are premises. That split is deliberate — two of the WAL
-checks compare an absent file to an absent file and **pass vacuously** when no
-hot WAL was staged, which is indistinguishable from a clean tree, so the premise
-now GATES them and they report *not verified* rather than *ok*. That was not
-hypothetical: the first version of the arm staged its WAL with a POST whose body
-field was wrong, and the premise probe is the only thing that said so.
-
-**A method note this unit earned.** The first counterfactual ran against a WAL
-made of schema pages, because the staging command silently failed and the
-server's own table creation filled the WAL instead. It fired, and it would have
-been reported as proof. The gate was then re-staged with a real write and the
-counterfactual **re-run against the artifact in its final form** — a
-counterfactual that exercised an earlier version of the check proves something
-about that version and nothing about the one that ships.
-
-**Driven through a real corpus**, which for this change means asking whether a
-read-only open still costs what it did and whether the WAL property survives a
-vault of consequence. Two runs. The LoCoMo feed across eight wings (88 drawers)
-answered `--read-only stats` in 5 ms and `--read-only search` in 23 ms, and a
-killed `serve-http` mid-ingest left a **1,755,152-byte** hot WAL that survived
-two read-only commands byte for byte, after which the writer recovered it and
-answered `VERIFY OK` with the uncheckpointed writes searchable. Then the repo's
-own source and docs mined into three wings — **364,843 drawers, 822 MB** —
-where `--read-only stats` took 281 ms and `--read-only search` 24.2 s against a
-writable **22.8 s**, i.e. inside the noise of the same query on the same vault,
-which is the comparison that matters: the change adds one `meta` lookup on an
-already-open path and must not show up. A 2,793,392-byte hot WAL was preserved
-there too, with `palace.db` byte-identical.
-
-**Drift check.** `docs/AGENTS.md:218` already said *"this one is an integrity
-verdict (exit 2)"*, and `docs/PARITY.md`, `THREAT_MODEL.md` and
-`architecture/index.html` say nothing about it — so the document was right and
-the code was wrong for one release. That is the **documents-lead** direction of
-the drift doctrine, and no documentation change is owed by the fix itself. What
-moved instead is arithmetic: `e2e` 438 → 448, `test` 785 → 786, the landing
-`cargo tests` tile and its `e2e checks` sum (703 → 713), and the house page,
-which republishes the test count.
-
----
-
-### O92 — CLOSED 2026-09-02: `LlmClient::destination` named a host that was never contacted, because it hand-parsed the authority
-
-**Round six, audit-chain dimension. This is a defect in M55's own fix, and it
-is mine.** Verified by reproducing the parse.
-
-M55 scoped the userinfo strip to the authority, taking the authority to end at
-the first `/`, `?` or `#` (`crates/undercroft-llm/src/lib.rs:193`). For a
-**special scheme** the WHATWG parser terminates the authority on a fourth
-character, `\`. This repo documents that exact string two crates over
-(`crates/undercroft-net/src/lib.rs:60-62`) and pins it in a test (`:413`):
-
-> `http://evil.com\@127.0.0.1/v1` — for a special scheme the WHATWG parser
-> treats `\` as a path separator, so the host is `evil.com` while an
-> `@`-split reads `127.0.0.1`.
-
-So for `https://evil.com\@127.0.0.1/v1`: the TLS gate passes (it starts
-`https://`), ureq — same `url` crate — connects to **evil.com**, and
-`destination()` returns **`https://127.0.0.1/v1`**. That value is interpolated
-into `audit_refine`'s HMAC'd canonical, so the chain authenticates a
-destination that was never contacted, pointing at loopback while the corpus
-went to an attacker-chosen host. It is the precise harm M55 was written to
-remove, inverted into the adversarial direction.
-
-**The class is the point.** `is_loopback`'s doc says *"Hand-parsing this string
-is how the predicate came to disagree with ureq twice"* and exists so nobody
-hand-parses a URL again. M55 hand-parsed one. Third instance, and its test
-enumerated `/`, `?` and `#` — the separators I thought of — with no `\` row.
-
-**Fix shape.** Do not hand-parse. `undercroft-net` already depends on `url`;
-parse and read `.host_str()`/`.port()`, which is the same parser ureq uses, and
-reassemble. That makes the function structurally unable to disagree with the
-connector rather than enumerating separators correctly.
-
-**Gate.** Add the `\` row to the existing table, and — the durable half — a
-test asserting `destination()`'s host EQUALS `Url::parse(base).host_str()` over
-a corpus of adversarial spellings, so the property is *agreement with the
-parser* rather than a list of characters someone remembered.
-
----
-
-**CLOSED 2026-09-02.** Fixed as prescribed: `destination()` reads host, port,
-path, query and fragment from `url::Url` and reassembles, so it cannot
-disagree with the connector. Both gate halves are in — the `\` row, and the
-property test over eleven adversarial spellings — plus a third at the call
-site in `refine.rs` that HMACs the value, because the llm crate's test proves
-the string and the surface test proves the record.
-
-**The ordinary rendering is byte-identical**, which was a design constraint
-rather than a happy accident: this value goes into an HMAC'd canonical, so a
-gratuitous change would move every future tag for no gain and make old records
-irreproducible from configuration. Three decisions carry it — an explicit port
-is kept and an implicit 443 is NOT added (`port()`, not
-`port_or_known_default()`), and the parser's normalization of "no path" to `/`
-is dropped, the base being trimmed of trailing slashes at construction. The
-pre-existing six-row table passing unchanged is what proves it.
-
-**Counterfactual: three of the four tests fire, and the two that stay green
-are the diagnostic.** Restoring M55's hand-parse fails the new row, the
-property test and the surface test. `no_destination_carries_a_credential` and
-its CLI twin stay green — correctly, because O92 is a WRONG-HOST defect and
-never leaked a credential, and those tests say so in their own docs. Read
-under the round-six rule, a green there is not partial coverage; it is a test
-measuring a different claim, and it does.
-
-**A false claim was caught by a failing premise, not by review.** The fix
-needs an answer for a base that does not parse, and `destination()` returns
-`String` with no error channel, so it returns a marker. I documented that
-branch as REACHABLE, reasoning from `with_key`'s own
-`base.starts_with("https://")` — a prefix test, not a parse. The test written
-to exercise it failed on its own premise: `with_key` builds its agent through
-`undercroft_net::agent_from_env`, which decides with the parser and refuses an
-unparseable base before a client exists. **The early check is not the gate;
-the one further down is.** The constant is now documented as unreachable and
-the test pins the refusal — so if anyone loosens that gate, the marker starting
-to appear in audit records is reported rather than discovered.
-
-**Not filed as a sibling finding, deliberately.** That prefix test is a second
-hand-parse, but it errs SAFE for the decision it makes: a string starting
-`https://` has scheme https if it parses at all, and `HTTPS://x` is refused
-where the parser would allow it. It admits only unparseable input, which the
-downstream gate then refuses. Recording it as a defect would be filing a
-finding I had just measured to be harmless.
 
 ---
 
@@ -6532,187 +6751,6 @@ condition, and match the marker before stripping rather than after.
 **Gate.** Extend O85's existing self-test to assert the shell consumer's
 verdict on a synthetic doubled log — the arm that exists for cargo and not for
 the other seven suites.
-
----
-
-### O89 — CLOSED 2026-09-02: the measured figures re-run, and a second stage's lift shrank without regressing
-
-**O88's stated residual, closed the same day.** O88 re-verified the parity
-document's *capability* claims and said plainly that its *measured* ones were
-a different job. This is that job — as far as this machine can take it.
-
-**Three LoCoMo arms, identical protocol and dataset, 1,982 evaluable QA:**
-
-| arm (session R@10) | 2026-07 | 2026-09-02 | |
-|---|---|---|---|
-| hash + BM25 (base) | 94.6% (1875) | **95.51%** (1893) | +18 q |
-| MiniLM + BM25 | 94.6% (1875) | **95.36%** (1890) | +15 q |
-| + ColBERT | 96.77% (1918) | **96.92%** (1921) | +3 q |
-
-**The finding is in the delta, and it is invisible to re-running one arm.**
-ColBERT reproduced to within three questions while the base moved eighteen,
-so its lift over fusion is now **+1.4 pts, not the recorded +2.2**. Nothing
-about the second stage regressed; the first stage improved underneath it. A
-second stage is worth the difference between itself and what it re-ranks, and
-that difference is not a property of the stage alone.
-
-The convergence claim survives intact: model and zero-model hash are three
-questions apart (95.51 vs 95.36).
-
-**Comparability, since it is the whole basis for calling these the same
-measurement.** Recall is hardware-independent, so July's Apple host and this
-Docker-for-Windows one are comparable on R@k. **Latency is not**, and no ms/q
-anywhere was re-measured or restated — a figure from another machine neither
-confirms nor refutes one from that machine, and overwriting would make those
-documents less true, not more.
-
-**Not re-measured, each stated where it is cited rather than left to
-inference:** the cross-encoder arm (no `reranker/model.onnx` export exists
-here — the embedder and ColBERT exports do), the served-model deltas (the
-weights volume is empty and they are multi-GB downloads), the FLORES
-cross-script figures (parallel corpora carry their own licences and never
-enter this repo), and the 131k→1M scale rows (hours of compute).
-
-**Nine surfaces carried the old figure, and they took THREE different
-treatments — which is the part a sweep would have destroyed.**
-
-* **Updated**, being live product claims: `README.md`, `website/landing/
-  index.html` (bar VALUES and bar WIDTHS, plus the derived *"+5.7 over their
-  best"* → **+6.5**), `website/src/retrieval.md`, `docs/AGENTS.md`,
-  `docs/MULTI_TENANCY.md`.
-* **Annotated with rows kept**, being measurement documents whose tables are
-  internally consistent and cite archived logs: `benchmarks/RESULTS.md`
-  (dated section, July rows intact), `docs/RETRIEVAL_SCALING.md`
-  (document-level banner, so it covers the HNSW-parity and `ort` rows a
-  section banner would have missed), `docs/BENCHMARKS_VS.md`.
-* **Deliberately untouched**, and these are the ones a regex would have got
-  wrong: `benchmarks/logs/README.md` DESCRIBES WHAT IS INSIDE AN ARCHIVED
-  LOG, so editing it would make the description false; the landing's `96.5`
-  vs-mem0 row is *MiniLM + ColBERT via `colbert-ort` at v0.23.0*, a different
-  configuration from the hash+ColBERT run and therefore not mine to restate;
-  and `docs/CONSULTATION_REVIEW.md`'s `66.9% vs 94.6%` with its `−27.7pp` is
-  a head-to-head whose competitor side was not re-run — **moving one side of
-  a head-to-head while the other stands is exactly what that document's
-  fairness contract exists to prevent.**
-
-**No gate.** A benchmark figure going stale is not mechanically detectable:
-nothing can know whether a recorded number still describes the tree without
-running the benchmark, which is the job itself. What IS worth carrying is the
-rule this unit ran on — **a measured figure is only comparable to one taken
-under the same protocol AND the same hardware class**, which is why recall
-moved here and latency did not.
-
----
-
-### O88 — CLOSED 2026-09-02: the parity document re-verified, and the label moved because it was earned
-
-**The maintainer's correction, and it lands on my reasoning rather than on a
-missed file.** Asked to leave no stales, I reported `docs/PARITY.md`'s
-`v1.0.0` as-of label as *correctly* left alone. The doctrine says
-**"Re-verify it, then move it."** I had been quoting the first clause as if it
-were the whole rule — which turns a deferral into a permanent excuse, and had
-done so across three releases. Deferring once is defensible; the third time it
-is the stale.
-
-**The re-read covered all 252 lines**, with every checkable claim put against
-the CODE rather than read for plausibility: the CLI's real subcommand surface
-from `--help` on a freshly built binary (not from the source, which is what
-`table_for_test` exists to stop people doing), the MCP count against
-`parity.rs`, the `/v1` count against `tenant.rs`'s dispatch, each capability
-bullet against the crate implementing it.
-
-**Four drifts, all of them things `1.2.0` moved and this file had not:**
-
-* the `kg` command list gave seven subcommands; there are **ten** —
-  `receipts`, `authority` and `canonical` were missing, and the last two are
-  the golden-values tier, which has no upstream equivalent at all;
-* `repair` was described as *"fingerprint backfill, re-embed, vacuum,
-  verify"*, omitting the stale-index drop, the identity re-stamp, the run
-  record and — the load-bearing part — that M19 put all of it in ONE
-  transaction;
-* the read-audit bullet described **`search`-only** auditing with a keyed
-  query fingerprint. That is precisely the defect O50/O51 closed across
-  thirteen doors, plus O79's `egress/refine`. **The parity document was
-  describing the pre-`1.2.0` state of the thing `1.2.0` was about**, which is
-  the sharpest available argument against deferring a re-read;
-* the `/v1` bullet predated O68 putting the agent-facing memory surface
-  there — 37 routes, now 56.
-
-**What the re-read did NOT cover is written into the document itself**, so
-the label cannot be read as more than was done: the measured figures — recall
-percentages, latencies, benchmark deltas — were **not** re-measured. They
-cite their own instruments and re-running those is a different job. A claim of
-the form *"this capability exists and works this way"* was checked; *"it
-measured N"* was not. Without that sentence the moved label would assert more
-than the work behind it, which is the `O56`/`O6` defect wearing the opposite
-coat.
-
-**One stale found on the way and fixed:** the CLI's own `--help` for `repair`
-was behind that function's doc comment, in the same four ways. No test pinned
-the string.
-
-**No gate**, and the reason is O87's, cited rather than re-derived: an as-of
-label going stale is a judgement about whether a document still matches a
-codebase, and nothing mechanical can hold that. What CAN be gated already is —
-the `version surfaces` preflight refuses to bump this label with a release,
-which is exactly why it survived three of them, and that refusal is correct.
-The gap it leaves is human and the answer is the doctrine sentence, applied
-whole.
-
----
-
-### O87 — CLOSED 2026-09-01: the post-1.2.0 sweep, run against O61's own findings
-
-**The same question O61 asked, one release later**, and deliberately run
-against O61's list rather than from scratch — a sweep that re-derives its own
-scope finds what it happens to think of. Documents only: no code, no version
-surface moves. Three findings, and the interesting result is which of O61's
-did **not** recur.
-
-**O61's headline defect did NOT recur, and that is a real answer rather than
-a lucky one.** It found a `ROADMAP` pointer reading *"described in CHANGELOG
-under `## Unreleased`"* which cutting a release had silently broken. Searched
-again: the five surviving mentions of `## Unreleased` are all inside O61's own
-entry and the corrected 1.1.0 pointer — historical narrative *about* the
-defect, not live pointers. The `1.2.0` section names no CHANGELOG heading, so
-there was nothing for the rename to break.
-
-**1. `UPGRADING.md` still said `## 1.2.0 (unreleased)`.** It had just been
-released. The section one down reads `## 1.1.1 (released 2026-08-19)`, so the
-convention was already there to follow. This is the plainest form of the class
-this entry is named for.
-
-**2. The `ROADMAP` heading for `1.2.0` diverged from its own convention.**
-Release prep set `## 1.2.0 — released 2026-09-01 — three round-four rows,
-…`, appending the old descriptive tail after a second em-dash; `1.1.0` and
-`1.1.1` are `## X.Y.Z — released DATE` with the description in the body
-paragraph. Normalised, description moved into the body. **O61 is why this was
-looked for at all**: it records that the two files use DIFFERENT conventions
-(`ROADMAP` writes `— released DATE`, `CHANGELOG` writes `— DATE`) and that
-*the first attempt at O61's own fix produced a second broken pointer* by
-mixing them. Checked both this time: the CHANGELOG heading is
-`## 1.2.0 — 2026-09-01`, which is correct.
-
-**3. `docs/PARITY.md`'s as-of note had gone stale in its own arithmetic** —
-the note O61 ADDED. It read *"Two releases have shipped since"*; three have.
-Updated, and `1.2.0` assessed the same way its siblings were. **The label
-stays at `v1.0.0`**, because no full re-read of its 225 lines was done and
-moving it would assert one — the rule that note itself sets.
-
-**The 1.2.0 assessment is labelled as WEAKER than the other two, deliberately.**
-`1.1.1` argues from the definition of a PATCH and `1.1.0` was small enough to
-enumerate; `1.2.0` is fifty-seven units, and the claim that it introduced no
-new *category* is a judgement that all of them stayed inside five existing
-headings — checked at category level, not line by line. Saying so is the point:
-the failure this document keeps recording is a claim stronger than its
-evidence.
-
-**No gate is proposed.** A release renaming a heading that prose points at is
-real, but the pointers are prose in arbitrary files and the only check that
-would catch them is *"every backtick-quoted `## Heading` resolves"* — which
-O61 already established is unbuildable, because `git grep` finds such strings
-inside the paragraphs DESCRIBING the defect. That reasoning is unchanged and
-is cited rather than re-derived.
 
 ---
 
