@@ -14,6 +14,40 @@ it previously passed. `backup create` gates on that verdict, so such a vault
 also stops being archivable until the tampering is resolved. See
 `UPGRADING.md`.
 
+### the battery refuses to compare a figure it cannot trust, on both readers (O97, O103)
+
+**ROADMAP O97 and O103 CLOSED.** One question asked twice — *may this count be
+compared?* — answered differently by two consumers because each implemented it
+separately.
+
+* **O97:** `suite_summary` emits the same untrustworthy-count marker as the
+  cargo reader when a log holds more than one run, and the shell consumer
+  stripped it with a trailing `.*` and compared anyway. A doubled log therefore
+  reported **PUBLISHED FIGURES ARE STALE** over figures that were correct —
+  O85's defect verbatim, one reader over, and outside its recorded residual.
+* **O103:** neither consumer looked at whether the suite had PASSED. `cargo
+  test` aborts at the first failing target, so a real, numeric, replay-free
+  count arrives over a fraction of the targets; observed as `test exit 101 — 93
+  passed over 2 targets`, with the battery advising that the published figure
+  of 798 be changed to 93.
+
+`count_untrustworthy` is the one answer now. The exit code is checked first —
+it is the stronger signal and the one no reader marker can express — then the
+marker, matched *before* the strip. Either way the battery still fails: a gate
+that cannot measure must not report clean.
+
+**The verdict prose was written for one cause and is now true of both.** It
+said *"the suites passed"*, *"reported a premise failure"*, *"describes a
+replayed log"* and *"the replay is intermittent, re-run"* — all false for a
+failed suite, and the last actively misdirecting, since re-running does not fix
+a deterministic failure. The per-line reason names the cause; the surrounding
+text no longer asserts one.
+
+Gated by three arms driving the real helper — a failed suite, a doubled shell
+log, and a clean passing suite that must still be compared, without which a
+helper answering "untrustworthy" to everything would silence the comparison
+entirely.
+
 ### a request `min_trust` can raise the deployment's trust floor, never lower it (O93)
 
 **ROADMAP O93 CLOSED**, by maintainer ruling on three written-out options.

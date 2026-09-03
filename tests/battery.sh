@@ -283,6 +283,45 @@ declare_suite_counts() {
     | sed -E 's#bash tests/([a-z0-9-]+)[.]sh.*[(]([0-9]+) checks#\1=\2#'
 }
 SUITE_COUNTS=$(declare_suite_counts)
+
+# **Why a suite's measured count cannot be trusted — empty when it can.**
+#
+# ONE answer for both consumers (ROADMAP O97, O103). They asked the question
+# differently and got different answers: the cargo arm guarded on the reader's
+# `PREMISE FAILURE` marker, the shell arm stripped that same marker with a
+# trailing `.*` and compared anyway, and NEITHER looked at whether the suite
+# had actually passed.
+#
+# Two ways a count lies, and they are not the same:
+#
+#   * **The suite FAILED** (O103). `cargo test` aborts at the first failing
+#     target, so a real, numeric, replay-free count arrives over a fraction of
+#     the targets. Observed: `test exit 101 — 93 passed, 1 failed over 2
+#     targets`, and the battery told the operator to publish 93 against a
+#     figure of 798. Checked FIRST, because it is the stronger signal and the
+#     one no reader marker can express.
+#   * **The reader disowned it** (O15/O27/O85/O97) — a replayed tail or a log
+#     holding more than one run.
+#
+# It still FAILS the battery either way: a gate that cannot measure must not
+# report clean. It fails saying WHICH, so nobody edits a figure that was
+# already right.
+count_untrustworthy() {  # $1 = suite name, $2 = that suite's summary line
+  local want="$1" line="${2:-}" i code=""
+  for i in "${!NAMES[@]}"; do
+    if [ "${NAMES[$i]}" = "$want" ]; then code="${CODES[$i]}"; break; fi
+  done
+  if [ -n "$code" ] && [ "$code" != "0" ]; then
+    printf 'the suite exited %s, so this run is partial — do NOT edit a published figure to match it (ROADMAP O103)' "$code"
+    return 0
+  fi
+  case "$line" in
+    *"PREMISE FAILURE"*)
+      printf '%s' "$line"
+      return 0 ;;
+  esac
+  printf ''
+}
 suite_count() { grep -oE "^$1=[0-9]+" <<< "$SUITE_COUNTS" | head -1 | cut -d= -f2; }
 
 # **Defined OUT HERE for the reason the four readers above are** (M13, and
@@ -396,6 +435,37 @@ case "$SUI_EMPTY" in
   *) echo "FAIL  the suite reader reported a verdict over an empty log: $SUI_EMPTY"; SUM_FAIL=1 ;;
 esac
 rm -rf "$SUM_TMP"
+# **The CONSUMER's verdict, which is the half nobody asserted** (ROADMAP O97,
+# O103). The arms above prove each reader EMITS its marker; none proved
+# anyone guards on it — and the shell consumer did not, stripping it with a
+# trailing `.*`. Nor did either consumer notice a suite that simply FAILED,
+# so an aborted `cargo test` produced a numeric count over two targets and
+# the battery told the operator to publish it.
+#
+# Driven through the real `count_untrustworthy`, with NAMES/CODES staged the
+# way a run leaves them. The control arm is not optional: a helper that
+# answered "untrustworthy" to everything would silence the figure comparison
+# entirely, which reports exactly what a clean tree reports.
+CU_NAMES_SAVE=("${NAMES[@]}"); CU_CODES_SAVE=("${CODES[@]}")
+NAMES=(test e2e backends-e2e); CODES=(101 0 0)
+if [ -z "$(count_untrustworthy test "798 passed, 0 failed, 4 ignored over 20 targets")" ]; then
+  echo "FAIL  a suite that exited 101 had its count compared anyway (O103):"
+  echo "      an aborted run is partial, and publishing its number is the harm"
+  SUM_FAIL=1
+fi
+if [ -z "$(count_untrustworthy backends-e2e "$SUI_REPLAY")" ]; then
+  echo "FAIL  the shell consumer does not guard on the marker its own reader"
+  echo "      emitted (O97): a doubled log would be compared to the published"
+  echo "      figure and reported as doc drift"
+  SUM_FAIL=1
+fi
+if [ -n "$(count_untrustworthy e2e "$SUI_CLEAN")" ]; then
+  echo "FAIL  a clean, passing suite is treated as unverifiable — the figure"
+  echo "      comparison would never run at all"
+  SUM_FAIL=1
+fi
+NAMES=("${CU_NAMES_SAVE[@]}"); CODES=("${CU_CODES_SAVE[@]}")
+
 if [ "$SUM_FAIL" -ne 0 ]; then
   echo "      the summary is reporting-only and decides nothing, but it is the"
   echo "      number a session copies into CLAUDE.md — an unreproducible doc claim"
@@ -2074,6 +2144,18 @@ echo "════════════════════════�
 # (`bash tests/battery.sh test`) must not report the other seven as drifted,
 # which would be an alarm that fires on correct usage.
 FIGURE_DRIFT=""
+# **Initialised HERE, beside `FIGURE_DRIFT`, and that is not tidiness.**
+# Both consumers APPEND to this now (O97/O103), so both READ it — and under
+# `set -u` an unset variable aborts the script. It did: the first version
+# assigned in the cargo arm and appended in the shell one, so a genuinely
+# failing suite died with `FIGURE_UNVERIFIABLE: unbound variable` AFTER the
+# verdict table, swallowing the very verdict the change exists to print. That
+# is M53's `LANDING: unbound variable` defect verbatim — a variable read by
+# post-run code and set somewhere that does not always run — and a reader
+# that crashes on the failure path cannot report. Found only by running the
+# battery with a deliberately failing test; the unit drive and the self-test
+# both passed over it.
+FIGURE_UNVERIFIABLE=""
 for i in "${!NAMES[@]}"; do
   n="${NAMES[$i]}"
   # ONE reader, shared with the preflight. This used to be a second,
@@ -2090,6 +2172,20 @@ for i in "${!NAMES[@]}"; do
   published=$(suite_count "$n")
   [ -z "$published" ] && continue
   line=$(suite_summary ".battery/$n.log")
+  # **ROADMAP O97: the shell arm strips the marker it should be guarding on.**
+  #
+  # `suite_summary` emits the SAME untrustworthy-count marker as the cargo
+  # reader when a log holds more than one run (O27), and the `sed` below ends
+  # in `.*` — which eats it. So a doubled log yielded a clean number and the
+  # comparison proceeded, announcing "PUBLISHED FIGURES ARE STALE" over
+  # figures that were correct: O85's defect verbatim, one reader over, and
+  # NOT covered by its residual paragraph. Matched BEFORE the strip now.
+  unverifiable=$(count_untrustworthy "$n" "$line")
+  if [ -n "$unverifiable" ]; then
+    FIGURE_UNVERIFIABLE="$FIGURE_UNVERIFIABLE  $n: $unverifiable
+"
+    continue
+  fi
   measured=$(sed -E 's/.*results: ([0-9]+) passed, ([0-9]+) failed.*/\1 \2/' <<< "$line")
   case "$measured" in
     # The sed above leaves the line UNCHANGED when it does not match, so
@@ -2143,9 +2239,14 @@ if printf '%s\n' "${NAMES[@]}" | grep -qx test; then
   #
   # It still FAILS — a gate that cannot measure must not report clean, which
   # is this file's oldest rule — but it fails saying what actually happened.
-  case "$tline" in
-    *"PREMISE FAILURE"*) FIGURE_UNVERIFIABLE="$tline" ;;
-  esac
+  # Through the SAME helper as the shell arm (O97/O103), so the two consumers
+  # cannot disagree about what an untrustworthy count looks like — which is
+  # how the shell one came to strip a marker the cargo one guarded on.
+  cargo_unverifiable=$(count_untrustworthy test "$tline")
+  if [ -n "$cargo_unverifiable" ]; then
+    FIGURE_UNVERIFIABLE="$FIGURE_UNVERIFIABLE  cargo tests: $cargo_unverifiable
+"
+  fi
   case "$tpass" in
     ''|*[!0-9]*) : ;;   # the reader said something else; it names its own failure
     *) if [ -n "${FIGURE_UNVERIFIABLE:-}" ]; then :; else
@@ -2168,15 +2269,23 @@ if printf '%s\n' "${NAMES[@]}" | grep -qx test; then
   esac
 fi
 
+# **The wording must not name a cause the run did not have** (O97/O103).
+#
+# This block was written for ONE cause — a replayed log — and said so in
+# every line: "the suites passed", "reported a premise failure", "describes a
+# replayed log", "the replay is intermittent, re-run". Once a FAILED suite
+# could reach it, all four sentences became false in the case that matters
+# most, and the advice actively misdirected: re-running does not fix a test
+# that fails deterministically. The per-line reason already says which cause
+# it was, so the surrounding prose states only what is true of both.
 if [ -n "${FIGURE_UNVERIFIABLE:-}" ]; then
   echo ""
-  echo "COUNT UNVERIFIABLE — the suites passed and the figures were NOT compared."
-  echo "The test-count reader reported a premise failure, so the number it"
-  echo "produced describes a replayed log rather than this run (ROADMAP O15):"
-  echo "  $FIGURE_UNVERIFIABLE"
-  echo "      This is NOT doc drift. Do not edit a published figure to match it."
-  echo "      Re-run the test suite; the replay is intermittent, and a clean log"
-  echo "      pairs every target header with exactly one result line."
+  echo "COUNT UNVERIFIABLE — the figures were NOT compared, because the count"
+  echo "this run produced cannot be trusted to describe it:"
+  printf "$FIGURE_UNVERIFIABLE"
+  echo "      This is NOT doc drift. Do NOT edit a published figure to match a"
+  echo "      number produced here — it may describe a partial run or a"
+  echo "      replayed log. Each line above says which."
   OVERALL=1
 fi
 
