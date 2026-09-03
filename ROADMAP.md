@@ -6599,7 +6599,7 @@ already concluded for relational claims.
 
 ---
 
-### O103 — the figure comparison runs on a suite that FAILED, and reports a truncated count as doc drift
+### O103 — CLOSED 2026-09-03: the figure comparison ran on a suite that FAILED, and reported a truncated count as doc drift
 
 **Found 2026-09-03 while closing O93.** Verified by reading the guard and by
 the run that produced it.
@@ -6640,6 +6640,34 @@ comparison entirely would pass.
 **Not fixed inside O93**, whose subject is the trust floor. Filed rather than
 folded in, because a battery-reader change wants its own counterfactual and
 this commit is already large.
+
+---
+
+**CLOSED 2026-09-03 with O97.** The suite's exit code is checked FIRST, before
+the reader's own marker, because it is the stronger signal and the one no
+marker can express: a `cargo test` that aborts at the first failing target
+produces a real, numeric, replay-free count over a fraction of the targets.
+
+**THE END-TO-END ARM IS WHAT EARNED ITS KEEP, and it found a defect in the fix
+that two other checks passed over.** Appending to `FIGURE_UNVERIFIABLE` in both
+consumers meant both READ it, and it was only ever assigned — so under `set -u`
+a genuinely failing suite died with `FIGURE_UNVERIFIABLE: unbound variable`
+AFTER the verdict table, swallowing the exact verdict this entry exists to
+print. That is **M53's `LANDING: unbound variable` defect verbatim**, a
+variable read by post-run code and set somewhere that does not always run, and
+a reader that crashes on the failure path cannot report. The unit drive of the
+helper passed. The preflight self-test passed. Only running the battery over a
+tree with a deliberately failing test showed it.
+
+**And then the verdict PROSE was false.** The block was written for one cause
+and said so in every line — *"the suites passed"*, *"reported a premise
+failure"*, *"describes a replayed log"*, *"the replay is intermittent, re-run"*.
+Once a failed suite could reach it, all four were wrong in the case that
+matters most, and the advice actively misdirected: re-running does not fix a
+deterministic failure. The per-line reason names the cause; the surrounding
+prose now states only what is true of both. **A correct verdict wrapped in a
+false explanation is still a false message**, and nothing but reading the real
+output would have caught it.
 
 ---
 
@@ -6955,7 +6983,7 @@ for **each of the five backends**, which is the observable the defect moves.
 
 ---
 
-### O97 — O85's `COUNT UNVERIFIABLE` guards the cargo reader only; the shell-suite consumer strips the same marker and compares anyway
+### O97 — CLOSED 2026-09-03: O85's `COUNT UNVERIFIABLE` guarded the cargo reader only; the shell-suite consumer stripped the same marker and compared anyway
 
 **Round six, gates dimension (D11).**
 
@@ -6990,6 +7018,20 @@ condition, and match the marker before stripping rather than after.
 **Gate.** Extend O85's existing self-test to assert the shell consumer's
 verdict on a synthetic doubled log — the arm that exists for cargo and not for
 the other seven suites.
+
+---
+
+**CLOSED 2026-09-03, together with O103** — they are one question asked twice,
+*may this count be compared?*, and the two consumers answered it differently
+because each implemented it separately. `count_untrustworthy` is the single
+answer now; the marker is matched BEFORE the strip, and both arms call it.
+
+Gate as prescribed, plus the half the entry identified as missing: O85's
+self-tests proved each reader EMITS its marker and nothing proved a consumer
+GUARDS on it. Three arms now drive the real helper — a failed suite, a doubled
+shell log, and a clean passing suite that must still be compared, without
+which a helper answering "untrustworthy" to everything would silence the
+comparison entirely and report what a clean tree reports.
 
 ---
 
