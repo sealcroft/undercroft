@@ -7,22 +7,26 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
 
 Published by **Sealcroft** at `github.com/sealcroft/undercroft`, site at
 `https://sealcroft.com/undercroft/`, house page at `https://sealcroft.com/`
-(repo `sealcroft/sealcroft.github.io`). Current release **1.2.1** — a PATCH
-over `1.2.0`, which was a MINOR over `1.1.1`, itself a PATCH over `1.1.0` and
-that a MINOR over the `1.0.0` that reset the version when the project was
-renamed (every earlier tag belonged to it under its former name and was
-withdrawn). PATCH is right by this file's own test — **a documented contract
-that changes** is what makes a MAJOR, and nothing here changes one. All three
-units are defects going away: a `--read-only` open that created the database
-it is forbidden to create and collapsed a crashed writer's WAL (O91, which
-shipped in `1.2.0`), an egress record naming a host that was never dialed
-(O92), and a pgvector DSN guard that failed OPEN and let plaintext-derived
-embeddings cross the network (O90). The one observable an operator could key
-on — a read-only open of an absent database exiting **2** rather than 1 —
-RESTORES what every document in this tree has published throughout, so it is a
-fix rather than a break; it can still stop a script written against `1.2.0`,
-which is why it has an `UPGRADING.md` entry. **The tree carries
-`1.2.1` only once the release PR merges; the TAG is a separate, explicit
+(repo `sealcroft/sealcroft.github.io`). Current release **1.2.2** — a PATCH
+over `1.2.1`, itself a PATCH over `1.2.0`, which was a MINOR over `1.1.1`.
+PATCH is right by this file's own test — **a documented contract that
+changes** is what makes a MAJOR, and nothing here changes one. `1.2.2` exists
+because `1.2.1` **shipped 16 release assets instead of 20**: O90's fix named
+`tokio_postgres::config::Host::Unix`, a variant that is `#[cfg(unix)]` and
+does not exist off unix, so `undercroft-index` did not compile for
+`x86_64-pc-windows-msvc` and both Windows binaries failed to build. Nothing
+saw it because nothing here compiled for Windows on a pull request — closed by
+the `windows-check` CI job (O102). `1.2.1` itself carried three defects going
+away: O91 (a `--read-only` open that created the database it is forbidden to
+create and collapsed a crashed writer's WAL — that one shipped in `1.2.0`),
+O92 (an egress record naming a host that was never dialed) and O90 (a pgvector
+DSN guard that failed OPEN, letting plaintext-derived embeddings cross the
+network). The one observable an operator could key on — a read-only open of an
+absent database exiting **2** rather than 1 — RESTORES what every document in
+this tree has published throughout, so it is a fix rather than a break; it can
+still stop a script written against `1.2.0`, which is why `UPGRADING.md`
+carries it. **The tree carries
+`1.2.2` only once the release PR merges; the TAG is a separate, explicit
 step** — a build reporting a version it was never tagged as is worse
 than one reporting the last release. `main` is branch
 protected on both repos: force pushes and deletions blocked, admins exempt.
@@ -2031,7 +2035,20 @@ compares the two as SETS of clippy invocations, both directions, with a
 premise arm on each extractor.
 **Eight compose suites run as a `fail-fast: false` MATRIX** — eight since
 `arch-check` joined (M14), and `tls-pins` is host-side and gets its own job
-rather than a matrix leg, so CI runs TEN jobs of which the matrix is one.
+rather than a matrix leg, so CI runs ELEVEN jobs of which the matrix is one.
+**The eleventh is `windows-check` (ROADMAP O102), and it exists because
+NOTHING here compiled for Windows on a pull request.** `release.yml` builds
+that target, and only on a TAG — so a Windows-only compile error was invisible
+until the one moment it can no longer be fixed without a new version. `1.2.1`
+shipped **16 assets instead of 20** that way: O90's fix named
+`tokio_postgres::config::Host::Unix`, a variant that is `#[cfg(unix)]` and
+does not exist off unix, and the ten-suite battery plus all seventeen other
+CI checks were green because every one of them runs in a Linux container.
+It is a `cargo check`, not a build: the class is code that does not COMPILE
+for the target, and linking stays `release.yml`'s job. **A target you SHIP is
+a target that must be compiled on a pull request** — the same rule as *ask
+what a gate can SEE*, applied to the platform axis rather than to an
+observable.
 The tenth is **`house-figures`** (ROADMAP O65), and it is the ONLY check in
 the tree that needs the INTERNET — which is exactly why it is a CI job and
 not a `tests/battery.sh` preflight: the preflights run on every local battery

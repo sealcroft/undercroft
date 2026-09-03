@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.2.2 — 2026-09-03
+
+PATCH: a fix whose only observable change is that a defect is gone. No
+documented contract moves.
+
+### the Windows binaries build again, and a pull request now compiles for Windows (O102)
+
+**`1.2.1` shipped 16 release assets instead of 20, and the cause was mine.**
+O90's fix matched on `tokio_postgres::config::Host::Unix` — a variant that is
+`#[cfg(unix)]` and **does not exist off unix** — so `undercroft-index` failed
+to compile for `x86_64-pc-windows-msvc` and both Windows binary jobs died.
+The Linux and macOS binaries and all four GHCR images built and published
+normally.
+
+The arm is now `#[cfg(unix)]`-gated. The `Tcp` arm below it already covers the
+non-unix case, where a socket path arrives as a name that cannot resolve.
+
+**Nothing caught it, and that is the part worth fixing.** The ten-suite
+battery and all seventeen other CI checks run in Linux containers;
+`release.yml` is the only thing in the tree that compiles for Windows, and it
+runs **only on a tag** — the one moment a compile error can no longer be fixed
+without a new version. A new `windows-check` CI job runs
+`cargo check --workspace` on `windows-latest` for every pull request, wired
+into the verdict's `needs:` and its asserted job count (9 → 10) so the gate
+cannot be narrowed quietly. `cargo check` and not a build: the class is code
+that does not compile for the target, and linking stays `release.yml`'s job.
+
+Verified both ways before shipping: the fixed tree compiles for a non-unix
+target, and with the gate removed that same check reproduces the exact release
+error — while the Linux check stays green, which is the blind spot measured
+rather than argued.
+
 ## 1.2.1 — 2026-09-03
 
 PATCH: a fix whose only observable change is that a defect is gone. The exit
