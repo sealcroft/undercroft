@@ -1,5 +1,71 @@
 # Changelog
 
+## Unreleased — 1.3.0
+
+MINOR: new capability, backward compatible. It adds a field beside ones that
+stay — `VerifyReport.policy_drift`, and a `policy_drift` key on
+`POST /v1/…/verify` — which is this project's test for MINOR rather than
+PATCH. Nothing documented stops being accepted.
+
+**One behavioural consequence is worth stating up front, and it is the point
+rather than a side effect**: a vault whose `wing_trust` or `retention_policy`
+rows were edited or deleted behind the store's back now FAILS `verify`, where
+it previously passed. `backup create` gates on that verdict, so such a vault
+also stops being archivable until the tampering is resolved. See
+`UPGRADING.md`.
+
+### verify sees the two keyed policy tables it never looked at (O94)
+
+**ROADMAP O94 CLOSED.** The rule that grew this report to six legs — *a keyed
+claim living in columns no drawer HMAC and no chain step covers must have a
+leg, or nothing sees it* — unapplied one table over. `wing_trust` and
+`retention_policy` are operator declarations, HMAC-tagged, outside every
+drawer's coverage, and `verify()` mentioned neither.
+
+**A flip and a deletion failed differently, and only one failed at all.**
+
+* A flipped `trust` column makes `wing_trusts()` raise `Integrity`, so the
+  retrieval path fails closed — but `verify` answered OK on all four
+  renderers, and `backup create` gates on that verdict, so a tampered vault
+  archived clean.
+* A DELETED row failed closed **nowhere**. `trust_clause` finds an empty
+  exclusion list and returns `Ok(None)` — no floor active — so a wing an
+  operator classed `quarantined` silently became retrievable under a
+  `standard` floor. Nothing anywhere reported it.
+
+**The evidence already existed and nothing consulted it.** Every assignment
+appends `trust/{wing}` (or `retention/{wing}[/{room}]`) carrying the *same*
+tag that goes into the row, and `audit` is append-only and
+rotation-preserved. `orphan_labels` could not reach it: it maps every prefixed
+label that is not `kg-entity/` through `strip_prefix("kg/").unwrap_or_default()`,
+which yields empty and `continue`s — and that leg's own exclusion rationale
+justifies skipping `del/`, `retention-clear/`, `read/`, `egress/` and
+`rotate/` because each has a legitimate path to an absent subject, while never
+mentioning `trust/`, the one prefix with no such path.
+
+**Absence discriminates for trust and not for retention, which is why one leg
+carries two rules.** No `DELETE FROM wing_trust` exists in the crate —
+assignment is insert-or-update only — so an orphaned `trust/` record is
+unambiguous, the same choke-point argument `orphan_labels` makes for a bare
+drawer id. `retention_policy` *is* deletable, through `clear_retention`, which
+appends `retention-clear/` in the same transaction; so a missing retention row
+is legitimate exactly when that record is **newer** than the assignment, and a
+finding otherwise. Both directions are compared, and the leg is one ordered
+pass over `audit` rather than a probe per policy, because that table has no
+index on `record_id`.
+
+**The first version of this leg alarmed on every rotated vault**, and the
+battery caught it. It compared the row's tag to the tag in the chain record —
+the obvious check, and wrong: rotation re-tags the policy rows under the new
+keys while preserving audit tags verbatim, because those are historical
+evidence. The leg now asserts only what survives a rotation — the row's tag
+recomputed under the current key, and the existence of the record id — with a
+test pinning that a routine rotation is not drift, and a second assertion in
+it proving the leg is still live afterwards rather than merely quiet.
+
+Rendered on all four surfaces — CLI, MCP, `/v1` and the admin console — which
+the `HAND_PROJECTED` gate enforced by refusing to build until they all did.
+
 ## 1.2.2 — 2026-09-03
 
 PATCH: a fix whose only observable change is that a defect is gone. No

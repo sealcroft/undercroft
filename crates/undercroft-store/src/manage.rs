@@ -3779,6 +3779,177 @@ mod tests {
         assert_eq!(s.retention_policies().unwrap().len(), 1);
     }
 
+    /// **A FLIPPED trust column fails verify (ROADMAP O94).**
+    ///
+    /// `wing_trust` and `retention_policy` are keyed operator declarations in
+    /// columns no drawer HMAC and no chain step covers — the exact shape that
+    /// grew `VerifyReport` to six legs — and `verify()` mentioned neither
+    /// table. A flip DID fail closed on the retrieval path
+    /// (`wing_trusts()` raises `Integrity`), but `verify` answered OK on all
+    /// four renderers, and `backup create` gates on that verdict, so a
+    /// tampered vault archived clean.
+    ///
+    /// **Split from the deletion case deliberately.** They are different
+    /// damage modes with different detectors, and while they shared one test
+    /// the flip assertion ran first — so a counterfactual that broke both
+    /// stopped at the flip and never exercised the deletion at all. One
+    /// assertion masking another is not coverage.
+    #[test]
+    fn a_flipped_trust_row_fails_verify() {
+        let (_d, mut s) = store();
+        s.upsert(&drawer("pacific", "r", "a drawer to check", 0))
+            .unwrap();
+        s.set_wing_trust("pacific", "quarantined").unwrap();
+        assert!(
+            s.verify().unwrap().ok(),
+            "premise: an untouched vault with a declared policy verifies"
+        );
+        // The column moves, the tag does not, so the canonical no longer
+        // recomputes — and the chain still holds the original tag.
+        s.conn
+            .execute("UPDATE wing_trust SET trust = 'trusted'", [])
+            .unwrap();
+        let r = s.verify().unwrap();
+        assert!(!r.ok(), "a flipped trust class must fail verify");
+        assert!(
+            r.policy_drift
+                .iter()
+                .any(|p| p.starts_with("trust/pacific")),
+            "and it must be NAMED, not merely counted: {:?}",
+            r.policy_drift
+        );
+    }
+
+    /// **A DELETED trust row fails verify — the case that failed closed
+    /// NOWHERE (ROADMAP O94).**
+    ///
+    /// With the row gone, `trust_clause` finds an empty exclusion list and
+    /// returns `Ok(None)` — no floor active — so a wing an operator classed
+    /// `quarantined` silently becomes retrievable under a `standard` floor.
+    /// Nothing anywhere reported it.
+    ///
+    /// Absence discriminates here because there is no `DELETE FROM
+    /// wing_trust` in this crate: assignment is insert-or-update only, so the
+    /// `trust/{wing}` record left behind has no legitimate path to an absent
+    /// row. That is the choke-point argument `orphan_labels` makes for a bare
+    /// drawer id, one table over.
+    #[test]
+    fn a_deleted_trust_row_fails_verify() {
+        let (_d, mut s) = store();
+        s.upsert(&drawer("pacific", "r", "a drawer to check", 0))
+            .unwrap();
+        s.set_wing_trust("pacific", "quarantined").unwrap();
+        assert!(s.verify().unwrap().ok(), "premise: it verifies first");
+
+        s.conn.execute("DELETE FROM wing_trust", []).unwrap();
+        let r = s.verify().unwrap();
+        assert!(!r.ok(), "a DELETED trust row must fail verify");
+        assert!(
+            r.policy_drift.iter().any(|p| p.contains("row is gone")),
+            "the deletion must be named as such: {:?}",
+            r.policy_drift
+        );
+    }
+
+    /// **A ROTATION must not trip this leg, and the first version of it did
+    /// (ROADMAP O94).**
+    ///
+    /// Rotation re-tags `wing_trust` and `retention_policy` under the new
+    /// keys and PRESERVES audit tags verbatim, because those are historical
+    /// evidence — the same asymmetry O13 records for forgetting
+    /// attestations: a keyed replay has a shorter lifetime than the document
+    /// it checks. So the obvious comparison, row tag == chain tag, holds only
+    /// until the first rotation and then reports drift on every policy of
+    /// every rotated vault.
+    ///
+    /// It shipped that way into a battery and `e2e` caught it as
+    /// `verify ok after rotate — exit 2`. The leg now asserts only what
+    /// survives a rotation: the row's own tag recomputed under the CURRENT
+    /// key, and the EXISTENCE of the record id. This test is the guard, and
+    /// it is here rather than left to the e2e suite because a unit that can
+    /// fail in 400 ms should not need a container to say so.
+    #[test]
+    fn a_rotation_is_not_policy_drift() {
+        let (d, mut s) = store();
+        s.upsert(&drawer("pacific", "r", "a drawer", 0)).unwrap();
+        s.set_wing_trust("pacific", "quarantined").unwrap();
+        s.set_retention("pacific", Some("r"), 30).unwrap();
+        assert!(s.verify().unwrap().ok(), "premise: clean before rotating");
+
+        let mgr = VaultManager::open(d.path(), None).unwrap();
+        let candidate = mgr.rotation_candidate("m").unwrap();
+        s.rotate_keys(candidate).unwrap();
+        let r = s.verify().unwrap();
+        assert!(
+            r.ok(),
+            "a routine rotation must not read as tampering: {:?}",
+            r.policy_drift
+        );
+        // Premise the other way: the leg is still LIVE after a rotation, not
+        // merely quiet. Without this the test passes on a leg that stopped
+        // working entirely.
+        s.conn.execute("DELETE FROM wing_trust", []).unwrap();
+        assert!(
+            !s.verify().unwrap().ok(),
+            "and it must still catch a deletion after a rotation"
+        );
+    }
+
+    /// A retention row removed behind the store's back is drift too — the
+    /// supported removal (`clear_retention`) appends `retention-clear/`, and
+    /// a bare `DELETE` does not.
+    #[test]
+    fn a_retention_row_deleted_behind_the_store_is_drift() {
+        let (_d, mut s) = store();
+        s.set_retention("pacific", Some("r"), 30).unwrap();
+        assert!(s.verify().unwrap().ok(), "premise: it verifies first");
+
+        s.conn.execute("DELETE FROM retention_policy", []).unwrap();
+        let r = s.verify().unwrap();
+        assert!(!r.ok(), "an unaudited retention deletion must fail verify");
+        assert!(
+            r.policy_drift
+                .iter()
+                .any(|p| p.starts_with("retention/pacific/r")),
+            "and it must name the policy: {:?}",
+            r.policy_drift
+        );
+    }
+
+    /// The other half, and without it the leg above would alarm on ordinary
+    /// operation — which is how a leg gets ignored and then deleted.
+    ///
+    /// `clear_retention` is a SUPPORTED removal: it deletes the row and
+    /// appends `retention-clear/` in the same transaction. So the assignment
+    /// record left in the chain must NOT be read as a missing row. Trust has
+    /// no such path, which is exactly why absence discriminates there and not
+    /// here.
+    #[test]
+    fn a_cleared_retention_policy_is_not_drift() {
+        let (_d, mut s) = store();
+        s.set_retention("pacific", Some("r"), 30).unwrap();
+        s.clear_retention("pacific", Some("r")).unwrap();
+        let r = s.verify().unwrap();
+        assert!(
+            r.ok(),
+            "clearing a policy through the supported path is not tampering: {:?}",
+            r.policy_drift
+        );
+
+        // And re-declaring after a clear must not be read as cleared: the
+        // clear is OLDER than the new assignment, which is why the comparison
+        // is on seq rather than on mere existence.
+        s.set_retention("pacific", Some("r"), 60).unwrap();
+        assert!(s.verify().unwrap().ok(), "a re-declared policy verifies");
+        s.conn.execute("DELETE FROM retention_policy", []).unwrap();
+        let r = s.verify().unwrap();
+        assert!(
+            !r.ok(),
+            "a stale clear must not excuse a row deleted after it: {:?}",
+            r.policy_drift
+        );
+    }
+
     #[test]
     fn delete_by_source_scopes_correctly() {
         let (_d, mut s) = store();

@@ -523,11 +523,36 @@ Consequences that are binding, not advisory:
   `UNDERCROFT_FDE_IVF_MIN` — slab-grouped cache + sealed centroids, kept
   default-off by its measured containment gate), experimental in-memory
   HNSW (hnsw.rs, `hnsw` feature), transactional audit chain (`chain_meta` + `chain_append`),
-  verify (**`VerifyReport` is the whole verdict and it has SIX legs**: record
+  verify (**`VerifyReport` is the whole verdict and it has SEVEN legs**: record
   HMACs, the chain replay, drawer supersession receipts, **KG fact
-  receipts**, orphan graph labels, mirror drift. The rule that keeps growing
+  receipts**, orphan graph labels, mirror drift, **declared-policy drift**.
+  The rule that keeps growing
   it: *a keyed claim living in columns no drawer HMAC and no chain step
-  covers must have a leg, or nothing sees it.* Supersessions got one for
+  covers must have a leg, or nothing sees it.* **The seventh is that rule
+  applied one table over (O94)**: `wing_trust` and `retention_policy` are
+  operator declarations, HMAC-tagged, outside every drawer's coverage, and
+  `verify()` mentioned neither table. A FLIP failed closed on the retrieval
+  path (`wing_trusts()` raises `Integrity`) while `verify` still answered OK
+  on all four renderers; a DELETION failed closed NOWHERE — `trust_clause`
+  finds an empty exclusion list and returns `Ok(None)`, so a wing classed
+  `quarantined` silently becomes retrievable under a `standard` floor. The
+  evidence to detect it already existed and nothing read it: each assignment
+  appends `trust/{wing}`, and that record id survives everything.
+  **The leg must assert only what survives a ROTATION, and its first version
+  did not**: comparing the row's tag to the chain record's is the obvious
+  check and it alarms on every rotated vault, because rotation re-tags the
+  policy rows under the new keys while PRESERVING audit tags verbatim as
+  historical evidence — O13's asymmetry one table over, *a keyed replay has a
+  shorter lifetime than the document it checks*. What survives is the row's
+  own tag recomputed under the CURRENT key (so a flip still fails) and the
+  EXISTENCE of the record id (so a deletion still shows).
+  **Absence discriminates for trust and not for retention, which is why one
+  leg needs two rules**: no `DELETE FROM wing_trust` exists in the crate, so
+  an orphaned `trust/` record is unambiguous — the choke-point argument
+  `orphan_labels` makes for a bare drawer id — while `retention_policy` IS
+  deletable through `clear_retention`, which appends `retention-clear/`, so a
+  missing retention row is legitimate exactly when that record is NEWER than
+  the assignment. Supersessions got one for
   exactly that reason and the identical structure one table over —
   `kg_triples.receipt_tag` / `source_fp` — did not until 2026-08-10, so
   `kg_verify_receipts` was reachable from `kg receipts`, `/v1 …/kg/receipts`
@@ -1563,8 +1588,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (791 run,
-                                      # 4 #[ignore]d = 795 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (796 run,
+                                      # 4 #[ignore]d = 800 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote

@@ -2349,6 +2349,14 @@ fn run(cli: Cli) -> Result<()> {
             for m in &report.mirror_drift {
                 println!("  MIRROR: {m}");
             }
+            // O94: a declared policy that no longer matches the chain record
+            // that assigned it. A flipped trust column fails closed on the
+            // retrieval path; a DELETED row does not — the floor simply stops
+            // applying — so this is the only place either becomes visible.
+            println!("policy drift:    {}", report.policy_drift.len());
+            for p in &report.policy_drift {
+                println!("  POLICY: {p}");
+            }
             // Drawer supersession links are part of the vault's integrity
             // story: a receipted link that fails its HMAC is tampering,
             // reported with the same severity as a bad record. The leg now
