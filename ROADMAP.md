@@ -1116,7 +1116,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**131** of the **146** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**132** of the **147** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -6599,7 +6599,51 @@ already concluded for relational claims.
 
 ---
 
-### O93 — a request-supplied `min_trust` REPLACES the operator's declared floor and can lower it from an agent surface
+### O103 — the figure comparison runs on a suite that FAILED, and reports a truncated count as doc drift
+
+**Found 2026-09-03 while closing O93.** Verified by reading the guard and by
+the run that produced it.
+
+`tests/battery.sh:2129` compares the published cargo-test figure whenever the
+`test` suite was in the run. It refuses to compare a count that is
+non-numeric, and — since O85 — one carrying `** PREMISE FAILURE **` from a
+replayed log. **It does not refuse a count from a suite that simply FAILED.**
+
+A single failing test aborts `cargo test` at that target, so the run reports a
+real, numeric, replay-free count over a fraction of the targets. Observed:
+
+```
+ test  exit 101   93 passed, 1 failed, 0 ignored over 2 targets
+ PUBLISHED FIGURES ARE STALE
+   cargo tests: CLAUDE.md publishes 798 run, this run measured 93
+```
+
+The suite exited **101** and the battery still told me to update the published
+figure to 93. That is the exact harm the O85 comment four lines above the
+guard describes — *"it sends the next person to edit a figure that was already
+right"* — reached through a door O85 did not close, because it reasoned about
+replays rather than about failures.
+
+**Fix shape.** The battery already knows each suite's exit code; gate the
+comparison on `test` having exited 0, and report `COUNT UNVERIFIABLE — the
+suite failed` otherwise. That is the verdict O85 introduced, applied to the
+other way a count can be untrustworthy. It must still FAIL the battery: the
+suite failing is already a failure, and a gate that cannot measure must not
+report clean.
+
+**Gate.** Run the battery over a tree with one deliberately failing test and
+assert the output says the count is unverifiable rather than naming a
+doc-drift figure. The premise arm is the same run on a green tree, which must
+still compare figures normally — without it, a guard that disabled the
+comparison entirely would pass.
+
+**Not fixed inside O93**, whose subject is the trust floor. Filed rather than
+folded in, because a battery-reader change wants its own counterfactual and
+this commit is already large.
+
+---
+
+### O93 — CLOSED 2026-09-03: a request `min_trust` REPLACED the operator's declared floor and could lower it from an agent surface
 
 **Round six, operational-capabilities dimension. Verified by reading the
 selection and the clause.**
@@ -6652,6 +6696,66 @@ is self-protection, which argues (c).
 with a LOWER `min_trust`, asserting whichever ruling lands — and asserting it
 on BOTH surfaces. Nothing exercises the two together today: `tests/e2e.sh:550`
 covers the vault floor, `lib.rs:15667` covers the request floor.
+
+---
+
+**CLOSED 2026-09-03. Ruling: option (a) — a request floor may RAISE the
+vault's, never lower it.** Taken by the maintainer after the options were laid
+out with what each costs.
+
+**(a) and (b) as filed are the same function** — "compose, take the stricter"
+and "replace but clamp to the vault floor" both evaluate to `max(request,
+vault)`. The axis the entry did not separate is whether the `wing`-scope
+bypass survives. It does: naming a wing confines the answer to that wing,
+where the defect was a corpus-wide lift, and tightening it would break a
+promise the tree defends on purpose.
+
+**ONE implementation, which was the load-bearing part of the fix.**
+`effective_trust_floor(request, wing, vault)` in `manage.rs` is now the only
+place this precedence exists. It existed TWICE — the store's
+`resolve_search_policy` and `cli/search.rs`, the latter added deliberately so
+the honest-exclusion disclosure matches, carrying a comment that reading it
+differently *"would disclose an exclusion that did not happen, or miss one
+that did"*. Clamping only the store would have made the reply say *0 wings
+excluded* while the store excluded several. Both call the one function; an
+e2e check drives that disclosure specifically.
+
+**Rejecting `min_trust: "quarantined"` — proposed alongside the ruling and
+then withdrawn on inspection.** It is unnecessary once the clamp lands (with a
+vault floor it clamps up; without one it names the default) and it would be a
+MAJOR by this project's own test, a documented value that stops being
+accepted. The value stays accepted.
+
+**`parity.rs`'s trust-assignment boundary is now TRUE rather than
+undermined.** It keeps `TrustAction::Set` off MCP because *"an agent assigning
+it chooses its own floor"* — an argument `min_trust` previously made hollow by
+permitting the same outcome without the assignment.
+
+**THE RETRIEVAL CLAIM I MADE WHEN OFFERING THE OPTIONS IS WITHDRAWN, MEASURED
+AND NOT ESTABLISHED.** I argued the clamp would likely make floored queries
+faster by keeping them on the `Only`/narrowing path rather than letting a
+lowered floor convert them to a corpus-shaped `AllBut`. Three runs:
+
+| corpus | result |
+|---|---|
+| 361,752 drawers, `pq` | ~2.4% spread across all four arms — no signal |
+| 130 drawers | **vacuous** — its own sanity arm reported every floor returning identical hits |
+| 2,400 drawers, both wings answering | Allow **71** ms/q vs the other arm **69** ms/q — no difference |
+
+And the third run's "Exclude" arm was not an exclusion: at `floor=standard`
+with nothing classed below it, `trust_clause` returns no clause at all, so it
+compared narrowing against UNFILTERED. **The Allow-vs-AllBut comparison was
+never established.** The mechanism is real and visible in the code —
+`narrows()` gates `scoped_pool_k` — but the latency consequence is not
+demonstrated, and it is recorded here as unproven rather than repeated as
+though it were.
+
+Two method notes from those runs, both this file's own lessons met again: the
+FIRST measurement used a stale `/src/target` binary and every number was the
+old behaviour's (caught by adding a functional freshness probe — does the
+clamp hold? — rather than a timestamp), and the second compared a path to
+itself until a sanity arm asserting the floors return DIFFERENT results said
+so.
 
 ---
 

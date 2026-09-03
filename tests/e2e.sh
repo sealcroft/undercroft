@@ -723,6 +723,32 @@ else
 fi
 check "a wing AT the floor answers" 0 "eng/decisions"                 -- \
   env UNDERCROFT_TRUST_FLOOR=trusted "$BIN" search "migrated the search stack"
+
+# **ROADMAP O93: a request floor may RAISE the vault's, never LOWER it.**
+#
+# `min_trust` used to win unconditionally, so `--min-trust quarantined` — a
+# value in the vocabulary, so it validates — made `trust_clause` return
+# `Ok(None)`: no exclusion at all, the deployment's floor removed corpus-wide
+# from any surface an agent can drive.
+#
+# O93 records that nothing exercised the two floors TOGETHER: the block above
+# covers the vault floor and a unit test covers the request floor, and the
+# defect lived only where both are present. Both spellings of the lift run here.
+check "a lowered request floor cannot lift the vault's" 0 "No memories matched." -- \
+  env UNDERCROFT_TRUST_FLOOR=trusted "$BIN" search "floor fixture hydrofoils" --min-trust quarantined
+check "...nor a partial lift" 0 "No memories matched." -- \
+  env UNDERCROFT_TRUST_FLOOR=trusted "$BIN" search "floor fixture hydrofoils" --min-trust standard
+# ...and the disclosure must follow the EFFECTIVE floor. This is the half a
+# second copy of the precedence gets wrong: `cli/search.rs` computes the
+# effective floor for this line, and if it still read the REQUEST floor it
+# would say a floor excluded nothing while the store excluded a wing — an
+# exclusion nobody can see, which is what that code exists to prevent.
+check "...and the disclosure names the floor that acted" 0 "below the trust floor" -- \
+  env UNDERCROFT_TRUST_FLOOR=trusted "$BIN" search "floor fixture hydrofoils" --min-trust quarantined
+# The other direction, so this is not a check that simply refuses
+# everything: RAISING is self-protection and stays allowed.
+check "raising the floor is still allowed" 0 "eng/decisions" -- \
+  "$BIN" search "migrated the search stack" --min-trust trusted
 # The regression itself: a read emptied BY THE FLOOR must say so. Saying
 # "Palace is empty" over an intact corpus is a false statement the caller
 # cannot see through.

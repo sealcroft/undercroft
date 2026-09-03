@@ -171,11 +171,12 @@ impl Exclusions {
         // wing scope bypasses it (naming a wing is self-scoping). Reading it
         // differently here would disclose an exclusion that did not happen,
         // or miss one that did.
-        let effective = match (opts.min_trust.as_deref(), opts.wing.as_deref()) {
-            (Some(t), _) => Some(t.to_string()),
-            (None, Some(_)) => None,
-            (None, None) => store.trust_floor().map(str::to_string),
-        };
+        let effective = undercroft_store::effective_trust_floor(
+            opts.min_trust.as_deref(),
+            opts.wing.as_deref(),
+            store.trust_floor(),
+        )
+        .map(str::to_string);
         let trust_excluded = match effective {
             Some(floor) => Some(store.trust_excluded_wing_count(&floor)?),
             None => None,
