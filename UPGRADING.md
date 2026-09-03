@@ -65,7 +65,7 @@ so rather than implying it checked them.
 
 ---
 
-## 1.2.1 (unreleased)
+## 1.2.1 (released 2026-09-03)
 
 ### a read-only open of a vault with no database exits **2** again, not 1
 
