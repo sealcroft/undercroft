@@ -5014,6 +5014,12 @@ unrecorded — the record is written after the loop, as both sibling egresses
 are. Shared with `index_push`, accepted there, and stated here rather than
 discovered later.
 
+> **STRUCK by O95 (2026-09-04).** `index_push` did not share it; it had
+> fixed it, and names this exact mistake in its own comment. This entry cited
+> the pre-fix shape of its precedent as licence for the gap. The error path
+> records what actually left now, and a run that selected nothing records
+> nothing.
+
 ---
 
 ### O80 — CLOSED 2026-09-01: the vocabulary is a type, and `tunnel/` is ruled open
@@ -7140,7 +7146,7 @@ already concluded for relational claims.
 
 ---
 
-### O95 — `refine` records no egress on its error paths, and the residual excusing that cites a precedent which fixed it
+### O95 — CLOSED 2026-09-04: `refine` records what left on its error paths, and nothing when nothing left
 
 **Round six, audit-chain dimension. Verified by reading both functions.**
 
@@ -7186,6 +7192,54 @@ not a conservative one. A `sources > 0 || dry_run` guard settles it.
 **Gate.** Drive `refine` with an extractor that fails mid-loop and assert the
 record exists with the count that actually left; and drive it against an empty
 scope and assert no record.
+
+---
+
+**CLOSED 2026-09-04.** Both halves, and the filing held on every claim it made
+about the tree: the three `?` exits sit exactly where it said, `kg_add_grounded`
+reaches `screen_kg_record` and refuses a distilled object under the quarantine
+declaration, and `index_push` records on its error path before propagating.
+
+**The fix is the precedent's shape, verbatim.** The loop body is split into
+`distil_one`, the fallible half; `refine` counts `sent` — drawers whose
+plaintext was POSTed, incremented BEFORE the extractor call, because the egress
+is the attempt and not the answer — and on an `Err` from any of the three
+writes it records `sent` through `record_egress`, logs rather than `?`s an
+audit failure so the ORIGINAL error is what the caller sees, then propagates.
+The success path records through the same function with `sent ==
+sources.len()`, so its canonical is byte-identical to O79's and the two tag
+tests did not move. **`record_egress` is the one recording site**, which is the
+O51 rule applied here: two inline copies would be the shape that gave the
+write screen three ways past it.
+
+**The second half deviates from the filing's guard, and the argument is the
+filing's own.** It prescribed `sources > 0 || dry_run`; the guard is `sent > 0`
+on both modes. A dry run over an empty scope POSTs nothing either, so a record
+for it would claim an egress that never happened — O51's rule, which the filing
+cites for the real run, does not have a dry-run exemption. No suite depended on
+the `|| dry_run` arm (the e2e vault holds drawers at both refine checks) and
+nothing in the tree offered a reason for it. Stated as a deviation rather than
+absorbed, because the filing is one of the three places intent is recorded.
+
+**Gates, both counterfactual against the artifact.** Unit:
+`a_refine_that_errors_mid_loop_records_what_actually_left` drives `refine()`
+against a loopback stub answering a triple whose object trips tier 1, screen
+on; asserts `Invalid`, exactly one record, and the tag verifying with ONE and
+refusing with THREE and ZERO — a premise arm with the screen off proves the
+stub distils all three. `a_refine_that_selects_nothing_records_nothing` covers
+both modes. Integration, through the real binary in its own process
+(`tests/cli.rs`): the CLI run fails naming the screen and leaves one record;
+`--wing nowhere` fails "no drawers to refine" and adds none; the same run over
+`serve-http`'s `/v1` answers 400 and adds exactly one more. `tests/e2e.sh`
+gained the empty-scope arm on the shipped binary. Restoring the pre-fix shape
+in the built image (the error-path call made a no-op, the guard made `true`)
+fails both unit tests and the integration test.
+
+**Surfaces moved with it**: CLAUDE.md's `audit_refine` paragraph, the O79
+entry's residual (struck: it cited the pre-fix shape of its own precedent),
+`architecture/index.html`'s egress prose, platform view 18 (the refusal-colour
+line that drew this gap now states the fix), CHANGELOG 1.3.1. No count moved,
+so nothing published on the house page.
 
 ---
 

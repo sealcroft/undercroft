@@ -423,6 +423,22 @@ else
 fi
 check "chain green after the egress" 0 "VERIFY OK"                     -- "$BIN" verify
 
+# ROADMAP O95 — a refine that SELECTS NOTHING records nothing. No plaintext
+# left the process, so a record would claim an egress that never happened,
+# and the CLI tells the operator "no drawers to refine" on the same run: the
+# chain must not contradict it. Counted against the total the two runs above
+# left, so a stray record here is a regression and not noise.
+O95_BEFORE="$("$BIN" history --limit 200 2>/dev/null | grep -cF "egress/refine" || true)"
+UNDERCROFT_LLM_URL="http://127.0.0.1:1" "$BIN" refine --wing nowhere >/tmp/o95-empty.txt 2>&1 && \
+  { echo "FAIL  an empty scope must be reported, not silently succeed"; FAIL=$((FAIL+1)); } || true
+O95_AFTER="$("$BIN" history --limit 200 2>/dev/null | grep -cF "egress/refine" || true)"
+if [ "${O95_AFTER:-0}" -eq "${O95_BEFORE:-0}" ] && grep -q "no drawers to refine" /tmp/o95-empty.txt; then
+  echo "ok    a refine over an empty scope records no egress"; PASS=$((PASS+1))
+else
+  echo "FAIL  a refine over an empty scope records no egress (before ${O95_BEFORE:-0}, after ${O95_AFTER:-0})"
+  sed 's/^/      /' /tmp/o95-empty.txt; FAIL=$((FAIL+1))
+fi
+
 # ...and a READ-ONLY handle must not write, so it warns and serves — the
 # replica precedent `/v1`'s export path states in as many words. Reachable:
 # `--read-only` is a global flag and `refine --dry-run` is a legitimate thing

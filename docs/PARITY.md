@@ -145,7 +145,8 @@ this project, which is why the two codebases share concepts but not code
   and POSTs it to a network endpoint: one `egress/refine` record per run,
   binding surface, destination host (credentials stripped), model, scope
   and counts, written on a dry run too because the corpus leaves
-  identically either way. Reads are audited under
+  identically either way, and on a run that errors mid-loop with the
+  count that actually left; a run that selected nothing records nothing. Reads are audited under
   `UNDERCROFT_READ_AUDIT=chain` across **thirteen doors** — nine that
   return drawer content and four knowledge-graph readers — one record per
   read, with a **keyed fingerprint of the subject, never its text**. The

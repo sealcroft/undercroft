@@ -76,6 +76,29 @@ claims the engine contradicts, none of them visible to the figure gate:
 Nothing in `crates/` changed. The egress view draws O95 as the open gap it
 is. Residual: `docs/diagrams/` still has no gate (filed in O105).
 
+### `refine` records what left on its error paths, and nothing when nothing left (O95)
+
+**ROADMAP O95 CLOSED.** `refine` POSTs each selected drawer's plaintext to
+`UNDERCROFT_LLM_URL` and, since 1.2.0, appends one `egress/refine` record —
+after the loop, on the success path only. Three writes inside the loop can
+refuse on ordinary input after a drawer's plaintext has left (a distilled object
+that trips the tier-1 screen under `UNDERCROFT_ADMISSION=quarantine`; a second
+run rewriting an approved canonical holder), and each aborted the run with no
+record for anything read before it: an audit-suppression primitive driven by
+corpus content, in the deployment the trail exists for. The residual excusing
+this cited `index_push` as sharing the gap; `index_push` had fixed it.
+
+Now the error path records the count that actually left before the error
+propagates, through the one recording function the success path uses, and an
+audit-write failure is logged rather than allowed to replace the original
+error. A run that selected nothing records nothing, dry run included — no
+plaintext left, and the CLI tells the operator "no drawers to refine" on the
+same run. The success-path record is byte-identical to before.
+
+Gated by two unit tests driving `refine()` against a loopback stub, an
+integration test through the real binary on both the CLI and `/v1`, and an
+e2e arm; the pre-fix shape restored in the built image fails all of them.
+
 ## 1.3.0 — 2026-09-04
 
 MINOR: new capability, backward compatible. It adds a field beside ones that

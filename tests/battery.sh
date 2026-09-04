@@ -298,7 +298,7 @@ SUITE_COUNTS=$(declare_suite_counts)
 #     target, so a real, numeric, replay-free count arrives over a fraction of
 #     the targets. Observed: `test exit 101 — 93 passed, 1 failed over 2
 #     targets`, and the battery told the operator to publish 93 against a
-#     figure of 798. Checked FIRST, because it is the stronger signal and the
+#     figure of 801. Checked FIRST, because it is the stronger signal and the
 #     one no reader marker can express.
 #   * **The reader disowned it** (O15/O27/O85/O97) — a replayed tail or a log
 #     holding more than one run.
@@ -448,7 +448,7 @@ rm -rf "$SUM_TMP"
 # entirely, which reports exactly what a clean tree reports.
 CU_NAMES_SAVE=("${NAMES[@]}"); CU_CODES_SAVE=("${CODES[@]}")
 NAMES=(test e2e backends-e2e); CODES=(101 0 0)
-if [ -z "$(count_untrustworthy test "798 passed, 0 failed, 4 ignored over 20 targets")" ]; then
+if [ -z "$(count_untrustworthy test "801 passed, 0 failed, 4 ignored over 20 targets")" ]; then
   echo "FAIL  a suite that exited 101 had its count compared anyway (O103):"
   echo "      an aborted run is partial, and publishing its number is the harm"
   SUM_FAIL=1
