@@ -900,7 +900,15 @@ Consequences that are binding, not advisory:
   EMBEDDINGS, which are merely plaintext-derived. **A dry run records
   too**, because `dry_run` skips writing FACTS and the network egress is
   byte-identical; the documented "write nothing" was about the triples
-  and now says so. The record lives in `refine.rs` — the one
+  and now says so. **And the ERROR path records what left (O95,
+  2026-09-04)**: the three writes after a drawer's POST can refuse on
+  ordinary input, and until O95 that aborted the run with no record for
+  the corpus prefix already on the endpoint — the residual excusing it
+  said the gap was shared with `index_push`, which had in fact fixed it.
+  `refine` counts drawers whose plaintext was POSTed, records that count
+  through the ONE recording function on either exit, never
+  `sources.len()`, and a run that selected nothing records nothing on
+  either mode. The record lives in `refine.rs` — the one
   implementation both surfaces drive — not at each call site, which is
   why the read-only warn-and-serve reaches the CLI as well as `/v1`;
   **reads audited under `UNDERCROFT_READ_AUDIT=chain`** —
@@ -1618,8 +1626,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (798 run,
-                                      # 4 #[ignore]d = 802 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (801 run,
+                                      # 4 #[ignore]d = 805 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1711,7 +1719,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # by nothing and two dead wrappers survived
                                       # from O20 and O25. Publishes no check count
                                       # deliberately
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (454 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (455 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (127 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (53 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (82 checks; weaviate

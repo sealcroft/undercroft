@@ -46,7 +46,7 @@
 
     <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="egress-paths-title egress-paths-desc">
       <title id="egress-paths-title">Undercroft egress paths and their chain records</title>
-      <desc id="egress-paths-desc">Content leaves a vault by three doors, each chain-recorded unconditionally under the egress namespace: an export records before it writes the recipient-sealed or plaintext bundle, because a local write can be re-run; an index push ships sealed content and embeddings to a remote backend in batches of sixty-four and records after the bytes have left, binding the count the backend acknowledged, and a batch that fails part-way records what left before the error propagates; and a refine posts each selected drawer's plaintext to the LLM endpoint and records after the loop, dry run included, with the surface, the destination host, the model, the scope and the counts — while a refine that errors mid-loop leaves no record today, an open item. A read-only handle serves each and says the egress went unaudited.</desc>
+      <desc id="egress-paths-desc">Content leaves a vault by three doors, each chain-recorded unconditionally under the egress namespace: an export records before it writes the recipient-sealed or plaintext bundle, because a local write can be re-run; an index push ships sealed content and embeddings to a remote backend in batches of sixty-four and records after the bytes have left, binding the count the backend acknowledged, and a batch that fails part-way records what left before the error propagates; and a refine posts each selected drawer's plaintext to the LLM endpoint and records after the loop, dry run included, with the surface, the destination host, the model, the scope and the counts, and a refine that errors mid-loop records the drawers that left before the error propagates; a run that selected nothing records nothing. A read-only handle serves each and says the egress went unaudited.</desc>
       <defs>
         <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7fa39c"/></marker>
         <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#35e0c2"/></marker>
@@ -142,7 +142,7 @@
       <text x="960" y="300" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">the refine loop</text>
       <text x="960" y="318" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">audit_refine AFTER the loop: sources ·</text>
       <text x="960" y="332" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">failed · dry_run; read-only warns and serves</text>
-      <text x="960" y="352" fill="#ff5d73" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">an error mid-loop records nothing yet (O95)</text>
+      <text x="960" y="352" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">an error mid-loop records what left, then errors</text>
 
       <!-- ============ NODES — destination lane ============ -->
       <rect x="248" y="464" width="224" height="80" rx="6" fill="#04080a"/>
