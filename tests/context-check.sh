@@ -39,11 +39,31 @@ set -uo pipefail
 # Claude Code slugs the project directory by replacing every path separator
 # (and the drive colon) with `-`. Derived rather than hard-coded: this file is
 # TRACKED, and a tracked tool carrying one machine's absolute path is the
-# defect O10 fixed one directory over. Verified on 2026-08-18 that the
-# derivation reproduces the real slug exactly.
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -W 2>/dev/null || cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# defect O10 fixed one directory over.
+#
+# **This line was `A && B || C && D` from 2026-08-18 to 2026-09-04, and that
+# parses as `((A && B) || C) && D` (ROADMAP O106)**: on a shell where `pwd -W`
+# succeeds — Git Bash, i.e. the maintainer's machine — BOTH `pwd`s ran and
+# `ROOT` was two lines, `C:/…` and `/c/…`. The slug inherited the newline and
+# no directory could match it, so the documented invocation, the session-id
+# form, always refused; the full-path form never touched the slug and worked,
+# which is how the defect hid behind O104's self-test. On a shell without
+# `pwd -W` only the second arm printed, so the line READ as though it worked.
+# The braces make the alternation one command.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && { pwd -W 2>/dev/null || pwd; })"
+case "$ROOT" in
+  *$'\n'*)
+    echo "CONTEXT CHECK FAILED — the project root resolved to more than one line:"
+    printf '%s\n' "$ROOT" | sed 's/^/  /'
+    echo "No transcript directory can match a slug with a newline in it (ROADMAP O106)."
+    exit 1 ;;
+esac
 SLUG="$(printf '%s' "$ROOT" | sed -E 's#[:/\\]#-#g')"
-PROJ="${CLAUDE_PROJECT_DIR:-$HOME/.claude/projects/$SLUG}"
+# `CLAUDE_PROJECT_DIR` is deliberately NOT honoured: the harness sets it to the
+# REPO root, which holds no `.jsonl`, and until O106 this line still read it —
+# so under a hook the session-id form pointed at the wrong directory while the
+# comment below said exactly that. Only `HOME` locates the transcripts.
+PROJ="$HOME/.claude/projects/$SLUG"
 WINDOW="${CONTEXT_WINDOW:-1000000}"
 
 # **THIS FALLBACK USED TO PICK ANOTHER PROJECT, AND THAT IS ROADMAP O104.**
@@ -95,7 +115,7 @@ if [ "${1:-}" = "--self-test" ]; then
   ST_TMP=$(mktemp -d)
   # 1. A project directory that does not exist must REFUSE, not wander off to
   #    another project. This is the defect verbatim.
-  if OUT=$(PROJ_OVERRIDE=1 HOME="$ST_TMP" bash "$0" 2>&1); then
+  if OUT=$(HOME="$ST_TMP" bash "$0" 2>&1); then
     echo "FAIL  a missing transcript directory did not refuse — it answered:"
     printf '%s
 ' "$OUT" | head -3 | sed 's/^/        /'
@@ -119,6 +139,32 @@ if [ "${1:-}" = "--self-test" ]; then
   else
     echo "FAIL  premise: no transcript anywhere to prove the happy path"
     ST_FAIL=1
+  fi
+  # 3. THE SESSION-ID FORM — the invocation the doctrine documents — must
+  #    measure (ROADMAP O106). Built under a fake HOME so it exercises the slug
+  #    derivation for THIS project rather than the full-path shortcut: a real
+  #    transcript copied under `<HOME>/.claude/projects/<slug>/<id>.jsonl`, then
+  #    asked for by id. Restoring the pre-O106 `ROOT` line fails exactly this
+  #    arm, because the slug then carries a newline.
+  if [ -n "$ST_REAL" ]; then
+    ST_PROJ="$ST_TMP/.claude/projects/$SLUG"
+    mkdir -p "$ST_PROJ" && cp "$ST_REAL" "$ST_PROJ/o106-probe.jsonl"
+    if OUT=$(HOME="$ST_TMP" bash "$0" o106-probe 2>&1) && printf '%s' "$OUT" | grep -q "remaining"; then
+      echo "ok    ...and the session-id form resolves this project's slug and measures"
+    else
+      echo "FAIL  the session-id form did not measure — the slug derivation is wrong:"
+      printf '%s\n' "$OUT" | head -3 | sed 's/^/        /'
+      ST_FAIL=1
+    fi
+    # 4. ...and it must keep measuring when the harness sets CLAUDE_PROJECT_DIR
+    #    to the repo root, as hooks do — that variable names the wrong
+    #    directory and must not be consulted.
+    if OUT=$(CLAUDE_PROJECT_DIR="$ROOT" HOME="$ST_TMP" bash "$0" o106-probe 2>&1) && printf '%s' "$OUT" | grep -q "remaining"; then
+      echo "ok    ...and CLAUDE_PROJECT_DIR (the repo root) is not mistaken for the transcripts"
+    else
+      echo "FAIL  CLAUDE_PROJECT_DIR steered the session-id form to the wrong directory"
+      ST_FAIL=1
+    fi
   fi
   rm -rf "$ST_TMP"
   [ "$ST_FAIL" -eq 0 ] && echo "context-check self-test: ok" || echo "context-check self-test: FAILED"

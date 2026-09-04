@@ -1116,7 +1116,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**136** of the **151** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**137** of the **152** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -6971,7 +6971,7 @@ audit looks like, and it is a unit, not a preflight.
 
 ---
 
-### O106 — `context-check.sh <session-id>` refuses on Git Bash, and O104's self-test cannot see it
+### O106 — CLOSED 2026-09-04: `context-check.sh <session-id>` refused on Git Bash, and O104's self-test could not see it
 
 **Found 2026-09-04, the first time the O104 doctrine was followed.** The
 handover says *run it with the session id*; run that way it printed
@@ -6999,6 +6999,59 @@ line. **Gate**: a self-test arm that copies a real transcript under a
 synthetic `HOME`/`projects/<slug>/` for THIS project and runs `bash "$0"
 <id>` — the session-id form — requiring a measurement, plus a premise arm
 asserting `ROOT` is a single line.
+
+---
+
+**CLOSED 2026-09-04.** The braces, exactly as filed, plus a guard that refuses
+when `ROOT` resolves to more than one line rather than letting a newline into
+the slug. **Two O104 leftovers in the same lines, fixed with it**: `PROJ`
+still honoured `CLAUDE_PROJECT_DIR` one line below a comment explaining that
+variable names the repo root and holds no transcripts — so under a hook the
+session-id form pointed at the wrong directory — and the self-test's
+`PROJ_OVERRIDE=1` was read by nothing. Gone, and gone.
+
+**Gates**: two self-test arms — the session-id form measured under a fake
+`HOME` built for THIS project's slug, and the same with `CLAUDE_PROJECT_DIR`
+set to the repo root as hooks set it. Counterfactual against the artifact:
+the old `ROOT` line restored in a temp copy makes the self-test fail at the
+new guard on every arm. Verified live: the documented invocation now measures
+(87.3% at the time), where it had refused.
+
+**Residual, stated**: no battery preflight runs `--self-test`, because two of
+its arms need a real transcript under `~/.claude` and a CI runner has none —
+and a preflight that skips when it has nothing to examine is the pass-on-
+nothing shape. The honest gate is a `--check-derivation` mode that prints the
+slug and fails on a multi-line `ROOT` or a slug without the repo's basename,
+run as a fifteenth preflight; filed here rather than built, because it moves
+the gated preflight count and this session was at the context stop-line.
+
+---
+
+### O107 — the battery's test-count reader can fail a GREEN suite on CI, because GitHub's log capture interleaves lines
+
+**Found 2026-09-04 on the O106 pull request.** The `test` suite exited 0 with
+every target green (twelve targets summing to 801), and the battery still
+failed: *"573 passed, 0 failed, 4 ignored over 19 targets — PREMISE FAILURE:
+1 orphan result line(s)"*. The raw log shows why — a `Running unittests …`
+header was appended to the SAME LINE as a test's `... ` output
+(`test tests::the_orchestrator_key_resolves_without_opening_anything ...      Running unittests src/lib.rs …`),
+so `test_summary` saw twenty result lines and nineteen headers. The reader
+was RIGHT to refuse the count (O15, O103); it was wrong to have nothing to
+say about a suite whose own exit code was 0.
+
+**The mechanism is not the replay O15 records.** CI's runner captures stdout
+and stderr as separate streams and merges them by timestamp; cargo prints
+headers on one and test lines on the other, so a header can land mid-line.
+Locally the two share a terminal and this cannot happen, which is why every
+local battery is clean and the failure is CI-only and intermittent.
+
+**Fix shape**: anchor the header match on `Running` or `Doc-tests` ANYWHERE
+in a line rather than at column zero, and count a line carrying both a test
+verdict and a header as both. **Gate**: the reader's preflight self-test
+gains a fixture with a header glued to a test line and must pair it.
+**Until then**: a red `suite (test)` whose log ends `exit 0` with a PREMISE
+FAILURE naming orphan lines is this, and `gh run rerun --failed` is the
+remedy — never editing a published figure, as the message already says.
 
 ---
 
