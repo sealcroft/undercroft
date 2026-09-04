@@ -65,7 +65,7 @@ so rather than implying it checked them.
 
 ---
 
-## 1.3.0 (unreleased)
+## 1.3.0 (released 2026-09-04)
 
 ### a vault with an edited or deleted trust/retention row now FAILS verify
 

@@ -7,26 +7,27 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
 
 Published by **Sealcroft** at `github.com/sealcroft/undercroft`, site at
 `https://sealcroft.com/undercroft/`, house page at `https://sealcroft.com/`
-(repo `sealcroft/sealcroft.github.io`). Current release **1.2.2** — a PATCH
-over `1.2.1`, itself a PATCH over `1.2.0`, which was a MINOR over `1.1.1`.
-PATCH is right by this file's own test — **a documented contract that
-changes** is what makes a MAJOR, and nothing here changes one. `1.2.2` exists
-because `1.2.1` **shipped 16 release assets instead of 20**: O90's fix named
-`tokio_postgres::config::Host::Unix`, a variant that is `#[cfg(unix)]` and
-does not exist off unix, so `undercroft-index` did not compile for
-`x86_64-pc-windows-msvc` and both Windows binaries failed to build. Nothing
-saw it because nothing here compiled for Windows on a pull request — closed by
-the `windows-check` CI job (O102). `1.2.1` itself carried three defects going
-away: O91 (a `--read-only` open that created the database it is forbidden to
-create and collapsed a crashed writer's WAL — that one shipped in `1.2.0`),
-O92 (an egress record naming a host that was never dialed) and O90 (a pgvector
-DSN guard that failed OPEN, letting plaintext-derived embeddings cross the
-network). The one observable an operator could key on — a read-only open of an
-absent database exiting **2** rather than 1 — RESTORES what every document in
-this tree has published throughout, so it is a fix rather than a break; it can
-still stop a script written against `1.2.0`, which is why `UPGRADING.md`
-carries it. **The tree carries
-`1.2.2` only once the release PR merges; the TAG is a separate, explicit
+(repo `sealcroft/sealcroft.github.io`). Current release **1.3.0** — a MINOR
+over `1.2.2`, itself a PATCH over `1.2.1` and that a PATCH over `1.2.0`.
+MINOR is right by this file's own test: it ADDS a field beside ones that stay
+— `VerifyReport.policy_drift`, and a `policy_drift` key on
+`POST /v1/…/verify` — and nothing documented stops being accepted. Two
+security-relevant changes ride in it and both are worth knowing before an
+upgrade. **`verify` gained a SEVENTH leg (O94)**: `wing_trust` and
+`retention_policy` are keyed operator declarations that no drawer HMAC and no
+chain step covered, so a flipped row failed closed on the retrieval path while
+`verify` answered OK, and a DELETED row failed closed NOWHERE — the floor
+simply stopped applying. A vault whose policy rows were edited outside the
+engine now FAILS verify, and `backup create` gates on that verdict, which is
+the point rather than a side effect. And **a request `min_trust` can no longer
+lower a deployment's declared floor (O93)**: it won unconditionally, and
+`trust_rank("quarantined") == 0` made `trust_clause` return no exclusion at
+all, so one search argument lifted the floor corpus-wide from an agent
+surface. Raising is untouched; an explicit `wing` scope still bypasses the
+vault floor, because that confines the answer rather than lifting the floor.
+`UPGRADING.md` carries the first; the second removes a capability nothing
+should have relied on. **The tree carries
+`1.3.0` only once the release PR merges; the TAG is a separate, explicit
 step** — a build reporting a version it was never tagged as is worse
 than one reporting the last release. `main` is branch
 protected on both repos: force pushes and deletions blocked, admins exempt.

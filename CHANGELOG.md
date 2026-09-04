@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — 1.3.0
+## 1.3.0 — 2026-09-04
 
 MINOR: new capability, backward compatible. It adds a field beside ones that
 stay — `VerifyReport.policy_drift`, and a `policy_drift` key on
