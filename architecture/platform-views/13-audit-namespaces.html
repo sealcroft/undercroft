@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Undercroft — Audit Namespaces</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:  #04080a;
+      --color-raise:  #071014;
+      --color-ink:    #d9f0ea;
+      --color-muted:  #7fa39c;
+      --color-accent: #35e0c2;
+      --font-sans:  -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --font-serif: Georgia, "Times New Roman", serif;
+      --font-mono:  ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1200px; width: 100%; }
+    .eyebrow {
+      font-family: var(--font-mono); font-size: 0.66rem; font-weight: 500;
+      letter-spacing: 0.18em; text-transform: uppercase;
+      color: var(--color-muted); margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400; letter-spacing: -0.02em; line-height: 1.15;
+      color: var(--color-ink); margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 900px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Layer stack · 13 of 22 · Undercroft</p>
+    <h1>What the audit chain is allowed to say, and to whom</h1>
+
+    <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="audit-namespaces-title audit-namespaces-desc">
+      <title id="audit-namespaces-title">Undercroft audit-chain namespaces and the agent fence</title>
+      <desc id="audit-namespaces-desc">Every audit record id is a namespace prefix plus the caller's subject, and the namespace is a Rust type with thirteen variants: chain_append requires one, so twelve of the thirteen are minted through that single door while key rotation writes its rotate record with its own insert because it computes the chain head over preserved bytes; the chain hashes each record's tag and never its id; and the MCP history tool, reading at agent scope, is fenced from nine of the thirteen — admission rulings, trust, retention and its clearing, deletions, egresses, the read trail, rotations and migrations — and sees only drawer, knowledge-graph, entity and tunnel records.</desc>
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7fa39c"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#35e0c2"/></marker>
+        <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#c9a961"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#04080a"/>
+
+      <!-- ============ ZONES (drawn first) ============ -->
+      <rect x="760" y="48" width="336" height="436" rx="8" fill="rgba(255,93,115,0.03)" stroke="rgba(255,93,115,0.35)" stroke-width="0.8" stroke-dasharray="4,4"/>
+      <rect x="856" y="52" width="144" height="12" rx="2" fill="#04080a"/>
+      <text x="928" y="61" fill="rgba(255,93,115,0.80)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.14em">FENCED FROM THE AGENT · 9</text>
+
+      <rect x="760" y="508" width="336" height="208" rx="8" fill="rgba(217,240,234,0.02)" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
+      <rect x="868" y="512" width="120" height="12" rx="2" fill="#04080a"/>
+      <text x="928" y="521" fill="rgba(217,240,234,0.40)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.14em">OPEN TO THE AGENT · 4</text>
+
+      <!-- ============ ARROWS (before boxes) ============ -->
+      <!-- chain_append -> audit table (shared x) -->
+      <line x1="280" y1="160" x2="280" y2="232" stroke="#35e0c2" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <!-- rotate.rs -> audit table, its own insert -->
+      <path d="M 600,160 V 196 Q 600,204 592,204 H 384 Q 376,204 376,212 V 232" fill="none" stroke="#7fa39c" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+      <!-- audit table -> undercroft_history (shared x) -->
+      <line x1="280" y1="328" x2="280" y2="376" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- undercroft_history -> the open zone: what agent scope may see -->
+      <path d="M 440,424 H 620 Q 628,424 628,432 V 612 Q 628,620 636,620 H 752" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- ============ ARROW LABELS (mask + gap) ============ -->
+      <rect x="288" y="176" width="96" height="12" rx="2" fill="#04080a"/>
+      <text x="336" y="185" fill="#35e0c2" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">MINTS 12 OF 13</text>
+
+      <rect x="420" y="184" width="88" height="12" rx="2" fill="#04080a"/>
+      <text x="464" y="193" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">OWN INSERT</text>
+
+      <rect x="288" y="340" width="96" height="12" rx="2" fill="#04080a"/>
+      <text x="336" y="349" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">PREFIX LIKE</text>
+
+      <rect x="636" y="512" width="80" height="12" rx="2" fill="#04080a"/>
+      <text x="676" y="521" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">SEES ONLY</text>
+
+      <!-- ============ NODES ============ -->
+      <!-- chain_append (FOCAL) -->
+      <rect x="120" y="64" width="320" height="96" rx="6" fill="#04080a"/>
+      <rect x="120" y="64" width="320" height="96" rx="6" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1.2"/>
+      <rect x="128" y="70" width="36" height="12" rx="2" fill="transparent" stroke="rgba(53,224,194,0.50)" stroke-width="0.8"/>
+      <text x="146" y="79" fill="#35e0c2" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">DOOR</text>
+      <text x="280" y="104" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">chain_append(Namespace, rest)</text>
+      <text x="280" y="122" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">the namespace is a TYPE, 13 variants</text>
+      <text x="280" y="136" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">prefix() + fenced_from_agent(), both exhaustive</text>
+      <text x="280" y="150" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">a new variant does not compile until both are ruled</text>
+
+      <!-- rotate.rs (the exception) -->
+      <rect x="480" y="64" width="240" height="96" rx="6" fill="#04080a"/>
+      <rect x="480" y="64" width="240" height="96" rx="6" fill="rgba(217,240,234,0.02)" stroke="rgba(217,240,234,0.20)" stroke-width="1" stroke-dasharray="4,3"/>
+      <rect x="488" y="70" width="64" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.30)" stroke-width="0.8"/>
+      <text x="520" y="79" fill="rgba(217,240,234,0.70)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">EXCEPTION</text>
+      <text x="600" y="104" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">rotate.rs</text>
+      <text x="600" y="122" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">mints rotate/ with its own INSERT</text>
+      <text x="600" y="136" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">the head is computed over PRESERVED</text>
+      <text x="600" y="150" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">audit bytes — a gate on the door is blind to it</text>
+
+      <!-- audit table -->
+      <rect x="120" y="232" width="320" height="96" rx="6" fill="#04080a"/>
+      <rect x="120" y="232" width="320" height="96" rx="6" fill="rgba(217,240,234,0.05)" stroke="#7fa39c" stroke-width="1"/>
+      <rect x="128" y="238" width="48" height="12" rx="2" fill="transparent" stroke="rgba(127,163,156,0.40)" stroke-width="0.8"/>
+      <text x="152" y="247" fill="rgba(127,163,156,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">ON DISK</text>
+      <text x="280" y="272" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">audit table</text>
+      <text x="280" y="290" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">record_id · tag · at — append-only</text>
+      <text x="280" y="304" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">the chain hashes the TAG, never the id:</text>
+      <text x="280" y="318" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">a mistyped prefix verifies clean and matches nothing</text>
+
+      <!-- undercroft_history -->
+      <rect x="120" y="376" width="320" height="96" rx="6" fill="#04080a"/>
+      <rect x="120" y="376" width="320" height="96" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <rect x="128" y="382" width="28" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
+      <text x="142" y="391" fill="rgba(217,240,234,0.80)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">MCP</text>
+      <text x="280" y="416" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">undercroft_history</text>
+      <text x="280" y="434" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">HistoryScope::Agent</text>
+      <text x="280" y="448" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">fenced by prefix, and by the reserved review wing:</text>
+      <text x="280" y="462" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">a diverted write cannot read its own evidence back</text>
+
+      <!-- ============ NAMESPACE CHIPS — fenced ============ -->
+      <rect x="776" y="80" width="304" height="36" rx="4" fill="#04080a"/>
+      <rect x="776" y="80" width="304" height="36" rx="4" fill="rgba(255,93,115,0.06)" stroke="rgba(255,93,115,0.45)" stroke-width="0.8"/>
+      <text x="788" y="95" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">admission/{id}/{verdict}</text>
+      <text x="788" y="108" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">a ruling on quarantined evidence, operator only</text>
+
+      <rect x="776" y="124" width="304" height="36" rx="4" fill="#04080a"/>
+      <rect x="776" y="124" width="304" height="36" rx="4" fill="rgba(255,93,115,0.06)" stroke="rgba(255,93,115,0.45)" stroke-width="0.8"/>
+      <text x="788" y="139" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">trust/{wing}</text>
+      <text x="788" y="152" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">the retrieval floor itself — verify leg 07 reads it back</text>
+
+      <rect x="776" y="168" width="304" height="36" rx="4" fill="#04080a"/>
+      <rect x="776" y="168" width="304" height="36" rx="4" fill="rgba(255,93,115,0.06)" stroke="rgba(255,93,115,0.45)" stroke-width="0.8"/>
+      <text x="788" y="183" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">retention/{wing}[/{room}]</text>
+      <text x="788" y="196" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">declared policy — a map of what is about to expire</text>
+
+      <rect x="776" y="212" width="304" height="36" rx="4" fill="#04080a"/>
+      <rect x="776" y="212" width="304" height="36" rx="4" fill="rgba(255,93,115,0.06)" stroke="rgba(255,93,115,0.45)" stroke-width="0.8"/>
+      <text x="788" y="227" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">retention-clear/{wing}[/{room}]</text>
+      <text x="788" y="240" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">the removal — newer than retention/ means legitimately gone</text>
+
+      <rect x="776" y="256" width="304" height="36" rx="4" fill="#04080a"/>
+      <rect x="776" y="256" width="304" height="36" rx="4" fill="rgba(255,93,115,0.06)" stroke="rgba(255,93,115,0.45)" stroke-width="0.8"/>
+      <text x="788" y="271" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">del/{id} · del/tunnel/{id}</text>
+      <text x="788" y="284" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">tombstones: agent deletes AND attested forgetting share it</text>
+
+      <rect x="776" y="300" width="304" height="36" rx="4" fill="#04080a"/>
+      <rect x="776" y="300" width="304" height="36" rx="4" fill="rgba(255,93,115,0.06)" stroke="rgba(255,93,115,0.45)" stroke-width="0.8"/>
+      <text x="788" y="315" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">egress/export · index-push · refine</text>
+      <text x="788" y="328" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">content leaving the vault, recorded unconditionally</text>
+
+      <rect x="776" y="344" width="304" height="36" rx="4" fill="#04080a"/>
+      <rect x="776" y="344" width="304" height="36" rx="4" fill="rgba(255,93,115,0.06)" stroke="rgba(255,93,115,0.45)" stroke-width="0.8"/>
+      <text x="788" y="359" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">read/{op}</text>
+      <text x="788" y="372" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">the opt-in read trail — a side channel on other principals</text>
+
+      <rect x="776" y="388" width="304" height="36" rx="4" fill="#04080a"/>
+      <rect x="776" y="388" width="304" height="36" rx="4" fill="rgba(255,93,115,0.06)" stroke="rgba(255,93,115,0.45)" stroke-width="0.8"/>
+      <text x="788" y="403" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">rotate/{keycheck}</text>
+      <text x="788" y="416" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">minted by rotate.rs, not by chain_append</text>
+
+      <rect x="776" y="432" width="304" height="36" rx="4" fill="#04080a"/>
+      <rect x="776" y="432" width="304" height="36" rx="4" fill="rgba(255,93,115,0.06)" stroke="rgba(255,93,115,0.45)" stroke-width="0.8"/>
+      <text x="788" y="447" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">migrate/{what}</text>
+      <text x="788" y="460" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">an at-rest migration that completed a clean walk</text>
+
+      <!-- ============ NAMESPACE CHIPS — open ============ -->
+      <rect x="776" y="540" width="304" height="36" rx="4" fill="#04080a"/>
+      <rect x="776" y="540" width="304" height="36" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>
+      <text x="788" y="555" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">{drawer id} — the bare prefix</text>
+      <text x="788" y="568" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">one record per drawer write, in the write's own transaction</text>
+
+      <rect x="776" y="584" width="304" height="36" rx="4" fill="#04080a"/>
+      <rect x="776" y="584" width="304" height="36" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>
+      <text x="788" y="599" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">kg/{triple id}</text>
+      <text x="788" y="612" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">a fact written, invalidated, superseded or promoted</text>
+
+      <rect x="776" y="628" width="304" height="36" rx="4" fill="#04080a"/>
+      <rect x="776" y="628" width="304" height="36" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>
+      <text x="788" y="643" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">kg-entity/{entity id}</text>
+      <text x="788" y="656" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">an entity created; the id is keyed by the stored secret</text>
+
+      <rect x="776" y="672" width="304" height="36" rx="4" fill="#04080a"/>
+      <rect x="776" y="672" width="304" height="36" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>
+      <text x="788" y="687" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">tunnel/{id}</text>
+      <text x="788" y="700" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">an agent-created link between rooms — ruled open (O80)</text>
+
+      <!-- ============ CALLOUT ============ -->
+      <line x1="124" y1="508" x2="124" y2="572" stroke="rgba(217,240,234,0.18)" stroke-width="1.2"/>
+      <text x="148" y="522" fill="#5c7f79" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" letter-spacing="0.14em">THE RULE</text>
+      <text x="148" y="546" fill="#d9f0ea" font-size="15" font-style="italic" font-family="Georgia, 'Times New Roman', serif">A namespace is a type: prefix() spells it once, fenced_from_agent() rules on it once,</text>
+      <text x="148" y="568" fill="#d9f0ea" font-size="15" font-style="italic" font-family="Georgia, 'Times New Roman', serif">both exhaustive — the fence excludes only what is listed, so nobody may leave a variant unruled.</text>
+
+      <!-- ============ LEGEND ============ -->
+      <line x1="120" y1="744" x2="1080" y2="744" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
+      <text x="120" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" letter-spacing="0.14em">LEGEND</text>
+
+      <rect x="212" y="756" width="16" height="10" rx="2" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1"/>
+      <text x="236" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">FOCAL</text>
+
+      <rect x="292" y="756" width="16" height="10" rx="2" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <text x="316" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">COMPONENT</text>
+
+      <rect x="404" y="756" width="16" height="10" rx="2" fill="rgba(217,240,234,0.05)" stroke="#7fa39c" stroke-width="1"/>
+      <text x="428" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">ON DISK</text>
+
+      <rect x="500" y="756" width="16" height="10" rx="2" fill="rgba(255,93,115,0.06)" stroke="rgba(255,93,115,0.45)" stroke-width="1"/>
+      <text x="524" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">FENCED NAMESPACE</text>
+
+      <rect x="652" y="756" width="16" height="10" rx="2" fill="#071014" stroke="#5c7f79" stroke-width="1"/>
+      <text x="676" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">OPEN NAMESPACE</text>
+
+      <line x1="796" y1="761" x2="828" y2="761" stroke="#35e0c2" stroke-width="1.2"/>
+      <text x="836" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">MINTS</text>
+
+      <line x1="896" y1="761" x2="928" y2="761" stroke="#7fa39c" stroke-width="1.2" stroke-dasharray="5,4"/>
+      <text x="936" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">OUTSIDE THE DOOR</text>
+    </svg>
+  </div>
+</body>
+</html>

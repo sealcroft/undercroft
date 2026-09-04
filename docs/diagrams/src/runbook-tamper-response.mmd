@@ -1,10 +1,10 @@
 flowchart TB
-    alert["PalaceTamperDetected<br/><i>alert / monitor beacon / verify count</i>"] --> loc["1 · Where?<br/><i>surface + vault labels</i>"]
-    loc --> conf["2 · Confirm + pinpoint<br/><i>undercroft verify vault —<br/>names the exact record(s), chain state</i>"]
-    conf --> mit["3 · Mitigate<br/><i>freeze writes (--read-only) ·<br/>preserve evidence copy · isolate vault</i>"]
+    alert["PalaceTamperDetected<br/><i>alert / monitor beacon / verify count</i>"] --> loc["1 · Where?<br/><i>surface label on the counter;<br/>vault · id · wing · room on the event</i>"]
+    loc --> conf["2 · Confirm + pinpoint<br/><i>undercroft verify --vault —<br/>names the exact record(s), chain state</i>"]
+    conf --> mit["3 · Mitigate<br/><i>preserve evidence copy FIRST ·<br/>freeze writes (--read-only) · isolate vault</i>"]
     mit --> fix{"4 · Fix — verbatim restore,<br/>never repair-in-place"}
     fix -- "known-good backup" --> restore["backup restore →<br/>verify must report 0 failures"]
-    fix -- "single record,<br/>source available" --> refile["re-file it —<br/><i>deterministic id ⇒ idempotent re-seal</i>"]
+    fix -- "single MINED record,<br/>source document available" --> refile["re-file it —<br/><i>source-derived id ⇒ idempotent re-seal</i>"]
     restore --> clean["repair (housekeeping) →<br/>read-write only once verify is clean"]
     refile --> clean
     clean --> prev["5 · Prevent<br/><i>scheduled backups · 0600 perms ·<br/>OS-level FIM · alerting on ·<br/>per-vault assertions</i>"]

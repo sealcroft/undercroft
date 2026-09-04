@@ -381,6 +381,7 @@ sequenceDiagram
     participant E as engine /v1
     T->>O: POST /t/search — Bearer tenant-token
     O->>O: token → HMAC → tenant row (vault, instance)
+    O->>O: per-tenant rate screen — a read replica refuses anything but GET or search
     O->>O: subpath allowlist (vault root unroutable)
     O->>O: unseal instance creds, mint X-Vault-Assertion(vault)
     O->>E: POST /v1/vaults/tenant-a/search — engine bearer + assertion
@@ -401,15 +402,15 @@ sequenceDiagram
     participant S as source engine
     participant D as target engine
     A->>O: POST /admin/tenants/{id}/migrate {to}
-    O->>S: GET /v1/vaults/{v}/export (NDJSON + token artifacts)
-    O->>D: POST /v1/vaults (create)
+    O->>S: GET /v1/vaults/{v}/export (NDJSON + manifest with counts)
+    O->>D: POST /v1/vaults (create — same security level, or refuse)
     O->>D: POST /v1/vaults/{v}/import
-    D-->>O: {imported: n}
-    alt n == exported lines
+    D-->>O: {imported: n, quarantined: q}
+    alt drawers, triples, entities, tunnels all equal the manifest, and q == 0
         O->>O: flip tenant→instance mapping
         O->>S: DELETE /v1/vaults/{v} (unless keep_source)
         O-->>A: {records, source_deleted}
-    else count mismatch
+    else any count differs, an import error, or q > 0 without keep_source
         O->>D: DELETE partial copy
         O-->>A: error — source left authoritative
     end

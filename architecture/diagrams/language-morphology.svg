@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 810" width="900" height="810" role="img" aria-labelledby="t d">
 <title id="t">How a language is resolved and what it admits</title>
-<desc id="d">Language is resolved strongest-first: a caller declaration, else the script where one script means one language, else the drawer's own closed-class function words. Five pairwise morphology rules then feed the lexical morph channel, which admits a drawer without claiming the drawer said the word.</desc>
+<desc id="d">Language is resolved by declaration first, else by the drawer's own closed-class function words; a query written in a script that names one language adds that language beside the resolved one rather than replacing it. Five pairwise morphology rules then feed the lexical morph channel, which admits a drawer without claiming the drawer said the word.</desc>
 <style>
   .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
   .h { font-size: 17px; font-weight: 600; }
@@ -29,7 +29,7 @@
 
 <rect x="24" y="76" width="852" height="206" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
 <text x="42" y="102" class="f l ink">1 · resolving the language</text>
-<text x="600" y="102" class="f s dim">strongest signal first, stop at the first hit</text>
+<text x="600" y="102" class="f s dim">declared outranks detected; the script only adds</text>
 
 <rect x="42" y="116" width="266" height="140" rx="8" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="1.8"/>
 <text x="58" y="139" class="f l" fill="var(--d-teal-ink,#0d6b62)">1. declared</text>
@@ -41,22 +41,22 @@
 <text x="58" y="244" class="f s" fill="var(--d-teal-ink,#0d6b62)">Outranks everything below.</text>
 
 <rect x="320" y="116" width="266" height="140" rx="8" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.8"/>
-<text x="336" y="139" class="f l" fill="var(--d-blue-ink,#33527d)">2. else the script</text>
-<text x="336" y="159" class="f s dim">where a script settles it</text>
-<text x="336" y="180" class="f s dim">Greek · Georgian · Hangul — one script,</text>
-<text x="336" y="195" class="f s dim">one language. A fact, not a reading.</text>
-<text x="336" y="218" class="f s dim">Cyrillic → Russian, Devanagari → Hindi:</text>
-<text x="336" y="233" class="f s dim">the majority language, and labelled</text>
-<text x="336" y="248" class="f s dim">approximate because that is what it is.</text>
+<text x="336" y="139" class="f l" fill="var(--d-blue-ink,#33527d)">2. else the drawer itself</text>
+<text x="336" y="159" class="f mono dim">language_of_drawer</text>
+<text x="336" y="180" class="f s dim">A text carrying der, die, und, nicht is</text>
+<text x="336" y="195" class="f s dim">German. Only CLOSED-class words vote —</text>
+<text x="336" y="210" class="f s dim">a loanword does not get one.</text>
+<text x="336" y="233" class="f s" fill="var(--d-blue-ink,#33527d)">Decisive or nothing: three hits and</text>
+<text x="336" y="248" class="f s" fill="var(--d-blue-ink,#33527d)">twice the runner-up, else stay silent.</text>
 
 <rect x="598" y="116" width="260" height="140" rx="8" fill="var(--d-violet-bg,#f6f3fb)" stroke="var(--d-violet,#6b4fa8)" stroke-width="1.8"/>
-<text x="614" y="139" class="f l" fill="var(--d-violet-ink,#523a86)">3. else the drawer itself</text>
-<text x="614" y="159" class="f mono dim">language_of_drawer</text>
-<text x="614" y="180" class="f s dim">A text carrying der, die, und, nicht is</text>
-<text x="614" y="195" class="f s dim">German. Only CLOSED-class words vote —</text>
-<text x="614" y="210" class="f s dim">a loanword does not get one.</text>
-<text x="614" y="233" class="f s" fill="var(--d-violet-ink,#523a86)">Decisive or nothing: three hits and</text>
-<text x="614" y="248" class="f s" fill="var(--d-violet-ink,#523a86)">twice the runner-up, else stay silent.</text>
+<text x="614" y="139" class="f l" fill="var(--d-violet-ink,#523a86)">+ the query's script, added</text>
+<text x="614" y="159" class="f mono dim">morph_lang_by_script(query)</text>
+<text x="614" y="180" class="f s dim">Greek · Georgian · Hangul — one script,</text>
+<text x="614" y="195" class="f s dim">one language. Cyrillic → Russian and</text>
+<text x="614" y="210" class="f s dim">Devanagari → Hindi, labelled approximate.</text>
+<text x="614" y="233" class="f s" fill="var(--d-violet-ink,#523a86)">Joins as a SECOND inflecting language;</text>
+<text x="614" y="248" class="f s" fill="var(--d-violet-ink,#523a86)">never replaces 1 or 2, never feeds suffixes.</text>
 
 <text x="42" y="274" class="f s dim">Read per candidate, not per query: a vault may hold several languages, and the drawer is the unit that has one.</text>
 

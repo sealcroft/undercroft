@@ -41,12 +41,12 @@
 </head>
 <body>
   <div class="frame">
-    <p class="eyebrow">Flowchart · 07 of 12 · Undercroft</p>
+    <p class="eyebrow">Flowchart · 07 of 22 · Undercroft</p>
     <h1>Admission control: what happens to a suspicious write</h1>
 
     <svg viewBox="0 0 1200 992" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="admission-control-title admission-control-desc">
       <title id="admission-control-title">Undercroft admission control</title>
-      <desc id="admission-control-desc">An incoming write is refused with a 400 when its declaration is invalid, committed verbatim when the admission screen is off or its tier-1 detector trips no signals, and otherwise diverted into the quarantine-pending wing with a 202 naming the id it landed under, where it is excluded from search, recent and list_drawers until an operator — never an agent over MCP — allows or denies it.</desc>
+      <desc id="admission-control-desc">An incoming write is refused with a 400 when its declaration is invalid, committed verbatim when the admission screen is off or nothing trips — the deterministic tier-1 detector, the declared per-writer rate screen, or the optional tier-2 advisor, which can only ever vote toward quarantine — and otherwise diverted into the quarantine-pending wing with a 202 naming the id it landed under, where it is excluded from search, recent and list_drawers until an operator — never an agent over MCP — allows or denies it.</desc>
       <defs>
         <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7fa39c"/></marker>
         <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#35e0c2"/></marker>
@@ -140,9 +140,9 @@
       <polygon points="480,472 656,536 480,600 304,536" fill="#04080a"/>
       <polygon points="480,472 656,536 480,600 304,536" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
       <text x="480" y="504" fill="rgba(217,240,234,0.55)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">DECISION</text>
-      <text x="480" y="528" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Tier-1 detector: signals tripped?</text>
-      <text x="480" y="546" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">deterministic · closed vocabulary</text>
-      <text x="480" y="560" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">offsets, never content</text>
+      <text x="480" y="528" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Screen: any signal tripped?</text>
+      <text x="480" y="546" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">tier-1 detector · declared rate screen</text>
+      <text x="480" y="560" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">tier-2 advisor, toward quarantine only</text>
 
       <!-- Write committed (FOCAL) -->
       <rect x="760" y="412" width="240" height="72" rx="20" fill="#04080a"/>

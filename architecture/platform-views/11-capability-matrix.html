@@ -41,12 +41,12 @@
 </head>
 <body>
   <div class="frame">
-    <p class="eyebrow">Capability matrix · 11 of 12 · Undercroft</p>
+    <p class="eyebrow">Capability matrix · 11 of 22 · Undercroft</p>
     <h1>Which surface may do what</h1>
 
     <svg viewBox="0 0 1200 724" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="capability-matrix-title capability-matrix-desc">
       <title id="capability-matrix-title">Undercroft capability matrix</title>
-      <desc id="capability-matrix-desc">Eight Undercroft capabilities scored across four surfaces: saving or updating a drawer, searching, and reading or writing the knowledge graph are available directly from the command line, the MCP agent tools and the HTTP API, with the orchestrator reaching the write paths by proxy; admission rulings, trust assignment, retention and forgetting, and key rotation or anchoring are available on every surface except MCP, which refuses them outright because an agent must not rule on the queue that exists to contain it nor assign the trust class that decides what it may retrieve.</desc>
+      <desc id="capability-matrix-desc">Eight Undercroft capabilities scored across four surfaces: saving or updating a drawer, searching and reading the knowledge graph are available directly from the command line, the MCP agent tools and the HTTP API, and by proxy through the orchestrator; writing a fact to the graph is direct on the command line and over MCP, while the HTTP API offers it only through the operator-only refine and authority routes and the orchestrator only through authority promotion; admission rulings, trust assignment and retention or forgetting are available on every surface except MCP, which refuses them outright because an agent must not rule on the queue that exists to contain it nor assign the trust class that decides what it may retrieve; and of key rotation and anchoring, the control plane carries anchoring alone — rotating a vault key is deliberately on neither of its planes.</desc>
       <defs>
         <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7fa39c"/></marker>
         <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#35e0c2"/></marker>
@@ -148,8 +148,8 @@
       <text x="836" y="248" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
 
       <rect x="928" y="224" width="152" height="40" rx="4" fill="#04080a"/>
-      <rect x="928" y="224" width="152" height="40" rx="4" fill="rgba(217,240,234,0.06)" stroke="rgba(217,240,234,0.14)" stroke-width="0.8"/>
-      <text x="1004" y="248" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+      <rect x="928" y="224" width="152" height="40" rx="4" fill="#04080a" stroke="rgba(217,240,234,0.12)" stroke-width="0.8"/>
+      <text x="1004" y="248" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">VIA PROXY</text>
 
       <!-- ============ NODES — row 2 · Knowledge graph read ============ -->
       <rect x="120" y="272" width="288" height="40" rx="4" fill="#04080a"/>
@@ -170,8 +170,8 @@
       <text x="836" y="296" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
 
       <rect x="928" y="272" width="152" height="40" rx="4" fill="#04080a"/>
-      <rect x="928" y="272" width="152" height="40" rx="4" fill="rgba(217,240,234,0.06)" stroke="rgba(217,240,234,0.14)" stroke-width="0.8"/>
-      <text x="1004" y="296" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+      <rect x="928" y="272" width="152" height="40" rx="4" fill="#04080a" stroke="rgba(217,240,234,0.12)" stroke-width="0.8"/>
+      <text x="1004" y="296" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">VIA PROXY</text>
 
       <!-- ============ NODES — row 3 · Knowledge graph write ============ -->
       <rect x="120" y="320" width="288" height="40" rx="4" fill="#04080a"/>
@@ -188,12 +188,12 @@
       <text x="668" y="344" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
 
       <rect x="760" y="320" width="152" height="40" rx="4" fill="#04080a"/>
-      <rect x="760" y="320" width="152" height="40" rx="4" fill="rgba(217,240,234,0.06)" stroke="rgba(217,240,234,0.14)" stroke-width="0.8"/>
-      <text x="836" y="344" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+      <rect x="760" y="320" width="152" height="40" rx="4" fill="#04080a" stroke="rgba(217,240,234,0.12)" stroke-width="0.8"/>
+      <text x="836" y="344" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">REFINE · AUTHORITY</text>
 
       <rect x="928" y="320" width="152" height="40" rx="4" fill="#04080a"/>
       <rect x="928" y="320" width="152" height="40" rx="4" fill="#04080a" stroke="rgba(217,240,234,0.12)" stroke-width="0.8"/>
-      <text x="1004" y="344" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">VIA PROXY</text>
+      <text x="1004" y="344" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">AUTHORITY ONLY</text>
 
       <!-- ============ NODES — row 4 · Admission rulings ============ -->
       <rect x="120" y="408" width="288" height="40" rx="4" fill="#04080a"/>
@@ -280,8 +280,8 @@
       <text x="836" y="576" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
 
       <rect x="928" y="552" width="152" height="40" rx="4" fill="#04080a"/>
-      <rect x="928" y="552" width="152" height="40" rx="4" fill="rgba(217,240,234,0.06)" stroke="rgba(217,240,234,0.14)" stroke-width="0.8"/>
-      <text x="1004" y="576" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+      <rect x="928" y="552" width="152" height="40" rx="4" fill="#04080a" stroke="rgba(217,240,234,0.12)" stroke-width="0.8"/>
+      <text x="1004" y="576" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">ANCHOR ONLY</text>
 
       <!-- ============ FOOTNOTE ============ -->
       <text x="120" y="624" fill="rgba(217,240,234,0.40)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" letter-spacing="0.14em">OPERATOR_ONLY — ASSERTED BY THE SAME TEST AS THE PARITY INVENTORY, SO THE TWO CAN NEVER DISAGREE</text>
@@ -295,7 +295,7 @@
       <text x="252" y="692" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">YES · DIRECT</text>
 
       <rect x="340" y="684" width="16" height="10" rx="2" fill="#04080a" stroke="rgba(217,240,234,0.12)" stroke-width="1"/>
-      <text x="364" y="692" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">VIA PROXY</text>
+      <text x="364" y="692" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">VIA PROXY · OR NARROWED TO WHAT IS NAMED</text>
 
       <rect x="440" y="684" width="16" height="10" rx="2" fill="rgba(255,93,115,0.10)" stroke="#ff5d73" stroke-width="1"/>
       <text x="464" y="692" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">NEVER · REFUSED AT THE TOOL GATE</text>

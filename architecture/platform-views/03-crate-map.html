@@ -41,12 +41,12 @@
 </head>
 <body>
   <div class="frame">
-    <p class="eyebrow">Component structure · 03 of 12 · Undercroft</p>
+    <p class="eyebrow">Component structure · 03 of 22 · Undercroft</p>
     <h1>Thirteen crates, and which may depend on which</h1>
 
     <svg viewBox="0 0 1200 856" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="crate-map-title crate-map-desc">
       <title id="crate-map-title">Undercroft workspace dependency graph</title>
-      <desc id="crate-map-desc">Nine of Undercroft's thirteen Rust crates, arranged by how deep each one sits in the workspace dependency graph: the command-line binary and the orchestrator binary depend on nothing above them, the store depends on the vault, the configuration crate and the served-model adapters, and the domain crate at the bottom is the one three separate crates reach, holding no input-output and no cryptography of its own; the orchestrator reaches only configuration, transport and observability, and never links an engine crate.</desc>
+      <desc id="crate-map-desc">Nine of Undercroft's thirteen Rust crates, arranged by how deep each one sits in the workspace dependency graph: the command-line binary and the orchestrator binary depend on nothing above them, the store depends on the vault, the configuration crate and the remote-index adapter, the served-model adapter is reached from the binary alone, both adapters leave the process only through the transport-policy crate, and the domain crate at the bottom is the one three of the drawn crates reach, holding no input-output and no cryptography of its own; the orchestrator reaches only configuration, transport and observability, and never links an engine crate.</desc>
       <defs>
         <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7fa39c"/></marker>
         <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#35e0c2"/></marker>
@@ -81,22 +81,22 @@
       <path d="M 380,344 H 368 Q 360,344 360,352 V 432 Q 360,440 352,440 H 248 Q 240,440 240,448 V 460" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
       <!-- E4 store -> config -->
       <path d="M 540,388 V 408 Q 540,416 548,416 H 672 Q 680,416 680,424 V 460" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
-      <!-- E5 store -> llm+index (shared x) -->
+      <!-- E5 store -> index (shared x) -->
       <line x1="480" y1="388" x2="480" y2="460" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
-      <!-- E6 store -> obs (shared y, within rank) -->
-      <line x1="580" y1="344" x2="860" y2="344" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- E6 cli -> llm, down the empty right column; hops E10 at x=840 -->
+      <path d="M 540,228 V 268 Q 540,276 548,276 H 832 a 8,8 0 0,1 16,0 H 952 Q 960,276 960,284 V 460" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
       <!-- E7 vault -> core (shared x) -->
       <line x1="240" y1="548" x2="240" y2="620" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
-      <!-- E8 llm+index -> net -->
+      <!-- E8 index -> net -->
       <path d="M 540,548 V 576 Q 540,584 548,584 H 672 Q 680,584 680,592 V 620" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
-      <!-- E9 llm+index -> core -->
+      <!-- E9 index -> core -->
       <path d="M 420,548 V 584 Q 420,592 412,592 H 288 Q 280,592 280,600 V 620" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
-      <!-- E10 orchestrator -> config, bridged over E6 at y=344 -->
-      <path d="M 860,216 H 848 Q 840,216 840,224 V 336 a 8,8 0 0,1 0,16 V 424 Q 840,432 832,432 H 728 Q 720,432 720,440 V 460" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
-      <!-- E11 orchestrator -> net, around the outside on the right channel -->
-      <path d="M 1060,184 H 1064 Q 1072,184 1072,192 V 584 Q 1072,592 1064,592 H 788 Q 780,592 780,600 V 620" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
-      <!-- E12 orchestrator -> obs (shared x) -->
-      <line x1="960" y1="228" x2="960" y2="300" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- E10 orchestrator -> config -->
+      <path d="M 860,216 H 848 Q 840,216 840,224 V 424 Q 840,432 832,432 H 728 Q 720,432 720,440 V 460" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- E11 orchestrator -> net, around the outside on the right channel, into net's right edge -->
+      <path d="M 1060,184 H 1064 Q 1072,184 1072,192 V 656 Q 1072,664 1064,664 H 820" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- E12 llm -> net, into net's top edge -->
+      <path d="M 920,548 V 584 Q 920,592 912,592 H 788 Q 780,592 780,600 V 620" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
 
       <!-- the dependency that is deliberately absent -->
       <line x1="856" y1="176" x2="700" y2="176" stroke="#ff5d73" stroke-width="1.2" stroke-dasharray="5,4"/>
@@ -106,8 +106,8 @@
       <rect x="700" y="144" width="120" height="12" rx="2" fill="#04080a"/>
       <text x="760" y="153" fill="#ff5d73" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">NO ENGINE DEP</text>
 
-      <rect x="660" y="312" width="100" height="12" rx="2" fill="#04080a"/>
-      <text x="710" y="321" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">COUNTS ONLY</text>
+      <rect x="968" y="360" width="96" height="12" rx="2" fill="#04080a"/>
+      <text x="1016" y="369" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">SERVED MODELS</text>
 
       <rect x="136" y="336" width="120" height="12" rx="2" fill="#04080a"/>
       <text x="196" y="345" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">DOMAIN TYPES</text>
@@ -115,8 +115,8 @@
       <rect x="584" y="384" width="100" height="12" rx="2" fill="#04080a"/>
       <text x="634" y="393" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">DECLARATIONS</text>
 
-      <rect x="940" y="480" width="120" height="12" rx="2" fill="#04080a"/>
-      <text x="1000" y="489" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">TLS OR LOOPBACK</text>
+      <rect x="968" y="596" width="96" height="12" rx="2" fill="#04080a"/>
+      <text x="1016" y="605" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">TLS OR LOOPBACK</text>
 
       <!-- ============ NODES ============ -->
       <!-- undercroft-cli -->
@@ -152,16 +152,16 @@
       <text x="480" y="362" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">SQLite · search · audit chain</text>
       <text x="480" y="376" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">admission · KG · retention</text>
 
-      <!-- undercroft-obs -->
-      <rect x="860" y="300" width="200" height="88" rx="6" fill="#04080a"/>
-      <rect x="860" y="300" width="200" height="88" rx="6" fill="rgba(217,240,234,0.05)" stroke="#7fa39c" stroke-width="1"/>
-      <rect x="868" y="306" width="28" height="12" rx="2" fill="transparent" stroke="rgba(127,163,156,0.40)" stroke-width="0.8"/>
-      <text x="882" y="315" fill="rgba(127,163,156,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">OBS</text>
-      <rect x="1016" y="306" width="36" height="12" rx="2" fill="transparent" stroke="rgba(92,127,121,0.50)" stroke-width="0.8"/>
-      <text x="1034" y="315" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">2 in</text>
-      <text x="960" y="344" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">undercroft-obs</text>
-      <text x="960" y="362" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">metrics · traces · SSE</text>
-      <text x="960" y="376" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">zero deps by default</text>
+      <!-- undercroft-llm -->
+      <rect x="860" y="460" width="200" height="88" rx="6" fill="#04080a"/>
+      <rect x="860" y="460" width="200" height="88" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <rect x="868" y="466" width="48" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
+      <text x="892" y="475" fill="rgba(217,240,234,0.80)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">ADAPTER</text>
+      <rect x="1016" y="466" width="36" height="12" rx="2" fill="transparent" stroke="rgba(92,127,121,0.50)" stroke-width="0.8"/>
+      <text x="1034" y="475" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">1 in</text>
+      <text x="960" y="504" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">undercroft-llm</text>
+      <text x="960" y="522" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">served embedder · refine runtime</text>
+      <text x="960" y="536" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">drawer plaintext leaves the process</text>
 
       <!-- undercroft-vault (FOCAL) -->
       <rect x="140" y="460" width="200" height="88" rx="6" fill="#04080a"/>
@@ -174,16 +174,16 @@
       <text x="240" y="522" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">HKDF · XChaCha20 · HMAC</text>
       <text x="240" y="536" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">rotation · export bundles</text>
 
-      <!-- undercroft-llm + -index -->
+      <!-- undercroft-index -->
       <rect x="380" y="460" width="200" height="88" rx="6" fill="#04080a"/>
       <rect x="380" y="460" width="200" height="88" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
-      <rect x="388" y="466" width="52" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
-      <text x="414" y="475" fill="rgba(217,240,234,0.80)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">ADAPTERS</text>
+      <rect x="388" y="466" width="48" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
+      <text x="412" y="475" fill="rgba(217,240,234,0.80)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">ADAPTER</text>
       <rect x="536" y="466" width="36" height="12" rx="2" fill="transparent" stroke="rgba(92,127,121,0.50)" stroke-width="0.8"/>
       <text x="554" y="475" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">1 in</text>
-      <text x="480" y="504" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">undercroft-llm + -index</text>
-      <text x="480" y="522" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">served embedders · runtimes</text>
-      <text x="480" y="536" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">remote vector backends</text>
+      <text x="480" y="504" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">undercroft-index</text>
+      <text x="480" y="522" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">five remote vector backends</text>
+      <text x="480" y="536" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">untrusted accelerators</text>
 
       <!-- undercroft-config -->
       <rect x="620" y="460" width="200" height="88" rx="6" fill="#04080a"/>
@@ -213,7 +213,7 @@
       <rect x="628" y="626" width="28" height="12" rx="2" fill="transparent" stroke="rgba(127,163,156,0.40)" stroke-width="0.8"/>
       <text x="642" y="635" fill="rgba(127,163,156,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">NET</text>
       <rect x="776" y="626" width="36" height="12" rx="2" fill="transparent" stroke="rgba(92,127,121,0.50)" stroke-width="0.8"/>
-      <text x="794" y="635" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">2 in</text>
+      <text x="794" y="635" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">3 in</text>
       <text x="720" y="664" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">undercroft-net</text>
       <text x="720" y="682" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">TLS or loopback only</text>
       <text x="720" y="696" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">CA pinning · no override</text>
@@ -221,8 +221,8 @@
       <!-- ============ FOOTNOTES ============ -->
       <text x="880" y="636" fill="rgba(127,163,156,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" letter-spacing="0.14em">N IN — DEPENDENTS DRAWN HERE</text>
       <text x="880" y="664" fill="rgba(127,163,156,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" letter-spacing="0.14em">NOT SHOWN</text>
-      <text x="880" y="682" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">undercroft-embed-onnx · -embed-ort</text>
-      <text x="880" y="696" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">undercroft-bench · edges reduced</text>
+      <text x="880" y="682" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">undercroft-obs · 7 dependents · 0 deps by default</text>
+      <text x="880" y="696" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">-embed-onnx · -embed-ort · -bench · edges reduced</text>
 
       <!-- ============ LEGEND ============ -->
       <line x1="96" y1="780" x2="1104" y2="780" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>

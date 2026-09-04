@@ -49,7 +49,7 @@
 <body>
   <div class="frame">
     <p class="eyebrow">Undercroft · Platform Views</p>
-    <h1>Twelve views of an encrypted memory engine</h1>
+    <h1>Twenty-two views of an encrypted memory engine</h1>
     <p class="lede">
       A parallel, illustrative set covering the platform end to end — surfaces,
       components, the write and read paths, the security model, and the operational
@@ -84,7 +84,7 @@
       </a>
       <a class="card" href="04-write-path.html">
         <div class="n">04</div><div class="t">The write path, and the choke point every save passes</div>
-        <div class="d">Validate, screen, chunk, embed, compress, seal, tag, and append to the audit chain in the same transaction — with the quarantine branch drawn where it actually forks.</div>
+        <div class="d">Derive the id, embed, validate, screen, compress, seal, tag, and append to the audit chain in the same transaction — with the quarantine branch drawn where it actually forks, and the diverted drawer re-entering the same path.</div>
         <span class="kind">Process</span>
       </a>
       <a class="card" href="05-retrieval-stack.html">
@@ -99,12 +99,12 @@
       </a>
       <a class="card" href="07-admission-control.html">
         <div class="n">07</div><div class="t">What happens to a suspicious write</div>
-        <div class="d">Declaration validated first — because the screen rewrites the fields validation reads — then the tier-one detector, the quarantine divert, and the operator ruling that is never reachable from an agent.</div>
+        <div class="d">Declaration validated first — because the screen rewrites the fields validation reads — then the screen itself (tier-one detector, declared rate, advisor toward quarantine only), the divert, and the operator ruling that is never reachable from an agent.</div>
         <span class="kind">Flowchart</span>
       </a>
       <a class="card" href="08-vault-lifecycle.html">
         <div class="n">08</div><div class="t">A vault through its life</div>
-        <div class="d">Init, open writable or read-only, rotate, repair, archive — and the reconcile-on-open guard where a crash fast-forwards and a rollback raises tamper.</div>
+        <div class="d">Init, open writable or read-only, rotate, repair, archive as a verify-gated copy — and the reconcile-on-open guard where a crash fast-forwards and a rollback raises tamper.</div>
         <span class="kind">State machine</span>
       </a>
       <a class="card" href="09-agent-session.html">
@@ -124,14 +124,64 @@
       </a>
       <a class="card" href="12-integrity-chain.html">
         <div class="n">12</div><div class="t">How tampering is detected</div>
-        <div class="d">The chain advancing inside the same transaction as the data, the anchor that must never run ahead of it, and the six legs verify actually checks.</div>
+        <div class="d">The chain advancing inside the same transaction as the data, the anchor that must never run ahead of it, and the seven legs verify actually checks.</div>
         <span class="kind">Data flow</span>
+      </a>
+      <a class="card" href="13-audit-namespaces.html">
+        <div class="n">13</div><div class="t">What the audit chain is allowed to say, and to whom</div>
+        <div class="d">Thirteen namespaces as one Rust type — twelve minted through chain_append, one by rotation's own insert — and the nine an agent's history tool is fenced from, ruled once and exhaustively.</div>
+        <span class="kind">Layer stack</span>
+      </a>
+      <a class="card" href="14-key-rotation.html">
+        <div class="n">14</div><div class="t">A key rotation, and what a crash in the middle of it does</div>
+        <div class="d">Candidate keys, a staged manifest, one transaction that re-seals every artifact and re-keys the chain over preserved bytes, then promotion — and the reconcile-at-open verdict when the process dies between the two.</div>
+        <span class="kind">Sequence</span>
+      </a>
+      <a class="card" href="15-verify-repair-backup.html">
+        <div class="n">15</div><div class="t">One verdict gates the archive, and what repair may touch</div>
+        <div class="d">The seven legs of verify, the exit code and 409 a failing leg produces, backup create refusing to archive it, and a repair that re-embeds and rebuilds but never rewrites content.</div>
+        <span class="kind">Flowchart</span>
+      </a>
+      <a class="card" href="16-transport-policy.html">
+        <div class="n">16</div><div class="t">Five ways out of the process, and the one policy they all pass</div>
+        <div class="d">The served embedder, the LLM runtime, the vector backends, the fleet hop and the trace exporter, each built by the transport crate: TLS or loopback, a pin that replaces the public roots, and a host taken from the parser that dials it.</div>
+        <span class="kind">Architecture</span>
+      </a>
+      <a class="card" href="17-forgetting.html">
+        <div class="n">17</div><div class="t">Forgetting with proof, and the two verdicts a proof can earn</div>
+        <div class="d">Tombstones chained with the deletion, a signed attestation, and a checker that answers Verified by keyed replay or Recorded once a rotation has destroyed the key — a reduced claim, never a forged one.</div>
+        <span class="kind">State machine</span>
+      </a>
+      <a class="card" href="18-egress-paths.html">
+        <div class="n">18</div><div class="t">Three ways content leaves, and the record each leaves behind</div>
+        <div class="d">Export records before it writes, a push records the count the backend acknowledged after the bytes left, refine records after its loop — and the one gap still open is drawn as a gap.</div>
+        <span class="kind">Swimlane</span>
+      </a>
+      <a class="card" href="19-read-choke-point.html">
+        <div class="n">19</div><div class="t">Every read states what it is; one site writes it down</div>
+        <div class="d">The required witness on every store reader, thirteen named operations against eight internal reasons, the single recording site, and the declaration that decides whether a read record exists at all.</div>
+        <span class="kind">Flowchart</span>
+      </a>
+      <a class="card" href="20-verification-pipeline.html">
+        <div class="n">20</div><div class="t">How a change proves itself, from the battery to the tag</div>
+        <div class="d">Fourteen preflights, ten Docker suites whose exit codes are the verdict, the house page before the push, eleven CI jobs behind one required check, and a release that smoke-probes every packaged asset.</div>
+        <span class="kind">Flowchart</span>
+      </a>
+      <a class="card" href="21-config-classes.html">
+        <div class="n">21</div><div class="t">What a bad declaration does, decided by its class</div>
+        <div class="d">Eighty-one variables on two axes — protects or tunes, checked or opaque — and the third distinction that decides what empty means: a vocabulary is trimmed, a payload never is.</div>
+        <span class="kind">Decision tree</span>
+      </a>
+      <a class="card" href="22-storage-layout.html">
+        <div class="n">22</div><div class="t">What is on disk, and which of it is sealed, tagged, or neither</div>
+        <div class="d">The palace directory, the manifest that is the rollback anchor, the staged manifest a rotation leaves, and the eighteen tables grouped by what protects them.</div>
+        <span class="kind">Storage layout</span>
       </a>
     </div>
 
     <footer>
       Skin: undercroft dark — paper #04080a · ink #d9f0ea · accent #35e0c2 · link #c9a961 · danger #ff5d73<br>
-      Tokens taken from website/landing/index.html. Every page is self-contained; fonts are the only external request.<br>
+      Tokens taken from website/landing/index.html. Every page is self-contained and makes no external request at all — system font stacks, no CDN.<br>
       Authoritative reference: architecture/diagrams/ (eleven SVGs, gated by arch-check).
     </footer>
   </div>

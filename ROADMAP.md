@@ -1116,7 +1116,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**134** of the **149** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**136** of the **151** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -6907,6 +6907,92 @@ operator's own UI read 836.2k/1M. Two answers about one session, ~10x apart.
 session project still resolves by mtime, which is right in the common case and
 is a guess in principle. The honest fix is for the caller to pass the id from
 the system prompt, and the doctrine now says so.
+
+---
+
+### O105 — CLOSED 2026-09-04: the three diagram sets described a different engine, and the newest one drifted four days after it was gated
+
+**Found by asking, not by a gate.** The maintainer asked whether the diagram
+sets had been checked; they had not, and a code-vs-diagram audit of all
+three — the eleven governed SVGs, the twelve platform views, the fourteen
+Mermaid blocks — run by four read-only verifiers against `crates/` rather
+than against any document, returned this:
+
+| set | false | stale | worst |
+|---|---|---|---|
+| `architecture/platform-views/` | 4 | 3 | `03` drew `store → llm`, an edge no manifest has, in the one view that claims to be "drawn from the manifests"; `08` called `backup create` a signed recipient-sealed bundle (it is `copy_dir`); `11` gave the HTTP API a direct graph write and the control plane key rotation; `12` said six verify legs |
+| `architecture/diagrams/` + `index.html` prose | 1 | 4 | `security-keys` showed two HKDF subkeys where `unlock` derives four; `write-path` had no admission step at all; the prose said "two named POSTs" and "four more things" |
+| `docs/diagrams/` + canonical Mermaid | 2 | 4 | `key-hierarchy` named a `fingerprint` key that does not exist and omitted `manifest` and `sample`; `components` said the orchestrator has "no crate dependency" (it links three) and lacked `undercroft-config`; four rendered SVGs no longer matched their own source blocks |
+
+Plus `docs/AGENTS.md` saying "six legs" twice, and the platform-views footer
+claiming fonts as "the only external request" after O78 removed them.
+
+**The mechanism of the newest drift is the one this file already names.** O94
+added `policy_drift` and moved four renderers; the platform view of the
+integrity chain is a fifth, and the doctrine's own sentence — *a change to
+the engine must still move both sets* — was not applied by the unit that
+shipped four days after it was written. The O74 figure gate is green
+throughout, correctly: a leg count is prose.
+
+**Fixed, all of it, and re-derived where a script owns the derivation**:
+the twelve views (the crate map now draws `undercroft-llm` as its own box
+with the edges the manifests have, observability moving to the footnote to
+stay inside the nine-node budget; the write path is reordered to id → embed
+→ validate → screen with the diverted drawer re-entering the path; the
+matrix cells read `REFINE · AUTHORITY`, `AUTHORITY ONLY`, `ANCHOR ONLY` and
+`VIA PROXY` where the code says so); the six governed SVGs and three prose
+paragraphs, then `sh build.sh` for the PDFs and the inlined copies; the
+fourteen Mermaid blocks, re-extracted and re-rendered through the pinned
+image. **Ten views that did not exist** now do, one per absent facet the
+coverage map ranked highest: audit namespaces and the agent fence, the
+two-phase key rotation, verify → repair → backup, the five-hop transport
+policy, attested forgetting and its two verdicts, the three egress paths,
+the read choke point, the battery → CI → release pipeline, the
+configuration classes, and the on-disk layout. Each passes `check.py`;
+`arch-check` exits 0 over the twenty-two.
+
+**What the egress view says about O95 is a gap drawn as a gap**: the refine
+lane carries *"an error mid-loop records nothing yet (O95)"* in the refusal
+colour. When O95 closes, that line and the view's `<desc>` move with it.
+
+**Residual, stated, two of them.** `docs/diagrams/` has no gate: nothing
+compares `src/*.mmd` to the canonical blocks or the SVGs to the sources, and
+the book never shows the SVGs, so the next drift there is invisible again.
+The shape is an extraction-and-compare arm on the `site` service, which
+already runs the Mermaid the SVGs are rendered from. And relational claims
+in all three sets remain bound by attention: this entry is what running the
+audit looks like, and it is a unit, not a preflight.
+
+---
+
+### O106 — `context-check.sh <session-id>` refuses on Git Bash, and O104's self-test cannot see it
+
+**Found 2026-09-04, the first time the O104 doctrine was followed.** The
+handover says *run it with the session id*; run that way it printed
+`CONTEXT CHECK FAILED — no transcript found under:` a path with a NEWLINE in
+the middle, while the transcript sat exactly where the slug said. The
+full-path form measured correctly.
+
+**Mechanism** (`tests/context-check.sh:44`): `ROOT="$(cd … && pwd -W
+2>/dev/null || cd … && pwd)"` parses as `((cd && pwd -W) || cd) && pwd`, so
+on a shell where `pwd -W` succeeds BOTH `pwd`s run and `ROOT` is two lines —
+`C:/Users/…` and `/c/Users/…`. The slug inherits the newline and no
+directory can match it. On a shell without `pwd -W` the first arm fails and
+only the second prints, which is why the line reads as though it works. It
+has been this way since the script was written on 2026-08-18; the old
+fallback search masked it by wandering to another project, which is O104's
+symptom, and O104 removed the fallback and made the defect a refusal.
+
+**Why the self-test is green**: `--self-test` drives the full-path form
+(`bash "$0" "$ST_REAL"`) and the missing-directory refusal; neither
+exercises the slug derivation with a session id, which is the documented
+invocation.
+
+**Fix shape**: `ROOT="$(cd … && { pwd -W 2>/dev/null || pwd; })"`, one
+line. **Gate**: a self-test arm that copies a real transcript under a
+synthetic `HOME`/`projects/<slug>/` for THIS project and runs `bash "$0"
+<id>` — the session-id form — requiring a measurement, plus a premise arm
+asserting `ROOT` is a single line.
 
 ---
 

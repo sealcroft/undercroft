@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Undercroft — Read Choke Point</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:  #04080a;
+      --color-raise:  #071014;
+      --color-ink:    #d9f0ea;
+      --color-muted:  #7fa39c;
+      --color-accent: #35e0c2;
+      --font-sans:  -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --font-serif: Georgia, "Times New Roman", serif;
+      --font-mono:  ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1200px; width: 100%; }
+    .eyebrow {
+      font-family: var(--font-mono); font-size: 0.66rem; font-weight: 500;
+      letter-spacing: 0.18em; text-transform: uppercase;
+      color: var(--color-muted); margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400; letter-spacing: -0.02em; line-height: 1.15;
+      color: var(--color-ink); margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 900px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Flowchart · 19 of 22 · Undercroft</p>
+    <h1>Every read states what it is, and one site decides whether it is written down</h1>
+
+    <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="read-choke-point-title read-choke-point-desc">
+      <title id="read-choke-point-title">Undercroft read choke point</title>
+      <desc id="read-choke-point-desc">Every store reader takes a required witness: a read is either Returned with one of thirteen named operations, meaning content goes back to a caller, or Internal with one of eight reasons the engine reads for itself — remote hydration, a write-path lookup, maintenance, verification, the policy fence, an export or refine already recorded as an egress, or membership of a bulk call; only Returned reads reach the single recording site, which appends one read record per call, carrying the operation, a keyed fingerprint of the subject, the scope and the count, and only when read auditing is declared for the deployment. The thirteen operations are counted against the audit rows a driver really wrote, in both directions, and two graph readers through which no content passes are deliberate exclusions rather than omissions.</desc>
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7fa39c"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#35e0c2"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#04080a"/>
+
+      <!-- ============ ZONES (drawn first) ============ -->
+      <rect x="832" y="48" width="304" height="488" rx="8" fill="rgba(217,240,234,0.02)" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
+      <rect x="876" y="52" width="216" height="12" rx="2" fill="#04080a"/>
+      <text x="984" y="61" fill="rgba(217,240,234,0.40)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.14em">ReadOp::ALL — COUNTED BOTH WAYS</text>
+
+      <!-- ============ ARROWS (before boxes) ============ -->
+      <!-- door -> witness decision (shared x) -->
+      <line x1="232" y1="112" x2="232" y2="148" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- witness: Internal -> no record (shared y) -->
+      <line x1="328" y1="180" x2="464" y2="180" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- witness: Returned -> record_read (shared x) -->
+      <line x1="232" y1="212" x2="232" y2="272" stroke="#35e0c2" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <!-- record_read -> declared? (shared x) -->
+      <line x1="232" y1="360" x2="232" y2="388" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- declared? NO -> nothing written (shared y) -->
+      <line x1="328" y1="420" x2="464" y2="420" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- declared? YES -> read record (shared x) -->
+      <line x1="232" y1="452" x2="232" y2="512" stroke="#35e0c2" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <!-- record_read -> the operations it names (shared y, dashed) -->
+      <line x1="368" y1="316" x2="832" y2="316" stroke="#7fa39c" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+
+      <!-- ============ ARROW LABELS (mask + gap) ============ -->
+      <rect x="368" y="160" width="80" height="12" rx="2" fill="#04080a"/>
+      <text x="408" y="169" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">INTERNAL</text>
+
+      <rect x="240" y="232" width="104" height="12" rx="2" fill="#04080a"/>
+      <text x="292" y="241" fill="#35e0c2" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">RETURNED(op)</text>
+
+      <rect x="368" y="400" width="32" height="12" rx="2" fill="#04080a"/>
+      <text x="384" y="409" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">NO</text>
+
+      <rect x="240" y="472" width="112" height="12" rx="2" fill="#04080a"/>
+      <text x="296" y="481" fill="#35e0c2" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES · DECLARED</text>
+
+      <rect x="556" y="296" width="112" height="12" rx="2" fill="#04080a"/>
+      <text x="612" y="305" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">NAMES THE DOOR</text>
+
+      <!-- ============ NODES ============ -->
+      <!-- the door (start) -->
+      <rect x="96" y="48" width="272" height="64" rx="20" fill="#04080a"/>
+      <rect x="96" y="48" width="272" height="64" rx="20" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <text x="232" y="76" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">A store reader is called</text>
+      <text x="232" y="94" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">get · recent · the graph readers · …</text>
+
+      <!-- witness decision -->
+      <polygon points="232,148 328,180 232,212 136,180" fill="#04080a"/>
+      <polygon points="232,148 328,180 232,212 136,180" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <text x="232" y="177" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Read::?</text>
+      <text x="232" y="192" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">required, or no compile</text>
+
+      <!-- Internal: no record -->
+      <rect x="464" y="148" width="272" height="88" rx="6" fill="#04080a"/>
+      <rect x="464" y="148" width="272" height="88" rx="6" fill="rgba(217,240,234,0.05)" stroke="#7fa39c" stroke-width="1"/>
+      <rect x="472" y="154" width="60" height="12" rx="2" fill="transparent" stroke="rgba(127,163,156,0.40)" stroke-width="0.8"/>
+      <text x="502" y="163" fill="rgba(127,163,156,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">INTERNAL</text>
+      <text x="600" y="184" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">The engine reads for itself</text>
+      <text x="600" y="202" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">8 reasons: hydration · write-path lookup · maintenance</text>
+      <text x="600" y="216" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">verification · policy fence · bulk member ·</text>
+      <text x="600" y="230" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">export-audited · refine-audited — egress/ covers those</text>
+
+      <!-- record_read (FOCAL) -->
+      <rect x="96" y="272" width="272" height="88" rx="6" fill="#04080a"/>
+      <rect x="96" y="272" width="272" height="88" rx="6" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1.2"/>
+      <rect x="104" y="278" width="52" height="12" rx="2" fill="transparent" stroke="rgba(53,224,194,0.50)" stroke-width="0.8"/>
+      <text x="130" y="287" fill="#35e0c2" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">ONE SITE</text>
+      <text x="232" y="310" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">record_read</text>
+      <text x="232" y="328" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">op · keyed fingerprint of the subject · scope · count</text>
+      <text x="232" y="342" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">was three inline copies; the 2nd funnel would have made 11</text>
+      <text x="232" y="356" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">never text — an operator with the key can re-derive the fp</text>
+
+      <!-- declared? decision -->
+      <polygon points="232,388 328,420 232,452 136,420" fill="#04080a"/>
+      <polygon points="232,388 328,420 232,452 136,420" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <text x="232" y="417" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">READ_AUDIT?</text>
+      <text x="232" y="432" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">=chain, per deployment</text>
+
+      <!-- nothing written -->
+      <rect x="464" y="384" width="272" height="72" rx="6" fill="#04080a"/>
+      <rect x="464" y="384" width="272" height="72" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <text x="600" y="412" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Nothing is written</text>
+      <text x="600" y="430" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">a per-read append is a real durability cost, so declared</text>
+      <text x="600" y="444" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">a read-only open force-disables it and warns</text>
+
+      <!-- read record -->
+      <rect x="96" y="512" width="272" height="88" rx="6" fill="#04080a"/>
+      <rect x="96" y="512" width="272" height="88" rx="6" fill="rgba(217,240,234,0.05)" stroke="#7fa39c" stroke-width="1"/>
+      <rect x="104" y="518" width="48" height="12" rx="2" fill="transparent" stroke="rgba(127,163,156,0.40)" stroke-width="0.8"/>
+      <text x="128" y="527" fill="rgba(127,163,156,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">ON CHAIN</text>
+      <text x="232" y="550" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">read/{op} appended</text>
+      <text x="232" y="568" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">one per CALL — a list is one record, never N</text>
+      <text x="232" y="582" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">behind &amp;self, does not anchor: anchors at the</text>
+      <text x="232" y="596" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">next open, or an explicit `anchor` (a write)</text>
+
+      <!-- ============ READOP CHIPS ============ -->
+      <text x="848" y="86" fill="rgba(127,163,156,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" letter-spacing="0.14em">DRAWER FUNNEL · 9</text>
+      <rect x="848" y="96" width="272" height="24" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>
+      <text x="860" y="112" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">search — the query is the subject, fingerprinted</text>
+      <rect x="848" y="128" width="272" height="24" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>
+      <text x="860" y="144" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">get — one drawer by id</text>
+      <rect x="848" y="160" width="272" height="24" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>
+      <text x="860" y="176" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">recent — what wake_up and the closet index load</text>
+      <rect x="848" y="192" width="272" height="24" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>
+      <text x="860" y="208" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">list — the paged browse</text>
+      <rect x="848" y="224" width="272" height="24" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>
+      <text x="860" y="240" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">diary · tunnel · closet · hallways — navigation</text>
+      <rect x="848" y="256" width="272" height="24" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>
+      <text x="860" y="272" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">admission-list — the review queue, operator only</text>
+
+      <text x="848" y="310" fill="rgba(127,163,156,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" letter-spacing="0.14em">KNOWLEDGE-GRAPH FUNNEL · 4</text>
+      <rect x="848" y="320" width="272" height="24" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>
+      <text x="860" y="336" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">kg-query — both arms, one tool, one namespace</text>
+      <rect x="848" y="352" width="272" height="24" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>
+      <text x="860" y="368" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">kg-timeline · kg-entities · kg-canonical</text>
+
+      <text x="848" y="406" fill="rgba(255,93,115,0.80)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" letter-spacing="0.14em">DELIBERATE EXCLUSIONS · 2</text>
+      <rect x="848" y="416" width="272" height="40" rx="4" fill="rgba(255,93,115,0.06)" stroke="rgba(255,93,115,0.45)" stroke-width="0.8"/>
+      <text x="860" y="432" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">kg_verify_receipts · kg_stats</text>
+      <text x="860" y="446" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">not doors — no content passes through them</text>
+
+      <text x="848" y="486" fill="rgba(127,163,156,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" letter-spacing="0.14em">RESIDUAL, STATED</text>
+      <text x="848" y="502" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">a new pub reader on all_triples reusing an</text>
+      <text x="848" y="514" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">existing ReadOp still passes the namespace gate</text>
+
+      <!-- ============ CALLOUT ============ -->
+      <line x1="100" y1="640" x2="100" y2="704" stroke="rgba(217,240,234,0.18)" stroke-width="1.2"/>
+      <text x="124" y="654" fill="#5c7f79" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" letter-spacing="0.14em">THE RECORD GOES ON THE DOOR</text>
+      <text x="124" y="678" fill="#d9f0ea" font-size="15" font-style="italic" font-family="Georgia, 'Times New Roman', serif">A shared helper decodes the whole graph for every arm and then filters — recording there would say 40</text>
+      <text x="124" y="700" fill="#d9f0ea" font-size="15" font-style="italic" font-family="Georgia, 'Times New Roman', serif">where 3 left. Over-reporting an exfil trail is a false claim, not a conservative one.</text>
+
+      <!-- ============ LEGEND ============ -->
+      <line x1="96" y1="744" x2="1136" y2="744" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
+      <text x="96" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" letter-spacing="0.14em">LEGEND</text>
+
+      <rect x="188" y="756" width="16" height="10" rx="2" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1"/>
+      <text x="212" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">FOCAL</text>
+
+      <rect x="268" y="756" width="16" height="10" rx="2" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <text x="292" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">STEP / DECISION</text>
+
+      <rect x="404" y="756" width="16" height="10" rx="2" fill="rgba(217,240,234,0.05)" stroke="#7fa39c" stroke-width="1"/>
+      <text x="428" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">OUTCOME</text>
+
+      <rect x="508" y="756" width="16" height="10" rx="2" fill="#071014" stroke="#5c7f79" stroke-width="1"/>
+      <text x="532" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">A NAMED OPERATION</text>
+
+      <line x1="676" y1="761" x2="708" y2="761" stroke="#35e0c2" stroke-width="1.2"/>
+      <text x="716" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">THE RECORDED PATH</text>
+
+      <line x1="868" y1="761" x2="900" y2="761" stroke="#7fa39c" stroke-width="1.2" stroke-dasharray="5,4"/>
+      <text x="908" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">INVENTORY</text>
+    </svg>
+  </div>
+</body>
+</html>

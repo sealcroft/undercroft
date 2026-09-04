@@ -1,8 +1,9 @@
 flowchart TB
+    scope["Scope resolution<br/><i>wing · room · kind · trust floor · quarantine fence<br/>→ seq set, BEFORE candidates</i>"] --> c
     subgraph c["Candidate tier — pick one (UNDERCROFT_RETRIEVAL)"]
         scan["full cosine scan<br/><i>default, small palaces</i>"]
         ftsx["FTS5 BM25 prefilter<br/><i>hmac-only, ≥2k drawers</i>"]
-        pqx["PQ / IVF ADC<br/><i>48 B/vector, RAM code cache,<br/>sealed rows AEAD</i>"]
+        pqx["PQ / IVF ADC<br/><i>48 B/vector, slab-grouped RAM cache,<br/>sealed rows AEAD, per-wing tier</i>"]
         fdex["MUVERA FDE dot<br/><i>token-aware; 256 B PQ codes,<br/>sealed rows AEAD</i>"]
         hnswx["HNSW (feature)<br/><i>RAM-only, ef scales with N</i>"]
     end

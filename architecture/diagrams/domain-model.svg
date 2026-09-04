@@ -60,7 +60,7 @@
 <rect x="472" y="214" width="352" height="198" rx="7" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)" stroke-width="1.4"/>
 <text x="488" y="238" class="f l" fill="var(--d-amber-ink,#8d5a1d)">room "facts"</text>
 <text x="488" y="262" class="f b dim">Distilled fact-drawers — one per distinct</text>
-<text x="488" y="279" class="f b dim">triple, written by POST /refine.</text>
+<text x="488" y="279" class="f b dim">triple, written by refine (CLI or /v1).</text>
 <text x="488" y="303" class="f b dim">Each carries an HMAC receipt citing the</text>
 <text x="488" y="320" class="f b dim">verbatim drawer it came from.</text>
 <text x="488" y="352" class="f s dim">The room filter alone selects the surface:</text>
@@ -73,7 +73,7 @@
 <text x="78" y="491" class="f b dim">Receipted triples — subject, predicate, object.</text>
 <text x="78" y="508" class="f b dim">valid_from: the words in the note that date the fact,</text>
 <text x="78" y="525" class="f b dim">else the drawer's own content_date.</text>
-<text x="78" y="547" class="f s dim">triple_id content-derived ⇒ repeats collapse · stated/background</text>
+<text x="78" y="547" class="f s dim">triple_id keyed by a stored secret ⇒ repeats collapse · stated / background / unevaluated</text>
 
 <rect x="458" y="444" width="382" height="116" rx="7" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.4"/>
 <text x="476" y="468" class="f l" fill="var(--d-green-ink,#22603c)">audit chain</text>

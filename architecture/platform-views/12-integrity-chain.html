@@ -41,12 +41,12 @@
 </head>
 <body>
   <div class="frame">
-    <p class="eyebrow">Data flow · 12 of 12 · Undercroft</p>
+    <p class="eyebrow">Data flow · 12 of 22 · Undercroft</p>
     <h1>How tampering is detected</h1>
 
     <svg viewBox="0 0 1200 768" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="integrity-chain-title integrity-chain-desc">
-      <title id="integrity-chain-title">Undercroft integrity chain and the six legs of verify</title>
-      <desc id="integrity-chain-desc">Every write appends one HMAC-tagged audit record inside the same database transaction that stores the data, advancing the committed head in chain_meta, while a separate manifest anchor is fsynced outside it and deliberately lags behind the database so that a power loss reconciles as a crash rather than raising a tamper alarm; verify then reads that committed state and returns one verdict assembled from six legs — record HMACs, chain replay, supersession receipts, knowledge-graph fact receipts, orphan graph labels, and mirror drift, the leg that compares a clear column against its HMAC-covered copy and so catches an edit made offline.</desc>
+      <title id="integrity-chain-title">Undercroft integrity chain and the seven legs of verify</title>
+      <desc id="integrity-chain-desc">Every write appends one HMAC-tagged audit record inside the same database transaction that stores the data, advancing the committed head in chain_meta, while a separate manifest anchor is fsynced outside it and deliberately lags behind the database so that a power loss reconciles as a crash rather than raising a tamper alarm; verify then reads that committed state and returns one verdict assembled from seven legs — record HMACs, chain replay, supersession receipts, knowledge-graph fact receipts, orphan graph labels, mirror drift, which compares a clear column against its HMAC-covered copy, and policy drift, which re-verifies every wing-trust and retention row under the current key and matches it to the chain record that assigned it, so an edit or a deletion made offline is caught.</desc>
       <defs>
         <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7fa39c"/></marker>
         <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#35e0c2"/></marker>
@@ -60,7 +60,7 @@
       <rect x="284" y="28" width="72" height="12" rx="2" fill="#04080a"/>
       <text x="320" y="37" fill="rgba(217,240,234,0.40)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.14em">WRITE PATH</text>
 
-      <rect x="600" y="24" width="480" height="560" rx="8" fill="rgba(217,240,234,0.02)" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
+      <rect x="600" y="24" width="480" height="616" rx="8" fill="rgba(217,240,234,0.02)" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
       <rect x="816" y="28" width="48" height="12" rx="2" fill="#04080a"/>
       <text x="840" y="37" fill="rgba(217,240,234,0.40)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.14em">VERIFY</text>
 
@@ -75,13 +75,14 @@
       <!-- chain_meta -> verify (gutter corridor at x=548) -->
       <path d="M 480,348 H 540 Q 548,348 548,340 V 100 Q 548,92 556,92 H 632" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
 
-      <!-- verify -> six legs; attach points 660/692/720/752/780/808 on the bottom edge -->
-      <path d="M 808,136 V 164 Q 808,172 816,172 H 848" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
-      <path d="M 780,136 V 236 Q 780,244 788,244 H 848" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
-      <path d="M 752,136 V 308 Q 752,316 760,316 H 848" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
-      <path d="M 720,136 V 380 Q 720,388 728,388 H 848" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
-      <path d="M 692,136 V 452 Q 692,460 700,460 H 848" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
-      <path d="M 660,136 V 524 Q 660,532 668,532 H 848" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- verify -> seven legs; attach points 644/672/700/728/756/784/812 on the bottom edge, 28 apart -->
+      <path d="M 812,136 V 164 Q 812,172 820,172 H 848" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 784,136 V 236 Q 784,244 792,244 H 848" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 756,136 V 308 Q 756,316 764,316 H 848" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 728,136 V 380 Q 728,388 736,388 H 848" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 700,136 V 452 Q 700,460 708,460 H 848" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 672,136 V 524 Q 672,532 680,532 H 848" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 644,136 V 596 Q 644,604 652,604 H 848" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
 
       <!-- ============ ARROW LABELS (mask + 8px gap) ============ -->
       <rect x="328" y="128" width="96" height="12" rx="2" fill="#04080a"/>
@@ -139,7 +140,7 @@
       <rect x="640" y="54" width="44" height="12" rx="2" fill="transparent" stroke="rgba(53,224,194,0.50)" stroke-width="0.8"/>
       <text x="662" y="63" fill="#35e0c2" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">VERIFY</text>
       <text x="736" y="92" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">verify</text>
-      <text x="736" y="110" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">six legs, one verdict</text>
+      <text x="736" y="110" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">seven legs, one verdict</text>
       <text x="736" y="124" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">reads; never writes</text>
 
       <!-- ============ VERIFY LEGS (chips) ============ -->
@@ -181,10 +182,17 @@
       <text x="892" y="530" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">mirror drift</text>
       <text x="892" y="544" fill="#ff5d73" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">clear column vs covered copy</text>
 
+      <rect x="848" y="580" width="216" height="48" rx="4" fill="#04080a"/>
+      <rect x="848" y="580" width="216" height="48" rx="4" fill="rgba(255,93,115,0.10)" stroke="#ff5d73" stroke-width="1"/>
+      <rect x="856" y="598" width="24" height="12" rx="2" fill="transparent" stroke="rgba(255,93,115,0.50)" stroke-width="0.8"/>
+      <text x="868" y="607" fill="#ff5d73" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">07</text>
+      <text x="892" y="602" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">policy drift</text>
+      <text x="892" y="616" fill="#ff5d73" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">trust + retention rows vs chain</text>
+
       <!-- ============ CALLOUT ============ -->
-      <line x1="124" y1="604" x2="124" y2="652" stroke="rgba(217,240,234,0.18)" stroke-width="1.2"/>
-      <text x="148" y="618" fill="#5c7f79" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" letter-spacing="0.14em">THE RULE</text>
-      <text x="148" y="646" fill="#d9f0ea" font-size="17" font-style="italic" font-family="Georgia, 'Times New Roman', serif">A keyed claim living in columns no drawer HMAC and no chain step covers must have a leg here, or nothing sees it.</text>
+      <line x1="124" y1="620" x2="124" y2="668" stroke="rgba(217,240,234,0.18)" stroke-width="1.2"/>
+      <text x="148" y="634" fill="#5c7f79" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" letter-spacing="0.14em">THE RULE</text>
+      <text x="148" y="662" fill="#d9f0ea" font-size="17" font-style="italic" font-family="Georgia, 'Times New Roman', serif">A keyed claim living in columns no drawer HMAC and no chain step covers must have a leg here, or nothing sees it.</text>
 
       <!-- ============ LEGEND ============ -->
       <line x1="120" y1="696" x2="1080" y2="696" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>

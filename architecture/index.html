@@ -424,7 +424,7 @@
 <rect x="472" y="214" width="352" height="198" rx="7" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)" stroke-width="1.4"/>
 <text x="488" y="238" class="f l" fill="var(--d-amber-ink,#8d5a1d)">room "facts"</text>
 <text x="488" y="262" class="f b dim">Distilled fact-drawers — one per distinct</text>
-<text x="488" y="279" class="f b dim">triple, written by POST /refine.</text>
+<text x="488" y="279" class="f b dim">triple, written by refine (CLI or /v1).</text>
 <text x="488" y="303" class="f b dim">Each carries an HMAC receipt citing the</text>
 <text x="488" y="320" class="f b dim">verbatim drawer it came from.</text>
 <text x="488" y="352" class="f s dim">The room filter alone selects the surface:</text>
@@ -437,7 +437,7 @@
 <text x="78" y="491" class="f b dim">Receipted triples — subject, predicate, object.</text>
 <text x="78" y="508" class="f b dim">valid_from: the words in the note that date the fact,</text>
 <text x="78" y="525" class="f b dim">else the drawer's own content_date.</text>
-<text x="78" y="547" class="f s dim">triple_id content-derived ⇒ repeats collapse · stated/background</text>
+<text x="78" y="547" class="f s dim">triple_id keyed by a stored secret ⇒ repeats collapse · stated / background / unevaluated</text>
 
 <rect x="458" y="444" width="382" height="116" rx="7" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.4"/>
 <text x="476" y="468" class="f l" fill="var(--d-green-ink,#22603c)">audit chain</text>
@@ -573,7 +573,7 @@
 
 <rect x="24" y="526" width="852" height="56" rx="8" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)"/>
 <text x="42" y="549" class="f b ink">Default posture: local-first and offline. No telemetry deps compiled in, no external API, deterministic embedder.</text>
-<text x="42" y="568" class="f s dim">Each outward path is a deliberate opt-in: UNDERCROFT_LLM_URL, UNDERCROFT_OTLP_ENDPOINT, a remote index URL, UNDERCROFT_LLM_KEY.</text>
+<text x="42" y="568" class="f s dim">Outward paths are opt-ins — UNDERCROFT_LLM_URL, UNDERCROFT_EMBED_URL, UNDERCROFT_OTLP_ENDPOINT, a remote index URL — each TLS or loopback via undercroft-net.</text>
 
 <defs><marker id="a" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--d-line2,#8fa3b4)"/></marker></defs>
 </svg>
@@ -591,7 +591,7 @@
 <p class="lede">Normalise, derive, embed, then commit everything atomically.</p>
 
 <figure>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 560" width="900" height="560" role="img" aria-labelledby="t_writepath d_writepath">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 640" width="900" height="640" role="img" aria-labelledby="t_writepath d_writepath">
 <title id="t_writepath">Undercroft write path</title>
 <desc id="d_writepath">A drawer is normalized, has structure derived from it, is embedded, then sealed, tagged and chained inside one transaction. The manifest anchor is fsynced afterwards and lags on purpose.</desc>
 <style>
@@ -604,7 +604,7 @@
   .ink { fill: var(--d-ink,#14202b); }
   .dim { fill: var(--d-dim,#55697a); }
 </style>
-<rect width="900" height="560" fill="var(--d-bg,#fbfcfd)"/>
+<rect width="900" height="640" fill="var(--d-bg,#fbfcfd)"/>
 <text x="28" y="36" class="f h ink">Write path — one drawer, and why it is safe</text>
 <text x="28" y="56" class="f b dim">Content is stored verbatim. Only derived structure is added; the text itself is never rewritten.</text>
 
@@ -620,7 +620,7 @@
 <text x="340" y="98" class="f l" fill="var(--d-violet-ink,#523a86)">2 · derive, never alter</text>
 <text x="340" y="118" class="f b dim">time_mentions · entities</text>
 <text x="340" y="134" class="f b dim">content_date anchors relative dates</text>
-<text x="340" y="150" class="f s dim">runs in Drawer::new — no path forgets</text>
+<text x="340" y="150" class="f s dim">extracted in new(); anchored if dated</text>
 
 <path d="M590 115 L616 115" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 
@@ -630,51 +630,58 @@
 <text x="638" y="134" class="f b dim">by default — no model, no network</text>
 <text x="638" y="150" class="f s dim">computed before the lock is taken</text>
 
-<path d="M450 160 L450 182" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
+<path d="M450 160 L450 176" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 
-<rect x="24" y="186" width="852" height="176" rx="9" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="2.2"/>
-<text x="42" y="212" class="f l" fill="var(--d-teal-ink,#0d6b62)">4 · one SQLite transaction — all of it, or none of it</text>
-<text x="700" y="212" class="f s" fill="var(--d-teal-ink,#0d6b62)">BEGIN IMMEDIATE</text>
+<rect x="24" y="180" width="852" height="56" rx="8" fill="var(--d-amber-bg,#fdf7ee)" stroke="var(--d-amber,#b8781f)" stroke-width="1.6"/>
+<text x="42" y="200" class="f l" fill="var(--d-amber-ink,#8d5a1d)">4 · at the write choke point: validate the declaration, then screen</text>
+<text x="42" y="216" class="f b dim">wing/room/kind names, the id shape and a finite vector are checked first, and refused as invalid input — never rewritten by the store.</text>
+<text x="42" y="230" class="f s dim">Then the Screen every write_drawer must state: Apply (tier-1 signals · declared rate · advisor) or Bypass(reason). A flagged write is DIVERTED into the review wing and sealed like any other.</text>
 
-<rect x="42" y="226" width="266" height="112" rx="7" fill="var(--d-card,#ffffff)" stroke="var(--d-teal,#12897e)" stroke-width="1.3"/>
-<text x="58" y="249" class="f l" fill="var(--d-teal-ink,#0d6b62)">seal</text>
-<text x="58" y="269" class="f b dim">XChaCha20-Poly1305 over content</text>
-<text x="58" y="285" class="f b dim">and embedding.</text>
-<text x="58" y="307" class="f s dim">AAD = the drawer id, plus distinct</text>
-<text x="58" y="323" class="f s dim">domains /emb · /tok · /pq</text>
+<path d="M450 240 L450 262" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 
-<rect x="318" y="226" width="264" height="112" rx="7" fill="var(--d-card,#ffffff)" stroke="var(--d-teal,#12897e)" stroke-width="1.3"/>
-<text x="334" y="249" class="f l" fill="var(--d-teal-ink,#0d6b62)">tag</text>
-<text x="334" y="269" class="f b dim">HMAC-SHA256 over</text>
-<text x="334" y="287" class="f mono ink">id ‖ meta_json ‖ sealed content</text>
-<text x="334" y="309" class="f s dim">metadata is covered for free — a new</text>
-<text x="334" y="325" class="f s dim">meta field needs no schema change</text>
+<rect x="24" y="266" width="852" height="176" rx="9" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="2.2"/>
+<text x="42" y="292" class="f l" fill="var(--d-teal-ink,#0d6b62)">5 · one SQLite transaction — all of it, or none of it</text>
+<text x="700" y="292" class="f s" fill="var(--d-teal-ink,#0d6b62)">BEGIN IMMEDIATE</text>
 
-<rect x="592" y="226" width="266" height="112" rx="7" fill="var(--d-card,#ffffff)" stroke="var(--d-teal,#12897e)" stroke-width="1.3"/>
-<text x="608" y="249" class="f l" fill="var(--d-teal-ink,#0d6b62)">chain</text>
-<text x="608" y="269" class="f b dim">chain_append runs in the SAME</text>
-<text x="608" y="285" class="f b dim">transaction as the row.</text>
-<text x="608" y="307" class="f s dim">so no committed write can exist</text>
-<text x="608" y="323" class="f s dim">without its audit entry</text>
+<rect x="42" y="306" width="266" height="112" rx="7" fill="var(--d-card,#ffffff)" stroke="var(--d-teal,#12897e)" stroke-width="1.3"/>
+<text x="58" y="329" class="f l" fill="var(--d-teal-ink,#0d6b62)">seal</text>
+<text x="58" y="349" class="f b dim">XChaCha20-Poly1305 over content</text>
+<text x="58" y="365" class="f b dim">and embedding.</text>
+<text x="58" y="387" class="f s dim">AAD = the drawer id, plus distinct</text>
+<text x="58" y="403" class="f s dim">domains /emb · /tok · /pq</text>
 
-<text x="42" y="354" class="f s dim">Bulk ingest: one transaction and one anchor per batch, not per drawer — measured ≈55× fewer fsyncs at 200 drawers.</text>
+<rect x="318" y="306" width="264" height="112" rx="7" fill="var(--d-card,#ffffff)" stroke="var(--d-teal,#12897e)" stroke-width="1.3"/>
+<text x="334" y="329" class="f l" fill="var(--d-teal-ink,#0d6b62)">tag</text>
+<text x="334" y="349" class="f b dim">HMAC-SHA256 over</text>
+<text x="334" y="367" class="f mono ink">id ‖ meta_json ‖ sealed content</text>
+<text x="334" y="389" class="f s dim">metadata is covered for free — a new</text>
+<text x="334" y="405" class="f s dim">meta field needs no schema change</text>
 
-<path d="M450 366 L450 388" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
+<rect x="592" y="306" width="266" height="112" rx="7" fill="var(--d-card,#ffffff)" stroke="var(--d-teal,#12897e)" stroke-width="1.3"/>
+<text x="608" y="329" class="f l" fill="var(--d-teal-ink,#0d6b62)">chain</text>
+<text x="608" y="349" class="f b dim">chain_append runs in the SAME</text>
+<text x="608" y="365" class="f b dim">transaction as the row.</text>
+<text x="608" y="387" class="f s dim">so no committed write can exist</text>
+<text x="608" y="403" class="f s dim">without its audit entry</text>
 
-<rect x="24" y="392" width="404" height="70" rx="8" fill="var(--d-card,#ffffff)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.4"/>
-<text x="42" y="416" class="f l ink">5 · then, outside the transaction</text>
-<text x="42" y="436" class="f b dim">fsync the manifest anchor through an atomic</text>
-<text x="42" y="452" class="f b dim">rename + directory sync. WAL, synchronous=FULL.</text>
+<text x="42" y="434" class="f s dim">Bulk ingest: one transaction and one anchor per batch, not per drawer — measured ≈55× fewer fsyncs at 200 drawers.</text>
 
-<rect x="440" y="392" width="436" height="70" rx="8" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.6"/>
-<text x="458" y="416" class="f l" fill="var(--d-green-ink,#22603c)">why the anchor lags on purpose</text>
-<text x="458" y="437" class="f b dim">anchor behind the db at open → power loss, fast-forward</text>
-<text x="458" y="454" class="f b dim">anchor ahead of the db at open → rollback, tamper alarm</text>
+<path d="M450 446 L450 468" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 
-<rect x="24" y="474" width="852" height="62" rx="8" fill="var(--d-red-bg,#fdf3f3)" stroke="var(--d-red,#b5453a)" stroke-width="1.4"/>
-<text x="42" y="498" class="f l" fill="var(--d-red-ink,#94382f)">The asymmetry is the detector</text>
-<text x="42" y="518" class="f b dim">An anchor that never runs ahead of the database is what makes "the machine lost power" and "someone restored an older</text>
-<text x="42" y="530" class="f b dim">copy of this file" distinguishable at all. That is why the invariant is directional, not just "keep them in sync".</text>
+<rect x="24" y="472" width="404" height="70" rx="8" fill="var(--d-card,#ffffff)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.4"/>
+<text x="42" y="496" class="f l ink">6 · then, outside the transaction</text>
+<text x="42" y="516" class="f b dim">fsync the manifest anchor through an atomic</text>
+<text x="42" y="532" class="f b dim">rename + directory sync. WAL, synchronous=FULL.</text>
+
+<rect x="440" y="472" width="436" height="70" rx="8" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.6"/>
+<text x="458" y="496" class="f l" fill="var(--d-green-ink,#22603c)">why the anchor lags on purpose</text>
+<text x="458" y="517" class="f b dim">anchor behind the db at open → power loss, fast-forward</text>
+<text x="458" y="534" class="f b dim">anchor ahead of the db at open → rollback, tamper alarm</text>
+
+<rect x="24" y="554" width="852" height="62" rx="8" fill="var(--d-red-bg,#fdf3f3)" stroke="var(--d-red,#b5453a)" stroke-width="1.4"/>
+<text x="42" y="578" class="f l" fill="var(--d-red-ink,#94382f)">The asymmetry is the detector</text>
+<text x="42" y="598" class="f b dim">An anchor that never runs ahead of the database is what makes "the machine lost power" and "someone restored an older</text>
+<text x="42" y="610" class="f b dim">copy of this file" distinguishable at all. That is why the invariant is directional, not just "keep them in sync".</text>
 
 <defs><marker id="a" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--d-line2,#8fa3b4)"/></marker></defs>
 </svg>
@@ -751,7 +758,7 @@
 <rect x="24" y="72" width="640" height="58" rx="8" fill="var(--d-card,#ffffff)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.4"/>
 <circle cx="48" cy="101" r="13" fill="var(--d-blue,#4a6fa5)"/><text x="48" y="106" class="f l" fill="var(--d-on,var(--d-card,#ffffff))" text-anchor="middle">1</text>
 <text x="72" y="96" class="f l ink">scope</text>
-<text x="72" y="116" class="f b dim">wing + optional room narrow the row set before anything is scored</text>
+<text x="72" y="116" class="f b dim">wing · room · kind · trust floor · quarantine fence narrow the row set before anything is scored</text>
 <rect x="676" y="72" width="200" height="58" rx="8" fill="var(--d-blue-bg,#eef3f8)" stroke="var(--d-line,#c9d4dd)"/>
 <text x="690" y="96" class="f s dim">decides how much work</text>
 <text x="690" y="113" class="f s dim">everything below must do</text>
@@ -797,7 +804,7 @@
 <text x="72" y="469" class="f b dim">MaxSim over ingest-time token matrices</text>
 <rect x="676" y="408" width="200" height="66" rx="8" fill="var(--d-violet-bg2,#f0ebf8)" stroke="var(--d-violet,#6b4fa8)"/>
 <text x="690" y="432" class="f mono" fill="var(--d-violet-ink,#523a86)">UNDERCROFT_RERANKER</text>
-<text x="690" y="449" class="f s dim">onnx · ort · colbert</text>
+<text x="690" y="449" class="f s dim">onnx · ort · colbert · colbert-ort</text>
 <text x="690" y="466" class="f s dim">RERANK_TOP_N default 50</text>
 <path d="M344 474 L344 492" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 
@@ -1036,7 +1043,7 @@
 <figure>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 810" width="900" height="810" role="img" aria-labelledby="t_languagemorphology d_languagemorphology">
 <title id="t_languagemorphology">How a language is resolved and what it admits</title>
-<desc id="d_languagemorphology">Language is resolved strongest-first: a caller declaration, else the script where one script means one language, else the drawer's own closed-class function words. Five pairwise morphology rules then feed the lexical morph channel, which admits a drawer without claiming the drawer said the word.</desc>
+<desc id="d_languagemorphology">Language is resolved by declaration first, else by the drawer's own closed-class function words; a query written in a script that names one language adds that language beside the resolved one rather than replacing it. Five pairwise morphology rules then feed the lexical morph channel, which admits a drawer without claiming the drawer said the word.</desc>
 <style>
   .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
   .h { font-size: 17px; font-weight: 600; }
@@ -1055,7 +1062,7 @@
 
 <rect x="24" y="76" width="852" height="206" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
 <text x="42" y="102" class="f l ink">1 · resolving the language</text>
-<text x="600" y="102" class="f s dim">strongest signal first, stop at the first hit</text>
+<text x="600" y="102" class="f s dim">declared outranks detected; the script only adds</text>
 
 <rect x="42" y="116" width="266" height="140" rx="8" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="1.8"/>
 <text x="58" y="139" class="f l" fill="var(--d-teal-ink,#0d6b62)">1. declared</text>
@@ -1067,22 +1074,22 @@
 <text x="58" y="244" class="f s" fill="var(--d-teal-ink,#0d6b62)">Outranks everything below.</text>
 
 <rect x="320" y="116" width="266" height="140" rx="8" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.8"/>
-<text x="336" y="139" class="f l" fill="var(--d-blue-ink,#33527d)">2. else the script</text>
-<text x="336" y="159" class="f s dim">where a script settles it</text>
-<text x="336" y="180" class="f s dim">Greek · Georgian · Hangul — one script,</text>
-<text x="336" y="195" class="f s dim">one language. A fact, not a reading.</text>
-<text x="336" y="218" class="f s dim">Cyrillic → Russian, Devanagari → Hindi:</text>
-<text x="336" y="233" class="f s dim">the majority language, and labelled</text>
-<text x="336" y="248" class="f s dim">approximate because that is what it is.</text>
+<text x="336" y="139" class="f l" fill="var(--d-blue-ink,#33527d)">2. else the drawer itself</text>
+<text x="336" y="159" class="f mono dim">language_of_drawer</text>
+<text x="336" y="180" class="f s dim">A text carrying der, die, und, nicht is</text>
+<text x="336" y="195" class="f s dim">German. Only CLOSED-class words vote —</text>
+<text x="336" y="210" class="f s dim">a loanword does not get one.</text>
+<text x="336" y="233" class="f s" fill="var(--d-blue-ink,#33527d)">Decisive or nothing: three hits and</text>
+<text x="336" y="248" class="f s" fill="var(--d-blue-ink,#33527d)">twice the runner-up, else stay silent.</text>
 
 <rect x="598" y="116" width="260" height="140" rx="8" fill="var(--d-violet-bg,#f6f3fb)" stroke="var(--d-violet,#6b4fa8)" stroke-width="1.8"/>
-<text x="614" y="139" class="f l" fill="var(--d-violet-ink,#523a86)">3. else the drawer itself</text>
-<text x="614" y="159" class="f mono dim">language_of_drawer</text>
-<text x="614" y="180" class="f s dim">A text carrying der, die, und, nicht is</text>
-<text x="614" y="195" class="f s dim">German. Only CLOSED-class words vote —</text>
-<text x="614" y="210" class="f s dim">a loanword does not get one.</text>
-<text x="614" y="233" class="f s" fill="var(--d-violet-ink,#523a86)">Decisive or nothing: three hits and</text>
-<text x="614" y="248" class="f s" fill="var(--d-violet-ink,#523a86)">twice the runner-up, else stay silent.</text>
+<text x="614" y="139" class="f l" fill="var(--d-violet-ink,#523a86)">+ the query's script, added</text>
+<text x="614" y="159" class="f mono dim">morph_lang_by_script(query)</text>
+<text x="614" y="180" class="f s dim">Greek · Georgian · Hangul — one script,</text>
+<text x="614" y="195" class="f s dim">one language. Cyrillic → Russian and</text>
+<text x="614" y="210" class="f s dim">Devanagari → Hindi, labelled approximate.</text>
+<text x="614" y="233" class="f s" fill="var(--d-violet-ink,#523a86)">Joins as a SECOND inflecting language;</text>
+<text x="614" y="248" class="f s" fill="var(--d-violet-ink,#523a86)">never replaces 1 or 2, never feeds suffixes.</text>
 
 <text x="42" y="274" class="f s dim">Read per candidate, not per query: a vault may hold several languages, and the drawer is the unit that has one.</text>
 
@@ -1441,7 +1448,7 @@
 <figure>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 812" width="900" height="812" role="img" aria-labelledby="t_securitykeys d_securitykeys">
 <title id="t_securitykeys">Key derivation and the AAD that binds every ciphertext</title>
-<desc id="d_securitykeys">One master key derives a separate encryption key and MAC key per vault via HKDF. Every sealed blob binds the vault id and the record id into its AAD, so a ciphertext moved between vaults or between rows fails to decrypt. Rotation re-seals every artifact and re-keys the chain in one transaction; export bundles use a hybrid X25519 + ML-KEM-768 exchange to a recipient key.</desc>
+<desc id="d_securitykeys">One master key derives four subkeys per vault via HKDF — encryption, MAC, manifest MAC and the training-sample draw — while the knowledge graph's blind-index secret is stored sealed and re-sealed on rotation rather than derived, so fact identifiers never move. Every sealed blob binds the vault id and the record id into its AAD, so a ciphertext moved between vaults or between rows fails to decrypt. Rotation re-seals every artifact and re-keys the chain in one transaction; export bundles use a hybrid X25519 + ML-KEM-768 exchange to a recipient key.</desc>
 <style>
   .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
   .h { font-size: 17px; font-weight: 600; }
@@ -1473,8 +1480,8 @@
 
 <rect x="286" y="110" width="326" height="72" rx="7" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.5"/>
 <text x="300" y="130" class="f b" fill="var(--d-blue-ink,#33527d)">HKDF(master, salt = vault_salt, info)</text>
-<text x="300" y="150" class="f mono dim">undercroft.v1/vault/&lt;id&gt;/enc</text>
-<text x="300" y="167" class="f mono dim">undercroft.v1/vault/&lt;id&gt;/mac</text>
+<text x="300" y="150" class="f mono dim">undercroft.v1/vault/&lt;id&gt;/enc · /mac</text>
+<text x="300" y="167" class="f mono dim">undercroft.v1/vault/&lt;id&gt;/manifest · /sample</text>
 
 <path d="M616 146 L656 146" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 
@@ -1486,10 +1493,11 @@
 <text x="674" y="172" class="f mono" fill="var(--d-green-ink,#22603c)">mac_key</text>
 <text x="740" y="172" class="f s dim">HMAC-SHA256 + chain</text>
 
-<text x="42" y="204" class="f s dim">The two keys are independent outputs of the same derivation, so an integrity tag can never be forged from a decryption key and the two roles stay separate.</text>
-<text x="42" y="224" class="f s dim">Both live in a zeroize-on-drop wrapper, are never <tspan class="f mono">Debug</tspan>-printed, and the key file is fsynced at creation — a key that is not durable is a vault that</text>
-<text x="42" y="239" class="f s dim">cannot be opened again after a power loss.</text>
-<text x="42" y="256" class="f s dim">A vault carries a <tspan class="f mono">keycheck</tspan> marker, so a wrong passphrase is refused up front rather than surfacing later as a wall of decryption failures.</text>
+<text x="42" y="200" class="f s dim">Four subkeys, independent outputs of one derivation: <tspan class="f mono">enc</tspan> seals, <tspan class="f mono">mac</tspan> tags records and the chain (and keys the dedup fingerprints),</text>
+<text x="42" y="214" class="f s dim"><tspan class="f mono">manifest</tspan> MACs the rollback anchor, <tspan class="f mono">sample</tspan> draws the training rows — so a tag can never be forged from a decryption key.</text>
+<text x="42" y="228" class="f s dim">All live in a zeroize-on-drop wrapper, are never <tspan class="f mono">Debug</tspan>-printed, and the key file is fsynced at creation; a <tspan class="f mono">keycheck</tspan> marker refuses a wrong</text>
+<text x="42" y="242" class="f s dim">passphrase up front rather than as a wall of decryption failures.</text>
+<text x="42" y="256" class="f s dim">The graph's blind-index secret is NOT derived: 32 random bytes sealed in meta, re-sealed by rotation, never regenerated — or every fact id would move.</text>
 
 <rect x="24" y="280" width="852" height="176" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
 <text x="42" y="306" class="f l ink">What every sealed blob authenticates alongside itself</text>
@@ -1497,14 +1505,16 @@
 
 <rect x="42" y="338" width="404" height="100" rx="7" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="1.4"/>
 <text x="58" y="358" class="f b" fill="var(--d-teal-ink,#0d6b62)">AAD = vault id + record id + domain</text>
-<text x="58" y="379" class="f mono dim">&lt;drawer id&gt;</text>
-<text x="180" y="379" class="f s dim">content</text>
-<text x="58" y="396" class="f mono dim">&lt;drawer id&gt;/emb</text>
-<text x="180" y="396" class="f s dim">embedding</text>
-<text x="58" y="413" class="f mono dim">&lt;drawer id&gt;/tok</text>
-<text x="180" y="413" class="f s dim">ColBERT token matrix</text>
-<text x="58" y="430" class="f mono dim">&lt;drawer id&gt;/pq</text>
-<text x="180" y="430" class="f s dim">PQ codes, codebook, pages</text>
+<text x="58" y="375" class="f mono dim">&lt;drawer id&gt;</text>
+<text x="200" y="375" class="f s dim">content</text>
+<text x="58" y="390" class="f mono dim">&lt;drawer id&gt;/emb</text>
+<text x="200" y="390" class="f s dim">embedding</text>
+<text x="58" y="405" class="f mono dim">&lt;drawer id&gt;/tok</text>
+<text x="200" y="405" class="f s dim">ColBERT token matrix</text>
+<text x="58" y="420" class="f mono dim">fde/&lt;drawer id&gt;/tok</text>
+<text x="200" y="420" class="f s dim">FDE row</text>
+<text x="58" y="435" class="f mono dim">pqrow/…/pq · pq/…</text>
+<text x="200" y="435" class="f s dim">PQ rows, pages, codebooks — index ids, not drawer ids</text>
 
 <rect x="458" y="338" width="400" height="100" rx="7" fill="var(--d-red-bg,#fdf2f1)" stroke="var(--d-red,#b5453a)" stroke-width="1.4"/>
 <text x="474" y="358" class="f b" fill="var(--d-red-ink,#993a30)">so all of these FAIL, not merely return nothing</text>
@@ -1661,7 +1671,7 @@
 <figcaption>One write, one read, and the reconciliation that separates a crash from a rollback. <a href="diagrams/security-integrity.svg">SVG</a> · <a href="pdf/security-integrity.pdf">PDF</a></figcaption>
 </figure>
 
-<p>The chain records more than writes. Every <strong>export</strong> is chain-audited unconditionally and on every surface — one <code>egress/export</code> record binding the surface, the recipient, the record counts and the export's own payload digest, anchored like any write — because content leaving the palace is precisely the event a history is worth keeping about. <strong>Reads</strong> are audited only where a deployment declares it (<code>UNDERCROFT_READ_AUDIT=chain</code>), a per-query append being a real durability cost: one record per content-returning <em>read</em> carrying a <em>keyed fingerprint</em> of its subject rather than the text, plus the declared scope and the count. That covers <strong>two funnels</strong>, which is the whole of the lesson: the drawer doors (search, get, recent, list, diary, tunnel, closet, hallways, the admission queue) and the knowledge graph's own (kg-query, kg-timeline, kg-entities, kg-canonical), because the graph returns words distilled out of drawers and reading it reads the corpus through a different door. Bulk doors record once per call, never once per row — a caller made one request and the trail says so. An operator holding the key can later prove a specific read was made by recomputing that fingerprint; the record on its own says nothing about what was asked.</p>
+<p>The chain records more than writes. Every <strong>export</strong> is chain-audited unconditionally and on every surface — one <code>egress/export</code> record binding the surface, the recipient, the record counts and the export's own payload digest, anchored like any write — because content leaving the palace is precisely the event a history is worth keeping about. The same rule covers the other two egresses: every <strong>index push</strong> appends <code>egress/index-push</code> — backend, collection, the count the backend actually acknowledged (a push that fails part-way records what left before it propagates the error) and whether the pushed content was plaintext — and every <strong>refine</strong> appends <code>egress/refine</code> binding the surface, the destination host, the model, the scope and the counts, on a dry run too, since the plaintext leaves either way. <strong>Reads</strong> are audited only where a deployment declares it (<code>UNDERCROFT_READ_AUDIT=chain</code>), a per-query append being a real durability cost: one record per content-returning <em>read</em> carrying a <em>keyed fingerprint</em> of its subject rather than the text, plus the declared scope and the count. That covers <strong>two funnels</strong>, which is the whole of the lesson: the drawer doors (search, get, recent, list, diary, tunnel, closet, hallways, the admission queue) and the knowledge graph's own (kg-query, kg-timeline, kg-entities, kg-canonical), because the graph returns words distilled out of drawers and reading it reads the corpus through a different door. Bulk doors record once per call, never once per row — a caller made one request and the trail says so. An operator holding the key can later prove a specific read was made by recomputing that fingerprint; the record on its own says nothing about what was asked.</p>
 <div class="note amber">
   <span class="tag">One boundary, stated</span>
   <p>A read runs behind a shared reference and therefore does <em>not</em> advance the manifest anchor. That is the legitimate crash shape the open-time reconciliation already fast-forwards — but it means read records between two anchored writes share that crash window, and an attacker with write access to the file could strip the unanchored tail undetected while it lasts. A write never stretches the window beyond the single in-flight record; reads can. What closes it is the next anchored write, or the reconciliation the next store open performs — so a deployment that wants the anchor kept tight is one that writes on a cadence of its own.</p>
@@ -1825,8 +1835,8 @@
 <p>Review happens over CLI and REST — never MCP, and MCP will not so much as read the queue. One check over the raw argument map, in front of every tool call, refuses any argument that names the reserved wing and any <code>id</code>-shaped argument naming a drawer resident in it: the agent whose write was quarantined can neither read the evidence back nor delete it. Being a rule about arguments rather than a clause per tool, it covers arguments that do not exist yet — the point, given that the failure this whole section describes is a checklist going stale. Two prices are pinned rather than hidden. It matches the <em>value</em>, not the key, so saving a drawer whose entire content is the literal string <code>quarantine-pending</code> is refused too; and the wing's <em>existence</em> is not concealed — it still appears in the taxonomy with its count, because hiding a review queue from its own inventory buys nothing once naming it is refused.</p>
 
 <h3 id="defense-operator-surfaces-and-the-read-only-posture">Operator surfaces, and the read-only posture</h3>
-<p>Which capability exists on which surface is enforced, not documented. The MCP tool inventory lives in code, and the server is counted against it in <em>both</em> directions: a tool the server advertises without an entry fails, and an entry naming a tool that no longer exists fails too — the second half being what stops an inventory becoming the stale table it replaced. Beside it sits the shorter and more interesting list, the capabilities that must <strong>never</strong> appear on MCP: admission review, wing trust assignment, retention, attested forgetting, key rotation. That is not a parity gap waiting to be closed. MCP is the surface an agent drives, and an agent must not be able to rule on the queue that exists to contain it, nor assign the trust class that decides what it may retrieve.</p>
-<p><code>serve-http --read-only</code> is a posture on the <strong>process</strong>, not a filter on one port. That process opens two handles on the same vault — one behind <code>/mcp</code>, one per tenant vault behind <code>/v1</code> — and for a while only the second honoured the flag, so a "read-only" server re-embedded every drawer of its <code>--vault</code> vault at start-up and, under <code>UNDERCROFT_READ_AUDIT=chain</code>, appended a chain record per <code>/mcp</code> search: whether the vault was written depended on which door you came in by. Both handles now take the same posture, as an argument a caller must state rather than a flag that can default. And the route gate sits in <em>front</em> of dispatch, <strong>failing closed</strong>: a request mutates unless it is a <code>GET</code> or one of two named <code>POST</code>s, so a route added later is refused on a read-only server until someone deliberately allows it — the opposite of the per-handler guard it replaced, where forgetting one line opened a write door and nothing said so. <code>POST …/kg/authority</code> was exactly that forgotten line, and is refused now. The two exceptions are POST for cost rather than for effect: <code>search</code> reads, and <code>verify</code> walks every row's HMAC, replays the chain, and checks four more things nothing else can see — every drawer supersession receipt, every knowledge-graph fact receipt, every graph audit label, and every clear mirror column against the covered copy.</p>
+<p>Which capability exists on which surface is enforced, not documented. The MCP tool inventory lives in code, and the server is counted against it in <em>both</em> directions: a tool the server advertises without an entry fails, and an entry naming a tool that no longer exists fails too — the second half being what stops an inventory becoming the stale table it replaced. Beside it sits the shorter and more interesting list, the capabilities that must <strong>never</strong> appear on MCP: admission review, wing trust assignment, retention, attested forgetting, key rotation and anchor tightening, authority promotion, export, import and refine — ten entries, asserted by the same test that counts the tool inventory. That is not a parity gap waiting to be closed. MCP is the surface an agent drives, and an agent must not be able to rule on the queue that exists to contain it, nor assign the trust class that decides what it may retrieve.</p>
+<p><code>serve-http --read-only</code> is a posture on the <strong>process</strong>, not a filter on one port. That process opens two handles on the same vault — one behind <code>/mcp</code>, one per tenant vault behind <code>/v1</code> — and for a while only the second honoured the flag, so a "read-only" server re-embedded every drawer of its <code>--vault</code> vault at start-up and, under <code>UNDERCROFT_READ_AUDIT=chain</code>, appended a chain record per <code>/mcp</code> search: whether the vault was written depended on which door you came in by. Both handles now take the same posture, as an argument a caller must state rather than a flag that can default. And the route gate sits in <em>front</em> of dispatch, <strong>failing closed</strong>: a request mutates unless it is a <code>GET</code> or one of three named <code>POST</code>s, so a route added later is refused on a read-only server until someone deliberately allows it — the opposite of the per-handler guard it replaced, where forgetting one line opened a write door and nothing said so. <code>POST …/kg/authority</code> was exactly that forgotten line, and is refused now. The three exceptions are POST for cost, or for a caller-supplied document, rather than for effect: <code>search</code> reads, <code>verify-forgetting</code> checks an attestation that has to travel in a body, and <code>verify</code> walks every row's HMAC, replays the chain, and checks five more things nothing else can see — every drawer supersession receipt, every knowledge-graph fact receipt, every graph audit label, every clear mirror column against the covered copy, and every wing-trust and retention row against the chain record that assigned it.</p>
 <p>The boundary is stated rather than blurred, and since 1.0.0 it includes the <em>open</em>. That sentence used to read the other way — a read-only open still created schema, reconciled a rotation and initialised the chain, so the posture protected the vault's contents from the traffic it served but not the file from every byte. It now opens the connection <code>SQLITE_OPEN_READ_ONLY</code> under <code>PRAGMA query_only=ON</code>, so a write nobody thought of fails loudly instead of happening quietly; the schema is checked rather than created; a lagging manifest anchor is reported rather than fast-forwarded; and an interrupted key rotation is honoured <em>in memory</em> with its <code>vault.json.next</code> left exactly where it is — the operation the incident-response runbook's own "freeze writes" step was performing on a suspected-compromise vault. Everything the open declined to repair is warned once and then readable as <code>unhealed</code> on <code>undercroft stats</code>, <code>undercroft_status</code>, <code>GET /v1/vaults/{id}/stats</code> and — since 1.2.0 — the admin console at <code>GET /ui</code>, which is where a long-lived server's operator is actually looking hours after the start-up that found it. Three more things that would otherwise write instead decline and say so: the embedder migration warns and serves the old vector space rather than rewriting it (the replica precedent — a replica exists to answer across configuration drift), read auditing is force-disabled because an audit record is a write, and a prefilter tier loads an existing index but never builds one, falling back to the exact scan and announcing it once per tier. <code>GET …/export</code> is served for the same reason, with a warning that its <code>egress/export</code> chain record was skipped.</p>
 <p>Two conditions refuse rather than report, because serving through them answers a question wrongly rather than partially. A manifest whose <code>palace.db</code> is absent is a <strong>409</strong> naming the file: <code>Connection::open</code> carries <code>SQLITE_OPEN_CREATE</code>, so a half-copied backup or a snapshot taken mid-write used to open "successfully" against a fabricated empty vault and answer every read empty with no error — "empty" is not "absent", and this one is an integrity verdict, so the CLI exits 2. A schema this build would have had to migrate is the other, also 409: migrating means every <code>ALTER TABLE … ADD COLUMN</code> in the named column inventories (counted by a test rather than written here, because the number in this sentence was twelve while the tree ran fourteen), and the honest answer is to name what is missing and ask for one writable open. Neither is a crash a replica must survive — a vault whose writer died mid-rotation still opens, which is the case that made reporting rather than refusing the rule everywhere else.</p>
 

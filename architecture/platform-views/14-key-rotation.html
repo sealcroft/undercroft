@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Undercroft — Key Rotation</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:  #04080a;
+      --color-raise:  #071014;
+      --color-ink:    #d9f0ea;
+      --color-muted:  #7fa39c;
+      --color-accent: #35e0c2;
+      --font-sans:  -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --font-serif: Georgia, "Times New Roman", serif;
+      --font-mono:  ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1200px; width: 100%; }
+    .eyebrow {
+      font-family: var(--font-mono); font-size: 0.66rem; font-weight: 500;
+      letter-spacing: 0.18em; text-transform: uppercase;
+      color: var(--color-muted); margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400; letter-spacing: -0.02em; line-height: 1.15;
+      color: var(--color-ink); margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 900px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Sequence · 14 of 22 · Undercroft</p>
+    <h1>A key rotation, and what a crash in the middle of it does</h1>
+
+    <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="key-rotation-title key-rotation-desc">
+      <title id="key-rotation-title">Undercroft key rotation sequence</title>
+      <desc id="key-rotation-desc">An operator rotates a vault's keys in two phases: the store asks the vault for a rotation candidate with a fresh salt and four new subkeys, stages the new manifest durably as vault.json.next, then in one database transaction re-seals every artifact under the new keys, re-tags the policy rows, re-keys the audit chain over the preserved historical bytes, appends a rotate record and flips the keycheck marker; only after that commit is the staged manifest promoted over vault.json. A crash between the commit and the promotion is reconciled at the next open, where the database keycheck decides whether the staged manifest is adopted or discarded, and the read-only role reports rather than heals. Identifiers, blind columns, fingerprints and audit record ids never move; tags, receipts and sealed bytes must.</desc>
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7fa39c"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#35e0c2"/></marker>
+        <marker id="arrow-link" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#c9a961"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#04080a"/>
+
+      <!-- ============ LIFELINES + FRAME (drawn first) ============ -->
+      <line x1="160" y1="128" x2="160" y2="700" stroke="rgba(217,240,234,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+      <line x1="400" y1="128" x2="400" y2="700" stroke="rgba(217,240,234,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+      <line x1="640" y1="128" x2="640" y2="700" stroke="rgba(217,240,234,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+      <line x1="880" y1="128" x2="880" y2="700" stroke="rgba(217,240,234,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+      <line x1="1080" y1="128" x2="1080" y2="700" stroke="rgba(217,240,234,0.20)" stroke-width="1" stroke-dasharray="3,3"/>
+
+      <!-- activation bar: the store holds control for the whole rotation -->
+      <rect x="396" y="152" width="8" height="296" fill="rgba(217,240,234,0.06)" stroke="#7fa39c" stroke-width="0.8"/>
+
+      <!-- OPT frame: a crash between COMMIT and promote -->
+      <rect x="600" y="480" width="512" height="128" rx="4" fill="rgba(217,240,234,0.02)" stroke="rgba(217,240,234,0.22)" stroke-width="1"/>
+      <rect x="600" y="480" width="40" height="16" rx="2" fill="#04080a" stroke="rgba(217,240,234,0.22)" stroke-width="1"/>
+      <text x="620" y="492" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.12em">OPT</text>
+      <text x="652" y="493" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" letter-spacing="0.04em">[the process died after COMMIT and before promote — reconciled at the next open]</text>
+
+      <!-- ============ MESSAGES (before actor boxes) ============ -->
+      <!-- 1 operator -> store -->
+      <line x1="160" y1="152" x2="392" y2="152" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- 2 store -> vault: candidate -->
+      <line x1="404" y1="184" x2="640" y2="184" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- 3 store -> manifest: stage .next -->
+      <line x1="404" y1="216" x2="880" y2="216" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- 4 store -> db: BEGIN -->
+      <line x1="404" y1="248" x2="1080" y2="248" stroke="#35e0c2" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <!-- 5 store self: reseal every artifact -->
+      <path d="M 404,280 H 440 V 300 H 412" fill="none" stroke="#35e0c2" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <!-- 6 store -> db: re-tag policy rows -->
+      <line x1="404" y1="328" x2="1080" y2="328" stroke="#35e0c2" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <!-- 7 store -> db: re-key the chain, rotate/ record, flip keycheck -->
+      <line x1="404" y1="360" x2="1080" y2="360" stroke="#35e0c2" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <!-- 8 store -> db: COMMIT -->
+      <line x1="404" y1="392" x2="1080" y2="392" stroke="#35e0c2" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <!-- 9 store -> manifest: promote -->
+      <line x1="404" y1="424" x2="880" y2="424" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- 10 store -> operator: report (return, dashed) -->
+      <line x1="396" y1="448" x2="160" y2="448" stroke="#7fa39c" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+      <!-- 11 db -> vault: at the next open, the committed keycheck -->
+      <line x1="1080" y1="528" x2="640" y2="528" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- 12 vault -> manifest: promote or discard, or report when read-only -->
+      <line x1="640" y1="576" x2="880" y2="576" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- ============ MESSAGE LABELS (mask + gap above the stroke) ============ -->
+      <rect x="208" y="132" width="136" height="12" rx="2" fill="#04080a"/>
+      <text x="276" y="141" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">rotate · operator only</text>
+
+      <rect x="428" y="164" width="188" height="12" rx="2" fill="#04080a"/>
+      <text x="522" y="173" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">rotation_candidate: fresh salt, 4 subkeys</text>
+
+      <rect x="520" y="196" width="244" height="12" rx="2" fill="#04080a"/>
+      <text x="642" y="205" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">stage vault.json.next · fsync + directory sync</text>
+
+      <rect x="640" y="228" width="200" height="12" rx="2" fill="#04080a"/>
+      <text x="740" y="237" fill="#35e0c2" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">BEGIN — one transaction for all of it</text>
+
+      <rect x="452" y="284" width="308" height="12" rx="2" fill="#04080a"/>
+      <text x="606" y="293" fill="#35e0c2" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">reseal every artifact: content · emb · tok · pq · fde · kg words · kg secret</text>
+
+      <rect x="616" y="308" width="248" height="12" rx="2" fill="#04080a"/>
+      <text x="740" y="317" fill="#35e0c2" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">re-tag wing_trust and retention_policy rows</text>
+
+      <rect x="576" y="340" width="328" height="12" rx="2" fill="#04080a"/>
+      <text x="740" y="349" fill="#35e0c2" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">re-key the chain over PRESERVED tags · rotate/ record · flip keycheck</text>
+
+      <rect x="700" y="372" width="80" height="12" rx="2" fill="#04080a"/>
+      <text x="740" y="381" fill="#35e0c2" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">COMMIT</text>
+
+      <rect x="544" y="404" width="196" height="12" rx="2" fill="#04080a"/>
+      <text x="642" y="413" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">promote vault.json.next over vault.json</text>
+
+      <rect x="196" y="428" width="164" height="12" rx="2" fill="#04080a"/>
+      <text x="278" y="437" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">RotationReport, chain-recorded</text>
+
+      <rect x="740" y="508" width="240" height="12" rx="2" fill="#04080a"/>
+      <text x="860" y="517" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">rotation_verdict(db keycheck) — decided, not done</text>
+
+      <rect x="628" y="556" width="264" height="12" rx="2" fill="#04080a"/>
+      <text x="760" y="565" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">matches ⇒ promote · else discard · read-only ⇒ REPORT</text>
+
+      <!-- ============ ACTORS ============ -->
+      <rect x="80" y="64" width="160" height="64" rx="6" fill="#04080a"/>
+      <rect x="80" y="64" width="160" height="64" rx="6" fill="rgba(127,163,156,0.10)" stroke="#5c7f79" stroke-width="1"/>
+      <rect x="88" y="70" width="52" height="12" rx="2" fill="transparent" stroke="rgba(92,127,121,0.40)" stroke-width="0.8"/>
+      <text x="114" y="79" fill="rgba(92,127,121,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">OPERATOR</text>
+      <text x="160" y="100" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Operator</text>
+      <text x="160" y="116" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">CLI or POST …/rotate</text>
+
+      <rect x="320" y="64" width="160" height="64" rx="6" fill="#04080a"/>
+      <rect x="320" y="64" width="160" height="64" rx="6" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1.2"/>
+      <rect x="328" y="70" width="36" height="12" rx="2" fill="transparent" stroke="rgba(53,224,194,0.50)" stroke-width="0.8"/>
+      <text x="346" y="79" fill="#35e0c2" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">STORE</text>
+      <text x="400" y="100" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Store</text>
+      <text x="400" y="116" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">rotate_keys(next)</text>
+
+      <rect x="560" y="64" width="160" height="64" rx="6" fill="#04080a"/>
+      <rect x="560" y="64" width="160" height="64" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <rect x="568" y="70" width="36" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
+      <text x="586" y="79" fill="rgba(217,240,234,0.80)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">VAULT</text>
+      <text x="640" y="100" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Vault</text>
+      <text x="640" y="116" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">old keys + the candidate</text>
+
+      <rect x="800" y="64" width="160" height="64" rx="6" fill="#04080a"/>
+      <rect x="800" y="64" width="160" height="64" rx="6" fill="rgba(217,240,234,0.05)" stroke="#7fa39c" stroke-width="1"/>
+      <rect x="808" y="70" width="52" height="12" rx="2" fill="transparent" stroke="rgba(127,163,156,0.40)" stroke-width="0.8"/>
+      <text x="834" y="79" fill="rgba(127,163,156,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">MANIFEST</text>
+      <text x="880" y="100" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">vault.json</text>
+      <text x="880" y="116" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">and its staged .next</text>
+
+      <rect x="1000" y="64" width="160" height="64" rx="6" fill="#04080a"/>
+      <rect x="1000" y="64" width="160" height="64" rx="6" fill="rgba(217,240,234,0.05)" stroke="#7fa39c" stroke-width="1"/>
+      <rect x="1008" y="70" width="28" height="12" rx="2" fill="transparent" stroke="rgba(127,163,156,0.40)" stroke-width="0.8"/>
+      <text x="1022" y="79" fill="rgba(127,163,156,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">DB</text>
+      <text x="1080" y="100" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">palace.db</text>
+      <text x="1080" y="116" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">rows · meta.keycheck · audit</text>
+
+      <!-- ============ CALLOUT ============ -->
+      <line x1="84" y1="628" x2="84" y2="692" stroke="rgba(217,240,234,0.18)" stroke-width="1.2"/>
+      <text x="108" y="642" fill="#5c7f79" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" letter-spacing="0.14em">THE CONTRACT, GATED</text>
+      <text x="108" y="666" fill="#d9f0ea" font-size="15" font-style="italic" font-family="Georgia, 'Times New Roman', serif">Nothing a reference is held to may move: drawer and fact ids, blind columns, content fingerprints, every audit record id.</text>
+      <text x="108" y="688" fill="#d9f0ea" font-size="15" font-style="italic" font-family="Georgia, 'Times New Roman', serif">Everything keyed must: tags, receipts, sealed bytes — so a rotation that changed nothing cannot pass for one that did.</text>
+
+      <!-- ============ LEGEND ============ -->
+      <line x1="80" y1="744" x2="1160" y2="744" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
+      <text x="80" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" letter-spacing="0.14em">LEGEND</text>
+
+      <rect x="172" y="756" width="16" height="10" rx="2" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1"/>
+      <text x="196" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">FOCAL</text>
+
+      <rect x="252" y="756" width="16" height="10" rx="2" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <text x="276" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">ACTOR</text>
+
+      <rect x="332" y="756" width="16" height="10" rx="2" fill="rgba(217,240,234,0.05)" stroke="#7fa39c" stroke-width="1"/>
+      <text x="356" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">ON DISK</text>
+
+      <line x1="436" y1="761" x2="468" y2="761" stroke="#35e0c2" stroke-width="1.2"/>
+      <text x="476" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">INSIDE THE ONE TRANSACTION</text>
+
+      <line x1="660" y1="761" x2="692" y2="761" stroke="#7fa39c" stroke-width="1.2"/>
+      <text x="700" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">CALL</text>
+
+      <line x1="748" y1="761" x2="780" y2="761" stroke="#7fa39c" stroke-width="1.2" stroke-dasharray="5,4"/>
+      <text x="788" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">RETURN</text>
+
+      <rect x="852" y="756" width="16" height="10" rx="2" fill="rgba(217,240,234,0.02)" stroke="rgba(217,240,234,0.22)" stroke-width="1"/>
+      <text x="876" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">OPT FRAGMENT · THE CRASH CASE</text>
+    </svg>
+  </div>
+</body>
+</html>

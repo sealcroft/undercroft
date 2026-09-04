@@ -1,6 +1,7 @@
 flowchart TB
     master["Master key<br/><i>file or Argon2id passphrase</i>"]
-    master -- "HKDF(vault A)" --> ka["vault A keys<br/>enc · mac · fingerprint"]
-    master -- "HKDF(vault B)" --> kb["vault B keys<br/>enc · mac · fingerprint"]
-    ka --> doms["AAD domains (vault A)<br/><br/>content — drawer text<br/>{id}/emb — embeddings<br/>{id}/tok — token matrices<br/>fde/{id}/tok — FDE rows<br/>{rec}/pq — PQ index artifacts"]
+    master -- "HKDF-SHA256(vault A salt, label)" --> ka["vault A subkeys<br/>enc · mac · manifest · sample<br/><i>fingerprints = truncated HMAC under mac</i>"]
+    master -- "HKDF-SHA256(vault B salt, label)" --> kb["vault B subkeys<br/>enc · mac · manifest · sample"]
+    ka --> doms["AAD domains (vault A)<br/><br/>{id} — drawer content<br/>{id}/emb — embeddings<br/>{id}/tok — token matrices<br/>fde/{id}/tok — FDE rows<br/>pqrow/…/pq — PQ index artifacts<br/>kg/{id} — graph words"]
+    ka --> kgs["kg blind secret<br/><i>32 random bytes sealed in meta —<br/>STORED, re-sealed on rotation,<br/>never re-derived: ids must not move</i>"]
     kb -. "vault B ciphertext under<br/>vault A keys ⇒ fails to open" .-> ka

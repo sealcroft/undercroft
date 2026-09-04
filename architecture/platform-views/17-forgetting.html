@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Undercroft — Provable Forgetting</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:  #04080a;
+      --color-raise:  #071014;
+      --color-ink:    #d9f0ea;
+      --color-muted:  #7fa39c;
+      --color-accent: #35e0c2;
+      --font-sans:  -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --font-serif: Georgia, "Times New Roman", serif;
+      --font-mono:  ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1200px; width: 100%; }
+    .eyebrow {
+      font-family: var(--font-mono); font-size: 0.66rem; font-weight: 500;
+      letter-spacing: 0.18em; text-transform: uppercase;
+      color: var(--color-muted); margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400; letter-spacing: -0.02em; line-height: 1.15;
+      color: var(--color-ink); margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 900px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">State machine · 17 of 22 · Undercroft</p>
+    <h1>Forgetting with proof, and the two verdicts a proof can earn</h1>
+
+    <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="forgetting-title forgetting-desc">
+      <title id="forgetting-title">Undercroft attested forgetting and verification</title>
+      <desc id="forgetting-desc">An operator's forget destroys each named drawer and its derived artifacts and chains a tombstone in the same transaction, then issues a signed attestation carrying the chain heads, the tombstone interval and unkeyed content fingerprints; verify-forgetting first checks the signature and that the document describes this vault, then either replays the keyed chain and answers Verified, or — when a key rotation since has destroyed the key that made the tombstones — finds the attested records as a contiguous run in the preserved audit trail with the drawers gone and answers Recorded with the rotation count, a reduced claim rather than a failure; anything else fails with the integrity exit code. A third party checks only the Ed25519 signature and needs no vault key.</desc>
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7fa39c"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#35e0c2"/></marker>
+        <marker id="arrow-danger" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ff5d73"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#04080a"/>
+
+      <!-- ============ ZONES (drawn first) ============ -->
+      <rect x="816" y="232" width="304" height="440" rx="8" fill="rgba(217,240,234,0.02)" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
+      <rect x="908" y="236" width="120" height="12" rx="2" fill="#04080a"/>
+      <text x="968" y="245" fill="rgba(217,240,234,0.40)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.14em">VERIFY-FORGETTING</text>
+
+      <!-- ============ TRANSITIONS (before boxes) ============ -->
+      <!-- start -> forget -->
+      <circle cx="64" cy="144" r="6" fill="#d9f0ea"/>
+      <line x1="70" y1="144" x2="96" y2="144" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- forget -> attestation (shared y) -->
+      <line x1="368" y1="144" x2="464" y2="144" stroke="#35e0c2" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <!-- attestation -> verify-forgetting (shared y) -->
+      <line x1="736" y1="144" x2="832" y2="144" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- attestation -> third party -->
+      <path d="M 528,192 V 380 Q 528,388 520,388 H 240 Q 232,388 232,396 V 416" fill="none" stroke="#7fa39c" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+      <!-- verify-forgetting -> the document checks (shared x) -->
+      <line x1="968" y1="192" x2="968" y2="256" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- checks -> Verified: the keyed replay -->
+      <path d="M 832,300 H 608 Q 600,300 600,308 V 416" fill="none" stroke="#35e0c2" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <!-- checks -> Recorded (shared x) -->
+      <line x1="968" y1="344" x2="968" y2="416" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- checks -> FAILED, down the outer channel into the right edge -->
+      <path d="M 1104,300 H 1120 Q 1128,300 1128,308 V 608 Q 1128,616 1120,616 H 1104" fill="none" stroke="#ff5d73" stroke-width="1.2" marker-end="url(#arrow-danger)"/>
+
+      <!-- ============ TRANSITION LABELS (mask + gap) ============ -->
+      <rect x="384" y="124" width="64" height="12" rx="2" fill="#04080a"/>
+      <text x="416" y="133" fill="#35e0c2" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">ISSUES</text>
+
+      <rect x="752" y="124" width="64" height="12" rx="2" fill="#04080a"/>
+      <text x="784" y="133" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">LATER</text>
+
+      <rect x="536" y="240" width="96" height="12" rx="2" fill="#04080a"/>
+      <text x="584" y="249" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">THE DOCUMENT</text>
+
+      <rect x="976" y="216" width="104" height="12" rx="2" fill="#04080a"/>
+      <text x="1028" y="225" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">FIRST, ALWAYS</text>
+
+      <rect x="664" y="280" width="112" height="12" rx="2" fill="#04080a"/>
+      <text x="720" y="289" fill="#35e0c2" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">NO ROTATION SINCE</text>
+
+      <rect x="976" y="372" width="96" height="12" rx="2" fill="#04080a"/>
+      <text x="1024" y="381" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">ROTATED SINCE</text>
+
+      <rect x="1032" y="532" width="88" height="12" rx="2" fill="#04080a"/>
+      <text x="1076" y="541" fill="#ff5d73" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">ELSE · EXIT 2</text>
+
+      <!-- ============ STATES ============ -->
+      <!-- forget -->
+      <rect x="96" y="96" width="272" height="96" rx="6" fill="#04080a"/>
+      <rect x="96" y="96" width="272" height="96" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <rect x="104" y="102" width="60" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
+      <text x="134" y="111" fill="rgba(217,240,234,0.80)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">OPERATOR</text>
+      <text x="232" y="134" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">forget --prove</text>
+      <text x="232" y="152" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">drawer + derived artifacts destroyed,</text>
+      <text x="232" y="166" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">del/{id} tombstone chained, one transaction</text>
+      <text x="232" y="180" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">never over MCP · quarantine evidence refused</text>
+
+      <!-- attestation (FOCAL) -->
+      <rect x="464" y="96" width="272" height="96" rx="6" fill="#04080a"/>
+      <rect x="464" y="96" width="272" height="96" rx="6" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1.2"/>
+      <rect x="472" y="102" width="52" height="12" rx="2" fill="transparent" stroke="rgba(53,224,194,0.50)" stroke-width="0.8"/>
+      <text x="498" y="111" fill="#35e0c2" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">RECEIPT</text>
+      <text x="600" y="134" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Attestation issued</text>
+      <text x="600" y="152" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">heads before + after · tombstone interval</text>
+      <text x="600" y="166" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">unkeyed content fps · Ed25519 signature</text>
+      <text x="600" y="180" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">mirror note: was a remote delete issued, or not</text>
+
+      <!-- verify-forgetting -->
+      <rect x="832" y="96" width="272" height="96" rx="6" fill="#04080a"/>
+      <rect x="832" y="96" width="272" height="96" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <rect x="840" y="102" width="36" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
+      <text x="858" y="111" fill="rgba(217,240,234,0.80)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">READ</text>
+      <text x="968" y="134" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">verify-forgetting</text>
+      <text x="968" y="152" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">CLI · POST …/verify-forgetting · OPS_ROUTES</text>
+      <text x="968" y="166" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">POST only because the document travels in a body</text>
+      <text x="968" y="180" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">a read: allowed on a read-only server</text>
+
+      <!-- the document checks -->
+      <rect x="832" y="256" width="272" height="88" rx="6" fill="#04080a"/>
+      <rect x="832" y="256" width="272" height="88" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <rect x="840" y="262" width="48" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
+      <text x="864" y="271" fill="rgba(217,240,234,0.80)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">CHECKS</text>
+      <text x="968" y="294" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Signature, then this vault</text>
+      <text x="968" y="312" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">signed by the operator's key? names this vault?</text>
+      <text x="968" y="326" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">a foreign document is 409, class integrity</text>
+
+      <!-- Verified (FOCAL) -->
+      <rect x="464" y="416" width="272" height="88" rx="6" fill="#04080a"/>
+      <rect x="464" y="416" width="272" height="88" rx="6" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1.2"/>
+      <rect x="472" y="422" width="60" height="12" rx="2" fill="transparent" stroke="rgba(53,224,194,0.50)" stroke-width="0.8"/>
+      <text x="502" y="431" fill="#35e0c2" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">VERDICT 1</text>
+      <text x="600" y="454" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Verified</text>
+      <text x="600" y="472" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">the keyed replay ran: heads chain through</text>
+      <text x="600" y="486" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">the tombstones, every tag verifies, drawers gone</text>
+
+      <!-- Recorded -->
+      <rect x="832" y="416" width="272" height="88" rx="6" fill="#04080a"/>
+      <rect x="832" y="416" width="272" height="88" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <rect x="840" y="422" width="60" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
+      <text x="870" y="431" fill="rgba(217,240,234,0.80)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">VERDICT 2</text>
+      <text x="968" y="454" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Recorded { rotations_since }</text>
+      <text x="968" y="472" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">the key is gone; the preserved trail holds exactly</text>
+      <text x="968" y="486" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">these tombstones, contiguous, drawers gone · exit 0</text>
+
+      <!-- FAILED -->
+      <rect x="832" y="576" width="272" height="80" rx="6" fill="#04080a"/>
+      <rect x="832" y="576" width="272" height="80" rx="6" fill="rgba(255,93,115,0.10)" stroke="#ff5d73" stroke-width="1"/>
+      <rect x="840" y="582" width="60" height="12" rx="2" fill="transparent" stroke="rgba(255,93,115,0.45)" stroke-width="0.8"/>
+      <text x="870" y="591" fill="#ff5d73" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">INTEGRITY</text>
+      <text x="968" y="614" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Attestation FAILED</text>
+      <text x="968" y="632" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">heads do not chain · a tombstone missing</text>
+      <text x="968" y="646" fill="#ff5d73" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">a record that is not a tombstone · a drawer still present</text>
+
+      <!-- third party -->
+      <rect x="96" y="416" width="272" height="88" rx="6" fill="#04080a"/>
+      <rect x="96" y="416" width="272" height="88" rx="6" fill="rgba(217,240,234,0.03)" stroke="rgba(217,240,234,0.30)" stroke-width="1"/>
+      <rect x="104" y="422" width="60" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.30)" stroke-width="0.8"/>
+      <text x="134" y="431" fill="rgba(217,240,234,0.70)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">EXTERNAL</text>
+      <text x="232" y="454" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">A third party</text>
+      <text x="232" y="472" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">checks the Ed25519 signature over the document</text>
+      <text x="232" y="486" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">no vault key needed; the fps are unkeyed on purpose</text>
+
+      <!-- ============ CALLOUT ============ -->
+      <line x1="100" y1="560" x2="100" y2="648" stroke="rgba(217,240,234,0.18)" stroke-width="1.2"/>
+      <text x="124" y="574" fill="#5c7f79" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" letter-spacing="0.14em">WHY THERE ARE TWO VERDICTS</text>
+      <text x="124" y="598" fill="#d9f0ea" font-size="15" font-style="italic" font-family="Georgia, 'Times New Roman', serif">The keyed replay has a shorter lifetime than the document it checks: a rotation destroys the key that</text>
+      <text x="124" y="620" fill="#d9f0ea" font-size="15" font-style="italic" font-family="Georgia, 'Times New Roman', serif">made the tombstones. Reading that as forged alarmed on every rotated vault; reading it as Verified would</text>
+      <text x="124" y="642" fill="#d9f0ea" font-size="15" font-style="italic" font-family="Georgia, 'Times New Roman', serif">over-claim. Recorded is the third state, and the enum is must_use so nobody can quietly collapse the two.</text>
+
+      <!-- ============ LEGEND ============ -->
+      <line x1="96" y1="744" x2="1120" y2="744" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
+      <text x="96" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" letter-spacing="0.14em">LEGEND</text>
+
+      <rect x="188" y="756" width="16" height="10" rx="2" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1"/>
+      <text x="212" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">FOCAL</text>
+
+      <rect x="268" y="756" width="16" height="10" rx="2" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <text x="292" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">STATE</text>
+
+      <rect x="348" y="756" width="16" height="10" rx="2" fill="rgba(255,93,115,0.10)" stroke="#ff5d73" stroke-width="1"/>
+      <text x="372" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">INTEGRITY VERDICT</text>
+
+      <rect x="508" y="756" width="16" height="10" rx="2" fill="rgba(217,240,234,0.03)" stroke="rgba(217,240,234,0.30)" stroke-width="1"/>
+      <text x="532" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">OUTSIDE THE ENGINE</text>
+
+      <line x1="684" y1="761" x2="716" y2="761" stroke="#7fa39c" stroke-width="1.2"/>
+      <text x="724" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">TRANSITION</text>
+
+      <line x1="812" y1="761" x2="844" y2="761" stroke="#7fa39c" stroke-width="1.2" stroke-dasharray="5,4"/>
+      <text x="852" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">THE DOCUMENT TRAVELS</text>
+    </svg>
+  </div>
+</body>
+</html>

@@ -15,7 +15,7 @@ docker run --rm -v "$PWD/docs/diagrams:/data" --entrypoint sh minlag/mermaid-cli
 
 | Diagram | Lives in |
 |---|---|
-| [architecture-components](architecture-components.svg) — 11-crate dependency graph, orchestrator's HTTP-only boundary | [architecture.md](../architecture.md) |
+| [architecture-components](architecture-components.svg) — 13-crate dependency graph, the shared transport and config crates, orchestrator's HTTP-only boundary | [architecture.md](../architecture.md) |
 | [architecture-key-hierarchy](architecture-key-hierarchy.svg) — master key → HKDF per vault → AAD domains | [architecture.md](../architecture.md) |
 | [architecture-write-path](architecture-write-path.svg) — seal → HMAC → single-tx chain advance → manifest anchor | [architecture.md](../architecture.md) |
 | [architecture-search-pipeline](architecture-search-pipeline.svg) — candidates → verify → fusion → rescore | [architecture.md](../architecture.md) |

@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 812" width="900" height="812" role="img" aria-labelledby="t d">
 <title id="t">Key derivation and the AAD that binds every ciphertext</title>
-<desc id="d">One master key derives a separate encryption key and MAC key per vault via HKDF. Every sealed blob binds the vault id and the record id into its AAD, so a ciphertext moved between vaults or between rows fails to decrypt. Rotation re-seals every artifact and re-keys the chain in one transaction; export bundles use a hybrid X25519 + ML-KEM-768 exchange to a recipient key.</desc>
+<desc id="d">One master key derives four subkeys per vault via HKDF — encryption, MAC, manifest MAC and the training-sample draw — while the knowledge graph's blind-index secret is stored sealed and re-sealed on rotation rather than derived, so fact identifiers never move. Every sealed blob binds the vault id and the record id into its AAD, so a ciphertext moved between vaults or between rows fails to decrypt. Rotation re-seals every artifact and re-keys the chain in one transaction; export bundles use a hybrid X25519 + ML-KEM-768 exchange to a recipient key.</desc>
 <style>
   .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
   .h { font-size: 17px; font-weight: 600; }
@@ -42,8 +42,8 @@
 
 <rect x="286" y="110" width="326" height="72" rx="7" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.5"/>
 <text x="300" y="130" class="f b" fill="var(--d-blue-ink,#33527d)">HKDF(master, salt = vault_salt, info)</text>
-<text x="300" y="150" class="f mono dim">undercroft.v1/vault/&lt;id&gt;/enc</text>
-<text x="300" y="167" class="f mono dim">undercroft.v1/vault/&lt;id&gt;/mac</text>
+<text x="300" y="150" class="f mono dim">undercroft.v1/vault/&lt;id&gt;/enc · /mac</text>
+<text x="300" y="167" class="f mono dim">undercroft.v1/vault/&lt;id&gt;/manifest · /sample</text>
 
 <path d="M616 146 L656 146" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 
@@ -55,10 +55,11 @@
 <text x="674" y="172" class="f mono" fill="var(--d-green-ink,#22603c)">mac_key</text>
 <text x="740" y="172" class="f s dim">HMAC-SHA256 + chain</text>
 
-<text x="42" y="204" class="f s dim">The two keys are independent outputs of the same derivation, so an integrity tag can never be forged from a decryption key and the two roles stay separate.</text>
-<text x="42" y="224" class="f s dim">Both live in a zeroize-on-drop wrapper, are never <tspan class="f mono">Debug</tspan>-printed, and the key file is fsynced at creation — a key that is not durable is a vault that</text>
-<text x="42" y="239" class="f s dim">cannot be opened again after a power loss.</text>
-<text x="42" y="256" class="f s dim">A vault carries a <tspan class="f mono">keycheck</tspan> marker, so a wrong passphrase is refused up front rather than surfacing later as a wall of decryption failures.</text>
+<text x="42" y="200" class="f s dim">Four subkeys, independent outputs of one derivation: <tspan class="f mono">enc</tspan> seals, <tspan class="f mono">mac</tspan> tags records and the chain (and keys the dedup fingerprints),</text>
+<text x="42" y="214" class="f s dim"><tspan class="f mono">manifest</tspan> MACs the rollback anchor, <tspan class="f mono">sample</tspan> draws the training rows — so a tag can never be forged from a decryption key.</text>
+<text x="42" y="228" class="f s dim">All live in a zeroize-on-drop wrapper, are never <tspan class="f mono">Debug</tspan>-printed, and the key file is fsynced at creation; a <tspan class="f mono">keycheck</tspan> marker refuses a wrong</text>
+<text x="42" y="242" class="f s dim">passphrase up front rather than as a wall of decryption failures.</text>
+<text x="42" y="256" class="f s dim">The graph's blind-index secret is NOT derived: 32 random bytes sealed in meta, re-sealed by rotation, never regenerated — or every fact id would move.</text>
 
 <rect x="24" y="280" width="852" height="176" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
 <text x="42" y="306" class="f l ink">What every sealed blob authenticates alongside itself</text>
@@ -66,14 +67,16 @@
 
 <rect x="42" y="338" width="404" height="100" rx="7" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="1.4"/>
 <text x="58" y="358" class="f b" fill="var(--d-teal-ink,#0d6b62)">AAD = vault id + record id + domain</text>
-<text x="58" y="379" class="f mono dim">&lt;drawer id&gt;</text>
-<text x="180" y="379" class="f s dim">content</text>
-<text x="58" y="396" class="f mono dim">&lt;drawer id&gt;/emb</text>
-<text x="180" y="396" class="f s dim">embedding</text>
-<text x="58" y="413" class="f mono dim">&lt;drawer id&gt;/tok</text>
-<text x="180" y="413" class="f s dim">ColBERT token matrix</text>
-<text x="58" y="430" class="f mono dim">&lt;drawer id&gt;/pq</text>
-<text x="180" y="430" class="f s dim">PQ codes, codebook, pages</text>
+<text x="58" y="375" class="f mono dim">&lt;drawer id&gt;</text>
+<text x="200" y="375" class="f s dim">content</text>
+<text x="58" y="390" class="f mono dim">&lt;drawer id&gt;/emb</text>
+<text x="200" y="390" class="f s dim">embedding</text>
+<text x="58" y="405" class="f mono dim">&lt;drawer id&gt;/tok</text>
+<text x="200" y="405" class="f s dim">ColBERT token matrix</text>
+<text x="58" y="420" class="f mono dim">fde/&lt;drawer id&gt;/tok</text>
+<text x="200" y="420" class="f s dim">FDE row</text>
+<text x="58" y="435" class="f mono dim">pqrow/…/pq · pq/…</text>
+<text x="200" y="435" class="f s dim">PQ rows, pages, codebooks — index ids, not drawer ids</text>
 
 <rect x="458" y="338" width="400" height="100" rx="7" fill="var(--d-red-bg,#fdf2f1)" stroke="var(--d-red,#b5453a)" stroke-width="1.4"/>
 <text x="474" y="358" class="f b" fill="var(--d-red-ink,#993a30)">so all of these FAIL, not merely return nothing</text>

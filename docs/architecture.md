@@ -27,8 +27,9 @@ flowchart TB
         vault["undercroft-vault<br/><i>HKDF keys, AEAD sealing,<br/>HMAC tags, audit chain</i>"]
         store["undercroft-store<br/><i>per-vault SQLite, hybrid search,<br/>PQ/IVF, ColBERT stage, FDE index, KG</i>"]
         index["undercroft-index<br/><i>remote vector backends<br/>(untrusted accelerators)</i>"]
-        llm["undercroft-llm<br/><i>local LLM runtimes<br/>(refine → KG)</i>"]
+        llm["undercroft-llm<br/><i>local LLM runtimes<br/>(refine → KG, served embedder)</i>"]
         net["undercroft-net<br/><i>outbound transport policy:<br/>TLS or loopback, no override</i>"]
+        config["undercroft-config<br/><i>declaration resolvers the engine<br/>and the control plane share</i>"]
         obs["undercroft-obs<br/><i>observability shim<br/>(no-op by default)</i>"]
         cli["undercroft-cli<br/><b>undercroft</b> binary<br/><i>CLI + MCP + HTTP /v1</i>"]
     end
@@ -36,7 +37,7 @@ flowchart TB
         onnx["undercroft-embed-onnx<br/><i>tract: embedder, reranker, ColBERT</i>"]
         ort["undercroft-embed-ort<br/><i>ONNX Runtime: same trio, faster</i>"]
     end
-    bench["undercroft-bench<br/><i>LongMemEval / LoCoMo /<br/>fde-synth harnesses</i>"]
+    bench["undercroft-bench<br/><i>LongMemEval / LoCoMo / synthetic<br/>scale + screen instruments</i>"]
     orch["undercroft-orchestrator<br/><b>undercroft-orchestrator</b> binary<br/><i>multi-tenant control plane</i>"]
 
     vault --> core
@@ -44,16 +45,26 @@ flowchart TB
     store --> core
     store --> vault
     store --> index
+    store --> net
+    store --> config
     store --> obs
+    index --> net
+    llm --> core
+    llm --> net
+    llm --> obs
+    obs -. "feature telemetry<br/>(OTLP hop)" .-> net
     cli --> core
     cli --> vault
     cli --> store
     cli --> index
     cli --> llm
     cli --> obs
-    cli -. "feature onnx" .-> onnx
+    cli -. "features onnx / ort" .-> onnx
+    cli -. "features onnx / ort" .-> ort
     onnx --> core
+    onnx --> obs
     ort --> core
+    ort --> obs
     bench --> core
     bench --> vault
     bench --> store
@@ -61,7 +72,10 @@ flowchart TB
     bench --> llm
     bench -. "features onnx / ort" .-> onnx
     bench -. "features onnx / ort" .-> ort
-    orch -. "HTTP /v1 only —<br/>no crate dependency" .-> cli
+    orch --> obs
+    orch --> net
+    orch --> config
+    orch -. "HTTP /v1 only —<br/>never linked BY the engine" .-> cli
 ```
 
 | Crate | Responsibility |
@@ -90,9 +104,10 @@ decrypting wrongly.
 ```mermaid
 flowchart TB
     master["Master key<br/><i>file or Argon2id passphrase</i>"]
-    master -- "HKDF(vault A)" --> ka["vault A keys<br/>enc · mac · fingerprint"]
-    master -- "HKDF(vault B)" --> kb["vault B keys<br/>enc · mac · fingerprint"]
-    ka --> doms["AAD domains (vault A)<br/><br/>content — drawer text<br/>{id}/emb — embeddings<br/>{id}/tok — token matrices<br/>fde/{id}/tok — FDE rows<br/>{rec}/pq — PQ index artifacts"]
+    master -- "HKDF-SHA256(vault A salt, label)" --> ka["vault A subkeys<br/>enc · mac · manifest · sample<br/><i>fingerprints = truncated HMAC under mac</i>"]
+    master -- "HKDF-SHA256(vault B salt, label)" --> kb["vault B subkeys<br/>enc · mac · manifest · sample"]
+    ka --> doms["AAD domains (vault A)<br/><br/>{id} — drawer content<br/>{id}/emb — embeddings<br/>{id}/tok — token matrices<br/>fde/{id}/tok — FDE rows<br/>pqrow/…/pq — PQ index artifacts<br/>kg/{id} — graph words"]
+    ka --> kgs["kg blind secret<br/><i>32 random bytes sealed in meta —<br/>STORED, re-sealed on rotation,<br/>never re-derived: ids must not move</i>"]
     kb -. "vault B ciphertext under<br/>vault A keys ⇒ fails to open" .-> ka
 ```
 
@@ -116,15 +131,17 @@ sequenceDiagram
     participant DB as SQLite (one transaction)
     C->>S: save(content, wing, room)
     S->>S: normalize (verbatim-preserving) → chunk → deterministic id
-    S->>S: embed (hash / onnx / external vector)
-    S->>V: seal content + embedding (sealed vaults — AAD binds vault id + label)
-    S->>V: HMAC tag over id ␟ meta ␟ content
-    S->>DB: BEGIN
+    S->>S: embed (hash / onnx / ort / http / external vector)
+    S->>S: validate the declaration, then Screen (admission tier 1 + rate)
+    Note over S: a flagged write is DIVERTED into the reserved review wing<br/>and re-enters this path with Bypass(AlreadyDiverted) — never dropped
+    S->>V: seal content + embedding (sealed vaults — AAD binds vault id + record id)
+    S->>V: HMAC tag over id ␟ meta_at_rest ␟ sealed content
+    S->>DB: BEGIN IMMEDIATE
     DB->>DB: drawer row (sealed blobs + tag)
     DB->>DB: audit row + chain_append → chain_meta head advances
     DB->>DB: COMMIT  — data and chain move together or not at all
     S->>V: anchor manifest (lagging rollback anchor, post-commit)
-    Note over S: derived artifacts, advisory, from plaintext in hand:<br/>token matrix (ColBERT) → FDE → PQ code row
+    Note over S: derived artifacts, advisory, from plaintext in hand:<br/>PQ code row → token matrix (ColBERT) → FDE → FTS entry (hmac-only)
 ```
 
 Crash between COMMIT and the manifest anchor? The next open replays the
@@ -141,19 +158,21 @@ is returned**.
 
 ```mermaid
 flowchart LR
-    q["query"] --> cand{{"candidate stage"}}
+    q["query"] --> scope["scope resolution<br/><i>wing · room · kind · trust floor ·<br/>quarantine fence → seq filter,<br/>BEFORE any candidate is drawn</i>"]
+    scope --> cand{{"candidate stage"}}
     cand -- "UNDERCROFT_RETRIEVAL=fde" --> fde["FDE dot product<br/><i>token-aware, PQ-coded cache</i>"]
-    cand -- "=pq" --> pq["PQ / IVF ADC scan<br/><i>bounded RAM</i>"]
-    cand -- "=hnsw" --> hnsw["in-memory HNSW<br/><i>experimental</i>"]
-    cand -- "default" --> fts["FTS5 BM25 prefilter<br/><i>hmac-only, large corpora</i><br/>or full cosine scan"]
+    cand -- "=pq" --> pq["PQ / IVF ADC scan<br/><i>bounded RAM, per-wing tier</i>"]
+    cand -- "=hnsw (feature)" --> hnsw["in-memory HNSW<br/><i>experimental</i>"]
+    cand -- "default" --> fts["FTS5 BM25 prefilter<br/><i>hmac-only, ≥2k drawers</i><br/>or full cosine scan"]
     fde --> hyd
     pq --> hyd
     hnsw --> hyd
     fts --> hyd
     hyd["hydrate candidates<br/>+ <b>HMAC verify each</b><br/>+ decrypt (sealed)"] --> fuse["fusion score<br/><i>cosine + BM25 + recency</i>"]
-    fuse --> second{{"second stage"}}
-    second -- "UNDERCROFT_RERANKER=onnx" --> ce["cross-encoder rerank<br/><i>top-N forwards</i>"]
-    second -- "=colbert" --> ms["MaxSim rescore<br/><i>stored token matrices,<br/>PQ-LUT, one query forward</i>"]
+    fuse --> gate["relevance gate<br/><i>lexical exact / morph channels,<br/>or cosine above the embedder's<br/>measured admission floor</i>"]
+    gate --> second{{"second stage"}}
+    second -- "UNDERCROFT_RERANKER=onnx | ort" --> ce["cross-encoder rerank<br/><i>top-N forwards</i>"]
+    second -- "=colbert | colbert-ort" --> ms["MaxSim rescore<br/><i>stored token matrices,<br/>PQ-LUT, one query forward</i>"]
     second -- "unset" --> out
     ce --> out["verbatim hits"]
     ms --> out

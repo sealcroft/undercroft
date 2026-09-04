@@ -1,7 +1,7 @@
 flowchart LR
     subgraph write["write (sealed vault)"]
-        c["content"] --> z["zstd compress"] --> e["XChaCha20-Poly1305<br/><i>AAD: vault id + record id</i>"]
-        c --> h["HMAC-SHA256 tag<br/><i>id ␟ meta ␟ content</i>"]
+        c["content"] --> z["zstd compress<br/><i>own frame, no shared dictionary</i>"] --> e["XChaCha20-Poly1305<br/><i>AAD: vault id + record id</i>"]
+        e --> h["HMAC-SHA256 tag<br/><i>id ␟ meta_at_rest ␟ sealed bytes</i>"]
         e --> row["SQLite row"]
         h --> row
         row --> chain["audit row + chain head<br/><i>same transaction</i>"]
