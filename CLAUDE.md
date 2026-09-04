@@ -2961,7 +2961,10 @@ loaded at every unit (definition of done, items 5 and 6). **When the context
 window reaches roughly 90%, STOP TAKING NEW UNITS and spend what is left
 updating every governance surface**
 — and **MEASURE that 90%, never estimate it: `bash
-tests/context-check.sh`**. This rule was stated for weeks with no way to
+tests/context-check.sh`** — **and pass it the session id from the
+system prompt's transcript path** (ROADMAP O104: with no argument it guessed
+at the project AND the session, measured a different project, and reported 8%
+for a session that was 84% full). This rule was stated for weeks with no way to
 evaluate it, so it was applied by feel and applied WRONG, repeatedly and in
 one direction: on 2026-08-18 the agent announced it was near the budget at a
 measured **54%**, having assumed a 200,000-token window when the real one is

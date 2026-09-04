@@ -46,11 +46,35 @@ SLUG="$(printf '%s' "$ROOT" | sed -E 's#[:/\\]#-#g')"
 PROJ="${CLAUDE_PROJECT_DIR:-$HOME/.claude/projects/$SLUG}"
 WINDOW="${CONTEXT_WINDOW:-1000000}"
 
-# Fall back to a search rather than failing on an unexpected slug: the mapping
-# is a client-side convention, not a contract we own.
-if [ ! -d "$PROJ" ] && [ -d "$HOME/.claude/projects" ]; then
-  ALT=$(ls -td "$HOME"/.claude/projects/*/ 2>/dev/null | head -1)
-  [ -n "$ALT" ] && PROJ="${ALT%/}"
+# **THIS FALLBACK USED TO PICK ANOTHER PROJECT, AND THAT IS ROADMAP O104.**
+# It read "fall back to a search rather than failing on an unexpected slug",
+# and the search was `ls -td ~/.claude/projects/*/ | head -1` — the most
+# recently touched project on the machine, whichever repo that is. Observed
+# 2026-09-04: this script measured a DIFFERENT PROJECT's session, reported
+# 921,350 tokens remaining and the verdict PLENTY, while the live session was
+# at 836k/1M. Two unsound guesses in series — wrong project, then wrong
+# session inside it — each of which answers confidently.
+#
+# `CLAUDE_PROJECT_DIR` is part of the same confusion: the harness sets it to
+# the REPO root, not to the transcripts directory, so honouring it here points
+# at a directory that holds no `.jsonl` at all.
+#
+# A tool whose whole purpose is to stop people estimating must not estimate.
+# It refuses now, and says what to pass.
+# An explicit transcript path or session id wins over any of this — it is
+# the one input that cannot be a guess.
+if [ $# -lt 1 ] && [ ! -d "$PROJ" ]; then
+  echo "CONTEXT CHECK REFUSED — no transcript directory for THIS project:"
+  echo "  $PROJ"
+  echo ""
+  echo "It used to fall back to the most recently touched project on the"
+  echo "machine and measure THAT — which is how it reported 8% for a session"
+  echo "that was 84% full (ROADMAP O104). Guessing at which project, or which"
+  echo "session, is what made the number wrong; refusing is the honest answer."
+  echo ""
+  echo "Pass the transcript explicitly — the path is in the system prompt:"
+  echo "  bash tests/context-check.sh <path-to-session.jsonl>"
+  exit 1
 fi
 
 # Calibration record, so the assumption can be re-checked rather than trusted:
@@ -59,13 +83,93 @@ fi
 # window. If a future session's percentage disagrees with what the client
 # shows, RE-CALIBRATE here; do not adjust the arithmetic above.
 
+# **SELF-TEST: the two refusals must FIRE, and an explicit path must still
+# work (ROADMAP O104).** Run as `bash tests/context-check.sh --self-test`.
+#
+# It exists because this tool answered confidently from the wrong project and
+# the wrong session, and the only thing that caught it was a human reading the
+# real number off the UI. A checker whose failure mode is a plausible number
+# needs a check of its own.
+if [ "${1:-}" = "--self-test" ]; then
+  ST_FAIL=0
+  ST_TMP=$(mktemp -d)
+  # 1. A project directory that does not exist must REFUSE, not wander off to
+  #    another project. This is the defect verbatim.
+  if OUT=$(PROJ_OVERRIDE=1 HOME="$ST_TMP" bash "$0" 2>&1); then
+    echo "FAIL  a missing transcript directory did not refuse — it answered:"
+    printf '%s
+' "$OUT" | head -3 | sed 's/^/        /'
+    ST_FAIL=1
+  else
+    case "$OUT" in
+      *REFUSED*|*FAILED*) echo "ok    a missing transcript directory refuses rather than guessing" ;;
+      *) echo "FAIL  it failed for some other reason: $OUT"; ST_FAIL=1 ;;
+    esac
+  fi
+  # 2. PREMISE, the other direction: given a real transcript it must still
+  #    MEASURE. A tool that refuses everything reports what a healthy one does.
+  ST_REAL=$(ls -t "$HOME"/.claude/projects/*/*.jsonl 2>/dev/null | head -1)
+  if [ -n "$ST_REAL" ]; then
+    if OUT=$(bash "$0" "$ST_REAL" 2>&1) && printf '%s' "$OUT" | grep -q "remaining"; then
+      echo "ok    ...and an explicit transcript is still measured"
+    else
+      echo "FAIL  an explicit transcript was not measured — the refusals are total"
+      ST_FAIL=1
+    fi
+  else
+    echo "FAIL  premise: no transcript anywhere to prove the happy path"
+    ST_FAIL=1
+  fi
+  rm -rf "$ST_TMP"
+  [ "$ST_FAIL" -eq 0 ] && echo "context-check self-test: ok" || echo "context-check self-test: FAILED"
+  exit "$ST_FAIL"
+fi
+
 if [ $# -ge 1 ] && [ -f "$1" ]; then
   F="$1"
 elif [ $# -ge 1 ]; then
   F="$PROJ/$1.jsonl"
 else
-  # Newest transcript in the project = the live session.
-  F=$(ls -t "$PROJ"/*.jsonl 2>/dev/null | head -1)
+  # **"Newest transcript = the live session" IS A GUESS, AND IT WAS WRONG
+  # (ROADMAP O104).** More than one Claude session can touch one project —
+  # a second window, a resumed session, a subagent — and `ls -t` then picks
+  # whichever was written most recently, which is not necessarily this one.
+  #
+  # Observed 2026-09-04: this script reported 921,350 tokens remaining and
+  # the verdict PLENTY while the live session was at 836k/1M — 84% full. It
+  # had selected another session's transcript. The arithmetic was right; the
+  # FILE was wrong.
+  #
+  # That failure direction is the dangerous one. `CLAUDE.md` mandates this
+  # script because estimating by feel went wrong before, and it went wrong
+  # toward stopping too EARLY. Under-reporting tells a session to keep taking
+  # units when it is nearly full, which is how work gets half-landed — the
+  # one thing the session-end rule exists to prevent.
+  #
+  # So: prefer an explicit id, and when guessing, REFUSE if the guess is
+  # ambiguous rather than answer confidently. A wrong number here is worse
+  # than no number, which is this file's own oldest rule.
+  if [ -n "${CLAUDE_SESSION_ID:-}" ] && [ -f "$PROJ/$CLAUDE_SESSION_ID.jsonl" ]; then
+    F="$PROJ/$CLAUDE_SESSION_ID.jsonl"
+  else
+    F=$(ls -t "$PROJ"/*.jsonl 2>/dev/null | head -1)
+    # Anything else touched in the last 5 minutes makes the pick a coin flip.
+    RIVALS=$(find "$PROJ" -name '*.jsonl' -newermt '-5 minutes' 2>/dev/null | wc -l)
+    if [ "${RIVALS:-0}" -gt 1 ]; then
+      echo "CONTEXT CHECK REFUSED — $RIVALS transcripts were written in the last"
+      echo "5 minutes, so 'the newest file' does not identify this session:"
+      find "$PROJ" -name '*.jsonl' -newermt '-5 minutes' 2>/dev/null | sed 's|^|  |'
+      echo ""
+      echo "Pass the session id explicitly — it is in the system prompt's"
+      echo "transcript path — or set CLAUDE_SESSION_ID:"
+      echo "  bash tests/context-check.sh <session-id>"
+      echo ""
+      echo "Guessing here reported 8% on a session that was 84% full"
+      echo "(ROADMAP O104), and under-reporting is the direction that gets"
+      echo "work half-landed."
+      exit 1
+    fi
+  fi
 fi
 
 if [ -z "${F:-}" ] || [ ! -f "$F" ]; then

@@ -1116,7 +1116,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**132** of the **147** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**134** of the **149** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -6832,25 +6832,7 @@ is the field that exists because a migration has to ask for it. Both are fixed.
 These are not releasable work. Kept out of the version sections deliberately,
 so a release plan is not padded with things a release cannot contain.
 
-**FILED 2026-09-03 (O101): that first sentence is false about most of this
-section's contents, and cutting `1.2.1` is what surfaced it.** The `O` series
-has accumulated here since round four, and the overwhelming majority of it is
-CLOSED, releasable ENGINE work — O1, O3, O4, O8-O45 and on. The convention is
-real and is applied: `1.1.1` holds O54-O61 physically, O46 leaves a *"MOVED
-to"* stub behind, and `1.2.1` took O87-O92 and O98 out of here today. It has
-simply never been applied to the backlog, so a section whose header says *"not
-releasable work"* is where nearly all the releasable work sits.
-
-Two things follow, both left as decisions rather than acted on inside a
-release. **The open round-six items still here — O93, O94, O95, O96, O97, O99,
-O100 — are releasable work with no target release, which is exactly what the
-`Open` section above is for**; they are here because the round-six filing
-followed the `O`-series habit rather than the section headers. And the ~50
-closed ones need either a migration into their release sections or an honest
-rewrite of this header. Migrating is mechanical and verifiable (extract by
-heading, assert the heading multiset is unchanged — which is how today's seven
-moved), but it is a ~4,000-line diff that belongs in its own unit, not in a
-release PR.
+**O101 below records that this header is false about most of what follows.**
 
 **This paragraph used to say "two are clicks in a web UI … and one is a naming
 decision", and it described the section as it was, not as it is** (corrected
@@ -6863,6 +6845,111 @@ which is the same defect as a count in prose one level up. So: O6 is the click,
 O7 is the naming decision that needs a MAJOR, and O23 sits here as a filed cost
 with the argument for leaving it. Releasable work with no target release now
 has its own section above.
+
+### O104 — CLOSED 2026-09-04: `context-check.sh` measured another PROJECT's session and reported 8% for a session that was 84% full
+
+**Found 2026-09-04 by the maintainer, who was looking at the real number while
+this script reported a different one.**
+
+`CLAUDE.md` mandates this script by name, and the reason is on the record: the
+context budget was applied by feel for weeks and applied WRONG, always toward
+stopping too early. **This failed in the opposite direction**, which is the
+worse one — it told a session at 84% to take another unit, and under-reporting
+is how work gets half-landed, the one thing the session-end rule exists to
+prevent.
+
+**Two unsound guesses in series, each answering confidently:**
+
+* **Wrong project.** `if [ ! -d "$PROJ" ]` fell back to
+  `ls -td ~/.claude/projects/*/ | head -1` — the most recently touched project
+  on the MACHINE, whichever repo that is. It measured
+  `C--Users-alaaa-Documents-lmstudio-conf-proj`. The comment called this
+  *"fall back to a search rather than failing on an unexpected slug"*.
+  `CLAUDE_PROJECT_DIR` compounds it: the harness sets that to the REPO root,
+  not to the transcripts directory, so honouring it points at a directory
+  holding no `.jsonl` at all.
+* **Wrong session.** Within a project, `ls -t | head -1` assumes *"newest
+  transcript = the live session"*. More than one session can touch one project
+  — a second window, a resume, a subagent — and the guess then picks whichever
+  was flushed last.
+
+The ARITHMETIC was never wrong. Reading the live transcript's last usage record
+gives **841,584**, against the operator's UI reading of 836.2k — the method is
+sound and the FILE was not.
+
+**Fixed.** Both fallbacks are refusals now, naming what to pass; an explicit
+transcript path or session id wins over every heuristic, and `CLAUDE_SESSION_ID`
+is honoured when set. Ambiguity inside a project (more than one transcript
+written in the last five minutes) refuses rather than picking.
+
+**A tool whose whole purpose is to stop people estimating must not itself
+estimate** — and where it cannot know, it must say so. This file's oldest rule,
+applied to the file that enforces it.
+
+**Gate: `bash tests/context-check.sh --self-test`**, and the ROADMAP heading
+preflight is what demanded it — this entry was first written CLOSED with no
+gate named, and the gate refused the closure, saying *"a closure with nothing
+behind it — the direction a session writing closures gets wrong"*. It was
+right: the fix had been verified by running it, and "I ran it" is not a gate.
+
+Two arms. A missing transcript directory must REFUSE rather than wander to
+another project — the defect verbatim. And the other direction, which is the
+one that matters here: given a real transcript it must still MEASURE, because
+a tool that refuses everything reports exactly what a healthy one does, and
+that is how this class of check gets neutered while looking stricter.
+
+**Counterfactual, measured on the live session**: the bare form reported
+`921,350 remaining · PLENTY`, the same tree given the session id explicitly
+reported `149,923 remaining · APPROACHING the 90% stop-line`, and the
+operator's own UI read 836.2k/1M. Two answers about one session, ~10x apart.
+
+**Residual, stated.** With no argument and no `CLAUDE_SESSION_ID`, a single-
+session project still resolves by mtime, which is right in the common case and
+is a guess in principle. The honest fix is for the caller to pass the id from
+the system prompt, and the doctrine now says so.
+
+---
+
+### O101 — this section's header says "not releasable work" and most of it is
+
+**Filed 2026-09-03 while cutting `1.2.1`, which is what surfaced it. Promoted
+from prose to an entry 2026-09-04**, because it was written inside the section
+header and therefore invisible to every count and to the heading-status gate —
+a filed item nothing could see, which is the shape it is itself about.
+
+The `O` series has accumulated in `## Unversioned` since round four, and the
+overwhelming majority of it is finished, releasable ENGINE work. The header says
+*"These are not releasable work"*.
+
+**The convention is real and IS applied, just never to the backlog.** `1.1.1`
+holds O54–O61 physically, O46 leaves a *"MOVED to"* stub behind, `1.2.1` took
+O87–O92 and O98 out, and `1.3.0` took O93/O94/O97/O103. Each release moves its
+own; nobody has moved the rest.
+
+**Two decisions, and they are the maintainer's:**
+
+* **The open items still here** — O95, O99, O100 — are releasable work with no
+  target release, which is exactly what the `Open — releasable work` section
+  above is for. They are here because the round-six filing followed the
+  `O`-series habit rather than the section headers. Moving them is small.
+* **The ~50 finished ones** need either a migration into their release sections
+  or an honest rewrite of this header. Both are defensible; what is not
+  defensible is the header continuing to describe a section it does not match.
+
+**Fix shape.** Migration is mechanical and verifiable the way three releases
+have already proved: extract by heading, reassemble under the target section,
+then assert the `###` heading multiset is unchanged AND that every entry hashes
+byte-identical before and after — which is how `1.2.1`'s seven and `1.3.0`'s
+four moved, both times turning a ~4,000-line diff into a measured claim. The
+alternative is one sentence in the header. **It is a ~4,000-line diff either
+way and belongs in its own unit, never folded into a release PR.**
+
+**Gate.** Whichever way it goes, the header and the contents must agree — and
+that is checkable: no entry whose body reports itself finished may sit under a
+section whose header claims the section holds no releasable work. A preflight
+could assert it; today nothing does, which is why the drift ran for months.
+
+---
 
 ### O99 — the misplaced-doc-block class is NOT closed: twelve further instances, and one is affirmatively false
 
