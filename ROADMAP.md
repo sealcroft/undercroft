@@ -7016,7 +7016,7 @@ scope and assert no record.
 
 ---
 
-### O96 — one `UNDERCROFT_INDEX_CA` declaration still gets two answers, because O82c left the `if tls` guard around it
+### O96 — CLOSED 2026-09-04: one `UNDERCROFT_INDEX_CA` declaration got two answers, because O82c left the `if tls` guard around it
 
 **Round six, config dimension. Verified.**
 
@@ -7051,6 +7051,34 @@ guard.
 that can see this asserts the resolver is called on every construction path —
 or, more cheaply, a test that a whitespace-only `UNDERCROFT_INDEX_CA` refuses
 for **each of the five backends**, which is the observable the defect moves.
+
+---
+
+**CLOSED 2026-09-04.** The resolution is hoisted above the branch and
+discarded on the `NoTls` arm — the ordering `agent_from_env` already uses,
+transport refusal first (it is the one an operator cannot fix by editing a
+file), then the pin unconditionally. **A declared pin that does not parse is a
+refusal on every path, not only the paths that would have used it.**
+
+Gated the cheaper way the entry names, which is also the better one here: the
+observable is one hop answering differently from four, so the check runs **per
+backend** and a single-backend check is structurally unable to see it. The
+pgvector arm is deliberately pointed at a NON-TLS loopback DSN, because that is
+the arm the guard skipped; on `sslmode=require` it always refused. A sixth arm
+pins the other direction — an UNDECLARED pin is not a refusal — without which a
+resolver that refused everything would pass.
+
+**The counterfactual fires on pgvector ALONE, and that is the correct shape
+rather than a partial pass.** Restoring the guard leaves the four HTTP backends
+green, because they were never wrong; they are the control that makes the
+pgvector line attributable. Read under the round-six rule, a green in a
+counterfactual is a test measuring a different claim — here, four of them
+measuring `agent_from_env`, which this defect never touched.
+
+Fourth instance of *one declaration, two answers*, after the `undercroft-llm`
+case `parity.rs` records verbatim and O82c itself. The pattern is now: when a
+policy read sits inside a conditional, ask what the OTHER arm does with the
+declaration — not whether the read is correct.
 
 ---
 

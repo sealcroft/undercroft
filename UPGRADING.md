@@ -65,6 +65,38 @@ so rather than implying it checked them.
 
 ---
 
+## 1.3.1 (unreleased)
+
+### a garbage `UNDERCROFT_INDEX_CA` now refuses on pgvector too
+
+**Who is affected:** a deployment using the **pgvector** index backend with a
+declared `UNDERCROFT_INDEX_CA` that is empty, whitespace-only, or a file
+holding no certificate, AND a DSN without `sslmode=require`. Nobody else: the
+other four backends already refused such a value, a pgvector deployment with a
+TLS DSN already refused it, and a valid pin is unaffected everywhere.
+
+The CA read sat inside `if dsn_demands_tls(dsn)` (ROADMAP O96), so on a
+loopback or non-TLS DSN the declaration was never resolved and the process
+started as though nothing had been declared. It is resolved unconditionally
+now, matching `agent_from_env` — the constructor the four HTTP backends use.
+
+**Symptom if it bites you:** `undercroft index status pgvector` (and any
+push) refuses with *"a declared trust root … pins nothing"* where it
+previously started. The declaration was already being ignored; nothing that
+was protected stops being protected.
+
+**Fix:** point `UNDERCROFT_INDEX_CA` at a PEM that holds a certificate, or
+unset it. Unsetting is a real choice, not a workaround: with no declaration
+the public roots apply, which is what an ignored value was silently doing.
+
+**Detectable before you restart** — this one *is* a declaration, so:
+
+```bash
+undercroft config check
+```
+
+already called that value fatal. This release makes the run agree with it.
+
 ## 1.3.0 (released 2026-09-04)
 
 ### a vault with an edited or deleted trust/retention row now FAILS verify

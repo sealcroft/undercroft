@@ -694,20 +694,33 @@ pub mod pgvector {
                     "UNDERCROFT_PGVECTOR_DSN", CA_VAR
                 )));
             }
+            // **Resolved UNCONDITIONALLY, above the branch, which is the
+            // whole of ROADMAP O96.** O82c moved this read into the policy
+            // crate and left it inside `if dsn_demands_tls(dsn)`, so one
+            // `UNDERCROFT_INDEX_CA` got TWO answers: the four HTTP backends
+            // reach `agent_from_env`, which calls `pin_from_env`
+            // unconditionally after its transport check, and refuse a
+            // whitespace-only value — while pgvector on a loopback or
+            // non-TLS DSN started silently with the declaration ignored.
+            // `undercroft config check` validates that variable, so a
+            // pre-flight called it FATAL while the run ignored it, which is
+            // the one property both config-check modules exist to provide.
+            //
+            // Not a new class: `parity.rs` records it verbatim for
+            // `undercroft-llm` — *"applied a declared pin only `if tls`, so a
+            // loopback-http base never validated the CA file while the shared
+            // path did"*. O82c fixed the mechanism and kept the guard.
+            //
+            // The ORDER is `agent_from_env`'s, deliberately: the transport
+            // refusal above comes first because it is the one an operator
+            // cannot fix by editing a file, and the resolution is discarded
+            // on the `NoTls` arm rather than skipped — a declared pin that
+            // does not parse is a refusal on every path, not only the paths
+            // that would have used it.
+            let declared_ca = undercroft_net::rustls_config_from_env("the remote index", CA_VAR)
+                .map_err(|e| IndexError::Transport(e.to_string()))?;
             let client = if dsn_demands_tls(dsn) {
-                // Through the shared resolver, NOT a bare `env::var` here
-                // (ROADMAP O82c). This hop cannot use `agent_from_env` — it
-                // speaks postgres, not HTTP — but it must not therefore
-                // answer the SAME declaration differently from the four
-                // backends that do: `declared_pin` trims and REFUSES a
-                // whitespace-only value, and the resolution is cached per
-                // process. Reading it here re-read the PEM on every
-                // construction, and `index/status` is reachable per request,
-                // so the restart-to-rotate property `pin_from_env` documents
-                // did not hold for the one backend where it mattered most.
-                let cfg = undercroft_net::rustls_config_from_env("the remote index", CA_VAR)
-                    .map_err(|e| IndexError::Transport(e.to_string()))?;
-                let tls = tokio_postgres_rustls::MakeRustlsConnect::new((*cfg).clone());
+                let tls = tokio_postgres_rustls::MakeRustlsConnect::new((*declared_ca).clone());
                 Client::connect(dsn, tls).map_err(|e| IndexError::Pg(e.to_string()))?
             } else {
                 Client::connect(dsn, NoTls).map_err(|e| IndexError::Pg(e.to_string()))?

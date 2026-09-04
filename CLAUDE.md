@@ -1685,7 +1685,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
 docker compose run --rm e2e           # e2e UI/UX suite against the release binary (454 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (127 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (53 checks)
-docker compose run --rm backends-e2e  # five live vector DBs over TLS (76 checks; weaviate
+docker compose run --rm backends-e2e  # five live vector DBs over TLS (82 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
                                       # answers HTTP before its Raft leader exists)
 bash tests/tls-pins.sh                # CA pins readable + the stack starts (13 checks).

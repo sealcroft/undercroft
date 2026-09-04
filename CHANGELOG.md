@@ -1,5 +1,44 @@
 # Changelog
 
+## Unreleased — 1.3.1
+
+PATCH: a fix whose only observable change is that a defect is gone. A
+whitespace-only `UNDERCROFT_INDEX_CA` was never documented as valid — the four
+HTTP backends already refused it, and `undercroft config check` already called
+it fatal — so honouring it on the fifth is the code keeping a contract rather
+than changing one.
+
+### one `UNDERCROFT_INDEX_CA` declaration gets one answer, on all five backends (O96)
+
+**ROADMAP O96 CLOSED.** O82c moved pgvector's CA read into the policy crate and
+left the call inside `if dsn_demands_tls(dsn)`, so one declaration got two
+answers:
+
+| `UNDERCROFT_INDEX_CA="   "` | before | now |
+|---|---|---|
+| qdrant / chroma / milvus / weaviate | refuses | refuses |
+| pgvector, loopback or non-TLS DSN | **starts silently, declaration ignored** | refuses |
+
+The four HTTP backends reach `agent_from_env`, which resolves the pin
+**unconditionally** after its transport check. pgvector cannot use that
+constructor — it speaks postgres, not HTTP — and the guard around its
+equivalent is what made the two disagree. `undercroft config check` validates
+that variable, so the pre-flight called a value fatal while the run ignored it:
+a pre-flight disagreeing with the run about one `(Protects, Checked)`
+declaration is the single property both config-check modules exist to provide.
+
+The resolution is hoisted above the branch and discarded on the `NoTls` arm —
+`agent_from_env`'s ordering. **A declared pin that does not parse is a refusal
+on every path, not only the paths that would have used it.**
+
+Gated per backend, because the observable is one hop answering differently from
+four and a single-backend check cannot see that. The pgvector arm uses a
+non-TLS loopback DSN, which is the arm the guard skipped; a sixth arm pins that
+an *undeclared* pin is still not a refusal.
+
+Fourth instance of *one declaration, two answers*, after the `undercroft-llm`
+case `parity.rs` records verbatim and O82c itself.
+
 ## 1.3.0 — 2026-09-04
 
 MINOR: new capability, backward compatible. It adds a field beside ones that

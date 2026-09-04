@@ -196,6 +196,41 @@ check "hmac-only push when told"   0 "PLAINTEXT record(s)" -- "$BIN" index push 
 : > /tmp/empty-ca.pem
 check "empty CA pin refuses" 1 "pins nothing" -- env UNDERCROFT_INDEX_CA=/tmp/empty-ca.pem   "$BIN" index status qdrant
 
+# **ROADMAP O96: ONE declaration, and every backend must answer it the same
+# way.** The check above ran on qdrant alone, and the defect was pgvector
+# answering differently: O82c moved its CA read into the policy crate but
+# left the call inside `if dsn_demands_tls(dsn)`, so on a loopback or
+# non-TLS DSN the declaration was ignored and the process started clean —
+# while the four HTTP backends refused, and `undercroft config check` called
+# the same value FATAL. A pre-flight disagreeing with the run about one
+# `(Protects, Checked)` declaration is the one property both config-check
+# modules exist to provide.
+#
+# A WHITESPACE-ONLY value rather than an empty file, because that is what
+# `declared_pin` trims and refuses — the shape a `$(cat …)` or a YAML block
+# scalar actually produces. Driven per backend: the class is one hop
+# answering differently from the others, so a single-backend check is
+# structurally unable to see it.
+#
+# pgvector is deliberately pointed at a NON-TLS loopback DSN here: that is
+# the arm the guard skipped. On a `sslmode=require` DSN it always refused.
+for be in qdrant chroma milvus weaviate; do
+  check "[$be] a whitespace CA declaration refuses" 1 "pins nothing" -- env \
+    UNDERCROFT_INDEX_CA="   " "$BIN" index status "$be"
+done
+check "[pgvector] a whitespace CA declaration refuses, even without TLS" 1 "pins nothing" -- env \
+  UNDERCROFT_INDEX_CA="   " \
+  UNDERCROFT_PGVECTOR_DSN="host=127.0.0.1 dbname=undercroft user=undercroft password=undercroft" \
+  "$BIN" index status pgvector
+# The other direction: with no declaration at all, that same DSN gets PAST
+# the pin resolution — so the refusal above is the pin, not the DSN.
+NOCA_OUT="$(env -u UNDERCROFT_INDEX_CA UNDERCROFT_PGVECTOR_DSN="host=127.0.0.1 dbname=undercroft user=undercroft password=undercroft" "$BIN" index status pgvector 2>&1 || true)"
+if grep -qF "pins nothing" <<<"$NOCA_OUT"; then
+  echo "FAIL  an UNDECLARED pin was reported as pinning nothing"; FAIL=$((FAIL+1))
+else
+  echo "ok    ...and an undeclared pin is not a refusal"; PASS=$((PASS+1))
+fi
+
 echo "== Misconfiguration UX =="
 unset UNDERCROFT_QDRANT_URL
 check "unconfigured backend errors" 1 "UNDERCROFT_QDRANT_URL" -- "$BIN" search "x" --backend qdrant
