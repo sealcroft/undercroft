@@ -18,7 +18,7 @@ flowchart LR
     end
     subgraph ingest["Background ingestion"]
         mine["mine / sweep<br/><i>transcript backfill</i>"]
-        daemon["daemon --watch<br/><i>systemd unit</i>"]
+        daemon["daemon run --watch<br/><i>systemd unit</i>"]
     end
     cc --> mcp["MCP stdio<br/><i>serve-mcp, 38 tools</i>"]
     cur --> mcp
@@ -29,8 +29,8 @@ flowchart LR
     http --> store
     mine --> store
     daemon --> store
-    store -. "sealed content only,<br/>re-verified locally" .-> remote["remote vector indexes<br/><i>Qdrant / Chroma / pgvector /<br/>Milvus / Weaviate — untrusted<br/>accelerators</i>"]
-    llmx["local LLM<br/><i>Ollama / OpenAI-compatible</i>"] -. "refine → KG<br/>(opt-in, local)" .-> store
+    store -. "index push: sealed content only,<br/>re-verified locally, chain-audited<br/>as an egress" .-> remote["remote vector indexes<br/><i>Qdrant / Chroma / pgvector /<br/>Milvus / Weaviate — untrusted<br/>accelerators</i>"]
+    store -. "refine: drawer plaintext out,<br/>screened facts back, chain-audited<br/>as an egress (dry run too)" .-> llmx["local LLM<br/><i>Ollama / OpenAI-compatible,<br/>TLS or loopback only</i>"]
 ```
 
 ## Claude Code

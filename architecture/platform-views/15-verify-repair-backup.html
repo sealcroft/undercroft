@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Undercroft — Verify, Repair, Backup</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:  #04080a;
+      --color-raise:  #071014;
+      --color-ink:    #d9f0ea;
+      --color-muted:  #7fa39c;
+      --color-accent: #35e0c2;
+      --font-sans:  -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --font-serif: Georgia, "Times New Roman", serif;
+      --font-mono:  ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1200px; width: 100%; }
+    .eyebrow {
+      font-family: var(--font-mono); font-size: 0.66rem; font-weight: 500;
+      letter-spacing: 0.18em; text-transform: uppercase;
+      color: var(--color-muted); margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400; letter-spacing: -0.02em; line-height: 1.15;
+      color: var(--color-ink); margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 900px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Flowchart · 15 of 22 · Undercroft</p>
+    <h1>One verdict gates the archive, and what repair may and may not touch</h1>
+
+    <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="verify-repair-backup-title verify-repair-backup-desc">
+      <title id="verify-repair-backup-title">Undercroft verify, repair and backup flow</title>
+      <desc id="verify-repair-backup-desc">verify reads every record and returns one verdict assembled from seven legs; when it passes, backup create copies the vault directory and keeps the last ten copies, and when any leg fails the command exits with the integrity code, the HTTP route answers 409, backup refuses to archive, and the operator runs repair, which backfills fingerprints, re-embeds every drawer, drops the quantized indexes, records itself on the chain, vacuums and re-verifies without ever rewriting content — a vault that still fails is restored verbatim from a known-good backup rather than patched in place.</desc>
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7fa39c"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#35e0c2"/></marker>
+        <marker id="arrow-danger" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ff5d73"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#04080a"/>
+
+      <!-- ============ ZONES (drawn first) ============ -->
+      <rect x="96" y="32" width="336" height="352" rx="8" fill="rgba(217,240,234,0.02)" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
+      <rect x="208" y="36" width="112" height="12" rx="2" fill="#04080a"/>
+      <text x="264" y="45" fill="rgba(217,240,234,0.40)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.14em">THE SEVEN LEGS</text>
+
+      <!-- ============ ARROWS (before boxes) ============ -->
+      <!-- verify -> decision (shared x) -->
+      <line x1="600" y1="120" x2="600" y2="168" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- decision YES -> backup create (shared y) -->
+      <line x1="696" y1="200" x2="800" y2="200" stroke="#35e0c2" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <!-- decision NO -> refused (shared x) -->
+      <line x1="600" y1="232" x2="600" y2="312" stroke="#ff5d73" stroke-width="1.2" marker-end="url(#arrow-danger)"/>
+      <!-- refused -> repair (shared x) -->
+      <line x1="600" y1="392" x2="600" y2="440" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- repair -> re-verify (shared x) -->
+      <line x1="600" y1="544" x2="600" y2="592" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- re-verify -> restore (shared y) -->
+      <line x1="720" y1="624" x2="800" y2="624" stroke="#ff5d73" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow-danger)"/>
+      <!-- backup create -> restore (shared x): the copies restore reads -->
+      <line x1="920" y1="256" x2="920" y2="584" stroke="#7fa39c" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
+
+      <!-- ============ ARROW LABELS (mask + gap) ============ -->
+      <rect x="608" y="132" width="88" height="12" rx="2" fill="#04080a"/>
+      <text x="652" y="141" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">ONE VERDICT</text>
+
+      <rect x="724" y="180" width="48" height="12" rx="2" fill="#04080a"/>
+      <text x="748" y="189" fill="#35e0c2" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">YES</text>
+
+      <rect x="608" y="260" width="120" height="12" rx="2" fill="#04080a"/>
+      <text x="668" y="269" fill="#ff5d73" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">NO · ANY LEG FAILED</text>
+
+      <rect x="608" y="404" width="104" height="12" rx="2" fill="#04080a"/>
+      <text x="660" y="413" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">OPERATOR RUNS</text>
+
+      <rect x="608" y="556" width="80" height="12" rx="2" fill="#04080a"/>
+      <text x="648" y="565" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">RE-VERIFY</text>
+
+      <rect x="724" y="604" width="72" height="12" rx="2" fill="#04080a"/>
+      <text x="760" y="613" fill="#ff5d73" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">STILL BAD</text>
+
+      <rect x="928" y="404" width="112" height="12" rx="2" fill="#04080a"/>
+      <text x="984" y="413" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">KNOWN-GOOD COPY</text>
+
+      <!-- ============ LEG CHIPS ============ -->
+      <rect x="112" y="60" width="304" height="36" rx="4" fill="#04080a"/>
+      <rect x="112" y="60" width="304" height="36" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>
+      <text x="124" y="75" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">01 · record HMACs</text>
+      <text x="124" y="88" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">every row's tag recomputed over its stored bytes</text>
+
+      <rect x="112" y="104" width="304" height="36" rx="4" fill="#04080a"/>
+      <rect x="112" y="104" width="304" height="36" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>
+      <text x="124" y="119" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">02 · chain replay</text>
+      <text x="124" y="132" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">every tag rehashed; the head must equal chain_meta</text>
+
+      <rect x="112" y="148" width="304" height="36" rx="4" fill="#04080a"/>
+      <rect x="112" y="148" width="304" height="36" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>
+      <text x="124" y="163" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">03 · supersession receipts</text>
+      <text x="124" y="176" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">keyed over the superseded content's fingerprint</text>
+
+      <rect x="112" y="192" width="304" height="36" rx="4" fill="#04080a"/>
+      <rect x="112" y="192" width="304" height="36" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>
+      <text x="124" y="207" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">04 · knowledge-graph fact receipts</text>
+      <text x="124" y="220" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">a forged citation fails here, not one call away</text>
+
+      <rect x="112" y="236" width="304" height="36" rx="4" fill="#04080a"/>
+      <rect x="112" y="236" width="304" height="36" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>
+      <text x="124" y="251" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">05 · orphan graph labels</text>
+      <text x="124" y="264" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">record_id is outside the hash — a relabel onto nothing</text>
+
+      <rect x="112" y="280" width="304" height="36" rx="4" fill="#04080a"/>
+      <rect x="112" y="280" width="304" height="36" rx="4" fill="rgba(255,93,115,0.10)" stroke="#ff5d73" stroke-width="1"/>
+      <text x="124" y="295" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">06 · mirror drift</text>
+      <text x="124" y="308" fill="#ff5d73" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">clear wing/room/kind/supersedes vs the covered copy</text>
+
+      <rect x="112" y="324" width="304" height="36" rx="4" fill="#04080a"/>
+      <rect x="112" y="324" width="304" height="36" rx="4" fill="rgba(255,93,115,0.10)" stroke="#ff5d73" stroke-width="1"/>
+      <text x="124" y="339" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">07 · policy drift</text>
+      <text x="124" y="352" fill="#ff5d73" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">wing_trust + retention rows re-tagged, matched to the chain</text>
+
+      <!-- ============ NODES ============ -->
+      <!-- verify (start) -->
+      <rect x="480" y="48" width="240" height="72" rx="20" fill="#04080a"/>
+      <rect x="480" y="48" width="240" height="72" rx="20" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <text x="600" y="80" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">verify</text>
+      <text x="600" y="98" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">&amp;self · reads; tightens no anchor</text>
+
+      <!-- decision -->
+      <polygon points="600,168 696,200 600,232 504,200" fill="#04080a"/>
+      <polygon points="600,168 696,200 600,232 504,200" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <text x="600" y="197" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">ok()?</text>
+      <text x="600" y="212" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">all seven empty</text>
+
+      <!-- backup create -->
+      <rect x="800" y="168" width="240" height="88" rx="6" fill="#04080a"/>
+      <rect x="800" y="168" width="240" height="88" rx="6" fill="rgba(217,240,234,0.05)" stroke="#7fa39c" stroke-width="1"/>
+      <rect x="808" y="174" width="48" height="12" rx="2" fill="transparent" stroke="rgba(127,163,156,0.40)" stroke-width="0.8"/>
+      <text x="832" y="183" fill="rgba(127,163,156,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">ARCHIVE</text>
+      <text x="920" y="208" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">backup create</text>
+      <text x="920" y="226" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">copy_dir of the vault · keeps the last 10</text>
+      <text x="920" y="240" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">not signed — export is the sealed bundle</text>
+
+      <!-- refused -->
+      <rect x="480" y="312" width="240" height="80" rx="6" fill="#04080a"/>
+      <rect x="480" y="312" width="240" height="80" rx="6" fill="rgba(255,93,115,0.10)" stroke="#ff5d73" stroke-width="1"/>
+      <rect x="488" y="318" width="60" height="12" rx="2" fill="transparent" stroke="rgba(255,93,115,0.45)" stroke-width="0.8"/>
+      <text x="518" y="327" fill="#ff5d73" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">INTEGRITY</text>
+      <text x="600" y="352" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Verdict: FAILED</text>
+      <text x="600" y="370" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">exit 2 · 409 class integrity · VERIFY FAILED</text>
+      <text x="600" y="384" fill="#ff5d73" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">backup create refuses to archive it</text>
+
+      <!-- repair (FOCAL) -->
+      <rect x="480" y="440" width="240" height="104" rx="6" fill="#04080a"/>
+      <rect x="480" y="440" width="240" height="104" rx="6" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1.2"/>
+      <rect x="488" y="446" width="36" height="12" rx="2" fill="transparent" stroke="rgba(53,224,194,0.50)" stroke-width="0.8"/>
+      <text x="506" y="455" fill="#35e0c2" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">HEAL</text>
+      <text x="600" y="480" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">repair</text>
+      <text x="600" y="498" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">backfill fingerprints · re-embed every drawer</text>
+      <text x="600" y="512" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">drop PQ/IVF · chain record · VACUUM</text>
+      <text x="600" y="530" fill="#35e0c2" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">content is NEVER rewritten</text>
+
+      <!-- re-verify (end) -->
+      <rect x="480" y="592" width="240" height="64" rx="20" fill="#04080a"/>
+      <rect x="480" y="592" width="240" height="64" rx="20" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <text x="600" y="620" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">verify, again</text>
+      <text x="600" y="638" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">repair returns the fresh report</text>
+
+      <!-- restore -->
+      <rect x="800" y="584" width="240" height="80" rx="6" fill="#04080a"/>
+      <rect x="800" y="584" width="240" height="80" rx="6" fill="rgba(217,240,234,0.05)" stroke="#7fa39c" stroke-width="1"/>
+      <rect x="808" y="590" width="52" height="12" rx="2" fill="transparent" stroke="rgba(127,163,156,0.40)" stroke-width="0.8"/>
+      <text x="834" y="599" fill="rgba(127,163,156,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">RUNBOOK</text>
+      <text x="920" y="624" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">backup restore</text>
+      <text x="920" y="642" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">verbatim, never repair-in-place</text>
+      <text x="920" y="656" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">then verify must report 0 failures</text>
+
+      <!-- ============ CALLOUT ============ -->
+      <line x1="100" y1="448" x2="100" y2="512" stroke="rgba(217,240,234,0.18)" stroke-width="1.2"/>
+      <text x="124" y="462" fill="#5c7f79" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" letter-spacing="0.14em">THE RULE</text>
+      <text x="124" y="486" fill="#d9f0ea" font-size="15" font-style="italic" font-family="Georgia, 'Times New Roman', serif">Repair rebuilds only what is derived.</text>
+      <text x="124" y="508" fill="#d9f0ea" font-size="15" font-style="italic" font-family="Georgia, 'Times New Roman', serif">A record that fails its HMAC is restored, never patched.</text>
+
+      <!-- ============ LEGEND ============ -->
+      <line x1="96" y1="744" x2="1104" y2="744" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
+      <text x="96" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" letter-spacing="0.14em">LEGEND</text>
+
+      <rect x="188" y="756" width="16" height="10" rx="2" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1"/>
+      <text x="212" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">FOCAL</text>
+
+      <rect x="268" y="756" width="16" height="10" rx="4" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <text x="292" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">START / END</text>
+
+      <rect x="376" y="756" width="16" height="10" rx="2" fill="rgba(217,240,234,0.05)" stroke="#7fa39c" stroke-width="1"/>
+      <text x="400" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">STEP</text>
+
+      <rect x="452" y="756" width="16" height="10" rx="2" fill="rgba(255,93,115,0.10)" stroke="#ff5d73" stroke-width="1"/>
+      <text x="476" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">INTEGRITY VERDICT</text>
+
+      <rect x="612" y="756" width="16" height="10" rx="2" fill="#071014" stroke="#5c7f79" stroke-width="1"/>
+      <text x="636" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">VERIFY LEG</text>
+
+      <line x1="732" y1="761" x2="764" y2="761" stroke="#7fa39c" stroke-width="1.2"/>
+      <text x="772" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">FLOW</text>
+
+      <line x1="828" y1="761" x2="860" y2="761" stroke="#7fa39c" stroke-width="1.2" stroke-dasharray="5,4"/>
+      <text x="868" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">WHAT THE COPIES ARE FOR</text>
+    </svg>
+  </div>
+</body>
+</html>

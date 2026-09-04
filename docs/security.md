@@ -39,8 +39,8 @@ What one record goes through, at rest and on read:
 ```mermaid
 flowchart LR
     subgraph write["write (sealed vault)"]
-        c["content"] --> z["zstd compress"] --> e["XChaCha20-Poly1305<br/><i>AAD: vault id + record id</i>"]
-        c --> h["HMAC-SHA256 tag<br/><i>id ␟ meta ␟ content</i>"]
+        c["content"] --> z["zstd compress<br/><i>own frame, no shared dictionary</i>"] --> e["XChaCha20-Poly1305<br/><i>AAD: vault id + record id</i>"]
+        e --> h["HMAC-SHA256 tag<br/><i>id ␟ meta_at_rest ␟ sealed bytes</i>"]
         e --> row["SQLite row"]
         h --> row
         row --> chain["audit row + chain head<br/><i>same transaction</i>"]
@@ -57,13 +57,18 @@ alarm, a rollback always is one:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Compare: open — replay audit rows,<br/>compare manifest anchor vs chain_meta head
-    Compare --> Clean: anchor == db head
-    Compare --> FastForward: anchor appears earlier<br/>in the replayed chain
-    Compare --> Tampered: anchor not in the<br/>replayed chain at all
-    FastForward --> Clean: crash artifact —<br/>anchor silently re-advanced
+    [*] --> Compare: open — verify the manifest MAC,<br/>compare its anchor vs the chain_meta head
+    Compare --> Unseeded: no chain_meta head yet<br/>(first open) — seeded, then Current
+    Compare --> Current: anchor == db head<br/>(no replay needed)
+    Compare --> Replay: anchor ≠ db head —<br/>replay every audit tag
+    Replay --> Healed: anchor appears earlier<br/>in the replayed chain
+    Replay --> ChainBroken: replayed chain ≠ db head —<br/>audit rows were edited
+    Replay --> Tampered: anchor never appears<br/>in the replayed chain
+    Healed --> Current: crash artifact — reported as<br/>anchor_at_open, re-anchored on a writable open
+    Unseeded --> Current
+    ChainBroken --> [*]: Integrity("audit-chain head")
     Tampered --> [*]: ManifestTampered —<br/>rollback or fork detected
-    Clean --> [*]
+    Current --> [*]
 ```
 - **Durability backs the reconciliation story**: the store pins SQLite to
   WAL + `synchronous=FULL`, so a data+chain commit is on disk before its
@@ -164,7 +169,9 @@ tenant*:
 
 ```mermaid
 flowchart TB
-    req["request to /v1/vaults/{id}/…"] --> b{"palace bearer<br/>valid?"}
+    req["request to /v1/vaults/{id}/…"] --> t{"UNDERCROFT_MCP_HTTP_TOKEN<br/>declared?"}
+    t -- "no — loopback only;<br/>any other bind refuses to start" --> a
+    t -- yes --> b{"palace bearer<br/>matches, constant-time?"}
     b -- no --> r401a["401"]
     b -- yes --> a{"assertion secret<br/>configured?"}
     a -- no --> serve["serve<br/><i>single-operator mode</i>"]

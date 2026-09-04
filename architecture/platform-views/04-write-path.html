@@ -41,12 +41,12 @@
 </head>
 <body>
   <div class="frame">
-    <p class="eyebrow">Process · 04 of 12 · Undercroft</p>
+    <p class="eyebrow">Process · 04 of 22 · Undercroft</p>
     <h1>The write path, and the choke point every save passes</h1>
 
     <svg viewBox="0 0 1200 736" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="write-path-title write-path-desc">
       <title id="write-path-title">Undercroft write path</title>
-      <desc id="write-path-desc">Every save in Undercroft runs the same eight ordered steps — validate the declared wing and room names, screen the content, derive a deterministic drawer id, embed it, compress it in its own frame, seal it with AAD bound to the vault, tag it with HMAC, and append to the audit chain inside the same SQLite transaction — and a save the screen flags is diverted instead into a quarantine wing, where it is reported as quarantined with the id it actually landed under.</desc>
+      <desc id="write-path-desc">Every save in Undercroft runs the same eight ordered steps — derive a deterministic drawer id as the drawer is built, embed it, validate the declared names and the vector at the store's write choke point, screen the content, compress it in its own frame, seal it with AAD bound to the vault, tag it with HMAC, and append to the audit chain inside the same SQLite transaction — and a save the screen flags is diverted into the quarantine wing and then sealed and chained like any other drawer, reported as quarantined with the id it actually landed under.</desc>
       <defs>
         <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7fa39c"/></marker>
         <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#35e0c2"/></marker>
@@ -74,16 +74,18 @@
       <line x1="584" y1="184" x2="616" y2="184" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
       <!-- 03 -> 04 (shared y) -->
       <line x1="824" y1="184" x2="856" y2="184" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
-      <!-- 04 -> 05, the row turn (shared x) -->
-      <line x1="960" y1="232" x2="960" y2="464" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- 04 -> 05, the row turn (shared x; fanned right of the divert's attach point) -->
+      <line x1="992" y1="232" x2="992" y2="464" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
       <!-- 05 -> 06 (shared y, leftward) -->
       <line x1="856" y1="512" x2="824" y2="512" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
       <!-- 06 -> 07 (shared y, leftward) -->
       <line x1="616" y1="512" x2="584" y2="512" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
       <!-- 07 -> 08 (shared y, leftward) -->
       <line x1="376" y1="512" x2="344" y2="512" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
-      <!-- 02 -> quarantine, the refusal branch (shared x) -->
-      <line x1="480" y1="232" x2="480" y2="304" stroke="#ff5d73" stroke-width="1.2" marker-end="url(#arrow-danger)"/>
+      <!-- 04 -> quarantine, the diversion branch: down the screen's bottom edge, into the diverted node's right edge -->
+      <path d="M 928,232 V 336 Q 928,344 920,344 H 824" fill="none" stroke="#ff5d73" stroke-width="1.2" marker-end="url(#arrow-danger)"/>
+      <!-- quarantine -> 05: the diverted drawer re-enters the same path as Bypass(AlreadyDiverted) and is sealed like any other -->
+      <path d="M 824,364 H 840 Q 848,364 848,372 V 488 Q 848,496 856,496" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
       <!-- 08 -> disk (shared x) -->
       <line x1="240" y1="560" x2="240" y2="616" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
 
@@ -91,49 +93,52 @@
       <rect x="248" y="72" width="72" height="12" rx="2" fill="#04080a"/>
       <text x="284" y="81" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">save(content)</text>
 
-      <rect x="488" y="256" width="56" height="12" rx="2" fill="#04080a"/>
-      <text x="516" y="265" fill="#ff5d73" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">FLAGGED</text>
+      <rect x="936" y="268" width="48" height="12" rx="2" fill="#04080a"/>
+      <text x="960" y="277" fill="#ff5d73" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">FLAGGED</text>
+
+      <rect x="856" y="400" width="72" height="12" rx="2" fill="#04080a"/>
+      <text x="892" y="409" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">RE-ENTERS</text>
 
       <rect x="248" y="600" width="72" height="12" rx="2" fill="#04080a"/>
       <text x="284" y="609" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">bytes on disk</text>
 
       <!-- ============ NODES ============ -->
-      <!-- 01 Validate declaration -->
+      <!-- 01 Chunk and derive id -->
       <rect x="136" y="136" width="208" height="96" rx="6" fill="#04080a"/>
       <rect x="136" y="136" width="208" height="96" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
       <rect x="144" y="142" width="24" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
       <text x="156" y="151" fill="rgba(217,240,234,0.80)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">01</text>
-      <text x="240" y="178" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Validate declaration</text>
-      <text x="240" y="196" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">wing and room names</text>
-      <text x="240" y="210" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">checked before any rewrite</text>
+      <text x="240" y="178" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Chunk and derive id</text>
+      <text x="240" y="196" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">(wing,room,source,chunk,norm)</text>
+      <text x="240" y="210" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">in Drawer::new, before the store</text>
 
-      <!-- 02 Screen (FOCAL) -->
+      <!-- 02 Embed -->
       <rect x="376" y="136" width="208" height="96" rx="6" fill="#04080a"/>
-      <rect x="376" y="136" width="208" height="96" rx="6" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1.2"/>
-      <rect x="384" y="142" width="24" height="12" rx="2" fill="transparent" stroke="rgba(53,224,194,0.50)" stroke-width="0.8"/>
-      <text x="396" y="151" fill="#35e0c2" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">02</text>
-      <text x="480" y="178" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Screen</text>
-      <text x="480" y="196" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">write_drawer(Screen)</text>
-      <text x="480" y="210" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">Apply or Bypass(reason)</text>
-      <text x="480" y="224" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">a new path will not compile</text>
+      <rect x="376" y="136" width="208" height="96" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <rect x="384" y="142" width="24" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
+      <text x="396" y="151" fill="rgba(217,240,234,0.80)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">02</text>
+      <text x="480" y="178" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Embed</text>
+      <text x="480" y="196" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">hash · onnx · ort · http · external</text>
+      <text x="480" y="210" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">offline by default · before the lock</text>
 
-      <!-- 03 Chunk and derive id -->
+      <!-- 03 Validate declaration -->
       <rect x="616" y="136" width="208" height="96" rx="6" fill="#04080a"/>
       <rect x="616" y="136" width="208" height="96" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
       <rect x="624" y="142" width="24" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
       <text x="636" y="151" fill="rgba(217,240,234,0.80)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">03</text>
-      <text x="720" y="178" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Chunk and derive id</text>
-      <text x="720" y="196" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">(wing,room,source,chunk,norm)</text>
-      <text x="720" y="210" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">deterministic · idempotent</text>
+      <text x="720" y="178" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Validate declaration</text>
+      <text x="720" y="196" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">names · kind · id shape · finite vector</text>
+      <text x="720" y="210" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">checked before any rewrite</text>
 
-      <!-- 04 Embed -->
+      <!-- 04 Screen (FOCAL) -->
       <rect x="856" y="136" width="208" height="96" rx="6" fill="#04080a"/>
-      <rect x="856" y="136" width="208" height="96" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
-      <rect x="864" y="142" width="24" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
-      <text x="876" y="151" fill="rgba(217,240,234,0.80)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">04</text>
-      <text x="960" y="178" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Embed</text>
-      <text x="960" y="196" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">vector for the semantic channel</text>
-      <text x="960" y="210" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">offline by default</text>
+      <rect x="856" y="136" width="208" height="96" rx="6" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1.2"/>
+      <rect x="864" y="142" width="24" height="12" rx="2" fill="transparent" stroke="rgba(53,224,194,0.50)" stroke-width="0.8"/>
+      <text x="876" y="151" fill="#35e0c2" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">04</text>
+      <text x="960" y="178" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Screen</text>
+      <text x="960" y="196" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">write_drawer(Screen)</text>
+      <text x="960" y="210" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">Apply or Bypass(reason)</text>
+      <text x="960" y="224" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">a new path will not compile</text>
 
       <!-- 05 Compress -->
       <rect x="856" y="464" width="208" height="96" rx="6" fill="#04080a"/>
@@ -173,13 +178,14 @@
       <text x="240" y="552" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">and deliberately lags</text>
 
       <!-- diverted branch target -->
-      <rect x="376" y="304" width="208" height="80" rx="6" fill="#04080a"/>
-      <rect x="376" y="304" width="208" height="80" rx="6" fill="rgba(255,93,115,0.10)" stroke="#ff5d73" stroke-width="1"/>
-      <rect x="384" y="310" width="52" height="12" rx="2" fill="transparent" stroke="rgba(255,93,115,0.45)" stroke-width="0.8"/>
-      <text x="410" y="319" fill="#ff5d73" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">DIVERTED</text>
-      <text x="480" y="344" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">quarantine-pending</text>
-      <text x="480" y="362" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">reports quarantined:true</text>
-      <text x="480" y="376" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">and the id it landed under</text>
+      <rect x="616" y="304" width="208" height="96" rx="6" fill="#04080a"/>
+      <rect x="616" y="304" width="208" height="96" rx="6" fill="rgba(255,93,115,0.10)" stroke="#ff5d73" stroke-width="1"/>
+      <rect x="624" y="310" width="52" height="12" rx="2" fill="transparent" stroke="rgba(255,93,115,0.45)" stroke-width="0.8"/>
+      <text x="650" y="319" fill="#ff5d73" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">DIVERTED</text>
+      <text x="720" y="344" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">quarantine-pending</text>
+      <text x="720" y="362" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">reports quarantined:true</text>
+      <text x="720" y="376" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">and the id it landed under</text>
+      <text x="720" y="390" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">sealed like any other, never dropped</text>
 
       <!-- ============ LEGEND ============ -->
       <line x1="120" y1="664" x2="1080" y2="664" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>

@@ -4,7 +4,9 @@ flowchart TB
         vault["undercroft-vault<br/><i>HKDF keys, AEAD sealing,<br/>HMAC tags, audit chain</i>"]
         store["undercroft-store<br/><i>per-vault SQLite, hybrid search,<br/>PQ/IVF, ColBERT stage, FDE index, KG</i>"]
         index["undercroft-index<br/><i>remote vector backends<br/>(untrusted accelerators)</i>"]
-        llm["undercroft-llm<br/><i>local LLM runtimes<br/>(refine → KG)</i>"]
+        llm["undercroft-llm<br/><i>local LLM runtimes<br/>(refine → KG, served embedder)</i>"]
+        net["undercroft-net<br/><i>outbound transport policy:<br/>TLS or loopback, no override</i>"]
+        config["undercroft-config<br/><i>declaration resolvers the engine<br/>and the control plane share</i>"]
         obs["undercroft-obs<br/><i>observability shim<br/>(no-op by default)</i>"]
         cli["undercroft-cli<br/><b>undercroft</b> binary<br/><i>CLI + MCP + HTTP /v1</i>"]
     end
@@ -12,7 +14,7 @@ flowchart TB
         onnx["undercroft-embed-onnx<br/><i>tract: embedder, reranker, ColBERT</i>"]
         ort["undercroft-embed-ort<br/><i>ONNX Runtime: same trio, faster</i>"]
     end
-    bench["undercroft-bench<br/><i>LongMemEval / LoCoMo /<br/>fde-synth harnesses</i>"]
+    bench["undercroft-bench<br/><i>LongMemEval / LoCoMo / synthetic<br/>scale + screen instruments</i>"]
     orch["undercroft-orchestrator<br/><b>undercroft-orchestrator</b> binary<br/><i>multi-tenant control plane</i>"]
 
     vault --> core
@@ -20,16 +22,26 @@ flowchart TB
     store --> core
     store --> vault
     store --> index
+    store --> net
+    store --> config
     store --> obs
+    index --> net
+    llm --> core
+    llm --> net
+    llm --> obs
+    obs -. "feature telemetry<br/>(OTLP hop)" .-> net
     cli --> core
     cli --> vault
     cli --> store
     cli --> index
     cli --> llm
     cli --> obs
-    cli -. "feature onnx" .-> onnx
+    cli -. "features onnx / ort" .-> onnx
+    cli -. "features onnx / ort" .-> ort
     onnx --> core
+    onnx --> obs
     ort --> core
+    ort --> obs
     bench --> core
     bench --> vault
     bench --> store
@@ -37,4 +49,7 @@ flowchart TB
     bench --> llm
     bench -. "features onnx / ort" .-> onnx
     bench -. "features onnx / ort" .-> ort
-    orch -. "HTTP /v1 only —<br/>no crate dependency" .-> cli
+    orch --> obs
+    orch --> net
+    orch --> config
+    orch -. "HTTP /v1 only —<br/>never linked BY the engine" .-> cli

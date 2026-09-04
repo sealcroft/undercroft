@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Undercroft — Configuration Classes</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --color-paper:  #04080a;
+      --color-raise:  #071014;
+      --color-ink:    #d9f0ea;
+      --color-muted:  #7fa39c;
+      --color-accent: #35e0c2;
+      --font-sans:  -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --font-serif: Georgia, "Times New Roman", serif;
+      --font-mono:  ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-paper);
+      color: var(--color-ink);
+      min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      padding: 3rem 2rem;
+    }
+    .frame { max-width: 1200px; width: 100%; }
+    .eyebrow {
+      font-family: var(--font-mono); font-size: 0.66rem; font-weight: 500;
+      letter-spacing: 0.18em; text-transform: uppercase;
+      color: var(--color-muted); margin-bottom: 0.5rem;
+    }
+    h1 {
+      font-family: var(--font-serif);
+      font-size: clamp(1.5rem, 2.4vw + 0.75rem, 2rem);
+      font-weight: 400; letter-spacing: -0.02em; line-height: 1.15;
+      color: var(--color-ink); margin-bottom: 1.5rem;
+    }
+    svg { width: 100%; min-width: 900px; display: block; }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <p class="eyebrow">Decision tree · 21 of 22 · Undercroft</p>
+    <h1>What a bad declaration does, decided by its class and not by its call site</h1>
+
+    <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="config-classes-title config-classes-desc">
+      <title id="config-classes-title">Undercroft declared-configuration classes</title>
+      <desc id="config-classes-desc">Every one of the eighty-one engine variables is classified in the parity inventory on two axes, so a new variable does not compile until someone decides both: whether it protects — turning a protection on, pinning an outward path or naming the vector space, where garbage refuses to open — or merely tunes a default that is already conservative, where garbage warns and the default stands; and whether the config-check pre-flight runs a real parse for it or has nothing to parse. A third distinction decides what empty means: a closed vocabulary is trimmed and reads empty as its default, while an opaque payload such as a secret or a path is never trimmed, refuses when empty, and refuses a trailing whitespace the transport that consumes it could not carry.</desc>
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7fa39c"/></marker>
+        <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#35e0c2"/></marker>
+      </defs>
+
+      <rect width="100%" height="100%" fill="#04080a"/>
+
+      <!-- ============ ARROWS (before boxes) ============ -->
+      <line x1="600" y1="96" x2="600" y2="136" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="496" y1="168" x2="384" y2="168" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="704" y1="168" x2="816" y2="168" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="600" y1="200" x2="600" y2="268" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="496" y1="300" x2="384" y2="300" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="704" y1="300" x2="816" y2="300" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="600" y1="332" x2="600" y2="400" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <line x1="496" y1="432" x2="384" y2="432" stroke="#35e0c2" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <line x1="704" y1="432" x2="816" y2="432" stroke="#35e0c2" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <line x1="600" y1="464" x2="600" y2="560" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+
+      <!-- ============ ARROW LABELS (mask + gap) ============ -->
+      <rect x="400" y="148" width="80" height="12" rx="2" fill="#04080a"/>
+      <text x="440" y="157" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">PROTECTS</text>
+      <rect x="720" y="148" width="80" height="12" rx="2" fill="#04080a"/>
+      <text x="760" y="157" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">TUNES</text>
+
+      <rect x="400" y="280" width="80" height="12" rx="2" fill="#04080a"/>
+      <text x="440" y="289" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">CHECKED</text>
+      <rect x="720" y="280" width="80" height="12" rx="2" fill="#04080a"/>
+      <text x="760" y="289" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">OPAQUE</text>
+
+      <rect x="392" y="412" width="96" height="12" rx="2" fill="#04080a"/>
+      <text x="440" y="421" fill="#35e0c2" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">VOCABULARY</text>
+      <rect x="720" y="412" width="80" height="12" rx="2" fill="#04080a"/>
+      <text x="760" y="421" fill="#35e0c2" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">PAYLOAD</text>
+
+      <rect x="608" y="500" width="56" height="12" rx="2" fill="#04080a"/>
+      <text x="636" y="509" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">ALL 81</text>
+
+      <!-- ============ NODES ============ -->
+      <!-- start -->
+      <rect x="464" y="40" width="272" height="56" rx="20" fill="#04080a"/>
+      <rect x="464" y="40" width="272" height="56" rx="20" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <text x="600" y="64" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">An UNDERCROFT_* variable is declared</text>
+      <text x="600" y="82" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">81 engine variables, each with a row in ENGINE_ENV_VARS</text>
+
+      <!-- decision 1: class -->
+      <polygon points="600,136 704,168 600,200 496,168" fill="#04080a"/>
+      <polygon points="600,136 704,168 600,200 496,168" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <text x="600" y="165" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">ConfigClass?</text>
+      <text x="600" y="180" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">what a bad value does</text>
+
+      <!-- Protects -->
+      <rect x="112" y="128" width="272" height="80" rx="6" fill="#04080a"/>
+      <rect x="112" y="128" width="272" height="80" rx="6" fill="rgba(255,93,115,0.06)" stroke="rgba(255,93,115,0.45)" stroke-width="1"/>
+      <text x="248" y="152" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Protects · 24</text>
+      <text x="248" y="170" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">turns a protection on, pins an outward path,</text>
+      <text x="248" y="184" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">or names the vector space</text>
+      <text x="248" y="200" fill="#ff5d73" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">garbage REFUSES to open — no tier by typo</text>
+
+      <!-- Tunes -->
+      <rect x="816" y="128" width="272" height="80" rx="6" fill="#04080a"/>
+      <rect x="816" y="128" width="272" height="80" rx="6" fill="rgba(217,240,234,0.05)" stroke="#7fa39c" stroke-width="1"/>
+      <text x="952" y="152" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Tunes · 57</text>
+      <text x="952" y="170" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">a knob over a default that is already</text>
+      <text x="952" y="184" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">the conservative choice</text>
+      <text x="952" y="200" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">garbage WARNS and the default stands</text>
+
+      <!-- decision 2: parse -->
+      <polygon points="600,268 704,300 600,332 496,300" fill="#04080a"/>
+      <polygon points="600,268 704,300 600,332 496,300" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <text x="600" y="297" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Parse?</text>
+      <text x="600" y="312" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">can the pre-flight see it</text>
+
+      <!-- Checked -->
+      <rect x="112" y="260" width="272" height="80" rx="6" fill="#04080a"/>
+      <rect x="112" y="260" width="272" height="80" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <text x="248" y="284" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Checked · 49</text>
+      <text x="248" y="302" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">config check runs the SAME resolver serve</text>
+      <text x="248" y="316" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">runs, opening nothing (22 protect, 27 tune)</text>
+      <text x="248" y="332" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">TUNED states every knob's unset and bounds once</text>
+
+      <!-- Opaque -->
+      <rect x="816" y="260" width="272" height="80" rx="6" fill="#04080a"/>
+      <rect x="816" y="260" width="272" height="80" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <text x="952" y="284" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Opaque · 32</text>
+      <text x="952" y="302" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">no parse to run; the consumer validates it —</text>
+      <text x="952" y="316" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">a path, a bearer, a model name (2 protect, 30 tune)</text>
+      <text x="952" y="332" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">listed, so "no parse" cannot hide a forgotten arm</text>
+
+      <!-- decision 3: shape -->
+      <polygon points="600,400 704,432 600,464 496,432" fill="#04080a"/>
+      <polygon points="600,400 704,432 600,464 496,432" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <text x="600" y="429" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Shape?</text>
+      <text x="600" y="444" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">what EMPTY means</text>
+
+      <!-- closed vocabulary (FOCAL) -->
+      <rect x="112" y="392" width="272" height="88" rx="6" fill="#04080a"/>
+      <rect x="112" y="392" width="272" height="88" rx="6" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1.2"/>
+      <text x="248" y="416" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Closed vocabulary</text>
+      <text x="248" y="434" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">trimmed — a trailing newline from $(cat …)</text>
+      <text x="248" y="448" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">cannot change its meaning</text>
+      <text x="248" y="466" fill="#35e0c2" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">empty is a third spelling of the default</text>
+
+      <!-- opaque payload (FOCAL) -->
+      <rect x="816" y="392" width="272" height="88" rx="6" fill="#04080a"/>
+      <rect x="816" y="392" width="272" height="88" rx="6" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1.2"/>
+      <text x="952" y="416" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Opaque payload</text>
+      <text x="952" y="434" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">never trimmed — trimming a secret changes the KEY</text>
+      <text x="952" y="448" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">empty REFUSES: it is always a failed interpolation</text>
+      <text x="952" y="466" fill="#35e0c2" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">trailing whitespace refuses where HTTP would strip it</text>
+
+      <!-- config check (end) -->
+      <rect x="464" y="560" width="272" height="64" rx="20" fill="#04080a"/>
+      <rect x="464" y="560" width="272" height="64" rx="20" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <text x="600" y="588" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">undercroft config check</text>
+      <text x="600" y="606" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">fails in a pipeline, not at a restart · the orchestrator has its own</text>
+
+      <!-- ============ CALLOUT ============ -->
+      <line x1="116" y1="648" x2="116" y2="712" stroke="rgba(217,240,234,0.18)" stroke-width="1.2"/>
+      <text x="140" y="662" fill="#5c7f79" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" letter-spacing="0.14em">WHY THE THIRD AXIS EXISTS</text>
+      <text x="140" y="686" fill="#d9f0ea" font-size="15" font-style="italic" font-family="Georgia, 'Times New Roman', serif">Two inline copies of one check disagreed: the minting side refused an empty assertion secret while the enforcing side</text>
+      <text x="140" y="708" fill="#d9f0ea" font-size="15" font-style="italic" font-family="Georgia, 'Times New Roman', serif">read it as "off". The rule was written from one instance; the sweep it demanded found three more the same day.</text>
+
+      <!-- ============ LEGEND ============ -->
+      <line x1="112" y1="744" x2="1088" y2="744" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
+      <text x="112" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" letter-spacing="0.14em">LEGEND</text>
+
+      <rect x="204" y="756" width="16" height="10" rx="2" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1"/>
+      <text x="228" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">FOCAL · THE SHAPE RULE</text>
+
+      <rect x="396" y="756" width="16" height="10" rx="2" fill="rgba(255,93,115,0.06)" stroke="rgba(255,93,115,0.45)" stroke-width="1"/>
+      <text x="420" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">REFUSES TO OPEN</text>
+
+      <rect x="548" y="756" width="16" height="10" rx="2" fill="rgba(217,240,234,0.05)" stroke="#7fa39c" stroke-width="1"/>
+      <text x="572" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">WARNS, DEFAULT KEPT</text>
+
+      <rect x="724" y="756" width="16" height="10" rx="2" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <text x="748" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">CLASS / DECISION</text>
+
+      <line x1="892" y1="761" x2="924" y2="761" stroke="#7fa39c" stroke-width="1.2"/>
+      <text x="932" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">CLASSIFIED AS</text>
+    </svg>
+  </div>
+</body>
+</html>

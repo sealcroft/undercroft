@@ -15,7 +15,7 @@ The whole procedure at a glance — each step is detailed below:
 
 ```mermaid
 flowchart TB
-    alert["PalaceTamperDetected<br/><i>alert / monitor beacon / verify count</i>"] --> loc["1 · Where?<br/><i>surface + vault labels</i>"]
+    alert["PalaceTamperDetected<br/><i>alert / monitor beacon / verify count</i>"] --> loc["1 · Where?<br/><i>surface label on the counter;<br/>vault · id · wing · room on the event</i>"]
     loc --> conf["2 · Confirm + pinpoint<br/><i>undercroft verify --vault —<br/>names the exact record(s), chain state</i>"]
     conf --> mit["3 · Mitigate<br/><i>preserve evidence copy FIRST ·<br/>freeze writes (--read-only) · isolate vault</i>"]
     mit --> fix{"4 · Fix — verbatim restore,<br/>never repair-in-place"}

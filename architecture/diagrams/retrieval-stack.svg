@@ -28,7 +28,7 @@
 <rect x="24" y="72" width="640" height="58" rx="8" fill="var(--d-card,#ffffff)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.4"/>
 <circle cx="48" cy="101" r="13" fill="var(--d-blue,#4a6fa5)"/><text x="48" y="106" class="f l" fill="var(--d-on,var(--d-card,#ffffff))" text-anchor="middle">1</text>
 <text x="72" y="96" class="f l ink">scope</text>
-<text x="72" y="116" class="f b dim">wing + optional room narrow the row set before anything is scored</text>
+<text x="72" y="116" class="f b dim">wing · room · kind · trust floor · quarantine fence narrow the row set before anything is scored</text>
 <rect x="676" y="72" width="200" height="58" rx="8" fill="var(--d-blue-bg,#eef3f8)" stroke="var(--d-line,#c9d4dd)"/>
 <text x="690" y="96" class="f s dim">decides how much work</text>
 <text x="690" y="113" class="f s dim">everything below must do</text>
@@ -74,7 +74,7 @@
 <text x="72" y="469" class="f b dim">MaxSim over ingest-time token matrices</text>
 <rect x="676" y="408" width="200" height="66" rx="8" fill="var(--d-violet-bg2,#f0ebf8)" stroke="var(--d-violet,#6b4fa8)"/>
 <text x="690" y="432" class="f mono" fill="var(--d-violet-ink,#523a86)">UNDERCROFT_RERANKER</text>
-<text x="690" y="449" class="f s dim">onnx · ort · colbert</text>
+<text x="690" y="449" class="f s dim">onnx · ort · colbert · colbert-ort</text>
 <text x="690" y="466" class="f s dim">RERANK_TOP_N default 50</text>
 <path d="M344 474 L344 492" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 

@@ -41,12 +41,12 @@
 </head>
 <body>
   <div class="frame">
-    <p class="eyebrow">State machine · 08 of 12 · Undercroft</p>
+    <p class="eyebrow">State machine · 08 of 22 · Undercroft</p>
     <h1>A vault through its life</h1>
 
     <svg viewBox="0 0 1200 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="vault-lifecycle-title vault-lifecycle-desc">
       <title id="vault-lifecycle-title">Undercroft vault lifecycle</title>
-      <desc id="vault-lifecycle-desc">A vault starts uninitialised, becomes sealed at rest once initialised, and from there opens either writable or read-only; every open reconciles the manifest anchor, where a crash fast-forwards it and a rollback is reported as tamper. A writable vault can rotate its keys or repair itself — each a single transaction that returns it to writable — and can be archived into a signed backup bundle, while the read-only role creates nothing, migrates nothing and promotes no staging manifest.</desc>
+      <desc id="vault-lifecycle-desc">A vault starts uninitialised, becomes sealed at rest once initialised, and from there opens either writable or read-only; every open reconciles the manifest anchor, where a crash fast-forwards it and a rollback is reported as tamper. A writable vault can rotate its keys or repair itself — re-embedding every drawer and rebuilding its indexes without rewriting content, each a single transaction that returns it to writable — and can be archived as a verify-gated directory copy (the signed, recipient-sealed bundle is an export, not a backup), while the read-only role creates nothing, migrates nothing and promotes no staging manifest.</desc>
       <defs>
         <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7fa39c"/></marker>
         <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#35e0c2"/></marker>
@@ -139,7 +139,7 @@
       <rect x="912" y="70" width="28" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
       <text x="926" y="79" fill="rgba(217,240,234,0.80)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">TXN</text>
       <text x="1004" y="108" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Repairing</text>
-      <text x="1004" y="126" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">rebuild index · heal anchor</text>
+      <text x="1004" y="126" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">re-embed · rebuild index · heal anchor</text>
       <text x="1004" y="140" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">content never rewritten</text>
 
       <!-- Uninitialised -->
@@ -183,10 +183,10 @@
       <rect x="904" y="528" width="200" height="88" rx="6" fill="#04080a"/>
       <rect x="904" y="528" width="200" height="88" rx="6" fill="rgba(217,240,234,0.05)" stroke="#7fa39c" stroke-width="1"/>
       <rect x="912" y="534" width="44" height="12" rx="2" fill="transparent" stroke="rgba(127,163,156,0.40)" stroke-width="0.8"/>
-      <text x="934" y="543" fill="rgba(127,163,156,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">BUNDLE</text>
+      <text x="934" y="543" fill="rgba(127,163,156,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">COPY</text>
       <text x="1004" y="572" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Archived</text>
-      <text x="1004" y="590" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">verify-gated snapshot</text>
-      <text x="1004" y="604" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">signed · recipient-sealed</text>
+      <text x="1004" y="590" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">verify-gated directory copy</text>
+      <text x="1004" y="604" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">keeps 10 · export is the sealed bundle</text>
 
       <!-- ============ LEGEND ============ -->
       <line x1="64" y1="664" x2="1136" y2="664" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>

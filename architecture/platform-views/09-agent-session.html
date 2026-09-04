@@ -41,12 +41,12 @@
 </head>
 <body>
   <div class="frame">
-    <p class="eyebrow">Sequence · 09 of 12 · Undercroft</p>
+    <p class="eyebrow">Sequence · 09 of 22 · Undercroft</p>
     <h1>One agent session, message by message</h1>
 
     <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="agent-session-title agent-session-desc">
       <title id="agent-session-title">Undercroft agent session sequence</title>
-      <desc id="agent-session-desc">Across one agent session a wake-up call loads recent drawers through the MCP server and the store's read choke point, where the vault verifies each tag and decrypts the content and — only when read auditing is switched on — a read record is written to the audit chain; a search then has the store resolve scope, generate candidates, hydrate and fuse before returning ranked hits with resolved dates, and a save seals and tags the new drawer in the vault while appending to the audit chain inside the same transaction.</desc>
+      <desc id="agent-session-desc">Across one agent session a wake-up call loads recent drawers through the MCP server and the store's read choke point, where the vault verifies each tag and decrypts the content and — only when read auditing is switched on — a read record is written to the audit chain; a search then has the store resolve scope, generate candidates, hydrate and fuse before returning ranked hits with resolved dates, leaving the same kind of read record under the same setting, and a save seals and tags the new drawer in the vault while appending to the audit chain inside the same transaction.</desc>
       <defs>
         <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7fa39c"/></marker>
         <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#35e0c2"/></marker>

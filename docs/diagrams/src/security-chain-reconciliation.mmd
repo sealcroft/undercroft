@@ -1,8 +1,13 @@
 stateDiagram-v2
-    [*] --> Compare: open — replay audit rows,<br/>compare manifest anchor vs chain_meta head
-    Compare --> Clean: anchor == db head
-    Compare --> FastForward: anchor appears earlier<br/>in the replayed chain
-    Compare --> Tampered: anchor not in the<br/>replayed chain at all
-    FastForward --> Clean: crash artifact —<br/>anchor silently re-advanced
+    [*] --> Compare: open — verify the manifest MAC,<br/>compare its anchor vs the chain_meta head
+    Compare --> Unseeded: no chain_meta head yet<br/>(first open) — seeded, then Current
+    Compare --> Current: anchor == db head<br/>(no replay needed)
+    Compare --> Replay: anchor ≠ db head —<br/>replay every audit tag
+    Replay --> Healed: anchor appears earlier<br/>in the replayed chain
+    Replay --> ChainBroken: replayed chain ≠ db head —<br/>audit rows were edited
+    Replay --> Tampered: anchor never appears<br/>in the replayed chain
+    Healed --> Current: crash artifact — reported as<br/>anchor_at_open, re-anchored on a writable open
+    Unseeded --> Current
+    ChainBroken --> [*]: Integrity("audit-chain head")
     Tampered --> [*]: ManifestTampered —<br/>rollback or fork detected
-    Clean --> [*]
+    Current --> [*]

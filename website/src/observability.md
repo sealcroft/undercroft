@@ -26,10 +26,10 @@ and every signal is metadata/counts only:
 ```mermaid
 flowchart LR
     e["undercroft engine<br/><i>--features telemetry</i>"]
-    e -- "UNDERCROFT_METRICS=1<br/>bearer-gated /metrics" --> prom["Prometheus"]
-    prom --> am["Alertmanager<br/><i>PalaceTamperDetected,<br/>chain stalls, latency</i>"] --> hook["webhook sink"]
+    e -- "UNDERCROFT_METRICS=1<br/>/metrics behind the palace bearer<br/>whenever one is declared" --> prom["Prometheus"]
+    prom --> am["Alertmanager<br/><i>PalaceTamperDetected, chain stalls,<br/>latency, engine down, 5xx, auth spikes</i>"] --> hook["webhook sink"]
     e -- "UNDERCROFT_LOG_FORMAT=json<br/>stdout" --> promtail["promtail"] --> loki["Loki"]
-    e -- "UNDERCROFT_OTLP_ENDPOINT<br/><i>metadata-only spans</i>" --> tempo["Tempo"]
+    e -- "UNDERCROFT_OTLP_ENDPOINT<br/><i>metadata-only spans, on the policed<br/>agent, root pinned by UNDERCROFT_OTLP_CA</i>" --> tls["tempo-tls<br/><i>Caddy terminator</i>"] --> tempo["Tempo"]
     e -- "SSE /v1/vaults/{id}/stream<br/><i>bearer + assertion</i>" --> monitor["Palace Monitor<br/><i>GET /monitor</i>"]
     prom --> graf["Grafana"]
     loki --> graf

@@ -41,12 +41,12 @@
 </head>
 <body>
   <div class="frame">
-    <p class="eyebrow">Nested · 06 of 12 · Undercroft</p>
+    <p class="eyebrow">Nested · 06 of 22 · Undercroft</p>
     <h1>What contains what, and where each key comes from</h1>
 
     <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="containment-and-keys-title containment-and-keys-desc">
       <title id="containment-and-keys-title">Undercroft containment and key hierarchy</title>
-      <desc id="containment-and-keys-desc">A palace directory on one machine holds vaults, each vault holds wings that a caller scopes to and that carry trust, each wing holds rooms for a session or document, and each room holds drawers of verbatim text; beside that nest, a master key is expanded by HKDF into four derived subkeys for sealing, HMAC tagging and choosing training rows, while a separately stored kg_secret is re-sealed by a key rotation rather than re-derived, so identifiers keyed with it never move.</desc>
+      <desc id="containment-and-keys-desc">A palace directory on one machine holds vaults, each vault holds wings that a caller scopes to and that carry trust, each wing holds rooms for a session or document, and each room holds drawers of verbatim text; beside that nest, a master key is expanded by HKDF into four derived subkeys — sealing, HMAC tagging, MACing the rollback anchor and choosing training rows, while a separately stored kg_secret is re-sealed by a key rotation rather than re-derived, so identifiers keyed with it never move.</desc>
       <defs>
         <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7fa39c"/></marker>
         <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#35e0c2"/></marker>
@@ -147,14 +147,15 @@
       <text x="928" y="304" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">one label per subkey</text>
 
       <!-- Derived subkeys -->
-      <rect x="784" y="360" width="288" height="104" rx="6" fill="#04080a"/>
-      <rect x="784" y="360" width="288" height="104" rx="6" fill="rgba(217,240,234,0.05)" stroke="#7fa39c" stroke-width="1"/>
+      <rect x="784" y="360" width="288" height="108" rx="6" fill="#04080a"/>
+      <rect x="784" y="360" width="288" height="108" rx="6" fill="rgba(217,240,234,0.05)" stroke="#7fa39c" stroke-width="1"/>
       <rect x="792" y="366" width="44" height="12" rx="2" fill="transparent" stroke="rgba(127,163,156,0.40)" stroke-width="0.8"/>
       <text x="814" y="375" fill="rgba(127,163,156,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">DERIVED</text>
       <text x="928" y="400" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Four derived subkeys</text>
       <text x="928" y="418" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">enc · seals content</text>
-      <text x="928" y="432" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">mac · HMAC tags + chain</text>
-      <text x="928" y="446" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">sample · picks training rows</text>
+      <text x="928" y="432" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">mac · HMAC tags + chain + fingerprints</text>
+      <text x="928" y="446" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">manifest · MACs the rollback anchor</text>
+      <text x="928" y="460" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">sample · picks training rows</text>
 
       <!-- kg_secret (FOCAL) -->
       <rect x="784" y="508" width="288" height="88" rx="6" fill="#04080a"/>

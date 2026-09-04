@@ -1390,10 +1390,13 @@ Consequences that are binding, not advisory:
   section at a time** behind a sidebar, enabled by script (`body.paged`)
   so that with JS off every section stays visible and the document still
   reads end to end
-- `architecture/platform-views/` — an **illustrative parallel set** of twelve
+- `architecture/platform-views/` — an **illustrative parallel set** of twenty-two
   self-contained HTML diagrams (surfaces, crate map, write path, retrieval
   stack, containment/keys, admission, lifecycle, agent session, deployment,
-  capability matrix, integrity chain) in the product's own dark palette,
+  capability matrix, integrity chain — and, since O105 on 2026-09-04, audit
+  namespaces, key rotation, verify/repair/backup, the transport policy,
+  forgetting, the three egress paths, the read choke point, the verification
+  pipeline, configuration classes and the storage layout) in the product's own dark palette,
   colour tokens taken from `website/landing/index.html` (verified 2026-08-30:
   same hex values under renamed variables). **The TYPOGRAPHY was never the
   product's**, and that is worth knowing because the sentence above implies
@@ -1417,7 +1420,17 @@ Consequences that are binding, not advisory:
   deployment diagram's `<desc>` said `/ui` sat behind the palace bearer when
   `http.rs` serves it in FRONT of that gate, and the falsehood was in the text
   a screen-reader user gets while the visible label was correct. So a change to
-  the engine must still move both sets or they disagree. `index.html` here is the entry point and
+  the engine must still move both sets or they disagree.
+  **That sentence was not followed by the unit it was written for, and the
+  drift it predicts arrived within four days (ROADMAP O105)**: O94 added the
+  seventh verify leg and the integrity view kept saying six; a code-vs-diagram
+  audit on 2026-09-04 also found a `store → llm` edge no manifest has in the
+  crate map, a backup described as a signed recipient-sealed bundle in the
+  lifecycle view, three wrong cells in the capability matrix, and the subkey
+  count wrong in two of three key diagrams — none of it visible to the figure
+  gate, because none of it is a count. The audit is the mechanism, and it has
+  to be RUN: after any change to the engine, read every diagram that names
+  the thing changed, in all three sets. `index.html` here is the entry point and
   `check.py` is the gate, run by the same `arch-check` service (one service,
   one CI leg): inventory counted in BOTH directions against `index.html`,
   the accessible-SVG contract, **offline assets with NO exception**, LF
@@ -1431,6 +1444,22 @@ Consequences that are binding, not advisory:
   breaches across a set whose exemplar had already been verified by eye, which
   is the calibration rule in one line: *a check that flags the artifact you
   confirmed with your own eyes is wrong about the check*
+- `docs/diagrams/` — the fourteen **Mermaid-sourced** SVGs of the manual, and
+  they are DERIVED: the canonical sources are the fenced `mermaid` blocks in
+  `docs/architecture.md`, `docs/security.md`, `docs/MULTI_TENANCY.md`,
+  `docs/integrations.md`, `docs/RETRIEVAL_SCALING.md`,
+  `website/src/observability.md` and `website/src/runbook.md`; `src/*.mmd`
+  are extracted copies and the SVGs are rendered from those with the pinned
+  `minlag/mermaid-cli:10.9.1` image (its README carries the recipe; on Docker
+  Desktop add `--user root`, or the mount is not writable). **Nothing derives
+  or checks this directory**, and on 2026-09-04 four of the fourteen had
+  drifted from their own canonical blocks — a tool count two releases stale,
+  a missing crate, a missing scope stage, three runbook labels — while the
+  canonical blocks themselves carried a phantom `fingerprint` key and an
+  orchestrator "no crate dependency" claim that its manifest contradicts
+  (ROADMAP O105). The book renders the Mermaid inline and never shows the
+  SVGs, so the drift was invisible everywhere it could be seen. A Mermaid
+  semicolon ends a statement, which is how one edit failed to render.
 - `website/` — GitHub Pages: `landing/index.html` (custom landing) + mdBook docs
   under `src/`. **`build-site.sh` is the ONE assembly**, run by both
   `pages.yml` and `docker compose run --rm site`; the two used to carry
@@ -2003,7 +2032,10 @@ hand-rolling byte detection: three hand-rolled attempts each failed, twice as
 a false negative and once declaring the whole repo corrupt — and its selector
 is PROBED in both directions since O55, because it had no probe at all while
 its own comment claimed the two failure modes were exercised). **Write files
-in BINARY mode on this repo.**
+in BINARY mode on this repo.** **And never quote `grep -c $'\r'` from this
+harness's shell**: on 2026-09-04 it returned 0 on a known CRLF sample, so
+every zero it had reported that day had measured nothing — a premise probe
+is what caught it, and `git ls-files --eol` is the only reader worth citing.
 
 **A local LLM is available for consultation** (maintainer's machine): LM Studio
 on `http://localhost:1234/v1`, OpenAI-compatible, model id `deephat-v1-7b` — a

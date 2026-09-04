@@ -39,6 +39,43 @@ an *undeclared* pin is still not a refusal.
 Fourth instance of *one declaration, two answers*, after the `undercroft-llm`
 case `parity.rs` records verbatim and O82c itself.
 
+### the three diagram sets describe the engine as shipped, and ten views that did not exist (O105)
+
+**ROADMAP O105 CLOSED.** A code-vs-diagram audit of all three sets found
+claims the engine contradicts, none of them visible to the figure gate:
+
+- `architecture/platform-views/` — the crate map drew a `store → llm` edge
+  no manifest has; the lifecycle view called `backup create` a signed,
+  recipient-sealed bundle (it copies the directory; export is the bundle);
+  the capability matrix gave the HTTP API a direct graph write and the
+  control plane key rotation; the integrity view said six verify legs after
+  1.3.0 shipped seven; the containment view listed three of "four" subkeys;
+  the write path drew validate and screen before the id and the embedding,
+  which the store computes first. All corrected, and **ten views added**:
+  audit namespaces and the agent fence, the two-phase key rotation, verify →
+  repair → backup, the five-hop transport policy, attested forgetting, the
+  three egress paths, the read choke point, the battery → CI → release
+  pipeline, the configuration classes, and the on-disk layout. Twenty-two
+  now, every one through `check.py`, `arch-check` green.
+- `architecture/diagrams/` — the key diagram showed two HKDF subkeys where
+  `unlock` derives four and omitted the stored graph secret; the write path
+  had no admission step; the morphology ladder drew the query's script as a
+  fallback when it is additive; smaller omissions in the retrieval,
+  layers and domain diagrams. The reference page's prose said "two named
+  POSTs" (three) and "four more things" verify checks (five). PDFs and the
+  inlined copies re-derived with `build.sh`.
+- `docs/diagrams/` and the canonical Mermaid — the key hierarchy named a
+  `fingerprint` key that does not exist, the components graph claimed the
+  orchestrator has no crate dependency and lacked `undercroft-config`, the
+  write-path sequence had no screen, the search pipeline lacked two reranker
+  values and the scope stage; four rendered SVGs had also drifted from their
+  own source blocks, one saying 34 MCP tools. Fourteen re-extracted and
+  re-rendered through the pinned mermaid-cli image.
+- `docs/AGENTS.md` said "six legs" twice. Seven.
+
+Nothing in `crates/` changed. The egress view draws O95 as the open gap it
+is. Residual: `docs/diagrams/` still has no gate (filed in O105).
+
 ## 1.3.0 — 2026-09-04
 
 MINOR: new capability, backward compatible. It adds a field beside ones that
