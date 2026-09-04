@@ -1288,6 +1288,374 @@ touching anyone's existing corpus.
 integrity verdict, and two different model files must produce two different
 identities.
 
+## 1.3.0 — released 2026-09-04
+
+Two security-relevant fixes and the gate pair that guards every figure this
+project publishes.
+
+MINOR: it ADDS a field beside ones that stay — `VerifyReport.policy_drift`,
+and a `policy_drift` key on `POST /v1/…/verify` — and nothing documented stops
+being accepted, which is this file's test for MINOR rather than PATCH.
+
+**One behavioural consequence is the point rather than a side effect**: a
+vault whose `wing_trust` or `retention_policy` rows were edited or deleted
+outside the engine now FAILS `verify`, and `backup create` gates on that
+verdict. `UPGRADING.md` carries it.
+
+**O93 and O94 are the same shape one table apart** — a keyed operator
+declaration that decides what a query may retrieve, and something able to
+ignore it. O94: nothing verified the declaration existed, so deleting the row
+lifted the floor silently. O93: a request argument overrode it, so an agent
+lifted the floor deliberately. Neither was reachable through the reserved
+quarantine wing, which is excluded unconditionally on its own path.
+
+**O97 and O103 are one question asked twice** — *may this count be compared?*
+— answered differently by two consumers because each implemented it
+separately. Filed separately, closed together, and the end-to-end arm found a
+defect in the fix that the unit drive and the self-test both passed over.
+
+
+### O94 — CLOSED 2026-09-03: `wing_trust` and `retention_policy` had no `VerifyReport` leg, and a DELETED row lifted a floor silently
+
+**Round six, audit-chain dimension. Verified: zero occurrences of either table
+in `verify()`'s body (`crates/undercroft-store/src/lib.rs:6796-7060`).**
+
+This is the rule that grew `verify` to six legs — *a keyed claim living in
+columns no drawer HMAC and no chain step covers must have a leg, or nothing
+sees it* — unapplied one table over.
+
+* A **flip** raises `StoreError::Integrity` from `wing_trusts()`
+  (`manage.rs:412-427`), so the retrieval path fails closed. But `verify` still
+  answers OK on all four renderers, and `backup create` gates on that verdict.
+* A **deletion** does not fail closed. With the row gone, `trust_clause`
+  finds an empty exclusion list and returns `Ok(None)` — *no floor active* — so
+  a wing the operator classed `quarantined` becomes retrievable under a
+  `standard` floor. Nothing anywhere reports it.
+
+**The evidence to detect it already exists and is not consulted.**
+`chain_append(&tx, .., Namespace::Trust, wing, &tag, &now)` (`manage.rs:403`)
+writes the *same* tag that goes into the row, and audit is append-only and
+rotation-preserved. `orphan_labels` cannot reach it: `lib.rs:7005-7015` maps
+every prefixed label that is not `kg-entity/` through
+`strip_prefix("kg/").unwrap_or_default()` → empty → `continue`. And that leg's
+own exclusion rationale (`lib.rs:2137-2143`) justifies skipping `del/`,
+`retention-clear/`, `read/`, `egress/` and `rotate/` because each has a
+legitimate path to an absent subject — **it never mentions `trust/`, which is
+the one prefix with no such path.** Applying the leg's stated reasoning
+includes `trust/`; the code excludes it by falling through a default.
+
+**Fix shape.** Either extend `orphan_labels` to `trust/` (its own reasoning
+already implies it) or add a seventh leg comparing each `wing_trust` row's tag
+to the `trust/{wing}` chain record. The second is stronger — it catches a
+deletion, which an orphan-label check by itself does not.
+
+**Gate.** Delete a `wing_trust` row behind the store's back and assert
+`verify().ok()` is false; then flip one and assert the same. Both fail today.
+
+---
+
+**CLOSED 2026-09-03.** Took the stronger of the two options offered: a
+**seventh leg**, `VerifyReport.policy_drift`, comparing each declared policy
+row to the chain record that assigned it. Extending `orphan_labels` to
+`trust/` was the weaker one and the entry said why — it catches a relabel, not
+a deletion.
+
+**Absence discriminates for trust and not for retention, and that asymmetry is
+the design.** There is no `DELETE FROM wing_trust` in the crate — assignment is
+insert-or-update only — so an orphaned `trust/` record is unambiguous, which is
+the choke-point argument `orphan_labels` already makes for a bare drawer id.
+`retention_policy` IS deletable, through `clear_retention`, which appends
+`retention-clear/` in the same transaction; so a missing retention row is
+legitimate exactly when that record is NEWER than the assignment. Comparing
+seq rather than mere existence is what stops a stale clear from excusing a row
+deleted after it — pinned by its own test.
+
+One ordered pass over `audit` and nothing per-row, because that table has no
+index on `record_id` — the cost lesson the orphan-label leg above it already
+paid, applied rather than re-learned. `ok()` counts the leg, without which it
+would be decorative: `backup create` gates on that verdict.
+
+**THE FIRST VERSION ALARMED ON EVERY ROTATED VAULT, and that is the mistake
+worth recording.** It compared the row's tag to the tag in the chain record —
+the obvious check, and wrong. Rotation re-tags `wing_trust` and
+`retention_policy` under the new keys while PRESERVING audit tags verbatim,
+because those are historical evidence; so row-tag == chain-tag holds only
+until the first rotation. This is O13's asymmetry one table over — *a keyed
+replay has a shorter lifetime than the document it checks* — and I wrote *"a
+leg that alarms on ordinary operation is how a leg gets ignored and then
+removed"* in the doc comment of the thing that did it. The battery caught it:
+`e2e` failed `verify ok after rotate — exit 2`, sixteen checks in that suite
+and one unit test.
+
+**The leg now asserts only what SURVIVES a rotation.** The row's own tag,
+recomputed under the CURRENT key — rotation re-tags, so a flip still fails —
+and the EXISTENCE of the record id, which rotation preserves verbatim, so a
+deletion still shows. The discarded tag comparison caught nothing the other
+two do not, except an insider who already holds the vault key. `seq` is still
+read, for the clear-ordering rule alone. A fifth test now guards the rotation
+case at unit speed rather than leaving it to a container.
+
+**The exposure, measured rather than argued.** Three drawers in a wing classed
+`quarantined`, one in an open wing, one query under a `standard` floor:
+
+| | hits |
+|---|---|
+| trust row present | **1** |
+| row deleted behind the store's back | **4** |
+
+All three quarantined drawers became retrievable, and before this leg `verify`
+answered `VERIFY OK`. It now exits 2 with
+`POLICY: trust/secret: assigned in the chain, row is gone`.
+
+**Four tests, and they are SPLIT on purpose.** The flip and the deletion began
+as one test with sequential assertions, and the counterfactual exposed why that
+is wrong: breaking the leg failed at the flip assertion and **never reached the
+deletion arm at all**, so the case the entry calls out as the silent one went
+unexercised while the transcript looked like a firing counterfactual. Split,
+all four fire independently with attributable messages. The fourth is the
+control — a policy cleared through the supported path is NOT drift — without
+which the leg would alarm on ordinary operation, which is how a leg gets
+ignored and then removed.
+
+Rendered on all four surfaces. `parity.rs::HAND_PROJECTED` enforced that by
+refusing to build, naming `policy_drift` as reaching `/v1` for free and
+stopping at the operator surface — the gate doing exactly what the `ui.html`
+entry above it was added for.
+
+### O93 — CLOSED 2026-09-03: a request `min_trust` REPLACED the operator's declared floor and could lower it from an agent surface
+
+**Round six, operational-capabilities dimension. Verified by reading the
+selection and the clause.**
+
+`crates/undercroft-store/src/lib.rs:5548-5553`:
+
+```rust
+let effective_floor = match (opts.min_trust.as_deref(), opts.wing.as_deref()) {
+    (Some(t), _) => Some(t),                       // request wins, unconditionally
+    (None, Some(_)) => None,
+    (None, None) => self.trust_floor.as_deref(),   // the operator's declaration
+};
+```
+
+`TRUST_VOCAB` is `["quarantined", "standard", "trusted"]`
+(`undercroft-core/src/lib.rs:143`), so `trust_rank("quarantined") == 0`, and
+`trust_clause` returns `Ok(None)` — **no exclusion at all** — for a rank-0
+floor (`manage.rs:437-443`).
+
+So on a vault opened with `UNDERCROFT_TRUST_FLOOR=trusted`, an MCP call
+`undercroft_search {"query":"…","min_trust":"quarantined"}` passes
+`validate_trust` (it is in the vocabulary) and removes the deployment's floor
+for that query. Same on `/v1` (`tenant.rs:849`).
+
+**Three surfaces state the opposite.** `lib.rs:2069-2072` says it *"**Composes**
+with the vault-level `UNDERCROFT_TRUST_FLOOR`"* — it replaces.
+`docs/AGENTS.md:1133` says *"Reading with a floor is **self-protection** and
+always allowed."* And `parity.rs:365-366` justifies keeping trust ASSIGNMENT
+operator-only because *"an agent assigning it chooses its own floor"* — which
+is the harm `min_trust` already permits.
+
+**Proportion, stated rather than left to the reader.** The reserved quarantine
+WING is separately and unconditionally excluded (`lib.rs:5563-5590`), so
+screened-and-diverted content is **not** reachable this way. The exposure is
+wings an operator deliberately classed `standard` or `quarantined`. An explicit
+`wing` scope also bypasses the vault floor by design — but that confines the
+answer to one named wing, where this lifts the floor corpus-wide.
+
+**Fix shape needs a RULING, not a patch, and the options differ in what they
+break.** (a) Compose — take the stricter of the two ranks, which makes the
+rustdoc true and cannot be lowered; the cost is that a caller can no longer
+widen below the deployment's floor even where that is legitimate. (b) Keep
+replacement but clamp to the vault floor when one is declared. (c) Declare the
+current behaviour intended and fix all three documents instead. **The tree does
+not settle this** — the doctrine says a deployment-assigned floor is what an
+agent must not choose, which argues (a)/(b); the parameter's own doc argues it
+is self-protection, which argues (c).
+
+**Gate.** A test opening a vault with a declared floor and issuing a search
+with a LOWER `min_trust`, asserting whichever ruling lands — and asserting it
+on BOTH surfaces. Nothing exercises the two together today: `tests/e2e.sh:550`
+covers the vault floor, `lib.rs:15667` covers the request floor.
+
+---
+
+**CLOSED 2026-09-03. Ruling: option (a) — a request floor may RAISE the
+vault's, never lower it.** Taken by the maintainer after the options were laid
+out with what each costs.
+
+**(a) and (b) as filed are the same function** — "compose, take the stricter"
+and "replace but clamp to the vault floor" both evaluate to `max(request,
+vault)`. The axis the entry did not separate is whether the `wing`-scope
+bypass survives. It does: naming a wing confines the answer to that wing,
+where the defect was a corpus-wide lift, and tightening it would break a
+promise the tree defends on purpose.
+
+**ONE implementation, which was the load-bearing part of the fix.**
+`effective_trust_floor(request, wing, vault)` in `manage.rs` is now the only
+place this precedence exists. It existed TWICE — the store's
+`resolve_search_policy` and `cli/search.rs`, the latter added deliberately so
+the honest-exclusion disclosure matches, carrying a comment that reading it
+differently *"would disclose an exclusion that did not happen, or miss one
+that did"*. Clamping only the store would have made the reply say *0 wings
+excluded* while the store excluded several. Both call the one function; an
+e2e check drives that disclosure specifically.
+
+**Rejecting `min_trust: "quarantined"` — proposed alongside the ruling and
+then withdrawn on inspection.** It is unnecessary once the clamp lands (with a
+vault floor it clamps up; without one it names the default) and it would be a
+MAJOR by this project's own test, a documented value that stops being
+accepted. The value stays accepted.
+
+**`parity.rs`'s trust-assignment boundary is now TRUE rather than
+undermined.** It keeps `TrustAction::Set` off MCP because *"an agent assigning
+it chooses its own floor"* — an argument `min_trust` previously made hollow by
+permitting the same outcome without the assignment.
+
+**THE RETRIEVAL CLAIM I MADE WHEN OFFERING THE OPTIONS IS WITHDRAWN, MEASURED
+AND NOT ESTABLISHED.** I argued the clamp would likely make floored queries
+faster by keeping them on the `Only`/narrowing path rather than letting a
+lowered floor convert them to a corpus-shaped `AllBut`. Three runs:
+
+| corpus | result |
+|---|---|
+| 361,752 drawers, `pq` | ~2.4% spread across all four arms — no signal |
+| 130 drawers | **vacuous** — its own sanity arm reported every floor returning identical hits |
+| 2,400 drawers, both wings answering | Allow **71** ms/q vs the other arm **69** ms/q — no difference |
+
+And the third run's "Exclude" arm was not an exclusion: at `floor=standard`
+with nothing classed below it, `trust_clause` returns no clause at all, so it
+compared narrowing against UNFILTERED. **The Allow-vs-AllBut comparison was
+never established.** The mechanism is real and visible in the code —
+`narrows()` gates `scoped_pool_k` — but the latency consequence is not
+demonstrated, and it is recorded here as unproven rather than repeated as
+though it were.
+
+Two method notes from those runs, both this file's own lessons met again: the
+FIRST measurement used a stale `/src/target` binary and every number was the
+old behaviour's (caught by adding a functional freshness probe — does the
+clamp hold? — rather than a timestamp), and the second compared a path to
+itself until a sanity arm asserting the floors return DIFFERENT results said
+so.
+
+### O97 — CLOSED 2026-09-03: O85's `COUNT UNVERIFIABLE` guarded the cargo reader only; the shell-suite consumer stripped the same marker and compared anyway
+
+**Round six, gates dimension (D11).**
+
+`suite_summary` emits the same untrustworthy-count marker for a doubled
+shell-suite log (`tests/battery.sh:257-259`). The post-run consumer then strips
+it:
+
+```
+2092:  line=$(suite_summary ".battery/$n.log")
+2093:  measured=$(sed -E 's/.*results: ([0-9]+) passed, ([0-9]+) failed.*/\1 \2/' <<< "$line")
+```
+
+The trailing `.*` eats the marker, so a doubled log yields a number and the
+comparison proceeds. The `FIGURE_UNVERIFIABLE` guard exists only at
+`tests/battery.sh:2146-2148`, inside `if … grep -qx test`.
+
+**The triggering condition has been observed in this repo** — the comment at
+`tests/battery.sh:246-248` records a real `backends-e2e` log carrying both
+`56 passed, 1 failed` and `54 passed, 3 failed`. Effect: an intermittent docker
+replay on a CI suite leg reports **PUBLISHED FIGURES ARE STALE** naming figures
+that are correct, which is O85's defect verbatim, one reader over. O85's
+`Residual, stated` paragraph does not mention the shell arm, so this is not a
+recorded residual.
+
+O85's own new self-tests are asymmetric in the same way: `:337-352` asserts the
+cargo consumer SEES the marker; `:414-417` asserts only that `suite_summary`
+EMITS its own. Nothing asserts anyone guards on it.
+
+**Fix shape.** Make the shell arm set `FIGURE_UNVERIFIABLE` on the same
+condition, and match the marker before stripping rather than after.
+
+**Gate.** Extend O85's existing self-test to assert the shell consumer's
+verdict on a synthetic doubled log — the arm that exists for cargo and not for
+the other seven suites.
+
+---
+
+**CLOSED 2026-09-03, together with O103** — they are one question asked twice,
+*may this count be compared?*, and the two consumers answered it differently
+because each implemented it separately. `count_untrustworthy` is the single
+answer now; the marker is matched BEFORE the strip, and both arms call it.
+
+Gate as prescribed, plus the half the entry identified as missing: O85's
+self-tests proved each reader EMITS its marker and nothing proved a consumer
+GUARDS on it. Three arms now drive the real helper — a failed suite, a doubled
+shell log, and a clean passing suite that must still be compared, without
+which a helper answering "untrustworthy" to everything would silence the
+comparison entirely and report what a clean tree reports.
+
+### O103 — CLOSED 2026-09-03: the figure comparison ran on a suite that FAILED, and reported a truncated count as doc drift
+
+**Found 2026-09-03 while closing O93.** Verified by reading the guard and by
+the run that produced it.
+
+`tests/battery.sh:2129` compares the published cargo-test figure whenever the
+`test` suite was in the run. It refuses to compare a count that is
+non-numeric, and — since O85 — one carrying `** PREMISE FAILURE **` from a
+replayed log. **It does not refuse a count from a suite that simply FAILED.**
+
+A single failing test aborts `cargo test` at that target, so the run reports a
+real, numeric, replay-free count over a fraction of the targets. Observed:
+
+```
+ test  exit 101   93 passed, 1 failed, 0 ignored over 2 targets
+ PUBLISHED FIGURES ARE STALE
+   cargo tests: CLAUDE.md publishes 798 run, this run measured 93
+```
+
+The suite exited **101** and the battery still told me to update the published
+figure to 93. That is the exact harm the O85 comment four lines above the
+guard describes — *"it sends the next person to edit a figure that was already
+right"* — reached through a door O85 did not close, because it reasoned about
+replays rather than about failures.
+
+**Fix shape.** The battery already knows each suite's exit code; gate the
+comparison on `test` having exited 0, and report `COUNT UNVERIFIABLE — the
+suite failed` otherwise. That is the verdict O85 introduced, applied to the
+other way a count can be untrustworthy. It must still FAIL the battery: the
+suite failing is already a failure, and a gate that cannot measure must not
+report clean.
+
+**Gate.** Run the battery over a tree with one deliberately failing test and
+assert the output says the count is unverifiable rather than naming a
+doc-drift figure. The premise arm is the same run on a green tree, which must
+still compare figures normally — without it, a guard that disabled the
+comparison entirely would pass.
+
+**Not fixed inside O93**, whose subject is the trust floor. Filed rather than
+folded in, because a battery-reader change wants its own counterfactual and
+this commit is already large.
+
+---
+
+**CLOSED 2026-09-03 with O97.** The suite's exit code is checked FIRST, before
+the reader's own marker, because it is the stronger signal and the one no
+marker can express: a `cargo test` that aborts at the first failing target
+produces a real, numeric, replay-free count over a fraction of the targets.
+
+**THE END-TO-END ARM IS WHAT EARNED ITS KEEP, and it found a defect in the fix
+that two other checks passed over.** Appending to `FIGURE_UNVERIFIABLE` in both
+consumers meant both READ it, and it was only ever assigned — so under `set -u`
+a genuinely failing suite died with `FIGURE_UNVERIFIABLE: unbound variable`
+AFTER the verdict table, swallowing the exact verdict this entry exists to
+print. That is **M53's `LANDING: unbound variable` defect verbatim**, a
+variable read by post-run code and set somewhere that does not always run, and
+a reader that crashes on the failure path cannot report. The unit drive of the
+helper passed. The preflight self-test passed. Only running the battery over a
+tree with a deliberately failing test showed it.
+
+**And then the verdict PROSE was false.** The block was written for one cause
+and said so in every line — *"the suites passed"*, *"reported a premise
+failure"*, *"describes a replayed log"*, *"the replay is intermittent, re-run"*.
+Once a failed suite could reach it, all four were wrong in the case that
+matters most, and the advice actively misdirected: re-running does not fix a
+deterministic failure. The per-line reason names the cause; the surrounding
+prose now states only what is true of both. **A correct verdict wrapped in a
+false explanation is still a false message**, and nothing but reading the real
+output would have caught it.
+
 ## 1.2.2 — released 2026-09-03
 
 One unit, and it exists because the release before it was incomplete.
@@ -6599,303 +6967,6 @@ already concluded for relational claims.
 
 ---
 
-### O103 — CLOSED 2026-09-03: the figure comparison ran on a suite that FAILED, and reported a truncated count as doc drift
-
-**Found 2026-09-03 while closing O93.** Verified by reading the guard and by
-the run that produced it.
-
-`tests/battery.sh:2129` compares the published cargo-test figure whenever the
-`test` suite was in the run. It refuses to compare a count that is
-non-numeric, and — since O85 — one carrying `** PREMISE FAILURE **` from a
-replayed log. **It does not refuse a count from a suite that simply FAILED.**
-
-A single failing test aborts `cargo test` at that target, so the run reports a
-real, numeric, replay-free count over a fraction of the targets. Observed:
-
-```
- test  exit 101   93 passed, 1 failed, 0 ignored over 2 targets
- PUBLISHED FIGURES ARE STALE
-   cargo tests: CLAUDE.md publishes 798 run, this run measured 93
-```
-
-The suite exited **101** and the battery still told me to update the published
-figure to 93. That is the exact harm the O85 comment four lines above the
-guard describes — *"it sends the next person to edit a figure that was already
-right"* — reached through a door O85 did not close, because it reasoned about
-replays rather than about failures.
-
-**Fix shape.** The battery already knows each suite's exit code; gate the
-comparison on `test` having exited 0, and report `COUNT UNVERIFIABLE — the
-suite failed` otherwise. That is the verdict O85 introduced, applied to the
-other way a count can be untrustworthy. It must still FAIL the battery: the
-suite failing is already a failure, and a gate that cannot measure must not
-report clean.
-
-**Gate.** Run the battery over a tree with one deliberately failing test and
-assert the output says the count is unverifiable rather than naming a
-doc-drift figure. The premise arm is the same run on a green tree, which must
-still compare figures normally — without it, a guard that disabled the
-comparison entirely would pass.
-
-**Not fixed inside O93**, whose subject is the trust floor. Filed rather than
-folded in, because a battery-reader change wants its own counterfactual and
-this commit is already large.
-
----
-
-**CLOSED 2026-09-03 with O97.** The suite's exit code is checked FIRST, before
-the reader's own marker, because it is the stronger signal and the one no
-marker can express: a `cargo test` that aborts at the first failing target
-produces a real, numeric, replay-free count over a fraction of the targets.
-
-**THE END-TO-END ARM IS WHAT EARNED ITS KEEP, and it found a defect in the fix
-that two other checks passed over.** Appending to `FIGURE_UNVERIFIABLE` in both
-consumers meant both READ it, and it was only ever assigned — so under `set -u`
-a genuinely failing suite died with `FIGURE_UNVERIFIABLE: unbound variable`
-AFTER the verdict table, swallowing the exact verdict this entry exists to
-print. That is **M53's `LANDING: unbound variable` defect verbatim**, a
-variable read by post-run code and set somewhere that does not always run, and
-a reader that crashes on the failure path cannot report. The unit drive of the
-helper passed. The preflight self-test passed. Only running the battery over a
-tree with a deliberately failing test showed it.
-
-**And then the verdict PROSE was false.** The block was written for one cause
-and said so in every line — *"the suites passed"*, *"reported a premise
-failure"*, *"describes a replayed log"*, *"the replay is intermittent, re-run"*.
-Once a failed suite could reach it, all four were wrong in the case that
-matters most, and the advice actively misdirected: re-running does not fix a
-deterministic failure. The per-line reason names the cause; the surrounding
-prose now states only what is true of both. **A correct verdict wrapped in a
-false explanation is still a false message**, and nothing but reading the real
-output would have caught it.
-
----
-
-### O93 — CLOSED 2026-09-03: a request `min_trust` REPLACED the operator's declared floor and could lower it from an agent surface
-
-**Round six, operational-capabilities dimension. Verified by reading the
-selection and the clause.**
-
-`crates/undercroft-store/src/lib.rs:5548-5553`:
-
-```rust
-let effective_floor = match (opts.min_trust.as_deref(), opts.wing.as_deref()) {
-    (Some(t), _) => Some(t),                       // request wins, unconditionally
-    (None, Some(_)) => None,
-    (None, None) => self.trust_floor.as_deref(),   // the operator's declaration
-};
-```
-
-`TRUST_VOCAB` is `["quarantined", "standard", "trusted"]`
-(`undercroft-core/src/lib.rs:143`), so `trust_rank("quarantined") == 0`, and
-`trust_clause` returns `Ok(None)` — **no exclusion at all** — for a rank-0
-floor (`manage.rs:437-443`).
-
-So on a vault opened with `UNDERCROFT_TRUST_FLOOR=trusted`, an MCP call
-`undercroft_search {"query":"…","min_trust":"quarantined"}` passes
-`validate_trust` (it is in the vocabulary) and removes the deployment's floor
-for that query. Same on `/v1` (`tenant.rs:849`).
-
-**Three surfaces state the opposite.** `lib.rs:2069-2072` says it *"**Composes**
-with the vault-level `UNDERCROFT_TRUST_FLOOR`"* — it replaces.
-`docs/AGENTS.md:1133` says *"Reading with a floor is **self-protection** and
-always allowed."* And `parity.rs:365-366` justifies keeping trust ASSIGNMENT
-operator-only because *"an agent assigning it chooses its own floor"* — which
-is the harm `min_trust` already permits.
-
-**Proportion, stated rather than left to the reader.** The reserved quarantine
-WING is separately and unconditionally excluded (`lib.rs:5563-5590`), so
-screened-and-diverted content is **not** reachable this way. The exposure is
-wings an operator deliberately classed `standard` or `quarantined`. An explicit
-`wing` scope also bypasses the vault floor by design — but that confines the
-answer to one named wing, where this lifts the floor corpus-wide.
-
-**Fix shape needs a RULING, not a patch, and the options differ in what they
-break.** (a) Compose — take the stricter of the two ranks, which makes the
-rustdoc true and cannot be lowered; the cost is that a caller can no longer
-widen below the deployment's floor even where that is legitimate. (b) Keep
-replacement but clamp to the vault floor when one is declared. (c) Declare the
-current behaviour intended and fix all three documents instead. **The tree does
-not settle this** — the doctrine says a deployment-assigned floor is what an
-agent must not choose, which argues (a)/(b); the parameter's own doc argues it
-is self-protection, which argues (c).
-
-**Gate.** A test opening a vault with a declared floor and issuing a search
-with a LOWER `min_trust`, asserting whichever ruling lands — and asserting it
-on BOTH surfaces. Nothing exercises the two together today: `tests/e2e.sh:550`
-covers the vault floor, `lib.rs:15667` covers the request floor.
-
----
-
-**CLOSED 2026-09-03. Ruling: option (a) — a request floor may RAISE the
-vault's, never lower it.** Taken by the maintainer after the options were laid
-out with what each costs.
-
-**(a) and (b) as filed are the same function** — "compose, take the stricter"
-and "replace but clamp to the vault floor" both evaluate to `max(request,
-vault)`. The axis the entry did not separate is whether the `wing`-scope
-bypass survives. It does: naming a wing confines the answer to that wing,
-where the defect was a corpus-wide lift, and tightening it would break a
-promise the tree defends on purpose.
-
-**ONE implementation, which was the load-bearing part of the fix.**
-`effective_trust_floor(request, wing, vault)` in `manage.rs` is now the only
-place this precedence exists. It existed TWICE — the store's
-`resolve_search_policy` and `cli/search.rs`, the latter added deliberately so
-the honest-exclusion disclosure matches, carrying a comment that reading it
-differently *"would disclose an exclusion that did not happen, or miss one
-that did"*. Clamping only the store would have made the reply say *0 wings
-excluded* while the store excluded several. Both call the one function; an
-e2e check drives that disclosure specifically.
-
-**Rejecting `min_trust: "quarantined"` — proposed alongside the ruling and
-then withdrawn on inspection.** It is unnecessary once the clamp lands (with a
-vault floor it clamps up; without one it names the default) and it would be a
-MAJOR by this project's own test, a documented value that stops being
-accepted. The value stays accepted.
-
-**`parity.rs`'s trust-assignment boundary is now TRUE rather than
-undermined.** It keeps `TrustAction::Set` off MCP because *"an agent assigning
-it chooses its own floor"* — an argument `min_trust` previously made hollow by
-permitting the same outcome without the assignment.
-
-**THE RETRIEVAL CLAIM I MADE WHEN OFFERING THE OPTIONS IS WITHDRAWN, MEASURED
-AND NOT ESTABLISHED.** I argued the clamp would likely make floored queries
-faster by keeping them on the `Only`/narrowing path rather than letting a
-lowered floor convert them to a corpus-shaped `AllBut`. Three runs:
-
-| corpus | result |
-|---|---|
-| 361,752 drawers, `pq` | ~2.4% spread across all four arms — no signal |
-| 130 drawers | **vacuous** — its own sanity arm reported every floor returning identical hits |
-| 2,400 drawers, both wings answering | Allow **71** ms/q vs the other arm **69** ms/q — no difference |
-
-And the third run's "Exclude" arm was not an exclusion: at `floor=standard`
-with nothing classed below it, `trust_clause` returns no clause at all, so it
-compared narrowing against UNFILTERED. **The Allow-vs-AllBut comparison was
-never established.** The mechanism is real and visible in the code —
-`narrows()` gates `scoped_pool_k` — but the latency consequence is not
-demonstrated, and it is recorded here as unproven rather than repeated as
-though it were.
-
-Two method notes from those runs, both this file's own lessons met again: the
-FIRST measurement used a stale `/src/target` binary and every number was the
-old behaviour's (caught by adding a functional freshness probe — does the
-clamp hold? — rather than a timestamp), and the second compared a path to
-itself until a sanity arm asserting the floors return DIFFERENT results said
-so.
-
----
-
-### O94 — CLOSED 2026-09-03: `wing_trust` and `retention_policy` had no `VerifyReport` leg, and a DELETED row lifted a floor silently
-
-**Round six, audit-chain dimension. Verified: zero occurrences of either table
-in `verify()`'s body (`crates/undercroft-store/src/lib.rs:6796-7060`).**
-
-This is the rule that grew `verify` to six legs — *a keyed claim living in
-columns no drawer HMAC and no chain step covers must have a leg, or nothing
-sees it* — unapplied one table over.
-
-* A **flip** raises `StoreError::Integrity` from `wing_trusts()`
-  (`manage.rs:412-427`), so the retrieval path fails closed. But `verify` still
-  answers OK on all four renderers, and `backup create` gates on that verdict.
-* A **deletion** does not fail closed. With the row gone, `trust_clause`
-  finds an empty exclusion list and returns `Ok(None)` — *no floor active* — so
-  a wing the operator classed `quarantined` becomes retrievable under a
-  `standard` floor. Nothing anywhere reports it.
-
-**The evidence to detect it already exists and is not consulted.**
-`chain_append(&tx, .., Namespace::Trust, wing, &tag, &now)` (`manage.rs:403`)
-writes the *same* tag that goes into the row, and audit is append-only and
-rotation-preserved. `orphan_labels` cannot reach it: `lib.rs:7005-7015` maps
-every prefixed label that is not `kg-entity/` through
-`strip_prefix("kg/").unwrap_or_default()` → empty → `continue`. And that leg's
-own exclusion rationale (`lib.rs:2137-2143`) justifies skipping `del/`,
-`retention-clear/`, `read/`, `egress/` and `rotate/` because each has a
-legitimate path to an absent subject — **it never mentions `trust/`, which is
-the one prefix with no such path.** Applying the leg's stated reasoning
-includes `trust/`; the code excludes it by falling through a default.
-
-**Fix shape.** Either extend `orphan_labels` to `trust/` (its own reasoning
-already implies it) or add a seventh leg comparing each `wing_trust` row's tag
-to the `trust/{wing}` chain record. The second is stronger — it catches a
-deletion, which an orphan-label check by itself does not.
-
-**Gate.** Delete a `wing_trust` row behind the store's back and assert
-`verify().ok()` is false; then flip one and assert the same. Both fail today.
-
----
-
-**CLOSED 2026-09-03.** Took the stronger of the two options offered: a
-**seventh leg**, `VerifyReport.policy_drift`, comparing each declared policy
-row to the chain record that assigned it. Extending `orphan_labels` to
-`trust/` was the weaker one and the entry said why — it catches a relabel, not
-a deletion.
-
-**Absence discriminates for trust and not for retention, and that asymmetry is
-the design.** There is no `DELETE FROM wing_trust` in the crate — assignment is
-insert-or-update only — so an orphaned `trust/` record is unambiguous, which is
-the choke-point argument `orphan_labels` already makes for a bare drawer id.
-`retention_policy` IS deletable, through `clear_retention`, which appends
-`retention-clear/` in the same transaction; so a missing retention row is
-legitimate exactly when that record is NEWER than the assignment. Comparing
-seq rather than mere existence is what stops a stale clear from excusing a row
-deleted after it — pinned by its own test.
-
-One ordered pass over `audit` and nothing per-row, because that table has no
-index on `record_id` — the cost lesson the orphan-label leg above it already
-paid, applied rather than re-learned. `ok()` counts the leg, without which it
-would be decorative: `backup create` gates on that verdict.
-
-**THE FIRST VERSION ALARMED ON EVERY ROTATED VAULT, and that is the mistake
-worth recording.** It compared the row's tag to the tag in the chain record —
-the obvious check, and wrong. Rotation re-tags `wing_trust` and
-`retention_policy` under the new keys while PRESERVING audit tags verbatim,
-because those are historical evidence; so row-tag == chain-tag holds only
-until the first rotation. This is O13's asymmetry one table over — *a keyed
-replay has a shorter lifetime than the document it checks* — and I wrote *"a
-leg that alarms on ordinary operation is how a leg gets ignored and then
-removed"* in the doc comment of the thing that did it. The battery caught it:
-`e2e` failed `verify ok after rotate — exit 2`, sixteen checks in that suite
-and one unit test.
-
-**The leg now asserts only what SURVIVES a rotation.** The row's own tag,
-recomputed under the CURRENT key — rotation re-tags, so a flip still fails —
-and the EXISTENCE of the record id, which rotation preserves verbatim, so a
-deletion still shows. The discarded tag comparison caught nothing the other
-two do not, except an insider who already holds the vault key. `seq` is still
-read, for the clear-ordering rule alone. A fifth test now guards the rotation
-case at unit speed rather than leaving it to a container.
-
-**The exposure, measured rather than argued.** Three drawers in a wing classed
-`quarantined`, one in an open wing, one query under a `standard` floor:
-
-| | hits |
-|---|---|
-| trust row present | **1** |
-| row deleted behind the store's back | **4** |
-
-All three quarantined drawers became retrievable, and before this leg `verify`
-answered `VERIFY OK`. It now exits 2 with
-`POLICY: trust/secret: assigned in the chain, row is gone`.
-
-**Four tests, and they are SPLIT on purpose.** The flip and the deletion began
-as one test with sequential assertions, and the counterfactual exposed why that
-is wrong: breaking the leg failed at the flip assertion and **never reached the
-deletion arm at all**, so the case the entry calls out as the silent one went
-unexercised while the transcript looked like a firing counterfactual. Split,
-all four fire independently with attributable messages. The fourth is the
-control — a policy cleared through the supported path is NOT drift — without
-which the leg would alarm on ordinary operation, which is how a leg gets
-ignored and then removed.
-
-Rendered on all four surfaces. `parity.rs::HAND_PROJECTED` enforced that by
-refusing to build, naming `policy_drift` as reaching `/v1` for free and
-stopping at the operator surface — the gate doing exactly what the `ui.html`
-entry above it was added for.
-
----
-
 ### O95 — `refine` records no egress on its error paths, and the residual excusing that cites a precedent which fixed it
 
 **Round six, audit-chain dimension. Verified by reading both functions.**
@@ -6980,58 +7051,6 @@ guard.
 that can see this asserts the resolver is called on every construction path —
 or, more cheaply, a test that a whitespace-only `UNDERCROFT_INDEX_CA` refuses
 for **each of the five backends**, which is the observable the defect moves.
-
----
-
-### O97 — CLOSED 2026-09-03: O85's `COUNT UNVERIFIABLE` guarded the cargo reader only; the shell-suite consumer stripped the same marker and compared anyway
-
-**Round six, gates dimension (D11).**
-
-`suite_summary` emits the same untrustworthy-count marker for a doubled
-shell-suite log (`tests/battery.sh:257-259`). The post-run consumer then strips
-it:
-
-```
-2092:  line=$(suite_summary ".battery/$n.log")
-2093:  measured=$(sed -E 's/.*results: ([0-9]+) passed, ([0-9]+) failed.*/\1 \2/' <<< "$line")
-```
-
-The trailing `.*` eats the marker, so a doubled log yields a number and the
-comparison proceeds. The `FIGURE_UNVERIFIABLE` guard exists only at
-`tests/battery.sh:2146-2148`, inside `if … grep -qx test`.
-
-**The triggering condition has been observed in this repo** — the comment at
-`tests/battery.sh:246-248` records a real `backends-e2e` log carrying both
-`56 passed, 1 failed` and `54 passed, 3 failed`. Effect: an intermittent docker
-replay on a CI suite leg reports **PUBLISHED FIGURES ARE STALE** naming figures
-that are correct, which is O85's defect verbatim, one reader over. O85's
-`Residual, stated` paragraph does not mention the shell arm, so this is not a
-recorded residual.
-
-O85's own new self-tests are asymmetric in the same way: `:337-352` asserts the
-cargo consumer SEES the marker; `:414-417` asserts only that `suite_summary`
-EMITS its own. Nothing asserts anyone guards on it.
-
-**Fix shape.** Make the shell arm set `FIGURE_UNVERIFIABLE` on the same
-condition, and match the marker before stripping rather than after.
-
-**Gate.** Extend O85's existing self-test to assert the shell consumer's
-verdict on a synthetic doubled log — the arm that exists for cargo and not for
-the other seven suites.
-
----
-
-**CLOSED 2026-09-03, together with O103** — they are one question asked twice,
-*may this count be compared?*, and the two consumers answered it differently
-because each implemented it separately. `count_untrustworthy` is the single
-answer now; the marker is matched BEFORE the strip, and both arms call it.
-
-Gate as prescribed, plus the half the entry identified as missing: O85's
-self-tests proved each reader EMITS its marker and nothing proved a consumer
-GUARDS on it. Three arms now drive the real helper — a failed suite, a doubled
-shell log, and a clean passing suite that must still be compared, without
-which a helper answering "untrustworthy" to everything would silence the
-comparison entirely and report what a clean tree reports.
 
 ---
 
