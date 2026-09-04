@@ -99,6 +99,18 @@ Gated by two unit tests driving `refine()` against a loopback stub, an
 integration test through the real binary on both the CLI and `/v1`, and an
 e2e arm; the pre-fix shape restored in the built image fails all of them.
 
+### `context-check.sh <session-id>` measures on Git Bash (O106)
+
+**ROADMAP O106 CLOSED.** The project-root derivation was `A && B || C && D`,
+which parses as `((A && B) || C) && D`: on a shell where `pwd -W` succeeds
+both `pwd`s ran, the root was two lines, the slug carried a newline, and the
+documented session-id invocation always refused while the full-path form
+worked. Braces make the alternation one command; a guard refuses a multi-line
+root outright. `CLAUDE_PROJECT_DIR`, which names the repo root and not the
+transcripts, is no longer consulted, and a dead `PROJ_OVERRIDE` is removed.
+Two self-test arms drive the session-id form under a fake home for this
+project's slug, with and without the harness's project variable.
+
 ## 1.3.0 — 2026-09-04
 
 MINOR: new capability, backward compatible. It adds a field beside ones that

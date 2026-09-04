@@ -6971,7 +6971,7 @@ audit looks like, and it is a unit, not a preflight.
 
 ---
 
-### O106 — `context-check.sh <session-id>` refuses on Git Bash, and O104's self-test cannot see it
+### O106 — CLOSED 2026-09-04: `context-check.sh <session-id>` refused on Git Bash, and O104's self-test could not see it
 
 **Found 2026-09-04, the first time the O104 doctrine was followed.** The
 handover says *run it with the session id*; run that way it printed
@@ -6999,6 +6999,31 @@ line. **Gate**: a self-test arm that copies a real transcript under a
 synthetic `HOME`/`projects/<slug>/` for THIS project and runs `bash "$0"
 <id>` — the session-id form — requiring a measurement, plus a premise arm
 asserting `ROOT` is a single line.
+
+---
+
+**CLOSED 2026-09-04.** The braces, exactly as filed, plus a guard that refuses
+when `ROOT` resolves to more than one line rather than letting a newline into
+the slug. **Two O104 leftovers in the same lines, fixed with it**: `PROJ`
+still honoured `CLAUDE_PROJECT_DIR` one line below a comment explaining that
+variable names the repo root and holds no transcripts — so under a hook the
+session-id form pointed at the wrong directory — and the self-test's
+`PROJ_OVERRIDE=1` was read by nothing. Gone, and gone.
+
+**Gates**: two self-test arms — the session-id form measured under a fake
+`HOME` built for THIS project's slug, and the same with `CLAUDE_PROJECT_DIR`
+set to the repo root as hooks set it. Counterfactual against the artifact:
+the old `ROOT` line restored in a temp copy makes the self-test fail at the
+new guard on every arm. Verified live: the documented invocation now measures
+(87.3% at the time), where it had refused.
+
+**Residual, stated**: no battery preflight runs `--self-test`, because two of
+its arms need a real transcript under `~/.claude` and a CI runner has none —
+and a preflight that skips when it has nothing to examine is the pass-on-
+nothing shape. The honest gate is a `--check-derivation` mode that prints the
+slug and fails on a multi-line `ROOT` or a slug without the repo's basename,
+run as a fifteenth preflight; filed here rather than built, because it moves
+the gated preflight count and this session was at the context stop-line.
 
 ---
 

@@ -3004,7 +3004,7 @@ updating every governance surface**
 tests/context-check.sh`** — **and pass it the session id from the
 system prompt's transcript path** (ROADMAP O104: with no argument it guessed
 at the project AND the session, measured a different project, and reported 8%
-for a session that was 84% full). This rule was stated for weeks with no way to
+for a session that was 84% full; and O106: the session-id form itself REFUSED on Git Bash until 2026-09-04, because the root derivation put a newline in the slug, while the full-path form always worked — the O104 self-test drove only the latter). This rule was stated for weeks with no way to
 evaluate it, so it was applied by feel and applied WRONG, repeatedly and in
 one direction: on 2026-08-18 the agent announced it was near the budget at a
 measured **54%**, having assumed a 200,000-token window when the real one is
