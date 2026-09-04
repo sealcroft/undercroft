@@ -7027,7 +7027,7 @@ the gated preflight count and this session was at the context stop-line.
 
 ---
 
-### O107 — the battery's test-count reader can fail a GREEN suite on CI, because GitHub's log capture interleaves lines
+### O107 — CLOSED 2026-09-04: the battery's test-count reader could fail a GREEN suite on CI, because GitHub's log capture interleaves lines
 
 **Found 2026-09-04 on the O106 pull request.** The `test` suite exited 0 with
 every target green (twelve targets summing to 801), and the battery still
@@ -7052,6 +7052,34 @@ gains a fixture with a header glued to a test line and must pair it.
 **Until then**: a red `suite (test)` whose log ends `exit 0` with a PREMISE
 FAILURE naming orphan lines is this, and `gh run rerun --failed` is the
 remedy — never editing a published figure, as the message already says.
+
+---
+
+**CLOSED 2026-09-04.** The header match is anchored anywhere in the line, and
+the reader COUNTS outstanding headers instead of pairing by strict alternation
+— **a deviation from the filed shape, and counterfactualing the filed FIX is
+what forced it.** The real CI log (run 33905992514, the `test` leg) shows the
+`undercroft_core` header glued onto a partial `undercroft_config` test line
+ABOVE config's own `test result:`. Under alternation the flag was already set
+by config's header, core's header was absorbed, config's result cleared the
+flag, and core's result was still an orphan: the filed fix applied to the old
+reader verbatim and run over that log reproduces `573 passed, 0 failed, 4
+ignored over 19 targets — 1 orphan` exactly. Counting is order-blind — the
+same log reads `801 passed, 0 failed, 4 ignored over 20 targets`, clean —
+under gawk 5.4 and under mawk 1.3.4 (`ubuntu:24.04`, CI's awk; two-argument
+`match()` only, the three-argument form being the GNU extension the
+published-figures reader already avoids). The replay arm is untouched, since a
+replayed tail still has no header to consume, and a header whose target never
+reported — which alternation silently overwrote with the next header — is now
+a named PREMISE FAILURE of its own.
+
+**Gates**: three arms in the reader preflight — the CI line byte-for-byte
+(the next header on a partial test line above the previous result), a result
+and a header on one line, a header with no result — beside the existing replay
+and empty arms. Counterfactual against the artifact: the old reader restored
+in a copy of `tests/battery.sh` fails all three (`11 passed … over 2 targets —
+1 orphan` twice, and `5 passed … over 1 targets` with the unreported header
+absorbed), and the copy exits 1.
 
 ---
 

@@ -111,6 +111,24 @@ transcripts, is no longer consulted, and a dead `PROJ_OVERRIDE` is removed.
 Two self-test arms drive the session-id form under a fake home for this
 project's slug, with and without the harness's project variable.
 
+### the battery's test-count reader no longer fails a green suite on CI (O107)
+
+**ROADMAP O107 CLOSED.** GitHub's log capture merges cargo's stderr headers
+into the stdout stream by timestamp, so the next target's `Running` header
+landed mid-line on a partial test line, ABOVE the previous target's
+`test result:`. The reader paired headers with results by strict alternation
+and matched a header only at column zero, so a suite that exited 0 with 801
+tests green was read as 573 over 19 targets with one orphan, and the battery
+went red. It now matches a header anywhere in a line and COUNTS outstanding
+headers, each result consuming one: order-blind, so the real CI log reads 801
+over 20 clean, while a replayed tail is still an orphan because it has no
+header to consume. The filed fix — anchor anywhere, keep the alternation —
+reproduces the CI failure verbatim and is recorded as such. A header whose
+target never reported is a named premise failure now, rather than something
+the next header silently overwrote. Three fixture arms in the reader
+preflight, one of them the CI line byte-for-byte; the reader is verified under
+mawk, which is CI's awk.
+
 ## 1.3.0 — 2026-09-04
 
 MINOR: new capability, backward compatible. It adds a field beside ones that
