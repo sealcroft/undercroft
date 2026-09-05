@@ -1649,17 +1649,32 @@ docker compose run --rm test          # cargo unit + integration tests (801 run,
                                       # tree produced one duplicated log and one
                                       # clean one, which is worse than a constant
                                       # error: nobody re-derives a number that
-                                      # looked right last time. Pair each target
-                                      # HEADER with the result that follows it —
+                                      # looked right last time. Count the target
+                                      # HEADERS and let each result consume one —
                                       # 20 targets, 12 binaries + 8 doc-tests —
                                       # and treat an orphan as a PREMISE FAILURE,
                                       # since it is the only visible symptom of
                                       # the replay. **`tests/battery.sh` DOES
                                       # this now (O15, closed 2026-08-12)**: its
-                                      # `test_summary` pairs headers with results
-                                      # and prints a loud PREMISE FAILURE naming
-                                      # the orphan count, so a replayed tail is
-                                      # reported rather than absorbed. It stays
+                                      # `test_summary` counts headers against
+                                      # results and prints a loud PREMISE FAILURE
+                                      # naming the orphan count, so a replayed
+                                      # tail is reported rather than absorbed.
+                                      # **COUNT, never pair by adjacency (O107,
+                                      # closed 2026-09-04)**: CI's runner merges
+                                      # cargo's stderr headers into the stdout
+                                      # stream by timestamp, and the next target's
+                                      # header landed mid-line ABOVE the previous
+                                      # target's result — a GREEN suite read as
+                                      # one orphan and the battery went red.
+                                      # Anchoring the header anywhere in the line
+                                      # (the filed fix) reproduces that failure
+                                      # verbatim; only counting outstanding
+                                      # headers survives the reordering, and it
+                                      # also names a target that never reported.
+                                      # A red `suite (test)` whose log ends
+                                      # `exit 0` is never a reason to edit a
+                                      # figure. It stays
                                       # informational — the script decides on EXIT
                                       # CODES, never on parsed output, by design —
                                       # but the number it prints is now the one

@@ -196,14 +196,35 @@ fi  # pause the preflight block: the readers below are shared with the RUN
 # duplicated log and one clean one — which is worse than a constant error,
 # because nobody re-derives a number that looked right last time.
 #
-# So: pair each target HEADER (`Running …` / `Doc-tests …`) with the result
-# that follows it, and sum only paired results. A duplicated tail has no
-# header above it, so its result lines are ORPHANS.
+# So: count target HEADERS (`Running …` / `Doc-tests …`) and let each result
+# consume one, summing only results that had a header to consume. A
+# duplicated tail has no header above it, so its result lines are ORPHANS.
 #
 # **An orphan is reported as a PREMISE FAILURE, never dropped.** It is the
 # only visible symptom of the replay; a reader that quietly ignored one would
 # be unable to say the stream had been duplicated at all, which is the same
 # defect one level down from the one this fixes.
+#
+# **"Consume one of the headers seen so far", NOT "the header directly above
+# it" (ROADMAP O107).** The first version paired by strict alternation —
+# a header set a flag, the next result cleared it — and matched headers at
+# column zero. On CI that failed a GREEN suite: the runner captures cargo's
+# stderr (headers) and stdout (test lines) separately and merges them by
+# timestamp, so the header for target B landed mid-line on a partial test
+# line of target A, BEFORE A's `test result:`. Anchoring the header anywhere
+# in the line — the filed fix — is necessary and NOT sufficient: the flag was
+# already set by A's header, so B's header was absorbed, A's result cleared
+# the flag, and B's result was still an orphan. Counting outstanding headers
+# is what makes the order irrelevant, and it costs nothing against the
+# replay: a replayed tail still carries results with no header to consume.
+# It also names the case the flag could never see — a header whose target
+# never reported at all, which under alternation was silently overwritten
+# by the next header.
+#
+# A line carrying BOTH a result and a header is read in textual order: the
+# part before the header is the result, the header opens the next target.
+# Two-argument `match()`/`RSTART` — POSIX, and mawk has it; the three-
+# argument form is the GNU extension the published-figures reader avoids.
 #
 # A function, not inline awk, because the gate below runs the SAME code on
 # synthetic input. A gate that re-implements what it checks agrees with itself
@@ -211,25 +232,38 @@ fi  # pause the preflight block: the readers below are shared with the RUN
 # for exactly that reason.
 test_summary() { # test_summary <log>
   awk '
-    /^[[:space:]]*(Running|Doc-tests)[[:space:]]/ { hdr = 1; next }
-    /^test result:/ {
-      if (hdr) {
-        for (i = 1; i <= NF; i++) {
-          if ($(i+1) ~ /^passed/)  p += $i
-          if ($(i+1) ~ /^failed/)  f += $i
-          if ($(i+1) ~ /^ignored/) g += $i
+    function header_at(s) {
+      return match(s, /(^|[[:space:]])(Running|Doc-tests)[[:space:]]/) ? RSTART : 0
+    }
+    function take_result(s,    n, i, w) {
+      if (pending > 0) {
+        n = split(s, w, /[[:space:]]+/)
+        for (i = 1; i <= n; i++) {
+          if (w[i+1] ~ /^passed/)  p += w[i]
+          if (w[i+1] ~ /^failed/)  f += w[i]
+          if (w[i+1] ~ /^ignored/) g += w[i]
         }
-        t++; hdr = 0
+        t++; pending--
       } else { orphan++ }
     }
+    {
+      h = header_at($0); r = index($0, "test result:")
+      if (h && r) {
+        if (h < r) { pending++; take_result(substr($0, r)) }
+        else       { take_result(substr($0, r, h - r)); pending++ }
+      } else if (h) { pending++ }
+      else if (r)   { take_result(substr($0, r)) }
+    }
     END {
-      if (t == 0 && orphan == 0) {
+      if (t == 0 && orphan == 0 && pending == 0) {
         printf "no result lines found — this reader examined nothing"
         exit
       }
       printf "%d passed, %d failed, %d ignored over %d targets", p, f, g, t
       if (orphan > 0)
         printf "  ** PREMISE FAILURE: %d orphan result line(s) — the log tail was replayed; this count is not trustworthy (ROADMAP O15) **", orphan
+      if (pending > 0)
+        printf "  ** PREMISE FAILURE: %d target header(s) with no result — a target started and never reported; this count is not trustworthy (ROADMAP O107) **", pending
     }' "$1" 2>/dev/null
 }
 
@@ -357,10 +391,55 @@ cp "$SUM_TMP/clean.log" "$SUM_TMP/replayed.log"
 cat >>"$SUM_TMP/replayed.log" <<'SUMEOF'
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 SUMEOF
+# **The CI shape (ROADMAP O107), byte-for-byte the line the runner produced**:
+# the header for the SECOND target glued onto a partial test line of the
+# first, ABOVE the first target's own result. A green suite; the alternation
+# reader called its second result an orphan and failed the battery.
+cat >"$SUM_TMP/glued.log" <<'SUMEOF'
+     Running unittests src/lib.rs (target/release/deps/a-1)
+test tests::a ... ok
+test tests::the_orchestrator_key_resolves_without_opening_anything ...      Running unittests src/lib.rs (target/release/deps/b-2)
+ok
+test result: ok. 10 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+   Doc-tests undercroft_core
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+SUMEOF
+# The other glue the filing names: a result and the next header on ONE line.
+# The result belongs to the target above, the header opens the one below.
+cat >"$SUM_TMP/glued-result.log" <<'SUMEOF'
+     Running unittests src/lib.rs (target/release/deps/a-1)
+test result: ok. 10 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out     Running tests/cli.rs (target/release/deps/b-2)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+   Doc-tests undercroft_core
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+SUMEOF
+# A header whose target never reported. Alternation overwrote it with the next
+# header and said nothing; counting leaves it outstanding, and it is NAMED.
+cat >"$SUM_TMP/unreported.log" <<'SUMEOF'
+     Running unittests src/lib.rs (target/release/deps/a-1)
+     Running tests/cli.rs (target/release/deps/b-2)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+SUMEOF
 SUM_CLEAN=$(test_summary "$SUM_TMP/clean.log")
 SUM_REPLAY=$(test_summary "$SUM_TMP/replayed.log")
+SUM_GLUED=$(test_summary "$SUM_TMP/glued.log")
+SUM_GLUED_R=$(test_summary "$SUM_TMP/glued-result.log")
+SUM_UNREP=$(test_summary "$SUM_TMP/unreported.log")
 SUM_EMPTY=$(test_summary /dev/null)
 SUM_FAIL=0
+case "$SUM_GLUED" in
+  "16 passed, 0 failed, 2 ignored over 3 targets") ;;
+  *) echo "FAIL  a header glued mid-line by CI's log capture broke the count (O107): $SUM_GLUED"; SUM_FAIL=1 ;;
+esac
+case "$SUM_GLUED_R" in
+  "16 passed, 0 failed, 2 ignored over 3 targets") ;;
+  *) echo "FAIL  a result and a header on one line were not read as both (O107): $SUM_GLUED_R"; SUM_FAIL=1 ;;
+esac
+case "$SUM_UNREP" in
+  "5 passed, 0 failed, 0 ignored over 1 targets  ** PREMISE FAILURE: 1 target header(s) with no result"*) ;;
+  *) echo "FAIL  a target that never reported was absorbed silently (O107): $SUM_UNREP"; SUM_FAIL=1 ;;
+esac
 case "$SUM_CLEAN" in
   "16 passed, 0 failed, 2 ignored over 3 targets") ;;
   *) echo "FAIL  the reader miscounts a clean log: $SUM_CLEAN"; SUM_FAIL=1 ;;
