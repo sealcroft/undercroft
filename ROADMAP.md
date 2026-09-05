@@ -7025,6 +7025,22 @@ slug and fails on a multi-line `ROOT` or a slug without the repo's basename,
 run as a fifteenth preflight; filed here rather than built, because it moves
 the gated preflight count and this session was at the context stop-line.
 
+**Residual CLOSED 2026-09-05.** `--check-derivation` exists and is the
+fifteenth preflight (`context-check derivation`). It runs after the multi-line
+`ROOT` guard, and the slug must end in the basename `git rev-parse
+--show-toplevel` reports for the checkout the check is INVOKED from — an
+independent derivation, which is what makes a copy of the script living
+somewhere else fail rather than agree with itself — and the derived root must
+be where the script lives. No transcript is read, so it runs on a CI runner
+that has none. The preflight carries two counterfactual arms against the
+artifact: a copy under a directory that is not this checkout must refuse (its
+slug names the wrong project), and a copy whose `ROOT` line is replaced by a
+two-line value must refuse at the guard, with the replacement checked to have
+applied before the verdict is believed. The `pf_word` map already knew
+`fifteen`; CLAUDE.md's gated "host-side preflights" figure moved with it, and
+two stale "thirteen" comments (`tests/battery.sh`, `ci.yml`) that no gate
+covered now carry no number at all.
+
 ---
 
 ### O107 — CLOSED 2026-09-04: the battery's test-count reader could fail a GREEN suite on CI, because GitHub's log capture interleaves lines

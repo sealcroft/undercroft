@@ -129,6 +129,17 @@ the next header silently overwrote. Three fixture arms in the reader
 preflight, one of them the CI line byte-for-byte; the reader is verified under
 mawk, which is CI's awk.
 
+### `context-check.sh` proves its slug derivation on every battery (O106 residual)
+
+**ROADMAP O106's residual CLOSED.** The self-test that O106 added needs a real
+transcript under `~/.claude`, which a CI runner never has, so no preflight
+could run it without passing on nothing. `--check-derivation` is the
+transcript-free half: the project root must resolve to one line and the slug
+must end in the basename git reports for the checkout the check is invoked
+from, an independent derivation. It is the fifteenth host-side preflight,
+probed both ways on every run — a copy of the script outside the checkout
+refuses, and a copy whose root line yields two lines refuses at the guard.
+
 ## 1.3.0 — 2026-09-04
 
 MINOR: new capability, backward compatible. It adds a field beside ones that

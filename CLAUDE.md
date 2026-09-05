@@ -1925,7 +1925,7 @@ own teardown was the place it had not been applied. Gated by the
 `destructive compose scope` preflight, which requires every compose teardown
 in `tests/` to name the project it destroys; `tests/tls-pins.sh`'s two scoped
 teardowns are the accepted shape. Logs land in `.battery/` (gitignored).
-**`bash tests/battery.sh --preflight-only` runs the fourteen host-side preflights
+**`bash tests/battery.sh --preflight-only` runs the fifteen host-side preflights
 and no suite**, which is what CI invokes. **A count the battery cannot trust is never compared to a published figure, and there are TWO ways to earn that (O97/O103): the suite EXITED NON-ZERO — `cargo test` aborts at the first failing target, so a numeric, replay-free count arrives over a fraction of them — or the reader disowned it with a `PREMISE FAILURE` marker. `count_untrustworthy` is the one place that question is answered, because it used to be answered twice and differently: the cargo arm guarded on the marker, the shell arm stripped it with a trailing `.*`, and neither looked at the exit code. It fails either way — a gate that cannot measure must not report clean — and the verdict names WHICH cause, because the message was written for a replay and told the reader to re-run a failure that was deterministic. (This sentence said "seven" while
 the tree ran eight, and nothing could say so — and then "ten" while the tree
 ran eleven, which the gate caught inside the very unit that caused it.
@@ -1950,7 +1950,7 @@ code — including the post-run comparison of each suite's MEASURED check count
 against the figure `CLAUDE.md` publishes for it. That comparison needs a RUN
 and therefore cannot be a preflight, so until M13 it ran nowhere on a pull
 request and a leg dropping from 370 checks to 3 was green. The flag skips the
-fourteen preflights because the dedicated `preflight` job already runs them
+fifteen preflights because the dedicated `preflight` job already runs them
 once. **The shared readers — `test_summary`, `suite_summary`,
 `declare_suite_counts`, `suite_count` — are deliberately defined OUTSIDE the
 skipped block**, and that is not tidiness: with them inside, `--no-preflight`
@@ -3019,7 +3019,7 @@ updating every governance surface**
 tests/context-check.sh`** — **and pass it the session id from the
 system prompt's transcript path** (ROADMAP O104: with no argument it guessed
 at the project AND the session, measured a different project, and reported 8%
-for a session that was 84% full; and O106: the session-id form itself REFUSED on Git Bash until 2026-09-04, because the root derivation put a newline in the slug, while the full-path form always worked — the O104 self-test drove only the latter). This rule was stated for weeks with no way to
+for a session that was 84% full; and O106: the session-id form itself REFUSED on Git Bash until 2026-09-04, because the root derivation put a newline in the slug, while the full-path form always worked — the O104 self-test drove only the latter. **The derivation is a battery preflight since 2026-09-05**: `--check-derivation` is the transcript-free half of the self-test, and it must resolve THIS checkout's slug on a single line, compared against the basename git reports rather than against itself; a copy of the script outside the checkout and a copy with a two-line root both refuse, probed on every run). This rule was stated for weeks with no way to
 evaluate it, so it was applied by feel and applied WRONG, repeatedly and in
 one direction: on 2026-08-18 the agent announced it was near the budget at a
 measured **54%**, having assumed a 200,000-token window when the real one is
