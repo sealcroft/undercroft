@@ -446,12 +446,15 @@ pub const SURFACE_ABSENCES: &[(&str, &str, Absence, &str)] = &[
     // `POST /v1/vaults/{id}/repair`. The row is gone because the absence is.
     //
     // **`Absence::Drift` had no instances when M16 wrote this inventory, and
-    // that was reported here as a result.** It is no longer true: M26 ruled
-    // all 21 remaining `Unruled` rows and every one came back `Drift`, so the
-    // variant is now the largest single verdict on this axis after
-    // `Boundary`. The sentence stood for a day and was found by re-verifying
-    // the filing that quoted it — a comment asserting a COUNT, in the file
-    // whose whole job is to stop counts being asserted.
+    // that was reported here as a result.** It stopped being true when M26
+    // ruled all 21 remaining `Unruled` rows and every one came back `Drift`;
+    // this comment then said the variant was "the largest single verdict on
+    // this axis after `Boundary`", and THAT rotted the same way (ROADMAP
+    // O100): every one of those 21 rows has since closed and left the table,
+    // so as of 2026-09-05 it holds NO `Drift` row at all. Twice now a
+    // comment here asserted a COUNT, in the file whose whole job is to stop
+    // counts being asserted. The counts are gated since O100 — the `prose
+    // figures` preflight reads this table — and this comment names none.
     //
     // What survives of the original point: the variant exists because the
     // doctrine's sentence is *"a boundary or a drift"*, and a vocabulary

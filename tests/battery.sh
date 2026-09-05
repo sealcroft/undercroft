@@ -1776,15 +1776,37 @@ PF_MCP=$(awk '/pub const MCP_TOOLS/,/^\];/' crates/undercroft-cli/src/parity.rs 
          | grep -cE '^\s*"undercroft_[a-z_]+",' || true)
 PF_DIAGRAMS=$(find architecture/diagrams -name '*.svg' | grep -c . || true)
 PF_IRREGULAR=$(awk '/^const IRREGULAR/,/^\];/' "$PF_STORE" | grep -oE '\),' | grep -c . || true)
+# ROADMAP O100: six published counts had rotted and none was gated. The
+# derivable ones join here — every truth below is read from the code, never
+# from another document. The read-only allowlist is the `mutates` match's
+# POST arms; the two variable families are the string literals the crates
+# carry (the CLAUDE.md recipe, bench excluded — it holds no `_CA` and no
+# `_ORCH_`); the shared resolvers are `undercroft-config`'s `pub fn resolve_*`;
+# the CLI-absence partition is `parity.rs`'s two tables.
+PF_TENANT="crates/undercroft-cli/src/tenant.rs"
+PF_PARITY="crates/undercroft-cli/src/parity.rs"
+PF_RO_ARMS=$(awk '/^fn mutates\(/,/^}/' "$PF_TENANT" | grep -cE '\("POST", &\["v1", "vaults", _, "[a-z-]+"\]\)' || true)
+PF_CA=$(grep -rhoE '"UNDERCROFT_[A-Z0-9_]*_CA"' crates --include='*.rs' | sort -u | grep -c . || true)
+PF_ORCH=$(grep -rhoE '"UNDERCROFT_ORCH_[A-Z0-9_]+"' crates --include='*.rs' | sort -u | grep -c . || true)
+PF_RESOLVERS=$(grep -cE '^pub fn resolve_' crates/undercroft-config/src/lib.rs || true)
+PF_ABS_ROWS=$(awk '/^pub const SURFACE_ABSENCES/,/^\];/' "$PF_PARITY" | grep -cE '^[[:space:]]+\("' || true)
+PF_ABS_ANCHORS=$(awk '/^pub const SURFACE_ABSENCES/,/^\];/' "$PF_PARITY" | grep -E '^[[:space:]]+\("' | sed -E 's/^[[:space:]]+\("([^"]+)".*/\1/' | sort -u | grep -c . || true)
+PF_COMPLETE=$(awk '/^pub const SURFACE_COMPLETE/,/^\];/' "$PF_PARITY" | grep -cE '^[[:space:]]+"' || true)
 
 # PREMISE. Every truth below is a count, and a broken extractor returns a
 # number too — zero. A zero here would silently agree with nothing.
 if [ "${PF_ENV_TOTAL:-0}" -lt 50 ] || [ "${PF_PREFLIGHTS:-0}" -lt 5 ] ||
    [ "${PF_CRATES:-0}" -lt 5 ] || [ "${PF_MCP:-0}" -lt 10 ] ||
-   [ "${PF_DIAGRAMS:-0}" -lt 5 ] || [ "${PF_IRREGULAR:-0}" -lt 50 ]; then
+   [ "${PF_DIAGRAMS:-0}" -lt 5 ] || [ "${PF_IRREGULAR:-0}" -lt 50 ] ||
+   [ "${PF_RO_ARMS:-0}" -lt 2 ] || [ "${PF_CA:-0}" -lt 3 ] ||
+   [ "${PF_ORCH:-0}" -lt 5 ] || [ "${PF_RESOLVERS:-0}" -lt 3 ] ||
+   [ "${PF_ABS_ROWS:-0}" -lt 20 ] || [ "${PF_ABS_ANCHORS:-0}" -lt 20 ] ||
+   [ "${PF_COMPLETE:-0}" -lt 10 ]; then
   echo "FAIL  a truth-side reader came back implausibly small:"
   echo "      env=$PF_ENV_TOTAL preflights=$PF_PREFLIGHTS crates=$PF_CRATES"
   echo "      mcp=$PF_MCP diagrams=$PF_DIAGRAMS irregular=$PF_IRREGULAR"
+  echo "      ro-arms=$PF_RO_ARMS ca=$PF_CA orch=$PF_ORCH resolvers=$PF_RESOLVERS"
+  echo "      absence rows=$PF_ABS_ROWS anchors=$PF_ABS_ANCHORS complete=$PF_COMPLETE"
   echo "      A reader that examined nothing reports what an accurate tree reports."
   echo ""
   echo "BATTERY FAILED — preflight"
@@ -1810,6 +1832,14 @@ PROSE_FIGURES=(
   "IRREGULAR pairs|CLAUDE.md|s/.*\\(\\*\\*([0-9]+) pairs.*/\\1/p|$PF_IRREGULAR"
   "ROADMAP entries the heading gate examines|ROADMAP.md|s/.*\\*\\*([0-9]+)\\*\\* of the \\*\\*[0-9]+\\*\\*.*/\\1/p|$PF_RM_IDS"
   "ROADMAP level-3 headings total|ROADMAP.md|s/.*\\*\\*[0-9]+\\*\\* of the \\*\\*([0-9]+)\\*\\*.*/\\1/p|$PF_RM_H3"
+  # ROADMAP O100 — six counts that had rotted with nothing counting them.
+  "read-only allowlist entries|docs/THREAT_MODEL.md|s/.*on a ([a-z]+)-entry allowlist.*/\\1/p|$PF_RO_ARMS"
+  "CA pins|docs/AGENTS.md|s/.*and the ([a-z]+) \`\\*_CA\` pins.*/\\1/p|$PF_CA"
+  "orchestrator env variables|UPGRADING.md|s/.*including the ([a-z]+) \`UNDERCROFT_ORCH_\\*\`.*/\\1/p|$PF_ORCH"
+  "shared declaration resolvers|UPGRADING.md|s/.*the ([a-z]+) declarations they share.*/\\1/p|$PF_RESOLVERS"
+  "CLI absence rows|CLAUDE.md|s/.*PARTITION it \\(([0-9]+) rows over.*/\\1/p|$PF_ABS_ROWS"
+  "CLI absence anchors|CLAUDE.md|s/.*rows over ([0-9]+) anchors.*/\\1/p|$PF_ABS_ANCHORS"
+  "CLI operations reachable everywhere|CLAUDE.md|s/.*plus ([0-9]+) reachable everywhere.*/\\1/p|$PF_COMPLETE"
 )
 
 PROSE_FAIL=0

@@ -141,7 +141,8 @@ this project, which is why the two codebases share concepts but not code
   assigns (never MCP), HMAC-tagged so a flip fails verification, consumed
   as a candidate-set floor resolved before candidates are drawn.
 - **Read and egress auditing** — exports are chain-audited unconditionally
-  on every surface, and so is **LLM distillation**, which reads the corpus
+  on every surface of a writable store (a read-only replica warns and
+  serves), and so is **LLM distillation**, which reads the corpus
   and POSTs it to a network endpoint: one `egress/refine` record per run,
   binding surface, destination host (credentials stripped), model, scope
   and counts, written on a dry run too because the corpus leaves

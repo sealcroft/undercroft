@@ -3255,14 +3255,16 @@ fn b64decode(s: &str) -> Result<Vec<u8>, base64::DecodeError> {
 /// dispatch, to decide what a `--read-only` server refuses.
 ///
 /// **Fails closed by construction**: a request mutates unless it is a `GET`
-/// or one of the two `POST`s named below. A route added later is refused on
+/// or one of the three `POST`s named below. A route added later is refused on
 /// a read-only server until someone deliberately adds it to that list — the
 /// opposite of the per-handler guard this replaced, where forgetting a line
 /// opened a write door and nothing said so.
 ///
-/// The two exceptions are POST for cost, not for effect: `search` reads (its
-/// optional read-audit record is already suppressed by `open_read_only`),
-/// and `verify` walks HMACs and replays the chain. `GET .../export` is a
+/// The three exceptions are POST for cost or for a caller-supplied document,
+/// never for effect: `search` reads (its optional read-audit record is
+/// already suppressed by `open_read_only`), `verify` walks HMACs and replays
+/// the chain, and `verify-forgetting` checks an attestation that has to
+/// travel in a body. `GET .../export` is a
 /// read here too — the egress chain record it would otherwise write is
 /// skipped on a read-only server, which warns and serves.
 fn mutates(method: &str, segs: &[&str]) -> bool {
@@ -4511,7 +4513,7 @@ mod tests {
         let (code, body) = ro.call("POST", "/v1/vaults/acme/anchor", None);
         assert_eq!(code, 403, "{body}");
         assert!(body.contains("read-only"), "{body}");
-        // Premise: the same server still serves the two named reads.
+        // Premise: the same server still serves the named reads.
         let (code, _) = ro.call("POST", "/v1/vaults/acme/verify", None);
         assert_eq!(code, 200);
     }

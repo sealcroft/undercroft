@@ -140,6 +140,24 @@ from, an independent derivation. It is the fifteenth host-side preflight,
 probed both ways on every run — a copy of the script outside the checkout
 refuses, and a copy whose root line yields two lines refuses at the guard.
 
+### six stale published counts corrected and gated, four security claims re-scoped (O100)
+
+**ROADMAP O100 CLOSED.** The read-only `/v1` allowlist has three entries
+(`search`, `verify`, `verify-forgetting`) and seven surfaces said two; the
+control plane reads eight `UNDERCROFT_ORCH_*` variables and its own `config
+check` runs six of them, where four documents said four; there are five
+`*_CA` pins, not four, on two surfaces; `undercroft-config` holds five shared
+resolvers, not three; the CLI-absence partition is 41 rows over 41 anchors
+plus 33 reachable everywhere, not 62/59/15; and `parity.rs` described a
+`Drift` verdict that no longer has a row. `docs/AGENTS.md` §11 now names the
+orchestrator's two metrics variables. Four security claims take their
+correctly-scoped sibling's qualifier: the at-rest claim names the unsealed
+`meta_json`, the read-audit row says "each content-returning read", the
+export-audit claim says "of a writable store", and the landing page's
+migration-file claim says "exported to a recipient". Seven new rows in the
+`prose figures` preflight read each count from the code, so 17 figures are
+gated where 10 were.
+
 ## 1.3.0 — 2026-09-04
 
 MINOR: new capability, backward compatible. It adds a field beside ones that

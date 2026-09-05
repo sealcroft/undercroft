@@ -244,8 +244,10 @@ one port. Both stores `serve-http` opens — the `/mcp` handle and every
 runs and read auditing is force-disabled with a warning rather than
 silently. The REST gate sits **in front of dispatch**, not at the top
 of each mutating handler, and it **fails closed**: every non-GET is
-refused unless it is on a two-entry allowlist (`POST …/search`, and
-`POST …/verify` — which walks every record's HMAC, replays the whole
+refused unless it is on a three-entry allowlist (`POST …/search`,
+`POST …/verify-forgetting` — a caller-supplied attestation that has to
+travel in a body — and `POST …/verify` — which walks every record's HMAC,
+replays the whole
 audit chain, checks every supersession receipt, checks every
 knowledge-graph fact receipt, resolves every graph audit
 label and compares four of the five mirror columns (`wing`, `room`, `kind`, `supersedes`; `filed_at` is deliberately excluded — the column takes the write path's own clock while the covered field was stamped at construction, so they differ by a clock read in normal operation and checking it reported healthy vaults as tampered) against the covered meta (**six** legs
@@ -412,7 +414,7 @@ enclave execution) compose with undercroft but are not provided by it.
 | Server auth | bearer + per-vault HMAC assertion (vault id in the MAC, constant-time, bare 401s); `--read-only` decided once in front of dispatch, failing closed | A4 |
 | Write-path admission | deterministic tier-1 screen at the one write choke point (a required `Screen` argument every caller must state); flagged writes diverted to the retrieval-excluded quarantine wing; allow/deny chain-audited | A7 ingest |
 | Retrieval policy | trust floor + quarantine fence + closed-vocabulary validation resolved before candidates are drawn, and shared verbatim by the remote path | A5 result steering, A7 reach |
-| Read/egress audit | `egress/export` on every export **and `egress/index-push` on every remote-index mirror** (the second is a whole-corpus egress, and on an hmac-only vault its payload is the plaintext), both behind no declaration (a read-only replica warns and serves unaudited); `UNDERCROFT_READ_AUDIT=chain` records each search with a **keyed** query fingerprint, never text | A7 forensics; insider/exfil accounting |
+| Read/egress audit | `egress/export` on every export **and `egress/index-push` on every remote-index mirror** (the second is a whole-corpus egress, and on an hmac-only vault its payload is the plaintext), both behind no declaration (a read-only replica warns and serves unaudited); `UNDERCROFT_READ_AUDIT=chain` records each content-returning read — search, get, recent, the lists and the KG readers (O50/O51) — with a **keyed** subject fingerprint, never text | A7 forensics; insider/exfil accounting |
 | Remote-index posture | sealed bytes out, local re-verification in; feature off by default | A5 |
 | Zero-telemetry default | no telemetry deps compiled in; metadata-only when opted in | A6 |
 | Verbatim + tombstones | exact words, keyed deletion markers, chain ordering | A7 attribution/excision |

@@ -1932,8 +1932,8 @@ ran eleven, which the gate caught inside the very unit that caused it.
 It caught the twelfth the same way, in the unit that added it.
 **It is gated now** — ROADMAP
 **O42** — by the `prose figures` preflight, which counts this number and
-seven other figures the doctrine states about the tree against what the tree
-actually measures. It caught its own arrival: adding that preflight made the
+the other figures the doctrine states about the tree against what the tree
+actually measures (the row count is printed by the preflight, never here). It caught its own arrival: adding that preflight made the
 count ten while this sentence still said nine.) The script is the one thing that
 runs on the host rather than in a container, and it has to be: it *drives*
 Docker, and the preflights read `ROADMAP.md`, the compose files, `ci.yml` and
@@ -2609,14 +2609,17 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   **The CLI axis had no such inventory at all until M16**, so every CLI-only
   capability was an unrecorded gap by construction — measured, **74** CLI
   operations of which `parity.rs` named **17**. `SURFACE_ABSENCES` +
-  `SURFACE_COMPLETE` now PARTITION it (62 rows over 59 anchors, plus 15
-  reachable everywhere = 74 — this said **63** until 2026-08-30, and the 63rd
-  `Absence::` is a COMMENT, which is the identical miscount O68 records having
-  already caught one variant down: it corrected `Drift` 22 → 21 and left the
-  TOTAL, one line up in the same sentence, still comment-inflated. The `= 74`
-  was never wrong, because it derives from ANCHORS plus `SURFACE_COMPLETE` and
-  not from rows — which is exactly why nothing noticed. Ungated: the `prose
-  figures` preflight counts ten figures and this is not one of them), keyed on
+  `SURFACE_COMPLETE` now PARTITION it (41 rows over 41 anchors — 34
+  `Boundary`, 7 `Structural`, 0 `Drift` — plus 33 reachable everywhere = 74.
+  This parenthesis said 62/59/15 until 2026-09-05, figures from before the 21
+  `Drift` rows closed and left the table, and before that said **63** rows
+  until 2026-08-30, the 63rd `Absence::` being a COMMENT — the identical
+  miscount O68 records having already caught one variant down: it corrected
+  `Drift` 22 → 21 and left the TOTAL, one line up in the same sentence, still
+  comment-inflated. The `= 74` was never wrong, because it derives from
+  ANCHORS plus `SURFACE_COMPLETE` and not from rows — which is exactly why
+  nothing noticed. **Gated since O100**: the `prose figures` preflight counts
+  the rows, the anchors and `SURFACE_COMPLETE` against `parity.rs`), keyed on
   the `main.rs` dispatch anchor and on
   `(anchor, absent_from)` because a ruling differs per surface — `repair` is
   a boundary on MCP and a drift on `/v1`. **`Absence::Unruled` is a real
