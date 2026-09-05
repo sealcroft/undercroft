@@ -29,6 +29,8 @@
 # not be presented as the same kind of thing. Override with CONTEXT_WINDOW.
 #
 # Usage:  bash tests/context-check.sh [session-id-or-path]
+#         bash tests/context-check.sh --self-test          # needs a real transcript
+#         bash tests/context-check.sh --check-derivation   # needs none; a preflight
 #
 # TRACKED, not in `.handover/` where it was first written. That directory is
 # gitignored, so a fresh clone would not carry this and nothing would invoke
@@ -65,6 +67,43 @@ SLUG="$(printf '%s' "$ROOT" | sed -E 's#[:/\\]#-#g')"
 # comment below said exactly that. Only `HOME` locates the transcripts.
 PROJ="$HOME/.claude/projects/$SLUG"
 WINDOW="${CONTEXT_WINDOW:-1000000}"
+
+# **`--check-derivation` — the half of the self-test that needs NO transcript
+# (ROADMAP O106's residual, closed 2026-09-05).** Two of `--self-test`'s arms
+# copy a real transcript from under `~/.claude`, and a CI runner has none, so
+# no battery preflight could run the self-test without skipping on an empty
+# machine — the pass-on-nothing shape. This mode exercises exactly what O106
+# got wrong, the ROOT → SLUG derivation, against evidence the checkout itself
+# carries: the multi-line guard above has already run by the time control
+# reaches here, and the slug must end in the basename git reports for the
+# checkout this script is INVOKED from — an independent derivation, so a copy
+# of this script living somewhere else fails instead of agreeing with itself.
+if [ "${1:-}" = "--check-derivation" ]; then
+  REPO="$(basename "$(git rev-parse --show-toplevel 2>/dev/null)")"
+  if [ -z "$REPO" ]; then
+    echo "CHECK-DERIVATION FAILED — not invoked from inside a git checkout, so"
+    echo "there is nothing independent to compare the slug against."
+    exit 1
+  fi
+  case "$SLUG" in
+    *"-$REPO") ;;
+    *)
+      echo "CHECK-DERIVATION FAILED — the slug does not name this checkout:"
+      echo "  root: $ROOT"
+      echo "  slug: $SLUG"
+      echo "  git:  $REPO"
+      echo "A session-id lookup under ~/.claude/projects/ would read the wrong"
+      echo "directory (ROADMAP O106)."
+      exit 1 ;;
+  esac
+  if [ ! -f "$ROOT/tests/context-check.sh" ]; then
+    echo "CHECK-DERIVATION FAILED — the derived root is not where this script lives:"
+    echo "  $ROOT"
+    exit 1
+  fi
+  echo "ok    context-check derives a single-line root and the slug $SLUG"
+  exit 0
+fi
 
 # **THIS FALLBACK USED TO PICK ANOTHER PROJECT, AND THAT IS ROADMAP O104.**
 # It read "fall back to a search rather than failing on an unexpected slug",

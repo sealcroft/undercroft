@@ -48,7 +48,7 @@ for a in "$@"; do
     # compose run` itself, so that the post-run check-count comparison — which
     # only a RUN can perform, and which therefore cannot be a preflight —
     # happens on a pull request instead of only on the maintainer's machine.
-    # Without this flag every leg would re-run all thirteen preflights, which
+    # Without this flag every leg would re-run every host-side preflight, which
     # the dedicated `preflight` job already does once. ROADMAP M13.
     --no-preflight) NO_PREFLIGHT=1 ;;
     # Exit 1, never 2. Exit 2 is this project's integrity verdict on every
@@ -1208,6 +1208,68 @@ else
   fi
   echo "ok    handover is current with HEAD ($HEAD_SHA), first of $ALL_MARKERS marker(s)"
 fi
+
+# ── preflight: context-check derives THIS checkout's slug ───────────────────
+# ROADMAP O106's residual. `tests/context-check.sh` is how the context-budget
+# rule is MEASURED rather than felt, and its documented session-id form was
+# broken for seventeen days by a one-line derivation defect that its own
+# self-test could not see. The self-test still cannot run here: two of its
+# arms need a real transcript under `~/.claude`, and a CI runner has none — a
+# preflight that skipped for want of a transcript would pass on nothing.
+# `--check-derivation` is the transcript-free half: the root must resolve to
+# one line and the slug must end in the basename git reports for the checkout
+# the check is invoked from, which is an independent derivation.
+#
+# PREMISE, both against the artifact rather than a retyped copy: a copy of
+# the script under a directory that is NOT this checkout must fail (its slug
+# names the wrong project), and a copy whose root line yields two lines must
+# fail at the guard. The second counterfactual is checked to have APPLIED
+# before its verdict is believed — an edit whose anchor no longer matches
+# leaves the copy correct, and a correct copy failing to fail proves nothing.
+echo "═══ preflight: context-check derivation ═══"
+CD_FAIL=0
+if ! CD_OUT=$(bash tests/context-check.sh --check-derivation 2>&1); then
+  echo "FAIL  context-check cannot derive this checkout's transcript slug:"
+  printf '%s\n' "$CD_OUT" | sed 's/^/      /'
+  CD_FAIL=1
+fi
+CD_TMP="$(mktemp -d)"
+mkdir -p "$CD_TMP/elsewhere/tests"
+cp tests/context-check.sh "$CD_TMP/elsewhere/tests/context-check.sh"
+if bash "$CD_TMP/elsewhere/tests/context-check.sh" --check-derivation >/dev/null 2>&1; then
+  echo "FAIL  premise: a copy of context-check living outside this checkout passed"
+  echo "      --check-derivation, so the slug is not being compared to anything"
+  CD_FAIL=1
+fi
+CD_REPO="$(basename "$(git rev-parse --show-toplevel)")"
+CD_COPY="$CD_TMP/$CD_REPO/tests/context-check.sh"
+mkdir -p "$(dirname "$CD_COPY")"
+cp tests/context-check.sh "$CD_COPY"
+CD_RL=$(grep -n '^ROOT="\$(cd ' "$CD_COPY" | cut -d: -f1 | head -1)
+if [ -z "$CD_RL" ]; then
+  echo "FAIL  premise: the ROOT line was not found in context-check.sh, so the"
+  echo "      two-line-root counterfactual cannot be applied"
+  CD_FAIL=1
+else
+  { head -n $((CD_RL - 1)) "$CD_COPY"; printf '%s\n' "ROOT=\$'/one\n/two'"; tail -n +$((CD_RL + 1)) "$CD_COPY"; } > "$CD_COPY.new" \
+    && mv "$CD_COPY.new" "$CD_COPY"
+  if [ "$(grep -c "^ROOT=\\$'/one" "$CD_COPY")" != "1" ]; then
+    echo "FAIL  premise: the two-line-root counterfactual did not apply"
+    CD_FAIL=1
+  elif bash "$CD_COPY" --check-derivation >/dev/null 2>&1; then
+    echo "FAIL  premise: a two-line project root passed --check-derivation; the"
+    echo "      O106 guard is not in front of it"
+    CD_FAIL=1
+  fi
+fi
+rm -rf "$CD_TMP"
+if [ "$CD_FAIL" -ne 0 ]; then
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "$CD_OUT"
+echo "      (a copy outside this checkout, and a copy with a two-line root, both refuse)"
 
 # ── preflight: the CI verdict job depends on EVERY job ─────────────────────
 # A required status check resolves against ONE context. That context is the
