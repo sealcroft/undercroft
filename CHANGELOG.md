@@ -1,12 +1,16 @@
 # Changelog
 
-## Unreleased — 1.3.1
+## Unreleased — 1.4.0
 
-PATCH: a fix whose only observable change is that a defect is gone. A
-whitespace-only `UNDERCROFT_INDEX_CA` was never documented as valid — the four
-HTTP backends already refused it, and `undercroft config check` already called
-it fatal — so honouring it on the fifth is the code keeping a contract rather
-than changing one.
+MINOR, by this project's own test: it ADDS beside things that stay — three
+search declarations (`when`, `when_slack_days`, `when_from_query`) on every
+surface and a `window` key on the `/v1` reply, all absent by default, with
+nothing documented ceasing to be accepted (O108). It was a PATCH until that
+landed: the fixes below make no documented contract move. A whitespace-only
+`UNDERCROFT_INDEX_CA` was never documented as valid — the four HTTP backends
+already refused it, and `undercroft config check` already called it fatal — so
+honouring it on the fifth is the code keeping a contract rather than changing
+one.
 
 ### one `UNDERCROFT_INDEX_CA` declaration gets one answer, on all five backends (O96)
 
@@ -206,6 +210,30 @@ never consults — the last filed as O108. bge-m3 reaches four of the fifteen
 and eleven stay below the pool; corpus-wide the floor drops from 12.5% to
 9.5% at 33× ingest and 6× query cost. Logs under `benchmarks/logs/o76_*`,
 figures in `benchmarks/RESULTS.md`.
+
+### a search can take a date window, declared or read out of the question (O108)
+
+**ROADMAP O108 CLOSED — the MINOR in this release.** Three declarations, the
+same names on `undercroft search`, `undercroft_search` and `POST /v1/…/search`,
+parsed by one function and absent by default. `when` (`YYYY-MM-DD..YYYY-MM-DD`,
+or one day) narrows to drawers whose `content_date` falls inside it, as `room`
+narrows; an undated drawer is outside every window; a bound that is not a date
+is refused, never an empty result. `when_slack_days` widens it on each side.
+`when_from_query` reads the question through the temporal scanner (under
+`language`, anchored on `ranked_at`) and, where it names a resolved day or
+period, uses that: drawers dated inside it join the candidate pool — a top-up
+bounded by the hydration budget, filtered by the scope and fenced by the trust
+clause exactly as the pool is — and every candidate whose `content_date` or
+resolved mention falls inside it takes a fixed date term (0.15) in the blend.
+With no window in force every score is byte-identical to before, pinned. The
+reply says which window ran: a note on the CLI and MCP, a `window` object on
+`/v1`. The bench's LoCoMo harness stamps each session's date on its chunks
+(the baseline miss list is byte-identical with or without the stamp) and gains
+`--when-from-query`; measured over `locomo10` at pool 50 on the hash embedder,
+the arm covers both ids O108 was filed on, turns 23 never-covered questions
+into covered ones and loses 1, floor 12.5% → 11.4%, session R@10 95.5% →
+96.6%, temporal misses 22 → 18, at a 3% search-cost increase. A read-only
+allowlist row in `docs/AGENTS.md` §10 that O100 missed now names its third read.
 
 ## 1.3.0 — 2026-09-04
 

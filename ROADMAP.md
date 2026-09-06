@@ -4160,13 +4160,16 @@ touching anyone's existing corpus.
 integrity verdict, and two different model files must produce two different
 identities.
 
-## 1.3.1 — unreleased
+## 1.4.0 — unreleased
 
-PATCH: fixes whose only observable change is that a defect is gone, filed here
-until the tag exists — the tree carries `1.3.1` only once the release PR merges,
-and the TAG is a separate step. Described in CHANGELOG under
-`## Unreleased — 1.3.1` (that file writes the bare date once released; this one
-writes `released DATE`).
+MINOR, by this file's own test: O108 ADDS three search declarations and a
+reply key beside everything that stays, absent by default, and nothing
+documented stops being accepted. Everything else here is patch-level and rides
+with it. Filed here until the tag exists — the tree carries `1.4.0` only once
+the release PR merges, and the TAG is a separate step. Described in CHANGELOG
+under `## Unreleased — 1.4.0` (that file writes the bare date once released;
+this one writes `released DATE`). This section was `1.3.1 — unreleased` from
+O101 (2026-09-06) until O108 landed the same day.
 
 ### O95 — CLOSED 2026-09-04: `refine` records what left on its error paths, and nothing when nothing left
 
@@ -4824,7 +4827,7 @@ entry prescribed: cut by heading, re-inserted at the end of the target
 section, then asserted — the `###` heading multiset is unchanged, every moved
 entry is byte-identical at its destination, and the non-blank line multiset
 differs from HEAD by exactly the six lines of the one section added
-(`## 1.3.1 — unreleased`, for the eight fixes closed after the `1.3.0` tag,
+(`## 1.3.1 — unreleased`, since renamed `1.4.0` by O108, for the eight fixes closed after the `1.3.0` tag,
 mirroring the CHANGELOG's `Unreleased` heading; this entry is the ninth).
 
 **Where each went, and how that was decided.** By the release window its
@@ -4929,6 +4932,95 @@ deeper pools (a cost the caller already controls). The entry's own rule is
 kept — any later claim on this floor is judged on these ids.
 
 ---
+
+### O108 — CLOSED 2026-09-06: a search takes a date window, declared or read out of the question, and says which one ran
+
+**Found 2026-09-06 while measuring O76 by id.** `conv-50_q43` asks *"Which
+city was Calvin at on October 3, 2023?"*; the gold turn sits in a session
+dated 4 October 2023 and says *"Yesterday I met with some incredible artists
+in Boston"*. The engine's temporal scanner resolves that "Yesterday" to
+2023-10-03 at read time (`live_time_mentions_in`) — the exact evidence the
+question names — and retrieval never consults it: `SearchOptions` carries no
+date, the query's own date is not extracted, and no channel scores a query
+date against a drawer's resolved mentions. Under the default hash embedder the
+turn never enters a 50-hit pool; a served bge-m3 reaches it by paraphrase, not
+by the date. `conv-47_q34` (*"countries visited in July 2022"* against a
+session dated 22 July 2022) is the same shape.
+
+**Fix shape**: read the query through the same scanner (`Locale` is already a
+read-time parameter on every search surface), and where it yields a resolved
+period, score candidates whose `content_date` or resolved mentions fall inside
+it — a fourth channel beside `lexical_exact`, `lexical_morph` and the cosine,
+per-drawer and therefore inside the independent-scoring invariant, DECLARED
+on `SearchOptions` and off by default (a query date is EVIDENCE the writer
+typed, but scoring by it changes what is retrievable, which is the MINOR
+test). **Gate**: the two ids above, under hash, at pool 50 — they must be
+covered — beside the LoCoMo temporal category as a whole, which must not
+regress; measured by `LOCOMO_MISS` lines, never by an aggregate.
+
+---
+
+**CLOSED 2026-09-06 — option C, as ruled, and the filed shape was not
+enough on its own.** Grounding found two things the filing did not know. The
+bench ingested every LoCoMo chunk with NO `content_date`, so in the bench's
+vault "yesterday" resolved to nothing and no date channel could have been
+measured on these ids until the harness stamped each session's date (it does
+now; the stamp alone leaves the hash miss list byte-identical — 248, the same
+ids). And the hash miss was pool-level for some shapes and cut-level for
+others, so a score-only fourth channel would have been blind to the first.
+The design therefore has THREE parts, one implementation each:
+
+* **A declared window is a narrowing** (`when`, inclusive `YYYY-MM-DD` bounds,
+  `when_slack_days` widening it): it rides `resolve_scope` →
+  `resolve_seq_filter_when` as one more positive clause over the first ten
+  bytes of the covered `meta_json`'s `content_date`, and the hydration `WHERE`
+  carries the same clause as the accelerator half. An undated drawer is
+  outside every window. A bound that is not a date is refused by
+  `DateWindow::parse` on every surface — a window that cannot match is a typo.
+* **A window read from the query is a top-up plus a term** (`when_from_query`,
+  off by default): `resolve_window` scans the query under `opts.locale`
+  anchored on `ranked_at` and takes the first resolving mention; `dated_seqs`
+  adds the drawers dated inside it to the candidate pool — bounded by the
+  hydration budget, under the same wing/room/kind clauses, the trust clause
+  and the scope's own `admits`, so it is not a route past a fence, and only
+  where a prefilter drew a pool at all — and every candidate whose
+  `content_date` or resolved mention falls inside it takes `DATE_HIT_WEIGHT`
+  (0.15, fixed; above recency's 0.10 because a day the caller named is
+  stronger evidence than "filed recently"). With no window the term is
+  exactly zero and every score is byte-identical, pinned to the bit.
+* **The window that ran is reported** through the same resolver: a note on
+  the CLI and MCP, a `window` object on `/v1`.
+
+**Gates.** Store: a refused garbage/reversed window; a declared window
+narrowing to dated drawers with slack, never an undated one; a query-read
+window scoring a resolved "yesterday" first and reported with its slack, and
+byte-identity on a dateless query; the top-up refusing a screen-diverted
+drawer dated inside the window and holding a wing scope (through the real
+`resolve_search_policy` clause); and the O76 shape in miniature — a drawer
+below the cut lifted into the page by its resolved mention, gaining exactly
+the date term while a filler naming no day gains nothing to the bit. Every
+surface through the binary: the CLI integration test and six e2e checks, the
+MCP handler test (schema advertises all three, handler honours them, a
+non-date refused), two e2e arms on `/v1` (the `window` object, a 400). The
+measurement the filing asked for: over `locomo10` at pool 50 the arm covers
+`conv-50_q43` and `conv-47_q34`, turns 23 never-covered questions into covered
+and loses one (`conv-48_q78`), floor 12.5% → 11.4%, session R@10 95.5% →
+96.6%, temporal misses 22 → 18, no category worse, search 24.5 → 25.3 ms/q,
+ingest unchanged (`benchmarks/RESULTS.md`, logs published). The mechanism
+that reached the two ids was the TERM — the chunk sat in the 1,600-row pool
+below the fifty cut — which is why the unit gate pins that path end to end
+and the top-up at the SQL level.
+
+**Cost, stated.** A window in force scans each hydrated candidate's content
+for mentions (the one per-candidate cost this adds; none without a window).
+The unit-test corpus taught one thing worth writing down: a filler that says
+"October 2023" mentions a period holding October 3rd and takes the term on
+its own merits — correctly — so the first fixture "failed" by being right.
+MINOR: the unreleased section is `1.4.0` now. A read-only allowlist row in
+`docs/AGENTS.md` §10 that O100 missed was corrected in passing.
+
+---
+
 
 
 
@@ -10495,33 +10587,6 @@ actually *satisfied* by the word "gate", which every one of these gap
 paragraphs contains. Detecting "this closed entry contains an open item" needs
 a semantic reading, which this file has repeatedly refused to fake with a
 scanner (O33, O47). The mechanism here is a heading, not a gate.
-
-### O108 — a query's date is never matched against a drawer's resolved mentions
-
-**Found 2026-09-06 while measuring O76 by id.** `conv-50_q43` asks *"Which
-city was Calvin at on October 3, 2023?"*; the gold turn sits in a session
-dated 4 October 2023 and says *"Yesterday I met with some incredible artists
-in Boston"*. The engine's temporal scanner resolves that "Yesterday" to
-2023-10-03 at read time (`live_time_mentions_in`) — the exact evidence the
-question names — and retrieval never consults it: `SearchOptions` carries no
-date, the query's own date is not extracted, and no channel scores a query
-date against a drawer's resolved mentions. Under the default hash embedder the
-turn never enters a 50-hit pool; a served bge-m3 reaches it by paraphrase, not
-by the date. `conv-47_q34` (*"countries visited in July 2022"* against a
-session dated 22 July 2022) is the same shape.
-
-**Fix shape**: read the query through the same scanner (`Locale` is already a
-read-time parameter on every search surface), and where it yields a resolved
-period, score candidates whose `content_date` or resolved mentions fall inside
-it — a fourth channel beside `lexical_exact`, `lexical_morph` and the cosine,
-per-drawer and therefore inside the independent-scoring invariant, DECLARED
-on `SearchOptions` and off by default (a query date is EVIDENCE the writer
-typed, but scoring by it changes what is retrievable, which is the MINOR
-test). **Gate**: the two ids above, under hash, at pool 50 — they must be
-covered — beside the LoCoMo temporal category as a whole, which must not
-regress; measured by `LOCOMO_MISS` lines, never by an aggregate.
-
----
 
 ### O23 — a very deep `offset` makes one request pay a full scan
 

@@ -1185,3 +1185,77 @@ fn a_partial_refine_is_recorded_on_the_cli_and_over_v1_and_an_empty_one_is_not()
         "the partial /v1 refine left exactly one more record"
     );
 }
+
+/// ROADMAP O108, through the binary: a declared window narrows by
+/// `content_date`, a window read from the query is applied and SAID, and a
+/// window that is not a date is refused at exit 1 naming the flag.
+#[test]
+fn cli_search_takes_a_date_window_declared_or_read_from_the_query() {
+    let home = TempDir::new().unwrap();
+    cmd(&home).args(["init"]).assert().success();
+    for (text, date) in [
+        (
+            "Calvin: Yesterday I met the artists in Boston",
+            "2023-10-04T12:00:00+00:00",
+        ),
+        (
+            "Calvin: the artists visited Lisbon",
+            "2023-08-01T12:00:00+00:00",
+        ),
+    ] {
+        cmd(&home)
+            .args(["remember", text, "--wing", "trip", "--content-date", date])
+            .assert()
+            .success();
+    }
+    cmd(&home)
+        .args([
+            "remember",
+            "Calvin: the artists are undated",
+            "--wing",
+            "trip",
+        ])
+        .assert()
+        .success();
+    let declared = search_out(&home, &["artists", "--when", "2023-10-04"]);
+    assert!(declared.contains("Boston"), "{declared}");
+    assert!(
+        !declared.contains("Lisbon") && !declared.contains("undated"),
+        "{declared}"
+    );
+    assert!(
+        declared.contains("(date window 2023-10-04 declared)"),
+        "{declared}"
+    );
+    let slack = search_out(
+        &home,
+        &["artists", "--when", "2023-10-04", "--when-slack-days", "70"],
+    );
+    assert!(
+        slack.contains("Boston") && slack.contains("Lisbon"),
+        "{slack}"
+    );
+    assert!(
+        !slack.contains("undated"),
+        "an undated drawer is outside every window:\n{slack}"
+    );
+    assert!(slack.contains("with 70 day(s) of slack"), "{slack}");
+    let read = search_out(
+        &home,
+        &[
+            "Which city was Calvin at on October 3, 2023?",
+            "--when-from-query",
+        ],
+    );
+    assert!(
+        read.contains("(date window 2023-10-03 read from the query)"),
+        "{read}"
+    );
+    assert!(read.find("Boston") < read.find("Lisbon"), "{read}");
+    cmd(&home)
+        .args(["search", "artists", "--when", "soon"])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicates::str::contains("--when"));
+}
