@@ -667,7 +667,12 @@ echo "$NOTRACE_OUT" | grep -E '^  (files scanned|pdf streams):' | sed 's/^  /   
 # `[A-Z][0-9]+` id, which are correctly out of scope. The coverage half of
 # that filing was stale; the one-directional half was right.
 echo "═══ preflight: ROADMAP headings ═══"
-ROADMAP_DRIFT=$(awk '
+# A FUNCTION over a file argument rather than an inline awk over ROADMAP.md,
+# so the fourth arm below can be PROBED on a fixture before the real scan is
+# believed (ROADMAP O101): a closed entry sitting under a section whose header
+# says it holds no releasable work, or open work only, is a drift the three
+# older arms cannot see because they judge each entry alone.
+roadmap_scan() { awk '
   function flush() {
     if (sec != "") {
       seen++
@@ -676,6 +681,8 @@ ROADMAP_DRIFT=$(awk '
         if (body !~ /[Gg]ate|[Cc]ounterfactual|test/) print "closure-without-evidence|" sec
         if (sec !~ /CLOSED [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ &&
             sec !~ /CLOSED by doctrine/) print "closure-without-a-date|" sec
+        if (top ~ /^## Unversioned/) print "closed-under-unversioned|" sec
+        if (top ~ /^## Open /) print "closed-under-open|" sec
       }
     }
   }
@@ -697,7 +704,7 @@ ROADMAP_DRIFT=$(awk '
   # script dies with a syntax error. That is how the first version of this
   # comment broke the file.
   /^### /             { flush(); sec = "";  body = ""; next }
-  /^## /              { flush(); sec = "";  body = ""; next }
+  /^## /              { flush(); sec = "";  body = ""; top = $0; next }
   { if (sec != "") body = body " " $0 }
   END {
     flush()
@@ -707,7 +714,50 @@ ROADMAP_DRIFT=$(awk '
     # commit. It said so only because the battery surfaced awk stderr.
     if (seen == 0) print "PREMISE-FAILED-no-sections-examined"
   }
-' ROADMAP.md)
+' "$1"; }
+# PREMISE for the fourth arm: a closed entry under `## Unversioned` must be
+# named, and the same entry under a release section must not be. A scanner
+# whose new arm never fires reports exactly what a migrated tree reports.
+RM_FIX="$(mktemp)"
+printf '## 1.9.9 — released 2099-01-01\n\n### O9999 — CLOSED 2099-01-01: probe\n\nbody with a gate.\n\n## Unversioned — decisions and external actions, not code\n\n### O9998 — CLOSED 2099-01-01: probe\n\nbody with a gate.\n' > "$RM_FIX"
+RM_PROBE=$(roadmap_scan "$RM_FIX"); rm -f "$RM_FIX"
+case "$RM_PROBE" in
+  *"closed-under-unversioned|### O9998"*) ;;
+  *) echo "FAIL  premise: the closed-under-unversioned arm did not fire on a"
+     echo "      fixture that places a CLOSED entry under Unversioned: $RM_PROBE"
+     echo ""; echo "BATTERY FAILED — preflight"; exit 1 ;;
+esac
+case "$RM_PROBE" in
+  *"closed-under-unversioned|### O9999"*|*"closed-under-open|### O9999"*)
+     echo "FAIL  premise: the arm fired on a closed entry under a RELEASE section"
+     echo ""; echo "BATTERY FAILED — preflight"; exit 1 ;;
+esac
+# **Closed entries that BELONG under `Unversioned`, each with its reason** —
+# a decision or an action outside this repository is closed and is still not
+# releasable, and the scanner cannot judge releasability. Counted BOTH ways
+# on the `OPERATOR_ONLY` precedent: a closed entry under `Unversioned` that is
+# not listed fails, and a listed id that is no longer a closed entry under
+# `Unversioned` fails too, so the list cannot outlive what it exempts. `Open`
+# has no exemptions: it holds open work only.
+UNVERSIONED_CLOSED=(
+  "O1|binaries and the image are published — an action taken, not code"
+  "O5|terminology decision: palace stays"
+  "O9|a GitHub branch-protection setting, observed to block"
+  "O12|closed by doctrine: a citation is derived, never declared"
+  "O37|the house Pages site enforces HTTPS — a setting on another repository"
+)
+ROADMAP_DRIFT=$(roadmap_scan ROADMAP.md)
+RM_UNV_HITS=$(printf '%s\n' "$ROADMAP_DRIFT" | grep '^closed-under-unversioned|' || true)
+for row in "${UNVERSIONED_CLOSED[@]}"; do
+  id="${row%%|*}"
+  if ! printf '%s\n' "$RM_UNV_HITS" | grep -qE "^closed-under-unversioned\|### ${id} "; then
+    echo "FAIL  UNVERSIONED_CLOSED lists $id (${row#*|}) but no closed entry"
+    echo "      with that id sits under '## Unversioned' — the list has outlived"
+    echo "      what it exempts; remove the row"
+    echo ""; echo "BATTERY FAILED — preflight"; exit 1
+  fi
+  ROADMAP_DRIFT=$(printf '%s\n' "$ROADMAP_DRIFT" | grep -vE "^closed-under-unversioned\|### ${id} " || true)
+done
 if [ "$ROADMAP_DRIFT" = "PREMISE-FAILED-no-sections-examined" ]; then
   echo "FAIL  the ROADMAP heading scan examined NO sections. The scanner is"
   echo "      broken, not the tree — a checker that cannot run reports exactly"
@@ -732,6 +782,15 @@ if [ -n "$ROADMAP_DRIFT" ]; then
       closure-without-a-date)
         echo "FAIL  this heading claims CLOSED without saying WHEN. Use"
         echo "      'CLOSED <yyyy-mm-dd>', or 'CLOSED by doctrine' for a ruling:" ;;
+      closed-under-unversioned)
+        echo "FAIL  this CLOSED entry sits under '## Unversioned', whose header"
+        echo "      promises nothing a release can contain. A closed engine entry"
+        echo "      lives under the release that shipped it (ROADMAP O101); a closed"
+        echo "      decision or external action is listed in UNVERSIONED_CLOSED with"
+        echo "      its reason:" ;;
+      closed-under-open)
+        echo "FAIL  this CLOSED entry sits under '## Open', which holds open work"
+        echo "      only. Move it under the release that shipped it (ROADMAP O101):" ;;
     esac
     printf '        %s\n' "$sec"
   done <<< "$ROADMAP_DRIFT"

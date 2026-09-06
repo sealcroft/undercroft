@@ -3098,6 +3098,13 @@ unwritten because a half-correct verdict is worse than a known-wrong one.
   project produces" rule, on the file that plans the work. Gated in
   `tests/battery.sh`'s preflight, host-side beside the line-ending check,
   because no image carries `ROADMAP.md` so no `cargo test` can read it.
+  **And a closed entry lives under the release that shipped it** (O101,
+  2026-09-06): the same preflight refuses a `CLOSED` entry under
+  `## Unversioned` or `## Open`, whose headers promise no releasable work and
+  open work only — seventy closed engine entries sat under those headers for
+  weeks. The five closed decisions and external actions that BELONG under
+  `Unversioned` are `UNVERSIONED_CLOSED`, an inventory with reasons counted
+  both ways, because the scanner cannot judge releasability.
 
 ## Conventions
 
