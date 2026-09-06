@@ -1301,8 +1301,15 @@ Consequences that are binding, not advisory:
   unscoped R@5 + steady-state ms/q, ONE ingest per corpus with `--floors`
   iterated in-process, per-pass warm-up reported separately — folding a
   one-time index build into a per-query average manufactured a 15× "effect"
-  in this instrument's own first version), `scopescale` (scoped recall AT
-  SCALE: a fixed 8192-drawer probe wing holding a fixed 512-row probe room,
+  in this instrument's own first version), `pqscale` (the unscoped tier AT
+  SCALE: one cumulative sealed vault grown 131k→1M, R@5 and ms/q per
+  candidate pool — and, since O23, `--offsets`: a page of five at each deep
+  start, timed beside the single deeper call whose tail it must equal byte
+  for byte under one pinned clock, a start past the corpus required EMPTY,
+  and the run FAILS on any page that is not that slice — so a deep offset's
+  cost is measured while its answer stays pinned), `scopescale` (scoped
+  recall AT SCALE: a fixed 8192-drawer probe wing holding a fixed 512-row
+  probe room,
   corpus grown around them to each checkpoint, four passes — unscoped
   control / wing / room / wing+room — the instrument any scoped-recall
   claim must cite), `xlingual` (cross-lingual R@1/R@5 per language pair
@@ -1648,8 +1655,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (807 run,
-                                      # 4 #[ignore]d = 811 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (811 run,
+                                      # 4 #[ignore]d = 815 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2387,7 +2394,19 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   it satisfies DBREACH's precondition in one commit. Prefer **fixed-rate**
   compression (quantization, whose output length is content-independent —
   embeddings are already int8 at `6 + dim` bytes) over entropy coding
-  anywhere new.
+  anywhere new. **And the decode buffer is sized from the frame header,
+  never from the bound (O109, 2026-09-06)**: `decompress_frame` handed
+  `zstd::bulk::decompress` the 16 MiB content bound as its CAPACITY, which
+  that call pre-allocates before decoding a byte, and the store kept the Vec
+  as the drawer's content `String` — so every hydrated framed candidate held
+  a 16 MiB mapping for the life of the search. Resident memory stayed honest
+  (untouched pages); the MAPPING COUNT did not, and a whole-corpus page at
+  10⁶ sealed rows reached `vm.max_map_count` (262,145 measured against
+  262,144, 8.2 TiB of address space over 5 GB resident) and killed the
+  process with 46 GB free — one JSON `offset` from any authenticated caller.
+  Found by O23's instrument, which was built to measure a COST and measured
+  a crash instead; the lesson is the pqscale one again — a claim about 10⁶
+  is settled at 10⁶, and this one had been argued from 10³.
 - **Independent per-item scoring is a poison-resistance property, and
   spending it is a decision.** A poisoned drawer can win its own slot and
   nothing else: `HashEmbedder` is a function of one drawer's text, `maxsim`

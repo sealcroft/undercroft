@@ -733,6 +733,82 @@ The price curve is linear-in-corpus by design (hydration `live/512` ×
 losing answers. It was 34.4/69.6/138.4/280.6 ms/q before the parallel-fuse
 pass; `dim/4` codes remain the unused shrink lever.
 
+### What a deep page costs (`pqscale --offsets`, ROADMAP O23)
+
+Pagination is `offset + limit`, and every candidate pool is sized from that
+depth — `max(256, depth·32)` — so a deep enough start hydrates the whole
+corpus. That was filed as a *cost* rather than a defect, with the argument
+that every alternative (a depth ceiling, a refusal, silent truncation) trades
+a bounded cost for a wrong answer, and the argument stood for a month without
+a number under it. `pqscale --offsets` puts one there: a page of five at each
+start, timed beside the single deeper call whose tail it must equal byte for
+byte under one pinned `ranked_at`, a start past the corpus required empty, and
+the run failing on any page that is not that slice. Same configuration as the
+settlement above (one cumulative sealed vault, hash embedder, PQ, `--pools
+256`), five queries per start, measured 2026-09-06.
+
+| page start | over-fetch | 131k | 262k | 524k | 1M |
+|---|---|---|---|---|---|
+| 0 | 256 | 27.7 ms | 46.1 ms | 82.0 ms | 191.7 ms |
+| 1,000 | 32,160 | 1.31 s | 1.06 s | 1.21 s | 1.21 s |
+| 10,000 | 320,160 | 6.67 s † | 8.58 s † | 14.7 s | 14.8 s |
+| 100,000 | 3,200,160 † | 4.52 s | 7.84 s | 23.5 s | **aborted** → 26.2 s ‡ |
+| past the corpus | † | 4.33 s | 8.38 s | 22.4 s | 30.5 s ‡ |
+
+† = the over-fetch is at least the corpus, i.e. every live row hydrated.
+Every measured page tiled its deeper call — 18 of 18 rows, 5 of 5 queries
+each. The 100,000 rows at 131k and 262k answered EMPTY on three of five
+queries, which is the exhausted-page contract and not a miss: a candidate
+with no lexical evidence is dropped at admission, so the admitted ranking is
+shorter than the corpus and ends before rank 100,000 there.
+
+Three things the table settles. **A fixed over-fetch costs the same at every
+size** — the 1,000 row is flat at ~1.2 s from 131k to 1M, and the 10,000 row
+is flat at ~14.7 s from 524k to 1M once its 320k pool stops being the whole
+corpus: the price belongs to the pool, not to the corpus. **A whole-corpus
+page is linear in the corpus** — 6.7 → 8.6 → 23.5 s for 131k → 262k → 524k,
+about 45 µs per hydrated row, against 28 → 46 → 82 ms for the first page, so
+the deepest page costs the shallowest one roughly 250× at every size.
+**Memory is linear too, and it is the number that matters**: a fresh
+single-checkpoint vault peaks at **1.75 / 3.53 / 6.79 GB** of container memory
+(docker stats, sampled every ~3 s) for a whole-corpus page at 131k / 262k /
+524k — about 13 KB per hydrated row, every candidate carried as a decoded
+drawer plus its token list until the page is cut. The instrument now prints
+the process's own `VmHWM` per row (`rss-hwm`), so the next run measures the
+peak from inside rather than bracketing it from beside the container.
+
+And one thing it does not settle. **The cumulative run's 1M checkpoint did
+not finish**: its 100,000 row ended in `memory allocation of 16777216 bytes
+failed` from the rayon workers on a 47 GB VM, after that checkpoint's own 0 /
+1,000 / 10,000 rows had tiled. Linear per-row memory predicts ~14 GB for that
+page, which the machine held with room to spare, so the abort is not explained
+by the per-row cost — and the process's idle resident set after it was 7.3 GB
+against a 1.5 GB database.
+
+**It was not memory, and it was not the offset.** A control on a FRESH 1M
+vault aborted identically (process high-water mark 4.4 GB after its 10,000
+row, the container sampled at 8.5 GB, 46 GB free), which ruled out the
+long-lived process; a third run that sampled the process's mapping count
+every two seconds then named the mechanism: **`maps=262,145` against
+`vm.max_map_count=262,144`, 8.2 TiB of virtual address space over 5 GB
+resident.** `decompress_frame` handed `zstd::bulk::decompress` the 16 MiB
+content bound as its *capacity*, which that call pre-allocates before it
+decodes a byte, and the store kept the Vec as the drawer's content `String`
+— so every hydrated zstd-framed candidate held a 16 MiB mapping for the life
+of the search, and a whole-corpus page ran out of MAPPINGS with the memory
+untouched. Every framed read anywhere also paid an mmap/munmap pair per row
+for a reservation it never used. That is ROADMAP **O109**, fixed the same
+day: the buffer is sized from the frame header, the 16 MiB kept as a refusal
+bound, a frame declaring no size keeping the old path. On the fixed binary
+the same page at 1M **completes in 26.2 s** (a page past the corpus, empty as
+pinned, in 30.5 s), both queries tiling, **215 mappings at peak against
+262,145**, 5.6 GB of address space against 8.2 TiB, a 4.9 GB high-water mark,
+exit 0 — and faster than the pre-fix curve predicted (524k took 23.5 s, so
+linear would have said ~47 s), because every hydrated row also stopped paying
+an mmap/munmap pair. The ‡ cells in the table are that run; every other cell
+was measured before the fix, on the cumulative vault, and stands as the
+record of what the decoder cost until 2026-09-06.
+
 ### Scoped queries at scale (`scopescale`)
 
 The instrument any scoped-recall claim must cite: a fixed 8,192-drawer

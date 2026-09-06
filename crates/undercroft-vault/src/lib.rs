@@ -947,11 +947,50 @@ fn compress_frame(plaintext: &[u8]) -> Vec<u8> {
     out
 }
 
+/// The most one drawer's content may decompress to. A BOUND, enforced
+/// against the size the frame header declares — never a pre-allocation.
+///
+/// It was the capacity handed to `zstd::bulk::decompress` for every framed
+/// drawer, and that call does `Vec::with_capacity(capacity)` before it
+/// decodes a byte, so each decode reserved 16 MiB, the store kept that Vec
+/// as the drawer's content `String`, and every hydrated framed candidate
+/// held a 16 MiB mapping for as long as the search held it. Resident memory
+/// stayed honest (the pages were never touched); the MAPPING COUNT did not:
+/// a whole-corpus page at 10⁶ sealed rows reached the kernel's
+/// `vm.max_map_count` (262,144 — measured 262,145 at the abort, 8.2 TiB of
+/// address space, 5 GB resident) and the process died in `handle_alloc_error`
+/// with 46 GB free. Every framed read anywhere also paid an mmap/munmap
+/// pair per row for the reservation (ROADMAP O109, found by O23's
+/// instrument).
+const MAX_CONTENT_BYTES: usize = 16 * 1024 * 1024;
+
 fn decompress_frame(framed: &[u8]) -> Result<Vec<u8>, VaultError> {
     match framed.first() {
         Some(&FRAME_RAW) => Ok(framed[1..].to_vec()),
-        Some(&FRAME_ZSTD) => zstd::bulk::decompress(&framed[1..], 16 * 1024 * 1024)
-            .map_err(|e| VaultError::CorruptManifest(format!("zstd: {e}"))),
+        Some(&FRAME_ZSTD) => {
+            let data = &framed[1..];
+            // Size the buffer from the header `compress_frame`'s bulk
+            // compressor always writes. A frame declaring more than the bound
+            // is REFUSED here rather than decoded into a fixed buffer that
+            // then overflows; a frame declaring nothing (no writer of ours
+            // produces one) keeps exactly the old capacity, so nothing that
+            // opened before stops opening.
+            let capacity = match zstd::zstd_safe::get_frame_content_size(data) {
+                Ok(Some(n)) if n > MAX_CONTENT_BYTES as u64 => {
+                    return Err(VaultError::CorruptManifest(format!(
+                        "zstd: frame declares {n} bytes of content, above the \
+                         {MAX_CONTENT_BYTES}-byte bound"
+                    )));
+                }
+                Ok(Some(n)) => n as usize,
+                Ok(None) => MAX_CONTENT_BYTES,
+                Err(e) => {
+                    return Err(VaultError::CorruptManifest(format!("zstd: {e:?}")));
+                }
+            };
+            zstd::bulk::decompress(data, capacity)
+                .map_err(|e| VaultError::CorruptManifest(format!("zstd: {e}")))
+        }
         // Legacy record written before compression framing: the whole
         // buffer is the content (normalized UTF-8 never starts with 0x00/0x01).
         _ => Ok(framed.to_vec()),
@@ -1018,6 +1057,56 @@ mod tests {
         assert_ne!(blob, b"remember this verbatim"); // actually encrypted
         let back = v.content_from_rest("rec1", &blob).unwrap();
         assert_eq!(back, b"remember this verbatim");
+    }
+
+    /// ROADMAP O109: a framed drawer decodes into a buffer of ITS OWN size,
+    /// not into the 16 MiB bound. The observable is the returned Vec's
+    /// capacity — the mapping each decode used to reserve — and the premise
+    /// arm proves the content really was zstd-framed, because a raw frame
+    /// would satisfy the assertion without exercising the decoder at all.
+    #[test]
+    fn a_framed_drawer_decodes_into_a_buffer_its_own_size() {
+        let dir = tempdir().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let v = mgr.create("a", SecurityLevel::Sealed).unwrap();
+        let text = "the quarterly budget review moved to thursday afternoon; "
+            .repeat(20)
+            .into_bytes();
+        assert!(
+            zstd::bulk::compress(&text, 3).unwrap().len() + 1 < text.len(),
+            "premise: this content compresses, so compress_frame frames it"
+        );
+        let blob = v.content_at_rest("rec1", &text);
+        let back = v.content_from_rest("rec1", &blob).unwrap();
+        assert_eq!(back, text);
+        assert_eq!(
+            back.capacity(),
+            text.len(),
+            "the decode buffer must be sized from the frame header, not the bound"
+        );
+    }
+
+    /// The bound stays a bound: a frame whose header declares more content
+    /// than `MAX_CONTENT_BYTES` is refused before a byte is decoded.
+    #[test]
+    fn a_frame_declaring_more_than_the_bound_is_refused() {
+        let dir = tempdir().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let v = mgr.create("a", SecurityLevel::Sealed).unwrap();
+        let big = vec![b'a'; MAX_CONTENT_BYTES + 1];
+        let blob = v.content_at_rest("rec1", &big);
+        let err = v.content_from_rest("rec1", &blob).unwrap_err();
+        assert!(
+            err.to_string().contains("above the"),
+            "an over-bound frame must be refused by the header, got: {err}"
+        );
+        // And the bound itself is still honoured: exactly MAX decodes.
+        let max = vec![b'a'; MAX_CONTENT_BYTES];
+        let blob = v.content_at_rest("rec1", &max);
+        assert_eq!(
+            v.content_from_rest("rec1", &blob).unwrap().len(),
+            MAX_CONTENT_BYTES
+        );
     }
 
     /// The training-sample draw must be reproducible for the key holder,

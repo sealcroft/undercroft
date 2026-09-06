@@ -235,6 +235,95 @@ into covered ones and loses 1, floor 12.5% → 11.4%, session R@10 95.5% →
 96.6%, temporal misses 22 → 18, at a 3% search-cost increase. A read-only
 allowlist row in `docs/AGENTS.md` §10 that O100 missed now names its third read.
 
+### a very deep `offset` is measured, not argued — and the gate its entry named now exists (O23)
+
+**ROADMAP O23 CLOSED 2026-09-06, as MEASURED; the measurement filed O109.**
+Pagination is `offset + limit` and every candidate pool is sized from that
+depth (`max(256, depth·32)`), so a deep enough start hydrates the whole
+corpus. Filed a month ago as a cost with an argument and no number — and with
+a gate, `a_deep_offset_still_returns_the_right_page`, that **no source file
+contained**: the entry cited a test nobody had written, and this file's own
+rule for a filing applies to a gate named in one.
+
+Two things ship. The test with that name, in `undercroft-store`: a sealed
+vault with the PQ tier on, a page at a depth whose over-fetch exceeds the
+corpus, required to be the same slice of the single deeper ranking, non-empty
+while that ranking has rows there, `truncated` true, and the last page exact
+with `truncated` false — run twelve times in a loop before it was believed,
+because it trains a codebook on a keyed draw. And `undercroft-bench pqscale
+--offsets`, a page of five at each deep start timed beside the single deeper
+call whose tail it must equal byte for byte under one pinned `ranked_at`, a
+start past the corpus required EMPTY, the run FAILING on any page that is not
+that slice. Off by default, and the shipped output is byte-identical without
+it. Each row also prints the process's own `VmHWM` (`rss-hwm`), so the peak
+is reported from inside rather than sampled from beside the container.
+
+Measured 2026-09-06 on the settlement's own configuration, one cumulative
+sealed vault 131k → 1M, five queries per start (full table in
+`docs/RETRIEVAL_SCALING.md`): **every page tiled its deeper call, 18 of 18
+rows**. A fixed over-fetch costs the same at every size — the 1,000 row is
+flat at ~1.2 s from 131k to 1M. A whole-corpus page is linear in the corpus —
+6.7 → 8.6 → 23.5 s at 131k → 262k → 524k, about 45 µs per hydrated row,
+roughly 250× the first page at every size. And memory is linear too: a fresh
+vault peaks at **1.75 / 3.53 / 6.79 GB** for a whole-corpus page at 131k /
+262k / 524k, about 13 KB per hydrated row. **The cumulative run's 1M
+checkpoint did not finish**: its 100,000 row ended in allocation failures on a
+47 GB VM after that checkpoint's shallower rows had tiled, which linear
+per-row memory (~14 GB for the page) does not explain. A control on a fresh
+1M vault aborted the same way, and a run sampling the process's mapping count
+named the cause — O109 below. With it fixed, the same page at 1M completes in
+26.2 s, 215 mappings at peak where 262,145 had been, 4.9 GB high-water mark.
+
+Governance moved with it: the entry lives under `1.4.0` now, the store's
+`search_inner` comment points at the measurement instead of at an argument,
+the two scaling documents gained the section, and the guide's bench bullet
+names `pqscale` at all — it listed every other synthetic instrument. Counts:
+tests 807 → 809 (811 with O109 below).
+
+### a framed drawer no longer reserves 16 MiB per decode, so a whole-corpus page at 10⁶ completes instead of killing the process (O109)
+
+**ROADMAP O109 FILED AND CLOSED 2026-09-06, found by O23's instrument, which
+was built to measure a cost and measured a crash.** `decompress_frame` in
+`undercroft-vault` handed `zstd::bulk::decompress` the 16 MiB content bound
+as its *capacity*; that call does `Vec::with_capacity(capacity)` before it
+decodes a byte, and the store keeps the Vec as the drawer's content `String`.
+So every zstd-framed drawer read on a sealed vault reserved 16 MiB of address
+space — one kernel mapping — for as long as the caller held it, and a search
+hydrating the corpus held one per candidate. Resident memory stayed honest,
+the pages being untouched; the mapping count did not. Measured at 10⁶ sealed
+rows with the process sampled every two seconds: **262,145 mappings against
+`vm.max_map_count` = 262,144, 8.2 TiB of virtual address space over 5 GB
+resident**, then `memory allocation of 16777216 bytes failed` from every
+rayon worker and the process gone — on a machine with 46 GB free, from one
+`offset` in a search body any authenticated caller may send. The bound of
+262k live framed rows is what separated 524k (a whole-corpus page in 23.5 s)
+from 1M (dead); a real corpus frames nearly every drawer, since anything past
+64 bytes of prose compresses, so on a real vault the ceiling sits near
+260,000 hydrated rows. Every framed read anywhere also paid an mmap/munmap
+pair per row for a reservation it never used.
+
+The fix is one function: the buffer is sized from the frame header that
+`compress_frame`'s bulk compressor always writes
+(`zstd_safe::get_frame_content_size`), the 16 MiB stays as a REFUSAL bound —
+a frame declaring more is refused by its header where it previously failed
+inside the decoder — and a frame declaring no size keeps exactly the old
+capacity, so nothing that opened before stops opening. PATCH-class by this
+project's test: no documented contract moves and no `UPGRADING.md` entry,
+because no deployment that worked stops working; a deployment that could not
+serve a deep page now can.
+
+Gated three ways. Two vault tests: the decoded buffer's capacity equals the
+content's length, with a premise arm proving the content really was framed
+(a raw frame would pass the assertion without exercising the decoder), and a
+frame declaring more than the bound is refused while exactly the bound still
+decodes. And the end-to-end arm is the row that died: `pqscale --offsets` at
+1M on the fixed binary, with the mapping sampler beside it: the page
+completes in 26.2 s, the page past the corpus in 30.5 s and empty as pinned,
+both queries tiling, **215 mappings at peak against 262,145 and 5.6 GB of
+address space against 8.2 TiB**, a 4.9 GB high-water mark, exit 0 — and
+faster than linear extrapolation from 524k (~47 s), because every hydrated
+row also stopped paying an mmap/munmap pair. Counts: tests 809 → 811.
+
 ## 1.3.0 — 2026-09-04
 
 MINOR: new capability, backward compatible. It adds a field beside ones that

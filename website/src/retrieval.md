@@ -250,6 +250,35 @@ Three findings worth carrying away, because each cost a belief:
   from 39.4/66.1/132.8/269.3 unscoped and ~85 ms/q wing-scoped. The instrument
   that refutes a belief is cheaper than the optimization that encodes it.
 
+### What a deep page costs
+
+A page is ranks `[offset, offset + limit)` of one ranking, and every candidate
+pool is sized from that depth (`max(256, depth·32)`), so a deep enough start
+hydrates the whole corpus. That was filed as a cost with an argument and no
+number; `undercroft-bench pqscale --offsets` measured it on 2026-09-06 — each
+page timed beside the single deeper call whose tail it must equal byte for
+byte, and the run fails on any page that is not that slice. Every page tiled:
+
+| page start | 131k | 262k | 524k | 1M |
+|---|---|---|---|---|
+| 0 | 27.7 ms | 46.1 ms | 82.0 ms | 191.7 ms |
+| 1,000 | 1.31 s | 1.06 s | 1.21 s | 1.21 s |
+| 10,000 | 6.67 s | 8.58 s | 14.7 s | 14.8 s |
+| 100,000 (whole corpus) | 4.52 s | 7.84 s | 23.5 s | aborted → 26.2 s after the fix |
+
+A fixed over-fetch costs the same at every corpus size; a whole-corpus page is
+linear in the corpus, about 45 µs and **13 KB of memory per hydrated row**
+(1.75 / 3.53 / 6.79 GB peak at 131k / 262k / 524k on a fresh vault). The
+cumulative run's 1M checkpoint aborted on allocation failures at the 100,000
+row on a 47 GB machine, which linear memory does not explain — and a run that
+sampled the process found why: **262,145 mappings against a ceiling of
+262,144**, 8.2 TiB of address space over 5 GB resident. Every zstd-framed
+drawer was decoded into a buffer pre-allocated at the 16 MiB content bound
+and kept as its content string, one mapping per hydrated row, so the page ran
+out of mappings rather than memory. Fixed the same day by sizing the buffer
+from the frame header with the bound kept as a refusal; the same page at 1M
+then completes in 26.2 s with 215 mappings at peak.
+
 ### Remote vector backends are untrusted accelerators, not a store swap
 
 Undercroft can push **sealed** content + embeddings to Qdrant / Weaviate /

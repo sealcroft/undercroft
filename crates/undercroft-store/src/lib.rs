@@ -5878,11 +5878,20 @@ impl PalaceStore {
         // limit; that is clamped where the cast happens. The residue is a
         // cost, not a wrong answer: a very deep offset makes one request pay
         // a full scan. That is corpus-bounded — the same price a below-floor
-        // scope already pays by design — and is recorded as ROADMAP O23
-        // rather than closed by breaking the contract. (It cited `A17` until
-        // 2026-08-12, and the ROADMAP holds no `A`-numbered entries at all
-        // any more: the residue was pointing at a vanished id, so it was
-        // recorded NOWHERE. A citation is not a filing.)
+        // scope already pays by design — and it is MEASURED rather than
+        // argued (ROADMAP O23, closed 2026-09-06 by `undercroft-bench
+        // pqscale --offsets`, table in docs/RETRIEVAL_SCALING.md): a
+        // whole-corpus page costs ~45 µs per hydrated row, linear, roughly
+        // 250× the first page at every size from 131k to 1M, every page the
+        // exact slice of its deeper call. The one thing that measurement
+        // found which was NOT a cost — a whole-corpus page at 10⁶ sealed rows
+        // killing the process on the kernel's mapping ceiling — belonged to
+        // the frame decoder, not to this depth, and is fixed there (O109).
+        // (This comment cited `A17` until 2026-08-12, and the ROADMAP holds
+        // no `A`-numbered entries at all any more: the residue was pointing
+        // at a vanished id, so it was recorded NOWHERE. A citation is not a
+        // filing — and the gate O23 then named was not written until it
+        // closed. A filing's gate is a claim about the tree too.)
         let depth = opts.offset.saturating_add(limit);
         // What the caller DECLARED, which outranks the text. When they
         // declared nothing this stays `Undeclared` and each candidate is
@@ -10469,6 +10478,86 @@ mod tests {
             10,
             "rank 350 exists in a 400-drawer corpus; the prefilter must fetch to the page's far edge"
         );
+    }
+
+    /// ROADMAP O23's contract, under the name the entry's gate had cited
+    /// for weeks without anyone writing it. A page at a depth whose
+    /// over-fetch exceeds the corpus — `max(256, depth·32)` past every live
+    /// row, the exact case that makes one request pay a full scan — must
+    /// still be ranks `[offset, offset + limit)` of the one ranking a single
+    /// deeper call produces, and must not be empty while that ranking has
+    /// rows there. Both shapes the entry rejects fail it: a clamped or
+    /// refused depth empties the page, and a shrunk over-fetch can move it.
+    /// What may move is the COST, which `undercroft-bench pqscale --offsets`
+    /// measures; the answer may not. Sealed with the PQ tier on, so the pool
+    /// arithmetic that sizes hydration from `depth` is the shipped path.
+    #[test]
+    fn a_deep_offset_still_returns_the_right_page() {
+        let (_dir, mut s) = store(SecurityLevel::Sealed);
+        const ROWS: usize = 1000;
+        for i in 0..ROWS as u32 {
+            s.upsert(&drawer(
+                "w",
+                "r",
+                &format!("manatee sighting number {i} in the estuary"),
+                i,
+            ))
+            .unwrap();
+        }
+        s.set_pq(true);
+        // One clock for every call, as a paging caller pins it.
+        let at = OffsetDateTime::now_utc();
+        let opts = |offset: usize, limit: usize| SearchOptions {
+            limit,
+            offset,
+            ranked_at: Some(at),
+            ..Default::default()
+        };
+        // Premise: this depth asks the prefilter for more candidates than
+        // the corpus holds, so it is the over-fetch-exceeds-corpus case and
+        // not a shallow page that any pool would satisfy.
+        let (offset, limit) = (900usize, 10usize);
+        assert!(
+            (offset + limit).saturating_mul(32) > ROWS,
+            "the depth must exceed the corpus once multiplied by the over-fetch"
+        );
+        let single: Vec<String> = s
+            .search("manatee estuary", &opts(0, offset + limit))
+            .unwrap()
+            .into_iter()
+            .map(|h| h.drawer.id)
+            .collect();
+        assert_eq!(
+            single.len(),
+            offset + limit,
+            "every drawer says both words, so the admitted ranking reaches the page's far edge"
+        );
+        let page = s
+            .search_page("manatee estuary", &opts(offset, limit))
+            .unwrap();
+        let ids: Vec<String> = page.hits.iter().map(|h| h.drawer.id.clone()).collect();
+        assert_eq!(
+            ids.len(),
+            limit,
+            "rank {offset} exists in a {ROWS}-row corpus"
+        );
+        assert_eq!(
+            ids,
+            single[offset..offset + limit],
+            "a deep page is the same slice of the one deeper ranking"
+        );
+        assert!(
+            page.truncated,
+            "{} admitted rows remain below the page",
+            ROWS - offset - limit
+        );
+        // The ranking's last page: still exact, and the engine says the
+        // ranking ended there rather than guessing from the page's length.
+        let last = s
+            .search_page("manatee estuary", &opts(ROWS - limit, limit))
+            .unwrap();
+        assert_eq!(last.hits.len(), limit, "the last page is full");
+        assert!(!last.truncated, "nothing is admitted below the last page");
     }
 
     /// Exactly what `POST /v1/vaults/{id}/drawers` does: index the new

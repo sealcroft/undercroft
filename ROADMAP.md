@@ -3988,7 +3988,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**138** of the **153** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**139** of the **154** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -5018,6 +5018,113 @@ The unit-test corpus taught one thing worth writing down: a filler that says
 its own merits — correctly — so the first fixture "failed" by being right.
 MINOR: the unreleased section is `1.4.0` now. A read-only allowlist row in
 `docs/AGENTS.md` §10 that O100 missed was corrected in passing.
+
+---
+
+### O23 — CLOSED 2026-09-06: a very deep `offset` pays a full scan — MEASURED 131k→1M, the argument replaced by a number, and the measurement found O109
+
+Filed in round four as a cost with an argument and no number — and with a
+gate, `a_deep_offset_still_returns_the_right_page`, that **no source file
+contained**. The entry named a test nobody had written and nothing could say
+so, because a filing's gate is prose. Both halves are closed.
+
+**The gate exists** (`undercroft-store`): a sealed vault with the PQ tier on,
+a page at a depth whose over-fetch (`depth·32`) exceeds the corpus — the
+exact case that makes one request pay a full scan — required to be the same
+slice of the single deeper ranking, non-empty while that ranking has rows
+there, `truncated` true, and the last page exact with `truncated` false.
+Looped twelve times before it was believed, since it trains a codebook on a
+keyed draw. Both shapes the entry rejects fail it: a clamped or refused depth
+empties the page, a shrunk over-fetch can move it.
+
+**The number** (`undercroft-bench pqscale --offsets`: a page of five at each
+start timed beside the single deeper call whose tail it must equal byte for
+byte under one pinned `ranked_at`, a start past the corpus required EMPTY,
+the run FAILING on any page that is not that slice; every row also prints
+the process's `VmHWM`; full table in `docs/RETRIEVAL_SCALING.md`): **18 of
+18 rows tiled** across 131k / 262k / 524k / 1M. A fixed over-fetch costs the
+same at every size — the 1,000 row is flat at ~1.2 s from 131k to 1M. A
+whole-corpus page is linear in the corpus — 6.7 / 8.6 / 23.5 s at 131k /
+262k / 524k, about 45 µs per hydrated row, roughly 250× the first page (28 /
+46 / 82 ms) at every size. Memory is linear too: 1.75 / 3.53 / 6.79 GB, about
+13 KB per hydrated row, every candidate carried as a decoded drawer plus its
+token list until the page is cut.
+
+**Ruling: closed as a measured cost, the argument standing.** Every
+alternative — a depth ceiling, a refusal, silent truncation — still trades a
+bounded cost for a wrong answer, and the cost is now a figure a caller can
+read off against their corpus size rather than a claim. What the argument had
+wrong was the word *bounded*: at 1M the page did not cost more, it KILLED the
+process. That was not this depth's defect but the frame decoder's (O109,
+below), which this instrument found on its first full run and which is fixed
+the same day; on the fixed binary the same page at 1M completes in 26.2 s,
+215 mappings at peak against 262,145.
+
+**Gate:** `a_deep_offset_still_returns_the_right_page` (store),
+`pqscale_deep_offsets_hold_the_page_contract` (bench), and the instrument
+itself, which fails a run on any page that is not the slice.
+
+---
+
+### O109 — CLOSED 2026-09-06: a zstd-framed drawer reserved 16 MiB per decode, and a whole-corpus page at 10⁶ sealed rows killed the process on the kernel's mapping ceiling
+
+**Found by O23's instrument, built to measure a cost, on its first full run.**
+The 1M checkpoint's 100,000 row ended in `memory allocation of 16777216 bytes
+failed` from every rayon worker, on a 47 GB VM with 46 GB free, after that
+checkpoint's shallower rows had tiled. Three runs separated the hypotheses,
+in order: a fresh-vault control aborted identically (process high-water mark
+4.4 GB, container sampled at 8.5 GB), which ruled out the long-lived
+process; per-checkpoint peaks on fresh vaults read **1.75 / 3.53 / 6.79 GB**
+at 131k / 262k / 524k — linear, ~13 KB per hydrated row, predicting ~14 GB at
+1M — which ruled out memory; and a run sampling the process's mapping count
+every two seconds named it: **`maps=262,145` against `vm.max_map_count` =
+262,144, 8.2 TiB of virtual address space over 5 GB resident.**
+
+**Mechanism, verified by reading both crates.** `decompress_frame`
+(`undercroft-vault`) handed `zstd::bulk::decompress` the 16 MiB content bound
+as its *capacity*; zstd 0.13.3's `Decompressor::decompress` does
+`Vec::with_capacity(capacity)` before it decodes a byte (`bulk/decompressor.rs:107`);
+`decode_with` (`undercroft-store`) then keeps that Vec as the drawer's content
+`String` through `String::from_utf8`, which preserves capacity. So every
+zstd-framed drawer read on a sealed vault reserved one 16 MiB mapping for as
+long as the caller held it, and a search hydrating the corpus held one per
+framed candidate — 262k of them is the ceiling, which is what separated 524k
+(23.5 s) from 1M (dead). The failing allocation size IS the capacity
+argument, and the 16 MB was never touched: resident memory stayed honest
+while the mapping count did not. Every framed read anywhere also paid an
+mmap/munmap pair per row for the reservation. A real corpus frames nearly
+every drawer (`compress_frame` frames anything past 64 bytes that
+compresses, and prose does), so on a real vault the ceiling sits near
+260,000 hydrated rows — reachable by one `offset` in a search body from any
+authenticated caller, on a single-threaded server serving every tenant.
+
+**Fix: size the buffer from the frame header, keep 16 MiB as a bound.**
+`compress_frame`'s bulk compressor always writes the content size into the
+frame, `zstd_safe::get_frame_content_size` reads it, and the buffer is
+allocated at exactly that. A frame declaring more than the bound is REFUSED
+by its header, where before it failed inside the decoder against a
+too-small buffer; a frame declaring no size (no writer of ours produces one)
+keeps exactly the old capacity, so nothing that opened before stops
+opening. PATCH by this file's test — no documented contract moves, no
+`UPGRADING.md` entry: no deployment that worked stops working, and one that
+could not serve a deep page now can. Rejected: `shrink_to_fit` after decode
+(the mapping still exists during the decode, and the fan-out holds many at
+once) and raising the ceiling from the deployment (a sysctl is not a fix).
+
+**Gates.** `a_framed_drawer_decodes_into_a_buffer_its_own_size` — the
+returned capacity equals the content length, with a PREMISE arm proving the
+content was zstd-framed, because a raw frame satisfies the assertion without
+touching the decoder; `a_frame_declaring_more_than_the_bound_is_refused` —
+over-bound refused by the header, exactly the bound still decodes. And the
+end-to-end arm is the row that died, `pqscale --offsets 100000` at 1M on
+the fixed binary with the mapping sampler beside it: the page completes in
+26.2 s, the page past the corpus in 30.5 s and empty as pinned, both queries
+tiling, **215 mappings at peak against 262,145 and 5.6 GB of address space
+against 8.2 TiB**, a 4.9 GB high-water mark, exit 0 — and faster than linear
+extrapolation from 524k (~47 s), because every hydrated row also stopped
+paying an mmap/munmap pair. Counterfactual: with the capacity reverted to
+the bound, `a_framed_drawer_decodes_into_a_buffer_its_own_size` fails on the
+capacity assertion; with `depth` clamped, O23's gate fails on an empty page.
 
 ---
 
@@ -10575,8 +10682,10 @@ releasable work with no target release yet.
 twenty-five entries that closed here between `1.1.1` and `1.2.0` had stayed
 under this heading after closing, which made it the same drift as the
 `Unversioned` header one section down; they are under `## 1.2.0` now, and
-O23 — filed as a cost under `Unversioned` although it is releasable — is
-here. When an entry below closes, it moves to the release that ships it.
+O23 — filed as a cost under `Unversioned` although it is releasable — sat
+here until it closed, measured, on 2026-09-06 (under `## 1.4.0`, beside the
+O109 its measurement found). When an entry below closes, it moves to the
+release that ships it.
 
 **The heading gate could not have caught this**, and that is worth stating
 rather than assuming someone will notice. Its three arms —
@@ -10587,40 +10696,6 @@ actually *satisfied* by the word "gate", which every one of these gap
 paragraphs contains. Detecting "this closed entry contains an open item" needs
 a semantic reading, which this file has repeatedly refused to fake with a
 scanner (O33, O47). The mechanism here is a heading, not a gate.
-
-### O23 — a very deep `offset` makes one request pay a full scan
-
-Round-four #54, and it turned out to be worse than the finding said. The
-finding was that a code comment cites ROADMAP `A17`, which does not exist.
-It does not exist because **the ROADMAP holds no `A`-numbered entries at
-all** any more — they were consolidated away — so the residue that comment
-says is "recorded as A17" was recorded **nowhere**. A citation is not a
-filing, and this one had been standing in for one.
-
-The residue itself, restated from the code that owns it
-(`search_inner`'s depth handling): pagination is `offset + limit`, so a very
-deep offset makes a single request scan the corpus. That is a **cost, not a
-wrong answer** — the pinned contract is that a page returns the right rows,
-and refusing past a ceiling would break that contract outright to save a
-cost. It is corpus-bounded, and it is the same price a below-floor scope
-already pays by design.
-
-What WAS broken was one line at the SQL boundary, where `k as i64` wrapped
-negative and SQLite reads a negative `LIMIT` as no limit. That is clamped at
-the cast, and is not this entry.
-
-**Deliberately not scheduled.** Filed so the cost is recorded rather than
-implied by a dangling id, and so a future reader finds the argument for
-leaving it: every alternative considered — a depth ceiling, refusing past a
-bound, silently truncating — trades a bounded cost for a wrong answer, which
-is the trade this project does not make.
-
-**Gate:** if it is ever closed, the closing change must keep
-`a_deep_offset_still_returns_the_right_page` true; the cost may move, the
-answer may not.
-
----
-
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 
