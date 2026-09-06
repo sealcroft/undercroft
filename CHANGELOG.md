@@ -191,6 +191,22 @@ byte-identical. Both headers now describe their contents in kind, and the
 `ROADMAP headings` preflight gained a fourth arm, probed both ways, that
 names a `CLOSED` entry sitting under either section.
 
+### the LoCoMo floor is measured by id, and it is eleven questions, not "implied evidence" (O76)
+
+**ROADMAP O76 CLOSED; O108 filed.** `undercroft-bench locomo` prints one
+`LOCOMO_MISS` line per question whose gold turns no hit in the pool covers,
+naming the conversation, question, category and turn ids — the last rank
+bucket named rather than counted. Two runs over `locomo10.json` at pool 50,
+the default hash embedder and served bge-m3 through the shipped TLS
+terminator: the fifteen questions the 2026-08-22 run recorded as never
+surfacing are all among the hash run's 248 misses; read one by one, three
+have gold no text matcher can reach, nine are paraphrase or world-knowledge
+misses, and two carry a date the engine's own scanner resolves but retrieval
+never consults — the last filed as O108. bge-m3 reaches four of the fifteen
+and eleven stay below the pool; corpus-wide the floor drops from 12.5% to
+9.5% at 33× ingest and 6× query cost. Logs under `benchmarks/logs/o76_*`,
+figures in `benchmarks/RESULTS.md`.
+
 ## 1.3.0 — 2026-09-04
 
 MINOR: new capability, backward compatible. It adds a field beside ones that

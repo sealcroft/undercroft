@@ -3988,7 +3988,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**137** of the **152** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**138** of the **153** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4867,6 +4867,69 @@ beyond the five exempt (50 under `Unversioned`, 24 under `Open`), and over
 this tree none.
 
 ---
+
+### O76 — CLOSED 2026-09-06: the residual is measured BY ID, and it is not "implied evidence" — it is eleven questions, three of them ungettable by any text matcher
+
+**Measured, 2026-08-23.** 15 of 1,531 questions (**1.0%**) have gold evidence
+the engine never surfaces within the top 50. Not explained by question length
+(9.5 words vs 10.0 overall) or by how many sessions the evidence spans (1.39
+vs 1.37). They skew to inferential questions — *"What fields would she be
+likely to pursue?"*, *"What is her relationship status?"* — where the answer
+is implied across a conversation rather than written in it.
+
+Same root cause as **O72**: a surface-form matcher cannot reach a claim nobody
+states. Unlike O72 it does not obviously yield to a better embedder either,
+since the target text may contain no restatement to match against at any
+depth.
+
+**Deliberately not scheduled.** Filed so the floor is recorded rather than
+implied by a rounding. This is the honest bottom of the current retrieval
+model, and any claim of "near-perfect recall" should be read against it.
+
+**Gate:** if a future change claims to close this, it must be measured on
+these 15 by id, not on an aggregate that can absorb them.
+
+---
+
+**CLOSED 2026-09-06 — measured by id, twice, with the instrument this entry's
+gate needed and did not have.** The bench's LoCoMo evaluator now prints one
+`LOCOMO_MISS conv=… q=… cat=… pool=… missing=<turn ids>` line per question
+whose gold turns no hit in the pool covers — the last `gold_all_rank` bucket
+NAMED, machine-readable like every other `LOCOMO_` line. Two runs over
+`locomo10.json` at pool 50 (logs under `benchmarks/logs/o76_*`, figures in
+`benchmarks/RESULTS.md`): the default hash embedder, and served bge-m3
+through the shipped TLS terminator with the CA pinned, the endpoint's own
+request log confirming the calls.
+
+**The fifteen are all there under hash** (15 of 15 among the bench's 248
+misses; the bench's floor is wider than the AMB run's 1.0% because it scores
+turn coverage over chunks and includes the adversarial category that run
+skipped — stated, not blended). **Read one by one, the filed diagnosis holds
+for a minority.** Three are gold no text matcher can reach: a signed
+basketball named only in a photo (`conv-43_q25`), a turn by the other speaker
+about a shelter fundraiser cited for John's hiking (`conv-41_q32`), a Weight
+Watchers meeting cited as a healthy meal (`conv-49_q37`). Nine are paraphrase
+or world-knowledge misses — "US cities" against a turn saying only "Chicago",
+"names of Audrey's dogs" against "a puppy called Pixie", "volunteering"
+against "went to a homeless shelter to give out food". Two carry a date the
+scanner resolves and retrieval ignores, filed as **O108** above. Nothing here
+is "implied across a conversation"; each miss is one named turn.
+
+**Under bge-m3, four of the fifteen are reached** (`conv-42_q83`,
+`conv-44_q15`, and both date cases, `conv-47_q34` and `conv-50_q43`) and
+eleven stay below the pool; corpus-wide the floor goes 248 → 188 questions
+(12.5% → 9.5%), session R@10 95.5 → 97.8%, at 33× ingest and 6× query cost.
+So the residual is restated precisely: **eleven questions, three ungettable,
+eight where the evidence turn does not win a slot in a fifty-chunk pool over
+a whole conversation even with a served model.** The counterfactual is the
+pair of runs: the same ids, the same instrument, one variable moved.
+
+**Deliberately not done here**: a date channel (O108, its own decision) and
+deeper pools (a cost the caller already controls). The entry's own rule is
+kept — any later claim on this floor is judged on these ids.
+
+---
+
 
 
 
@@ -10433,26 +10496,30 @@ paragraphs contains. Detecting "this closed entry contains an open item" needs
 a semantic reading, which this file has repeatedly refused to fake with a
 scanner (O33, O47). The mechanism here is a heading, not a gate.
 
-### O76 — the residual one percent: questions whose evidence is implied, not stated
+### O108 — a query's date is never matched against a drawer's resolved mentions
 
-**Measured, 2026-08-23.** 15 of 1,531 questions (**1.0%**) have gold evidence
-the engine never surfaces within the top 50. Not explained by question length
-(9.5 words vs 10.0 overall) or by how many sessions the evidence spans (1.39
-vs 1.37). They skew to inferential questions — *"What fields would she be
-likely to pursue?"*, *"What is her relationship status?"* — where the answer
-is implied across a conversation rather than written in it.
+**Found 2026-09-06 while measuring O76 by id.** `conv-50_q43` asks *"Which
+city was Calvin at on October 3, 2023?"*; the gold turn sits in a session
+dated 4 October 2023 and says *"Yesterday I met with some incredible artists
+in Boston"*. The engine's temporal scanner resolves that "Yesterday" to
+2023-10-03 at read time (`live_time_mentions_in`) — the exact evidence the
+question names — and retrieval never consults it: `SearchOptions` carries no
+date, the query's own date is not extracted, and no channel scores a query
+date against a drawer's resolved mentions. Under the default hash embedder the
+turn never enters a 50-hit pool; a served bge-m3 reaches it by paraphrase, not
+by the date. `conv-47_q34` (*"countries visited in July 2022"* against a
+session dated 22 July 2022) is the same shape.
 
-Same root cause as **O72**: a surface-form matcher cannot reach a claim nobody
-states. Unlike O72 it does not obviously yield to a better embedder either,
-since the target text may contain no restatement to match against at any
-depth.
-
-**Deliberately not scheduled.** Filed so the floor is recorded rather than
-implied by a rounding. This is the honest bottom of the current retrieval
-model, and any claim of "near-perfect recall" should be read against it.
-
-**Gate:** if a future change claims to close this, it must be measured on
-these 15 by id, not on an aggregate that can absorb them.
+**Fix shape**: read the query through the same scanner (`Locale` is already a
+read-time parameter on every search surface), and where it yields a resolved
+period, score candidates whose `content_date` or resolved mentions fall inside
+it — a fourth channel beside `lexical_exact`, `lexical_morph` and the cosine,
+per-drawer and therefore inside the independent-scoring invariant, DECLARED
+on `SearchOptions` and off by default (a query date is EVIDENCE the writer
+typed, but scoring by it changes what is retrievable, which is the MINOR
+test). **Gate**: the two ids above, under hash, at pool 50 — they must be
+covered — beside the LoCoMo temporal category as a whole, which must not
+regress; measured by `LOCOMO_MISS` lines, never by an aggregate.
 
 ---
 

@@ -504,3 +504,41 @@ for corpora too large to scan locally — never for latency, never for accuracy.
 | 4-core / edge, large corpus | hmac-only + PQ/IVF prefilter (`UNDERCROFT_RETRIEVAL=pq`); **ColBERT** (`UNDERCROFT_RERANKER=colbert`) | bounded RAM; ~93 ms/q @ 96.8% |
 | GPU box | ort CUDA EP (each forward ~1–5 ms) | reranked query well under 50 ms |
 | Huge corpus, RAM-rich | HNSW (tune `ef`/over-fetch with N) or PQ+IVF (shipped) | 300+ q/s (HNSW) / bounded-RAM (PQ+IVF) |
+
+## LoCoMo residual by id — the first-stage floor, named (ROADMAP O76)
+
+Run 2026-09-06 in Docker, `locomo10.json` (10 conversations, 1,982
+questions incl. category 5), pool 50, k 10, default chunking. The bench
+prints one `LOCOMO_MISS` line per question whose gold turns no hit in the
+pool covers, so the floor is a list of ids rather than a percentage that
+can absorb one question leaving and another arriving. Logs:
+`logs/o76_locomo10_hash_pool50.log`, `logs/o76_locomo10_bge-m3_pool50.log`.
+
+```
+/build/release/undercroft-bench locomo locomo10.json --k 10 --pool 50
+# served row: UNDERCROFT_EMBEDDER=http UNDERCROFT_EMBED_URL=https://embeddings-tls
+#             UNDERCROFT_EMBED_CA=/tls/root.crt UNDERCROFT_EMBED_MODEL=bge-m3
+```
+
+| Metric (turn-level coverage over the 50-hit pool) | hash-v3 | bge-m3 (served) |
+|---|---|---|
+| Session R@10 | 95.5% | 97.8% |
+| All gold turns delivered, 1 turn needed (1,554 q) | 85.7% | 90.2% |
+| All gold turns delivered, 2 turns needed (241 q) | 44.4% | 57.7% |
+| Gold covered anywhere in the pool | 87.5% | 90.5% |
+| Never covered — questions, by id | **248** | **188** (68 hash misses reached, 8 new) |
+| Ingest / search cost | 20 s / 24.5 ms per q | 673 s / 154 ms per q |
+
+The fifteen questions the 2026-08-22 AMB run recorded as never surfacing
+within 50 (session granularity, categories 1–4) are all among the 248:
+`conv-41_q3 q32 q64 · conv-42_q83 · conv-43_q21 q25 q38 · conv-44_q12 q15
+q24 q29 · conv-47_q34 · conv-48_q88 · conv-49_q37 · conv-50_q43`.
+bge-m3 reaches **4** of them (`conv-42_q83`, `conv-44_q15`, `conv-47_q34`,
+`conv-50_q43`); the other **11** stay below the pool under both embedders —
+three because the gold cannot be reached by any text matcher (an object
+named only in a photo, a turn by the other speaker, a meeting cited as a
+meal), eight because the evidence is a paraphrase or needs world knowledge
+(Chicago for "US cities", a puppy called Pixie for "dogs' names") and the
+turn's chunk does not win a slot in a 50-chunk pool over a whole
+conversation. Category 5 (adversarial) is included here and was skipped by
+the AMB run, which is why this floor (12.5% / 9.5%) is not that run's 1.0%.
