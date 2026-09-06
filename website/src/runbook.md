@@ -104,10 +104,21 @@ forge the chain MAC).
 
    Two conditions refuse instead, both **409**, because serving through them
    would answer a question wrongly rather than partially: a manifest whose
-   `palace.db` is absent (a half-copied backup or a snapshot taken mid-write —
+   `vault.db` is absent (a half-copied backup or a snapshot taken mid-write —
    "empty" is not "absent", and this one exits **2**, an integrity verdict),
    and a schema this build would have had to migrate (open it once with a
    writable process, then retry).
+
+   **The database is `vault.db` since 1.5.0**, beside `vault.json`; before
+   that it was `palace.db`. A vault created earlier keeps that name until its
+   first WRITABLE open, which checkpoints the WAL and renames it in place; a
+   read-only open serves the file where it is and reports the pending rename
+   on `unhealed`, so a replica of a not-yet-migrated primary says so rather
+   than failing. A directory holding BOTH files is refused on either posture
+   (409, exit 2 — one of them is a stray copy, and an open that picked one
+   would serve the wrong vault silently): move the stray aside and reopen.
+   Any script of yours that names the file — backups, the tamper demo in the
+   observability README, a monitor — must name `vault.db`, or check for both.
 
    If your incident needs a byte-frozen vault, stop the server rather than
    restarting it. If the vault lives on a write-protected mount or a snapshot,

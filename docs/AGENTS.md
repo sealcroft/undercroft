@@ -214,7 +214,7 @@ undercroft serve-http --host 0.0.0.0 --port 8800
   `vault.json.next` left exactly where it is. Whatever the open declined to
   repair is warned at start-up and readable afterwards as `unhealed` on
   `undercroft stats`, `undercroft_status` and `GET /v1/vaults/{id}/stats`.
-  Two conditions **refuse** instead, both 409: a manifest whose `palace.db`
+  Two conditions **refuse** instead, both 409: a manifest whose `vault.db`
   is absent — "empty" is not "absent", and this one is an integrity verdict
   (exit 2) — and a schema this build would have had to migrate, which needs
   one writable open first.) On `/mcp` the

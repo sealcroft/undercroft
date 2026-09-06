@@ -1,5 +1,75 @@
 # Changelog
 
+## Unreleased — 1.5.0
+
+MINOR, by this project's own test: the per-vault database gains a name
+(`vault.db`) beside the one it had, and nothing documented stops being
+accepted — a vault created under the old name opens, verifies and is renamed
+in place, so no on-disk format stops opening. `UPGRADING.md` carries it for
+the scripts that name the file, which the engine cannot see.
+
+### the per-vault database is `vault.db`, and a vault created before this is renamed at its first writable open (O7)
+
+**ROADMAP O7 CLOSED 2026-09-07.** `palace` named two levels of the hierarchy:
+the whole installation everywhere it is written ("the palace master key",
+"initialize the palace", "export the palace") and, through the one file
+`Vault::db_path` joined, each vault's database. A reader was told the palace
+contains vaults and each vault contains a palace. The installation keeps the
+word (the O5 ruling); the per-vault file is `vault.db` now, beside
+`vault.json`, which names the same thing that file names.
+
+**The rename is not one `rename(2)`, and that is the whole of the design.** A
+WAL database is three files that SQLite finds by the database's own name, so
+`vault.db` beside a hot `palace.db-wal` silently loses every committed frame
+not yet checkpointed — no error, just an older state. The store's WRITABLE
+open therefore checkpoints (TRUNCATE), renames, then removes the emptied
+sidecars; a checkpoint that reports `busy` (another process holds the file)
+leaves the name alone and the next writable open retries; a crash between
+checkpoint and rename loses nothing and one after it leaves empty sidecars
+the next writable open sweeps. The vault crate does not speak SQLite, so it
+only ANSWERS which layout a directory has (`DbLayout::{Current, Legacy,
+Absent, Ambiguous}`, `DB_FILE`, `LEGACY_DB_FILE`) and `db_path` returns the
+file the vault HAS — a pure function of the directory, which is what lets a
+read-only open serve a legacy name without renaming and report it on
+`unhealed` (`Unhealed::LegacyDatabaseName`, the existing channel for repairs
+a read-only unlock declines). `database_exists` answers for either name,
+because the alternative — every pre-1.5.0 vault reading as A33's
+`DatabaseMissing` on upgrade day — is the trap the entry filed. Two files
+under one manifest are refused on both postures as `DatabaseAmbiguous`, an
+integrity-class verdict (409 + `class: "integrity"`, exit 2) like its
+one-file-too-few sibling, and the bare-directory hold used by destructive
+restores applies the same rule. No wire format, serde field, crypto domain,
+audit namespace or id recipe moves.
+
+**Gated on every surface the entry named and one it did not.** Vault: a new
+vault's database is `vault.db` and until it exists the layout is `Absent`; a
+legacy-named database is served, reported by a read-only unlock and left
+alone by a writable one (the unlock never renames — the store does); two
+files are `Ambiguous`. Store: the O7 gate itself — a populated vault put back
+under `palace.db` opens with no verdict, every row present, renamed to
+`vault.db` with no legacy file or sidecar left, `verify` green; the read-only
+half, serving and reporting with nothing touched; **a hot WAL survives the
+rename** (a writer leaked mid-life, its committed rows only in the WAL, the
+premise that the WAL is non-empty asserted — a bare rename fails this by
+returning fewer rows with no error); two files refused on both postures with
+neither touched. CLI and `/v1`: `DatabaseAmbiguous` in both integrity
+inventories, which the cross-surface set test keeps identical. e2e, through
+the real binary and `open_store_as`: eleven checks staging a legacy vault
+exactly as an upgrade meets one — read-only serves and reports and renames
+nothing, a writable `verify` is green and renames, two files refuse with exit
+2 on both postures touching neither, `/v1 --read-only` serves a legacy vault
+reporting it on `stats.unhealed` and answers two files with 409 + class.
+Every e2e, CLI and store test that inspected a fresh vault's database by name
+moved to the new one.
+
+Counts: tests 811 → 818, e2e 463 → 474. Documents: the runbook states the
+layout and the rename; `docs/AGENTS.md`, `docs/MULTI_TENANCY.md`,
+`docs/remote-server.md`, `docs/security.md`, the architecture page, the
+platform-overview view and the observability README's tamper demo name the
+new file; the 1.2.1 records in `UPGRADING.md` and the O91 measurement in
+`CLAUDE.md` keep the old name, because that is what the file was called when
+they were measured.
+
 ## 1.4.0 — 2026-09-07
 
 MINOR, by this project's own test: it ADDS beside things that stay — three

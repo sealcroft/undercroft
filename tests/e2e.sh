@@ -123,7 +123,7 @@ check "vault anchor"              0 "committed chain head"           -- "$BIN" v
 
 echo "== Encryption at rest =="
 absent_in_db "sealed vault has no plaintext on disk" \
-  "BLUE HERON" "$UNDERCROFT_HOME/vaults/work/palace.db"
+  "BLUE HERON" "$UNDERCROFT_HOME/vaults/work/vault.db"
 
 echo "== FTS5 BM25 prefilter (hmac-only vaults) =="
 check "hmac-only vault create"    0 "Created vault 'plain'"          -- "$BIN" vault create plain --level hmac-only
@@ -133,20 +133,20 @@ check "prefiltered search hits"   0 "kubernetes"                     -- \
   env UNDERCROFT_FTS_PREFILTER_MIN=1 "$BIN" search "staging kubernetes cluster" --vault plain
 check "prefilter off still hits"  0 "kubernetes"                     -- \
   env UNDERCROFT_FTS_PREFILTER_MIN=off "$BIN" search "staging kubernetes cluster" --vault plain
-if grep -qF "drawers_fts" "$UNDERCROFT_HOME/vaults/plain/palace.db" 2>/dev/null; then
+if grep -qF "drawers_fts" "$UNDERCROFT_HOME/vaults/plain/vault.db" 2>/dev/null; then
   echo "ok    hmac-only vault has an FTS index"; PASS=$((PASS+1))
 else
   echo "FAIL  hmac-only vault missing its FTS index"; FAIL=$((FAIL+1))
 fi
 absent_in_db "sealed vault has no FTS index" \
-  "drawers_fts" "$UNDERCROFT_HOME/vaults/work/palace.db"
+  "drawers_fts" "$UNDERCROFT_HOME/vaults/work/vault.db"
 
 echo "== PQ/IVF prefilter (UNDERCROFT_RETRIEVAL=pq, both vault levels) =="
 check "pq search hits"            0 "kubernetes"                     -- \
   env UNDERCROFT_RETRIEVAL=pq "$BIN" search "staging kubernetes cluster" --vault plain
 check "bad retrieval mode fails"  1 "unknown UNDERCROFT_RETRIEVAL"    -- \
   env UNDERCROFT_RETRIEVAL=nope "$BIN" search "anything" --vault plain
-if grep -qF "drawer_pq" "$UNDERCROFT_HOME/vaults/plain/palace.db" 2>/dev/null; then
+if grep -qF "drawer_pq" "$UNDERCROFT_HOME/vaults/plain/vault.db" 2>/dev/null; then
   echo "ok    hmac-only vault has PQ codes on disk"; PASS=$((PASS+1))
 else
   echo "FAIL  hmac-only vault missing its PQ codes"; FAIL=$((FAIL+1))
@@ -157,7 +157,7 @@ check "pq search on sealed vault" 0 "BLUE HERON"                     -- \
 # (the unit suite asserts no plaintext-derived bytes; here we re-assert the
 # at-rest check now that the PQ tables exist in the same db file).
 absent_in_db "sealed vault db stays sealed with PQ on" \
-  "BLUE HERON" "$UNDERCROFT_HOME/vaults/work/palace.db"
+  "BLUE HERON" "$UNDERCROFT_HOME/vaults/work/vault.db"
 
 echo "== Admission screening (C3.3) =="
 # Opt-in per command: a flagged save diverts to quarantine (never lands
@@ -508,9 +508,9 @@ esac
 # question it asks — measured, it stays green over the defect. Only a run
 # through the real binary reaches `open_store_as`.
 RO_VAULT="$UNDERCROFT_HOME/vaults/default"
-cp "$RO_VAULT/palace.db" /tmp/o91-palace.db
-rm -f "$RO_VAULT/palace.db" "$RO_VAULT/palace.db-wal" "$RO_VAULT/palace.db-shm"
-if [ -f "$RO_VAULT/vault.json" ] && [ ! -f "$RO_VAULT/palace.db" ]; then
+cp "$RO_VAULT/vault.db" /tmp/o91-vault.db
+rm -f "$RO_VAULT/vault.db" "$RO_VAULT/vault.db-wal" "$RO_VAULT/vault.db-shm"
+if [ -f "$RO_VAULT/vault.json" ] && [ ! -f "$RO_VAULT/vault.db" ]; then
   echo "ok    premise: manifest present, database absent"; PASS=$((PASS+1))
 else
   echo "FAIL  premise: could not stage a manifest-without-database vault"; FAIL=$((FAIL+1))
@@ -524,13 +524,92 @@ else
 fi
 # The assertion that actually fails over the defect. The exit code alone does
 # not: a fabricated database answers ReadOnlyUnmigrated, which is also non-zero.
-if [ ! -f "$RO_VAULT/palace.db" ]; then
+if [ ! -f "$RO_VAULT/vault.db" ]; then
   echo "ok    ...and the refusal created no database on the way out"; PASS=$((PASS+1))
 else
-  echo "FAIL  --read-only FABRICATED palace.db — A33 is defeated"; FAIL=$((FAIL+1))
+  echo "FAIL  --read-only FABRICATED vault.db — A33 is defeated"; FAIL=$((FAIL+1))
 fi
-cp /tmp/o91-palace.db "$RO_VAULT/palace.db"
+cp /tmp/o91-vault.db "$RO_VAULT/vault.db"
 check "the vault is intact after the O91 probe" 0 "VERIFY OK"          -- "$BIN" verify
+
+# ROADMAP O7 — the per-vault database is `vault.db` since 1.5.0, and a vault
+# created before that carries `palace.db`. THIS BELONGS AT THE SURFACE: the
+# store's own O7 tests open the store directly, and only a run through the
+# real binary reaches `open_store_as` — where a `database_exists` that knew
+# one name would turn every pre-1.5.0 vault into the A33 verdict above on
+# upgrade day. Staged exactly as an upgrade meets one.
+O7_VAULT="$UNDERCROFT_HOME/vaults/default"
+mv "$O7_VAULT/vault.db" "$O7_VAULT/palace.db"
+rm -f "$O7_VAULT/vault.db-wal" "$O7_VAULT/vault.db-shm"
+if [ -f "$O7_VAULT/palace.db" ] && [ ! -f "$O7_VAULT/vault.db" ]; then
+  echo "ok    premise: a pre-1.5.0 vault (palace.db, no vault.db) is staged"; PASS=$((PASS+1))
+else
+  echo "FAIL  premise: could not stage a legacy-named vault"; FAIL=$((FAIL+1))
+fi
+"$BIN" --read-only stats >/tmp/o7-ro.txt 2>&1; O7_RC=$?
+if [ "$O7_RC" -eq 0 ] && grep -q "unhealed: the database is still named palace.db" /tmp/o7-ro.txt; then
+  echo "ok    a read-only open serves a legacy-named vault and reports the pending rename"; PASS=$((PASS+1))
+else
+  echo "FAIL  --read-only stats on a legacy-named vault exited $O7_RC or did not report the rename"
+  sed 's/^/      /' /tmp/o7-ro.txt; FAIL=$((FAIL+1))
+fi
+if [ -f "$O7_VAULT/palace.db" ] && [ ! -f "$O7_VAULT/vault.db" ]; then
+  echo "ok    ...and renamed nothing"; PASS=$((PASS+1))
+else
+  echo "FAIL  a read-only open RENAMED the database"; FAIL=$((FAIL+1))
+fi
+check "a writable open of a legacy-named vault is no verdict: verify stays green" 0 "VERIFY OK" -- "$BIN" verify
+if [ -f "$O7_VAULT/vault.db" ] && [ ! -f "$O7_VAULT/palace.db" ]; then
+  echo "ok    ...and the writable open renamed palace.db to vault.db"; PASS=$((PASS+1))
+else
+  echo "FAIL  the writable open did not rename the database"; ls "$O7_VAULT" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+# Two databases under one manifest: an integrity verdict on both postures,
+# and the refusal touches neither file.
+cp "$O7_VAULT/vault.db" "$O7_VAULT/palace.db"
+check "two database files are refused with the verdict exit (writable)" 2 "holds two databases" -- "$BIN" stats
+check "two database files are refused with the verdict exit (read-only)" 2 "holds two databases" -- "$BIN" --read-only stats
+if [ -f "$O7_VAULT/vault.db" ] && [ -f "$O7_VAULT/palace.db" ]; then
+  echo "ok    ...and the refusal touched neither file"; PASS=$((PASS+1))
+else
+  echo "FAIL  the refusal moved or removed a database file"; FAIL=$((FAIL+1))
+fi
+rm -f "$O7_VAULT/palace.db"
+# The same two states over /v1. A server caches its handle, so each state
+# gets its own server: the layout is judged at open.
+mv "$O7_VAULT/vault.db" "$O7_VAULT/palace.db"
+rm -f "$O7_VAULT/vault.db-wal" "$O7_VAULT/vault.db-shm"
+"$BIN" serve-http --host 127.0.0.1 --port 18995 --read-only >/dev/null 2>&1 &
+O7SRV=$!
+for _ in $(seq 1 40); do curl -sf http://127.0.0.1:18995/healthz >/dev/null 2>&1 && break; sleep 0.25; done
+O7_V=$(curl -s -o /tmp/o7-v1.json -w '%{http_code}' http://127.0.0.1:18995/v1/vaults/default/stats)
+kill $O7SRV 2>/dev/null; wait $O7SRV 2>/dev/null
+if [ "$O7_V" = "200" ] && grep -q 'palace.db' /tmp/o7-v1.json && [ -f "$O7_VAULT/palace.db" ]; then
+  echo "ok    /v1 read-only serves a legacy-named vault, reports the rename on unhealed, renames nothing"; PASS=$((PASS+1))
+else
+  echo "FAIL  /v1 read-only on a legacy-named vault: HTTP $O7_V"; sed 's/^/      /' /tmp/o7-v1.json; echo; FAIL=$((FAIL+1))
+fi
+mv "$O7_VAULT/palace.db" "$O7_VAULT/vault.db"
+# Two files on a SIBLING vault, beside a healthy default: the server opens
+# its default vault at start-up, so an ambiguous default refuses to start
+# (correctly — exit 2 — and the first draft of this arm measured that as a
+# 000). The verdict this arm is after is the per-request one.
+"$BIN" vault create o7twin >/dev/null 2>&1
+"$BIN" stats --vault o7twin >/dev/null 2>&1   # a writable open creates vault.db
+O7_TWIN="$UNDERCROFT_HOME/vaults/o7twin"
+cp "$O7_TWIN/vault.db" "$O7_TWIN/palace.db"
+"$BIN" serve-http --host 127.0.0.1 --port 18996 --read-only >/dev/null 2>&1 &
+O7SRV=$!
+for _ in $(seq 1 40); do curl -sf http://127.0.0.1:18996/healthz >/dev/null 2>&1 && break; sleep 0.25; done
+O7_VA=$(curl -s -o /tmp/o7-v1a.json -w '%{http_code}' http://127.0.0.1:18996/v1/vaults/o7twin/stats)
+kill $O7SRV 2>/dev/null; wait $O7SRV 2>/dev/null
+if [ "$O7_VA" = "409" ] && grep -qF '"class":"integrity"' /tmp/o7-v1a.json; then
+  echo "ok    /v1 calls two database files an integrity verdict (409 + class)"; PASS=$((PASS+1))
+else
+  echo "FAIL  /v1 answered $O7_VA for two database files"; sed 's/^/      /' /tmp/o7-v1a.json; echo; FAIL=$((FAIL+1))
+fi
+rm -f "$O7_TWIN/palace.db"
+check "the vault is intact after the O7 probes" 0 "VERIFY OK"          -- "$BIN" verify
 
 # ROADMAP O91, the SECOND and worse half — measured, not reasoned about. The
 # read-write connection was DROPPED at function end, and SQLite checkpoints the
@@ -559,8 +638,8 @@ WSRV=$!
 for _ in $(seq 1 40); do curl -sf http://127.0.0.1:18991/healthz >/dev/null 2>&1 && break; sleep 0.25; done
 WPOST=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:18991/v1/vaults/default/drawers -H 'content-type: application/json' -d '{"text":"a hot write that must survive in the wal","wing":"notes","room":"r"}')
 kill -9 $WSRV 2>/dev/null; wait $WSRV 2>/dev/null
-WAL_B=$(stat -c%s "$WV/palace.db-wal" 2>/dev/null || echo 0)
-DB_B=$(md5sum "$WV/palace.db" 2>/dev/null | cut -d' ' -f1)
+WAL_B=$(stat -c%s "$WV/vault.db-wal" 2>/dev/null || echo 0)
+DB_B=$(md5sum "$WV/vault.db" 2>/dev/null | cut -d' ' -f1)
 if [ "$WAL_B" -gt 0 ]; then
   echo "ok    premise: a crashed writer left a hot wal ($WAL_B bytes)"; PASS=$((PASS+1)); WAL_STAGED=1
 else
@@ -568,8 +647,8 @@ else
   FAIL=$((FAIL+1)); WAL_STAGED=0
 fi
 "$BIN" --read-only stats >/dev/null 2>&1 || true
-WAL_A=$(stat -c%s "$WV/palace.db-wal" 2>/dev/null || echo 0)
-DB_A=$(md5sum "$WV/palace.db" 2>/dev/null | cut -d' ' -f1)
+WAL_A=$(stat -c%s "$WV/vault.db-wal" 2>/dev/null || echo 0)
+DB_A=$(md5sum "$WV/vault.db" 2>/dev/null | cut -d' ' -f1)
 # Both comparisons pass VACUOUSLY when the premise failed — 0 equals 0, and an
 # untouched absent file has the same md5 as an untouched present one. A check
 # that examined nothing must not read like a clean one, so the premise gates
@@ -582,11 +661,11 @@ else
   echo "FAIL  a read-only open COLLAPSED the hot wal ($WAL_B -> $WAL_A)"; FAIL=$((FAIL+1))
 fi
 if [ "$WAL_STAGED" -eq 0 ]; then
-  echo "FAIL  palace.db immutability NOT VERIFIED — no premise to test it against"; FAIL=$((FAIL+1))
+  echo "FAIL  vault.db immutability NOT VERIFIED — no premise to test it against"; FAIL=$((FAIL+1))
 elif [ "$DB_B" = "$DB_A" ]; then
-  echo "ok    ...and does not rewrite palace.db"; PASS=$((PASS+1))
+  echo "ok    ...and does not rewrite vault.db"; PASS=$((PASS+1))
 else
-  echo "FAIL  a read-only open REWROTE palace.db"; FAIL=$((FAIL+1))
+  echo "FAIL  a read-only open REWROTE vault.db"; FAIL=$((FAIL+1))
 fi
 export UNDERCROFT_HOME="$E2E_HOME"
 
@@ -605,7 +684,7 @@ rm -rf "$UNDERCROFT_HOME"; mkdir -p "$UNDERCROFT_HOME"
 "$BIN" vault create broken >/dev/null 2>&1
 UNDERCROFT_VAULT=broken "$BIN" remember --wing notes --room r "doomed" >/dev/null 2>&1
 BV="$UNDERCROFT_HOME/vaults/broken"
-rm -f "$BV/palace.db" "$BV/palace.db-wal" "$BV/palace.db-shm"
+rm -f "$BV/vault.db" "$BV/vault.db-wal" "$BV/vault.db-shm"
 "$BIN" serve-http --host 127.0.0.1 --port 18994 --read-only >/dev/null 2>&1 &
 VSRV=$!
 for _ in $(seq 1 40); do curl -sf http://127.0.0.1:18994/healthz >/dev/null 2>&1 && break; sleep 0.25; done
@@ -623,10 +702,10 @@ else
   echo "FAIL  /v1 answered $V_CODE without class integrity"
   sed 's/^/      /' /tmp/o91-v1.json; echo; FAIL=$((FAIL+1))
 fi
-if [ ! -f "$BV/palace.db" ]; then
+if [ ! -f "$BV/vault.db" ]; then
   echo "ok    ...and serving that refusal created no database"; PASS=$((PASS+1))
 else
-  echo "FAIL  /v1 FABRICATED palace.db under --read-only"; FAIL=$((FAIL+1))
+  echo "FAIL  /v1 FABRICATED vault.db under --read-only"; FAIL=$((FAIL+1))
 fi
 export UNDERCROFT_HOME="$E2E_HOME"
 
@@ -891,7 +970,7 @@ echo "== Integrity: verify + tamper detection =="
 check "verify clean vault"        0 "VERIFY OK"                      -- "$BIN" verify --vault work
 # Forge the record's metadata in place (same length, so the SQLite file
 # stays structurally valid — only the HMAC can catch it).
-DB="$UNDERCROFT_HOME/vaults/work/palace.db"
+DB="$UNDERCROFT_HOME/vaults/work/vault.db"
 perl -0777 -pi -e 's/"added_by":"cli"/"added_by":"clj"/' "$DB"
 out="$("$BIN" verify --vault work 2>&1)"; code=$?
 if [ "$code" -eq 2 ] && grep -q "VERIFY FAILED" <<<"$out"; then
@@ -1586,7 +1665,7 @@ kill $HTTP_PID 2>/dev/null
 # up is the evidence destruction A32 filed.
 RO_VAULT="$UNDERCROFT_HOME/vaults/default"
 printf '{"half-written":' > "$RO_VAULT/vault.json.next"
-RO_BEFORE="$(cd "$RO_VAULT" && md5sum palace.db vault.json vault.json.next | sort)"
+RO_BEFORE="$(cd "$RO_VAULT" && md5sum vault.db vault.json vault.json.next | sort)"
 "$BIN" serve-http --host 127.0.0.1 --port 18766 --read-only &
 RO_PID=$!
 sleep 1
@@ -1618,7 +1697,7 @@ else
 fi
 kill $RO_PID 2>/dev/null
 wait $RO_PID 2>/dev/null
-RO_AFTER="$(cd "$RO_VAULT" && md5sum palace.db vault.json vault.json.next 2>&1 | sort)"
+RO_AFTER="$(cd "$RO_VAULT" && md5sum vault.db vault.json vault.json.next 2>&1 | sort)"
 if [ "$RO_BEFORE" = "$RO_AFTER" ]; then
   echo "ok    read-only server leaves the vault byte-identical"; PASS=$((PASS+1))
 else
@@ -1656,7 +1735,7 @@ rm -f "$RO_VAULT/vault.json.next"
 # the one that could not stay off the evidence. Same staging-manifest recipe
 # as above, driven through the binary a responder actually types.
 printf '{"half-written":' > "$RO_VAULT/vault.json.next"
-CLI_RO_BEFORE="$(cd "$RO_VAULT" && md5sum palace.db vault.json vault.json.next | sort)"
+CLI_RO_BEFORE="$(cd "$RO_VAULT" && md5sum vault.db vault.json vault.json.next | sort)"
 # PREMISE, and it is the reason this is not two bare `|| true` lines. If the
 # global `--read-only` ever stopped PARSING, both commands would fail
 # instantly, touch nothing, and the byte-comparison below would pass having
@@ -1670,7 +1749,7 @@ else
   "$BIN" --read-only stats 2>&1 | head -2 | sed 's/^/      /'; FAIL=$((FAIL+1))
 fi
 "$BIN" --read-only vault list >/dev/null 2>&1 || true
-CLI_RO_AFTER="$(cd "$RO_VAULT" && md5sum palace.db vault.json vault.json.next 2>&1 | sort)"
+CLI_RO_AFTER="$(cd "$RO_VAULT" && md5sum vault.db vault.json vault.json.next 2>&1 | sort)"
 if [ "$CLI_RO_BEFORE" = "$CLI_RO_AFTER" ]; then
   echo "ok    --read-only CLI leaves the vault byte-identical"; PASS=$((PASS+1))
 else

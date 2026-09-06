@@ -289,7 +289,16 @@ Consequences that are binding, not advisory:
   n-gram embedder (`embed.rs`: `Embedder` trait + `HashEmbedder`), reranker
   trait (`rerank.rs`: `Reranker`), late-interaction trait + MaxSim + int8
   token packing (`late.rs`: `LateInteraction`), conversation parsing, entities
-- `crates/undercroft-vault` — security layer (keys.rs: master key + HKDF;
+- `crates/undercroft-vault` — security layer (**the per-vault database is
+  `vault.db` since 1.5.0, beside `vault.json` — O7: `palace` had named both
+  the installation and each vault's file, and the installation keeps the
+  word. `Vault::db_path` answers with the file the directory HAS
+  (`DbLayout`), so a pre-1.5.0 `palace.db` is served where found; the
+  store's WRITABLE open checkpoints the WAL and renames it — a bare rename
+  orphans every committed frame in a hot `-wal`, silently — a read-only open
+  reports it on `unhealed`, and two files refuse as an integrity verdict on
+  both postures. `database_exists` knows both names, or upgrade day would
+  read every older vault as A33's missing database;** keys.rs: master key + HKDF;
   seal.rs: AEAD + HMAC; lib.rs: VaultManager/Vault + manifest-as-rollback-
   anchor + pure chain arithmetic + key rotation primitives
   (rotation_candidate, byte-exact reseal_at_rest, two-phase
@@ -1231,7 +1240,7 @@ Consequences that are binding, not advisory:
   the posture one call later was already too late. Each of those is
   DETECTED and REPORTED instead, on `PalaceStats.unhealed` (all three
   surfaces) and as a warning at open. Two conditions refuse rather than
-  report, both 409: an absent `palace.db` under a present manifest
+  report, both 409: an absent `vault.db` under a present manifest
   (`DatabaseMissing`, A33 — "empty" is not "absent", and it is an
   integrity verdict, so exit 2), and a schema a read-only role would have
   had to migrate (`ReadOnlyUnmigrated`, exit 1 — the vault is intact, the
@@ -1654,8 +1663,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (811 run,
-                                      # 4 #[ignore]d = 815 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (818 run,
+                                      # 4 #[ignore]d = 822 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1762,7 +1771,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # by nothing and two dead wrappers survived
                                       # from O20 and O25. Publishes no check count
                                       # deliberately
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (463 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (474 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (127 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (53 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (82 checks; weaviate

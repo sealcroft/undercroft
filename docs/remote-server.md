@@ -209,7 +209,7 @@ query_only=ON`; the schema is checked rather than created, a lagging manifest
 anchor is reported rather than healed, and a staged rotation is honoured in
 memory with its file untouched. Whatever the open declined to repair appears
 as `unhealed` on `GET /v1/vaults/{id}/stats` beside `read_only`. Two
-conditions refuse with **409** instead: a manifest whose `palace.db` is
+conditions refuse with **409** instead: a manifest whose `vault.db` is
 absent, and a schema this build would have had to migrate.
 
 What is still not a claim: a read-only connection materialises SQLite's WAL

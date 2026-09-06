@@ -106,7 +106,7 @@ What it means now:
   on `GET /v1/vaults/{id}/stats` alongside `read_only`. A prefilter loads
   an existing index and never builds one (R1), falling back to the exact
   scan and saying so once per tier. Two conditions refuse rather than
-  report, both 409: an absent `palace.db` under a present manifest, and a
+  report, both 409: an absent `vault.db` under a present manifest, and a
   schema this build would have had to migrate.
 
 ### Boundaries in the fleet, stated

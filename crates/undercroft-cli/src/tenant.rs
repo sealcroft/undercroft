@@ -3519,7 +3519,9 @@ fn store_err(e: StoreError) -> RestError {
         // says a retry only re-detects it; the remedy is in the message.
         // Only the first is an INTEGRITY verdict — the vault contradicts
         // itself — so only the first exits 2 on the CLI.
-        StoreError::DatabaseMissing { .. } | StoreError::ReadOnlyUnmigrated { .. } => 409,
+        StoreError::DatabaseMissing { .. }
+        | StoreError::DatabaseAmbiguous { .. }
+        | StoreError::ReadOnlyUnmigrated { .. } => 409,
         // "That record is not here" has ONE status class across every
         // route: `forget` and `admission` used to answer 400 for it while
         // GET/PUT on the same id answered 404, so a client could not key
@@ -3537,6 +3539,7 @@ fn store_err(e: StoreError) -> RestError {
         StoreError::Integrity(_)
         | StoreError::Attestation(_)
         | StoreError::DatabaseMissing { .. }
+        | StoreError::DatabaseAmbiguous { .. }
         | StoreError::Vault(
             undercroft_vault::VaultError::ManifestTampered
             | undercroft_vault::VaultError::CorruptManifest(_),
@@ -3747,7 +3750,18 @@ mod tests {
                 "DatabaseMissing",
                 || S::DatabaseMissing {
                     id: "acme".into(),
-                    path: "/vaults/acme/palace.db".into(),
+                    path: "/vaults/acme/vault.db".into(),
+                },
+                true,
+            ),
+            // Its O7 sibling: two databases under one manifest is the same
+            // self-contradiction, one file too many rather than one too few.
+            (
+                "DatabaseAmbiguous",
+                || S::DatabaseAmbiguous {
+                    id: "acme".into(),
+                    current: "/vaults/acme/vault.db".into(),
+                    legacy: "/vaults/acme/palace.db".into(),
                 },
                 true,
             ),

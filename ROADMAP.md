@@ -4160,6 +4160,84 @@ touching anyone's existing corpus.
 integrity verdict, and two different model files must produce two different
 identities.
 
+## 1.5.0 — unreleased
+
+The per-vault database is named for the vault.
+
+MINOR, by this file's own test: the per-vault file gains a name beside the
+one it had, and nothing documented stops being accepted — a vault created
+under the old name opens with no verdict, verifies, and is renamed in place.
+This section said MAJOR for a month, on the table below that reads *"an
+on-disk format that will not open … unless it ships with a compat path that
+opens both"*; it ships with that path, and the compat path is what makes it
+a minor rather than an exception to the rule. Filed here until the tag
+exists. `UPGRADING.md` carries it for the scripts that name the file.
+
+### O7 — CLOSED 2026-09-07: `palace` named two levels of the hierarchy — the per-vault database is `vault.db`, and a legacy `palace.db` is renamed at its first writable open
+
+Split out of O5 on 2026-08-10, because the ruling that closed O5 (the
+components keep their names) settled *which* word and not the defect here:
+ONE word denoted two things. `Vault::db_path()` joined `palace.db` onto a
+single vault's directory while everywhere else "the palace" is the whole
+installation ("the palace master key", "initialize the palace", "export the
+palace"), so a reader was told the palace contains vaults and each vault
+contains a palace. The installation keeps the word; the file is `vault.db`,
+beside `vault.json`, which names the same thing.
+
+**Ruling (maintainer, 2026-09-07): `vault.db`, migrated on the first
+writable open.** The alternative shapes were a compat-only rename (new vaults
+only, two spellings in the wild forever) and a different noun; the
+migrating shape converges on one name and costs a rename step in the sealing
+path plus a posture arm, both of which are below.
+
+**The rename is not one `rename(2)`.** A WAL database is three files SQLite
+finds by the database's own name, so `vault.db` beside a hot `palace.db-wal`
+loses every committed frame not yet checkpointed with no error at all. The
+vault crate does not speak SQLite, so it only ANSWERS what a directory holds
+— `DbLayout::{Current, Legacy, Absent, Ambiguous}`, `DB_FILE`,
+`LEGACY_DB_FILE` — and `db_path` returns the file the vault HAS, a pure
+function of the directory. The store's WRITABLE open (`migrate_db_filename`)
+checkpoints with TRUNCATE, renames, removes the emptied sidecars; `busy`
+(another process holds the file) leaves the name alone for the next writable
+open; a crash between checkpoint and rename loses nothing, one after it
+leaves empty sidecars the next writable open sweeps. A read-only open serves
+the legacy name where it is and reports it through the existing
+`Unhealed` channel (`LegacyDatabaseName`) on every stats surface, which is
+the R4 posture doctrine applied to a rename. `database_exists` answers for
+either name — the entry's own filing named the trap: read one name and
+upgrade day turns every older vault into A33's `DatabaseMissing`. Two files
+under one manifest are `DatabaseAmbiguous`, an integrity-class verdict on
+both postures (409 + `class: "integrity"`, exit 2), in both surfaces'
+inventories, which the cross-surface set test keeps identical; the
+bare-directory hold behind destructive restores applies the same rule.
+Nothing else moves: no wire format, serde field, crypto domain, audit
+namespace or id recipe, all re-checked.
+
+**Gates**, and the entry's own gate holds — *a vault created before the
+change opens without an integrity verdict and `verify` stays green*: vault
+(`a_new_vault_names_its_database_vault_db`,
+`a_legacy_named_database_is_served_and_reported_read_only`,
+`two_database_files_are_an_ambiguous_layout`); store
+(`a_legacy_named_vault_is_renamed_on_a_writable_open_and_verifies`,
+`a_read_only_open_serves_a_legacy_named_vault_and_reports_it`,
+`a_hot_wal_survives_the_rename` — a writer leaked mid-life, its rows only in
+the WAL, the WAL's size asserted non-zero as the premise; a bare rename
+answers fewer rows with no error —
+`two_database_files_are_refused_on_both_postures`); the CLI and `/v1`
+integrity inventories; and eleven e2e checks through the real binary and
+`open_store_as`, staging a legacy vault exactly as an upgrade meets one
+(read-only serves, reports, renames nothing; writable `verify` green and
+renamed; two files refuse on both postures touching neither; `/v1
+--read-only` serves a legacy vault reporting it on `stats.unhealed` and
+answers two files 409 + class). Counterfactuals, run: `database_exists` reading
+one name fails the read-only legacy test as `DatabaseMissing` and NOT the
+writable one — a partial fire with a structural reason, the writable open
+renames before anything asks that question, so that test measures the
+migration; the checkpoint removed fails the hot-WAL test on the row count. Counts: tests 811 → 818, e2e
+463 → 474.
+
+---
+
 ## 1.4.0 — released 2026-09-07
 
 A date window on every search surface, a deep page measured at a million
@@ -11381,43 +11459,6 @@ The comment is corrected; the sets are not reconciled. Reconciling them is a
 decision about CI cost, not a defect to fix silently: state which set is
 canonical, then count them against each other in the preflight that already
 reads both files.
-
-### O7 — `palace` names two levels of the hierarchy
-Split out of O5 on 2026-08-10 so the ruling that closed O5 (the components
-keep their names) is not mistaken for having closed this too. **It is a
-separate defect and the ruling does not touch it**: the objection here is not
-*which* word, it is that ONE word denotes two different things.
-
-- `Vault::db_path()` joins `palace.db` onto a **single vault's** directory —
-  `crates/undercroft-vault/src/lib.rs:217`.
-- Everywhere else "the palace" is the **whole installation**: the palace
-  master key (`crates/undercroft-vault/src/keys.rs:60`), `Initialize the
-  palace` (`crates/undercroft-cli/src/main.rs:68`), `Mine a directory into
-  the palace`, `Export the palace`.
-
-So a reader is told the palace contains vaults, and also that each vault
-contains a palace. That is confusing on its own terms and would still be
-confusing under any replacement noun.
-
-**Scope — this is cosmetic, and the boundary is what makes it cheap.** It
-touches no wire format, no serde field, no crypto domain separation, no
-audit-chain namespace and no id recipe (all four re-checked under O5 above).
-The per-vault filename is the only on-disk artifact, and renaming a file
-that an existing vault already carries presents as `DatabaseMissing` —
-409 / exit 2, an integrity verdict — so it is **not** a free move on a
-populated vault even though the vocabulary change is trivial.
-
-**Shape of a fix:** rename the per-vault artifact, not the installation-level
-noun — the installation sense is the older and more widely written one. A
-migration would have to open the vault, rename within the same directory, and
-leave the anchor untouched.
-
-**Gate:** whatever lands, a vault created before the change must still open
-without an integrity verdict, and `verify` must stay green across it.
-
-**Not scheduled.** Filed because a gap is a gap; if it is judged not worth
-doing, that is a decision with an argument and belongs here in writing rather
-than as an item that quietly never moves.
 
 ### O12 — CLOSED by doctrine: a citation is DERIVED, never declared
 Found on 2026-08-10 by an e2e check that FAILED: it asserted `undercroft
