@@ -1298,7 +1298,14 @@ Consequences that are binding, not advisory:
   detector gate: the tier-1 screen over a clean LoCoMo-shaped corpus —
   per-class trips, flagged fraction, fixture-score distribution for
   threshold headroom, plus the true-positive arm where every committed
-  fixture must trip; deterministic, no vault, no model)
+  fixture must trip; deterministic, no vault, no model). **The LoCoMo
+  harness names its floor (O76, 2026-09-06)**: every question whose gold
+  turns no hit in the pool covers is printed as a `LOCOMO_MISS` line with
+  its conversation, question, category and turn ids, so a claim about the
+  first-stage floor is judged on ids rather than on a bucket count that can
+  absorb one question leaving and another arriving. Measured that way, the
+  "residual one percent" was eleven named questions, three of them gold no
+  text matcher can reach, and a served bge-m3 reached four of the fifteen
 - `deploy/observability/` — Prometheus + Alertmanager + Loki + Tempo + Grafana
   stack (see its README.md + RUNBOOK.md). **Every rule is aggregated `by
   (instance)` and that is load-bearing, not cosmetic**: Alertmanager's

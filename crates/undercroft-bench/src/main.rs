@@ -2679,7 +2679,9 @@ struct GoldRecall {
     /// The first bucket is what we deliver today. Everything between it and
     /// the last bucket is evidence the matcher *found and ranked* but placed
     /// below the cut — the headroom a second stage can reach without a better
-    /// first stage. The last bucket is the first-stage floor.
+    /// first stage. The last bucket is the first-stage floor, and every
+    /// question in it is also printed as a `LOCOMO_MISS` line naming the gold
+    /// turns no hit covered (ROADMAP O76 measures that floor by id).
     gold_all_rank: [u32; 7],
     /// Turn coverage under [`select_within_budget`] — same bytes to the
     /// reader, redundancy charged once, slot count free to vary.
@@ -2844,7 +2846,7 @@ fn locomo_eval(
             .get("qa")
             .and_then(Value::as_array)
             .context("sample missing qa")?;
-        for qa in qa_pairs.iter() {
+        for (qi, qa) in qa_pairs.iter().enumerate() {
             let question = qa
                 .get("question")
                 .and_then(Value::as_str)
@@ -2945,9 +2947,15 @@ fn locomo_eval(
                 gold.slot_session_all += 1.0;
             }
             let mut wanted: Vec<(&str, Span)> = Vec::new();
+            // The gold ids beside their spans, so a miss can be NAMED
+            // (ROADMAP O76) — `wanted` alone knows rooms and offsets.
+            let mut wanted_ids: Vec<&str> = Vec::new();
             for e in &evidence {
                 match turn_span.get(e.as_str()) {
-                    Some((room, sp)) => wanted.push((room.as_str(), *sp)),
+                    Some((room, sp)) => {
+                        wanted.push((room.as_str(), *sp));
+                        wanted_ids.push(e.as_str());
+                    }
                     None => gold.unlocatable_turns += 1,
                 }
             }
@@ -3030,9 +3038,44 @@ fn locomo_eval(
                             .unwrap_or(RANK_BUCKETS.len());
                         gold.gold_all_rank[b] += 1;
                     }
-                    // Deeper than the last bucket, but still found: still
-                    // second-stage headroom, not a first-stage floor.
-                    None => gold.gold_all_rank[RANK_BUCKETS.len() + 1] += 1,
+                    // Never covered inside the pool: the first-stage floor.
+                    // Counted in the last bucket AND named (ROADMAP O76): the
+                    // entry that filed this floor requires any claim to be
+                    // measured on the residual questions BY ID, and a bucket
+                    // count can absorb one question leaving and another
+                    // arriving. One line per question, machine-readable like
+                    // the other LOCOMO_ lines, naming the gold turns no hit in
+                    // the pool covers.
+                    None => {
+                        gold.gold_all_rank[RANK_BUCKETS.len() + 1] += 1;
+                        let mut per_room: std::collections::HashMap<&str, Vec<Span>> =
+                            Default::default();
+                        for h in &hits {
+                            if let Some(spans) = chunk_span.get(&h.drawer.id) {
+                                let have = per_room.entry(h.drawer.meta.room.as_str()).or_default();
+                                have.extend(spans.iter().copied());
+                                let merged = merge_spans(std::mem::take(have));
+                                *have = merged;
+                            }
+                        }
+                        let missing: Vec<&str> = wanted
+                            .iter()
+                            .zip(wanted_ids.iter())
+                            .filter(|((room, sp), _)| {
+                                !per_room.get(*room).is_some_and(|m| covers(m, *sp))
+                            })
+                            .map(|(_, id)| *id)
+                            .collect();
+                        let sid = sample
+                            .get("sample_id")
+                            .and_then(Value::as_str)
+                            .unwrap_or("?");
+                        println!(
+                            "LOCOMO_MISS conv={sid} q={qi} cat={cat} pool={} missing={}",
+                            hits.len(),
+                            missing.join(",")
+                        );
+                    }
                 }
                 // Same bytes to the reader, redundancy charged once, slot
                 // count free to vary. This is the comparison a per-document

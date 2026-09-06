@@ -26,6 +26,8 @@ it will be scrubbed with the history noted.
 | `pqpage_spike.log` | sealed page-tier research spike, 10⁶–10⁷ synthetic |
 | `fde_slab_sweep.log`, `fde_slab_sweep2.log` | inverted-FDE containment/latency sweeps (v0.39.0 gate) |
 | `fde_pq_sweep.log` | bounded-RAM FDE tier sweeps (v0.24.0) |
+| `o76_locomo10_hash_pool50.log` | LoCoMo residual BY ID under the hash embedder, pool 50: 248 `LOCOMO_MISS` lines (ROADMAP O76) |
+| `o76_locomo10_bge-m3_pool50.log` | the same run under served bge-m3: 188 misses, 4 of the filed fifteen reached |
 
 Head-to-head shard logs (e.g., additional LoCoMo conversations for a
 competitor row) are appended here as their runs complete; `VS_RAW`
