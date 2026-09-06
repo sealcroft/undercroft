@@ -69,7 +69,8 @@ Every memory namespace is a **vault** — a hard isolation boundary:
   embedding* are encrypted with **XChaCha20-Poly1305**. The AEAD associated
   data binds vault id + record id, so ciphertext cannot be replayed into
   another vault or another record slot. Nothing content-derived is written to
-  disk in plaintext — a default vault searches by decrypt-scan, and the
+  disk in plaintext except the unsealed `meta_json`, which keeps offsets and
+  resolved dates and never words — a default vault searches by decrypt-scan, and the
   optional index tiers below (PQ codes and codebooks, ColBERT token
   matrices, FDE vectors) are sealed under their own AAD domains and read
   through decrypt-once RAM caches rather than in the clear.

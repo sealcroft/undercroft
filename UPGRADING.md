@@ -16,7 +16,7 @@ the resolver that runs at start-up, and **opens nothing** — no vault, no
 database, no socket, no outbound call. Exit 1 means this environment would
 refuse to start; exit 0 means it starts.
 
-**Every one of them, including the four `UNDERCROFT_ORCH_*` the control
+**Every one of them, including the eight `UNDERCROFT_ORCH_*` the control
 plane reads.** Three of those were a coverage gap until 1.1.0 — their parses
 sat inside a binary the engine deliberately never links — and O24 closed it by
 moving the parses to a crate both link and neither owns, so this command runs
@@ -33,7 +33,8 @@ plane has its own:
 undercroft-orchestrator config check
 ```
 
-It runs the four `UNDERCROFT_ORCH_*` declarations that binary reads through
+It runs the six checked `UNDERCROFT_ORCH_*` declarations that binary reads
+(`_ADDR` and `_DB` are opaque payload, validated by their consumers) through
 the same resolvers its `serve` path runs, opens no state database and binds no
 port, and uses the same exit codes. What must not drift is the CLASSIFICATION
 of each variable, and that is counted across the two inventories, in both
@@ -42,8 +43,9 @@ directions, by a test rather than by anyone remembering.
 **Run it to pre-flight the control plane standalone** — on a host that runs
 the orchestrator and no engine, it is the command there is. It is not a
 substitute for the engine's, and the engine's is not a substitute for it: the
-two cover different binaries, and the three declarations they share go through
-one implementation, so they cannot disagree.
+two cover different binaries, and the five declarations they share go through
+one implementation (`undercroft-config`'s five resolvers), so they cannot
+disagree.
 
 Everything that can refuse is pre-flighted. Until 1.1.0 the orchestrator's
 declarations had no pre-flight at all (ROADMAP O21), and three of them were

@@ -21,7 +21,9 @@ modification: every read verifies, `verify` audits everything.
 - **Sealing**: XChaCha20-Poly1305, random 24-byte nonce, AAD binds
   `vault_id + record_id` — ciphertext cannot be replayed across vaults or
   record slots. Sealed vaults encrypt content *and* embeddings; nothing
-  content-derived is written to disk in plaintext (no FTS index either).
+  content-derived is written to disk in plaintext (no FTS index either)
+  except the unsealed `meta_json`, which keeps resolutions — offsets and
+  ISO dates — and never words (the exposure is pinned by test).
   hmac-only vaults — which store plaintext by choice — keep an FTS5 BM25
   prefilter index. Like embeddings, it is derived data outside the HMAC
   envelope: tampering with it can hide records from *search* (an
@@ -121,8 +123,9 @@ stateDiagram-v2
   allowed`. (This line used to say it "strips all mutating tools"; it does
   not, and a client that filters its own UI off the catalogue would show
   buttons that cannot fire.) On `/v1` the gate sits in front of dispatch
-  and **fails closed**: every non-GET is refused unless named, and the two
-  named reads are `POST …/search` and `POST …/verify`. **The open is
+  and **fails closed**: every non-GET is refused unless named, and the three
+  named reads are `POST …/search`, `POST …/verify` and
+  `POST …/verify-forgetting`. **The open is
   covered too since 1.0.0** (ROADMAP R4): this line used to say the open
   itself writes — schema creation, chain init, and a rotation reconcile
   that could promote or delete a staged `vault.json.next`. The connection

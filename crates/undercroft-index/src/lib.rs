@@ -168,7 +168,7 @@ pub(crate) fn backend_agent_with(
     // request) and present here too, with the same consequence one layer
     // down: a push re-read and re-parsed the PEM for every batch, and the
     // pin was mutable at runtime by anything that could rewrite the file.
-    // `agent_from_env` is also where the four `*_CA` variables agree about
+    // `agent_from_env` is also where the `*_CA` variables agree about
     // what an empty declaration means.
     undercroft_net::agent_from_env("the remote index", base_url, CA_VAR, timeout)
         .map_err(|e| IndexError::Transport(e.to_string()))

@@ -86,12 +86,14 @@ What it means now:
   read auditing is force-disabled with a warning rather than silently
   dropped.
 - **The gate sits in front of dispatch and fails closed.** A request
-  mutates unless it is a `GET` or one of two named `POST`s, so a route
+  mutates unless it is a `GET` or one of three named `POST`s, so a route
   added later is refused until someone classifies it deliberately —
   the opposite of a forgotten guard, which is a silent write door.
-- **The two `POST` exceptions are POST for cost, not for effect**:
-  `search` reads (its optional read-audit record is already suppressed
-  by the read-only open) and `verify` walks HMACs and replays the chain.
+- **The three `POST` exceptions are POST for cost or for a caller-supplied
+  document, never for effect**: `search` reads (its optional read-audit
+  record is already suppressed by the read-only open), `verify` walks HMACs
+  and replays the chain, and `verify-forgetting` checks an attestation that
+  has to travel in a body.
   `GET .../export` is a read here too — the egress chain record it would
   otherwise write is skipped, and the server **warns and serves** rather
   than refusing the export.
@@ -470,9 +472,11 @@ engine:
 undercroft-orchestrator config check    # or: config-check --verbose
 ```
 
-It runs the four `UNDERCROFT_ORCH_*` declarations this binary reads through
-the same resolvers `serve` runs — the sealing key, the admin bearer, the rate
-limit and the engine-hop CA pin — and opens no state database and binds no
+It runs the six checked `UNDERCROFT_ORCH_*` declarations this binary reads
+through the same resolvers `serve` runs — the sealing key, the admin bearer,
+the metrics listener and its token, the rate limit and the engine-hop CA pin;
+`_ADDR` and `_DB` are opaque payload validated by their consumers — and opens
+no state database and binds no
 port. Exit 1 means this environment would refuse to start.
 
 **A fleet runs it alongside `undercroft config check` on each engine, not

@@ -193,8 +193,9 @@ filter on one port, and the gate sits **in front of dispatch** rather than
 at the top of each mutating handler — because the per-handler version had
 thirteen guards for fourteen mutating routes and `POST …/kg/authority`
 never got one. It **fails closed**: every `GET` is served, and every
-non-GET is refused with 403 *unless it is one of two named reads* —
-`POST …/search` and `POST …/verify` (both POST for cost, not for effect).
+non-GET is refused with 403 *unless it is one of three named reads* —
+`POST …/search`, `POST …/verify` and `POST …/verify-forgetting` (POST for
+cost or for a caller-supplied document, never for effect).
 A route added later is refused until someone deliberately names it. This
 paragraph used to say "only reads (stats, search, export) are served",
 which under-listed the reads and omitted `verify` entirely.

@@ -202,8 +202,9 @@ undercroft serve-http --host 0.0.0.0 --port 8800
   `UNDERCROFT_READ_AUDIT=chain` — that variable's trail is empty on a
   read-only server, by design and with a warning at open. On `/v1` the
   refusal is decided in front of dispatch and **fails closed**: anything
-  that is not a `GET` is refused except `POST .../search` and
-  `POST .../verify`, so a route added later is refused until it is
+  that is not a `GET` is refused except `POST .../search`, `POST .../verify`
+  and `POST .../verify-forgetting` (the caller's attestation has to travel in
+  a body), so a route added later is refused until it is
   deliberately classified. (`POST .../verify` is classified as a read because
   it only walks HMACs and replays the chain — it takes `&self` and writes
   nothing. Since 1.0.0 the **open** is a read too: the connection is
@@ -1257,7 +1258,7 @@ and `/ui` answer 403.
 
 **Check them before you deploy.** `undercroft config check` runs every
 `UNDERCROFT_*` declaration in the current environment through the resolver
-that runs at start-up, opening nothing — **including the four
+that runs at start-up, opening nothing — **including the eight
 `UNDERCROFT_ORCH_*` the control plane reads** (three were a coverage gap
 until 1.1.0; O24 moved the shared parses into a crate both binaries link).
 `undercroft-orchestrator config check` pre-flights the control plane
@@ -1286,7 +1287,7 @@ explicit*:
   silent fallback would remove exactly what you asked for. Those refuse to
   open. `UNDERCROFT_TRUST_FLOOR`, `UNDERCROFT_ADMISSION`,
   `UNDERCROFT_SEMANTIC_GATE`, `UNDERCROFT_READ_AUDIT`,
-  `UNDERCROFT_ADMISSION_RATE` and the four `*_CA` pins are in this class.
+  `UNDERCROFT_ADMISSION_RATE` and the five `*_CA` pins are in this class.
   Declining is declarable: `off` is always a legal value.
 
 
@@ -1472,6 +1473,12 @@ by `serve --read-replica`; refused when empty **or ending in whitespace** —
 HTTP strips a header value's trailing whitespace, so `$(cat token)` over a
 file ending in a newline clears the length floor and produces a control plane
 that starts cleanly and refuses every `/admin` request forever) · `UNDERCROFT_ORCH_ENGINE_CA` (PEM pinning the root for the hop to the engines — that hop refuses cleartext beyond loopback, with no override) · `UNDERCROFT_ORCH_ADDR` (127.0.0.1:8900) ·
+`UNDERCROFT_ORCH_METRICS_ADDR` (telemetry builds: a SEPARATE `/metrics`
+listener, because the control plane's one listener cannot be loopback-only;
+loopback needs no token) · `UNDERCROFT_ORCH_METRICS_TOKEN` (required when
+that listener is not loopback — the process **refuses to start** without it,
+and refuses an empty or whitespace-tailed value; both are pre-flighted by
+`undercroft-orchestrator config check`) ·
 `UNDERCROFT_ORCH_RATE_LIMIT` (req/min per tenant; unset/`0`/`off` = off;
 per-process — each replica enforces its own windows. A value that is not
 one of those **refuses to start**, the engine's posture for a declaration

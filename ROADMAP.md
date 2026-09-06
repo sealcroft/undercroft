@@ -7189,7 +7189,7 @@ decision to take, not an omission.
 
 ---
 
-### O100 — six published counts are stale, and four scoped security claims lost their scope
+### O100 — CLOSED 2026-09-05: six published counts were stale, and four scoped security claims had lost their scope
 
 **Round six, docs-vs-code dimension.** All verified against code by the auditor
 and spot-checked here. None is gated: the `prose figures` preflight covers ten
@@ -7240,6 +7240,45 @@ arms, `*_CA` count, `UNDERCROFT_ORCH_*` count, shared-resolver count). The
 scoped-claim half is not gateable — a qualifier that goes missing moves no
 count — and is recorded here as bound by attention, which is what O89's entry
 already concluded for relational claims.
+
+---
+
+**CLOSED 2026-09-05.** Every claim above re-verified against the code before
+a line moved, and two of the filing's figures were refined by that reading
+rather than copied. **The orchestrator's own `config check` runs SIX checked
+`UNDERCROFT_ORCH_*` declarations, not four** — key, admin bearer, metrics
+listener and its token, rate limit, engine-hop CA pin; `_ADDR` and `_DB` are
+opaque — so `UPGRADING.md:36` and `MULTI_TENANCY.md:473` say six-with-the-list
+where the filing's "eight" would have been the wrong count for THAT sentence
+(eight is what the control plane READS, and that is what `UPGRADING.md:19` and
+`AGENTS.md` §11 now say). And the parity table's verdict split is **34
+`Boundary`, 7 `Structural`, 0 `Drift`** over 41 rows / 41 anchors, plus 33
+`SURFACE_COMPLETE` = 74, so `parity.rs`'s comment now records that its
+"largest single verdict" sentence rotted the same way its predecessor did and
+names no count. The `mutates` allowlist is three arms; seven surfaces said two
+(`tenant.rs` rustdoc and a test comment, `remote-server.md`,
+`MULTI_TENANCY.md` twice, `THREAT_MODEL.md`, `security.md`, `AGENTS.md`);
+`architecture/index.html` already said three. The sweep also found an EIGHTH
+"four `*_CA`" in a comment in `undercroft-index`, which the filing did not
+list; it names no number now. `AGENTS.md` §11 gains both metrics variables in
+the orchestrator row.
+
+**The four scoped claims** each take their correctly-scoped sibling's
+qualifier: README and `security.md` name the unsealed `meta_json` (offsets and
+resolved dates, never words); `THREAT_MODEL.md`'s table row says "each
+content-returning read" and names the O50/O51 doors; `PARITY.md` says "of a
+writable store (a read-only replica warns and serves)"; the landing page says
+"exported to a recipient".
+
+**Gate**: seven rows in the `prose figures` preflight, every truth read from
+the code — the `mutates` POST arms, the `_CA` and `ORCH_` string literals the
+crates carry, `undercroft-config`'s `pub fn resolve_*`, and the two
+`parity.rs` tables (rows, distinct anchors, `SURFACE_COMPLETE`) — with premise
+floors on each. Counterfactual against the artifact: the seven patterns run
+over HEAD's files extract `two`, `four`, `four`, `three`, `62`, `59` and (the
+line-wrapped sentence) nothing at all — every one a failure — and `41`, `41`,
+`33` and the rest of the truths from the tree now. 10 → 17 prose figures. The
+scoped-claim half stays bound by attention, as filed.
 
 ---
 
