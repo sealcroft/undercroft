@@ -230,6 +230,19 @@ pub fn resolve_metrics_token(
 /// opposite answer from the two secrets above, and the distinction is
 /// `CLAUDE.md`'s payload-vs-vocabulary rule. Pinned by test so a future sweep
 /// for `is_empty()` over a declaration does not "fix" it into a refusal.
+///
+/// Anything outside that vocabulary REFUSES to start. It used to be
+/// `parse().ok().unwrap_or(0)` in the orchestrator, i.e. every unreadable
+/// declaration became "off" with nothing printed — and the two typos a
+/// reader of this project is most likely to make are `100/min` and
+/// `1_000`, the first because the engine's own rate variable really is
+/// `<count>/<seconds>`. An operator who declared a limit believes noisy
+/// tenants are throttled; silently serving unlimited is the failure mode,
+/// and neither `/healthz` nor the console would have said so. This is the
+/// engine's `resolve_read_audit` / `resolve_admission_rate` posture applied
+/// to the control plane: a declaration the process cannot read is a startup
+/// refusal, not a default. Pure, so the parse is tested without touching
+/// the environment.
 pub fn resolve_rate_limit(declared: Option<&str>) -> Result<u64, ConfigError> {
     let Some(raw) = declared else { return Ok(0) };
     let v = raw.trim();

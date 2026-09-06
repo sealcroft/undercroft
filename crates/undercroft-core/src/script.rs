@@ -206,10 +206,6 @@ pub struct Segmented {
     pub len: usize,
 }
 
-/// Segment `text` into comparison tokens.
-///
-/// `text` is expected to be already canonicalized and lowercased by the
-/// caller — this function decides boundaries, not encoding.
 /// A mark that is orthographically *inside* a word even though
 /// `is_alphanumeric` says otherwise.
 ///
@@ -275,6 +271,10 @@ fn runs(text: &str) -> Vec<&str> {
     out
 }
 
+/// Segment `text` into comparison tokens.
+///
+/// `text` is expected to be already canonicalized and lowercased by the
+/// caller — this function decides boundaries, not encoding.
 pub fn segment(text: &str) -> Segmented {
     let mut out = Segmented {
         tokens: Vec::new(),

@@ -2284,10 +2284,6 @@ fn run_model_eval(
 // harnesses (session/message/turn-level evidence recall)
 // ---------------------------------------------------------------------------
 
-/// LoCoMo: one item = a conversation with `session_N` dialog arrays and QA
-/// pairs whose evidence is dialog ids like "D3:12" (session 3). Session-
-/// granularity retrieval: rank sessions, score R@k against evidence
-/// sessions. Returns (recall_sum, evaluated, per_category).
 /// Per-category (recall_sum, count) accumulator.
 type CategoryScores = std::collections::BTreeMap<String, (f32, u32)>;
 
@@ -2730,6 +2726,10 @@ struct GoldRecall {
     page_unpinned_drift: u32,
 }
 
+/// LoCoMo: one item = a conversation with `session_N` dialog arrays and QA
+/// pairs whose evidence is dialog ids like "D3:12" (session 3). Session-
+/// granularity retrieval: rank sessions, score R@k against evidence
+/// sessions. Returns (recall_sum, evaluated, per_category).
 #[allow(clippy::too_many_arguments)]
 fn locomo_eval(
     samples: &[Value],

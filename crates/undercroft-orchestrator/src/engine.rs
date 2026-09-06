@@ -255,7 +255,6 @@ pub fn export_vault(creds: &InstanceCreds, vault: &str) -> Result<String, String
     String::from_utf8(r.body).map_err(|_| "export was not UTF-8".into())
 }
 
-/// Import NDJSON into a vault; returns the engine's imported count.
 /// What one engine import reported: drawers plus (since the manifest-era
 /// export format) the knowledge-graph records that rode the same stream.
 /// The additive keys default to zero against an older engine.
@@ -276,6 +275,7 @@ pub struct ImportCounts {
     pub quarantined: u64,
 }
 
+/// Import NDJSON into a vault; returns the engine's imported count.
 pub fn import_vault(
     creds: &InstanceCreds,
     vault: &str,

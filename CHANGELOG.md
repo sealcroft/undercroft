@@ -158,6 +158,25 @@ migration-file claim says "exported to a recipient". Seven new rows in the
 `prose figures` preflight read each count from the code, so 17 figures are
 gated where 10 were.
 
+### twenty-eight doc blocks returned to the items they describe (O99)
+
+**ROADMAP O99 CLOSED.** M56 fixed the misplaced-doc-block class inside one
+branch's diff; O99 filed twelve more across the tree, and a tree-wide sweep
+found sixteen beyond those. Every stranded block — a doc left heading its
+neighbour when an item was inserted between it and its owner — is back on the
+item it describes, as a pure move proved per site, in twelve files: the
+config-class, MCP-inventory and env-var inventories in `parity.rs`, the `/mcp`
+bearer resolver, the search-policy, scope, late-stage-depth, containment,
+prefix-family, suffix, BM25, read-witness and read-audit docs in the store,
+the trust-floor setter, the orchestrator's import, serve and error classifier,
+the token-artifact importer, the segmenter, and six test and bench docs. One
+line was affirmatively false and is gone (`chain_next_hex` never persisted a
+manifest); one sentence a later unit had falsified now names
+`tighten_anchor`; two stale duplicate docs are folded into the live one, the
+orchestrator's rate-limit rationale moving to the resolver's new home in
+`undercroft-config`. The `#![warn(missing_docs)]` question stays a ruling,
+now with its cost measured: about 113 of some 595 public items carry no doc.
+
 ## 1.3.0 — 2026-09-04
 
 MINOR: new capability, backward compatible. It adds a field beside ones that

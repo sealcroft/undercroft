@@ -1125,13 +1125,6 @@ fn month_name_is_deliberate(text: &str, off: usize) -> bool {
 // used in Egypt, Sudan and the Gulf. Both are current, neither is a dialect of
 // the other, and a corpus can mix them — so both are matched.
 
-/// Arabic-Indic (U+0660..U+0669, ٠-٩) and Extended Arabic-Indic
-/// (U+06F0..U+06F9, ۰-۹, used for Persian and Urdu) digits rewritten as ASCII.
-///
-/// Returns `None` unless every character is a digit in one of the three sets,
-/// so this never half-converts a mixed token. Without it `"٣ أيام"` is
-/// invisible: `str::parse` accepts ASCII only, so a perfectly ordinary Arabic
-/// count silently fails to be a count.
 /// The field order a text demonstrates about itself.
 ///
 /// A numeric date whose day exceeds twelve can only be read one way, and that
@@ -1177,7 +1170,10 @@ fn order_demonstrated_by(text: &str) -> DateOrder {
     }
 }
 
-/// A token's digits rewritten as ASCII, or `None` if it is not all digits.
+/// A token's digits rewritten as ASCII, or `None` if it is not all digits —
+/// so a mixed token is never half-converted. Without it `"٣ أيام"` is
+/// invisible: `str::parse` accepts ASCII only, so a perfectly ordinary Arabic
+/// count silently fails to be a count.
 ///
 /// The digit system is a NUMERAL SYSTEM and nothing more. An earlier version of
 /// this carried an "era offset" keyed on the Thai block, on the reasoning that

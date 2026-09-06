@@ -405,7 +405,6 @@ impl Vault {
         u64::from_le_bytes(tag[..8].try_into().expect("HMAC-SHA256 is 32 bytes"))
     }
 
-    /// Advance the audit chain for one write and persist the manifest.
     /// One pure chain step over hex heads: `next = HMAC(prev ‖ tag)`. The
     /// store owns *where* the committed head lives (a `chain_meta` row that
     /// advances inside the same SQLite transaction as the data it covers —

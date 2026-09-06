@@ -448,13 +448,6 @@ impl PalaceStore {
         Ok(Some((model, packed)))
     }
 
-    /// Import a portable token artifact for `id`, re-sealed under **this**
-    /// vault's key. Safe by construction: the packed matrix must parse, it
-    /// is stored under its `model` name (rescoring only ever reads matrices
-    /// whose model matches the attached encoder), and served results are
-    /// still HMAC-verified — a wrong or malicious artifact can only
-    /// mis-rank, never forge content. Restore therefore skips the
-    /// per-drawer encode forward entirely.
     /// Whether a ColBERT token matrix is filed under `id`.
     ///
     /// A read, for the callers that need to tell "this drawer has no matrix"
@@ -473,6 +466,13 @@ impl PalaceStore {
             .is_some()
     }
 
+    /// Import a portable token artifact for `id`, re-sealed under **this**
+    /// vault's key. Safe by construction: the packed matrix must parse, it
+    /// is stored under its `model` name (rescoring only ever reads matrices
+    /// whose model matches the attached encoder), and served results are
+    /// still HMAC-verified — a wrong or malicious artifact can only
+    /// mis-rank, never forge content. Restore therefore skips the
+    /// per-drawer encode forward entirely.
     pub fn import_token_artifact(
         &mut self,
         id: &str,

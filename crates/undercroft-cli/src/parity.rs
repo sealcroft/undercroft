@@ -24,22 +24,6 @@
 //! to be absent from MCP, so the boundary is enforced by the same mechanism
 //! that enforces the parity.
 
-/// The MCP tool inventory. Every tool the server advertises must appear
-/// here exactly once, and every entry must name a real tool.
-/// **Every `UNDERCROFT_*` variable the engine honours - the inventory the
-/// code is counted against, in both directions.**
-///
-/// There was no gate for this at all: the counts in `CLAUDE.md` and
-/// `architecture/index.html` were hand-maintained prose, and the dimension
-/// whose whole job is "a declared configuration that never took effect" had
-/// its own census go stale and be repaired by hand. A number in prose is a
-/// claim about the moment someone last counted.
-///
-/// `undercroft-bench` is excluded deliberately - its `UNDERCROFT_VS_*` and
-/// `UNDERCROFT_TEST_*` belong to the harness rather than to the engine, and
-/// the canonical count in `CLAUDE.md` has always excluded them.
-///
-/// Adding a variable means adding a line here. That is the point.
 /// How a declaration behaves when its value does not parse.
 ///
 /// **Derived from the configuration doctrine `architecture/index.html`
@@ -105,6 +89,20 @@ pub enum Parse {
 use ConfigClass::{Protects, Tunes};
 use Parse::{Checked, Opaque};
 
+/// **Every `UNDERCROFT_*` variable the engine honours - the inventory the
+/// code is counted against, in both directions.**
+///
+/// There was no gate for this at all: the counts in `CLAUDE.md` and
+/// `architecture/index.html` were hand-maintained prose, and the dimension
+/// whose whole job is "a declared configuration that never took effect" had
+/// its own census go stale and be repaired by hand. A number in prose is a
+/// claim about the moment someone last counted.
+///
+/// `undercroft-bench` is excluded deliberately - its `UNDERCROFT_VS_*` and
+/// `UNDERCROFT_TEST_*` belong to the harness rather than to the engine, and
+/// the canonical count in `CLAUDE.md` has always excluded them.
+///
+/// Adding a variable means adding a line here. That is the point.
 pub const ENGINE_ENV_VARS: &[(&str, ConfigClass, Parse)] = &[
     ("UNDERCROFT_ADMISSION", Protects, Checked),
     ("UNDERCROFT_ADMISSION_LLM", Protects, Checked),
@@ -196,6 +194,8 @@ pub const ENGINE_ENV_VARS: &[(&str, ConfigClass, Parse)] = &[
     ("UNDERCROFT_WING_PQ_MIN", Tunes, Checked),
 ];
 
+/// The MCP tool inventory. Every tool the server advertises must appear
+/// here exactly once, and every entry must name a real tool.
 pub const MCP_TOOLS: &[&str] = &[
     // Memory: the agent surface proper.
     "undercroft_save",
@@ -1254,11 +1254,6 @@ mod tests {
         );
     }
 
-    /// The MCP tool surface matches its inventory, in BOTH directions.
-    ///
-    /// A tool added to the server without a line here fails; a line here
-    /// naming a tool that no longer exists fails too. The second half is
-    /// what stops the inventory becoming the stale doc table it replaces.
     /// The MCP tool-name prefix, in ONE place. Every gate below scans
     /// `mcp.rs` as text and keys on it, and a copy left behind by a rename
     /// would search for a string that cannot occur — which passes green
@@ -1473,6 +1468,11 @@ mod tests {
         }
     }
 
+    /// The MCP tool surface matches its inventory, in BOTH directions.
+    ///
+    /// A tool added to the server without a line here fails; a line here
+    /// naming a tool that no longer exists fails too. The second half is
+    /// what stops the inventory becoming the stale doc table it replaces.
     #[test]
     fn the_mcp_tool_surface_matches_its_inventory() {
         let src = include_str!("mcp.rs");
