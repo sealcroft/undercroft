@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — 1.4.0
+## 1.4.0 — 2026-09-07
 
 MINOR, by this project's own test: it ADDS beside things that stay — three
 search declarations (`when`, `when_slack_days`, `when_from_query`) on every

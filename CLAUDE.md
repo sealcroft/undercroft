@@ -7,27 +7,26 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
 
 Published by **Sealcroft** at `github.com/sealcroft/undercroft`, site at
 `https://sealcroft.com/undercroft/`, house page at `https://sealcroft.com/`
-(repo `sealcroft/sealcroft.github.io`). Current release **1.3.0** — a MINOR
-over `1.2.2`, itself a PATCH over `1.2.1` and that a PATCH over `1.2.0`.
-MINOR is right by this file's own test: it ADDS a field beside ones that stay
-— `VerifyReport.policy_drift`, and a `policy_drift` key on
-`POST /v1/…/verify` — and nothing documented stops being accepted. Two
-security-relevant changes ride in it and both are worth knowing before an
-upgrade. **`verify` gained a SEVENTH leg (O94)**: `wing_trust` and
-`retention_policy` are keyed operator declarations that no drawer HMAC and no
-chain step covered, so a flipped row failed closed on the retrieval path while
-`verify` answered OK, and a DELETED row failed closed NOWHERE — the floor
-simply stopped applying. A vault whose policy rows were edited outside the
-engine now FAILS verify, and `backup create` gates on that verdict, which is
-the point rather than a side effect. And **a request `min_trust` can no longer
-lower a deployment's declared floor (O93)**: it won unconditionally, and
-`trust_rank("quarantined") == 0` made `trust_clause` return no exclusion at
-all, so one search argument lifted the floor corpus-wide from an agent
-surface. Raising is untouched; an explicit `wing` scope still bypasses the
-vault floor, because that confines the answer rather than lifting the floor.
-`UPGRADING.md` carries the first; the second removes a capability nothing
-should have relied on. **The tree carries
-`1.3.0` only once the release PR merges; the TAG is a separate, explicit
+(repo `sealcroft/sealcroft.github.io`). Current release **1.4.0** — a MINOR
+over `1.3.0`, itself a MINOR over `1.2.2`. MINOR is right by this file's own
+test: it ADDS beside things that stay — three search declarations (`when`,
+`when_slack_days`, `when_from_query`) on every surface and a `window` key on
+the `/v1` reply (O108), all absent by default — and nothing documented stops
+being accepted. Three things ride in it that are worth knowing before an
+upgrade. **A deep page is measured, not argued (O23)**: `undercroft-bench
+pqscale --offsets` timed a whole-corpus page from 131k to 1M rows and found it
+linear at ~45 µs and ~13 KB per hydrated row, ~250× the first page — the cost
+the entry had asserted for a month with no number and a gate no source file
+contained. **The measurement killed the process at 10⁶, and that was a
+defect, not a cost (O109)**: `decompress_frame` handed zstd the 16 MiB content
+bound as a CAPACITY, which pre-allocates, so every hydrated framed drawer held
+a 16 MiB mapping and a whole-corpus page on ~260,000 framed rows reached the
+kernel's mapping ceiling with 46 GB free. The buffer is sized from the frame
+header now; nothing that started before stops starting. And **a garbage
+`UNDERCROFT_INDEX_CA` refuses on pgvector as on the other four backends
+(O96)**, which `UPGRADING.md` carries because a deployment that had been
+silently ignoring the value now refuses to start. **The tree carries
+`1.4.0` only once the release PR merges; the TAG is a separate, explicit
 step** — a build reporting a version it was never tagged as is worse
 than one reporting the last release. `main` is branch
 protected on both repos: force pushes and deletions blocked, admins exempt.

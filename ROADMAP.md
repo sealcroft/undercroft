@@ -4160,16 +4160,21 @@ touching anyone's existing corpus.
 integrity verdict, and two different model files must produce two different
 identities.
 
-## 1.4.0 — unreleased
+## 1.4.0 — released 2026-09-07
+
+A date window on every search surface, a deep page measured at a million
+rows, and the frame decoder that measurement found reserving 16 MiB per
+drawer.
 
 MINOR, by this file's own test: O108 ADDS three search declarations and a
 reply key beside everything that stays, absent by default, and nothing
 documented stops being accepted. Everything else here is patch-level and rides
-with it. Filed here until the tag exists — the tree carries `1.4.0` only once
-the release PR merges, and the TAG is a separate step. Described in CHANGELOG
-under `## Unreleased — 1.4.0` (that file writes the bare date once released;
-this one writes `released DATE`). This section was `1.3.1 — unreleased` from
-O101 (2026-09-06) until O108 landed the same day.
+with it. **One behavioural consequence is worth knowing**: a whole-corpus
+page on a sealed vault of more than ~260,000 framed drawers killed the process
+on the kernel's mapping ceiling (O109) and now completes; nothing that started
+before stops starting, and `UPGRADING.md` carries the one refusal in this
+release (O96, a garbage `UNDERCROFT_INDEX_CA` on pgvector). This section was
+`1.3.1 — unreleased` from O101 (2026-09-06) until O108 landed the same day.
 
 ### O95 — CLOSED 2026-09-04: `refine` records what left on its error paths, and nothing when nothing left
 
