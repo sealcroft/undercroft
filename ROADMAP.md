@@ -7140,7 +7140,7 @@ could assert it; today nothing does, which is why the drift ran for months.
 
 ---
 
-### O99 — the misplaced-doc-block class is NOT closed: twelve further instances, and one is affirmatively false
+### O99 — CLOSED 2026-09-06: the misplaced-doc-block class swept tree-wide — 28 sites restored, and the `missing_docs` question is the maintainer's
 
 **Round six, docs-vs-code dimension.** M56 fixed nine sites found by scanning
 the DIFF. A sweep of the whole tree — 2,395 doc blocks across 66 files — found
@@ -7186,6 +7186,63 @@ documenting every public item. That is a real trade and it is the maintainer's.
 **Gate.** `#![warn(missing_docs)]` is the only mechanical option identified and
 it is half a gate — it sees the orphan, never the misattribution. Recorded as a
 decision to take, not an omission.
+
+---
+
+**CLOSED 2026-09-06.** Every filed site re-read before it moved. **The six
+verified instances and the false `chain_next_hex` line are as filed**; of the
+five Tier-1 candidates, FOUR are instances (`engine.rs` `ImportCounts` wore
+`import_vault`'s summary, `proxy.rs`'s metrics listener wore `serve`'s, its
+`engine_response` wore `engine_err`'s, `latestage.rs`'s `has_token_artifact`
+wore `import_token_artifact`'s) and one is NOT (`store/lib.rs:8749` at the
+sweep's commit is `needs_full_scan`'s own coherent doc). **The "nine
+test/bench instances listed in `.handover/SWEEP6_FINDINGS.md`" were never
+written into that file** — it holds one summary row for O99 and nothing under
+it — so the filing pointed at a list that did not exist, and this closure
+records that rather than inheriting it.
+
+**The class was then swept over the whole tree rather than the diff**, which
+is the bound M56 lacked: a scanner over every `///` run flagging a line that
+starts a fresh sentence directly after a sentence-ending line (the exact glue
+an insertion leaves), checked for sensitivity on all twelve known lines
+(12/12) and then read by eye — 252 hits, most of them line-wrapped prose,
+which is why M56 rightly refused it as a GATE and why it is recorded here as
+an investigation method and not built. It found **sixteen more**: the
+segmenter's doc on `is_joining_mark`, `contains_a_long_word`'s on
+`shares_a_stem`, `same_word_family`'s on `MorphRule`, `suffixes_for`'s on
+`inflections_for`, `bm25_raw`'s on `Bm25`, the `Read` witness's on
+`ReadScope`, `audit_read`'s on `record_read` (carrying a sentence that R3 had
+made false — "there is still no callable anchor-tightening operation" — now
+naming `tighten_anchor`), a stale OLDER copy of `ascii_digits`'s doc heading
+`order_demonstrated_by` (deleted, its one surviving rationale folded into the
+live doc), the orchestrator's pre-O24 `resolve_rate_limit` doc heading a
+`use` re-export (its refusal rationale and typo examples moved to the resolver
+in `undercroft-config`, where the code now lives), a duplicated summary on
+`wings()` (folded), and six test/bench docs — the MCP-inventory test's on
+`TOOL_PREFIX`, the LoCoMo evaluator's on `CategoryScores`, and in the store's
+tests the trust-floor-arms, rescore-depth, read-audit and assertion-secret
+docs each stranded on the test above their own. **28 sites in twelve files.**
+
+**Method, so the next sweep is cheaper than this one**: the mover cut each
+stranded block by its item and the first line of the item's OWN doc, re-inserted
+it above its owner (above any attribute run), and checked that the file's
+line count and sorted line multiset were unchanged and the block sat intact
+directly above the owner — a pure move, proved per site. The first run of
+that script carried a bash arithmetic error in its verification line, so the
+moves landed unverified and were verified after the fact by the multiset
+check; the corrected mover verified the rest inline.
+
+**Residual — the ruling this entry was filed for, with its cost now
+MEASURED**: `#![warn(missing_docs)]` on the library crates would catch the
+orphaned half of this class for `pub` items only, and under the lint's
+`-D warnings` it fails until every one is written — roughly **113 of ~595**
+public items carry none today (core 31/155, vault 22/96, store 30/220, index
+13/23, llm 15/33, net 1/16, obs 1/46, config 0/6; top-level and method `pub`
+items outside test modules, counted by a scanner and approximate). It would
+have seen none of the private-item instances above and none of the
+misattributions. The alternatives are re-running the scanner by hand at each
+drift audit (attention-bound, complete, cheap) or nothing. Ruling requested;
+the tree is consistent either way.
 
 ---
 

@@ -733,12 +733,6 @@ pub(crate) fn late_top_n() -> usize {
     )
 }
 
-/// The resolution rule, as a pure function of the two variables' values.
-///
-/// Pure so it can be tested exhaustively without mutating the environment:
-/// `std::env::set_var` is process-global and the suite runs tests in parallel,
-/// so an env-driven test of this is a flake generator aimed at every other
-/// test that happens to run beside it.
 /// The convex blend's semantic weight (`UNDERCROFT_FUSION_WEIGHT`):
 /// `score = w·semantic + (0.90 − w)·lexical + 0.10·recency`. Recency's
 /// share is fixed — it was never the contested split. DECLARED and
@@ -1326,6 +1320,12 @@ pub(crate) fn parse_fusion_weight(raw: Option<&str>) -> Result<f32, String> {
     }
 }
 
+/// The resolution rule, as a pure function of the two variables' values.
+///
+/// Pure so it can be tested exhaustively without mutating the environment:
+/// `std::env::set_var` is process-global and the suite runs tests in parallel,
+/// so an env-driven test of this is a flake generator aimed at every other
+/// test that happens to run beside it.
 fn resolve_late_top_n(late: Option<&str>, rerank: Option<&str>) -> usize {
     // ROADMAP O48: a declared-but-unreadable `UNDERCROFT_LATE_TOP_N` used to
     // fall through in silence. It still falls through — the resolved value is
@@ -1750,22 +1750,6 @@ pub(crate) struct Landing {
     pub(crate) diverted_to: Option<String>,
 }
 
-/// Which content-returning read this is — the read path's answer to
-/// [`Screen`], and it exists for the same reason.
-///
-/// ROADMAP O50 (round-four #23). `UNDERCROFT_READ_AUDIT=chain` is documented
-/// for *"insider/exfil accounting"*, and `audit_read` had exactly TWO call
-/// sites, both passing the literal `"search"`. Every by-id and bulk read —
-/// `get`, `recent`, `list_drawers` — returned verbatim content and appended
-/// nothing. An insider with a valid token walks `GET /v1/…/drawers` for ids
-/// and `GET …/drawers/{id}` for each, exfiltrating the whole vault with ZERO
-/// chain records, while the same person running one search leaves one.
-///
-/// The cause was structural: nothing required a content-returning read to
-/// reach the auditor, so coverage was added one call site at a time — the
-/// exact arrangement `CLAUDE.md` names as the birth of all 65 drifts. So this
-/// is a REQUIRED argument on the funnel, not a defaulted one: a new read path
-/// does not compile until its author states which it is.
 /// What a read was scoped to, for the audit record. Search projects its
 /// `SearchOptions` onto this; every other read has nothing to put here, which
 /// is why the fields are `Option` rather than a borrowed `SearchOptions` —
@@ -1803,6 +1787,22 @@ impl<'a> ReadScope<'a> {
     }
 }
 
+/// Which content-returning read this is — the read path's answer to
+/// [`Screen`], and it exists for the same reason.
+///
+/// ROADMAP O50 (round-four #23). `UNDERCROFT_READ_AUDIT=chain` is documented
+/// for *"insider/exfil accounting"*, and `audit_read` had exactly TWO call
+/// sites, both passing the literal `"search"`. Every by-id and bulk read —
+/// `get`, `recent`, `list_drawers` — returned verbatim content and appended
+/// nothing. An insider with a valid token walks `GET /v1/…/drawers` for ids
+/// and `GET …/drawers/{id}` for each, exfiltrating the whole vault with ZERO
+/// chain records, while the same person running one search leaves one.
+///
+/// The cause was structural: nothing required a content-returning read to
+/// reach the auditor, so coverage was added one call site at a time — the
+/// exact arrangement `CLAUDE.md` names as the birth of all 65 drifts. So this
+/// is a REQUIRED argument on the funnel, not a defaulted one: a new read path
+/// does not compile until its author states which it is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Read {
     /// A read whose content leaves the process for a caller. Audited when
@@ -5531,21 +5531,6 @@ impl PalaceStore {
         }
     }
 
-    /// Everything a search must settle from the caller's DECLARATIONS
-    /// before it may look at a single drawer: the closed-vocabulary
-    /// checks, the effective trust floor, and the quarantine fence. The
-    /// wing-set restriction that comes out is the whole retrieval policy;
-    /// `None` means "no wing is excluded".
-    ///
-    /// This is a shared, required step rather than a block inside
-    /// `search_inner` because it once WAS such a block: the remote-backend
-    /// path (`search_with_index`) validated neither vocabulary and applied
-    /// neither the floor nor the fence, so after an `index push` the same
-    /// query answered with admission-quarantined content and below-floor
-    /// wings on `--backend qdrant` that `--backend local` hard-excluded.
-    /// A mirror is an accelerator, not a different policy. Any future
-    /// retrieval path must call this too — that is the point of it having
-    /// a name.
     /// Does the **verified** metadata admit this drawer under the retrieval
     /// policy? The boundary — the SQL clause is only the accelerator.
     ///
@@ -5597,6 +5582,21 @@ impl PalaceStore {
         }
     }
 
+    /// Everything a search must settle from the caller's DECLARATIONS
+    /// before it may look at a single drawer: the closed-vocabulary
+    /// checks, the effective trust floor, and the quarantine fence. The
+    /// wing-set restriction that comes out is the whole retrieval policy;
+    /// `None` means "no wing is excluded".
+    ///
+    /// This is a shared, required step rather than a block inside
+    /// `search_inner` because it once WAS such a block: the remote-backend
+    /// path (`search_with_index`) validated neither vocabulary and applied
+    /// neither the floor nor the fence, so after an `index push` the same
+    /// query answered with admission-quarantined content and below-floor
+    /// wings on `--backend qdrant` that `--backend local` hard-excluded.
+    /// A mirror is an accelerator, not a different policy. Any future
+    /// retrieval path must call this too — that is the point of it having
+    /// a name.
     pub(crate) fn resolve_search_policy(
         &self,
         opts: &SearchOptions,
@@ -6290,6 +6290,29 @@ impl PalaceStore {
         self.read_audit = on;
     }
 
+    /// **The one place that decides whether a read is recorded.** It was
+    /// three inline copies of `if let Read::Returned(op) = read { if
+    /// self.read_audit { .. } }` after O50, and the KG funnel would have
+    /// made it eight — which is how the write side's screen came to be
+    /// applied per call site with three ways past it. `Internal` never
+    /// records, by the reason its variant carries; a read-only handle never
+    /// records because `open_read_only` force-disables the flag, and that
+    /// flag is the only thing keeping such a handle from writing.
+    fn record_read(
+        &self,
+        read: Read,
+        subject: &str,
+        scope: ReadScope<'_>,
+        returned: usize,
+    ) -> Result<(), StoreError> {
+        if let Read::Returned(op) = read {
+            if self.read_audit {
+                self.audit_read(op, subject, scope, returned)?;
+            }
+        }
+        Ok(())
+    }
+
     /// One chain record for a read (C-track read-path auditing). The
     /// canonical carries a KEYED fingerprint of the query — the chain
     /// must never hold content, and a query is content — plus the
@@ -6322,31 +6345,9 @@ impl PalaceStore {
     /// process opens the store); on a long-lived server `store_for` caches
     /// the handle, so a repeated `POST /v1/…/verify` never re-opens and
     /// never re-anchors. The advice failed precisely on the deployment it
-    /// was written for. There is still no callable anchor-tightening
-    /// operation outside `open` (ROADMAP A31).
-    /// **The one place that decides whether a read is recorded.** It was
-    /// three inline copies of `if let Read::Returned(op) = read { if
-    /// self.read_audit { .. } }` after O50, and the KG funnel would have
-    /// made it eight — which is how the write side's screen came to be
-    /// applied per call site with three ways past it. `Internal` never
-    /// records, by the reason its variant carries; a read-only handle never
-    /// records because `open_read_only` force-disables the flag, and that
-    /// flag is the only thing keeping such a handle from writing.
-    fn record_read(
-        &self,
-        read: Read,
-        subject: &str,
-        scope: ReadScope<'_>,
-        returned: usize,
-    ) -> Result<(), StoreError> {
-        if let Read::Returned(op) = read {
-            if self.read_audit {
-                self.audit_read(op, subject, scope, returned)?;
-            }
-        }
-        Ok(())
-    }
-
+    /// was written for (ROADMAP A31) — which is why R3 shipped
+    /// [`Self::tighten_anchor`], the callable anchor-tightening operation
+    /// outside `open`.
     fn audit_read(
         &self,
         op: ReadOp,
@@ -6540,29 +6541,6 @@ impl PalaceStore {
         Ok(scored.into_iter().map(|(_, s)| s).collect())
     }
 
-    /// The rows a search may draw candidates from, resolved BEFORE any
-    /// candidate is generated. `None` when nothing restricts the corpus.
-    ///
-    /// Which variant of [`SeqFilter`] comes back is the whole point, and the
-    /// rule is one line: **a positive narrowing materializes its members; a
-    /// bare exclusion materializes its complement.**
-    ///
-    /// - Anything positive present (`wing`, `room`, `kind`, or a
-    ///   `TrustClause::Allow`) → `Only`, over exactly the SQL this function
-    ///   has always built, the exclusion included. Byte-identical to what a
-    ///   declared scope resolved to before [`SeqFilter`] existed, fetched
-    ///   through its index (`idx_drawers_wing_room` for wing-led lookups,
-    ///   `idx_drawers_room` for room-only), and its SIZE still decides
-    ///   whether a prefilter runs at all: a scope that fits the hydration
-    ///   budget is scanned exactly instead.
-    /// - Otherwise a non-empty `TrustClause::Exclude` alone → `AllBut` over
-    ///   the excluded wings, served by the same index's leftmost prefix.
-    ///   O(excluded), not O(corpus).
-    /// - Otherwise `None`.
-    ///
-    /// `Allow(empty)` stays on the positive branch so `TrustClause::sql`'s
-    /// `1 = 0` still yields an empty `Only` — an honest "no wing qualifies",
-    /// exactly as before.
     /// **Which membership set, if any, a search must materialize.**
     ///
     /// Extracted from `search_inner` so the DECISION is testable rather than
@@ -6632,6 +6610,29 @@ impl PalaceStore {
         }
     }
 
+    /// The rows a search may draw candidates from, resolved BEFORE any
+    /// candidate is generated. `None` when nothing restricts the corpus.
+    ///
+    /// Which variant of [`SeqFilter`] comes back is the whole point, and the
+    /// rule is one line: **a positive narrowing materializes its members; a
+    /// bare exclusion materializes its complement.**
+    ///
+    /// - Anything positive present (`wing`, `room`, `kind`, or a
+    ///   `TrustClause::Allow`) → `Only`, over exactly the SQL this function
+    ///   has always built, the exclusion included. Byte-identical to what a
+    ///   declared scope resolved to before [`SeqFilter`] existed, fetched
+    ///   through its index (`idx_drawers_wing_room` for wing-led lookups,
+    ///   `idx_drawers_room` for room-only), and its SIZE still decides
+    ///   whether a prefilter runs at all: a scope that fits the hydration
+    ///   budget is scanned exactly instead.
+    /// - Otherwise a non-empty `TrustClause::Exclude` alone → `AllBut` over
+    ///   the excluded wings, served by the same index's leftmost prefix.
+    ///   O(excluded), not O(corpus).
+    /// - Otherwise `None`.
+    ///
+    /// `Allow(empty)` stays on the positive branch so `TrustClause::sql`'s
+    /// `1 = 0` still yields an empty `Only` — an honest "no wing qualifies",
+    /// exactly as before.
     fn resolve_seq_filter(
         &self,
         wing: Option<&str>,
@@ -7310,9 +7311,8 @@ impl PalaceStore {
         Ok(out)
     }
 
-    /// Distinct wings and per-wing drawer counts.
-    /// Wing names and their drawer counts, **excluding the reserved review
-    /// queue** — which it did not, and that was the second half of O32.
+    /// Distinct wing names and their drawer counts, **excluding the reserved
+    /// review queue** — which it did not, and that was the second half of O32.
     ///
     /// The quarantine fence was built for reads that return CONTENT
     /// (`search`, `recent`, `list_drawers`), so this one was never in scope:
@@ -7445,40 +7445,6 @@ fn fuzzy_eq(q: &str, tok: &str) -> bool {
     same_word_family(q, tok) || contains_a_long_word(q, tok)
 }
 
-/// One word is a whole substring of the other, at any offset.
-///
-/// This is the half of compounding a prefix rule structurally cannot see:
-/// `Dampfschiff` is a *suffix* of `Donaudampfschifffahrt` and `Ausbildung` sits
-/// interior to `Bundesausbildungsförderungsgesetz`, so `same_word_family`
-/// reaches neither — the shared prefix is zero.
-///
-/// It is also a consistency fix. `lexical_score` has always scored this
-/// relation, through `lower.contains(t)`, so `Fusion::Legacy` and every
-/// remote-index search already had it; only the default BM25 path, which
-/// compares tokens rather than substrings, did not. Measured, that mattered
-/// more than it looks: the cosine leg carries `Dampfschiff` /
-/// `Donaudampfschifffahrt` at 0.8182 on a bare pair but only 0.5058 once the
-/// drawer reaches ~80 words, so at real chunk length `lexical_exact` was 0,
-/// `semantic` was below the gate, and the drawer was dropped rather than
-/// mis-ranked.
-///
-/// **Eight characters on the shorter side**, chosen by measurement over this
-/// repo's own prose (73 files, 6,710 distinct alphabetic words): 644 linked
-/// pairs, 0.017% of eligible pairs, 214 of them beyond `same_word_family`'s
-/// reach, per-word degree p90 = 1 and max = 8. At seven the `-ability` family
-/// alone links fourteen words to `ability`, and `article`/`particle`,
-/// `mission`/`admission` and `allowed`/`swallowed` arrive — 401 extra pairs.
-///
-/// Deliberately short of `run` / `running`, whose shorter side is 3: short
-/// stems are a different gap and this is not a workaround for it.
-///
-/// The residue it does create is real morphology far more often than noise —
-/// `unresolved`/`resolved`, `incompatible`/`compatible`,
-/// `autoincrement`/`increment` — with `counting`/`accounting` and
-/// `knowledge`/`acknowledged` as the sharpest genuine false pairs. All of it
-/// lands in the approximate channel, so none of it can admit a drawer.
-/// Critically, it creates none of gap (a)'s false friends: containment is
-/// false for `город`/`горох`, `книга`/`книге` and `positive`/`position`.
 /// One word contains the other, in a script that attaches without a delimiter
 /// and is not logographic.
 ///
@@ -7517,6 +7483,40 @@ fn shares_a_stem(q: &str, tok: &str) -> bool {
     }
 }
 
+/// One word is a whole substring of the other, at any offset.
+///
+/// This is the half of compounding a prefix rule structurally cannot see:
+/// `Dampfschiff` is a *suffix* of `Donaudampfschifffahrt` and `Ausbildung` sits
+/// interior to `Bundesausbildungsförderungsgesetz`, so `same_word_family`
+/// reaches neither — the shared prefix is zero.
+///
+/// It is also a consistency fix. `lexical_score` has always scored this
+/// relation, through `lower.contains(t)`, so `Fusion::Legacy` and every
+/// remote-index search already had it; only the default BM25 path, which
+/// compares tokens rather than substrings, did not. Measured, that mattered
+/// more than it looks: the cosine leg carries `Dampfschiff` /
+/// `Donaudampfschifffahrt` at 0.8182 on a bare pair but only 0.5058 once the
+/// drawer reaches ~80 words, so at real chunk length `lexical_exact` was 0,
+/// `semantic` was below the gate, and the drawer was dropped rather than
+/// mis-ranked.
+///
+/// **Eight characters on the shorter side**, chosen by measurement over this
+/// repo's own prose (73 files, 6,710 distinct alphabetic words): 644 linked
+/// pairs, 0.017% of eligible pairs, 214 of them beyond `same_word_family`'s
+/// reach, per-word degree p90 = 1 and max = 8. At seven the `-ability` family
+/// alone links fourteen words to `ability`, and `article`/`particle`,
+/// `mission`/`admission` and `allowed`/`swallowed` arrive — 401 extra pairs.
+///
+/// Deliberately short of `run` / `running`, whose shorter side is 3: short
+/// stems are a different gap and this is not a workaround for it.
+///
+/// The residue it does create is real morphology far more often than noise —
+/// `unresolved`/`resolved`, `incompatible`/`compatible`,
+/// `autoincrement`/`increment` — with `counting`/`accounting` and
+/// `knowledge`/`acknowledged` as the sharpest genuine false pairs. All of it
+/// lands in the approximate channel, so none of it can admit a drawer.
+/// Critically, it creates none of gap (a)'s false friends: containment is
+/// false for `город`/`горох`, `книга`/`книге` and `positive`/`position`.
 fn contains_a_long_word(q: &str, tok: &str) -> bool {
     // Delimiting scripts only — a bigram token from Han, Arabic or Thai must
     // never reach a substring rule.
@@ -7538,56 +7538,6 @@ fn contains_a_long_word(q: &str, tok: &str) -> bool {
     }
 }
 
-/// One word is nearly a prefix of the other — the reachable half of
-/// morphology, without needing to know anyone's language.
-///
-/// This connects suffix and agglutinative inflection: `documentation` to
-/// `document`/`documented`/`documents`/`documenting`, `encryption` to
-/// `encrypt`, Georgian `ბიბლიოთეკა` to `ბიბლიოთეკაში`, German
-/// `Konfiguration` to `Konfigurationen`.
-///
-/// The two thresholds are both load-bearing and both were chosen by what they
-/// reject. A prefix of **7** is what excludes the systematic English
-/// `-tive`/`-tion` class, which sits at exactly 6 and is length-symmetric so a
-/// length-difference bound would not catch it: `positive`/`position`,
-/// `relative`/`relation`, `creative`/`creation`, `transfer`/`transform`,
-/// `personal`/`personnel`. It also rejects the Slavic and Greek false friends
-/// a 6 would admit — `сообщение` (message) / `сообщество` (community),
-/// `κατάσταση` (situation) / `κατάστημα` (shop). Bounding the divergent tail
-/// on the **shorter** side rejects `представление` (idea) /
-/// `представитель` (representative), which shares 8.
-///
-/// Three false pairs survive and are the accepted cost: `conversation` /
-/// `conversion`, `processor` / `procession`, `internal` / `international`.
-/// They feed the **approximate** channel only, so none of them can admit a
-/// drawer **on the lexical channel** — they can only move one inside a result
-/// set that already cleared the exact gate. That containment is why the
-/// channel split had to land first.
-///
-/// The qualifier is not pedantry. The gate is a disjunction, and its other arm
-/// is `semantic >` the embedder's own gate, which is undiscounted and
-/// uncapped: measured, `internal` / `international` clears it at every drawer
-/// length tested and `conversation` / `conversion` at three lengths of four.
-/// So these pairs *can* be admitted — by the cosine leg, not by this rule.
-/// Reading this containment as absolute overstates what the split buys.
-///
-/// One asymmetry worth knowing before reading the next paragraph as absolute:
-/// `lexical_score`'s exact leg is unrestricted substring containment with **no
-/// length gate**, so on `Fusion::Legacy` and on every remote-index search a
-/// query `run` against a drawer saying `i was running daily` already yields
-/// `lexical_exact = 1.0` and is admitted. It is the default BM25 path, which
-/// compares whole tokens, that does not. So the short-stem gap is *directional*
-/// (it bites when the query is the shorter form) and holds on one of three
-/// fusion modes — the same shipped inconsistency `contains_a_long_word` was
-/// added to reduce.
-///
-/// What this does not reach, and no prefix rule can: Russian nominal case
-/// (`книга`/`книге` share 4, and so do `город`/`горох`), Greek `πόλη`/`πόλεων`
-/// (3), English short stems (`running`/`run` — `run` is 3 characters), and
-/// German compounds, where `Dampfschiff` is a *suffix* of
-/// `Donaudampfschifffahrt` (the embedder's character trigrams already carry
-/// that one on the cosine leg). Stem-rewriting morphology — Arabic broken
-/// plurals, Korean conjugation — shares no contiguous surface at all.
 /// The per-script morphological rules — the "right tool per language" made
 /// explicit, with every value carrying the promiscuity that chose it.
 ///
@@ -7702,25 +7652,6 @@ impl MorphLang {
     }
 }
 
-/// The inflectional endings a word may gain, as a CLOSED set per language.
-///
-/// Deliberately never `-e`: German `Reis` (rice) + `e` is `Reise` (journey),
-/// and that pair is a control.
-///
-/// **`-er` is the reason this function takes a language at all.** German needs
-/// it for `Kind`/`Kinder`, `Haus`/`Häuser`, `Buch`/`Bücher`. English cannot
-/// have it: measured against the controls, enabling it for English admitted
-/// `flow`/`flower`, `tow`/`tower`, `corn`/`corner`, `butt`/`butter` and
-/// `cow`/`cower` — five false pairs for two real ones, because English also
-/// builds agent nouns with `-er` and the shorter word is frequently not the
-/// verb. Note the population instrument could NOT see this: adding `-er` moved
-/// promiscuity by +0.21 links per query, indistinguishable from safe. Only the
-/// negative controls caught it.
-///
-/// The umlaut would have discriminated without any declaration — `Häuser`,
-/// `Bücher`, `Männer` all carry one and `flower` cannot — but `search_key`
-/// folds it away long before this rule sees the word, and `Kind`/`Kinder` has
-/// no umlaut anyway.
 /// Endings that SUBSTITUTE for one another on a shared stem, per language.
 ///
 /// This is the mechanism `suffix_family` is structurally blind to, and it is
@@ -8400,6 +8331,25 @@ fn inflection_family(q: &str, tok: &str, lang: MorphLang) -> bool {
     })
 }
 
+/// The inflectional endings a word may gain, as a CLOSED set per language.
+///
+/// Deliberately never `-e`: German `Reis` (rice) + `e` is `Reise` (journey),
+/// and that pair is a control.
+///
+/// **`-er` is the reason this function takes a language at all.** German needs
+/// it for `Kind`/`Kinder`, `Haus`/`Häuser`, `Buch`/`Bücher`. English cannot
+/// have it: measured against the controls, enabling it for English admitted
+/// `flow`/`flower`, `tow`/`tower`, `corn`/`corner`, `butt`/`butter` and
+/// `cow`/`cower` — five false pairs for two real ones, because English also
+/// builds agent nouns with `-er` and the shorter word is frequently not the
+/// verb. Note the population instrument could NOT see this: adding `-er` moved
+/// promiscuity by +0.21 links per query, indistinguishable from safe. Only the
+/// negative controls caught it.
+///
+/// The umlaut would have discriminated without any declaration — `Häuser`,
+/// `Bücher`, `Männer` all carry one and `flower` cannot — but `search_key`
+/// folds it away long before this rule sees the word, and `Kind`/`Kinder` has
+/// no umlaut anyway.
 fn suffixes_for(lang: MorphLang) -> &'static [&'static str] {
     // `-en` is German's, not everyone's. It buys English nothing — every
     // English `-en` form here (`child`/`children`, `ox`/`oxen`) is irregular
@@ -8916,6 +8866,56 @@ fn greek_word_family(q: &str, tok: &str) -> bool {
     greek(q) && greek(tok) && same_word_family(q, tok)
 }
 
+/// One word is nearly a prefix of the other — the reachable half of
+/// morphology, without needing to know anyone's language.
+///
+/// This connects suffix and agglutinative inflection: `documentation` to
+/// `document`/`documented`/`documents`/`documenting`, `encryption` to
+/// `encrypt`, Georgian `ბიბლიოთეკა` to `ბიბლიოთეკაში`, German
+/// `Konfiguration` to `Konfigurationen`.
+///
+/// The two thresholds are both load-bearing and both were chosen by what they
+/// reject. A prefix of **7** is what excludes the systematic English
+/// `-tive`/`-tion` class, which sits at exactly 6 and is length-symmetric so a
+/// length-difference bound would not catch it: `positive`/`position`,
+/// `relative`/`relation`, `creative`/`creation`, `transfer`/`transform`,
+/// `personal`/`personnel`. It also rejects the Slavic and Greek false friends
+/// a 6 would admit — `сообщение` (message) / `сообщество` (community),
+/// `κατάσταση` (situation) / `κατάστημα` (shop). Bounding the divergent tail
+/// on the **shorter** side rejects `представление` (idea) /
+/// `представитель` (representative), which shares 8.
+///
+/// Three false pairs survive and are the accepted cost: `conversation` /
+/// `conversion`, `processor` / `procession`, `internal` / `international`.
+/// They feed the **approximate** channel only, so none of them can admit a
+/// drawer **on the lexical channel** — they can only move one inside a result
+/// set that already cleared the exact gate. That containment is why the
+/// channel split had to land first.
+///
+/// The qualifier is not pedantry. The gate is a disjunction, and its other arm
+/// is `semantic >` the embedder's own gate, which is undiscounted and
+/// uncapped: measured, `internal` / `international` clears it at every drawer
+/// length tested and `conversation` / `conversion` at three lengths of four.
+/// So these pairs *can* be admitted — by the cosine leg, not by this rule.
+/// Reading this containment as absolute overstates what the split buys.
+///
+/// One asymmetry worth knowing before reading the next paragraph as absolute:
+/// `lexical_score`'s exact leg is unrestricted substring containment with **no
+/// length gate**, so on `Fusion::Legacy` and on every remote-index search a
+/// query `run` against a drawer saying `i was running daily` already yields
+/// `lexical_exact = 1.0` and is admitted. It is the default BM25 path, which
+/// compares whole tokens, that does not. So the short-stem gap is *directional*
+/// (it bites when the query is the shorter form) and holds on one of three
+/// fusion modes — the same shipped inconsistency `contains_a_long_word` was
+/// added to reduce.
+///
+/// What this does not reach, and no prefix rule can: Russian nominal case
+/// (`книга`/`книге` share 4, and so do `город`/`горох`), Greek `πόλη`/`πόλεων`
+/// (3), English short stems (`running`/`run` — `run` is 3 characters), and
+/// German compounds, where `Dampfschiff` is a *suffix* of
+/// `Donaudampfschifffahrt` (the embedder's character trigrams already carry
+/// that one on the cosine leg). Stem-rewriting morphology — Arabic broken
+/// plurals, Korean conjugation — shares no contiguous surface at all.
 fn same_word_family(q: &str, tok: &str) -> bool {
     // Delimiting scripts only. A bigram token from Han, Arabic or Thai must
     // never reach a character-prefix rule.
@@ -8955,11 +8955,6 @@ fn needs_full_scan(qterms: &[String]) -> bool {
     })
 }
 
-/// Raw Okapi BM25 per candidate over the candidate set as the corpus, plus
-/// `k_sat` — the mean IDF of query terms that actually occur, used as the
-/// saturation constant when squashing raw scores into [0,1]. Term matching
-/// carries the same one-typo tolerance (5+ char terms) as lexical search,
-/// so a misspelled query still contributes.
 /// BM25 over a candidate set, kept in two channels.
 ///
 /// `raw` is for ranking and blends both kinds of evidence. `exact` counts
@@ -8979,6 +8974,11 @@ struct Bm25 {
 /// Approximate evidence counts, but never as much as saying the word.
 const APPROX_WEIGHT: f32 = 0.5;
 
+/// Raw Okapi BM25 per candidate over the candidate set as the corpus, plus
+/// `k_sat` — the mean IDF of query terms that actually occur, used as the
+/// saturation constant when squashing raw scores into [0,1]. Term matching
+/// carries the same one-typo tolerance (5+ char terms) as lexical search,
+/// so a misspelled query still contributes.
 fn bm25_raw(qterms: &[String], cands: &[Candidate], lang: MorphLang) -> Bm25 {
     let n = cands.len();
     if n == 0 || qterms.is_empty() {
@@ -13032,10 +13032,6 @@ mod tests {
         );
     }
 
-    /// Read-path auditing (the consultation-filed gap, closed): off by
-    /// default with a byte-identical read contract, declared on it puts
-    /// one chain record per search — carrying a KEYED fingerprint of the
-    /// query, never its text — and the chain stays green.
     /// ROADMAP O50 (round-four #23). `UNDERCROFT_READ_AUDIT=chain` is
     /// documented for insider/exfil accounting, and `audit_read` had exactly
     /// TWO call sites, both `"search"`. Every by-id and bulk read returned
@@ -13270,6 +13266,10 @@ mod tests {
         assert!(s.verify().unwrap().ok());
     }
 
+    /// Read-path auditing (the consultation-filed gap, closed): off by
+    /// default with a byte-identical read contract, declared on it puts
+    /// one chain record per search — carrying a KEYED fingerprint of the
+    /// query, never its text — and the chain stays green.
     #[test]
     fn reads_are_audited_only_when_declared_and_never_leak_the_query() {
         let (dir, mut s) = store(SecurityLevel::Sealed);
@@ -13577,25 +13577,6 @@ mod tests {
         );
     }
 
-    /// **A declared assertion secret that names no secret refuses, in BOTH
-    /// of the two directions the old filter failed in.**
-    ///
-    /// `Tenancy::new` used `.filter(|s| !s.is_empty())`, which produced two
-    /// opposite silent failures from one line — and a fix that merely maps
-    /// empty to absent closes only the first:
-    ///
-    /// * `""` → `None` → every `/v1` assertion gate and the `POST /mcp`
-    ///   transport gate became a no-op, with no warning; the banner omitted
-    ///   the clause rather than saying assertions were off. Reachable from
-    ///   the compose recipe in `docs/remote-server.md`, because an unset
-    ///   shell variable interpolates to empty rather than absent.
-    /// * `" "` → `Some(b" ")` → assertions ENFORCED with a one-byte
-    ///   guessable key, and the banner truthfully said they were required.
-    ///
-    /// The last two arms are the one that is easy to get backwards: this is
-    /// opaque PAYLOAD, not a word from a closed vocabulary, so it is **not
-    /// trimmed** — trimming would change the KEY and silently invalidate
-    /// every header a deployment had already minted.
     /// Round-four #40 was a DOC defect: `CLAUDE.md` and two comments in this
     /// file said morphology language is "declared, never detected" long after
     /// `language_of_drawer` shipped — one of them sitting twenty lines above
@@ -13682,6 +13663,25 @@ mod tests {
         );
     }
 
+    /// **A declared assertion secret that names no secret refuses, in BOTH
+    /// of the two directions the old filter failed in.**
+    ///
+    /// `Tenancy::new` used `.filter(|s| !s.is_empty())`, which produced two
+    /// opposite silent failures from one line — and a fix that merely maps
+    /// empty to absent closes only the first:
+    ///
+    /// * `""` → `None` → every `/v1` assertion gate and the `POST /mcp`
+    ///   transport gate became a no-op, with no warning; the banner omitted
+    ///   the clause rather than saying assertions were off. Reachable from
+    ///   the compose recipe in `docs/remote-server.md`, because an unset
+    ///   shell variable interpolates to empty rather than absent.
+    /// * `" "` → `Some(b" ")` → assertions ENFORCED with a one-byte
+    ///   guessable key, and the banner truthfully said they were required.
+    ///
+    /// The last two arms are the one that is easy to get backwards: this is
+    /// opaque PAYLOAD, not a word from a closed vocabulary, so it is **not
+    /// trimmed** — trimming would change the KEY and silently invalidate
+    /// every header a deployment had already minted.
     #[test]
     fn a_declared_assertion_secret_that_names_no_secret_refuses() {
         // Unset is not a declaration: a deployment that never declared one
@@ -15732,10 +15732,6 @@ mod tests {
         assert!(s.search("anything", &floored).is_err());
     }
 
-    /// The two floor arms and the self-scoping rule: `trusted` admits only
-    /// assigned wings (unassigned = standard, below it); the VAULT floor
-    /// is bypassed by an explicitly named wing scope, but a request's own
-    /// `min_trust` never is.
     /// **A declared trust floor governs every read that returns content,
     /// not `search` alone.**
     ///
@@ -15819,6 +15815,10 @@ mod tests {
         );
     }
 
+    /// The two floor arms and the self-scoping rule: `trusted` admits only
+    /// assigned wings (unassigned = standard, below it); the VAULT floor
+    /// is bypassed by an explicitly named wing scope, but a request's own
+    /// `min_trust` never is.
     #[test]
     fn trust_floor_arms_and_the_self_scoping_bypass() {
         let (_d, mut s) = store(SecurityLevel::Sealed);
@@ -16488,16 +16488,6 @@ mod tests {
         );
     }
 
-    /// The two rescore budgets resolve independently, and a deployment that
-    /// pinned the old single knob keeps what it pinned — **including when the
-    /// value it pinned is unparseable.**
-    ///
-    /// That last case is the whole reason this test exists.
-    /// `UNDERCROFT_RERANK_TOP_N=0` has always resolved to 50, because the
-    /// `n > 0` filter fails and the default applies. A fallback that only
-    /// honoured *valid* values would newly resolve the same setting to 200 —
-    /// quadrupling rescore depth for someone who changed nothing. Serial,
-    /// because environment variables are process-global.
     /// The scope-sized pool policy, pinned at its three regimes: small
     /// scopes are taken whole (exact), mid scopes ride the floors the
     /// scopescale sweep priced, large scopes converge to the proven
@@ -16571,6 +16561,16 @@ mod tests {
         }
     }
 
+    /// The two rescore budgets resolve independently, and a deployment that
+    /// pinned the old single knob keeps what it pinned — **including when the
+    /// value it pinned is unparseable.**
+    ///
+    /// That last case is the whole reason this test exists.
+    /// `UNDERCROFT_RERANK_TOP_N=0` has always resolved to 50, because the
+    /// `n > 0` filter fails and the default applies. A fallback that only
+    /// honoured *valid* values would newly resolve the same setting to 200 —
+    /// quadrupling rescore depth for someone who changed nothing. Serial,
+    /// because environment variables are process-global.
     #[test]
     fn the_two_rescore_depths_resolve_independently() {
         assert_ne!(

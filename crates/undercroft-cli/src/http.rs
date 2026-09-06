@@ -91,40 +91,6 @@ fn unauthorized(code: u16) -> Response<std::io::Cursor<Vec<u8>>> {
         .with_header(wa)
 }
 
-/// The declared bearer for `/mcp` and `/v1`. `None` when unset — the
-/// documented default, which a non-loopback bind then refuses outright.
-///
-/// **Set-but-empty REFUSES**, and the boundary this closes is narrower than
-/// its two siblings, which is why it is its own decision rather than a line
-/// in theirs. A network-exposed bind with no token already refuses below;
-/// what an empty declaration silently produced was a **loopback** server on
-/// which the operator asked for a bearer and got none, serving `/mcp` and
-/// `/v1` to any caller on the host. That is bounded by the binding in a way
-/// [`undercroft_store::resolve_passphrase`] and
-/// [`undercroft_store::resolve_assertion_secret`] were not — and it is the
-/// same defect, which is what the `.filter(|t| !t.is_empty())` this replaces
-/// had in common with them.
-///
-/// Opaque payload, so the value is **never trimmed**: trimming would make the
-/// server accept a key the operator did not declare, and a server whose key
-/// silently differs from the file it was configured from is the failure this
-/// whole class is about. A declaration that cannot work is REFUSED, never
-/// quietly adjusted into one that can.
-///
-/// **TRAILING whitespace is refused for that reason**, and the boundary is
-/// measured rather than assumed. HTTP strips a field value's trailing
-/// whitespace, so a trailing space or newline can never be presented — every
-/// client is refused, forever, with a 401 that says nothing and a server log
-/// that says nothing either. `UNDERCROFT_MCP_HTTP_TOKEN=$(cat
-/// /run/secrets/token)` is how it happens, and a file ending in a newline is
-/// the normal case, not the odd one. Leading and INTERNAL whitespace are
-/// presentable — measured, both answer 200 — so they are accepted: the
-/// refusal is exactly as wide as the defect.
-///
-/// The sibling secrets are deliberately not treated this way.
-/// [`undercroft_store::resolve_assertion_secret`] is an HMAC key: it is never
-/// put in a header, both sides compute with the same bytes, and trailing
-/// whitespace changes nothing about whether it works.
 /// The sampler's tick interval when nothing else wakes the loop. Named
 /// rather than a bare `2000` in two places (ROADMAP O52).
 pub(crate) const DEFAULT_SAMPLE_INTERVAL_MS: u64 = 2000;
@@ -167,6 +133,40 @@ pub(crate) fn resolve_sample_interval_ms(declared: Option<&str>) -> Result<u64, 
     .map_err(|f| f.why)
 }
 
+/// The declared bearer for `/mcp` and `/v1`. `None` when unset — the
+/// documented default, which a non-loopback bind then refuses outright.
+///
+/// **Set-but-empty REFUSES**, and the boundary this closes is narrower than
+/// its two siblings, which is why it is its own decision rather than a line
+/// in theirs. A network-exposed bind with no token already refuses below;
+/// what an empty declaration silently produced was a **loopback** server on
+/// which the operator asked for a bearer and got none, serving `/mcp` and
+/// `/v1` to any caller on the host. That is bounded by the binding in a way
+/// [`undercroft_store::resolve_passphrase`] and
+/// [`undercroft_store::resolve_assertion_secret`] were not — and it is the
+/// same defect, which is what the `.filter(|t| !t.is_empty())` this replaces
+/// had in common with them.
+///
+/// Opaque payload, so the value is **never trimmed**: trimming would make the
+/// server accept a key the operator did not declare, and a server whose key
+/// silently differs from the file it was configured from is the failure this
+/// whole class is about. A declaration that cannot work is REFUSED, never
+/// quietly adjusted into one that can.
+///
+/// **TRAILING whitespace is refused for that reason**, and the boundary is
+/// measured rather than assumed. HTTP strips a field value's trailing
+/// whitespace, so a trailing space or newline can never be presented — every
+/// client is refused, forever, with a 401 that says nothing and a server log
+/// that says nothing either. `UNDERCROFT_MCP_HTTP_TOKEN=$(cat
+/// /run/secrets/token)` is how it happens, and a file ending in a newline is
+/// the normal case, not the odd one. Leading and INTERNAL whitespace are
+/// presentable — measured, both answer 200 — so they are accepted: the
+/// refusal is exactly as wide as the defect.
+///
+/// The sibling secrets are deliberately not treated this way.
+/// [`undercroft_store::resolve_assertion_secret`] is an HMAC key: it is never
+/// put in a header, both sides compute with the same bytes, and trailing
+/// whitespace changes nothing about whether it works.
 pub(crate) fn resolve_mcp_token(declared: Option<&str>) -> Result<Option<String>, String> {
     match declared {
         None => Ok(None),

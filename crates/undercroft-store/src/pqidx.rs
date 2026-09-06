@@ -401,9 +401,6 @@ impl PalaceStore {
         Ok(())
     }
 
-    /// Declare the vault-level trust floor programmatically (the env
-    /// `UNDERCROFT_TRUST_FLOOR` resolved at open is the deployment's way).
-    /// `None` = no floor. An invalid class is rejected, never coerced.
     /// The vault's declared trust floor, if any.
     ///
     /// A surface needs this to tell "this vault is empty" from "nothing in
@@ -417,6 +414,9 @@ impl PalaceStore {
         self.trust_floor.as_deref()
     }
 
+    /// Declare the vault-level trust floor programmatically (the env
+    /// `UNDERCROFT_TRUST_FLOOR` resolved at open is the deployment's way).
+    /// `None` = no floor. An invalid class is rejected, never coerced.
     pub fn set_trust_floor(&mut self, floor: Option<String>) -> Result<(), StoreError> {
         if let Some(f) = floor.as_deref() {
             undercroft_core::validate_trust(f).map_err(|e| StoreError::Invalid(e.to_string()))?;

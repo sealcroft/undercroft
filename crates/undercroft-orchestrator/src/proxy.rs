@@ -64,22 +64,6 @@ pub(crate) struct RateLimiter {
     windows: std::cell::RefCell<std::collections::HashMap<String, (u64, u64)>>,
 }
 
-/// Read `UNDERCROFT_ORCH_RATE_LIMIT`: unset, empty, `off` or `0` = off;
-/// a positive integer declares requests per tenant per minute. Anything
-/// else REFUSES to start.
-///
-/// It used to be `parse().ok().unwrap_or(0)`, i.e. every unreadable
-/// declaration became "off" with nothing printed — and the two typos a
-/// reader of this project is most likely to make are `100/min` and
-/// `1_000`, the first because the engine's own rate variable really is
-/// `<count>/<seconds>`. An operator who declared a limit believes noisy
-/// tenants are throttled; silently serving unlimited is the failure
-/// mode, and neither `/healthz` nor the console would have said so.
-/// This is the engine's `resolve_read_audit` /
-/// `resolve_admission_rate` posture applied to the control plane: a
-/// declaration this process cannot read is a startup refusal, not a
-/// default. Pure, so the parse is tested without touching the
-/// environment.
 /// The `/admin` bearer and the rate screen, re-exported from
 /// `undercroft-config`.
 ///
@@ -678,7 +662,6 @@ pub enum Role<'a> {
     ReadReplica,
 }
 
-/// Run the proxy loop forever.
 /// Bring up the control plane's metrics endpoint on its own address, if one
 /// is declared. `Ok(())` with nothing bound is the default and the common
 /// case.
@@ -770,6 +753,7 @@ fn bytes_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && bool::from(a.ct_eq(b))
 }
 
+/// Run the proxy loop forever.
 pub fn serve(orch: &Orch, addr: &str, role: Role<'_>) -> anyhow::Result<()> {
     // Resolved BEFORE the bind: a refusal about configuration must not
     // arrive after the port is open and a load balancer has started
@@ -1422,14 +1406,6 @@ impl MigrateError {
     }
 }
 
-/// Turn one of `engine.rs`'s stringified failures back into a class.
-///
-/// `engine.rs` renders a relayed refusal with the status in parentheses
-/// (`engine import failed (409): …`), so recovering it here is a coupling
-/// to that formatting — deliberate, and stated: the alternative is a typed
-/// engine client, which is the right fix and a much larger one. A 4xx is
-/// the ENGINE's verdict on the request and is kept verbatim; anything else
-/// (a transport failure, an engine 5xx) is what 502 actually means.
 /// Turn an `engine::*` String failure into a response that keeps what the
 /// engine said.
 ///
@@ -1467,6 +1443,14 @@ fn engine_response(msg: &str) -> Response<std::io::Cursor<Vec<u8>>> {
     }
 }
 
+/// Turn one of `engine.rs`'s stringified failures back into a class.
+///
+/// `engine.rs` renders a relayed refusal with the status in parentheses
+/// (`engine import failed (409): …`), so recovering it here is a coupling
+/// to that formatting — deliberate, and stated: the alternative is a typed
+/// engine client, which is the right fix and a much larger one. A 4xx is
+/// the ENGINE's verdict on the request and is kept verbatim; anything else
+/// (a transport failure, an engine 5xx) is what 502 actually means.
 fn engine_err(msg: String) -> MigrateError {
     let b = msg.as_bytes();
     for i in 0..b.len().saturating_sub(4) {
