@@ -177,6 +177,20 @@ orchestrator's rate-limit rationale moving to the resolver's new home in
 `undercroft-config`. The `#![warn(missing_docs)]` question stays a ruling,
 now with its cost measured: about 113 of some 595 public items carry no doc.
 
+### the ROADMAP's closed entries live under the release that shipped them (O101)
+
+**ROADMAP O101 CLOSED.** The `## Unversioned` section, whose header says it
+holds nothing a release can contain, held some seventy closed engine entries;
+the `## Open` section, whose header says it holds unscheduled open work, held
+twenty-five closed ones. Seventy-two entries moved to the release whose window
+their closure falls in, confirmed against this file — 37 to `1.1.0`, 25 to
+`1.2.0`, 9 to a new `## 1.3.1 — unreleased` section — and the one open
+releasable item under `Unversioned` moved to `Open`. Proved as a pure
+relocation: the heading multiset is unchanged and every moved entry is
+byte-identical. Both headers now describe their contents in kind, and the
+`ROADMAP headings` preflight gained a fourth arm, probed both ways, that
+names a `CLOSED` entry sitting under either section.
+
 ## 1.3.0 — 2026-09-04
 
 MINOR: new capability, backward compatible. It adds a field beside ones that
