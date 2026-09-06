@@ -67,7 +67,7 @@ so rather than implying it checked them.
 
 ---
 
-## 1.3.1 (unreleased)
+## 1.4.0 (released 2026-09-07)
 
 ### a garbage `UNDERCROFT_INDEX_CA` now refuses on pgvector too
 
