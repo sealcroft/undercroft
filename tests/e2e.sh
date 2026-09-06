@@ -79,6 +79,15 @@ check "remember files a drawer"   0 "Filed drawer"                   -- "$BIN" r
   "We migrated the search stack to Rust for memory safety" --wing eng --room decisions
 check "second memory"             0 "Filed drawer"                   -- "$BIN" remember \
   "Team lunch every Thursday at the ramen place" --wing social
+# ROADMAP O108: a date window, declared or read out of the query, on the CLI.
+check "dated memory"              0 "Filed drawer"                   -- "$BIN" remember \
+  "Calvin: Yesterday I met the artists in Boston" --wing trip --content-date 2023-10-04T12:00:00+00:00
+check "declared window narrows"   0 "Boston"                          -- "$BIN" search "artists" --when 2023-10-04
+check "window says it is declared" 0 "(date window 2023-10-04 declared)" -- "$BIN" search "artists" --when 2023-10-04
+check "undated is outside a window" 0 "No memories matched"          -- "$BIN" search "rust migration" --when 2000-01-01
+check "query-read window is said"  0 "(date window 2023-10-03 read from the query)" -- "$BIN" search \
+  "Which city was Calvin at on October 3, 2023?" --when-from-query
+check "a window must be a date"   1 "--when"                          -- "$BIN" search artists --when soon
 check "search finds relevant"     0 "eng/decisions"                  -- "$BIN" search "why rust migration"
 check "search scoped empty"       0 "No memories matched"            -- "$BIN" search "rust" --wing social
 # Page 2 of a two-hit ranking: one hit, numbered by absolute rank.
@@ -2234,6 +2243,19 @@ else
 fi
 rest_code "unknown trust 400"   400 -- -X POST "$API/vaults/acme/trust" \
   -H "X-Vault-Assertion: $(sign acme)" -d '{"wing":"spam","trust":"golden"}'
+# ROADMAP O108 over /v1: a window read from the query is applied and REPORTED
+# (`window.read`, `window.applied`, `window.source`), and a declared window
+# that is not a date is the caller's error.
+WINDOWED="$(curl -s -X POST "$API/vaults/acme/search" -H "X-Vault-Assertion: $(sign acme)" \
+  -d '{"query":"what shipped on 3 October 2023","when_from_query":true,"when_slack_days":1}')"
+if grep -q '"applied":\["2023-10-02","2023-10-04"\]' <<<"$WINDOWED" && grep -q '"read":\["2023-10-03","2023-10-03"\]' <<<"$WINDOWED" \
+   && grep -q '"source":"query"' <<<"$WINDOWED" && grep -q '"slack_days":1' <<<"$WINDOWED"; then
+  echo "ok    /v1 reports the query-read window it applied"; PASS=$((PASS+1))
+else
+  echo "FAIL  /v1 reports the query-read window it applied"; echo "$WINDOWED" | head -c 400; FAIL=$((FAIL+1))
+fi
+rest_code "window must be a date"  400 -- -X POST "$API/vaults/acme/search" \
+  -H "X-Vault-Assertion: $(sign acme)" -d '{"query":"x","when":"soon"}'
 
 # Provable forgetting (C3.2): destruction through the chain, with a
 # receipt — the attestation names the heads and tombstones, and the

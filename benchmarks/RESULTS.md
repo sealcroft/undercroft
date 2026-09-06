@@ -542,3 +542,30 @@ meal), eight because the evidence is a paraphrase or needs world knowledge
 turn's chunk does not win a slot in a 50-chunk pool over a whole
 conversation. Category 5 (adversarial) is included here and was skipped by
 the AMB run, which is why this floor (12.5% / 9.5%) is not that run's 1.0%.
+
+### The query-read date window (ROADMAP O108), same protocol
+
+Run 2026-09-06, hash embedder, `locomo10.json`, pool 50, k 10, every chunk
+stamped with its session's date (the harness read no dates before this run;
+the stamp alone leaves the miss list byte-identical — 248, the same ids).
+Logs: `logs/o108_locomo10_hash_dated_pool50.log`,
+`logs/o108_locomo10_hash_when-from-query_pool50.log`.
+
+```
+undercroft-bench locomo locomo10.json --k 10 --pool 50                    # baseline
+undercroft-bench locomo locomo10.json --k 10 --pool 50 --when-from-query  # O108 arm
+```
+
+| Metric | hash-v3 | hash-v3 + `when_from_query` |
+|---|---|---|
+| Session R@10 | 95.5% | 96.6% |
+| Gold covered anywhere in the pool | 87.5% | 88.6% |
+| Never covered, by id | 248 | 226 (23 reached, 1 new: `conv-48_q78`) |
+| … of which temporal (category 2) | 22 | 18 |
+| Search cost | 24.5 ms per q | 25.3 ms per q (ingest unchanged) |
+
+Both O108 ids (`conv-50_q43`, `conv-47_q34`) are covered under the arm and
+were not before; every category is equal or better. The mechanism that
+reached them is the score term on the drawer's own resolved mention — the
+chunk was in the 1,600-row pool and below the fifty cut — not the pool
+top-up, which only fires for a drawer the prefilter left out entirely.

@@ -208,6 +208,21 @@ enum Command {
         /// verbose one. Leftover slots refill in score order
         #[arg(long)]
         room_cap: Option<usize>,
+        /// Only drawers dated inside this window, by their `content_date`:
+        /// inclusive `YYYY-MM-DD..YYYY-MM-DD`, or one `YYYY-MM-DD`. An
+        /// undated drawer is outside every window
+        #[arg(long)]
+        when: Option<String>,
+        /// Days added on each side of the window before it is applied
+        #[arg(long, default_value_t = 0)]
+        when_slack_days: u32,
+        /// Read a date out of the query itself (under --language) and use it
+        /// as the window: drawers dated inside it join the candidate pool
+        /// and every candidate dated or mentioning a day inside it takes a
+        /// date term. Off unless declared; a query naming no date applies
+        /// nothing
+        #[arg(long, default_value_t = false)]
+        when_from_query: bool,
         /// Retrieval backend: local (scan), or a remote vector index
         /// (qdrant | chroma | pgvector) used as an untrusted accelerator —
         /// results are always re-verified and re-ranked locally
@@ -2142,6 +2157,9 @@ fn run(cli: Cli) -> Result<()> {
             offset,
             ranked_at,
             room_cap,
+            when,
+            when_slack_days,
+            when_from_query,
             backend,
         } => {
             let store = open_store(&cli, vault)?;
@@ -2176,6 +2194,16 @@ fn run(cli: Cli) -> Result<()> {
                 room_cap: *room_cap,
                 offset: *offset,
                 ranked_at: Some(ranked_at),
+                // ROADMAP O108: the date window, declared or read from the
+                // query, parsed by the one function every surface uses.
+                when: when
+                    .as_deref()
+                    .map(undercroft_store::DateWindow::parse)
+                    .transpose()
+                    .map_err(|e| anyhow::anyhow!("--when: {e}"))?,
+                when_from_query: *when_from_query,
+                when_slack_days: *when_slack_days,
+                locale: search::locale_from(&serde_json::json!({ "language": language })),
             };
             // ROADMAP O73. Only the local path can answer exactly: the page
             // signals come off the engine's own cut. The remote path ranks
@@ -2213,6 +2241,9 @@ fn run(cli: Cli) -> Result<()> {
             // floor must not be mistaken for a thin corpus. Counted by the same
             // helper every surface uses.
             for note in search::Exclusions::measure(&store, &opts)?.notes() {
+                println!("{note}");
+            }
+            if let Some(note) = search::window_note(query, &opts) {
                 println!("{note}");
             }
             // The remote path has no `lexical_morph` channel at all:

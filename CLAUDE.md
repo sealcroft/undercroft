@@ -1151,7 +1151,22 @@ Consequences that are binding, not advisory:
   only MCP+`/v1`, the trust-floor exclusion count only CLI+`/v1`), and
   `DEFAULT_LIMIT` is now **5 everywhere** (it was 5 on CLI/MCP and 10 on
   `/v1`, so "the same search" answered differently per transport —
-  unified DOWN, since every surface names its continuation);
+  unified DOWN, since every surface names its continuation). **A search can
+  take a DATE WINDOW since O108 (2026-09-06)**, three declarations parsed
+  once for all three surfaces: `when` narrows to drawers whose covered
+  `content_date` falls inside it (a positive narrowing like `room`, undated
+  drawers outside every window, a non-date REFUSED), `when_slack_days` widens
+  it, and `when_from_query` reads the question through the temporal scanner
+  and, where it resolves a day or period, tops the candidate pool up with the
+  drawers dated inside it — fenced by the same scope, trust clause and
+  `admits` as the pool — and adds a fixed 0.15 term for every candidate whose
+  `content_date` or resolved mention falls inside. Off by default and
+  byte-identical without a window; the reply says which window ran, from
+  the ONE resolver the store applied (`resolve_window`). Measured on LoCoMo
+  it covers the two ids it was filed on, reaches 23 never-covered questions
+  and loses one. The bench stamps each session's date on its chunks for it;
+  before that the harness ingested no dates at all, so no date channel could
+  have been measured there;
   i18n.rs: result-string localization for nine languages
   (`UNDERCROFT_LANG` → `LANG`, primary subtag; errors, help and
   machine-oriented output stay English);
@@ -1633,8 +1648,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (801 run,
-                                      # 4 #[ignore]d = 805 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (807 run,
+                                      # 4 #[ignore]d = 811 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1741,7 +1756,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # by nothing and two dead wrappers survived
                                       # from O20 and O25. Publishes no check count
                                       # deliberately
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (455 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (463 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (127 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (53 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (82 checks; weaviate

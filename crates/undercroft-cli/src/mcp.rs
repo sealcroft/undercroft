@@ -414,6 +414,7 @@ fn tool(name: &str, desc: &str, props: Value, required: &[&str]) -> Value {
 fn tool_definitions() -> Value {
     let s = |d: &str| json!({ "type": "string", "description": d });
     let i = |d: &str| json!({ "type": "integer", "description": d });
+    let b = |d: &str| json!({ "type": "boolean", "description": d });
     let n = |d: &str| json!({ "type": "number", "description": d });
     json!([
         // --- palace core ---
@@ -421,7 +422,7 @@ fn tool_definitions() -> Value {
             json!({ "content": s("verbatim text"), "wing": s("person/project partition"), "room": s("topic"), "kind": s("declared record kind: question|preference|decision|event|procedure|statement — a closed vocabulary, rejected if unknown; omit rather than guess"), "content_date": s("when the content happened, RFC 3339 or YYYY-MM-DD; anchors relative dates in the text"), "supersedes": s("id of the drawer this memory replaces — records a receipted update link; the old drawer is never deleted or hidden"), "agent": s("provenance claim: which agent wrote this (recorded + tamper-covered, never a trust boundary)"), "channel": s("provenance claim: origin class of the content, e.g. user|tool-output|scrape|agent"), "session": s("provenance claim: the session this was written in") }),
             &["content"]),
         tool("undercroft_search", "Hybrid semantic + lexical search over stored memories.",
-            json!({ "query": s("search query"), "wing": s("scope to wing"), "room": s("scope to room"), "kind": s("filter to a declared record kind: question|preference|decision|event|procedure|statement. Drawers with no declared kind are excluded while set, and the reply says how many"), "limit": i("max results"), "offset": i("rank to continue from — pass the offset a previous page's footer gave you to go deeper instead of re-asking the same question"), "ranked_at": s("RFC 3339 instant from a previous page's footer; repeat it so every page slices one identical ranking instead of one that drifts between calls"), "room_cap": i("soft cap on how many returned hits may come from any one room. A room is one session or ticket, and a flat top-k fills up with the most verbose one — cap it when the answer spans several. Soft: leftover slots refill in score order, so a single-room question loses nothing"), "as_of": s("reference date (RFC 3339 or YYYY-MM-DD) — the engine reports how long before it each memory happened, exactly, instead of leaving you to work it out"),
+            json!({ "query": s("search query"), "wing": s("scope to wing"), "room": s("scope to room"), "kind": s("filter to a declared record kind: question|preference|decision|event|procedure|statement. Drawers with no declared kind are excluded while set, and the reply says how many"), "limit": i("max results"), "offset": i("rank to continue from — pass the offset a previous page's footer gave you to go deeper instead of re-asking the same question"), "ranked_at": s("RFC 3339 instant from a previous page's footer; repeat it so every page slices one identical ranking instead of one that drifts between calls"), "room_cap": i("soft cap on how many returned hits may come from any one room. A room is one session or ticket, and a flat top-k fills up with the most verbose one — cap it when the answer spans several. Soft: leftover slots refill in score order, so a single-room question loses nothing"), "when": s("only drawers dated inside this window by their content_date: inclusive YYYY-MM-DD..YYYY-MM-DD, or one YYYY-MM-DD. An undated drawer is outside every window"), "when_slack_days": i("days added on each side of the window before it is applied"), "when_from_query": b("read a date out of the query itself (under `language`) and use it as the window: drawers dated inside it join the candidate pool and every candidate dated or mentioning a day inside it takes a date term. Off unless declared; a query naming no date applies nothing. The reply says which window ran"), "as_of": s("reference date (RFC 3339 or YYYY-MM-DD) — the engine reports how long before it each memory happened, exactly, instead of leaving you to work it out"),
                     // The morphology half of this description is generated from
                     // MorphLang::CODES: the handler mapped thirteen languages
                     // while this string named two, so an agent reading its own
@@ -583,6 +584,17 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                 .unwrap_or(crate::search::DEFAULT_LIMIT);
             // Rank to continue from — the previous page's footer names it.
             let offset = opt_u64(args, "offset").unwrap_or(0) as usize;
+            // ROADMAP O108: the date window, declared or read from the query,
+            // parsed by the one function every surface uses.
+            let when = opt_str(args, "when")
+                .map(undercroft_store::DateWindow::parse)
+                .transpose()
+                .map_err(|e| anyhow::anyhow!("when: {e}"))?;
+            let when_from_query = args
+                .get("when_from_query")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let when_slack_days = opt_u64(args, "when_slack_days").unwrap_or(0) as u32;
             // The instant the ranking is computed as of. Resolved here so the
             // footer can state the exact value the next page must repeat:
             // pages of one iteration slice one ranking, pinned to one clock.
@@ -617,6 +629,12 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
                 room_cap: opt_u64(args, "room_cap").map(|v| v as usize),
                 offset,
                 ranked_at: Some(ranked_at),
+                when,
+                when_from_query,
+                when_slack_days,
+                // The same read-time locale the drawers' mentions are read
+                // under, so the query and the content are scanned alike.
+                locale: crate::search::locale_from(args),
             };
             // ROADMAP O73: the page variant, so the footer below can state
             // what the engine knows instead of inferring it from the page
@@ -631,7 +649,8 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
             // leg reached the CLI and `/v1` and never this one, so an agent
             // setting a floor got a thin answer with no statement of what its
             // own floor had excluded.
-            let notes = crate::search::Exclusions::measure(store, &opts)?.notes();
+            let mut notes = crate::search::Exclusions::measure(store, &opts)?.notes();
+            notes.extend(crate::search::window_note(query, &opts));
             let notes = if notes.is_empty() {
                 String::new()
             } else {
@@ -1468,6 +1487,53 @@ mod tests {
             "week_start must be advertised"
         );
         assert!(schema.contains("room_cap"), "room_cap must be advertised");
+        // ROADMAP O108: the date window is declared, so an agent reading its
+        // own contract must be able to see all three of its knobs.
+        for key in ["\"when\"", "when_slack_days", "when_from_query"] {
+            assert!(schema.contains(key), "{key} must be advertised");
+        }
+        // ...and the handler honours them: a declared window narrows by
+        // `content_date`, a query-read window is applied AND said, and a
+        // window that cannot be a date is refused rather than ignored.
+        call_direct(
+            &mut s,
+            "undercroft_save",
+            json!({ "content": "Calvin: Yesterday I met the artists in Boston",
+                    "wing": "team", "room": "trip", "content_date": "2023-10-04" }),
+        );
+        call_direct(
+            &mut s,
+            "undercroft_save",
+            json!({ "content": "Calvin: the artists visited Lisbon",
+                    "wing": "team", "room": "trip", "content_date": "2023-08-01" }),
+        );
+        let declared = search(&mut s, json!({"query": "artists", "when": "2023-10-04"}));
+        assert!(
+            declared.contains("Boston") && !declared.contains("Lisbon"),
+            "{declared}"
+        );
+        assert!(
+            declared.contains("(date window 2023-10-04 declared)"),
+            "{declared}"
+        );
+        let read = search(
+            &mut s,
+            json!({"query": "Which city was Calvin at on October 3, 2023?", "when_from_query": true}),
+        );
+        assert!(
+            read.contains("(date window 2023-10-03 read from the query)"),
+            "{read}"
+        );
+        assert!(
+            read.find("Boston") < read.find("Lisbon"),
+            "the asked-for day ranks first:\n{read}"
+        );
+        let bad = call_tool(
+            &mut s,
+            "undercroft_search",
+            &json!({"query": "x", "when": "soon"}),
+        );
+        assert!(bad.is_err(), "a window that is not a date is refused");
 
         // `room_cap` is a SOFT cap, so it changes which rooms are represented
         // rather than how many hits come back. Two rooms, cap 1 ⇒ both rooms.

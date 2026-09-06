@@ -377,6 +377,12 @@ enum Command {
         /// the doctrine cites was one run at one cap value with no sweep.
         #[arg(long)]
         room_cap: Option<usize>,
+        /// ROADMAP O108: read a date out of each question and let drawers
+        /// dated inside it join the pool and take the date term. Off keeps
+        /// the shipped ranking byte-identical; on is the arm the O108 gate
+        /// measures, by id, through `LOCOMO_MISS`.
+        #[arg(long, default_value_t = false)]
+        when_from_query: bool,
     },
     /// Head-to-head vs external memory systems (competitive track C1.1):
     /// the LoCoMo protocol + scorer, driven through a system adapter —
@@ -2470,6 +2476,26 @@ fn select_within_budget(
     picked
 }
 
+/// A LoCoMo session's date as `YYYY-MM-DD`, read out of the sample's
+/// `session_N_date_time` ("1:56 pm on 8 May, 2023") by the engine's own
+/// English scanner rather than by a second date parser: the text after
+/// " on " with its comma dropped is the "7 May 2023" shape the scanner
+/// documents. `None` when the sample carries no such field or the scanner
+/// resolves nothing — never a guessed date (ROADMAP O108).
+fn locomo_session_date(conv: &Value, n: usize) -> Option<String> {
+    let raw = conv
+        .get(format!("session_{n}_date_time"))
+        .and_then(Value::as_str)?;
+    let day = raw.rsplit(" on ").next().unwrap_or(raw).replace(',', "");
+    undercroft_core::temporal::extract_time_mentions_in(
+        &day,
+        None,
+        undercroft_core::temporal::Locale::ENGLISH,
+    )
+    .into_iter()
+    .find_map(|m| m.resolved)
+}
+
 /// Smallest prefix of the ranked hits whose union covers **every** gold turn,
 /// or `None` if the whole candidate list never does.
 ///
@@ -2743,6 +2769,7 @@ fn locomo_eval(
     turn_units: bool,
     paging: bool,
     room_cap: Option<usize>,
+    when_from_query: bool,
 ) -> Result<(f32, u32, CategoryScores, PhaseTiming, GoldRecall)> {
     let mut recall_sum = 0f32;
     let mut evaluated = 0u32;
@@ -2779,6 +2806,14 @@ fn locomo_eval(
         let mut chunk_span: std::collections::HashMap<String, Vec<Span>> = Default::default();
         while let Some(dialogs) = conv.get(format!("session_{n}")).and_then(Value::as_array) {
             let room = format!("session_{n}");
+            // ROADMAP O108: the session's own date, stamped as every chunk's
+            // `content_date`. Without it "yesterday" in a turn resolves to
+            // nothing and no date window could reach the drawer — which is
+            // what this harness measured for O76, silently, until now. The
+            // drawer id does not carry the date, so the hash baseline is
+            // byte-identical with or without the stamp (pinned by re-running
+            // it: 248 misses either way).
+            let session_date = locomo_session_date(conv, n);
             let turns: Vec<(String, String)> = dialogs
                 .iter()
                 .filter_map(|d| {
@@ -2831,7 +2866,8 @@ fn locomo_eval(
             };
             for (ci, chunk) in pieces.into_iter().enumerate() {
                 let spans = locate_chunk(&body, &chunk, &mut ccur);
-                let d = Drawer::new("locomo", &room, chunk, None, ci as u32, "bench");
+                let d = Drawer::new("locomo", &room, chunk, None, ci as u32, "bench")
+                    .with_content_date(session_date.clone());
                 chunk_span.insert(d.id.clone(), spans);
                 store.upsert(&d)?;
             }
@@ -2878,6 +2914,9 @@ fn locomo_eval(
                 room: None,
                 limit: if pool > 0 { pool } else { k * 6 },
                 room_cap,
+                // ROADMAP O108: the query-read date window, under the default
+                // (English) locale the drawers' own dates are stamped in.
+                when_from_query,
                 ..Default::default()
             };
             let search_started = Instant::now();
@@ -4311,6 +4350,7 @@ fn main() -> Result<()> {
             pool,
             paging_contract,
             room_cap,
+            when_from_query,
         } => {
             let raw = std::fs::read_to_string(&dataset)
                 .with_context(|| format!("reading {}", dataset.display()))?;
@@ -4329,6 +4369,7 @@ fn main() -> Result<()> {
                 unit == "turn",
                 paging_contract,
                 room_cap,
+                when_from_query,
             )?;
             // RAW line carries the exact numerator/denominator so sharded runs
             // (convos [start,end)) sum to the full R@k without rounding drift.
@@ -4713,7 +4754,7 @@ mod tests {
             // fixture too — asserted below, so the contract check itself
             // has coverage rather than existing only when an operator
             // passes the flag.
-            locomo_eval(&[sample], 5, "local", 800, 8000, 0, false, true, None).unwrap();
+            locomo_eval(&[sample], 5, "local", 800, 8000, 0, false, true, None, false).unwrap();
         assert_eq!(n, 1, "evidence-free QA must be skipped");
         assert_eq!(recall, 1.0, "evidence session must be retrieved");
         assert_eq!(per_cat.get("1").unwrap().1, 1);

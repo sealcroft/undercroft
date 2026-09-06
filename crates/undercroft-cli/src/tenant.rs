@@ -870,6 +870,24 @@ impl Tenancy {
                 .get("room_cap")
                 .and_then(Value::as_u64)
                 .map(|v| v as usize),
+            // ROADMAP O108: the date window, declared or read from the query,
+            // parsed by the one function every surface uses; a bound that is
+            // not a date is the caller's error, said as a 400.
+            when: body
+                .get("when")
+                .and_then(Value::as_str)
+                .map(undercroft_store::DateWindow::parse)
+                .transpose()
+                .map_err(|e| RestError::new(400, format!("when: {e}")))?,
+            when_from_query: body
+                .get("when_from_query")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            when_slack_days: body
+                .get("when_slack_days")
+                .and_then(Value::as_u64)
+                .unwrap_or(0) as u32,
+            locale: locale_from(&body),
         };
         let vector = parse_vector(&body, "vector")?;
         // Reference date for elapsed-time computation. The engine holds the
@@ -1010,6 +1028,21 @@ impl Tenancy {
             // was cut. Additive: every field above is unchanged.
             "truncated": page_truncated,
         });
+        // ROADMAP O108: the date window that ran, from the one resolver the
+        // search itself used — read bounds, applied bounds and where it came
+        // from. Additive, and present only while a window is in force, so
+        // a search declaring none answers exactly as before.
+        if let Some(w) = undercroft_store::resolve_window(&query, &opts) {
+            resp["window"] = json!({
+                "read": [w.read_start, w.read_end],
+                "applied": [w.start, w.end],
+                "source": match w.source {
+                    undercroft_store::WindowSource::Declared => "declared",
+                    undercroft_store::WindowSource::Query => "query",
+                },
+                "slack_days": opts.when_slack_days,
+            });
+        }
         // Present only when the request declared a NARROWING scope. A bare
         // exclusion is the complement of a small set, so reporting its
         // cardinality would be reporting the corpus as a scope.

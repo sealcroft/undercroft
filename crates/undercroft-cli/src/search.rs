@@ -205,6 +205,34 @@ impl Exclusions {
     }
 }
 
+/// The date window a search applied, said once for every surface (ROADMAP
+/// O108) — from the SAME resolver the store ran, so the caller is told the
+/// window that actually narrowed or topped up the pool, never a re-derivation.
+/// A declared window is stated as declared; one read from the query names
+/// the reading, because a scanner's reading of "last week" is evidence the
+/// caller should be able to check. `None` while no window is in force.
+pub fn window_note(query: &str, opts: &SearchOptions) -> Option<String> {
+    let w = undercroft_store::resolve_window(query, opts)?;
+    let source = match w.source {
+        undercroft_store::WindowSource::Declared => "declared",
+        undercroft_store::WindowSource::Query => "read from the query",
+    };
+    let read = if w.read_start == w.read_end {
+        w.read_start.clone()
+    } else {
+        format!("{}..{}", w.read_start, w.read_end)
+    };
+    let applied = if opts.when_slack_days > 0 {
+        format!(
+            ", applied as {}..{} with {} day(s) of slack",
+            w.start, w.end, opts.when_slack_days
+        )
+    } else {
+        String::new()
+    };
+    Some(format!("(date window {read} {source}{applied})"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

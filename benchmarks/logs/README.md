@@ -28,6 +28,8 @@ it will be scrubbed with the history noted.
 | `fde_pq_sweep.log` | bounded-RAM FDE tier sweeps (v0.24.0) |
 | `o76_locomo10_hash_pool50.log` | LoCoMo residual BY ID under the hash embedder, pool 50: 248 `LOCOMO_MISS` lines (ROADMAP O76) |
 | `o76_locomo10_bge-m3_pool50.log` | the same run under served bge-m3: 188 misses, 4 of the filed fifteen reached |
+| `o108_locomo10_hash_dated_pool50.log` | the hash baseline with every chunk stamped with its session's date: 248 misses, the same ids (the stamp is free) |
+| `o108_locomo10_hash_when-from-query_pool50.log` | the O108 arm, `--when-from-query`: 226 misses, both filed ids covered, temporal 22 → 18 (ROADMAP O108) |
 
 Head-to-head shard logs (e.g., additional LoCoMo conversations for a
 competitor row) are appended here as their runs complete; `VS_RAW`
