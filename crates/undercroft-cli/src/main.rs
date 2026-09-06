@@ -1693,6 +1693,10 @@ fn integrity_verdict(e: &anyhow::Error) -> bool {
                     // `ReadOnlyUnmigrated` is deliberately NOT here: the
                     // vault is intact, the posture is simply wrong for it.
                     | S::DatabaseMissing { .. }
+                    // Two databases under one manifest (ROADMAP O7): the
+                    // same self-contradiction, one file too many rather
+                    // than one too few.
+                    | S::DatabaseAmbiguous { .. }
                     | S::Vault(V::ManifestTampered | V::CorruptManifest(_))
             );
         }
@@ -4636,7 +4640,13 @@ mod tests {
             // The member the old list did not have.
             anyhow::Error::from(S::DatabaseMissing {
                 id: "acme".into(),
-                path: "/vaults/acme/palace.db".into(),
+                path: "/vaults/acme/vault.db".into(),
+            }),
+            // Its O7 sibling: one database too many rather than one too few.
+            anyhow::Error::from(S::DatabaseAmbiguous {
+                id: "acme".into(),
+                current: "/vaults/acme/vault.db".into(),
+                legacy: "/vaults/acme/palace.db".into(),
             }),
         ] {
             assert!(integrity_verdict(&e), "must be a verdict: {e:?}");

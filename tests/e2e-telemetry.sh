@@ -319,7 +319,7 @@ echo "== ROADMAP O62: a real tamper reaches a live subscriber, localized =="
 # a fixed-length substitution can reach the covered bytes. That is the same
 # primitive `tests/e2e-orchestrator.sh` uses, and same-length matters — it
 # keeps the SQLite file structurally valid so ONLY the record HMAC can object.
-TDB="$UNDERCROFT_HOME/vaults/tampered/palace.db"
+TDB="$UNDERCROFT_HOME/vaults/tampered/vault.db"
 UNDERCROFT_MCP_HTTP_TOKEN="$TOKEN" \
   "$BIN" serve-http --host 127.0.0.1 --port 8799 >/tmp/ttamper.log 2>&1 &
 S5=$!
@@ -334,8 +334,8 @@ kill "$S5" 2>/dev/null
 wait "$S5" 2>/dev/null
 
 # WAL, and this is the step the first version of this arm was missing. SQLite
-# runs in WAL mode, so a row the server wrote lives in `palace.db-wal` and is
-# NOT in `palace.db` — measured on a probe: the main file sat at 4 KB with no
+# runs in WAL mode, so a row the server wrote lives in `vault.db-wal` and is
+# NOT in `vault.db` — measured on a probe: the main file sat at 4 KB with no
 # trace of the drawer while the WAL held it, so the substitution below matched
 # nothing and the premise check below correctly refused to call that a pass.
 #

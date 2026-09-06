@@ -3849,7 +3849,7 @@ mod tests {
     fn a_pre_blind_index_graph_is_migrated_and_stops_leaking() {
         let dir = TempDir::new().unwrap();
         let mgr = VaultManager::open(dir.path(), None).unwrap();
-        let db = dir.path().join("vaults/kg-test/palace.db");
+        let db = dir.path().join("vaults/kg-test/vault.db");
         {
             // Write two facts, then put the rows back into their pre-A10
             // shape: clear subject/predicate, clear entity name, ids that
@@ -4184,7 +4184,7 @@ mod tests {
         s.kg_add("alice", "reports_to", "bob", None, None, 1.0, None)
             .unwrap();
         drop(s);
-        let db = std::fs::read(dir.path().join("vaults/kg-test/palace.db")).unwrap();
+        let db = std::fs::read(dir.path().join("vaults/kg-test/vault.db")).unwrap();
 
         for w in words.iter().chain(["bob", "reports_to"].iter()) {
             assert!(
@@ -4227,7 +4227,7 @@ mod tests {
         s2.kg_add(words[0], words[1], words[2], None, None, 1.0, None)
             .unwrap();
         drop(s2);
-        let db2 = std::fs::read(dir2.path().join("vaults/kg-test/palace.db")).unwrap();
+        let db2 = std::fs::read(dir2.path().join("vaults/kg-test/vault.db")).unwrap();
         assert!(
             db2.windows(5).any(|w| w == b"alice"),
             "premise: an hmac-only vault keeps the subject readable"
@@ -4256,7 +4256,7 @@ mod tests {
     fn a_tamper_failing_row_leaves_the_migration_incomplete_and_says_so() {
         let dir = TempDir::new().unwrap();
         let mgr = VaultManager::open(dir.path(), None).unwrap();
-        let db = dir.path().join("vaults/kg-test/palace.db");
+        let db = dir.path().join("vaults/kg-test/vault.db");
         {
             let mut s =
                 PalaceStore::open(mgr.create("kg-test", SecurityLevel::Sealed).unwrap()).unwrap();
@@ -4453,7 +4453,7 @@ mod tests {
             .unwrap();
         assert!(s.verify().unwrap().ok());
         drop(s);
-        let conn = rusqlite::Connection::open(dir.path().join("vaults/kg-test/palace.db")).unwrap();
+        let conn = rusqlite::Connection::open(dir.path().join("vaults/kg-test/vault.db")).unwrap();
         conn.execute("UPDATE kg_triples SET confidence = 0.1", [])
             .unwrap();
         drop(conn);
@@ -4621,7 +4621,7 @@ mod tests {
         drop(s);
 
         // Offline attacker rewrites the citation binding.
-        let db = rusqlite::Connection::open(dir.path().join("vaults/kg-test/palace.db")).unwrap();
+        let db = rusqlite::Connection::open(dir.path().join("vaults/kg-test/vault.db")).unwrap();
         db.execute(
             "UPDATE kg_triples SET receipt_tag = X'0011' WHERE receipt_tag IS NOT NULL",
             [],
@@ -4678,7 +4678,7 @@ mod tests {
         // TAMPERING: relabel the surviving drawer's audit row onto an id no
         // drawer ever had. No live row, and no tombstone, because nothing
         // destroyed it.
-        let db = rusqlite::Connection::open(dir.path().join("vaults/kg-test/palace.db")).unwrap();
+        let db = rusqlite::Connection::open(dir.path().join("vaults/kg-test/vault.db")).unwrap();
         let moved = db
             .execute(
                 "UPDATE audit SET record_id = 'ffffffffffffffffffffffffffffffff' \
@@ -4752,7 +4752,7 @@ mod tests {
         // Corrupt the DRAWER's sealed content — not the receipt. Any path
         // that fetches the cited drawer now fails its record HMAC; a path
         // that does not fetch it is unaffected. That is the whole test.
-        let db = rusqlite::Connection::open(dir.path().join("vaults/kg-test/palace.db")).unwrap();
+        let db = rusqlite::Connection::open(dir.path().join("vaults/kg-test/vault.db")).unwrap();
         let n = db
             .execute("UPDATE drawers SET content = X'00112233'", [])
             .unwrap();
@@ -4844,7 +4844,7 @@ mod tests {
         drop(s);
 
         // Now the real forgery, and the cheap door must catch it.
-        let db = rusqlite::Connection::open(dir.path().join("vaults/kg-test/palace.db")).unwrap();
+        let db = rusqlite::Connection::open(dir.path().join("vaults/kg-test/vault.db")).unwrap();
         db.execute(
             "UPDATE kg_triples SET receipt_tag = X'0011' WHERE receipt_tag IS NOT NULL",
             [],
@@ -4909,7 +4909,7 @@ mod tests {
 
         // Offline attacker rewrites the citation binding — the same forgery
         // as `receipt_tamper_is_detected`, judged by the whole-vault verdict.
-        let db = rusqlite::Connection::open(dir.path().join("vaults/kg-test/palace.db")).unwrap();
+        let db = rusqlite::Connection::open(dir.path().join("vaults/kg-test/vault.db")).unwrap();
         db.execute(
             "UPDATE kg_triples SET receipt_tag = X'0011' WHERE receipt_tag IS NOT NULL",
             [],
@@ -6508,7 +6508,7 @@ mod tests {
     fn a_pre_u12_vault_rekeys_its_content_fingerprints_and_stops_leaking() {
         let dir = TempDir::new().unwrap();
         let mgr = VaultManager::open(dir.path(), None).unwrap();
-        let db = dir.path().join("vaults/u12/palace.db");
+        let db = dir.path().join("vaults/u12/vault.db");
         let (cited_id, content, fact) = {
             let mut s =
                 PalaceStore::open(mgr.create("u12", SecurityLevel::Sealed).unwrap()).unwrap();
@@ -6541,7 +6541,7 @@ mod tests {
 
         // The next writable open migrates it. **Every handle is dropped
         // before the file is read**: in WAL mode the `VACUUM` lands in the
-        // `-wal` and reaches `palace.db` at the checkpoint an unforced close
+        // `-wal` and reaches `vault.db` at the checkpoint an unforced close
         // performs, so reading the file with a store still open measures the
         // pre-migration pages and fails for a reason that is not the code's.
         {
@@ -6704,7 +6704,7 @@ mod tests {
              retries instead of declaring a half-migrated vault done"
         );
         drop(s);
-        let after = std::fs::read(dir.path().join("vaults/u12t/palace.db")).unwrap();
+        let after = std::fs::read(dir.path().join("vaults/u12t/vault.db")).unwrap();
         assert!(
             after.windows(32).any(|w| w == super::content_fp(&content)),
             "COST, pinned: refusing to re-tag a tampered binding leaves its unkeyed digest \

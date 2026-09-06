@@ -103,8 +103,8 @@ fn vault_isolation_between_namespaces() {
         .success()
         .stdout(predicate::str::contains("No memories matched"));
     // Separate DB files on disk.
-    assert!(home.path().join("vaults/work/palace.db").exists());
-    assert!(home.path().join("vaults/default/palace.db").exists());
+    assert!(home.path().join("vaults/work/vault.db").exists());
+    assert!(home.path().join("vaults/default/vault.db").exists());
 }
 
 #[test]
@@ -366,7 +366,7 @@ fn verify_passes_clean_and_fails_after_tampering() {
         .stdout(predicate::str::contains("VERIFY OK"));
 
     // Forge the record directly in SQLite, bypassing the vault layer.
-    let db = home.path().join("vaults/default/palace.db");
+    let db = home.path().join("vaults/default/vault.db");
     let conn = rusqlite_open(&db);
     conn.execute("UPDATE drawers SET content = X'666f72676564'", [])
         .unwrap(); // 'forged'
@@ -388,7 +388,7 @@ fn sealed_vault_leaves_no_plaintext_in_db() {
         .args(["remember", "zebra-passport-9331 is the recovery phrase"])
         .assert()
         .success();
-    let db = std::fs::read(home.path().join("vaults/default/palace.db")).unwrap();
+    let db = std::fs::read(home.path().join("vaults/default/vault.db")).unwrap();
     let needle = b"zebra-passport-9331";
     assert!(!db.windows(needle.len()).any(|w| w == needle));
     // But search still finds it (decrypt-scan).
@@ -1004,7 +1004,7 @@ fn a_forged_fact_receipt_fails_the_cli_with_the_integrity_exit_code() {
     cmd(&dest).args(["verify"]).assert().success();
 
     // The forgery: rewrite the keyed citation binding offline.
-    let db = rusqlite::Connection::open(dest.path().join("vaults/default/palace.db")).unwrap();
+    let db = rusqlite::Connection::open(dest.path().join("vaults/default/vault.db")).unwrap();
     let moved = db
         .execute(
             "UPDATE kg_triples SET receipt_tag = X'0011' WHERE receipt_tag IS NOT NULL",

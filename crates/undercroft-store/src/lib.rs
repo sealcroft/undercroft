@@ -368,15 +368,34 @@ pub struct VaultHold(
 /// when someone genuinely holds the vault, which is exactly when a
 /// destructive restore must not proceed.
 pub fn hold_vault_exclusively(dir: &std::path::Path) -> Result<VaultHold, StoreError> {
-    let db = dir.join("palace.db");
-    if !db.exists() {
-        // Opening would CREATE it, which for a directory about to be replaced
-        // is noise; and a vault with no database has no holder to find.
-        return Err(StoreError::Invalid(format!(
-            "vault directory {} has no palace.db",
-            dir.display()
-        )));
-    }
+    // The file the directory HOLDS, under either name (ROADMAP O7): a bare
+    // directory has no `Vault` to ask, so the same rule is applied here.
+    let current = dir.join(undercroft_vault::DB_FILE);
+    let legacy = dir.join(undercroft_vault::LEGACY_DB_FILE);
+    let db = match (current.exists(), legacy.exists()) {
+        (true, true) => {
+            return Err(StoreError::Invalid(format!(
+                "vault directory {} holds two databases ({} and {}); move the stray one aside \
+                 before holding it",
+                dir.display(),
+                undercroft_vault::DB_FILE,
+                undercroft_vault::LEGACY_DB_FILE
+            )));
+        }
+        (true, false) => current,
+        (false, true) => legacy,
+        (false, false) => {
+            // Opening would CREATE it, which for a directory about to be
+            // replaced is noise; and a vault with no database has no holder
+            // to find.
+            return Err(StoreError::Invalid(format!(
+                "vault directory {} has no database ({} or the pre-1.5.0 {})",
+                dir.display(),
+                undercroft_vault::DB_FILE,
+                undercroft_vault::LEGACY_DB_FILE
+            )));
+        }
+    };
     let conn = rusqlite::Connection::open(&db)?;
     // Fail fast. An operator waiting on a silent command is worse off than
     // one told immediately what holds the vault.
@@ -1517,7 +1536,7 @@ pub enum StoreError {
     /// A read-only open found the manifest but no database (ROADMAP A33).
     ///
     /// `VaultManager::exists` answers about `vault.json`; the database is
-    /// `palace.db`, a different file. A writable open CREATES it —
+    /// `vault.db`, a different file. A writable open CREATES it —
     /// `Connection::open` carries `SQLITE_OPEN_CREATE` — so a half-copied
     /// backup, an interrupted transfer or a snapshot taken mid-write used to
     /// open "successfully" against a fabricated empty vault, and `search`,
@@ -1531,6 +1550,23 @@ pub enum StoreError {
          writable process if you intended to start an empty one."
     )]
     DatabaseMissing { id: String, path: String },
+    /// A vault directory holding TWO databases — `vault.db` and the
+    /// pre-1.5.0 `palace.db` — under one manifest (ROADMAP O7). Whichever
+    /// the manifest's chain head anchors, the other is a stray copy, and an
+    /// open that picked one would serve or overwrite the wrong vault
+    /// silently. Refused on every posture; an integrity-class verdict like
+    /// its neighbour above, because the stored evidence contradicts itself.
+    #[error(
+        "vault {id:?} holds two databases: {current} and the pre-1.5.0 {legacy}. One of them \
+         is a stray copy and this open will not guess which. Move the one that is not this \
+         vault's database out of the directory (`undercroft verify` against each, with the \
+         other moved aside, says which the manifest anchors), then reopen."
+    )]
+    DatabaseAmbiguous {
+        id: String,
+        current: String,
+        legacy: String,
+    },
     /// A read-only open met a schema older than this build expects.
     ///
     /// Migrating is a write (`CREATE TABLE`, plus every `ALTER TABLE ... ADD
@@ -3206,7 +3242,85 @@ impl PalaceStore {
         Ok(vault)
     }
 
+    /// ROADMAP O7: bring a pre-1.5.0 vault's database under its current
+    /// name, `vault.db`, on a WRITABLE open — and only then.
+    ///
+    /// The rename is not one `rename(2)`: a WAL database is three files, and
+    /// SQLite finds a database's `-wal` and `-shm` by the database's own
+    /// name, so `vault.db` beside a hot `palace.db-wal` silently loses every
+    /// committed frame that was not yet checkpointed. The order is therefore
+    /// checkpoint (TRUNCATE, so the `-wal` is empty afterwards), rename the
+    /// database, then remove the emptied sidecars — and a checkpoint that
+    /// could not complete (`busy`: another process holds the file) leaves
+    /// the name alone, so the open proceeds on the legacy path and the next
+    /// writable open tries again. A crash between the checkpoint and the
+    /// rename loses nothing; one after the rename leaves empty sidecars that
+    /// the next writable open sweeps.
+    ///
+    /// Two database files under one manifest are refused rather than chosen
+    /// between, on this posture and on the read-only one.
+    fn migrate_db_filename(vault: &Vault) -> Result<(), StoreError> {
+        use undercroft_vault::DbLayout;
+        let io = |e: std::io::Error| StoreError::Vault(VaultError::Io(e));
+        let sidecars = |db: &std::path::Path| -> Vec<std::path::PathBuf> {
+            let base = db.to_string_lossy().into_owned();
+            vec![
+                std::path::PathBuf::from(format!("{base}-wal")),
+                std::path::PathBuf::from(format!("{base}-shm")),
+            ]
+        };
+        match vault.db_layout() {
+            DbLayout::Legacy => {
+                let from = vault.legacy_db_path();
+                let to = vault.current_db_path();
+                let busy: i64 = {
+                    let conn = Connection::open(&from)?;
+                    conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))?
+                };
+                if busy != 0 {
+                    undercroft_obs::diag_warn!(
+                        "vault {:?}: {} could not be checkpointed (another process holds it), so \
+                         it keeps its pre-1.5.0 name for now; the next writable open will retry",
+                        vault.id(),
+                        from.display()
+                    );
+                    return Ok(());
+                }
+                std::fs::rename(&from, &to).map_err(io)?;
+                for stray in sidecars(&from) {
+                    if stray.exists() {
+                        std::fs::remove_file(&stray).map_err(io)?;
+                    }
+                }
+                undercroft_obs::diag_warn!(
+                    "vault {:?}: renamed {} to {} (ROADMAP O7 — the per-vault database is \
+                     vault.db since 1.5.0; scripts naming palace.db must follow)",
+                    vault.id(),
+                    from.display(),
+                    to.display()
+                );
+                Ok(())
+            }
+            DbLayout::Current => {
+                // Sidecars orphaned by a crash after the rename above.
+                for stray in sidecars(&vault.legacy_db_path()) {
+                    if stray.exists() {
+                        std::fs::remove_file(&stray).map_err(io)?;
+                    }
+                }
+                Ok(())
+            }
+            DbLayout::Ambiguous => Err(StoreError::DatabaseAmbiguous {
+                id: vault.id().to_string(),
+                current: vault.current_db_path().display().to_string(),
+                legacy: vault.legacy_db_path().display().to_string(),
+            }),
+            DbLayout::Absent => Ok(()),
+        }
+    }
+
     fn open_inner(vault: Vault, embedder: Box<dyn Embedder + Send>) -> Result<Self, StoreError> {
+        Self::migrate_db_filename(&vault)?;
         let conn = Connection::open(vault.db_path())?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         // Pinned explicitly rather than left to the compile-time default: the
@@ -3404,6 +3518,15 @@ impl PalaceStore {
         vault: Vault,
         embedder: Box<dyn Embedder + Send>,
     ) -> Result<Self, StoreError> {
+        // ROADMAP O7: two databases under one manifest are refused on this
+        // posture too — a read-only open that guessed would serve the stray.
+        if matches!(vault.db_layout(), undercroft_vault::DbLayout::Ambiguous) {
+            return Err(StoreError::DatabaseAmbiguous {
+                id: vault.id().to_string(),
+                current: vault.current_db_path().display().to_string(),
+                legacy: vault.legacy_db_path().display().to_string(),
+            });
+        }
         // Ask before opening: `SQLITE_OPEN_READ_ONLY` would refuse an absent
         // file too, but with a bare "unable to open database file" that
         // names neither the file nor why a read-only role will not make one.
@@ -4230,7 +4353,7 @@ impl PalaceStore {
     /// as [`StoreError::DatabaseMissing`]'s own doc says. O81 then called
     /// this from `open_store_as` BEFORE the posture dispatch, so it ran on
     /// `Posture::ReadOnly` too: `undercroft --read-only` FABRICATED a
-    /// zero-length `palace.db`, `vault.database_exists()` became true, and
+    /// zero-length `vault.db`, `vault.database_exists()` became true, and
     /// A33's guard in [`Self::open_read_only`] could no longer fire. A
     /// missing database stopped being an integrity verdict (409 +
     /// `class:"integrity"`, exit 2) and became an ordinary unmigrated-schema
@@ -9665,7 +9788,7 @@ mod tests {
         let (dir, store) = store(SecurityLevel::HmacOnly);
         let vault_dir = dir.path().join("vaults/test");
         assert!(
-            vault_dir.join("palace.db").exists(),
+            vault_dir.join("vault.db").exists(),
             "premise: the vault has a database to hold"
         );
 
@@ -9713,7 +9836,7 @@ mod tests {
         std::fs::create_dir_all(&empty).unwrap();
         assert!(hold_vault_exclusively(&empty).is_err());
         assert!(
-            !empty.join("palace.db").exists(),
+            !empty.join("vault.db").exists(),
             "the probe must not have created the database it went looking for"
         );
     }
@@ -11676,7 +11799,7 @@ mod tests {
         )
         .unwrap();
         drop(s);
-        let db = std::fs::read(dir.path().join("vaults/test/palace.db")).unwrap();
+        let db = std::fs::read(dir.path().join("vaults/test/vault.db")).unwrap();
         assert!(
             !db.windows(9).any(|w| w == b"top-secre"),
             "external sealed vault leaked plaintext content"
@@ -11777,7 +11900,7 @@ mod tests {
         // manifest anchor still points at a head this database never
         // produces. Internally the rolled-back db is self-consistent — only
         // the out-of-database anchor exposes it.
-        let db = rusqlite::Connection::open(dir.path().join("vaults/test/palace.db")).unwrap();
+        let db = rusqlite::Connection::open(dir.path().join("vaults/test/vault.db")).unwrap();
         db.execute(
             "DELETE FROM audit WHERE seq = (SELECT MAX(seq) FROM audit)",
             [],
@@ -11875,7 +11998,7 @@ mod tests {
         let secret = "the launch code is very-secret-phrase-42";
         s.upsert(&drawer("w", "r", secret, 0)).unwrap();
         drop(s);
-        let db = std::fs::read(dir.path().join("vaults/test/palace.db")).unwrap();
+        let db = std::fs::read(dir.path().join("vaults/test/vault.db")).unwrap();
         let needle = b"very-secret-phrase-42";
         assert!(
             !db.windows(needle.len()).any(|w| w == needle),
@@ -11898,7 +12021,7 @@ mod tests {
         s.upsert(&drawer("w", "r", secret, 0).with_content_date(Some("2023-05-08".into())))
             .unwrap();
         drop(s);
-        let db = std::fs::read(dir.path().join("vaults/test/palace.db")).unwrap();
+        let db = std::fs::read(dir.path().join("vaults/test/vault.db")).unwrap();
         let leaked: Vec<&str> = ["Zerlinda", "zerlinda", "three weeks ago", "passphrase"]
             .into_iter()
             .filter(|n| db.windows(n.len()).any(|w| w == n.as_bytes()))
@@ -12003,7 +12126,7 @@ mod tests {
         )
         .unwrap();
         drop(s);
-        let db = std::fs::read(dir.path().join("vaults/test/palace.db")).unwrap();
+        let db = std::fs::read(dir.path().join("vaults/test/vault.db")).unwrap();
         let has = |n: &str| db.windows(n.len()).any(|w| w == n.as_bytes());
         let has_bytes = |n: &[u8]| db.windows(n.len()).any(|w| w == n);
 
@@ -14007,8 +14130,8 @@ mod tests {
         assert!(s.verify().unwrap().ok(), "chain green with read records");
         // The query text reaches no disk byte: the record holds a keyed
         // fingerprint. Scan the db AND its WAL — recent writes live there.
-        let mut bytes = std::fs::read(dir.path().join("vaults/test/palace.db")).unwrap();
-        if let Ok(wal) = std::fs::read(dir.path().join("vaults/test/palace.db-wal")) {
+        let mut bytes = std::fs::read(dir.path().join("vaults/test/vault.db")).unwrap();
+        if let Ok(wal) = std::fs::read(dir.path().join("vaults/test/vault.db-wal")) {
             bytes.extend_from_slice(&wal);
         }
         let needle = b"zq1x7probe";
@@ -15375,7 +15498,7 @@ mod tests {
     #[test]
     fn a_read_only_search_with_the_prefilter_on_writes_nothing() {
         let dir = TempDir::new().unwrap();
-        let db = dir.path().join("vaults/test/palace.db");
+        let db = dir.path().join("vaults/test/vault.db");
         let query = "why did we switch to graphql";
         {
             let mgr = VaultManager::open(dir.path(), None).unwrap();
@@ -17527,7 +17650,7 @@ mod tests {
         s.upsert(&drawer("w", "r", "findable plaintext content", 0))
             .unwrap();
         drop(s);
-        let db = std::fs::read(dir.path().join("vaults/test/palace.db")).unwrap();
+        let db = std::fs::read(dir.path().join("vaults/test/vault.db")).unwrap();
         assert!(db.windows(8).any(|w| w == b"findable"));
     }
 
@@ -17600,7 +17723,7 @@ mod tests {
         s.upsert(&dr).unwrap();
         drop(s);
         // Tamper with the row directly, bypassing the store.
-        let conn = Connection::open(dir.path().join("vaults/test/palace.db")).unwrap();
+        let conn = Connection::open(dir.path().join("vaults/test/vault.db")).unwrap();
         conn.execute(
             "UPDATE drawers SET content = ?1 WHERE id = ?2",
             params![b"forged memory".as_slice(), dr.id],
@@ -17626,7 +17749,7 @@ mod tests {
         s.upsert(&drawer("w", "r", "two", 1)).unwrap();
         drop(s);
         // Delete an audit row (hide a write).
-        let conn = Connection::open(dir.path().join("vaults/test/palace.db")).unwrap();
+        let conn = Connection::open(dir.path().join("vaults/test/vault.db")).unwrap();
         conn.execute("DELETE FROM audit WHERE seq = 1", []).unwrap();
         drop(conn);
         let mgr = VaultManager::open(dir.path(), None).unwrap();
@@ -18367,7 +18490,7 @@ mod tests {
         // Simulate a vault predating the feature (or a dropped index). The
         // external-content triggers an older build installed are gone now, so
         // dropping the table is the whole simulation.
-        let conn = Connection::open(dir.path().join("vaults/test/palace.db")).unwrap();
+        let conn = Connection::open(dir.path().join("vaults/test/vault.db")).unwrap();
         conn.execute_batch("DROP TABLE drawers_fts;").unwrap();
         drop(conn);
         let mgr = VaultManager::open(dir.path(), None).unwrap();
@@ -18815,10 +18938,10 @@ mod tests {
     ///   in `connect_read_only` exists for when it is not.
     /// * `-wal` **only while it is empty**. Zero length is the same
     ///   scaffolding; the moment it carries a frame it is a write that has
-    ///   not reached `palace.db` yet, and dropping it wholesale is precisely
+    ///   not reached `vault.db` yet, and dropping it wholesale is precisely
     ///   how this test would miss the writes it exists to catch.
     ///
-    /// Everything else — `palace.db`, `vault.json`, `vault.json.next`,
+    /// Everything else — `vault.db`, `vault.json`, `vault.json.next`,
     /// anything a future tier adds — is compared byte for byte.
     fn vault_bytes(dir: &std::path::Path) -> std::collections::BTreeMap<String, Vec<u8>> {
         let mut out = std::collections::BTreeMap::new();
@@ -18854,6 +18977,145 @@ mod tests {
                 .unwrap(),
             Box::new(HashEmbedder),
         )
+    }
+
+    /// A populated vault whose database has been put back under its
+    /// pre-1.5.0 name, exactly as an upgrade meets one. Returns the manager
+    /// and the vault directory; the store is dropped (checkpointed and
+    /// closed) before the rename.
+    fn legacy_named_vault(rows: u32) -> (TempDir, VaultManager, std::path::PathBuf) {
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
+        let vdir = vault.current_db_path().parent().unwrap().to_path_buf();
+        {
+            let mut s = PalaceStore::open(vault).unwrap();
+            for i in 0..rows {
+                s.upsert(&drawer(
+                    "w",
+                    "r",
+                    &format!("heron sighting {i} by the weir"),
+                    i,
+                ))
+                .unwrap();
+            }
+        }
+        std::fs::rename(vdir.join("vault.db"), vdir.join("palace.db")).unwrap();
+        assert!(!vdir.join("vault.db").exists() && vdir.join("palace.db").exists());
+        (dir, mgr, vdir)
+    }
+
+    /// ROADMAP O7's gate: a vault created before the rename opens with no
+    /// integrity verdict, its rows are there, `verify` stays green — and a
+    /// WRITABLE open is what moves the file to `vault.db`.
+    #[test]
+    fn a_legacy_named_vault_is_renamed_on_a_writable_open_and_verifies() {
+        let (_d, mgr, vdir) = legacy_named_vault(3);
+        let s =
+            PalaceStore::open(mgr.unlock("test").unwrap()).expect("a legacy name is not a verdict");
+        assert_eq!(s.count().unwrap(), 3, "every row came across the rename");
+        assert!(
+            vdir.join("vault.db").exists(),
+            "the writable open renamed the database"
+        );
+        assert!(
+            !vdir.join("palace.db").exists(),
+            "and left no legacy file behind"
+        );
+        assert!(!vdir.join("palace.db-wal").exists() && !vdir.join("palace.db-shm").exists());
+        assert!(
+            s.verify().unwrap().ok(),
+            "verify stays green across the rename"
+        );
+        assert!(s.stats().unwrap().unhealed.is_empty());
+    }
+
+    /// The same vault under a READ-ONLY open: served from the file it has,
+    /// nothing on disk touched, the pending rename reported on `unhealed`,
+    /// and `verify` green there too.
+    #[test]
+    fn a_read_only_open_serves_a_legacy_named_vault_and_reports_it() {
+        let (_d, mgr, vdir) = legacy_named_vault(3);
+        let s = ro(&mgr, "test").expect("a legacy name is not a verdict on a read-only open");
+        assert_eq!(s.count().unwrap(), 3);
+        assert!(
+            vdir.join("palace.db").exists() && !vdir.join("vault.db").exists(),
+            "read-only renames nothing"
+        );
+        let notes = s.stats().unwrap().unhealed;
+        assert!(
+            notes
+                .iter()
+                .any(|n| n.contains("palace.db") && n.contains("vault.db")),
+            "the read-only open must say the rename is pending: {notes:?}"
+        );
+        assert!(s.verify().unwrap().ok());
+    }
+
+    /// The rename must not lose a HOT WAL. A writer that never closed
+    /// (leaked here, as a crash leaves it) has its committed rows only in
+    /// `palace.db-wal`; a bare `rename` of the database would orphan them,
+    /// and SQLite would open `vault.db` at the state before those commits
+    /// with no error at all. The migration checkpoints first.
+    #[test]
+    fn a_hot_wal_survives_the_rename() {
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
+        let vdir = vault.current_db_path().parent().unwrap().to_path_buf();
+        let mut leaked = PalaceStore::open(vault).unwrap();
+        for i in 0..5u32 {
+            leaked
+                .upsert(&drawer(
+                    "w",
+                    "r",
+                    &format!("kingfisher note {i} at the sluice"),
+                    i,
+                ))
+                .unwrap();
+        }
+        // Never closed: the connection is forgotten with its WAL unflushed.
+        std::mem::forget(leaked);
+        for f in ["vault.db", "vault.db-wal", "vault.db-shm"] {
+            let to = f.replacen("vault.db", "palace.db", 1);
+            std::fs::rename(vdir.join(f), vdir.join(to)).unwrap();
+        }
+        let wal = std::fs::metadata(vdir.join("palace.db-wal")).unwrap().len();
+        assert!(
+            wal > 0,
+            "premise: the WAL must be hot, or this test proves nothing ({wal} bytes)"
+        );
+        let s = PalaceStore::open(mgr.unlock("test").unwrap()).unwrap();
+        assert_eq!(
+            s.count().unwrap(),
+            5,
+            "every committed row in the hot WAL survived the rename"
+        );
+        assert!(vdir.join("vault.db").exists() && !vdir.join("palace.db").exists());
+        assert!(s.verify().unwrap().ok());
+    }
+
+    /// Two databases under one manifest: refused on both postures, as the
+    /// integrity-class verdict it is, never chosen between.
+    #[test]
+    fn two_database_files_are_refused_on_both_postures() {
+        let (_d, mgr, vdir) = legacy_named_vault(2);
+        std::fs::write(vdir.join("vault.db"), b"a stray copy").unwrap();
+        assert!(
+            matches!(
+                PalaceStore::open(mgr.unlock("test").unwrap()),
+                Err(StoreError::DatabaseAmbiguous { .. })
+            ),
+            "a writable open must refuse"
+        );
+        assert!(
+            matches!(ro(&mgr, "test"), Err(StoreError::DatabaseAmbiguous { .. })),
+            "a read-only open must refuse"
+        );
+        assert!(
+            vdir.join("vault.db").exists() && vdir.join("palace.db").exists(),
+            "and touch neither"
+        );
     }
 
     /// R4's gate: a read-only open of an UNRECONCILED vault writes nothing,
@@ -18988,7 +19250,7 @@ mod tests {
         match ro(&mgr, "test") {
             Err(StoreError::DatabaseMissing { id, path }) => {
                 assert_eq!(id, "test");
-                assert!(path.ends_with("palace.db"), "{path}");
+                assert!(path.ends_with("vault.db"), "{path}");
             }
             other => panic!(
                 "expected DatabaseMissing, got {other:?}",
@@ -19225,7 +19487,7 @@ mod tests {
             ro(&mgr, "test").is_ok(),
             "premise: it opens the ordinary way while the -shm can be made"
         );
-        let shm = vdir.join("palace.db-shm");
+        let shm = vdir.join("vault.db-shm");
         let _ = std::fs::remove_file(&shm);
         std::fs::create_dir(&shm).unwrap();
 
@@ -19252,7 +19514,7 @@ mod tests {
             s.upsert(&drawer("w", "r", "the heron files verbatim drawers", 0))
                 .unwrap();
         }
-        let db_after_one = std::fs::read(vdir.join("palace.db")).unwrap();
+        let db_after_one = std::fs::read(vdir.join("vault.db")).unwrap();
         {
             let mut s = PalaceStore::open(mgr.unlock("test").unwrap()).unwrap();
             s.upsert(&drawer("w", "r", "a second note about the estuary", 1))
@@ -19260,7 +19522,7 @@ mod tests {
         }
         assert!(ro(&mgr, "test").is_ok(), "premise: it opens while coherent");
         // The anchor now names two writes; put the one-write database back.
-        std::fs::write(vdir.join("palace.db"), &db_after_one).unwrap();
+        std::fs::write(vdir.join("vault.db"), &db_after_one).unwrap();
         assert!(
             matches!(
                 ro(&mgr, "test"),
@@ -19280,7 +19542,7 @@ mod tests {
     ///
     /// The database is created (and the identity then cleared) rather than
     /// left absent, because since R4 a read-only open of a vault with no
-    /// `palace.db` REFUSES — see
+    /// `vault.db` REFUSES — see
     /// `a_read_only_open_of_an_absent_database_refuses_instead_of_faking_one`.
     /// The property under test here is the stamping, so the vault has to get
     /// past that door first.

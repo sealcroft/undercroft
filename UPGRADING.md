@@ -67,6 +67,49 @@ so rather than implying it checked them.
 
 ---
 
+## 1.5.0 (unreleased)
+
+### the per-vault database is `vault.db`; a `palace.db` is renamed at its first writable open
+
+**Who is affected:** anything OUTSIDE the engine that names the database file
+— a backup script, a monitoring check, the tamper demo in
+`deploy/observability/README.md`, a restore procedure that copies
+`vaults/<id>/palace.db` by name. The engine itself is unaffected in every
+direction: a vault created before 1.5.0 opens with no verdict, its rows and
+audit chain intact, and `verify` stays green across the rename.
+
+`palace` named two levels of the hierarchy — the whole installation ("the
+palace master key", "initialize the palace") and, through this one file, each
+vault's database. The installation keeps the word (ROADMAP O5); the per-vault
+file is `vault.db` now, beside `vault.json`, which names the same thing.
+
+**What happens on upgrade:** the first WRITABLE open of an older vault
+checkpoints its WAL (so no committed frame is orphaned), renames `palace.db`
+to `vault.db`, removes the emptied sidecars, and logs the rename. A
+checkpoint that cannot complete because another process holds the file
+leaves the name alone and the next writable open retries. A READ-ONLY open
+(`--read-only`, a replica) never renames: it serves the file under whichever
+name it has and reports *"the database is still named palace.db … a
+writable open will rename it"* on `unhealed`, on every stats surface.
+
+**Symptom if it bites you:** a script that expects `palace.db` finds no such
+file on a vault the engine has already migrated (or on any vault created
+since), and a copy made from the OLD name while a writer was running may be
+a snapshot the engine has since renamed. A directory holding BOTH files
+refuses to open on either posture — *"holds two databases … this open will
+not guess which"*, 409 with `class: "integrity"`, exit 2 — because one of
+them is a stray copy and serving the wrong one silently is worse than
+stopping.
+
+**Fix:** name `vault.db` in your scripts, or check for both. If an open
+refuses on two files, move the stray aside (`undercroft verify` against
+each, with the other moved out, says which one the manifest's chain head
+anchors) and reopen.
+
+**Not detectable before you restart** — this is per-vault on-disk state, not
+a declaration, so `undercroft config check` cannot see it. Nothing here
+stops a deployment from starting; it changes what a file is called.
+
 ## 1.4.0 (released 2026-09-07)
 
 ### a garbage `UNDERCROFT_INDEX_CA` now refuses on pgvector too

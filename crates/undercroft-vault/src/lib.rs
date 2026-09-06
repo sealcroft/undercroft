@@ -125,6 +125,32 @@ pub enum Access {
     ReadOnly,
 }
 
+/// The per-vault database's filename since 1.5.0 (ROADMAP O7). It sits
+/// beside `vault.json`, the manifest, and names the same thing that file
+/// names: THIS vault. "The palace" is the whole installation and stays so.
+pub const DB_FILE: &str = "vault.db";
+
+/// The per-vault database's filename before 1.5.0. Still served wherever it
+/// is found, and renamed to [`DB_FILE`] by the first writable open.
+pub const LEGACY_DB_FILE: &str = "palace.db";
+
+/// Which database file a vault directory holds (ROADMAP O7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DbLayout {
+    /// `vault.db` alone.
+    Current,
+    /// `palace.db` alone: a pre-1.5.0 vault no writable open has renamed.
+    Legacy,
+    /// Neither: a vault about to be created, or a manifest whose database
+    /// is missing (A33) — `database_exists` is what tells those apart from
+    /// a caller's point of view, and it says "absent" for both.
+    Absent,
+    /// Both: two databases claiming one manifest. Refused at open on every
+    /// posture rather than guessed at, because whichever one the manifest's
+    /// chain head anchors, the other is a stray copy an operator must judge.
+    Ambiguous,
+}
+
 /// Something a read-only unlock found and deliberately did **not** repair.
 ///
 /// A refusal would be worse than a report: a vault whose writer crashed
@@ -142,11 +168,20 @@ pub enum Unhealed {
     RotationPromotionDeferred,
     /// A rotation that never committed: its staging file is still on disk.
     RotationDiscardDeferred,
+    /// The database is still under its pre-1.5.0 name, `palace.db`
+    /// (ROADMAP O7). Renaming it is a write, and one that needs a WAL
+    /// checkpoint first, so a read-only open serves it where it is and a
+    /// writable open renames it.
+    LegacyDatabaseName,
 }
 
 impl std::fmt::Display for Unhealed {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Unhealed::LegacyDatabaseName => f.write_str(
+                "the database is still named palace.db (renaming it is a write, and it \
+                 needs a WAL checkpoint first); a writable open will rename it to vault.db",
+            ),
             Unhealed::TornStagingManifest => f.write_str(
                 "a torn vault.json.next was left in place (removing it is a write); \
                  a writable open will discard it",
@@ -212,12 +247,48 @@ impl Vault {
         &self.dir
     }
 
-    /// Path of this vault's SQLite database.
+    /// Path of this vault's SQLite database: the file the directory HOLDS.
+    ///
+    /// `vault.db` for every vault created since 1.5.0 and for every older
+    /// vault a writable open has renamed; `palace.db` for an older vault no
+    /// writable open has touched yet (ROADMAP O7 — one word named both the
+    /// installation and each vault's database, and the per-vault file is the
+    /// one that moved). A pure function of the directory, so a read-only
+    /// open serves whichever name is there and renames nothing; the rename
+    /// itself lives in the store's writable open, because it needs a WAL
+    /// checkpoint first and this crate does not speak SQLite.
     pub fn db_path(&self) -> PathBuf {
-        self.dir.join("palace.db")
+        match self.db_layout() {
+            DbLayout::Legacy => self.legacy_db_path(),
+            _ => self.current_db_path(),
+        }
     }
 
-    /// Whether this vault's database file is actually there.
+    /// `<vault dir>/vault.db`, whether or not it exists yet.
+    pub fn current_db_path(&self) -> PathBuf {
+        self.dir.join(DB_FILE)
+    }
+
+    /// `<vault dir>/palace.db`, the pre-1.5.0 name, whether or not it exists.
+    pub fn legacy_db_path(&self) -> PathBuf {
+        self.dir.join(LEGACY_DB_FILE)
+    }
+
+    /// Which database file this vault's directory holds (ROADMAP O7).
+    pub fn db_layout(&self) -> DbLayout {
+        match (
+            self.current_db_path().exists(),
+            self.legacy_db_path().exists(),
+        ) {
+            (true, true) => DbLayout::Ambiguous,
+            (true, false) => DbLayout::Current,
+            (false, true) => DbLayout::Legacy,
+            (false, false) => DbLayout::Absent,
+        }
+    }
+
+    /// Whether this vault's database file is actually there, under either
+    /// name.
     ///
     /// [`VaultManager::exists`] answers about `vault.json`, which is a
     /// different file: a half-copied backup, an interrupted `rsync` or a
@@ -225,9 +296,12 @@ impl Vault {
     /// `Connection::open` then CREATES the database and the vault answers
     /// every read empty with no error at all (ROADMAP A33). A caller that
     /// must not write has to be able to tell "empty" from "absent" before it
-    /// opens anything, and this is that question.
+    /// opens anything, and this is that question. A vault still carrying
+    /// `palace.db` has its database — reading it as ABSENT would turn every
+    /// pre-1.5.0 vault into an integrity verdict on the day of the upgrade,
+    /// which is exactly the trap O7's own filing named.
     pub fn database_exists(&self) -> bool {
-        self.db_path().exists()
+        !matches!(self.db_layout(), DbLayout::Absent)
     }
 
     /// Filesystem repairs a read-only unlock found and declined to make.
@@ -870,6 +944,12 @@ impl VaultManager {
                 }
             }
         }
+        // ROADMAP O7: a database still under its pre-1.5.0 name. The rename
+        // is the store's, at its writable open (it checkpoints the WAL
+        // first); a read-only unlock reports it and serves the file as is.
+        if matches!(access, Access::ReadOnly) && matches!(vault.db_layout(), DbLayout::Legacy) {
+            vault.unhealed.push(Unhealed::LegacyDatabaseName);
+        }
         Ok(vault)
     }
 
@@ -1057,6 +1137,70 @@ mod tests {
         assert_ne!(blob, b"remember this verbatim"); // actually encrypted
         let back = v.content_from_rest("rec1", &blob).unwrap();
         assert_eq!(back, b"remember this verbatim");
+    }
+
+    /// ROADMAP O7: a new vault's database is `vault.db`, and until it exists
+    /// the layout is `Absent` — which `database_exists` reports as absent,
+    /// the A33 answer, rather than as a fresh vault to fabricate.
+    #[test]
+    fn a_new_vault_names_its_database_vault_db() {
+        let dir = tempdir().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let v = mgr.create("a", SecurityLevel::Sealed).unwrap();
+        assert_eq!(v.db_layout(), DbLayout::Absent);
+        assert!(!v.database_exists());
+        assert_eq!(v.db_path().file_name().unwrap(), DB_FILE);
+        assert_ne!(DB_FILE, LEGACY_DB_FILE);
+    }
+
+    /// ROADMAP O7's gate, at this crate's level: a vault that still carries
+    /// `palace.db` HAS its database — `db_path` answers with that file,
+    /// `database_exists` says so (an integrity verdict on the day of the
+    /// upgrade is the trap the entry named), a read-only unlock serves it
+    /// and reports the pending rename, and a writable unlock reports
+    /// nothing because the rename is the store's to make.
+    #[test]
+    fn a_legacy_named_database_is_served_and_reported_read_only() {
+        let dir = tempdir().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let v = mgr.create("a", SecurityLevel::Sealed).unwrap();
+        std::fs::write(v.legacy_db_path(), b"not really sqlite").unwrap();
+        assert_eq!(v.db_layout(), DbLayout::Legacy);
+        assert!(v.database_exists());
+        assert_eq!(v.db_path(), v.legacy_db_path());
+        let ro = mgr.unlock_as("a", Access::ReadOnly).unwrap();
+        assert!(
+            ro.unhealed().contains(&Unhealed::LegacyDatabaseName),
+            "a read-only unlock must say the rename is pending: {:?}",
+            ro.unhealed()
+        );
+        assert!(
+            ro.legacy_db_path().exists(),
+            "a read-only unlock renames nothing"
+        );
+        let rw = mgr.unlock_as("a", Access::ReadWrite).unwrap();
+        assert!(rw.unhealed().is_empty());
+        assert!(
+            rw.legacy_db_path().exists(),
+            "the unlock itself never renames — the store does"
+        );
+    }
+
+    /// Two database files under one manifest are refused, not guessed at.
+    #[test]
+    fn two_database_files_are_an_ambiguous_layout() {
+        let dir = tempdir().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let v = mgr.create("a", SecurityLevel::Sealed).unwrap();
+        std::fs::write(v.current_db_path(), b"x").unwrap();
+        std::fs::write(v.legacy_db_path(), b"y").unwrap();
+        assert_eq!(v.db_layout(), DbLayout::Ambiguous);
+        assert!(v.database_exists());
+        assert_eq!(
+            v.db_path(),
+            v.current_db_path(),
+            "the path names the current file; the store refuses"
+        );
     }
 
     /// ROADMAP O109: a framed drawer decodes into a buffer of ITS OWN size,

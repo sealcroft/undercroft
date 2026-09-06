@@ -132,7 +132,7 @@ stateDiagram-v2
   is now `SQLITE_OPEN_READ_ONLY` under `PRAGMA query_only=ON`, the schema
   is checked rather than created, a lagging anchor is reported rather than
   healed, and a staged rotation is left on disk; what was declined is
-  readable as `unhealed` on every stats surface. An absent `palace.db`
+  readable as `unhealed` on every stats surface. An absent `vault.db`
   under a present manifest and an unmigrated schema both refuse with 409
   rather than being papered over. Residue: SQLite's WAL scaffolding
   (`-shm`, a zero-length `-wal`) is still materialised where the directory

@@ -470,11 +470,11 @@ fi
 UNDERCROFT_HOME="$(dirname "$(dirname "$HOT_DIR")")" \
   "$BIN" remember "the turbine bearing was replaced in March" \
   --vault "tenant-$HOT_ID" --wing w --room r >/dev/null 2>&1
-HOT_BEFORE="$(md5sum "$HOT_DIR/palace.db" | cut -d' ' -f1)"
+HOT_BEFORE="$(md5sum "$HOT_DIR/vault.db" | cut -d' ' -f1)"
 # Same length, so the SQLite file stays structurally valid and only the
 # record HMAC can catch it.
-perl -0777 -pi -e 's/"wing":"w"/"wing":"x"/' "$HOT_DIR/palace.db"
-forged "tamper fixture: the drawer row was forged" "$HOT_DIR/palace.db" "$HOT_BEFORE"
+perl -0777 -pi -e 's/"wing":"w"/"wing":"x"/' "$HOT_DIR/vault.db"
+forged "tamper fixture: the drawer row was forged" "$HOT_DIR/vault.db" "$HOT_BEFORE"
 OUT="$("$ORCH" --db "$UNDERCROFT_ORCH_DB" ops "$HOT_ID" verify 2>&1)"; CODE=$?
 if [ "$CODE" -eq 2 ] && grep -q '"ok":false' <<<"$OUT"; then
   ok "tampered vault: ops verify exits 2 on a 200 + ok:false"

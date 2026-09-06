@@ -131,7 +131,7 @@ metric increments, and `PalaceTamperDetected` fires within a scrape interval:
 ```bash
 # rewrite a drawer's content column directly in the vault DB (bypassing the HMAC)
 docker compose exec undercroft sh -c \
-  "sqlite3 /data/vaults/demo/palace.db \"UPDATE drawers SET content=x'00' WHERE 1 LIMIT 1\"" \
+  "sqlite3 /data/vaults/demo/vault.db \"UPDATE drawers SET content=x'00' WHERE 1 LIMIT 1\"" \
   || echo "(install sqlite3 in the image, or use the python one-liner in RUNBOOK.md)"
 # now search so the record is read + verified → hmac-fail
 curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
