@@ -162,6 +162,19 @@ enum Command {
         /// instrument mode that produced the recall-vs-pool curve).
         #[arg(long)]
         pool_div: Option<String>,
+        /// ROADMAP O23: deep page starts to time at every checkpoint,
+        /// comma-separated (`0,1000,10000,100000,2000000`). Each is a page
+        /// of five at that rank, timed beside the single deeper call whose
+        /// tail it must equal byte for byte under one pinned `ranked_at`;
+        /// a start past the corpus must come back empty. A page that
+        /// breaks either fails the run. Empty = the arm is off and the
+        /// output is exactly what it always was.
+        #[arg(long, default_value = "")]
+        offsets: String,
+        /// Queries per deep offset. Separate from `--queries` and small,
+        /// because a deep page can cost a corpus scan.
+        #[arg(long, default_value_t = 5)]
+        deep_queries: usize,
         #[arg(long, default_value = "sealed")]
         level: String,
     },
@@ -466,6 +479,20 @@ enum Command {
         #[arg(long)]
         limit: Option<usize>,
     },
+}
+
+/// The process's peak resident set so far, in MiB — Linux's `VmHWM`, read
+/// from `/proc/self/status`; `None` anywhere that file does not exist. A
+/// lifetime high-water mark, so a row's own peak shows as the amount it
+/// raised this. It exists because the first deep-offset run at 10⁶ ended in
+/// allocation failures that a docker-stats sampler beside the container
+/// could only bracket (ROADMAP O23/O109): the process must report the
+/// observable the defect moves.
+fn peak_rss_mib() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    let line = status.lines().find(|l| l.starts_with("VmHWM:"))?;
+    let kb: u64 = line.split_whitespace().nth(1)?.parse().ok()?;
+    Some(kb / 1024)
 }
 
 fn level_of(s: &str) -> SecurityLevel {
@@ -1027,12 +1054,35 @@ fn run_synth(n: usize, level: SecurityLevel, queries: Option<usize>) -> Result<(
 /// ingested so far. No gate: whatever the recall and latency curves do IS
 /// the result, and a probe that bails on the interesting region would be
 /// the stride landmine again.
+/// The deep-offset arm of `pqscale` (ROADMAP O23): which page starts to
+/// time, and how many queries at each. Parsed once, like the sizes.
+struct DeepOffsets {
+    starts: Vec<usize>,
+    per_start: usize,
+}
+
+impl DeepOffsets {
+    fn parse(offsets: &str, per_start: usize) -> Result<Self> {
+        let starts = offsets
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| {
+                s.parse()
+                    .map_err(|_| anyhow::anyhow!("--offsets entries are numbers, got {s:?}"))
+            })
+            .collect::<Result<_>>()?;
+        Ok(Self { starts, per_start })
+    }
+}
+
 fn run_pqscale(
     sizes: &str,
     queries: usize,
     pools: &str,
     batch: usize,
     pool_div: Option<&str>,
+    deep: DeepOffsets,
     level: SecurityLevel,
 ) -> Result<()> {
     let checkpoints: Vec<usize> = sizes
@@ -1083,6 +1133,16 @@ fn run_pqscale(
         None => "default".to_string(),
     };
 
+    // ROADMAP O23: the deep page starts to time.
+    let DeepOffsets {
+        starts: deep_offsets,
+        per_start: deep_queries,
+    } = deep;
+    // A page of this size at every deep start: the CLI's default page, and
+    // the width every R@5 column above is scored over.
+    const DEEP_LIMIT: usize = 5;
+    let mut deep_mismatches = 0usize;
+
     // Every 512th fact is a query candidate — bounded memory at 10^6.
     const KEY_STRIDE: usize = 512;
     let mut keys: Vec<(String, String, String)> = Vec::new();
@@ -1091,6 +1151,12 @@ fn run_pqscale(
         "Pqscale — level={level:?} retrieval=pq checkpoints={checkpoints:?} \
          pools={pool_limits:?} batch={batch} pool_div={div_label}"
     );
+    if !deep_offsets.is_empty() {
+        println!(
+            "  deep offsets={deep_offsets:?} limit={DEEP_LIMIT} \
+             ({deep_queries} queries each, clock pinned per query)"
+        );
+    }
     for &target in &checkpoints {
         let seg_start = ingested;
         let ingest_started = Instant::now();
@@ -1175,6 +1241,93 @@ fn run_pqscale(
                 1000.0 * secs / q_total.max(1) as f32,
             );
         }
+
+        // ROADMAP O23: what a deep page COSTS, measured rather than argued.
+        // Pagination is `offset + limit` and every pool is sized from that
+        // depth (`max(256, depth·32)`), so a deep enough start hydrates the
+        // whole corpus. The contract this arm holds while it times is the
+        // R3 one: the page is ranks `[offset, offset+limit)` of ONE deeper
+        // ranking, byte for byte under a pinned clock, and a start past the
+        // ranking is empty. A page that breaks it is a defect and fails the
+        // run below — never a statistic beside a latency.
+        if !deep_offsets.is_empty() {
+            let n_deep = deep_queries.clamp(1, q_total.max(1));
+            for &off in &deep_offsets {
+                let depth = off.saturating_add(DEEP_LIMIT);
+                let over_fetch = std::cmp::max(256, depth.saturating_mul(32));
+                let mut page_secs = 0f32;
+                let mut single_secs = 0f32;
+                let mut tiled = 0usize;
+                let mut empty = 0usize;
+                for (qi, (key, topic, _)) in sampled.iter().copied().take(n_deep).enumerate() {
+                    let q = query_for(qi, key, topic);
+                    let pinned = time::OffsetDateTime::now_utc();
+                    let popts = |offset: usize, limit: usize| SearchOptions {
+                        limit,
+                        offset,
+                        ranked_at: Some(pinned),
+                        ..Default::default()
+                    };
+                    let t = Instant::now();
+                    let page = store.search(&q, &popts(off, DEEP_LIMIT))?;
+                    page_secs += t.elapsed().as_secs_f32();
+                    if page.is_empty() {
+                        empty += 1;
+                    }
+                    if off < ingested {
+                        // The single deeper call the page must be a slice
+                        // of. Skipped past the corpus, where it would
+                        // return every row: there the page can only be
+                        // empty, and that is the whole assertion.
+                        let t = Instant::now();
+                        let single = store.search(&q, &popts(0, depth))?;
+                        single_secs += t.elapsed().as_secs_f32();
+                        let want: Vec<&str> = single
+                            .iter()
+                            .skip(off)
+                            .take(DEEP_LIMIT)
+                            .map(|h| h.drawer.id.as_str())
+                            .collect();
+                        let got: Vec<&str> = page.iter().map(|h| h.drawer.id.as_str()).collect();
+                        if want == got {
+                            tiled += 1;
+                        } else {
+                            deep_mismatches += 1;
+                        }
+                    } else if page.is_empty() {
+                        tiled += 1;
+                    } else {
+                        deep_mismatches += 1;
+                    }
+                }
+                let single_col = if off < ingested {
+                    format!("{:>9.1} ms/q", 1000.0 * single_secs / n_deep as f32)
+                } else {
+                    "  past corpus".to_string()
+                };
+                let hwm_col = match peak_rss_mib() {
+                    Some(m) => format!("{m:>6} MiB"),
+                    None => "   n/a".to_string(),
+                };
+                println!(
+                    "    offset={off:>8}  depth={depth:>8}  over-fetch={over_fetch:>9}{}  \
+                     page {:>9.1} ms/q  single {single_col}  tiled {tiled}/{n_deep}  \
+                     empty {empty}  rss-hwm {hwm_col}",
+                    if over_fetch >= ingested {
+                        " (whole corpus)"
+                    } else {
+                        ""
+                    },
+                    1000.0 * page_secs / n_deep as f32,
+                );
+            }
+        }
+    }
+    if deep_mismatches > 0 {
+        anyhow::bail!(
+            "PQSCALE DEEP-OFFSET CONTRACT BROKEN: {deep_mismatches} page(s) were not the \
+             slice of one deeper ranking (or were not empty past the corpus)"
+        );
     }
     println!("PQSCALE DONE");
     Ok(())
@@ -4270,6 +4423,8 @@ fn main() -> Result<()> {
             pools,
             batch,
             pool_div,
+            offsets,
+            deep_queries,
             level,
         } => run_pqscale(
             &sizes,
@@ -4277,6 +4432,7 @@ fn main() -> Result<()> {
             &pools,
             batch,
             pool_div.as_deref(),
+            DeepOffsets::parse(&offsets, deep_queries)?,
             level_of(&level),
         ),
         Command::Scopescale {
@@ -4707,6 +4863,25 @@ mod tests {
     #[test]
     fn synth_small_run_passes() {
         run_synth(40, SecurityLevel::Sealed, None).expect("synthetic benchmark must pass");
+    }
+
+    /// ROADMAP O23's instrument, driven small enough for a unit test: on a
+    /// 300-row sealed vault the starts cover a shallow page, a page whose
+    /// over-fetch already exceeds the corpus (`105·32 > 300`), the last
+    /// rows, and a start past the corpus. The run fails on any page that is
+    /// not the slice of its deeper call, so passing IS the contract.
+    #[test]
+    fn pqscale_deep_offsets_hold_the_page_contract() {
+        run_pqscale(
+            "300",
+            4,
+            "256",
+            64,
+            None,
+            DeepOffsets::parse("0,100,250,1000", 2).unwrap(),
+            SecurityLevel::Sealed,
+        )
+        .expect("a deep page must tile the single deeper ranking");
     }
 
     #[test]
