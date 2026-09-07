@@ -2,10 +2,14 @@
 //! 800-char chunks, 100-char overlap, 50-char minimum, split on paragraph
 //! boundaries where possible so drawers stay readable.
 
+/// How a document is cut into drawers — mempalace's miner defaults: 800-byte chunks, 100 bytes of overlap, a 50-byte minimum.
 #[derive(Debug, Clone, Copy)]
 pub struct ChunkOptions {
+    /// Target length of one chunk, in bytes of normalized text; a paragraph longer than this is windowed.
     pub chunk_size: usize,
+    /// Bytes shared between consecutive windows when a paragraph must be split, so a span cut in two survives whole in one of them.
     pub overlap: usize,
+    /// The smallest piece filed as a chunk of its own, in bytes.
     pub min_chunk: usize,
 }
 

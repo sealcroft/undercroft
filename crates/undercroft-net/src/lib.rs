@@ -23,26 +23,44 @@
 //!
 //! What this crate does NOT claim: TLS protects the wire, not the
 //! destination. A remote endpoint still receives whatever you send it.
+#![warn(missing_docs)]
 
 use std::sync::Arc;
 
+/// Everything the transport policy refuses, before a byte moves.
 #[derive(Debug, thiserror::Error)]
 pub enum NetError {
+    /// Cleartext HTTP to a non-loopback host. There is no override.
     #[error(
         "{what} is configured with cleartext http to a non-loopback host ({url}). Drawer-derived \
          data would cross the network in the clear. Use https (terminate TLS in front of the \
          service — see deploy/embeddings-tls/ for a working example), or bind the service to \
          loopback. There is no override."
     )]
-    Cleartext { what: &'static str, url: String },
+    Cleartext {
+        /// Which hop.
+        what: &'static str,
+        /// The endpoint as declared.
+        url: String,
+    },
+    /// A declared trust root that pins nothing.
     #[error("{what}: the declared trust root {path} {reason}")]
     BadPin {
+        /// Which hop declared it.
         what: &'static str,
+        /// The declared PEM path.
         path: String,
+        /// Why it pins nothing.
         reason: String,
     },
+    /// A declaration this hop cannot use.
     #[error("{what}: {reason}")]
-    Config { what: &'static str, reason: String },
+    Config {
+        /// Which hop.
+        what: &'static str,
+        /// What it cannot use, and why.
+        reason: String,
+    },
 }
 
 /// Whether a base URL points at this machine.

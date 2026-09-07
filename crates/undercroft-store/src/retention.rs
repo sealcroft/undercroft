@@ -48,18 +48,24 @@ use crate::{chain_append, Namespace, PalaceStore, StoreError};
 /// One declared policy, as listed back to the operator.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RetentionPolicy {
+    /// The wing the policy covers.
     pub wing: String,
     /// Empty = the whole wing.
     pub room: String,
+    /// A drawer older than this many days, by its HMAC-covered `filed_at`, is past the policy.
     pub max_age_days: u32,
+    /// When the policy was declared (RFC 3339).
     pub assigned_at: String,
 }
 
 /// One policy's share of a sweep.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RetentionSweepEntry {
+    /// The policy's wing.
     pub wing: String,
+    /// The policy's room; empty for a whole-wing policy.
     pub room: String,
+    /// The policy's age bound, in days.
     pub max_age_days: u32,
     /// Drawer ids past the policy's age at sweep time.
     pub expired: Vec<String>,
@@ -68,7 +74,9 @@ pub struct RetentionSweepEntry {
 /// What a sweep did (or, dry, would do).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RetentionSweep {
+    /// Whether nothing was destroyed.
     pub dry_run: bool,
+    /// Each policy's share of the sweep.
     pub policies: Vec<RetentionSweepEntry>,
     /// Distinct drawers destroyed (a wing policy and a room policy can
     /// name the same drawer; it dies once).

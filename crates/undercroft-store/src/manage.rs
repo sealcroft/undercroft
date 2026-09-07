@@ -30,18 +30,27 @@ pub(crate) enum PendingEvidence {
     Ruled,
 }
 
+/// A drawer as listed: id, place, a content preview and provenance — never the whole content.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DrawerSummary {
+    /// The drawer's id.
     pub id: String,
+    /// The wing it is filed in.
     pub wing: String,
+    /// The room it is filed in.
     pub room: String,
+    /// The first bytes of the content, for a listing.
     pub preview: String,
+    /// When it was filed (RFC 3339).
     pub filed_at: String,
+    /// The file it was mined from, when it was mined.
     pub source_file: Option<String>,
 }
 
+/// What a stats surface reports about one vault. Hand-projected on the CLI and the console (`parity::HAND_PROJECTED`), so a field added here must reach every renderer.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PalaceStats {
+    /// Every drawer row, unfenced: the vault's true row count, and the number `db_bytes` is measured against.
     pub records: u64,
     /// Drawers sitting in the reserved review wing (M4).
     ///
@@ -62,9 +71,13 @@ pub struct PalaceStats {
     /// Zero on a vault that has never diverted a write, which is every vault
     /// with admission screening off (the default).
     pub quarantined: u64,
+    /// Drawer count per wing, the reserved review wing excluded.
     pub wings: Vec<(String, u64)>,
+    /// Distinct rooms, the reserved review wing excluded.
     pub rooms: u64,
+    /// Knowledge-graph counts.
     pub kg: crate::KgStats,
+    /// Cross-wing tunnels.
     pub tunnels: u64,
     /// Audit-chain height: how many records the chain has COMMITTED, read
     /// from `chain_meta` like `records` is read from `drawers`. Both
@@ -94,7 +107,9 @@ pub struct PalaceStats {
     pub chain_records: u64,
     /// The committed chain head, from the same read as `writes`.
     pub chain_head: String,
+    /// `sealed` or `hmac-only`.
     pub level: String,
+    /// Size of the database file on disk, in bytes.
     pub db_bytes: u64,
     /// `(artifact, generation)` for every trained index artifact — how many
     /// times each codebook or centroid set has been trained in this vault.
@@ -151,10 +166,14 @@ pub struct SemanticChannel {
     pub gate_source: &'static str,
 }
 
+/// What a dedup pass did — or, on a dry run, would do.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DedupReport {
+    /// Groups of drawers whose content matched.
     pub duplicate_groups: u64,
+    /// Ids of the drawers removed, or that would be.
     pub removed: Vec<String>,
+    /// Whether rows were actually removed, as opposed to a dry run.
     pub applied: bool,
     /// How many distinct appearance dates were carried onto survivors rather
     /// than deleted with their rows. Reported because it is the difference
@@ -170,19 +189,29 @@ pub struct DedupReport {
     pub quarantined: u64,
 }
 
+/// A declared connection between two wings, labelled by the agent that made it.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Tunnel {
+    /// The tunnel's id; the chain refers to it as `tunnel/{id}`.
     pub id: String,
+    /// One end of the tunnel.
     pub from_wing: String,
+    /// The other end.
     pub to_wing: String,
+    /// The agent-written label — screened like every field an agent can write and read back.
     pub label: String,
+    /// When the tunnel was created (RFC 3339).
     pub created_at: String,
 }
 
+/// Two entities that co-occur across drawers, with how often.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Hallway {
+    /// One entity.
     pub entity_a: String,
+    /// The other entity.
     pub entity_b: String,
+    /// How many drawers mention both.
     pub strength: u64,
 }
 
@@ -1073,6 +1102,7 @@ impl PalaceStore {
     // Stats / dedup
     // ------------------------------------------------------------------
 
+    /// Everything `PalaceStats` reports, from the database's own clocks, fenced against the reserved review wing where the field says so.
     pub fn stats(&self) -> Result<PalaceStats, StoreError> {
         // Fenced the same way `wings()` is, and it was NOT (ROADMAP O34).
         // O32 fenced the wing list against the reserved wing and left this
@@ -1387,6 +1417,7 @@ impl PalaceStore {
     // Tunnels — cross-wing connections
     // ------------------------------------------------------------------
 
+    /// Declare a tunnel between two wings — both names validated, the label screened — appended to the chain as `tunnel/{id}` and anchored.
     pub fn create_tunnel(
         &mut self,
         from_wing: &str,
@@ -1479,6 +1510,7 @@ impl PalaceStore {
         Ok(id)
     }
 
+    /// Every tunnel, or those touching one wing, tag-verified on the way out.
     pub fn list_tunnels(&self, wing: Option<&str>) -> Result<Vec<Tunnel>, StoreError> {
         let mut stmt = self.conn.prepare(
             "SELECT id, from_wing, to_wing, label, tag, created_at FROM tunnels ORDER BY seq",
@@ -1521,6 +1553,7 @@ impl PalaceStore {
         Ok(out)
     }
 
+    /// Destroy a tunnel, audited as `del/tunnel/{id}`; `false` when there was none.
     pub fn delete_tunnel(&mut self, id: &str) -> Result<bool, StoreError> {
         let tag = self.vault.tag(format!("del\x1ftunnel/{id}").as_bytes());
         let tx = self.conn.transaction()?;
@@ -1958,6 +1991,7 @@ pub enum Namespace {
     Trust,
     /// A declared retention policy, and its removal.
     Retention,
+    /// The removal of a declared retention policy: `retention-clear/{wing}[/{room}]`.
     RetentionClear,
     /// Destruction — `del/{id}` for a drawer, `del/tunnel/{id}` for a tunnel.
     Del,
@@ -2302,6 +2336,7 @@ pub struct AuditRecord {
     /// Hex of the subject's HMAC as of this write. This IS the evidence, and
     /// it is what the chain folds in.
     pub tag: String,
+    /// When the record was appended (RFC 3339).
     pub at: String,
 }
 

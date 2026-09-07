@@ -42,16 +42,26 @@ fn getrandom_bytes(buf: &mut [u8]) {
     rand::thread_rng().fill_bytes(buf);
 }
 
+/// One fact: subject, predicate, object, its validity interval, its provenance and the declared authority tier. On a sealed vault the words live in sealed blobs and the indexed columns hold keyed blinds.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Triple {
+    /// The fact's id, keyed with the vault's STORED graph secret so it survives a key rotation; the chain refers to it as `kg/{id}`.
     pub id: String,
+    /// The subject entity, as written.
     pub subject: String,
+    /// The relation, as written.
     pub predicate: String,
+    /// The object, as written.
     pub object: String,
+    /// Start of the interval the fact holds for, when declared (a date or datetime string).
     pub valid_from: Option<String>,
+    /// End of that interval; `None` while the fact is active.
     pub valid_to: Option<String>,
+    /// The extractor's or writer's confidence, 0 to 1.
     pub confidence: f64,
+    /// The drawer the fact cites, when it cites one.
     pub source_drawer_id: Option<String>,
+    /// When the fact was written (RFC 3339).
     pub extracted_at: String,
     /// Where the fact rests, when that was ever evaluated. `None` is
     /// `Grounding::Unevaluated` and is not the same as an empty evaluation.
@@ -63,6 +73,7 @@ pub struct Triple {
     /// `stated`/`unreviewed`). See [`PalaceStore::kg_set_authority`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authority_class: Option<String>,
+    /// The declared review state on the authority tier, when the fact was placed on it — closed vocabulary, HMAC-covered.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review_state: Option<String>,
     /// The exact-lookup slot [`PalaceStore::lookup_canonical`] answers by.
@@ -84,11 +95,16 @@ impl Triple {
     }
 }
 
+/// Graph counts for a stats surface.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct KgStats {
+    /// Entity rows.
     pub entities: u64,
+    /// Fact rows, active and closed together.
     pub triples: u64,
+    /// Facts with no `valid_to`.
     pub active: u64,
+    /// Facts whose interval has been closed.
     pub closed: u64,
 }
 
@@ -787,8 +803,11 @@ pub enum ReceiptVerdict {
 /// A fact's receipt and its verification outcome.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ReceiptStatus {
+    /// The fact whose receipt was checked.
     pub triple_id: String,
+    /// The drawer the receipt binds the fact to.
     pub source_drawer_id: String,
+    /// What the check found.
     pub verdict: ReceiptVerdict,
 }
 
@@ -797,8 +816,11 @@ pub struct ReceiptStatus {
 /// [`PalaceStore::verify_supersessions`](crate::PalaceStore).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SupersessionStatus {
+    /// The superseding drawer.
     pub drawer_id: String,
+    /// The drawer it declares itself to supersede.
     pub supersedes: String,
+    /// What the check found.
     pub verdict: ReceiptVerdict,
 }
 
@@ -818,7 +840,9 @@ pub struct SupersessionStatus {
 /// forever. Recorded in the CHANGELOG as an upgrade note.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TripleExport {
+    /// The decoded, verified fact.
     pub triple: Triple,
+    /// The stored source fingerprint, hex, when the fact was receipted — a claim at the destination, which re-derives its own binding.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_fp: Option<String>,
 }
@@ -3326,6 +3350,7 @@ impl PalaceStore {
         Ok(out)
     }
 
+    /// Entity and fact counts, active and closed.
     pub fn kg_stats(&self) -> Result<KgStats, StoreError> {
         let entities: i64 = self
             .conn

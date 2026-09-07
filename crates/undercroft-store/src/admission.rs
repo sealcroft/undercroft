@@ -41,10 +41,15 @@ pub const QUARANTINE_WING: &str = "quarantine-pending";
 /// One pending admission review.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PendingAdmission {
+    /// The id the diverted drawer landed under — the quarantine recipe's, carrying a domain tag and every component of the ordinary id.
     pub id: String,
+    /// The wing the writer declared; an `allow` ruling restores the drawer to it.
     pub intended_wing: String,
+    /// The room the writer declared; an `allow` ruling restores the drawer to it.
     pub intended_room: String,
+    /// The closed-vocabulary signal codes that tripped the screen, with offsets and never content.
     pub signals: Vec<undercroft_core::admission::AdmissionSignal>,
+    /// When the write was diverted (RFC 3339).
     pub filed_at: String,
 }
 

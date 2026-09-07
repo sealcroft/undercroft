@@ -28,15 +28,21 @@ use std::io;
 use std::path::Path;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
+/// Length of every key this crate handles, in bytes.
 pub const KEY_LEN: usize = 32;
+/// Length of a vault's key-derivation salt, in bytes.
 pub const SALT_LEN: usize = 16;
 
+/// Master-key file and key-derivation failures.
 #[derive(Debug, thiserror::Error)]
 pub enum KeyError {
+    /// Reading or writing the key file failed.
     #[error("io error: {0}")]
     Io(#[from] io::Error),
+    /// The master key file is not exactly `KEY_LEN` bytes.
     #[error("master key file is corrupt (expected {KEY_LEN} bytes)")]
     CorruptKeyFile,
+    /// Argon2id refused; the message is the library's.
     #[error("argon2 failure: {0}")]
     Kdf(String),
 }
@@ -46,6 +52,7 @@ pub enum KeyError {
 pub struct SecretKey(pub(crate) [u8; KEY_LEN]);
 
 impl SecretKey {
+    /// The raw key bytes. Never logged and never `Debug`-printed.
     pub fn as_bytes(&self) -> &[u8; KEY_LEN] {
         &self.0
     }

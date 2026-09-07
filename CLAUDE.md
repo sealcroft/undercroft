@@ -1767,7 +1767,17 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # `#[cfg(feature = "telemetry")]` was linted
                                       # by nothing and two dead wrappers survived
                                       # from O20 and O25. Publishes no check count
-                                      # deliberately
+                                      # deliberately. **`#![warn(missing_docs)]` is
+                                      # on in the eight library crates (O110,
+                                      # 2026-09-07)**, so this refuses a public
+                                      # item with no doc — 372 of them when it
+                                      # went on, three times the 113 O99's scanner
+                                      # counted, because struct fields and enum
+                                      # variants are items and the scanner saw
+                                      # neither, and 12 of the 372 only under the
+                                      # TELEMETRY build, which the default check
+                                      # never compiles. It sees an orphan, never a doc on
+                                      # the wrong item; that half stays by eye
 docker compose run --rm e2e           # e2e UI/UX suite against the release binary (474 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (127 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (53 checks)

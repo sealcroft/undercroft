@@ -70,11 +70,17 @@
 /// already marks its own word boundaries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Script {
+    /// Han (CJK ideographs): every character is a morpheme, so unigrams count as words.
     Han,
+    /// Japanese hiragana — no word delimiters.
     Hiragana,
+    /// Japanese katakana — no word delimiters.
     Katakana,
+    /// Korean hangul — syllable blocks with particles attached, no word delimiters.
     Hangul,
+    /// Bopomofo (zhuyin) — no word delimiters.
     Bopomofo,
+    /// Arabic script: writes spaces, but its clitics attach with none, so it is segmented as non-delimiting.
     Arabic,
     /// Hebrew. It writes spaces between words, which is why it sat in `Other`
     /// and was therefore treated as delimiting — but its clitics (`ה` the,
@@ -86,9 +92,13 @@ pub enum Script {
     /// lengths, Hebrew admitted **0**, the only language in the audit to score
     /// nothing at all. Whole-word containment reaches 7 of those 8.
     Hebrew,
+    /// Khmer — no word delimiters; ZWSP is its word separator and is deliberately not stripped.
     Khmer,
+    /// Thai — no word delimiters.
     Thai,
+    /// Lao — no word delimiters.
     Lao,
+    /// Myanmar (Burmese) — no word delimiters.
     Myanmar,
     /// Any script that delimits its words — Latin, Cyrillic, Greek, Georgian,
     /// Tibetan, Devanagari, digits, and everything else.

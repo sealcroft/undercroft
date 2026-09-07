@@ -134,6 +134,7 @@ impl FdeEncoder {
         }
     }
 
+    /// The construction parameters this encoder was built with.
     pub fn params(&self) -> FdeParams {
         self.params
     }

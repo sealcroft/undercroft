@@ -31,6 +31,7 @@
 //! **Nothing here opens anything.** Every function is a pure string→value
 //! parse, which is what lets a pre-flight run the same code a start-up runs
 //! without a database, a socket or a port.
+#![warn(missing_docs)]
 
 /// A declaration that does not resolve.
 ///
