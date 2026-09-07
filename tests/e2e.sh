@@ -1694,6 +1694,17 @@ if grep -q "413" <<<"$out" && grep -q "ceiling" <<<"$out"; then
 else
   echo "FAIL  mcp refuses an oversized body 413"; echo "$out" | head -3 | sed 's/^/      /'; FAIL=$((FAIL+1))
 fi
+# ROADMAP O114 (CLOSED): the terabyte declaration with NO bearer — the
+# oldest refusal path, an unauthenticated peer — on /mcp, where the bearer
+# gate runs before the body is read. Before the vendored patch the 401's
+# drop allocated the declared size; the history check below is the liveness
+# this arm exists for.
+out="$(timeout 25 bash -c 'exec 3<>/dev/tcp/127.0.0.1/18766; printf "POST /mcp HTTP/1.0\r\nContent-Type: application/json\r\nContent-Length: 999999999999\r\n\r\n{}" >&3; timeout 8 cat <&3; exec 3<&- 3>&-' 2>&1 || true)"
+if grep -q "401" <<<"$out"; then
+  echo "ok    mcp survives a terabyte declaration with no bearer (401)"; PASS=$((PASS+1))
+else
+  echo "FAIL  mcp survives a terabyte declaration with no bearer (401)"; echo "$out" | head -3 | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
 # The audit chain is browsable, on the agent surface, FENCED. Driven through
 # MCP because that is where the fence lives and where a raw log would have
 # handed an agent the reviewer's view of the queue that screened its writes.
@@ -2140,6 +2151,24 @@ rest_code "oversized body declared 413 on /v1" 413 -- --max-time 15 -X POST "$AP
 rest_body "413 names the ceiling" 'ceiling' -- --max-time 15 -X POST "$API/vaults/acme2/import" \
   -H "X-Vault-Assertion: $(sign acme2)" -H "Content-Length: 300000000" --data-binary '{}'
 rest_code "server answers after the refusal" 200 -- --max-time 15 "$API/vaults/acme2/stats" \
+  -H "X-Vault-Assertion: $(sign acme2)"
+# ROADMAP O114 (CLOSED): the terabyte declaration itself, on BOTH refusal
+# paths. Before the vendored patch this allocated 999,999,999,999 bytes on
+# the request's drop and aborted the process on CI's kernel — the check
+# after each one is the whole point, and it is what went 000 there. The
+# 401 arm carries no assertion at all: an unauthenticated peer.
+rest_code "terabyte declaration refused 413" 413 -- --max-time 15 -X POST "$API/vaults/acme2/import" \
+  -H "X-Vault-Assertion: $(sign acme2)" -H "Content-Length: 999999999999" --data-binary '{}'
+rest_code "server survives a terabyte declaration on the 413 path" 200 -- --max-time 15 "$API/vaults/acme2/stats" \
+  -H "X-Vault-Assertion: $(sign acme2)"
+# On /v1 the ceiling is checked in `handle`, BEFORE `route` reads the vault
+# assertion (the palace bearer gate precedes both), so a missing assertion
+# still meets the 413 first — pinned, because the first version of this arm
+# expected a 401 and measured the order instead. The unauthenticated 401
+# arm lives on /mcp below, whose bearer gate runs before the body is read.
+rest_code "terabyte declaration without an assertion is still 413 first" 413 -- --max-time 15 -X POST "$API/vaults/acme2/import" \
+  -H "Content-Length: 999999999999" --data-binary '{}'
+rest_code "server survives a terabyte declaration with no assertion" 200 -- --max-time 15 "$API/vaults/acme2/stats" \
   -H "X-Vault-Assertion: $(sign acme2)"
 
 # Semantic dedup-refresh: re-ingesting the same fact refreshes, not piles up.

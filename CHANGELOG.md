@@ -57,15 +57,36 @@ naming the ceiling on `/v1` and `/mcp`, the server answering afterwards) and
 two on the orchestrator suite. Tests 818 → 824, e2e 474 → 478,
 orchestrator 127 → 129.
 
-**What those checks found on CI is filed as ROADMAP O114 and is OPEN,
-CRITICAL, and older than this branch**: `tiny_http` drains an unread
-request body on drop with `vec![0; remaining]`, an allocation sized by the
-client's `Content-Length`, so one header on any refusal path — the
-unauthenticated 401 included — kills `serve-http` and the orchestrator on a
-heuristic-overcommit kernel (upstream tiny-http #290, unfixed). The fix is
-inside the crate and the shape (vendor / fork / replace) is the
-maintainer's; until ruled, neither listener should face an untrusted
-segment.
+### one header killed every listener: `tiny_http` vendored and patched (O114, CRITICAL)
+
+**ROADMAP O114 FILED AND CLOSED 2026-09-07 — found by O111's own e2e gate on
+CI, older than the branch that found it.** `tiny_http 0.12.0` drained an
+unread request body on drop with `vec![0; remaining]`, an allocation sized
+by the client's declared `Content-Length` and taken before a byte was read,
+on every refusal path — the unauthenticated bearer 401 first among them. One
+header killed `serve-http` and the orchestrator on a heuristic-overcommit
+kernel; the local battery could not see it because WSL overcommits the
+allocation. Upstream tiny-http #290 is open with no release since 0.12.0.
+Ruled option A: the crate is vendored under `[patch.crates-io]`
+(`vendor/tiny_http`, 0.12.0 verbatim plus the patch, MIT OR Apache-2.0,
+attributed in `NOTICE`, the diff recorded, the tree pinned by
+`vendor/SHA256SUMS` through a new battery preflight in both directions).
+
+The bounded drain the filing prescribed was not the fix: the crate sets no
+socket read timeout, so any drain parks the single-threaded request loop
+for as long as a silent peer holds the socket. The patch drains nothing —
+the drop reports whether the body was consumed on the signal the original
+created and discarded, and the connection ENDS behind a body a handler
+refused without reading, neither drained nor parsed as the next request.
+The same crate grew header lines and header lists without bound; both are
+capped (16 KiB per line, 128 headers). Measured: three terabyte
+declarations answer 413 and the server answers after; pipelined requests
+behind a read body are served, behind an unread one are not. Gates: the
+terabyte declaration on the 413 path (with and without a vault assertion or
+tenant token — on both listeners the ceiling precedes that check, pinned)
+and on the unauthenticated 401 path proper (`/mcp` with no bearer), each
+followed by liveness (e2e 478 → 483, orchestrator 129 → 133). `UPGRADING.md` carries the header ceilings and the closed connection
+behind a refusal.
 
 ### twelve docs O110 added were false about the item they head, and six more had gone stale — corrected
 

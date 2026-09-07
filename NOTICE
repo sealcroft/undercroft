@@ -5,6 +5,18 @@ Undercroft is licensed under the Business Source License 1.1 (see LICENSE).
 
 --------------------------------------------------------------------------
 
+Vendored third-party code
+
+vendor/tiny_http is tiny_http 0.12.0 (https://github.com/tiny-http/tiny-http),
+copyright its authors, licensed under MIT OR Apache-2.0 — both license texts
+are kept beside it. Undercroft carries it as a `[patch.crates-io]` with one
+change, every line of which is marked `UNDERCROFT PATCH` and recorded in
+vendor/tiny_http/UNDERCROFT.patch: an unread request body is no longer
+drained on drop (an allocation of the client's declared size, upstream
+issue #290) and a request's header block is bounded. See ROADMAP O114.
+
+--------------------------------------------------------------------------
+
 Heritage attribution
 
 Undercroft began as a fork of the MemPalace project

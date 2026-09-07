@@ -21,6 +21,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
+# The vendored, patched HTTP server crate (`[patch.crates-io]`, ROADMAP
+# O114): a build without it resolves tiny_http from the registry and ships
+# the unbounded drop-drain this tree exists to be rid of.
+COPY vendor ./vendor
 # The observability deployment configs. `undercroft-obs` gates them against
 # the series inventory it exports — an alert naming a series the binary does
 # not export never fires and never errors — and that gate must FAIL rather

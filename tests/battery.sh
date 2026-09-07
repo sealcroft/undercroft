@@ -1764,6 +1764,63 @@ else
   exit 1
 fi
 
+echo "═══ preflight: vendored crates are pinned ═══"
+# ROADMAP O114. `vendor/` holds a patched copy of a third-party crate taken
+# through `[patch.crates-io]`; a byte changed there is a change to the HTTP
+# server every listener runs on, and nothing else in the tree would notice.
+# `vendor/SHA256SUMS` pins every file, and this compares in BOTH directions:
+# a listed file that is missing, a present file that is unlisted, a changed
+# byte. Regenerating the sums is the deliberate act that admits a change.
+VENDOR_SUMS="vendor/SHA256SUMS"
+if [ ! -f "$VENDOR_SUMS" ]; then
+  echo "FAIL  $VENDOR_SUMS is absent — the vendored tree is unpinned."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+VENDOR_LISTED=$(awk '{print $2}' "$VENDOR_SUMS" | sed 's#^\./##' | LC_ALL=C sort)
+VENDOR_PRESENT=$(cd vendor && find . -type f ! -name SHA256SUMS | sed 's#^\./##' | LC_ALL=C sort)
+VENDOR_N=$(printf '%s\n' "$VENDOR_LISTED" | grep -c . || true)
+# PREMISE: the pin must cover a real tree. The crate ships eighteen source
+# files plus its manifest, licenses, README and this project's two notes.
+if [ "${VENDOR_N:-0}" -lt 20 ]; then
+  echo "FAIL  $VENDOR_SUMS lists $VENDOR_N file(s); the vendored crate has more than 20."
+  echo "      The reader is broken, not the tree."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+VENDOR_DIFF=$(diff <(printf '%s\n' "$VENDOR_LISTED") <(printf '%s\n' "$VENDOR_PRESENT") || true)
+if [ -n "$VENDOR_DIFF" ]; then
+  echo "FAIL  vendor/ and $VENDOR_SUMS name different files (< listed only, > present only):"
+  printf '%s\n' "$VENDOR_DIFF" | sed 's/^/        /'
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+if ! (cd vendor && sha256sum --quiet -c SHA256SUMS >/dev/null 2>&1); then
+  echo "FAIL  a vendored file's bytes differ from $VENDOR_SUMS:"
+  (cd vendor && sha256sum -c SHA256SUMS 2>/dev/null | grep -v ': OK$' | sed 's/^/        /')
+  echo "      If the change is deliberate, regenerate the sums (vendor/tiny_http/UNDERCROFT.md)"
+  echo "      and the recorded UNDERCROFT.patch in the same unit."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+# And the patch is still THERE: a pristine upstream copy would pin clean too.
+# The drain's absence is asserted on a CODE line (`let mut buf = vec![0; …]`
+# at the start of a statement), not on the substring — the patch's own
+# comment quotes the original line, and the first version of this probe
+# matched the comment and refused the tree that carried the fix.
+if ! grep -q 'UNDERCROFT PATCH' vendor/tiny_http/src/util/equal_reader.rs \
+   || grep -qE '^[[:space:]]*let mut buf = vec!\[0; remaining_to_read\]' vendor/tiny_http/src/util/equal_reader.rs; then
+  echo "FAIL  vendor/tiny_http no longer carries the O114 patch (the drop-drain is back)."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    vendor/ is pinned ($VENDOR_N files, both directions) and carries the O114 patch"
+
 echo "═══ preflight: prose figures ═══"
 
 pf_word() {

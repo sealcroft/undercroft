@@ -69,6 +69,29 @@ so rather than implying it checked them.
 
 ## 1.5.1 (unreleased)
 
+### a request's header block is bounded, and a connection ends behind a body that was refused
+
+**Who is affected:** a client sending a single header line above 16 KiB or
+more than 128 headers to the engine or the orchestrator — and a client that
+pipelines a second request behind a body the server refused without reading
+(a 401, a 413).
+
+**Why:** the HTTP server crate both binaries run on drained an unread body
+on drop with an allocation of the client's declared `Content-Length`, so one
+header killed the process (ROADMAP O114, vendored and patched under
+`vendor/tiny_http`). The patch neither drains nor allocates: the connection
+ends instead. The header ceilings close the same crate's other unbounded
+read, a header line grown byte by byte with no limit.
+
+**Symptom:** a header line above 16 KiB closes the connection with no
+response; more than 128 headers answers 400; a request pipelined behind a
+refused body is not served — the connection is closed after the refusal.
+
+**Fix:** keep headers under the ceilings (a bearer plus a vault assertion
+plus the usual client headers is well under a kilobyte); open a new
+connection after a refused upload rather than reusing the one it was refused
+on.
+
 ### a request body above 256 MiB is refused with 413, on `/v1`, `/mcp` and the orchestrator
 
 **Who is affected:** a script that POSTs a single body above 256 MiB to the

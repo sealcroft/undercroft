@@ -601,6 +601,22 @@ done
 code_is "oversized tenant body is 413" 413 -- --max-time 15 -X POST "${AUTH_ACME2[@]}" \
   -H "Content-Length: 300000000" -d '{"query":"flux"}' "$O/t/search"
 code_is "the plane answers after the refusal" 200 -- --max-time 15 "$O/healthz"
+# ROADMAP O114 (CLOSED): the terabyte declaration, on the 413 path and on
+# the unauthenticated 401 path, each followed by the liveness the vendored
+# patch buys — before it, the drop allocated the declared size and killed
+# this plane on CI.
+code_is "terabyte declaration through /t/ is 413" 413 -- --max-time 15 -X POST "${AUTH_ACME2[@]}" \
+  -H "Content-Length: 999999999999" -d '{"query":"flux"}' "$O/t/search"
+code_is "the plane survives a terabyte declaration (413)" 200 -- --max-time 15 "$O/healthz"
+# The proxy reads (or refuses) the body BEFORE `route` authenticates, so with
+# no token the terabyte meets the 413 first — pinned, because the first
+# version of this arm expected a 401 and measured the order. On this plane
+# the 413 is therefore the only refusal that drops a body unread; the
+# unauthenticated arm proper lives on the engine's /mcp, whose bearer gate
+# precedes its body read.
+code_is "terabyte declaration without a token is still 413 first" 413 -- --max-time 15 -X POST \
+  -H "Content-Length: 999999999999" -d '{"query":"flux"}' "$O/t/search"
+code_is "the plane survives a terabyte declaration with no token" 200 -- --max-time 15 "$O/healthz"
 code_is "another tenant is untouched" 200 -- -X POST "${AUTH_GLOBEX[@]}" \
   -d '{"query":"anything"}' "$O/t/search"
 
