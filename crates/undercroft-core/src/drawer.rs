@@ -27,10 +27,14 @@ pub struct Occurrence {
     pub filed_at: String,
 }
 
+/// Everything recorded about a drawer beside its content: where it is filed, where it came from, when, by whom, and what the engine derived. Covered in full by the drawer's HMAC; a clear mirror of a few fields is kept beside it for SQL, and a security decision reads the covered copy.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DrawerMeta {
+    /// The wing the drawer is filed in — a person or a project.
     pub wing: String,
+    /// The room within the wing — a topic, a session, a ticket.
     pub room: String,
+    /// The file the drawer was mined from, when it was mined rather than saved through an API.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_file: Option<String>,
     /// Position of this chunk within `source_file` — **when there is one.**
@@ -42,15 +46,21 @@ pub struct DrawerMeta {
     /// within a document, and orders nothing at all across API saves — read
     /// it together with `source_file` or not at all.
     pub chunk_index: u32,
+    /// The surface that filed the drawer (`mine`, `rest`, an MCP client …), stamped by the engine rather than claimed by the writer.
     pub added_by: String,
     /// RFC 3339 timestamp of when the drawer was filed.
     pub filed_at: String,
+    /// Which revision of content normalization produced the stored bytes. Part of the drawer id, so a change in normalization never re-derives an existing id silently.
     pub normalize_version: u32,
+    /// Which id derivation produced `Drawer::id`, named so a reader can tell what the id is deterministic over.
     pub id_recipe: String,
+    /// First 1-based source line the chunk covers, when the source had lines.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_start: Option<u32>,
+    /// Last 1-based source line the chunk covers, when the source had lines.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_end: Option<u32>,
+    /// The date the content was written or is about (`YYYY-MM-DD`), when known: the anchor relative dates in the text resolve against, and what a declared date window narrows on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_date: Option<String>,
     /// Dates and times written into the content itself, preserved verbatim
@@ -58,6 +68,7 @@ pub struct DrawerMeta {
     /// structure, like `entities` — the text is never altered.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub time_mentions: Vec<crate::temporal::TimeMention>,
+    /// The hall the drawer is filed under, when one was declared — a grouping above wings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hall: Option<String>,
     /// The declared record kind — one of [`crate::KIND_VOCAB`], or absent
@@ -92,8 +103,10 @@ pub struct DrawerMeta {
     /// written before provenance existed stays byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
+    /// The writer's own claim of the channel the content came through. A claim, never a trust boundary.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
+    /// The writer's own claim of the session that produced the content. A claim, never a trust boundary.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
     /// Tier-1 admission signals tripped at ingest (C3.3): signal CODES
@@ -107,8 +120,10 @@ pub struct DrawerMeta {
     /// quarantined.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intended_wing: Option<String>,
+    /// The room a diverted drawer was aimed at before admission control moved it to the review wing; restored by an `allow` ruling.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intended_room: Option<String>,
+    /// Entity names extracted from the content. Emptied at rest (`meta_at_rest`) and read live instead, so plaintext-derived words never sit unsealed in `meta_json`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub entities: Vec<String>,
     /// **Further** times this same content was recorded, beyond the drawer's
@@ -126,11 +141,14 @@ pub struct DrawerMeta {
     pub occurrences: Vec<Occurrence>,
 }
 
+/// A drawer: one verbatim piece of content, its deterministic id, and its metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Drawer {
+    /// Deterministic over (wing, room, source, chunk index, normalize version) — `ids::drawer_id`. API saves carry a unique append index as the chunk index, so they are unique per call rather than idempotent.
     pub id: String,
     /// Verbatim content. Encrypted at rest in sealed vaults.
     pub content: String,
+    /// Everything recorded about the drawer beside its content.
     pub meta: DrawerMeta,
 }
 

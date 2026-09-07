@@ -4,6 +4,7 @@
 //! projects), wings hold *rooms* (topics), rooms hold *drawers* — verbatim
 //! chunks of original text. Nothing is summarized or paraphrased on the way
 //! in; retrieval returns the exact bytes that were stored.
+#![warn(missing_docs)]
 
 pub mod admission;
 pub mod chunk;
@@ -28,6 +29,7 @@ pub use ids::drawer_id;
 pub use normalize::{normalize_content, normalize_wing_name, NORMALIZE_VERSION};
 pub use rerank::Reranker;
 
+/// Errors the domain model raises: an invalid declared name, or content past the size bound.
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {
     /// `what` names the FIELD, and it is in the message because it was not.
@@ -42,10 +44,14 @@ pub enum CoreError {
     /// the field: it could not be met while the label went nowhere.
     #[error("invalid {what} {value:?}: {reason}")]
     InvalidName {
+        /// Which field the value was declared for (`wing`, `room`, `vault` …), so the refusal can name it.
         what: &'static str,
+        /// The rejected value, as declared.
         value: String,
+        /// Why it was rejected.
         reason: &'static str,
     },
+    /// Content longer than the bound: `(actual bytes, maximum)`.
     #[error("content too large: {0} bytes (max {1})")]
     ContentTooLarge(usize, usize),
 }

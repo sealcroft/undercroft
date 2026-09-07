@@ -1,5 +1,48 @@
 # Changelog
 
+## Unreleased — 1.5.1
+
+PATCH: nothing observable changes. Every public item in the eight library
+crates carries a doc comment and a lint refuses the next one that does not.
+
+### every public item is documented, and `#![warn(missing_docs)]` keeps it so (O110, the O99 ruling)
+
+**ROADMAP O110 FILED AND CLOSED 2026-09-07 — the ruling O99 was owed.** O99
+swept the misplaced-doc-block class by eye and left one question to the
+maintainer: whether `#![warn(missing_docs)]` on the library crates is worth
+a build gate, at a measured cost of **~113 of ~595** public items undocumented.
+The ruling was *enable everywhere* — and the first thing enabling it did was
+correct the cost by a factor of three: the compiler flags **360** items on
+the default build, not 113, because a `pub` struct field and an enum variant
+are documentable items and O99's scanner counted neither (170 fields and 98
+variants, plus 92 in the scanner's own scope: 37 methods, 23 structs, 10
+enums, 8 constants, 6 associated functions, 5 modules, 2 traits, 1
+associated constant). The ruling was re-confirmed at the true figure before
+a word was written — and the telemetry lint then found **12 more**, the
+fields of the live monitor's `Sample`, which exist only behind the
+`telemetry` feature and which a default check never compiles: the
+`--all-targets`-without-features blind spot O84 recorded, one lint over.
+**372** in all.
+
+Every one of the 372 is documented against the code it describes, not its
+name — read in context first, one line each where a line is the truth
+(`/// The wing the drawer is filed in`), longer where the item carries a
+decision (`Vault::writes` is the anchor's count, never the live one;
+`SearchHit.score` is calibrated absolutely, never against the other hits;
+`IndexRecord.embedding` is plaintext-derived, which is why the hop obeys the
+transport policy). Eight inline struct-variants (`CorruptRow { id, reason }`
+and its siblings) were expanded so each field could carry its own line.
+The attribute sits in each crate root after the crate doc, so `cargo
+clippy --all-targets -- -D warnings` — the compose `lint` service and the
+CI job alike — now refuses a public item added without a doc. It sees the
+orphan and never a misattribution; the by-eye scanner O99 recorded as
+method stays the audit's instrument for that half.
+
+Placement was checked by the compiler rather than by hand: a doc comment
+that lands on a non-item line is a compile error, and the count went
+372 → 0 with no other warning, on the default build and both telemetry builds. No behaviour, no test count and no published
+figure moves.
+
 ## 1.5.0 — 2026-09-07
 
 MINOR, by this project's own test: the per-vault database gains a name

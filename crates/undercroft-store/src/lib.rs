@@ -11,6 +11,7 @@
 //!   verified on read and re-walkable via [`PalaceStore::verify`];
 //! * an append-only `audit` table records the tag of every write in order,
 //!   which must replay to the manifest's HMAC chain head.
+#![warn(missing_docs)]
 
 pub mod admission;
 mod fdeidx;
@@ -1415,7 +1416,9 @@ pub(crate) fn parse_late_top_n(raw: Option<&str>) -> Result<Option<usize>, Strin
 /// Override at open with `UNDERCROFT_FUSION` (`bm25` / `legacy`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Fusion {
+    /// The older blend: a flat term-overlap fraction weighting every matched query term equally. Measurably worse, kept for comparison.
     Legacy,
+    /// The default: cosine blended with Okapi BM25 over the decrypted candidate set, plus recency.
     Bm25,
 }
 
@@ -1461,16 +1464,27 @@ pub(crate) fn parse_fusion(raw: Option<&str>) -> Result<Fusion, String> {
 const BM25_K1: f32 = 1.2;
 const BM25_B: f32 = 0.75;
 
+/// Everything the store can refuse. The integrity family — `Integrity`, `Attestation`, `DatabaseMissing`, `DatabaseAmbiguous`, a tampered or corrupt manifest — exits 2 on the CLI and answers 409 with `class: "integrity"` on `/v1`, the two sets kept identical by a cross-surface test.
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
+    /// SQLite refused.
     #[error("sqlite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
+    /// The vault layer refused: a key, a seal, or the manifest.
     #[error("vault error: {0}")]
     Vault(#[from] VaultError),
+    /// A row decoded to something impossible; the reason names what.
     #[error("corrupt row {id}: {reason}")]
-    CorruptRow { id: String, reason: String },
+    CorruptRow {
+        /// The row's id.
+        id: String,
+        /// What was wrong with it.
+        reason: String,
+    },
+    /// A record's HMAC did not verify — the integrity verdict, carrying the record's id.
     #[error("integrity failure on record {0} — HMAC mismatch")]
     Integrity(String),
+    /// The vault's recorded vector space is not this process's embedder; searching across the swap would degrade recall silently.
     #[error(
         "vault was embedded with {stored:?} ({stored_dim}d) but the current embedder is \
          {current:?} ({current_dim}d); searching across a model swap silently degrades recall. \
@@ -1478,19 +1492,30 @@ pub enum StoreError {
          to re-embed."
     )]
     EmbedderMismatch {
+        /// The identity the vault recorded.
         stored: String,
+        /// Its dimension.
         stored_dim: usize,
+        /// This process's embedder identity.
         current: String,
+        /// Its dimension.
         current_dim: usize,
     },
+    /// A remote index backend refused.
     #[error("remote index error: {0}")]
     Index(#[from] undercroft_index::IndexError),
+    /// The remote mirror was pushed under a different embedder than the vault now uses.
     #[error(
         "the remote index was built with embedder {pushed:?} but this vault now uses \
          {current:?}; vectors from two embedding spaces cannot be compared, so its candidates \
          would be meaningless. Run `undercroft index push` to rebuild it."
     )]
-    IndexStale { pushed: String, current: String },
+    IndexStale {
+        /// The identity the mirror was pushed with.
+        pushed: String,
+        /// The vault's current identity.
+        current: String,
+    },
     /// An external-embedding vault reached from a surface that cannot
     /// supply a vector. The message names the boundary rather than only
     /// the symptom: neither the CLI nor MCP has any way to produce a
@@ -1506,10 +1531,18 @@ pub enum StoreError {
          cannot write to, search or create an external vault at all."
     )]
     ExternalVault,
+    /// A vector was supplied to a vault that computes its own embeddings.
     #[error("this vault computes its own embeddings; a vector may not be supplied")]
     NotExternalVault,
+    /// A supplied vector's length is not the vault's dimension.
     #[error("embedding dimension mismatch: vault expects {expected}, got {got}")]
-    EmbeddingDim { expected: usize, got: usize },
+    EmbeddingDim {
+        /// The vault's dimension.
+        expected: usize,
+        /// The supplied vector's length.
+        got: usize,
+    },
+    /// Invalid input or an invalid operation; the message says which.
     #[error("invalid operation: {0}")]
     Invalid(String),
     /// A destruction attestation did not verify against this vault: a
@@ -1549,7 +1582,12 @@ pub enum StoreError {
          taken mid-write; restore the database beside the manifest, or open the vault with a \
          writable process if you intended to start an empty one."
     )]
-    DatabaseMissing { id: String, path: String },
+    DatabaseMissing {
+        /// The vault.
+        id: String,
+        /// Where the database was expected.
+        path: String,
+    },
     /// A vault directory holding TWO databases — `vault.db` and the
     /// pre-1.5.0 `palace.db` — under one manifest (ROADMAP O7). Whichever
     /// the manifest's chain head anchors, the other is a stray copy, and an
@@ -1563,8 +1601,11 @@ pub enum StoreError {
          other moved aside, says which the manifest anchors), then reopen."
     )]
     DatabaseAmbiguous {
+        /// The vault.
         id: String,
+        /// Path of the `vault.db` that was found.
         current: String,
+        /// Path of the `palace.db` that was found beside it.
         legacy: String,
     },
     /// A read-only open met a schema older than this build expects.
@@ -1582,7 +1623,10 @@ pub enum StoreError {
          migrate it — migrating is a write. Open it once with a writable process (any write \
          command, or `undercroft verify`) to migrate, then retry read-only."
     )]
-    ReadOnlyUnmigrated { missing: String },
+    ReadOnlyUnmigrated {
+        /// The first schema element this build expects and the database lacks.
+        missing: String,
+    },
 }
 
 /// Raw drawer row as read for search: (id, meta_json, content, embedding, tag).
@@ -1726,6 +1770,7 @@ pub(crate) fn supersession_canonical(
 /// the response it always did.
 #[derive(Debug, Clone)]
 pub struct SearchPage {
+    /// The page: ranks `[offset, offset + limit)` of one ranking.
     pub hits: Vec<SearchHit>,
     /// The admitted ranking held more rows than `[offset, offset+limit)`
     /// covered. Exact, not a guess: admission (`hits.retain`) runs BEFORE the
@@ -1740,10 +1785,14 @@ pub struct SearchPage {
     pub scope: Option<usize>,
 }
 
+/// One retrieved drawer with every channel that scored it, so a caller can tell what kind of evidence found it.
 #[derive(Debug, Clone)]
 pub struct SearchHit {
+    /// The drawer, HMAC-verified and decrypted.
     pub drawer: Drawer,
+    /// The fused score in `[0, 1]`, calibrated absolutely — never against the other hits.
     pub score: f32,
+    /// The calibrated cosine channel.
     pub semantic: f32,
     /// Lexical evidence for ranking: exact term matches plus approximate ones
     /// (folds, one-edit tolerance, morphological families) at reduced weight.
@@ -1867,18 +1916,31 @@ pub enum Read {
 /// leaves. `kg_stats` is the same class one door over (counts).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ReadOp {
+    /// A search (`read/search`).
     Search,
+    /// One drawer fetched by id.
     Get,
+    /// The most recent drawers — what `wake_up` and the closet index call.
     Recent,
+    /// A paged drawer listing.
     List,
+    /// The diary view.
     Diary,
+    /// A tunnel listing.
     Tunnel,
+    /// The closet index.
     Closet,
+    /// Entity co-occurrence hallways.
     Hallways,
+    /// The admission review queue, on operator surfaces only.
     AdmissionList,
+    /// A graph query, either arm — one tool is what a caller drives.
     KgQuery,
+    /// A fact's timeline.
     KgTimeline,
+    /// An entity listing.
     KgEntities,
+    /// A canonical-key lookup.
     KgCanonical,
 }
 
@@ -1903,6 +1965,7 @@ impl ReadOp {
         ReadOp::KgCanonical,
     ];
 
+    /// The namespace this door records under: `read/<this>`.
     pub fn as_str(self) -> &'static str {
         match self {
             ReadOp::Search => "search",
@@ -1998,7 +2061,9 @@ pub struct SaveOutcome {
     /// Where the drawer ACTUALLY landed — the quarantine id when
     /// diverted, never the id the caller aimed at.
     pub id: String,
+    /// Whether the id was new. `false` when an existing drawer was rewritten.
     pub created: bool,
+    /// Whether a near-duplicate was refreshed in place instead of a new drawer being filed.
     pub deduped: bool,
     /// True when the screen diverted this write. A surface that reports
     /// `created` alone tells a caller its memory was filed where it
@@ -2026,7 +2091,10 @@ pub enum AnchorState {
     /// The anchor was a strict ancestor of the committed head by
     /// `behind_by` records — and has been fast-forwarded, unless the caller
     /// asked only for the verdict.
-    Healed { behind_by: usize },
+    Healed {
+        /// How many committed records the anchor trailed the head by.
+        behind_by: usize,
+    },
 }
 
 /// The surface identity every import stamps, on every transport. Named
@@ -2080,6 +2148,7 @@ pub struct BulkOutcome {
     pub quarantined: usize,
 }
 
+/// What a search declares. Built once for all three surfaces (`cli/search.rs`); every field is a declaration, none is inferred.
 #[derive(Debug, Default, Clone)]
 pub struct SearchOptions {
     /// Whose inflection applies. **A declaration outranks the text**; leaving
@@ -2087,7 +2156,9 @@ pub struct SearchOptions {
     /// then decides per candidate from that drawer's own function words. See
     /// [`MorphLang`].
     pub morph_lang: MorphLang,
+    /// Narrow to one wing.
     pub wing: Option<String>,
+    /// Narrow to one room.
     pub room: Option<String>,
     /// Filter to drawers whose DECLARED kind equals this value (one of
     /// [`undercroft_core::KIND_VOCAB`]; an unknown value is an error, never
@@ -2107,6 +2178,7 @@ pub struct SearchOptions {
     /// `wing` scope bypasses the vault floor (naming a wing is
     /// self-scoping) but never an explicit `min_trust` in the same request.
     pub min_trust: Option<String>,
+    /// Page size; `0` means the store's default of ten.
     pub limit: usize,
     /// Soft cap on how many of the returned hits may come from any single
     /// room. `None` (the default) keeps pure score order.
@@ -2168,7 +2240,9 @@ pub struct SearchOptions {
 /// An inclusive day range, both bounds `YYYY-MM-DD`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DateWindow {
+    /// First day, inclusive, `YYYY-MM-DD`.
     pub start: String,
+    /// Last day, inclusive, `YYYY-MM-DD`.
     pub end: String,
 }
 
@@ -2209,10 +2283,13 @@ pub enum WindowSource {
 pub struct ResolvedWindow {
     /// The window as read or declared, before slack.
     pub read_start: String,
+    /// The last day as declared or read, before slack.
     pub read_end: String,
     /// The bounds applied, after `when_slack_days` on each side.
     pub start: String,
+    /// The last day applied, after slack.
     pub end: String,
+    /// Declared by the caller, or read out of the query.
     pub source: WindowSource,
 }
 
@@ -2311,10 +2388,14 @@ fn date_hit_for(
 /// drawer's HMAC, so a forged date fails the read that hydrates the row.
 const CONTENT_DATE_SQL: &str = "substr(json_extract(meta_json, '$.content_date'), 1, 10)";
 
+/// The whole verdict, seven legs: record HMACs, the chain replay, supersession receipts, fact receipts, orphan labels, mirror drift and policy drift. Hand-projected on four renderers (`parity::HAND_PROJECTED`), so a new leg must reach all of them.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct VerifyReport {
+    /// How many records had their HMAC checked.
     pub records_checked: u64,
+    /// Ids whose HMAC failed.
     pub bad_records: Vec<String>,
+    /// Whether replaying every record's tag reproduces the committed head.
     pub chain_ok: bool,
     /// Every drawer supersession link with its verdict (empty when no
     /// drawer declares one). Carried INSIDE the report rather than left to
@@ -2491,6 +2572,7 @@ impl VerifyReport {
     }
 }
 
+/// One open vault: its SQLite connection, keys, embedder, retrieval tiers and caches. Opened writable (`open`) or read-only (`open_read_only`), a posture decided once.
 pub struct PalaceStore {
     conn: Connection,
     vault: Vault,
@@ -4239,6 +4321,7 @@ impl PalaceStore {
         Ok(n)
     }
 
+    /// The vault this store is open on.
     pub fn vault(&self) -> &Vault {
         &self.vault
     }
@@ -4270,6 +4353,7 @@ impl PalaceStore {
         ))
     }
 
+    /// Every drawer row, unfenced (`SELECT COUNT(*)`). Never an id source: it goes down on delete.
     pub fn count(&self) -> Result<u64, StoreError> {
         let n: i64 = self
             .conn
@@ -8060,18 +8144,31 @@ pub enum MorphLang {
     /// corpus behaves as it always did.
     #[default]
     Undeclared,
+    /// English suffix families — `-er` is NOT among them (`flow`/`flower`).
     English,
+    /// German suffix families, including the `-er` plural (`Kind`/`Kinder`).
     German,
+    /// Italian suffix families.
     Italian,
+    /// Spanish suffix families.
     Spanish,
+    /// French suffix families.
     French,
+    /// Portuguese suffix families.
     Portuguese,
+    /// Russian suffix families.
     Russian,
+    /// Greek suffix families.
     Greek,
+    /// Dutch suffix families.
     Dutch,
+    /// Turkish suffix families.
     Turkish,
+    /// Hindi suffix families.
     Hindi,
+    /// Georgian suffix families.
     Georgian,
+    /// Korean suffix families.
     Korean,
 }
 

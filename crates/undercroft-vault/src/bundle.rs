@@ -67,29 +67,40 @@ const KEM_EK_LEN: usize = 1184;
 const KEM_DK_LEN: usize = 2400;
 const KEM_CT_LEN: usize = 1088;
 
+/// Everything a bundle export or import can refuse.
 #[derive(Debug, thiserror::Error)]
 pub enum BundleError {
+    /// The file does not begin with a bundle magic.
     #[error("not a undercroft bundle (bad magic)")]
     BadMagic,
+    /// The file ends before its declared contents do.
     #[error("bundle is truncated")]
     Truncated,
+    /// The recipient string is neither a 32-byte hex X25519 key nor a `pq1` hybrid key.
     #[error("recipient string is neither a 32-byte hex X25519 key nor a pq1 hybrid key")]
     BadRecipient,
+    /// The identity string is neither a 32-byte hex X25519 secret nor a `pq1` hybrid secret.
     #[error("identity is neither a 32-byte hex X25519 secret nor a pq1 hybrid secret")]
     BadIdentity,
+    /// The bundle did not open: wrong identity key, or a corrupted file.
     #[error("bundle failed to open — wrong identity key or corrupted file")]
     Open,
+    /// A v2 (hybrid) bundle offered to an X25519-only identity. Never silently downgraded.
     #[error(
         "this bundle uses the hybrid post-quantum format and the identity is X25519-only — \
          it was addressed to a pq1 hybrid recipient; use that identity's secret"
     )]
     NeedsHybrid,
+    /// The signing key is not a 32-byte hex Ed25519 secret.
     #[error("signing key is not a 32-byte hex ed25519 secret")]
     BadSigner,
+    /// The manifest carries no signature, or its signature does not verify against its sender.
     #[error("manifest signature is missing or does not verify against its sender")]
     BadSignature,
+    /// The manifest could not be read as one; the message says what was wrong.
     #[error("manifest is malformed: {0}")]
     BadManifest(String),
+    /// The bundle declared an expiry that has passed (the instant, RFC 3339).
     #[error("bundle expired at {0}")]
     Expired(String),
 }
@@ -107,7 +118,10 @@ pub enum Attestation {
     /// A manifest carrying neither sender nor signature.
     Unsigned,
     /// A signature that verified. `sender` is proven, not claimed.
-    Verified { sender: String },
+    Verified {
+        /// The sender whose signature verified over the manifest.
+        sender: String,
+    },
 }
 
 impl Attestation {
@@ -345,11 +359,15 @@ fn seal(
 /// signature is not checked.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ManifestCounts {
+    /// How many drawer records the payload holds.
     pub drawers: u64,
+    /// How many knowledge-graph entity records the payload holds.
     #[serde(default)]
     pub kg_entities: u64,
+    /// How many knowledge-graph fact records the payload holds.
     #[serde(default)]
     pub kg_triples: u64,
+    /// How many tunnel records the payload holds.
     #[serde(default)]
     pub tunnels: u64,
 }
@@ -374,6 +392,7 @@ pub struct BundleManifest {
     /// both say where the records came from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embedder: Option<String>,
+    /// The source vault's audit-chain head at export — provenance, never importable state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chain_head: Option<String>,
     /// Sender-declared trust class for the receiving deployment's policy —

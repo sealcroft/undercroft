@@ -21,6 +21,7 @@
 //! bleed, and offline tampering of the database or manifest. It does not
 //! defend against an attacker who can read process memory while a vault is
 //! unlocked.
+#![warn(missing_docs)]
 
 pub mod bundle;
 pub mod keys;
@@ -35,22 +36,31 @@ use time::OffsetDateTime;
 use keys::{derive_vault_key, SecretKey, KEY_LEN};
 use seal::{chain_next, record_hmac, verify_hmac, SealError, HMAC_LEN};
 
+/// Everything the vault layer can refuse: I/O, key and seal failures, a vault that is missing or already present, a manifest that is corrupt or fails its MAC, and an invalid name.
 #[derive(Debug, thiserror::Error)]
 pub enum VaultError {
+    /// A filesystem operation failed.
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    /// Master-key or key-derivation failure.
     #[error("key error: {0}")]
     Key(#[from] keys::KeyError),
+    /// Sealing or opening a record failed: wrong key, tampered bytes, or a truncated blob.
     #[error("seal error: {0}")]
     Seal(#[from] SealError),
+    /// No vault of this id has a manifest under the palace.
     #[error("vault {0:?} not found (create it with `undercroft vault create {0}`)")]
     NotFound(String),
+    /// A vault of this id already has a manifest.
     #[error("vault {0:?} already exists")]
     AlreadyExists(String),
+    /// The manifest could not be read as one; the message says what was wrong.
     #[error("vault manifest is corrupt: {0}")]
     CorruptManifest(String),
+    /// The manifest's HMAC does not verify under the vault's keys — evidence of tampering, and an integrity verdict on every surface.
     #[error("vault manifest failed integrity verification — possible tampering")]
     ManifestTampered,
+    /// The vault id failed `validate_name`.
     #[error("invalid vault name: {0}")]
     BadName(#[from] undercroft_core::CoreError),
 }
@@ -239,10 +249,12 @@ pub struct Vault {
 }
 
 impl Vault {
+    /// The vault's id: its directory name under `vaults/`, and the AAD every sealed record is bound to.
     pub fn id(&self) -> &str {
         &self.id
     }
 
+    /// The vault's directory, holding `vault.json` and its database.
     pub fn dir(&self) -> &Path {
         &self.dir
     }
@@ -310,14 +322,17 @@ impl Vault {
         &self.unhealed
     }
 
+    /// Sealed (AEAD content plus HMAC) or HMAC-only (plaintext content, tagged).
     pub fn level(&self) -> SecurityLevel {
         self.level
     }
 
+    /// The write count the manifest anchor held when THIS handle last anchored — not the live count, which `PalaceStats.writes` reads from `chain_meta`.
     pub fn writes(&self) -> u64 {
         self.manifest.writes
     }
 
+    /// The chain head the manifest anchor held when THIS handle last anchored — the rollback anchor, not the live head, which lives in `chain_meta`.
     pub fn chain_head_hex(&self) -> &str {
         &self.manifest.chain_head_hex
     }
@@ -362,6 +377,7 @@ impl Vault {
         }
     }
 
+    /// Recover an embedding from its at-rest form: opened under the record's `/emb` AAD domain on a sealed vault, read as-is on hmac-only, then dequantized from int8.
     pub fn embedding_from_rest(
         &self,
         record_id: &str,
@@ -807,6 +823,7 @@ impl VaultManager {
         })
     }
 
+    /// The palace root: the data directory holding `master.key` and `vaults/`.
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -815,6 +832,7 @@ impl VaultManager {
         self.root.join("vaults").join(id)
     }
 
+    /// Every vault id under the palace that has a manifest, sorted.
     pub fn list(&self) -> Result<Vec<String>, VaultError> {
         let mut out = Vec::new();
         let dir = self.root.join("vaults");
@@ -830,6 +848,7 @@ impl VaultManager {
         Ok(out)
     }
 
+    /// Whether a vault of this id has a manifest. Says nothing about its database — that is `Vault::database_exists`.
     pub fn exists(&self, id: &str) -> bool {
         self.vault_dir(id).join("vault.json").exists()
     }
@@ -1111,6 +1130,7 @@ fn dequantize_embedding(raw: &[u8]) -> Vec<f32> {
 
 // Re-export for store-layer signatures.
 pub use seal::HMAC_LEN as RECORD_TAG_LEN;
+/// Length of the palace master key in bytes.
 pub const MASTER_KEY_LEN: usize = KEY_LEN;
 
 #[cfg(test)]

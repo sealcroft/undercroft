@@ -16,6 +16,7 @@
 //! Everything reported here is **metadata and counts only** — never drawer
 //! content or key material — matching Undercroft's local-first, opt-in
 //! stance.
+#![warn(missing_docs)]
 
 #[cfg(feature = "telemetry")]
 mod imp;
@@ -77,7 +78,9 @@ macro_rules! diag_error {
 /// Outcome of a drawer write, used as a metric label.
 #[derive(Clone, Copy)]
 pub enum WriteOutcome {
+    /// A new drawer was filed.
     Created,
+    /// An existing near-duplicate was refreshed instead.
     Deduped,
     /// The admission screen diverted the write. Its own label rather than
     /// `created`, because `drawer_writes_total{outcome="created"}` counted
@@ -102,8 +105,11 @@ impl WriteOutcome {
 /// A knowledge-graph mutation kind, used as a metric label.
 #[derive(Clone, Copy)]
 pub enum KgKind {
+    /// An entity write.
     Entity,
+    /// A fact write.
     Triple,
+    /// A supersession.
     Supersede,
 }
 
@@ -688,17 +694,29 @@ pub fn event_hmac_fail(vault: &str, surface: &str, site: TamperSite<'_>) {
 #[cfg(feature = "telemetry")]
 #[derive(Clone, serde::Serialize)]
 pub struct Sample {
+    /// When the sample was taken, as a Unix timestamp in seconds.
     pub ts: i64,
+    /// The vault sampled.
     pub vault: String,
+    /// Whether the vault is sealed.
     pub sealed: bool,
+    /// Drawer count.
     pub drawers: u64,
+    /// Distinct rooms.
     pub rooms: u64,
+    /// Drawer count per wing — names travel, since the subscriber proved per-vault authorization (M6).
     pub wings: Vec<(String, u64)>,
+    /// Knowledge-graph facts.
     pub kg_triples: u64,
+    /// Knowledge-graph entities.
     pub kg_entities: u64,
+    /// Facts still active.
     pub kg_active: u64,
+    /// Cross-wing tunnels.
     pub tunnels: u64,
+    /// Audit-chain height.
     pub chain_height: u64,
+    /// Database size on disk, in bytes.
     pub db_bytes: u64,
 }
 

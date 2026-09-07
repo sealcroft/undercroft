@@ -17,17 +17,24 @@ use subtle::ConstantTimeEq;
 
 use crate::keys::SecretKey;
 
+/// XChaCha20-Poly1305 nonce length in bytes; a nonce leads every sealed blob.
 pub const NONCE_LEN: usize = 24;
+/// Length of a record's HMAC-SHA256 tag in bytes.
 pub const HMAC_LEN: usize = 32;
 
+/// Everything opening a sealed record or checking a tag can refuse.
 #[derive(Debug, thiserror::Error)]
 pub enum SealError {
+    /// AEAD open failed: wrong key, or tampered ciphertext.
     #[error("decryption failed: wrong key or tampered ciphertext")]
     Decrypt,
+    /// The blob is shorter than a nonce plus a tag.
     #[error("sealed blob too short")]
     Truncated,
+    /// The record's HMAC does not match — the integrity verdict.
     #[error("integrity check failed: record HMAC does not match")]
     BadHmac,
+    /// The opened content is not UTF-8.
     #[error("stored content is not valid UTF-8")]
     Utf8(#[from] std::string::FromUtf8Error),
 }

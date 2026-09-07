@@ -39,18 +39,26 @@ use crate::{canonical, PalaceStore, StoreError};
 /// What one rotation re-sealed / re-tagged.
 #[derive(Debug, Default, serde::Serialize)]
 pub struct RotationReport {
+    /// Drawers re-sealed and re-tagged.
     pub drawers: usize,
+    /// Graph entities re-sealed and re-tagged.
     pub kg_entities: usize,
+    /// Graph facts re-sealed and re-tagged, their receipts re-keyed.
     pub kg_triples: usize,
+    /// Tunnels re-tagged.
     pub tunnels: usize,
+    /// ColBERT token matrices re-sealed.
     pub token_matrices: usize,
+    /// PQ code rows re-sealed.
     pub pq_rows: usize,
     /// Sealed PQ pages re-sealed (the opt-in page tier; 0 in per-row mode).
     pub pq_pages: usize,
     /// Per-wing PQ rows re-sealed (the wing-as-retrieval-unit tier; 0 when
     /// no wing has crossed its floor).
     pub wing_pq_rows: usize,
+    /// FDE rows re-sealed.
     pub fde_rows: usize,
+    /// Audit records re-keyed over their preserved bytes.
     pub audit_entries: usize,
     /// Sealed meta artifacts re-sealed (codebooks, IVF centroids, FDE params).
     pub meta_artifacts: usize,

@@ -22,23 +22,30 @@
 //! * queries return candidate ids only — the caller re-loads records from
 //!   the local palace, where HMAC verification and decryption happen. A
 //!   lying index can hide results, but cannot forge or alter them.
+#![warn(missing_docs)]
 
 use serde::{Deserialize, Serialize};
 
+/// Everything a remote backend hop can refuse.
 #[derive(Debug, thiserror::Error)]
 pub enum IndexError {
+    /// The HTTP call failed.
     #[error("http error: {0}")]
     Http(String),
+    /// The postgres call failed.
     #[error("postgres error: {0}")]
     Pg(String),
+    /// The backend answered something this client cannot read.
     #[error("unexpected response from backend: {0}")]
     BadResponse(String),
     /// The transport policy refused this endpoint, or a declared CA pin
     /// did not resolve. Construction-time, before a byte moves.
     #[error("{0}")]
     Transport(String),
+    /// `UNDERCROFT_INDEX` names no backend this build has.
     #[error("unknown backend {0:?} (expected: qdrant, chroma, pgvector, milvus, weaviate)")]
     UnknownBackend(String),
+    /// The named backend has no endpoint declared: `(backend, the variable to set)`.
     #[error("backend {0} is not configured: set {1}")]
     NotConfigured(&'static str, &'static str),
 }
@@ -46,6 +53,7 @@ pub enum IndexError {
 /// One record pushed to a remote index.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexRecord {
+    /// The drawer id — all a remote may ever hand back.
     pub id: String,
     /// Base64 of the drawer's **at-rest** content blob.
     ///
@@ -57,23 +65,32 @@ pub struct IndexRecord {
     /// REFUSES to push an hmac-only vault unless the caller states that
     /// plaintext leaving the machine is intended.
     pub sealed_b64: String,
+    /// The drawer's wing, for filtering at the backend.
     pub wing: String,
+    /// The drawer's room.
     pub room: String,
+    /// The drawer's vector — plaintext-derived, which is why every hop obeys the transport policy.
     pub embedding: Vec<f32>,
 }
 
 /// A candidate hit from a remote query: id + backend-reported score.
 #[derive(Debug, Clone)]
 pub struct Candidate {
+    /// The drawer id the backend offered.
     pub id: String,
+    /// The backend's own score: a hint for candidate order, never the score that decides.
     pub score: f32,
 }
 
+/// A remote vector backend as an untrusted accelerator: it returns candidate ids, and every candidate is re-verified and re-scored locally.
 pub trait VectorIndex {
+    /// The backend's name, for records and messages.
     fn name(&self) -> &'static str;
     /// Create/ensure the collection for a (vault, dimension) pair.
     fn ensure(&mut self, collection: &str, dim: usize) -> Result<(), IndexError>;
+    /// Push records into the collection.
     fn upsert(&mut self, collection: &str, records: &[IndexRecord]) -> Result<(), IndexError>;
+    /// The nearest candidates to a vector, at most `limit`.
     fn query(
         &mut self,
         collection: &str,
@@ -81,7 +98,9 @@ pub trait VectorIndex {
         wing: Option<&str>,
         limit: usize,
     ) -> Result<Vec<Candidate>, IndexError>;
+    /// How many records the collection holds.
     fn count(&mut self, collection: &str) -> Result<u64, IndexError>;
+    /// Remove records by id — what a destruction reaches when a mirror exists.
     fn delete(&mut self, collection: &str, ids: &[String]) -> Result<(), IndexError>;
 
     /// **How many rows the mirror holds, or `None` when there is no mirror —
@@ -207,16 +226,19 @@ pub fn from_env(backend: &str) -> Result<Box<dyn VectorIndex>, IndexError> {
     }
 }
 
+/// Qdrant, over its REST API.
 pub mod qdrant {
     use super::*;
     use serde_json::{json, Value};
 
+    /// A Qdrant endpoint reached through the policed agent.
     pub struct QdrantIndex {
         base: String,
         agent: ureq::Agent,
     }
 
     impl QdrantIndex {
+        /// Connect to a Qdrant endpoint; cleartext to a non-loopback host is refused.
         pub fn new(base_url: &str) -> Result<Self, IndexError> {
             Ok(Self {
                 base: base_url.trim_end_matches('/').to_string(),
@@ -376,6 +398,7 @@ pub mod qdrant {
     }
 }
 
+/// Chroma, over its REST API.
 pub mod chroma {
     use super::*;
     use serde_json::{json, Value};
@@ -389,6 +412,7 @@ pub mod chroma {
     }
 
     impl ChromaIndex {
+        /// Connect to a Chroma endpoint; cleartext to a non-loopback host is refused.
         pub fn new(base_url: &str) -> Result<Self, IndexError> {
             Ok(Self {
                 base: format!(
@@ -566,6 +590,7 @@ pub mod chroma {
     }
 }
 
+/// PostgreSQL with pgvector, over `tokio-postgres`.
 pub mod pgvector {
     use super::*;
     use postgres::{Client, NoTls};
@@ -681,6 +706,7 @@ pub mod pgvector {
     }
 
     impl PgVectorIndex {
+        /// Connect to a pgvector DSN; every host and hostaddr must be loopback unless the DSN demands TLS.
         pub fn new(dsn: &str) -> Result<Self, IndexError> {
             // The same rule as every other client, spelled for libpq:
             // cleartext beyond loopback is refused at construction, before
@@ -885,6 +911,7 @@ pub mod pgvector {
     }
 }
 
+/// Milvus, over its REST API.
 pub mod milvus {
     use super::*;
     use serde_json::{json, Value};
@@ -898,6 +925,7 @@ pub mod milvus {
     }
 
     impl MilvusIndex {
+        /// Connect to a Milvus endpoint; cleartext to a non-loopback host is refused.
         pub fn new(base_url: &str) -> Result<Self, IndexError> {
             Ok(Self {
                 base: base_url.trim_end_matches('/').to_string(),
@@ -1046,6 +1074,7 @@ pub mod milvus {
     }
 }
 
+/// Weaviate, over its REST API.
 pub mod weaviate {
     use super::*;
     use serde_json::{json, Value};
@@ -1059,6 +1088,7 @@ pub mod weaviate {
     }
 
     impl WeaviateIndex {
+        /// Connect to a Weaviate endpoint; cleartext to a non-loopback host is refused.
         pub fn new(base_url: &str) -> Result<Self, IndexError> {
             Ok(Self {
                 base: base_url.trim_end_matches('/').to_string(),

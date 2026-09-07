@@ -142,27 +142,39 @@ pub enum AttestationVerdict {
 /// about content the vault no longer holds at all.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ForgottenDrawer {
+    /// The destroyed drawer's id.
     pub id: String,
+    /// Unkeyed SHA-256 of the destroyed content, hex: the commitment a third party checks against content it already holds, without the vault key.
     pub content_fp: String,
 }
 
 /// One chained record inside the attested interval.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AttestedRecord {
+    /// The chain record's label — `del/{id}` for a tombstone.
     pub record_id: String,
+    /// The record's tag, hex — what the chain folds in.
     pub tag: String,
+    /// When the record was appended (RFC 3339).
     pub at: String,
 }
 
 /// The attestation `forget --prove` emits.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ForgetAttestation {
+    /// Attestation format version.
     pub version: u32,
+    /// The vault the destruction ran in.
     pub vault: String,
+    /// When the attestation was minted (RFC 3339).
     pub created_at: String,
+    /// Every drawer the operation destroyed, by id and content fingerprint.
     pub drawers: Vec<ForgottenDrawer>,
+    /// The audit-chain head before the first tombstone, hex.
     pub head_before: String,
+    /// The audit-chain head after the last tombstone, hex.
     pub head_after: String,
+    /// The tombstone interval, in chain order.
     pub records: Vec<AttestedRecord>,
     /// **What this destruction did NOT reach: a remote mirror.**
     ///
@@ -184,8 +196,10 @@ pub struct ForgetAttestation {
     /// module refuses to mint.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mirror: Option<String>,
+    /// The operator's Ed25519 public key, hex, when the attestation was signed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sender: Option<String>,
+    /// The operator's Ed25519 signature over the attestation, hex, when signed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sig: Option<String>,
 }

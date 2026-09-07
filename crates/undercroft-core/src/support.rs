@@ -27,7 +27,9 @@ use serde::{Deserialize, Serialize};
 /// A byte range of the source drawer's content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Span {
+    /// Byte offset of the span's first byte in the drawer's content.
     pub offset: u32,
+    /// Length of the span in bytes.
     pub len: u32,
 }
 
@@ -81,6 +83,7 @@ impl Support {
         Support { spans }
     }
 
+    /// Whether at least one span of the note supports the fact. `false` is an unsupported fact, not an absent evaluation.
     pub fn is_stated(&self) -> bool {
         !self.spans.is_empty()
     }

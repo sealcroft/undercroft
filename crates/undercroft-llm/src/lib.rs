@@ -13,6 +13,7 @@
 //!
 //! Extraction prompts force JSON output and parsing is defensive — a
 //! chatty model that wraps JSON in prose still parses.
+#![warn(missing_docs)]
 
 pub mod advisor;
 pub mod embed;
@@ -22,18 +23,24 @@ pub use embed::HttpEmbedder;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+/// Everything the LLM client can refuse.
 #[derive(Debug, thiserror::Error)]
 pub enum LlmError {
+    /// No runtime URL is declared.
     #[error("UNDERCROFT_LLM_URL is not set — refinement requires a local LLM runtime")]
     NotConfigured,
+    /// The HTTP call failed.
     #[error("llm http error: {0}")]
     Http(String),
+    /// The model's answer could not be used.
     #[error("llm returned unusable output: {0}")]
     BadOutput(String),
+    /// The transport policy or a declaration refused before a byte moved.
     #[error("refused: {0}")]
     Refused(String),
 }
 
+/// Which chat API shape the runtime speaks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApiKind {
     /// Ollama native `/api/chat`
@@ -42,6 +49,7 @@ pub enum ApiKind {
     OpenAi,
 }
 
+/// A client for a local LLM runtime on the policed transport: TLS or loopback, an optional pinned root, an optional bearer.
 pub struct LlmClient {
     base: String,
     model: String,
@@ -79,6 +87,7 @@ pub struct LlmClient {
 const UNPARSEABLE_DESTINATION: &str = "<unparseable base url>";
 
 impl LlmClient {
+    /// Build a client for `base_url` and `model`, reading `UNDERCROFT_LLM_KEY` for the bearer; cleartext to a non-loopback host is refused.
     pub fn new(base_url: &str, model: &str, kind: ApiKind) -> Result<Self, LlmError> {
         Self::with_key(base_url, model, kind, "")
     }
@@ -168,6 +177,7 @@ impl LlmClient {
         Self::with_key(&base, &model, kind, &key)
     }
 
+    /// The model name requests are made with.
     pub fn model(&self) -> &str {
         &self.model
     }
@@ -311,9 +321,12 @@ impl LlmClient {
 // Extraction tasks
 // ---------------------------------------------------------------------------
 
+/// An entity the model named in a text.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct ExtractedEntity {
+    /// The entity's name, as the model wrote it.
     pub name: String,
+    /// The model's type label; `unknown` when it gave none.
     #[serde(rename = "type", default = "unknown_type")]
     pub entity_type: String,
 }
@@ -322,10 +335,14 @@ fn unknown_type() -> String {
     "unknown".into()
 }
 
+/// A fact the model distilled — a claim to be grounded against the note, never evidence by itself.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct ExtractedTriple {
+    /// The subject, as the model wrote it.
     pub subject: String,
+    /// The relation, as the model wrote it.
     pub predicate: String,
+    /// The object, as the model wrote it.
     pub object: String,
     /// The words in the note that say *when* this fact was established,
     /// copied verbatim — "three months ago", "last May". **Not a date.**
@@ -351,10 +368,13 @@ pub struct ExtractedTriple {
     pub quote: Option<String>,
 }
 
+/// A memory the model proposed from a text.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct ExtractedMemory {
+    /// The model's type label; `unknown` when it gave none.
     #[serde(rename = "type", default = "unknown_type")]
     pub memory_type: String,
+    /// The proposed memory text.
     pub content: String,
 }
 
@@ -576,14 +596,17 @@ self-contained sentence per memory, in the note's language\"}]. Skip small talk 
 transient detail. No prose, no markdown fences.";
 
 impl LlmClient {
+    /// Ask the model for the entities in `text`.
     pub fn extract_entities(&self, text: &str) -> Result<Vec<ExtractedEntity>, LlmError> {
         Ok(entities_from_output(&self.complete(ENTITY_SYSTEM, text)?))
     }
 
+    /// Ask the model for the facts in `text`.
     pub fn extract_triples(&self, text: &str) -> Result<Vec<ExtractedTriple>, LlmError> {
         Ok(triples_from_output(&self.complete(TRIPLE_SYSTEM, text)?))
     }
 
+    /// Ask the model for the memories in `text`.
     pub fn extract_memories(&self, text: &str) -> Result<Vec<ExtractedMemory>, LlmError> {
         Ok(memories_from_output(&self.complete(MEMORY_SYSTEM, text)?))
     }

@@ -18,11 +18,13 @@
 
 use serde_json::Value;
 
+/// One message of a parsed conversation transcript, kept as written.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Message {
     /// Transcript `type`: `user`, `assistant`, `system`, `summary`, …
     /// Kept as written rather than collapsed to a two-value enum.
     pub role: String,
+    /// The message body, verbatim.
     pub text: String,
     /// 1-based line number in the source transcript (stable sweep id).
     pub line: u32,

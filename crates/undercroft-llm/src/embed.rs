@@ -69,6 +69,7 @@ const ATTEMPTS: usize = 2;
 /// The text sent once at construction to learn the endpoint's dimension.
 const PROBE: &str = "dimension probe";
 
+/// An `Embedder` backed by a served model (`UNDERCROFT_EMBEDDER=http`) on the policed transport; the dimension is probed from the endpoint at construction rather than assumed.
 pub struct HttpEmbedder {
     base: String,
     model: String,

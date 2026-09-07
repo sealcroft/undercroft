@@ -453,10 +453,12 @@ impl CoarseQuantizer {
         })
     }
 
+    /// How many IVF partitions the index has.
     pub fn nlist(&self) -> usize {
         self.nlist
     }
 
+    /// How many vectors the centroids were trained on.
     pub fn trained_n(&self) -> u64 {
         self.trained_n
     }

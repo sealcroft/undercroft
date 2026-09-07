@@ -124,6 +124,7 @@ pub enum TimeKind {
 pub struct TimeMention {
     /// The span exactly as written, preserved verbatim.
     pub text: String,
+    /// Absolute (names a date on its own) or relative (meaningful only against the drawer's anchor).
     pub kind: TimeKind,
     /// `YYYY-MM-DD` when derivable — directly for absolute mentions, or
     /// against the anchor for relative ones. `None` means "recorded, not
@@ -325,9 +326,12 @@ pub fn hours_between(from: &str, to: &str) -> Option<i64> {
 /// hardcoded assumption. CLDR is the authority every platform reads for this.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum WeekStart {
+    /// Monday-first weeks — ISO 8601 and most of Europe.
     #[default]
     Monday,
+    /// Sunday-first weeks — the United States, Canada, Japan, Israel.
     Sunday,
+    /// Saturday-first weeks — Egypt, Saudi Arabia, the UAE and their neighbours, where Friday is the holy day.
     Saturday,
 }
 
@@ -359,7 +363,9 @@ impl WeekStart {
 /// English *may* with a month in four languages. A caller knows its corpus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Locale {
+    /// Which scanner reads the text — a grammar per language, not a vocabulary table.
     pub language: Language,
+    /// Which day starts the week; it moves "last week" and every week count.
     pub week_start: WeekStart,
     /// Which field a bare numeric date puts first. `07/05/2023` is 7 May or
     /// 5 July depending on the writer's convention, and no amount of reading
@@ -390,6 +396,7 @@ pub struct Locale {
 /// drawer overrides the default before it ever applies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DateOrder {
+    /// The caller did not say: what the text demonstrates decides, then the language's convention, then day-first.
     #[default]
     Undeclared,
     /// `d/M/y` — most of the world, per CLDR.
@@ -767,12 +774,15 @@ fn era_year_range(cal: Calendar, y: i32) -> Option<(Date, Date)> {
 /// language.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Language {
+    /// English: the marker after the count ("three days ago"), month names and ordinals; the numeric date order is left to `DateOrder`, since US and Commonwealth English differ.
     #[default]
     English,
+    /// Arabic: the marker before the count (قبل ثلاثة أيام), a dual number, both the Levantine and the Roman month systems, Arabic-Indic digits.
     Arabic,
 }
 
 impl Locale {
+    /// English with Monday weeks, an undeclared date order (US and Commonwealth split, so nothing follows from the language) and the Gregorian calendar.
     pub const ENGLISH: Locale = Locale {
         language: Language::English,
         week_start: WeekStart::Monday,
@@ -796,14 +806,17 @@ impl Locale {
         calendar: Calendar::Gregorian,
     };
 
+    /// This locale with a different first day of the week.
     pub fn with_week_start(self, week_start: WeekStart) -> Self {
         Self { week_start, ..self }
     }
 
+    /// This locale with a declared field order for bare numeric dates.
     pub fn with_date_order(self, date_order: DateOrder) -> Self {
         Self { date_order, ..self }
     }
 
+    /// This locale with a declared calendar for the years it reads.
     pub fn with_calendar(self, calendar: Calendar) -> Self {
         Self { calendar, ..self }
     }

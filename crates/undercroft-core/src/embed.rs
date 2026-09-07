@@ -16,11 +16,16 @@
 
 use sha2::{Digest, Sha256};
 
+/// Dimension of every vector the hashed embedder produces: 384 buckets.
 pub const EMBED_DIM: usize = 384;
 
+/// A text-to-vector model. The hashed default is deterministic and offline; served and in-process models implement the same contract and are refused at open when a vault records a different one.
 pub trait Embedder {
+    /// The identity a vault records for the vector space this embedder produces; a mismatch at open is refused rather than ranked across.
     fn model_name(&self) -> &str;
+    /// Length of the vectors `embed` returns.
     fn dimension(&self) -> usize;
+    /// Embed one text into a vector of `dimension` floats.
     fn embed(&self, text: &str) -> Vec<f32>;
 
     /// The `semantic` score above which this vector space may admit a drawer
@@ -208,6 +213,7 @@ pub fn calibrate_semantic_floor<E: Embedder + ?Sized>(e: &E) -> Option<f32> {
     Some(floor.clamp(0.0, 0.98))
 }
 
+/// The default embedder: feature hashing over word unigrams, bigrams and character trigrams, SHA-256 into `EMBED_DIM` buckets. Deterministic and offline, and deliberately without cross-lingual reach — that is a model's job.
 #[derive(Debug, Default, Clone)]
 pub struct HashEmbedder;
 
@@ -302,7 +308,9 @@ impl HashEmbedder {
 /// class this whole series exists to remove; one extra tuple is cheaper than
 /// making an exception to it.
 pub const HASH_EMBEDDER_V1: &str = "undercroft-hash-v1";
+/// Identity of the second hashed token space. Shipped in no tag but built on the branch, so a vault carrying it is migrated to v3 at open like a v1 one.
 pub const HASH_EMBEDDER_V2: &str = "undercroft-hash-v2";
+/// Identity of the current hashed vector space (v3: folded, script-segmented tokens) — what `HashEmbedder::model_name` reports.
 pub const HASH_EMBEDDER: &str = "undercroft-hash-v3";
 
 /// The `semantic` score above which [`HashEmbedder`] admits on cosine alone.
