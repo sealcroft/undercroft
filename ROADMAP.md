@@ -4160,7 +4160,7 @@ touching anyone's existing corpus.
 integrity verdict, and two different model files must produce two different
 identities.
 
-## 1.5.0 — unreleased
+## 1.5.0 — released 2026-09-07
 
 The per-vault database is named for the vault.
 
@@ -4170,8 +4170,8 @@ under the old name opens with no verdict, verifies, and is renamed in place.
 This section said MAJOR for a month, on the table below that reads *"an
 on-disk format that will not open … unless it ships with a compat path that
 opens both"*; it ships with that path, and the compat path is what makes it
-a minor rather than an exception to the rule. Filed here until the tag
-exists. `UPGRADING.md` carries it for the scripts that name the file.
+a minor rather than an exception to the rule. `UPGRADING.md` carries it for
+the scripts that name the file.
 
 ### O7 — CLOSED 2026-09-07: `palace` named two levels of the hierarchy — the per-vault database is `vault.db`, and a legacy `palace.db` is renamed at its first writable open
 

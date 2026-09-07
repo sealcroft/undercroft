@@ -67,7 +67,7 @@ so rather than implying it checked them.
 
 ---
 
-## 1.5.0 (unreleased)
+## 1.5.0 (released 2026-09-07)
 
 ### the per-vault database is `vault.db`; a `palace.db` is renamed at its first writable open
 
