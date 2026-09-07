@@ -6,6 +6,12 @@
 !Cargo.lock
 !crates
 !crates/**
+# The vendored, patched HTTP server crate the workspace takes through
+# `[patch.crates-io]` (ROADMAP O114). Without it every image resolves
+# tiny_http from the registry — and the Dockerfile's COPY fails first, which
+# is the loud version of that failure.
+!vendor
+!vendor/**
 # The observability stack's configs: `cargo test` checks the alert rules and
 # the dashboard against the series the binary actually exports, and that gate
 # fails rather than skips when the tree is missing.

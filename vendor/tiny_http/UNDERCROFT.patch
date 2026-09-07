@@ -1,0 +1,262 @@
+diff -ru '--exclude=UNDERCROFT.md' '--exclude=UNDERCROFT.patch' '--exclude=SHA256SUMS' --label upstream-0.12.0 --label vendor/tiny_http upstream-0.12.0 vendor/tiny_http
+--- upstream-0.12.0
++++ vendor/tiny_http
+@@ -34,8 +34,24 @@
+ 
+     // true if the connection goes through SSL
+     secure: bool,
++
++    // UNDERCROFT PATCH (ROADMAP O114): the previous request's body-consumption
++    // signal, when that body was read lazily. Checked before parsing the next
++    // request: a body the handler never read is neither drained (an
++    // allocation of the client's declared size, and a read a silent peer can
++    // stall forever) nor parsed as the next request — the connection ends.
++    pending_body: Option<std::sync::mpsc::Receiver<IoResult<()>>>,
+ }
+ 
++// UNDERCROFT PATCH (ROADMAP O114): bounds on what one request's header block
++// may cost before a byte of it is understood. `read_next_line` grew a `Vec`
++// per byte with no ceiling and `read` collected headers with no ceiling, so a
++// peer streaming one endless line — or endless lines — grew the process
++// without bound at line rate. A bearer plus a vault assertion plus the
++// ordinary client headers is well under a kilobyte; these are generous.
++const MAX_HEADER_LINE_BYTES: usize = 16 * 1024;
++const MAX_HEADERS: usize = 128;
++
+ /// Error that can happen when reading a request.
+ #[derive(Debug)]
+ enum ReadError {
+@@ -65,6 +81,7 @@
+             next_header_source: first_header,
+             no_more_requests: false,
+             secure,
++            pending_body: None,
+         }
+     }
+ 
+@@ -97,6 +114,14 @@
+ 
+             prev_byte_was_cr = byte == b'\r';
+ 
++            // UNDERCROFT PATCH (ROADMAP O114): a line past the ceiling is a
++            // refusal, not a growth.
++            if buf.len() >= MAX_HEADER_LINE_BYTES {
++                return Err(IoError::new(
++                    ErrorKind::InvalidInput,
++                    "header line exceeds the ceiling",
++                ));
++            }
+             buf.push(byte);
+         }
+     }
+@@ -123,6 +148,10 @@
+                     if line.is_empty() {
+                         break;
+                     };
++                    // UNDERCROFT PATCH (ROADMAP O114): see `MAX_HEADERS`.
++                    if headers.len() >= MAX_HEADERS {
++                        return Err(ReadError::WrongHeader(version));
++                    }
+                     headers.push(match FromStr::from_str(line.as_str().trim()) {
+                         // TODO: remove this conversion
+                         Ok(h) => h,
+@@ -144,7 +173,7 @@
+         std::mem::swap(&mut self.next_header_source, &mut data_source);
+ 
+         // building the next reader
+-        let request = crate::request::new_request(
++        let (request, body_signal) = crate::request::new_request_with_body_signal(
+             self.secure,
+             method,
+             path,
+@@ -164,6 +193,9 @@
+             }
+         })?;
+ 
++        // UNDERCROFT PATCH (ROADMAP O114): remembered for the next `next()`.
++        self.pending_body = body_signal;
++
+         // return the request
+         Ok(request)
+     }
+@@ -183,6 +215,20 @@
+             return None;
+         }
+ 
++        // UNDERCROFT PATCH (ROADMAP O114): behind a lazily-read body, wait
++        // for the handler to drop the request (it always has to, to reach
++        // the next one on this connection — this blocks exactly where the
++        // sequential reader already did) and refuse to parse the bytes it
++        // left unread as a request. `Err` from `recv` means the reader was
++        // dropped without a verdict, which only a leak produces; treat it as
++        // unread.
++        if let Some(rx) = self.pending_body.take() {
++            match rx.recv() {
++                Ok(Ok(())) => {}
++                _ => return None,
++            }
++        }
++
+         loop {
+             let rq = match self.read() {
+                 Err(ReadError::WrongRequestLine) => {
+diff -ru '--exclude=UNDERCROFT.md' '--exclude=UNDERCROFT.patch' '--exclude=SHA256SUMS' --label upstream-0.12.0 --label vendor/tiny_http upstream-0.12.0 vendor/tiny_http
+--- upstream-0.12.0
++++ vendor/tiny_http
+@@ -133,13 +133,53 @@
+     version: HTTPVersion,
+     headers: Vec<Header>,
+     remote_addr: Option<SocketAddr>,
+-    mut source_data: R,
++    source_data: R,
+     writer: W,
+ ) -> Result<Request, RequestCreationError>
+ where
+     R: Read + Send + 'static,
+     W: Write + Send + 'static,
+ {
++    new_request_with_body_signal(
++        secure,
++        method,
++        path,
++        version,
++        headers,
++        remote_addr,
++        source_data,
++        writer,
++    )
++    .map(|(rq, _)| rq)
++}
++
++/// UNDERCROFT PATCH (ROADMAP O114): as [`new_request`], also handing back
++/// the body reader's consumption signal — `Some` only for a
++/// `Content-Length` body large enough to be read lazily — so the connection
++/// can refuse to parse another request behind a body that was never read.
++/// The original discarded this receiver (`let (data_reader, _) = …`).
++#[allow(clippy::too_many_arguments)]
++pub(crate) fn new_request_with_body_signal<R, W>(
++    secure: bool,
++    method: Method,
++    path: String,
++    version: HTTPVersion,
++    headers: Vec<Header>,
++    remote_addr: Option<SocketAddr>,
++    mut source_data: R,
++    writer: W,
++) -> Result<
++    (
++        Request,
++        Option<std::sync::mpsc::Receiver<io::Result<()>>>,
++    ),
++    RequestCreationError,
++>
++where
++    R: Read + Send + 'static,
++    W: Write + Send + 'static,
++{
++    let mut body_signal = None;
+     // finding the transfer-encoding header
+     let transfer_encoding = headers
+         .iter()
+@@ -212,7 +252,8 @@
+ 
+             Box::new(Cursor::new(buffer)) as Box<dyn Read + Send + 'static>
+         } else {
+-            let (data_reader, _) = EqualReader::new(source_data, content_length); // TODO:
++            let (data_reader, rx) = EqualReader::new(source_data, content_length);
++            body_signal = Some(rx);
+             Box::new(FusedReader::new(data_reader)) as Box<dyn Read + Send + 'static>
+         }
+     } else if transfer_encoding.is_some() {
+@@ -226,19 +267,22 @@
+         Box::new(io::empty()) as Box<dyn Read + Send + 'static>
+     };
+ 
+-    Ok(Request {
+-        data_reader: Some(reader),
+-        response_writer: Some(Box::new(writer) as Box<dyn Write + Send + 'static>),
+-        remote_addr,
+-        secure,
+-        method,
+-        path,
+-        http_version: version,
+-        headers,
+-        body_length: content_length,
+-        must_send_continue: expects_continue,
+-        notify_when_responded: None,
+-    })
++    Ok((
++        Request {
++            data_reader: Some(reader),
++            response_writer: Some(Box::new(writer) as Box<dyn Write + Send + 'static>),
++            remote_addr,
++            secure,
++            method,
++            path,
++            http_version: version,
++            headers,
++            body_length: content_length,
++            must_send_continue: expects_continue,
++            notify_when_responded: None,
++        },
++        body_signal,
++    ))
+ }
+ 
+ impl Request {
+diff -ru '--exclude=UNDERCROFT.md' '--exclude=UNDERCROFT.patch' '--exclude=SHA256SUMS' --label upstream-0.12.0 --label vendor/tiny_http upstream-0.12.0 vendor/tiny_http
+--- upstream-0.12.0
++++ vendor/tiny_http
+@@ -63,26 +63,33 @@
+ where
+     R: Read,
+ {
++    // UNDERCROFT PATCH (ROADMAP O114; upstream tiny-http #290). The
++    // original drained the unread remainder here with
++    // `vec![0; remaining_to_read]` — an allocation sized by the CLIENT's
++    // `Content-Length`, taken before a byte was read, on the drop of every
++    // request a handler answered without consuming (a 401, a 413). One
++    // header therefore aborted the process on a heuristic-overcommit
++    // kernel. And a drain that succeeds is not safe either: the crate sets
++    // no socket read timeout, so a peer that declares a body and sends
++    // nothing parks the dropping thread — the single-threaded request loop
++    // — for as long as it likes.
++    //
++    // So: never drain. Report whether the body was consumed, and let the
++    // connection END when it was not (`ClientConnection::next` reads this
++    // signal before parsing another request on the same socket). A
++    // keep-alive client whose body was read whole is unaffected; one whose
++    // body was refused gets its connection closed, which is what a
++    // refusal should cost it.
+     fn drop(&mut self) {
+-        let mut remaining_to_read = self.size;
+-
+-        while remaining_to_read > 0 {
+-            let mut buf = vec![0; remaining_to_read];
+-
+-            match self.reader.read(&mut buf) {
+-                Err(e) => {
+-                    self.last_read_signal.send(Err(e)).ok();
+-                    break;
+-                }
+-                Ok(0) => {
+-                    self.last_read_signal.send(Ok(())).ok();
+-                    break;
+-                }
+-                Ok(other) => {
+-                    remaining_to_read -= other;
+-                }
+-            }
+-        }
++        let verdict = if self.size == 0 {
++            Ok(())
++        } else {
++            Err(std::io::Error::new(
++                std::io::ErrorKind::Other,
++                "request body left unread; the connection will not be reused",
++            ))
++        };
++        self.last_read_signal.send(verdict).ok();
+     }
+ }
+ 

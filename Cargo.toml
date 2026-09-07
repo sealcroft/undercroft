@@ -104,3 +104,17 @@ tracing-opentelemetry = "0.28"
 [profile.release]
 lto = "thin"
 strip = true
+
+# The one vendored crate, and why (ROADMAP O114). `tiny_http 0.12.0` drains
+# an unread request body on drop with `vec![0; remaining]` — an allocation
+# sized by the client's declared `Content-Length`, taken on every refusal
+# path including the unauthenticated 401 — and sets no socket read timeout,
+# so a peer declaring a body it never sends parks the request loop inside
+# that drain. Upstream tiny-http #290 is open with no release since 0.12.0.
+# `vendor/tiny_http` is 0.12.0 verbatim plus that fix and two header-block
+# ceilings, every changed line marked `UNDERCROFT PATCH`, the whole tree
+# pinned by `vendor/SHA256SUMS` (a battery preflight, both directions) and
+# the diff against upstream recorded in `vendor/tiny_http/UNDERCROFT.patch`.
+# Attributed in NOTICE (MIT OR Apache-2.0, both texts kept beside it).
+[patch.crates-io]
+tiny_http = { path = "vendor/tiny_http" }

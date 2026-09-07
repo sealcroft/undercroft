@@ -1628,9 +1628,33 @@ Consequences that are binding, not advisory:
   run folder therefore carries a README stating its findings in prose
   rather than leaving them implicit in the data. Holds
   `amb-locomo10-2026-08-22/` (M32)
+- `vendor/tiny_http` — **the one vendored crate** (ROADMAP O114, ruled
+  option A): `tiny_http` 0.12.0 verbatim plus one patch, taken through
+  `[patch.crates-io]` in the root `Cargo.toml`. The crate both listeners run
+  on drained an unread request body on drop with `vec![0; remaining]` — an
+  allocation of the CLIENT's declared `Content-Length`, on every refusal
+  path including the unauthenticated bearer 401 — so one header killed
+  `serve-http` and the orchestrator on a heuristic-overcommit kernel, and
+  the local battery could not see it because WSL overcommits (upstream
+  tiny-http #290, unfixed). **A bounded drain would not have been the fix**:
+  the crate sets no socket read timeout, so any drain parks the
+  single-threaded request loop for as long as a silent peer holds the
+  socket. The patch drains nothing — the drop reports whether the body was
+  consumed on a signal the original created and discarded, and the
+  connection ENDS behind a refused body; a header line above 16 KiB and a
+  request with more than 128 headers are refused too, the same class one
+  read over. Every changed line is marked `UNDERCROFT PATCH`, the diff is
+  `vendor/tiny_http/UNDERCROFT.patch`, the tree is pinned by
+  `vendor/SHA256SUMS` through the `vendored crates are pinned` preflight
+  (both directions, plus a probe that the patch is still present — a
+  pristine copy would pin clean too), the Dockerfile COPYs it, and `NOTICE`
+  attributes it. **Editing anything there means regenerating the sums on
+  purpose**; the recipe is in `vendor/tiny_http/UNDERCROFT.md`. Two
+  warnings the crate emits are upstream's own and are left alone: the diff
+  carries the fix and nothing else
 - `SECURITY.md` (disclosure policy; private vulnerability reporting is
-  enabled on the repo), `NOTICE` (MemPalace MIT heritage attribution),
-  `LICENSE` (BUSL 1.1 — see Conventions)
+  enabled on the repo), `NOTICE` (MemPalace MIT heritage attribution, and
+  the vendored `tiny_http`), `LICENSE` (BUSL 1.1 — see Conventions)
 - `.github/workflows/release.yml` — on every `v*` tag: five binary
   targets (linux x86_64/arm64 native, macOS Intel cross-compiled on
   macos-latest + Apple Silicon, windows) uploaded to the release with
@@ -1784,8 +1808,8 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (478 checks)
-docker compose run --rm orchestrator-e2e  # two engines + orchestrator (129 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (483 checks)
+docker compose run --rm orchestrator-e2e  # two engines + orchestrator (133 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (53 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (82 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
@@ -1975,7 +1999,7 @@ own teardown was the place it had not been applied. Gated by the
 `destructive compose scope` preflight, which requires every compose teardown
 in `tests/` to name the project it destroys; `tests/tls-pins.sh`'s two scoped
 teardowns are the accepted shape. Logs land in `.battery/` (gitignored).
-**`bash tests/battery.sh --preflight-only` runs the fifteen host-side preflights
+**`bash tests/battery.sh --preflight-only` runs the sixteen host-side preflights
 and no suite**, which is what CI invokes. **A count the battery cannot trust is never compared to a published figure, and there are TWO ways to earn that (O97/O103): the suite EXITED NON-ZERO — `cargo test` aborts at the first failing target, so a numeric, replay-free count arrives over a fraction of them — or the reader disowned it with a `PREMISE FAILURE` marker. `count_untrustworthy` is the one place that question is answered, because it used to be answered twice and differently: the cargo arm guarded on the marker, the shell arm stripped it with a trailing `.*`, and neither looked at the exit code. It fails either way — a gate that cannot measure must not report clean — and the verdict names WHICH cause, because the message was written for a replay and told the reader to re-run a failure that was deterministic. (This sentence said "seven" while
 the tree ran eight, and nothing could say so — and then "ten" while the tree
 ran eleven, which the gate caught inside the very unit that caused it.
@@ -2000,7 +2024,7 @@ code — including the post-run comparison of each suite's MEASURED check count
 against the figure `CLAUDE.md` publishes for it. That comparison needs a RUN
 and therefore cannot be a preflight, so until M13 it ran nowhere on a pull
 request and a leg dropping from 370 checks to 3 was green. The flag skips the
-fifteen preflights because the dedicated `preflight` job already runs them
+sixteen preflights because the dedicated `preflight` job already runs them
 once. **The shared readers — `test_summary`, `suite_summary`,
 `declare_suite_counts`, `suite_count` — are deliberately defined OUTSIDE the
 skipped block**, and that is not tidiness: with them inside, `--no-preflight`

@@ -4171,6 +4171,110 @@ on the engine and "truncate silently" on the control plane, and two FDE
 declarations gain a range `config check` shows. `UPGRADING.md` carries the
 two of those a script could meet. Filed here until the tag exists.
 
+### O114 — CLOSED 2026-09-07 (option A, as ruled): `tiny_http` allocated the client's declared `Content-Length` on the drop of an unread request — one header killed every listener, unauthenticated; vendored and patched
+
+**Found 2026-09-07 by O111's own e2e gate, on CI and not locally.** The
+check declares `Content-Length: 999999999999` over a two-byte body and
+expects 413 and a server that still answers. Locally it passed. On CI both
+suites lost every check after it with `code 000`: the engine and the
+orchestrator had DIED. Read in the crate (`tiny_http 0.12.0`,
+`src/util/equal_reader.rs:66-86`): when a `Request` is dropped with its body
+unread, `EqualReader::drop` drains the remainder with
+`let mut buf = vec![0; remaining_to_read]` — an allocation sized by the
+CLIENT's declaration, taken before a byte is read. A terabyte of `calloc`
+succeeds under WSL's overcommit and aborts under a heuristic-overcommit
+kernel (`handle_alloc_error`, no unwinding, no catch), which is why the
+local battery and CI disagreed. Upstream knows: tiny-http issue **#290**
+(open, "Drain unread request bodies with a fixed-size buffer (unbounded
+allocation from declared Content-Length)"), no tagged release since 0.12.0.
+
+**It is not O111's regression; O111 made it VISIBLE.** Every refusal that
+answers without reading the body drops the request unread, and the oldest
+one is the palace bearer gate: an UNAUTHENTICATED peer sends one header and
+a 401 is written, the request drops, and the process allocates whatever the
+header said — on `serve-http` (both `/v1` and `/mcp`), and on the
+orchestrator's every route. This has been true for as long as the tree has
+used tiny_http. O111's 413 is one more such path, and its e2e check is the
+first thing in this tree that ever sent the header.
+
+**Why this is filed and not fixed in the same unit.** The fix is not in this
+tree's code: no public `Request` API removes the reader without dropping it
+(`respond`, `into_writer` and `Drop` all end in the same drain), and
+`mem::forget` trades the abort for a leaked thread and socket per request.
+It is a ten-line change INSIDE the crate — drain with a fixed buffer, stop
+after a bounded total and let the connection close — which means one of:
+
+- **A. Vendor the crate under `[patch.crates-io]`** (`vendor/tiny_http`,
+  MIT/Apache-2.0, attributed in `NOTICE` like `calendrical_calculations`),
+  carrying the fix and nothing else, with the diff against 0.12.0 pinned by
+  a preflight so it cannot drift silently. Cheapest and fully in this
+  tree's control; costs a tracked copy of a third-party crate.
+- **B. A fork under `github.com/sealcroft`** with the fix, as a `git`
+  dependency pinned to a rev. Same fix, one more repository to keep public
+  and one more supply-chain edge the doctrine's own transport rules would
+  have to reason about.
+- **C. Replace the HTTP server library** in both binaries. The right
+  long-term answer if tiny_http stays unmaintained; a unit of its own.
+
+A supply-chain shape is the maintainer's to choose; this entry is the
+record that the defect is known, CRITICAL, unauthenticated, and older than
+the branch that found it. **Until it is ruled, `serve-http` and the
+orchestrator should not face an untrusted network segment**, which the
+transport doctrine already advises for other reasons.
+
+**Gate, owed by the closure**: the terabyte header on the 401 path with no
+bearer (unauthenticated), on the 413 path, and on the orchestrator, each
+followed by a check that the process still answers — the exact check O111
+had to narrow to 300,000,000 to keep its own gate measuring the 413 rather
+than this. And the crate diff pinned, both directions.
+
+
+---
+
+**CLOSED 2026-09-07 — option A, as ruled: vendored under `[patch.crates-io]`.**
+`vendor/tiny_http` is 0.12.0 verbatim plus one patch, every changed line
+marked `UNDERCROFT PATCH`, the diff recorded in `vendor/tiny_http/UNDERCROFT.patch`,
+the tree pinned by `vendor/SHA256SUMS` through the `vendored crates are
+pinned` preflight (both directions, plus a probe that the patch is still
+present — a pristine copy would pin clean too), attributed in `NOTICE`.
+
+**The bounded drain the filing prescribed was not the fix, and reading the
+crate is what said so.** It sets no socket read timeout, so any drain — a
+kilobyte or a terabyte — blocks the dropping thread, which is this project's
+single-threaded request loop, for as long as a silent peer keeps the socket
+open: the allocation was the crash, the read was the stall, and bounding the
+buffer only cured the first. The patch drains NOTHING. `EqualReader::drop`
+reports whether the body was consumed on the signal the original created and
+threw away (`let (data_reader, _) = …  // TODO:`), `new_request_with_body_signal`
+hands it back beside the request, and `ClientConnection::next` waits for the
+verdict before parsing another request on that socket and ENDS the connection
+when the body was left unread — neither drained nor parsed as a request. A
+keep-alive client whose body was read whole is unaffected. The same crate
+grew a header line byte by byte with no ceiling and collected headers with
+none, the same class one read over, so the patch adds two: 16 KiB per line
+(the connection closes), 128 headers (400).
+
+**Measured on the patched engine**, one container, no bearer: three
+`Content-Length: 999999999999` requests answer 413 and `/healthz` answers
+after; a 20 KiB header line closes and `/healthz` answers after; two
+pipelined `GET`s on one connection both answer 200; a read body followed by
+a pipelined `GET` answers 400 then 200; an UNREAD terabyte declaration
+followed by a pipelined `GET` answers 413 and nothing else. **Gates**: the
+terabyte declaration on the 413 path with and without a vault assertion (on
+`/v1` the ceiling in `handle` precedes the assertion in `route`, and on the
+orchestrator the proxy's read precedes `route`'s token check — the first
+version of both arms expected a 401 and measured that order instead) and on
+the UNAUTHENTICATED 401 path proper, `/mcp` with no bearer, whose gate
+precedes the body read; each followed by liveness — the exact checks that
+read `000` on CI before this. e2e 478 → 483, orchestrator 129 → 133,
+preflights fifteen → sixteen. `UPGRADING.md` carries
+the header ceilings and the closed-connection-behind-a-refusal behaviour.
+Two warnings the vendored crate emits (`SequentialWriter` unused,
+`MustBeShareDummy` never used) are upstream's and are left as they are: the
+diff carries the fix and nothing else.
+
+---
+
 ### O111 — CLOSED 2026-09-07: O109's class swept tree-wide — three decoders whose length check could wrap, an FDE construction with no ceiling, and a request body with none
 
 **Round seven, the allocation dimension.** O109 was one instance of a
@@ -11526,63 +11630,6 @@ obvious replacement was `vault`, and `vault` already names a different
 concept — the isolation and crypto unit — so reusing it would have been worse
 than the status quo. That search is over: the ruling above is that no target
 word is needed, because no rename is owed.
-
-### O114 — CRITICAL: `tiny_http` allocates the client's declared `Content-Length` when an unread request is dropped, so one header kills every listener, unauthenticated
-
-**Found 2026-09-07 by O111's own e2e gate, on CI and not locally.** The
-check declares `Content-Length: 999999999999` over a two-byte body and
-expects 413 and a server that still answers. Locally it passed. On CI both
-suites lost every check after it with `code 000`: the engine and the
-orchestrator had DIED. Read in the crate (`tiny_http 0.12.0`,
-`src/util/equal_reader.rs:66-86`): when a `Request` is dropped with its body
-unread, `EqualReader::drop` drains the remainder with
-`let mut buf = vec![0; remaining_to_read]` — an allocation sized by the
-CLIENT's declaration, taken before a byte is read. A terabyte of `calloc`
-succeeds under WSL's overcommit and aborts under a heuristic-overcommit
-kernel (`handle_alloc_error`, no unwinding, no catch), which is why the
-local battery and CI disagreed. Upstream knows: tiny-http issue **#290**
-(open, "Drain unread request bodies with a fixed-size buffer (unbounded
-allocation from declared Content-Length)"), no tagged release since 0.12.0.
-
-**It is not O111's regression; O111 made it VISIBLE.** Every refusal that
-answers without reading the body drops the request unread, and the oldest
-one is the palace bearer gate: an UNAUTHENTICATED peer sends one header and
-a 401 is written, the request drops, and the process allocates whatever the
-header said — on `serve-http` (both `/v1` and `/mcp`), and on the
-orchestrator's every route. This has been true for as long as the tree has
-used tiny_http. O111's 413 is one more such path, and its e2e check is the
-first thing in this tree that ever sent the header.
-
-**Why this is filed and not fixed in the same unit.** The fix is not in this
-tree's code: no public `Request` API removes the reader without dropping it
-(`respond`, `into_writer` and `Drop` all end in the same drain), and
-`mem::forget` trades the abort for a leaked thread and socket per request.
-It is a ten-line change INSIDE the crate — drain with a fixed buffer, stop
-after a bounded total and let the connection close — which means one of:
-
-- **A. Vendor the crate under `[patch.crates-io]`** (`vendor/tiny_http`,
-  MIT/Apache-2.0, attributed in `NOTICE` like `calendrical_calculations`),
-  carrying the fix and nothing else, with the diff against 0.12.0 pinned by
-  a preflight so it cannot drift silently. Cheapest and fully in this
-  tree's control; costs a tracked copy of a third-party crate.
-- **B. A fork under `github.com/sealcroft`** with the fix, as a `git`
-  dependency pinned to a rev. Same fix, one more repository to keep public
-  and one more supply-chain edge the doctrine's own transport rules would
-  have to reason about.
-- **C. Replace the HTTP server library** in both binaries. The right
-  long-term answer if tiny_http stays unmaintained; a unit of its own.
-
-A supply-chain shape is the maintainer's to choose; this entry is the
-record that the defect is known, CRITICAL, unauthenticated, and older than
-the branch that found it. **Until it is ruled, `serve-http` and the
-orchestrator should not face an untrusted network segment**, which the
-transport doctrine already advises for other reasons.
-
-**Gate, owed by the closure**: the terabyte header on the 401 path with no
-bearer (unauthenticated), on the 413 path, and on the orchestrator, each
-followed by a check that the process still answers — the exact check O111
-had to narrow to 300,000,000 to keep its own gate measuring the 413 rather
-than this. And the crate diff pinned, both directions.
 
 ### O112 — `palace` still names ONE vault in the code and on three surfaces, and whether that is O7's defect or O5's ruling is the maintainer's
 
