@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — 1.5.1
+## 1.5.1 — 2026-09-07
 
 PATCH: no documented contract moves. Every public item in the eight library
 crates carries a doc comment and a lint refuses the next one that does not;

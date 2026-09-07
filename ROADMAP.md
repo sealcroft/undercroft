@@ -4160,7 +4160,7 @@ touching anyone's existing corpus.
 integrity verdict, and two different model files must produce two different
 identities.
 
-## 1.5.1 — unreleased
+## 1.5.1 — released 2026-09-07
 
 Every public item documented, and a lint that keeps it so; then the seventh
 audit round, which swept O109's class tree-wide and closed what it found.
@@ -4169,7 +4169,7 @@ PATCH: no documented contract moves. Three decoders refuse a header that
 used to wrap their length check, one HTTP body ceiling replaces "no ceiling"
 on the engine and "truncate silently" on the control plane, and two FDE
 declarations gain a range `config check` shows. `UPGRADING.md` carries the
-two of those a script could meet. Filed here until the tag exists.
+two of those a script could meet.
 
 ### O114 — CLOSED 2026-09-07 (option A, as ruled): `tiny_http` allocated the client's declared `Content-Length` on the drop of an unread request — one header killed every listener, unauthenticated; vendored and patched
 
