@@ -57,6 +57,16 @@ naming the ceiling on `/v1` and `/mcp`, the server answering afterwards) and
 two on the orchestrator suite. Tests 818 → 824, e2e 474 → 478,
 orchestrator 127 → 129.
 
+**What those checks found on CI is filed as ROADMAP O114 and is OPEN,
+CRITICAL, and older than this branch**: `tiny_http` drains an unread
+request body on drop with `vec![0; remaining]`, an allocation sized by the
+client's `Content-Length`, so one header on any refusal path — the
+unauthenticated 401 included — kills `serve-http` and the orchestrator on a
+heuristic-overcommit kernel (upstream tiny-http #290, unfixed). The fix is
+inside the crate and the shape (vendor / fork / replace) is the
+maintainer's; until ruled, neither listener should face an untrusted
+segment.
+
 ### twelve docs O110 added were false about the item they head, and six more had gone stale — corrected
 
 The by-eye half of O99's method, run over the 372 docs the previous entry
