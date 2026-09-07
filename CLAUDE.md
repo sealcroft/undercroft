@@ -7,28 +7,25 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
 
 Published by **Sealcroft** at `github.com/sealcroft/undercroft`, site at
 `https://sealcroft.com/undercroft/`, house page at `https://sealcroft.com/`
-(repo `sealcroft/sealcroft.github.io`). Current release **1.4.0** — a MINOR
-over `1.3.0`, itself a MINOR over `1.2.2`. MINOR is right by this file's own
-test: it ADDS beside things that stay — three search declarations (`when`,
-`when_slack_days`, `when_from_query`) on every surface and a `window` key on
-the `/v1` reply (O108), all absent by default — and nothing documented stops
-being accepted. Three things ride in it that are worth knowing before an
-upgrade. **A deep page is measured, not argued (O23)**: `undercroft-bench
-pqscale --offsets` timed a whole-corpus page from 131k to 1M rows and found it
-linear at ~45 µs and ~13 KB per hydrated row, ~250× the first page — the cost
-the entry had asserted for a month with no number and a gate no source file
-contained. **The measurement killed the process at 10⁶, and that was a
-defect, not a cost (O109)**: `decompress_frame` handed zstd the 16 MiB content
-bound as a CAPACITY, which pre-allocates, so every hydrated framed drawer held
-a 16 MiB mapping and a whole-corpus page on ~260,000 framed rows reached the
-kernel's mapping ceiling with 46 GB free. The buffer is sized from the frame
-header now; nothing that started before stops starting. And **a garbage
-`UNDERCROFT_INDEX_CA` refuses on pgvector as on the other four backends
-(O96)**, which `UPGRADING.md` carries because a deployment that had been
-silently ignoring the value now refuses to start. **The tree carries
-`1.4.0` only once the release PR merges; the TAG is a separate, explicit
-step** — a build reporting a version it was never tagged as is worse
-than one reporting the last release. `main` is branch
+(repo `sealcroft/sealcroft.github.io`). Current release **1.5.0** — a MINOR
+over `1.4.0`, itself a MINOR over `1.3.0`. MINOR is right by this file's own
+test: the per-vault database gains a name beside the one it had — `vault.db`,
+beside `vault.json` (O7) — and nothing documented stops being accepted,
+because a vault created under the old name opens with no verdict, verifies,
+and is renamed in place. That compat path is what keeps it off MAJOR; the
+ROADMAP had said MAJOR for a month on the *"unless it ships with a compat
+path that opens both"* clause. Two things are worth knowing before an
+upgrade. **The rename happens at the first WRITABLE open, after a WAL
+checkpoint**: a WAL database is three files SQLite finds by the database's
+name, so a bare rename orphans every committed frame in a hot `-wal`; a
+read-only open serves `palace.db` where it is and reports the pending rename
+on `unhealed`, and a directory holding BOTH files refuses on either posture
+as an integrity verdict. And **anything outside the engine that names the
+file must follow** — backups, monitors, the observability README's tamper
+demo — which `UPGRADING.md` carries, since `config check` cannot see
+per-vault on-disk state. **The tree carries `1.5.0` only once the release
+PR merges; the TAG is a separate, explicit step** — a build reporting a
+version it was never tagged as is worse than one reporting the last release. `main` is branch
 protected on both repos: force pushes and deletions blocked, admins exempt.
 Forking cannot be disabled while the repos are public, and they must stay
 public — GitHub Free will not serve Pages from a private repo.

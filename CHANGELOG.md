@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — 1.5.0
+## 1.5.0 — 2026-09-07
 
 MINOR, by this project's own test: the per-vault database gains a name
 (`vault.db`) beside the one it had, and nothing documented stops being
