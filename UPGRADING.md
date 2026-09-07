@@ -67,6 +67,41 @@ so rather than implying it checked them.
 
 ---
 
+## 1.5.1 (unreleased)
+
+### a request body above 256 MiB is refused with 413, on `/v1`, `/mcp` and the orchestrator
+
+**Who is affected:** a script that POSTs a single body above 256 MiB to the
+engine directly — a whole-vault NDJSON import over `POST /v1/…/import` is
+the only route where that is plausible. Anything behind the orchestrator was
+already capped at 256 MiB; it used to forward the first 256 MiB and import a
+PREFIX of the corpus at 200, which is the defect this closes (ROADMAP O111).
+
+**Symptom:** `413` with `request body exceeds the 268435456-byte ceiling
+(declared N bytes)`, before a byte of the body is read when `Content-Length`
+declares it, on arrival otherwise.
+
+**Fix:** split the import into several bodies (the format is line-per-record
+and the manifest line is optional on legacy payloads), or import the file
+through `undercroft import`, which reads from disk and has no body. A body
+that is not UTF-8 is now `400` where `/v1` used to route it as an empty
+string; a script relying on that answered "invalid JSON" already.
+
+### `UNDERCROFT_FDE_REPS` above 64 and `UNDERCROFT_FDE_DPROJ` above 4096 warn and take the default
+
+**Who is affected:** a deployment declaring either above its new ceiling AND
+building an FDE index for the first time on a vault. An existing vault keeps
+the construction it persisted (a persisted construction is refused only
+where it cannot work — `reps · 2^ksim · dproj` past 2²⁰ floats — and then
+rebuilds every FDE from the stored token matrices under the declaration).
+
+**Symptom:** `undercroft config check` prints the declaration as out of
+range; at start-up the engine warns and keeps the default (8 / 16), the
+`Tunes` class rule. Nothing refuses to start.
+
+**Fix:** declare a value inside the range, or unset it. The paper's largest
+configuration uses 20 repetitions.
+
 ## 1.5.0 (released 2026-09-07)
 
 ### the per-vault database is `vault.db`; a `palace.db` is renamed at its first writable open

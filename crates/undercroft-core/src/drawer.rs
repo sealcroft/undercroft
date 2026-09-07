@@ -27,7 +27,12 @@ pub struct Occurrence {
     pub filed_at: String,
 }
 
-/// Everything recorded about a drawer beside its content: where it is filed, where it came from, when, by whom, and what the engine derived. Covered in full by the drawer's HMAC; a clear mirror of a few fields is kept beside it for SQL, and a security decision reads the covered copy.
+/// Everything recorded about a drawer beside its content: where it is
+/// filed, where it came from, when, by whom, and what the engine derived.
+/// Covered by the drawer's HMAC except `entities` and every
+/// `time_mentions[].text`, which `meta_at_rest` empties before the tag is
+/// computed because they are read live; a clear mirror of a few fields is
+/// kept beside it for SQL, and a security decision reads the covered copy.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DrawerMeta {
     /// The wing the drawer is filed in — a person or a project.

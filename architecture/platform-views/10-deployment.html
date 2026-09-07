@@ -46,7 +46,7 @@
 
     <svg viewBox="0 0 1200 812" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="deployment-title deployment-desc">
       <title id="deployment-title">Undercroft deployment shapes</title>
-      <desc id="deployment-desc">Undercroft is deployed in three shapes: one user runs the binary locally, where the command line and a stdio MCP server open no port and mount a vault directory holding palace.db and its manifest; one served host runs serve-http, which puts /v1, /mcp and /metrics behind a bearer token that is mandatory for any non-loopback bind, serves /ui in front of that gate as a static shell carrying no secrets that the operator pastes the bearer into, and keeps the vault on that host; and a fleet adds the orchestrator, which holds the tenant registry and sealed engine credentials in its own SQLite, proxies tenant traffic to engines over /v1, and is trailed by a read replica whose state database is read-only and whose lag is reported by /healthz.</desc>
+      <desc id="deployment-desc">Undercroft is deployed in three shapes: one user runs the binary locally, where the command line and a stdio MCP server open no port and mount a vault directory holding vault.db and its manifest; one served host runs serve-http, which puts /v1, /mcp and /metrics behind a bearer token that is mandatory for any non-loopback bind, serves /ui in front of that gate as a static shell carrying no secrets that the operator pastes the bearer into, and keeps the vault on that host; and a fleet adds the orchestrator, which holds the tenant registry and sealed engine credentials in its own SQLite, proxies tenant traffic to engines over /v1, and is trailed by a read replica whose state database is read-only and whose lag is reported by /healthz.</desc>
       <defs>
         <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7fa39c"/></marker>
         <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#35e0c2"/></marker>
@@ -124,7 +124,7 @@
       <rect x="160" y="370" width="36" height="12" rx="2" fill="transparent" stroke="rgba(127,163,156,0.40)" stroke-width="0.8"/>
       <text x="178" y="379" fill="rgba(127,163,156,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">DISK</text>
       <text x="352" y="398" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">~/.undercroft</text>
-      <text x="352" y="416" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">palace.db · vault.json</text>
+      <text x="352" y="416" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">vault.db · vault.json</text>
       <text x="352" y="430" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">master.key, unless a passphrase</text>
 
       <!-- serve-http (FOCAL) -->

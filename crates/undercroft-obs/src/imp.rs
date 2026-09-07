@@ -199,8 +199,12 @@ impl opentelemetry_http::HttpClient for PolicedOtlpClient {
             Err(e) => return Err(Box::new(e)),
         };
         let status = resp.status();
-        let mut buf = Vec::new();
-        std::io::Read::read_to_end(&mut resp.into_reader(), &mut buf)?;
+        // Under the shared ceiling (ROADMAP O111): a collector's reply is
+        // small, and one that is not is refused rather than buffered.
+        let declared = resp
+            .header("Content-Length")
+            .and_then(|v| v.trim().parse::<usize>().ok());
+        let buf = undercroft_net::read_body_bounded(resp.into_reader(), declared)?;
         Ok(opentelemetry_http::Response::builder()
             .status(status)
             .body(opentelemetry_http::Bytes::from(buf))?)

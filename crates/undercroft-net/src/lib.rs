@@ -406,9 +406,123 @@ pub fn agent_pinned(
     Ok(builder.build())
 }
 
+/// The most bytes one HTTP body may weigh — a request this process serves,
+/// or a response a remote peer returns — before it is REFUSED rather than
+/// buffered. One number for every hop, stated here because the transport
+/// policy is the one thing every hop already shares (ROADMAP O111).
+///
+/// It is a ceiling on what is read into memory, never a pre-allocation:
+/// `read_body_bounded` grows the buffer from the bytes that arrive and stops
+/// one past the ceiling. 256 MiB is the orchestrator's existing request cap,
+/// which is the largest legitimate body any surface takes (a whole-vault
+/// NDJSON import); the engine had NO ceiling — `read_to_string` on whatever
+/// an authenticated peer streamed — and the five remote-index, LLM and OTLP
+/// hops read a peer's response the same way, on a peer the doctrine calls an
+/// *untrusted accelerator*. Refuse, never truncate: a silently truncated
+/// import writes a prefix of the corpus and answers 200.
+pub const MAX_BODY_BYTES: usize = 256 * 1024 * 1024;
+
+/// Why a body was not taken whole.
+#[derive(Debug, thiserror::Error)]
+pub enum BodyError {
+    /// The body is above [`MAX_BODY_BYTES`], by declaration or by arrival.
+    #[error(
+        "body exceeds the {MAX_BODY_BYTES}-byte ceiling{}",
+        .declared.map(|n| format!(" (declared {n} bytes)")).unwrap_or_default()
+    )]
+    TooLarge {
+        /// What `Content-Length` declared, when it declared anything — a
+        /// refusal on the declaration reads no body at all.
+        declared: Option<usize>,
+    },
+    /// The transport failed mid-body.
+    #[error("body could not be read: {0}")]
+    Io(#[from] std::io::Error),
+    /// The body arrived whole and is not JSON.
+    #[error("body is not JSON: {0}")]
+    Json(#[from] serde_json::Error),
+}
+
+/// Read a body whole under [`MAX_BODY_BYTES`]. A declared length above the
+/// ceiling refuses before a byte is read; an undeclared (chunked) body is
+/// read to one byte past the ceiling and refused there.
+pub fn read_body_bounded<R: std::io::Read>(
+    reader: R,
+    declared: Option<usize>,
+) -> Result<Vec<u8>, BodyError> {
+    read_body_bounded_with(reader, declared, MAX_BODY_BYTES)
+}
+
+/// [`read_body_bounded`] with the ceiling as a parameter, so the refusal can
+/// be exercised on a body a test can afford to build.
+pub fn read_body_bounded_with<R: std::io::Read>(
+    reader: R,
+    declared: Option<usize>,
+    max: usize,
+) -> Result<Vec<u8>, BodyError> {
+    use std::io::Read;
+    if let Some(n) = declared {
+        if n > max {
+            return Err(BodyError::TooLarge { declared: Some(n) });
+        }
+    }
+    let mut out = Vec::new();
+    reader.take(max as u64 + 1).read_to_end(&mut out)?;
+    if out.len() > max {
+        return Err(BodyError::TooLarge { declared });
+    }
+    Ok(out)
+}
+
+/// A response body as JSON, under the ceiling. Every hop that used to call
+/// `ureq`'s `into_json` — which reads the whole body first — goes through
+/// this instead.
+pub fn read_json_bounded(resp: ureq::Response) -> Result<serde_json::Value, BodyError> {
+    let declared = resp
+        .header("Content-Length")
+        .and_then(|v| v.trim().parse::<usize>().ok());
+    let bytes = read_body_bounded(resp.into_reader(), declared)?;
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ROADMAP O111: the ceiling refuses on the declaration without reading,
+    /// refuses an undeclared body one byte past it, and takes a body exactly
+    /// at it — and refuses, never truncates, which is the property a
+    /// prefix-of-an-import would violate.
+    #[test]
+    fn a_body_past_the_ceiling_is_refused_not_truncated() {
+        let max = 16;
+        let data = vec![b'x'; max + 1];
+        // Declared over: refused before a byte is read (the reader is empty).
+        let err = read_body_bounded_with(&b""[..], Some(max + 1), max).unwrap_err();
+        assert!(
+            matches!(err, BodyError::TooLarge { declared: Some(17) }),
+            "{err}"
+        );
+        // Undeclared and over: refused on arrival, not cut to a prefix.
+        let err = read_body_bounded_with(&data[..], None, max).unwrap_err();
+        assert!(
+            matches!(err, BodyError::TooLarge { declared: None }),
+            "{err}"
+        );
+        // Exactly at the ceiling: taken whole.
+        assert_eq!(
+            read_body_bounded_with(&data[..max], Some(max), max)
+                .unwrap()
+                .len(),
+            max
+        );
+        assert_eq!(
+            read_body_bounded_with(&data[..max], None, max)
+                .unwrap()
+                .len(),
+            max
+        );
+    }
 
     /// The two spellings that inverted this gate in production, plus the
     /// ordinary cases. Kept as behaviour rather than as an enumeration of

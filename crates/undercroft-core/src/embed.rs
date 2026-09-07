@@ -287,15 +287,22 @@ impl HashEmbedder {
     }
 }
 
-/// Identity of the default embedder.
+/// Identity of the first hashed token space: no fold, no segmentation. A
+/// vault recording it is migrated to v3 at open.
+pub const HASH_EMBEDDER_V1: &str = "undercroft-hash-v1";
+/// Identity of the second hashed token space (`search_key` +
+/// `script::segment`). Shipped in no tag but built on the branch, so a vault
+/// carrying it is migrated to v3 at open like a v1 one.
+pub const HASH_EMBEDDER_V2: &str = "undercroft-hash-v2";
+/// Identity of the default embedder — the current hashed vector space, what
+/// `HashEmbedder::model_name` reports.
 ///
 /// `v2` canonicalizes with `match_key` and segments with `script::segment`,
-/// so it puts different vectors in the index than `v1` did for the same text.
-/// The name is the thing that makes that visible: a vault records it, and an
-/// open that finds a different one is a migration, not a silent swap. See
+/// so it puts different vectors in the index than `v1` did for the same text;
+/// v3 keeps Brahmic conjuncts as one word rather than fragments. The name is
+/// the thing that makes that visible: a vault records it, and an open that
+/// finds a different one is a migration, not a silent swap. See
 /// `PalaceStore::open_with_embedder`.
-/// v1: no fold, no segmentation. v2: `search_key` + `script::segment`.
-/// v3: Brahmic conjuncts are one word rather than fragments.
 ///
 /// v2 was never released — no tag carries it and `origin/main` still holds v1 —
 /// so it could have been redefined in place a second time, and the research
@@ -307,10 +314,10 @@ impl HashEmbedder {
 /// `UNDERCROFT_FORCE_EMBEDDER` escape. Silently stale vectors are the failure
 /// class this whole series exists to remove; one extra tuple is cheaper than
 /// making an exception to it.
-pub const HASH_EMBEDDER_V1: &str = "undercroft-hash-v1";
-/// Identity of the second hashed token space. Shipped in no tag but built on the branch, so a vault carrying it is migrated to v3 at open like a v1 one.
-pub const HASH_EMBEDDER_V2: &str = "undercroft-hash-v2";
-/// Identity of the current hashed vector space (v3: folded, script-segmented tokens) — what `HashEmbedder::model_name` reports.
+///
+/// (This block headed `HASH_EMBEDDER_V1` from the day v2 was minted until
+/// ROADMAP O111: the O99 shape, and the `missing_docs` lint saw only the
+/// orphan it left on this constant.)
 pub const HASH_EMBEDDER: &str = "undercroft-hash-v3";
 
 /// The `semantic` score above which [`HashEmbedder`] admits on cosine alone.

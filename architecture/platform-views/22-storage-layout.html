@@ -66,16 +66,16 @@
       <!-- the tables -->
       <rect x="384" y="224" width="704" height="448" rx="8" fill="rgba(217,240,234,0.02)" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
       <rect x="656" y="228" width="160" height="12" rx="2" fill="#04080a"/>
-      <text x="736" y="237" fill="rgba(217,240,234,0.40)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.14em">palace.db · 18 TABLES + 1 VIRTUAL</text>
+      <text x="736" y="237" fill="rgba(217,240,234,0.40)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.14em">vault.db · 18 TABLES + 1 VIRTUAL</text>
 
       <!-- ============ ARROWS (before boxes) ============ -->
       <!-- master.key -> vault.json (derives the four subkeys) -->
       <path d="M 320,124 H 344 Q 352,124 352,132 V 144 Q 352,152 360,152 H 384" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
       <!-- vault.json.next -> vault.json (promote, dashed, leftward) -->
       <line x1="640" y1="152" x2="608" y2="152" stroke="#7fa39c" stroke-width="1.2" stroke-dasharray="5,4" marker-end="url(#arrow)"/>
-      <!-- vault.json -> palace.db, over the top -->
+      <!-- vault.json -> vault.db, over the top -->
       <path d="M 496,112 V 96 Q 496,88 504,88 H 984 Q 992,88 992,96 V 112" fill="none" stroke="#35e0c2" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
-      <!-- palace.db -> its tables -->
+      <!-- vault.db -> its tables -->
       <line x1="992" y1="192" x2="992" y2="224" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
 
       <!-- ============ ARROW LABELS (mask + gap) ============ -->
@@ -118,10 +118,10 @@
       <text x="752" y="168" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">promoted or discarded at the next open</text>
       <text x="752" y="182" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">a read-only open reports it, touches nothing</text>
 
-      <!-- palace.db (FOCAL) -->
+      <!-- vault.db (FOCAL) -->
       <rect x="896" y="112" width="192" height="80" rx="6" fill="#04080a"/>
       <rect x="896" y="112" width="192" height="80" rx="6" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1.2"/>
-      <text x="992" y="136" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">palace.db</text>
+      <text x="992" y="136" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">vault.db</text>
       <text x="992" y="154" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">SQLite · WAL · synchronous=FULL</text>
       <text x="992" y="168" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">chain_meta holds the committed head</text>
       <text x="992" y="182" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">read-only open: query_only, no WAL churn</text>

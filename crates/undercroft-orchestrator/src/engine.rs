@@ -193,11 +193,14 @@ pub fn vault_request(
     // drawer probe — an amplification nothing else reports.
     undercroft_obs::orch_engine_call(if status < 400 { "ok" } else { "status" });
     let content_type = resp.content_type().to_string();
-    let mut body = Vec::new();
-    use std::io::Read;
-    resp.into_reader()
-        .take(256 * 1024 * 1024)
-        .read_to_end(&mut body)
+    // Refused past the shared ceiling, never truncated: a cut export would
+    // have failed its manifest digest downstream, but a cut reply on any
+    // other route was a parse error wearing the engine's status (ROADMAP
+    // O111).
+    let declared = resp
+        .header("Content-Length")
+        .and_then(|v| v.trim().parse::<usize>().ok());
+    let body = undercroft_net::read_body_bounded(resp.into_reader(), declared)
         .map_err(|e| format!("engine response read: {e}"))?;
     Ok(EngineResponse {
         status,

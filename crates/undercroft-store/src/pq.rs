@@ -128,6 +128,14 @@ fn l2_sq(a: &[f32], b: &[f32]) -> f32 {
 }
 
 impl ProductQuantizer {
+    /// The vector width this quantizer reconstructs: `m · dsub`. A packed
+    /// token matrix declares its own `dim` in its header, and a decoder that
+    /// allocates `rows · dim` before comparing the two allocates whatever the
+    /// header says (ROADMAP O111).
+    pub fn dim(&self) -> usize {
+        self.m * self.dsub
+    }
+
     /// Bytes per encoded vector.
     pub fn code_len(&self) -> usize {
         self.m
@@ -313,7 +321,18 @@ impl ProductQuantizer {
         }
         let m = u32::from_le_bytes(data[1..5].try_into().ok()?) as usize;
         let dsub = u32::from_le_bytes(data[5..9].try_into().ok()?) as usize;
-        if m == 0 || dsub == 0 || data.len() != 9 + m * K * dsub * 4 {
+        // CHECKED arithmetic, so the length check is a bound on the
+        // allocation below and not a formality: release builds carry no
+        // overflow checks, and `m = 2^30, dsub = 2^24` wraps `m·K·dsub·4` to
+        // exactly zero — a nine-byte blob then satisfied the equality and
+        // `with_capacity(m)` reserved 24 GiB before a byte was read (ROADMAP
+        // O111). Equality against the blob's own length is what bounds `m`.
+        let body = m
+            .checked_mul(K)
+            .and_then(|x| x.checked_mul(dsub))
+            .and_then(|x| x.checked_mul(4))
+            .and_then(|x| x.checked_add(9))?;
+        if m == 0 || dsub == 0 || data.len() != body {
             return None;
         }
         let mut codebooks = Vec::with_capacity(m);
@@ -519,7 +538,15 @@ impl CoarseQuantizer {
         let nlist = u32::from_le_bytes(data[1..5].try_into().ok()?) as usize;
         let dim = u32::from_le_bytes(data[5..9].try_into().ok()?) as usize;
         let trained_n = u64::from_le_bytes(data[9..17].try_into().ok()?);
-        if nlist == 0 || dim == 0 || data.len() != 17 + nlist * dim * 4 {
+        // Same checked shape as `ProductQuantizer::from_bytes`: `nlist =
+        // dim = 2^31` wrapped the product to zero and a 17-byte blob decoded
+        // to an empty centroid table wearing `nlist = 2^31`, which the first
+        // probe then indexed past.
+        let body = nlist
+            .checked_mul(dim)
+            .and_then(|x| x.checked_mul(4))
+            .and_then(|x| x.checked_add(17))?;
+        if nlist == 0 || dim == 0 || data.len() != body {
             return None;
         }
         let centroids = data[17..]
@@ -538,6 +565,51 @@ impl CoarseQuantizer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ROADMAP O111: the length check is a BOUND on the allocation, so it
+    /// has to survive the arithmetic. Both headers below wrap the old
+    /// `m·K·dsub·4` and `nlist·dim·4` products to exactly zero in a release
+    /// build, so a blob holding nothing but its header satisfied the
+    /// equality; `ProductQuantizer::from_bytes` then reserved 24 GiB before
+    /// reading a byte and `CoarseQuantizer::from_bytes` built an empty
+    /// centroid table wearing `nlist = 2^31` for the first probe to index
+    /// past. On an hmac-only vault those blobs are clear and untagged, so an
+    /// offline writer could plant either while `verify` answered OK.
+    #[test]
+    fn a_header_that_wraps_the_length_check_is_refused() {
+        let m: usize = 1 << 30;
+        let dsub: usize = 1 << 24;
+        // PREMISE: this is the header the old check accepted — the wrapped
+        // product plus the header length is exactly the blob's length.
+        assert_eq!(
+            m.wrapping_mul(K)
+                .wrapping_mul(dsub)
+                .wrapping_mul(4)
+                .wrapping_add(9),
+            9
+        );
+        let mut blob = vec![1u8];
+        blob.extend((m as u32).to_le_bytes());
+        blob.extend((dsub as u32).to_le_bytes());
+        assert_eq!(blob.len(), 9);
+        assert!(
+            ProductQuantizer::from_bytes(&blob).is_none(),
+            "a wrapped codebook header must be refused, not allocated"
+        );
+
+        let nlist: usize = 1 << 31;
+        let dim: usize = 1 << 31;
+        assert_eq!(nlist.wrapping_mul(dim).wrapping_mul(4).wrapping_add(17), 17);
+        let mut blob = vec![1u8];
+        blob.extend((nlist as u32).to_le_bytes());
+        blob.extend((dim as u32).to_le_bytes());
+        blob.extend(0u64.to_le_bytes());
+        assert_eq!(blob.len(), 17);
+        assert!(
+            CoarseQuantizer::from_bytes(&blob).is_none(),
+            "a wrapped centroid header must be refused, not decoded empty"
+        );
+    }
 
     /// A codebook trained on one repeating slice of a periodic corpus must
     /// announce itself, and one trained on a representative sample must not.

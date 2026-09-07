@@ -1,0 +1,239 @@
+warning: embedder: bge-m3 via https://embeddings-tls — TLS protects the wire, but the ENDPOINT still reads drawer text in plaintext on every write and every search. Sealing protects a vault at rest, not content handed to another process; if that trade is unacceptable, use the in-process onnx/ort embedders.
+LOCOMO_MISS conv=conv-26 q=7 cat=1 pool=50 missing=D2:14
+LOCOMO_MISS conv=conv-26 q=14 cat=3 pool=50 missing=D3:5
+LOCOMO_MISS conv=conv-26 q=15 cat=1 pool=50 missing=D5:4,D1:18
+LOCOMO_MISS conv=conv-26 q=18 cat=1 pool=50 missing=D4:6
+LOCOMO_MISS conv=conv-26 q=24 cat=1 pool=50 missing=D5:4
+LOCOMO_MISS conv=conv-26 q=32 cat=1 pool=50 missing=D8:17
+LOCOMO_MISS conv=conv-26 q=34 cat=1 pool=50 missing=D3:3
+LOCOMO_MISS conv=conv-26 q=38 cat=1 pool=50 missing=D8:6,D9:1,D1:18
+LOCOMO_MISS conv=conv-26 q=42 cat=3 pool=50 missing=D10:14
+LOCOMO_MISS conv=conv-26 q=48 cat=1 pool=50 missing=D12:14
+LOCOMO_MISS conv=conv-26 q=50 cat=3 pool=50 missing=D12:1
+LOCOMO_MISS conv=conv-26 q=69 cat=3 pool=50 missing=D16:18,D13:16
+LOCOMO_MISS conv=conv-26 q=75 cat=1 pool=50 missing=D18:1
+LOCOMO_MISS conv=conv-26 q=89 cat=4 pool=50 missing=D2:15
+LOCOMO_MISS conv=conv-26 q=118 cat=4 pool=50 missing=D10:14
+LOCOMO_MISS conv=conv-26 q=127 cat=4 pool=50 missing=D14:17
+LOCOMO_MISS conv=conv-26 q=175 cat=5 pool=50 missing=D10:14
+LOCOMO_MISS conv=conv-26 q=181 cat=5 pool=50 missing=D14:17
+  convo 1/10 done — 197 q, R@10 so far: 99.5%
+warning: embedder: bge-m3 via https://embeddings-tls — TLS protects the wire, but the ENDPOINT still reads drawer text in plaintext on every write and every search. Sealing protects a vault at rest, not content handed to another process; if that trade is unacceptable, use the in-process onnx/ort embedders.
+LOCOMO_MISS conv=conv-30 q=2 cat=4 pool=50 missing=D1:7,D1:6
+LOCOMO_MISS conv=conv-30 q=27 cat=1 pool=50 missing=D14:14,D9:10
+LOCOMO_MISS conv=conv-30 q=74 cat=4 pool=50 missing=D15:9
+  convo 2/10 done — 302 q, R@10 so far: 99.7%
+warning: embedder: bge-m3 via https://embeddings-tls — TLS protects the wire, but the ENDPOINT still reads drawer text in plaintext on every write and every search. Sealing protects a vault at rest, not content handed to another process; if that trade is unacceptable, use the in-process onnx/ort embedders.
+LOCOMO_MISS conv=conv-41 q=2 cat=1 pool=50 missing=D2:28
+LOCOMO_MISS conv=conv-41 q=3 cat=1 pool=50 missing=D3:5
+LOCOMO_MISS conv=conv-41 q=6 cat=1 pool=50 missing=D2:1,D19:1,D14:10
+LOCOMO_MISS conv=conv-41 q=10 cat=2 pool=50 missing=D7:1
+LOCOMO_MISS conv=conv-41 q=12 cat=1 pool=50 missing=D3:11
+LOCOMO_MISS conv=conv-41 q=14 cat=3 pool=50 missing=D8:18,D8:20
+LOCOMO_MISS conv=conv-41 q=25 cat=1 pool=50 missing=D13:24,D8:15
+LOCOMO_MISS conv=conv-41 q=32 cat=1 pool=50 missing=D18:2
+LOCOMO_MISS conv=conv-41 q=40 cat=1 pool=50 missing=D22:7
+LOCOMO_MISS conv=conv-41 q=44 cat=1 pool=50 missing=D28:5
+LOCOMO_MISS conv=conv-41 q=47 cat=1 pool=50 missing=D25:13
+LOCOMO_MISS conv=conv-41 q=49 cat=1 pool=50 missing=D25:19
+LOCOMO_MISS conv=conv-41 q=50 cat=3 pool=50 missing=D26:6,D3:5
+LOCOMO_MISS conv=conv-41 q=64 cat=3 pool=50 missing=D32:14,D5:8,D11:10,D27:4
+LOCOMO_MISS conv=conv-41 q=85 cat=4 pool=50 missing=D10:13
+LOCOMO_MISS conv=conv-41 q=94 cat=4 pool=50 missing=D13:18
+LOCOMO_MISS conv=conv-41 q=147 cat=4 pool=50 missing=D31:4
+LOCOMO_MISS conv=conv-41 q=167 cat=5 pool=50 missing=D13:18
+LOCOMO_MISS conv=conv-41 q=191 cat=5 pool=50 missing=D31:4
+  convo 3/10 done — 495 q, R@10 so far: 99.0%
+warning: embedder: bge-m3 via https://embeddings-tls — TLS protects the wire, but the ENDPOINT still reads drawer text in plaintext on every write and every search. Sealing protects a vault at rest, not content handed to another process; if that trade is unacceptable, use the in-process onnx/ort embedders.
+LOCOMO_MISS conv=conv-42 q=0 cat=3 pool=50 missing=D1:7
+LOCOMO_MISS conv=conv-42 q=1 cat=1 pool=50 missing=D3:4,D10:9
+LOCOMO_MISS conv=conv-42 q=14 cat=3 pool=50 missing=D7:1
+LOCOMO_MISS conv=conv-42 q=23 cat=1 pool=50 missing=D2:7
+LOCOMO_MISS conv=conv-42 q=43 cat=2 pool=50 missing=D22:9
+LOCOMO_MISS conv=conv-42 q=45 cat=2 pool=50 missing=D22:9
+LOCOMO_MISS conv=conv-42 q=49 cat=1 pool=50 missing=D14:1
+LOCOMO_MISS conv=conv-42 q=51 cat=1 pool=50 missing=D13:9
+LOCOMO_MISS conv=conv-42 q=55 cat=1 pool=50 missing=D4:6,D7:6
+LOCOMO_MISS conv=conv-42 q=56 cat=1 pool=50 missing=D5:6,D26:9
+LOCOMO_MISS conv=conv-42 q=58 cat=1 pool=50 missing=D9:12,D19:17
+LOCOMO_MISS conv=conv-42 q=59 cat=1 pool=50 missing=D15:9
+LOCOMO_MISS conv=conv-42 q=66 cat=3 pool=50 missing=D25:19,D28:25
+LOCOMO_MISS conv=conv-42 q=68 cat=3 pool=50 missing=D7:6,D14:21
+LOCOMO_MISS conv=conv-42 q=74 cat=1 pool=50 missing=D1:16
+LOCOMO_MISS conv=conv-42 q=75 cat=1 pool=50 missing=D3:4
+LOCOMO_MISS conv=conv-42 q=79 cat=1 pool=50 missing=D5:1,D12:13,D12:14
+LOCOMO_MISS conv=conv-42 q=81 cat=1 pool=50 missing=D19:8
+  convo 4/10 done — 755 q, R@10 so far: 98.7%
+warning: embedder: bge-m3 via https://embeddings-tls — TLS protects the wire, but the ENDPOINT still reads drawer text in plaintext on every write and every search. Sealing protects a vault at rest, not content handed to another process; if that trade is unacceptable, use the in-process onnx/ort embedders.
+LOCOMO_MISS conv=conv-43 q=3 cat=3 pool=50 missing=D1:14,D1:16,D1:18
+LOCOMO_MISS conv=conv-43 q=7 cat=1 pool=50 missing=D14:16
+LOCOMO_MISS conv=conv-43 q=11 cat=1 pool=50 missing=D3:25
+LOCOMO_MISS conv=conv-43 q=14 cat=1 pool=50 missing=D2:1
+LOCOMO_MISS conv=conv-43 q=17 cat=1 pool=50 missing=D5:2
+LOCOMO_MISS conv=conv-43 q=18 cat=1 pool=50 missing=D1:14,D26:36
+LOCOMO_MISS conv=conv-43 q=21 cat=1 pool=50 missing=D6:3
+LOCOMO_MISS conv=conv-43 q=24 cat=2 pool=50 missing=D7:1
+LOCOMO_MISS conv=conv-43 q=25 cat=1 pool=50 missing=D7:7,D7:9
+LOCOMO_MISS conv=conv-43 q=26 cat=1 pool=50 missing=D17:1,D17:11
+LOCOMO_MISS conv=conv-43 q=30 cat=1 pool=50 missing=D27:36
+LOCOMO_MISS conv=conv-43 q=35 cat=1 pool=50 missing=D3:27
+LOCOMO_MISS conv=conv-43 q=38 cat=1 pool=50 missing=D13:1
+LOCOMO_MISS conv=conv-43 q=40 cat=2 pool=50 missing=D14:16
+LOCOMO_MISS conv=conv-43 q=41 cat=1 pool=50 missing=D16:1
+LOCOMO_MISS conv=conv-43 q=42 cat=1 pool=50 missing=D10:4
+LOCOMO_MISS conv=conv-43 q=52 cat=1 pool=50 missing=D20:2
+LOCOMO_MISS conv=conv-43 q=53 cat=3 pool=50 missing=D20:2
+LOCOMO_MISS conv=conv-43 q=56 cat=2 pool=50 missing=D21:13
+LOCOMO_MISS conv=conv-43 q=67 cat=3 pool=50 missing=D4:1,D6:6,D15:3
+LOCOMO_MISS conv=conv-43 q=202 cat=5 pool=50 missing=D10:11
+LOCOMO_MISS conv=conv-43 q=212 cat=5 pool=50 missing=D15:7
+  convo 5/10 done — 997 q, R@10 so far: 98.6%
+warning: embedder: bge-m3 via https://embeddings-tls — TLS protects the wire, but the ENDPOINT still reads drawer text in plaintext on every write and every search. Sealing protects a vault at rest, not content handed to another process; if that trade is unacceptable, use the in-process onnx/ort embedders.
+LOCOMO_MISS conv=conv-44 q=2 cat=1 pool=50 missing=D13:1,D19:15
+LOCOMO_MISS conv=conv-44 q=3 cat=1 pool=50 missing=D13:1
+LOCOMO_MISS conv=conv-44 q=10 cat=2 pool=50 missing=D6:2
+LOCOMO_MISS conv=conv-44 q=12 cat=1 pool=50 missing=D17:1
+LOCOMO_MISS conv=conv-44 q=16 cat=2 pool=50 missing=D11:7
+LOCOMO_MISS conv=conv-44 q=17 cat=1 pool=50 missing=D11:7
+LOCOMO_MISS conv=conv-44 q=19 cat=3 pool=50 missing=D10:12
+LOCOMO_MISS conv=conv-44 q=20 cat=3 pool=50 missing=D10:23
+LOCOMO_MISS conv=conv-44 q=23 cat=1 pool=50 missing=D2:12,D5:3,D5:5,D5:7
+LOCOMO_MISS conv=conv-44 q=24 cat=1 pool=50 missing=D2:16
+LOCOMO_MISS conv=conv-44 q=26 cat=1 pool=50 missing=D10:16
+LOCOMO_MISS conv=conv-44 q=28 cat=1 pool=50 missing=D4:25
+LOCOMO_MISS conv=conv-44 q=29 cat=1 pool=50 missing=D2:1
+LOCOMO_MISS conv=conv-44 q=31 cat=1 pool=50 missing=D14:27
+LOCOMO_MISS conv=conv-44 q=33 cat=3 pool=50 missing=D21:5
+LOCOMO_MISS conv=conv-44 q=35 cat=1 pool=50 missing=D12:1
+LOCOMO_MISS conv=conv-44 q=39 cat=1 pool=50 missing=D2:15
+LOCOMO_MISS conv=conv-44 q=40 cat=1 pool=50 missing=D14:2
+LOCOMO_MISS conv=conv-44 q=43 cat=3 pool=50 missing=D11:9
+LOCOMO_MISS conv=conv-44 q=44 cat=3 pool=50 missing=D11:9
+LOCOMO_MISS conv=conv-44 q=45 cat=2 pool=50 missing=D12:1
+LOCOMO_MISS conv=conv-44 q=46 cat=2 pool=50 missing=D12:1
+LOCOMO_MISS conv=conv-44 q=49 cat=1 pool=50 missing=D23:18
+LOCOMO_MISS conv=conv-44 q=51 cat=1 pool=50 missing=D9:5,D18:10
+LOCOMO_MISS conv=conv-44 q=52 cat=3 pool=50 missing=D23:1
+LOCOMO_MISS conv=conv-44 q=53 cat=3 pool=50 missing=D2:18,D5:7
+LOCOMO_MISS conv=conv-44 q=60 cat=1 pool=50 missing=D28:6
+LOCOMO_MISS conv=conv-44 q=108 cat=4 pool=50 missing=D23:12
+LOCOMO_MISS conv=conv-44 q=111 cat=4 pool=50 missing=D24:10
+LOCOMO_MISS conv=conv-44 q=152 cat=5 pool=50 missing=D23:12
+  convo 6/10 done — 1155 q, R@10 so far: 98.4%
+warning: embedder: bge-m3 via https://embeddings-tls — TLS protects the wire, but the ENDPOINT still reads drawer text in plaintext on every write and every search. Sealing protects a vault at rest, not content handed to another process; if that trade is unacceptable, use the in-process onnx/ort embedders.
+LOCOMO_MISS conv=conv-47 q=0 cat=3 pool=50 missing=D1:27
+LOCOMO_MISS conv=conv-47 q=2 cat=1 pool=50 missing=D1:36
+LOCOMO_MISS conv=conv-47 q=11 cat=2 pool=50 missing=D6:7
+LOCOMO_MISS conv=conv-47 q=19 cat=3 pool=50 missing=D9:16
+LOCOMO_MISS conv=conv-47 q=24 cat=1 pool=50 missing=D27:2
+LOCOMO_MISS conv=conv-47 q=33 cat=3 pool=50 missing=D17:13
+LOCOMO_MISS conv=conv-47 q=40 cat=1 pool=50 missing=D14:17,D14:23
+LOCOMO_MISS conv=conv-47 q=51 cat=1 pool=50 missing=D19:7,D24:3
+  convo 7/10 done — 1345 q, R@10 so far: 98.4%
+warning: embedder: bge-m3 via https://embeddings-tls — TLS protects the wire, but the ENDPOINT still reads drawer text in plaintext on every write and every search. Sealing protects a vault at rest, not content handed to another process; if that trade is unacceptable, use the in-process onnx/ort embedders.
+LOCOMO_MISS conv=conv-48 q=8 cat=1 pool=50 missing=D15:29
+LOCOMO_MISS conv=conv-48 q=11 cat=3 pool=50 missing=D23:4
+LOCOMO_MISS conv=conv-48 q=14 cat=1 pool=50 missing=D12:3,D29:7
+LOCOMO_MISS conv=conv-48 q=19 cat=1 pool=50 missing=D2:24
+LOCOMO_MISS conv=conv-48 q=23 cat=3 pool=50 missing=D2:30
+LOCOMO_MISS conv=conv-48 q=28 cat=3 pool=50 missing=D4:33
+LOCOMO_MISS conv=conv-48 q=36 cat=3 pool=50 missing=D13:5,D21:6,D21:8,D22:6,D22:14,D24:14,D26:6
+LOCOMO_MISS conv=conv-48 q=39 cat=1 pool=50 missing=D10:13
+LOCOMO_MISS conv=conv-48 q=40 cat=3 pool=50 missing=D10:17
+LOCOMO_MISS conv=conv-48 q=61 cat=4 pool=50 missing=D22:12
+LOCOMO_MISS conv=conv-48 q=78 cat=2 pool=50 missing=D2:1
+LOCOMO_MISS conv=conv-48 q=86 cat=1 pool=50 missing=D4:26,D23:20
+LOCOMO_MISS conv=conv-48 q=87 cat=1 pool=50 missing=D6:10
+LOCOMO_MISS conv=conv-48 q=88 cat=1 pool=50 missing=D12:1,D15:1,D29:1
+LOCOMO_MISS conv=conv-48 q=93 cat=4 pool=50 missing=D22:12
+LOCOMO_MISS conv=conv-48 q=114 cat=4 pool=50 missing=D7:9
+LOCOMO_MISS conv=conv-48 q=123 cat=4 pool=50 missing=D10:17
+LOCOMO_MISS conv=conv-48 q=141 cat=4 pool=50 missing=D15:27
+LOCOMO_MISS conv=conv-48 q=203 cat=5 pool=50 missing=D7:9
+  convo 8/10 done — 1584 q, R@10 so far: 98.6%
+warning: embedder: bge-m3 via https://embeddings-tls — TLS protects the wire, but the ENDPOINT still reads drawer text in plaintext on every write and every search. Sealing protects a vault at rest, not content handed to another process; if that trade is unacceptable, use the in-process onnx/ort embedders.
+LOCOMO_MISS conv=conv-49 q=7 cat=1 pool=50 missing=D10:8,D20:6,D7:2,D7:6,D21:19
+LOCOMO_MISS conv=conv-49 q=11 cat=1 pool=50 missing=D10:6,D15:1
+LOCOMO_MISS conv=conv-49 q=14 cat=1 pool=50 missing=D22:12
+LOCOMO_MISS conv=conv-49 q=19 cat=3 pool=50 missing=D3:15,D22:1,D8:17,D8:22,D9:8,D9:11,D14:12,D12:11
+LOCOMO_MISS conv=conv-49 q=20 cat=3 pool=50 missing=D14:12,D8:12
+LOCOMO_MISS conv=conv-49 q=28 cat=1 pool=50 missing=D6:4,D11:7
+LOCOMO_MISS conv=conv-49 q=32 cat=1 pool=50 missing=D6:13
+LOCOMO_MISS conv=conv-49 q=37 cat=1 pool=50 missing=D18:6
+LOCOMO_MISS conv=conv-49 q=40 cat=2 pool=50 missing=D8:12
+LOCOMO_MISS conv=conv-49 q=41 cat=2 pool=50 missing=D8:12
+LOCOMO_MISS conv=conv-49 q=49 cat=1 pool=50 missing=D9:2
+LOCOMO_MISS conv=conv-49 q=50 cat=1 pool=50 missing=D1:14,D4:8,D6:1,D9:6,D25:8,D25:10
+LOCOMO_MISS conv=conv-49 q=51 cat=3 pool=50 missing=D4:6,D14:1,D14:2
+LOCOMO_MISS conv=conv-49 q=77 cat=1 pool=50 missing=D23:15
+LOCOMO_MISS conv=conv-49 q=82 cat=1 pool=50 missing=D16:17
+LOCOMO_MISS conv=conv-49 q=100 cat=4 pool=50 missing=D6:13
+LOCOMO_MISS conv=conv-49 q=105 cat=4 pool=50 missing=D8:12
+LOCOMO_MISS conv=conv-49 q=122 cat=4 pool=50 missing=D14:1
+LOCOMO_MISS conv=conv-49 q=147 cat=4 pool=50 missing=D23:15
+LOCOMO_MISS conv=conv-49 q=166 cat=5 pool=50 missing=D6:13
+LOCOMO_MISS conv=conv-49 q=179 cat=5 pool=50 missing=D14:1
+LOCOMO_MISS conv=conv-49 q=190 cat=5 pool=50 missing=D23:15
+  convo 9/10 done — 1780 q, R@10 so far: 98.5%
+warning: embedder: bge-m3 via https://embeddings-tls — TLS protects the wire, but the ENDPOINT still reads drawer text in plaintext on every write and every search. Sealing protects a vault at rest, not content handed to another process; if that trade is unacceptable, use the in-process onnx/ort embedders.
+LOCOMO_MISS conv=conv-50 q=4 cat=3 pool=50 missing=D3:10
+LOCOMO_MISS conv=conv-50 q=11 cat=1 pool=50 missing=D9:1
+LOCOMO_MISS conv=conv-50 q=15 cat=1 pool=50 missing=D8:4
+LOCOMO_MISS conv=conv-50 q=19 cat=1 pool=50 missing=D12:7
+LOCOMO_MISS conv=conv-50 q=23 cat=1 pool=50 missing=D5:5,D4:5,D3:12
+LOCOMO_MISS conv=conv-50 q=28 cat=1 pool=50 missing=D5:10
+LOCOMO_MISS conv=conv-50 q=29 cat=1 pool=50 missing=D8:8
+LOCOMO_MISS conv=conv-50 q=30 cat=1 pool=50 missing=D2:10,D10:11
+LOCOMO_MISS conv=conv-50 q=31 cat=2 pool=50 missing=D17:1
+LOCOMO_MISS conv=conv-50 q=46 cat=1 pool=50 missing=D21:4
+LOCOMO_MISS conv=conv-50 q=60 cat=1 pool=50 missing=D4:24
+LOCOMO_MISS conv=conv-50 q=63 cat=1 pool=50 missing=D16:4
+LOCOMO_MISS conv=conv-50 q=85 cat=4 pool=50 missing=D8:4
+LOCOMO_MISS conv=conv-50 q=143 cat=4 pool=50 missing=D28:8
+LOCOMO_MISS conv=conv-50 q=144 cat=4 pool=50 missing=D28:8
+LOCOMO_MISS conv=conv-50 q=151 cat=4 pool=50 missing=D30:1
+LOCOMO_MISS conv=conv-50 q=194 cat=5 pool=50 missing=D28:8
+  convo 10/10 done — 1982 q, R@10 so far: 98.6%
+LOCOMO_RAW convos=0..10/10 recall_sum=1954.0000 evaluated=1982
+LOCOMO_TIMING convos=0..10/10 ingest_secs=858.201 search_secs=292.271 evaluated=1982 search_ms_per_q=147.5
+LoCoMo — 1982 questions, session granularity: R@10 98.6%
+  category 1            97.5%  (282)
+  category 2            97.8%  (321)
+  category 3            91.3%  (92)
+  category 4            99.6%  (841)
+  category 5            99.3%  (446)
+LOCOMO_GOLD_RAW convos=0..10/10 queries=1982 session_any=1954.0000 session_all=1823.0000 slot_session_any=1931.0000 slot_session_all=1780.0000 turn_queries=1977 turn_any=1793.0000 turn_all=1609.0000 slots=19820 repeat_slots=5205 unlocatable_turns=9
+LOCOMO_DOCCAP_RAW convos=0..10/10 cap=1 turn_queries=1977 turn_any=1450.0000 turn_all=1218.0000
+LOCOMO_DOCCAP_RAW convos=0..10/10 cap=2 turn_queries=1977 turn_any=1754.0000 turn_all=1568.0000
+Gold evidence, session, 60-hit pool scan: any 98.6%  all 92.0%   (1982 q)
+Gold evidence, session, in the 10 slots:  any 97.4%  all 89.8%   (1982 q)
+Gold evidence, turn,    in the 10 slots:  any 90.7%  all 81.4%   (1977 q)
+  at most 1 slot(s) per document:  any 73.3%  all 61.6%   (all -19.8pp vs the same retrieval uncapped)
+  at most 2 slot(s) per document:  any 88.7%  all 79.3%   (all -2.1pp vs the same retrieval uncapped)
+  budget-selected (8000 B, overlap charged once): any 90.8%  all 81.5%   (all +0.1pp, mean 10.6 chunks)
+  slots filled by an already-represented document: 5205/19820 = 26.3%
+    of those, 3843 overlap text already returned and 1362 carry different text from the same document
+  bytes handed to the reader twice: 401892/15415080 = 2.6%  (the ceiling on what any dedup can recover)
+  gold turns needed = 1   all delivered 91.6%  (1554 q)
+  gold turns needed = 2   all delivered 59.8%  (241 q)
+  gold turns needed = 3   all delivered 38.3%  (81 q)
+  gold turns needed = 4   all delivered 10.3%  (58 q)
+  gold turns needed = 5+  all delivered 9.3%  (43 q)
+  gold-turns-needed  baseline   cap<=2     budget
+    1                  91.6%     89.1%     91.8%   (1554 q)
+    2                  59.8%     59.3%     59.8%   (241 q)
+    3                  38.3%     38.3%     38.3%   (81 q)
+    4                  10.3%     10.3%     10.3%   (58 q)
+    5+                  9.3%      7.0%      9.3%   (43 q)
+  category 1  all delivered 34.5%  (281 q)
+  category 2  all delivered 86.9%  (320 q)
+  category 3  all delivered 39.3%  (89 q)
+  category 4  all delivered 93.6%  (841 q)
+  category 5  all delivered 92.4%  (446 q)
+  all gold covered within top-10   81.4%  (cumulative)
+  all gold covered within top-20   85.9%  (cumulative)
+  all gold covered within top-40   89.8%  (cumulative)
+  all gold covered within top-80   91.1%  (cumulative)
+  all gold covered within top-160  91.1%  (cumulative)
+  all gold covered anywhere in the pool: 91.1%  — never, at any depth: 8.9%  (the first-stage floor)
+  9 gold turns could not be located in the ingested body and are excluded from the turn rows

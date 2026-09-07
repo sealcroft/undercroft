@@ -1,6 +1,7 @@
 //! Text chunking, mirroring mempalace's miner defaults:
-//! 800-char chunks, 100-char overlap, 50-char minimum, split on paragraph
-//! boundaries where possible so drawers stay readable.
+//! 800-byte chunks, 100-byte overlap, 50-byte minimum (`len()` over the
+//! normalized UTF-8, so a CJK paragraph holds fewer characters), split on
+//! paragraph boundaries where possible so drawers stay readable.
 
 /// How a document is cut into drawers — mempalace's miner defaults: 800-byte chunks, 100 bytes of overlap, a 50-byte minimum.
 #[derive(Debug, Clone, Copy)]

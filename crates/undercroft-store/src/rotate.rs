@@ -58,7 +58,10 @@ pub struct RotationReport {
     pub wing_pq_rows: usize,
     /// FDE rows re-sealed.
     pub fde_rows: usize,
-    /// Audit records re-keyed over their preserved bytes.
+    /// Audit records the chain head was replayed over under the new key.
+    /// Their tags are preserved verbatim, never re-tagged — historical
+    /// evidence — which is what makes them the one tag-carrying table
+    /// rotation reads and does not rewrite.
     pub audit_entries: usize,
     /// Sealed meta artifacts re-sealed (codebooks, IVF centroids, FDE params).
     pub meta_artifacts: usize,

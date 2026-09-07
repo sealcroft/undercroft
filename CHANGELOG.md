@@ -2,8 +2,107 @@
 
 ## Unreleased — 1.5.1
 
-PATCH: nothing observable changes. Every public item in the eight library
-crates carries a doc comment and a lint refuses the next one that does not.
+PATCH: no documented contract moves. Every public item in the eight library
+crates carries a doc comment and a lint refuses the next one that does not;
+three at-rest decoders refuse a header that used to wrap their length check;
+every HTTP body has one 256 MiB ceiling that refuses rather than truncates;
+two FDE declarations gain a range. `UPGRADING.md` carries the two a script
+could meet.
+
+### O109's class swept tree-wide: wrapped length checks, an unbounded FDE construction, an unbounded request body (O111)
+
+**ROADMAP O111 FILED AND CLOSED 2026-09-07 — the seventh audit round.**
+O109 was one instance of *a capacity argument that is a bound rather than a
+size*; the sweep read every allocation site in the tree (368 hits in 43
+files, ~70 opened in context) and every body reader on both listeners and
+the six outbound hops.
+
+- **`ProductQuantizer::from_bytes` / `CoarseQuantizer::from_bytes`** — the
+  length check `data.len() == 9 + m·K·dsub·4` was unchecked arithmetic in a
+  release build with no overflow checks: `m = 2^30, dsub = 2^24` wraps it to
+  zero, a nine-byte blob passes, and `with_capacity(m)` reserves 24 GiB
+  before a byte is read (the coarse twin: a 17-byte blob decoding to an
+  empty centroid table wearing `nlist = 2^31`). Clear and untagged on an
+  hmac-only vault, loaded on every search. Checked now, so the equality
+  against the blob's own length bounds every allocation below it.
+- **`unpack_v2`** — the v2 token header's `dim` was compared with nothing
+  and all three callers reserved `rows·dim` floats: one row claiming
+  `dim = u32::MAX` was 16 GiB inside `token_artifact`, which `export` and
+  `backup create` call per drawer. `dim` must equal the codebook's
+  reconstruction width, the only authority on it.
+- **The FDE construction** — a 25-byte persisted `params` blob with
+  `ksim = 40` made the first encode allocate `reps·2^40·dproj` floats, and
+  `UNDERCROFT_FDE_REPS` / `_DPROJ` were bare `usize ≥ 1`, so
+  `UNDERCROFT_FDE_REPS=100000000` passed `config check` and allocated
+  ~200 GB at first build. `FdeParams::dim_for` is the one door (`FDE_DIM_MAX`
+  2²⁰ floats, checked arithmetic); the two knobs are ranged (64 / 4096) where
+  the pre-flight prints them; a persisted construction is refused only where
+  it cannot work, never above a declaration ceiling, since refusing one that
+  works rebuilds every FDE for nothing.
+- **The request body** — the engine read whatever an authenticated peer
+  streamed, with no ceiling, on `/v1` and `/mcp`; the orchestrator `take`d
+  256 MiB and FORWARDED THE PREFIX, so a tenant import one byte over the cap
+  imported part of its corpus at 200. One ceiling now
+  (`undercroft_net::MAX_BODY_BYTES`, 256 MiB) through one bounded reader on
+  both listeners, the proxy, the engine client's response and the five
+  outbound hops that read a remote peer's reply with `ureq`'s unbounded
+  `into_json` (four index backends, both LLM calls, OTLP). A declared length
+  over it is 413 before a byte is read; arrival past it is 413; a body that
+  is not UTF-8 is 400 where `/v1` routed it as the empty string.
+- **The frame that declares no size** — O109's one surviving arm still
+  reserved the whole 16 MiB bound; it streams under the bound now.
+
+Six unit gates with premise and counterfactual arms, four e2e checks (413
+naming the ceiling on `/v1` and `/mcp`, the server answering afterwards) and
+two on the orchestrator suite. Tests 818 → 824, e2e 474 → 478,
+orchestrator 127 → 129.
+
+**What those checks found on CI is filed as ROADMAP O114 and is OPEN,
+CRITICAL, and older than this branch**: `tiny_http` drains an unread
+request body on drop with `vec![0; remaining]`, an allocation sized by the
+client's `Content-Length`, so one header on any refusal path — the
+unauthenticated 401 included — kills `serve-http` and the orchestrator on a
+heuristic-overcommit kernel (upstream tiny-http #290, unfixed). The fix is
+inside the crate and the shape (vendor / fork / replace) is the
+maintainer's; until ruled, neither listener should face an untrusted
+segment.
+
+### twelve docs O110 added were false about the item they head, and six more had gone stale — corrected
+
+The by-eye half of O99's method, run over the 372 docs the previous entry
+added: **zero misattributed, twelve false**, every one on an item whose
+NEIGHBOUR does the thing described — `LlmClient::new` documented as reading
+`UNDERCROFT_LLM_KEY` (only `from_env` does), `IndexError::UnknownBackend`
+naming a variable that does not exist, `SearchOptions` "built once" where
+three surfaces build it, `SearchHit.score` in `[0, 1]` while a date window
+reaches 1.15, `ReadOnlyUnmigrated.missing` "the first" of a list,
+`Language::English` claiming ordinals, `RotationReport.audit_entries`
+"re-keyed" of the table rotation preserves, `KeyError::CorruptKeyFile` and
+`KEY_LEN` each half their scope, `BundleError::Expired` describing a refusal
+minted nowhere (both importers now mint it), `VaultError::CorruptManifest`
+omitting its content-frame arm, `DrawerMeta` "covered in full" over two
+fields `meta_at_rest` empties. Six that the code outgrew: the stranded
+`HASH_EMBEDDER_V1` block (O99's shape, invisible to O99's scanner because
+its glue is lowercase), `verify`'s "five legs" under seven,
+`unhealed`'s "always empty on a writable open" on two surfaces (CLAUDE.md
+had recorded that fixed; the comments were still there),
+`Namespace::Retention` claiming its own removal, `Namespace::Egress` missing
+`egress/refine`, the chunker's header in characters over a struct in bytes.
+The glue scanner re-run over the whole tree: 216 hits, 216 read, none an
+O110 line. The lint sees the orphan; this half stays by eye, and the shape
+to read for is *the neighbour does it*.
+
+### `palace.db` residue in four platform views and the landing tamper demo — the drift O105 predicts, four days after O7
+
+The naming scan (O7's class, twenty-two words tested, one open question filed
+as ROADMAP O112) found `08-vault-lifecycle`, `10-deployment` (in the
+screen-reader `<desc>` as well as the label), `14-key-rotation` and
+`22-storage-layout` still naming the per-vault file `palace.db`, beside
+`01-platform-overview` which already said `vault.db`, and the landing page's
+tamper demo doing the same. All say `vault.db`. Also corrected: the
+multi-tenancy guide's "per-vault memory store" for the engine (one process,
+one palace, many vaults), two unqualified `manifest`s in the agent guide, and
+a vault's export described there as "the whole palace".
 
 ### every public item is documented, and `#![warn(missing_docs)]` keeps it so (O110, the O99 ruling)
 

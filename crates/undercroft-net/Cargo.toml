@@ -19,6 +19,10 @@ url.workspace = true
 # two rustls trees end up in the binary.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 rustls-pemfile = "2"
+# The bounded JSON reader every hop uses instead of `ureq`'s unbounded
+# `into_json` (ROADMAP O111). Already in the tree through ureq's `json`
+# feature, so this names a dependency the crate carried rather than adding one.
+serde_json.workspace = true
 # The public trust roots a client that declared no pin falls back to — the
 # same set ureq's own `tls` feature uses, so the two clients in this crate
 # (ureq and tokio-postgres) trust the same thing.

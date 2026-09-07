@@ -35,6 +35,9 @@ undercroft-store = { path = "../undercroft-store" }
 undercroft-index = { path = "../undercroft-index" }
 undercroft-llm = { path = "../undercroft-llm" }
 undercroft-obs = { path = "../undercroft-obs" }
+# For the one request-body ceiling every listener shares (ROADMAP O111);
+# already linked through undercroft-llm and undercroft-index.
+undercroft-net = { path = "../undercroft-net" }
 undercroft-embed-onnx = { path = "../undercroft-embed-onnx", optional = true }
 undercroft-embed-ort = { path = "../undercroft-embed-ort", optional = true }
 anyhow = { workspace = true }

@@ -157,7 +157,7 @@ POST   /v1/vaults/{id}/repair           (the REMEDIATION half of verify; a write
 POST   /v1/vaults/{id}/anchor           (tighten the manifest rollback anchor; a write)
 POST   /v1/vaults/{id}/rotate           (re-key the vault; sole-writer contract)
 GET    /v1/vaults/{id}/export           (decrypted NDJSON: {drawer, vector} per line)
-POST   /v1/vaults/{id}/import           (NDJSON body; returns {imported, quarantined})
+POST   /v1/vaults/{id}/import           (NDJSON body, at most 256 MiB — 413 above, never a prefix; returns {imported, quarantined})
 
 ── not under /v1 ────────────────────────────────────────────────────────
 GET    /ui                              (vault admin console; unauthenticated static page)

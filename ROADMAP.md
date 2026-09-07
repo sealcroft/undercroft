@@ -3988,7 +3988,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**140** of the **155** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**144** of the **159** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4162,10 +4162,144 @@ identities.
 
 ## 1.5.1 — unreleased
 
-Every public item documented, and a lint that keeps it so.
+Every public item documented, and a lint that keeps it so; then the seventh
+audit round, which swept O109's class tree-wide and closed what it found.
 
-PATCH: nothing observable changes; no test count and no published figure
-moves. Filed here until the tag exists.
+PATCH: no documented contract moves. Three decoders refuse a header that
+used to wrap their length check, one HTTP body ceiling replaces "no ceiling"
+on the engine and "truncate silently" on the control plane, and two FDE
+declarations gain a range `config check` shows. `UPGRADING.md` carries the
+two of those a script could meet. Filed here until the tag exists.
+
+### O111 — CLOSED 2026-09-07: O109's class swept tree-wide — three decoders whose length check could wrap, an FDE construction with no ceiling, and a request body with none
+
+**Round seven, the allocation dimension.** O109 was one instance of a
+shape — *a capacity argument that is a bound rather than a size* — and its
+closure asked for the class to be swept. The sweep grepped every
+`with_capacity`, `vec![_; n]`, `reserve`, `resize`, `bulk::`, `read_to_end`
+and parsed-length site in the tree (368 hits, 43 files; 143 inside test
+modules skipped; ~70 opened in context, the rest `.len()` of a collection in
+hand), then read every body reader on both listeners and every response
+reader on the six outbound hops. Four things survived verification, each
+read in the code before it was believed, and one of the sweep's own ratings
+was wrong in the direction that matters.
+
+1. **`ProductQuantizer::from_bytes` and `CoarseQuantizer::from_bytes`
+   (`store/pq.rs`)** checked `data.len() == 9 + m·K·dsub·4` with unchecked
+   arithmetic. Release builds carry no overflow checks, so `m = 2^30, dsub =
+   2^24` wraps the product to exactly zero, a NINE-byte blob satisfies the
+   equality, and `Vec::with_capacity(m)` reserves 24 GiB before a byte is
+   read; the coarse twin decodes a 17-byte blob to an empty centroid table
+   wearing `nlist = 2^31`, which the first probe indexes past. On an
+   hmac-only vault `pq_meta`/`tok_meta`/`fde_meta` are clear and untagged
+   (`index_at_rest` returns the bytes), so an offline writer plants either
+   while `verify` answers OK, and the blob is loaded on every search and on a
+   read-only replica's first. The functions' own doc promised `None` on any
+   shape mismatch. **Checked arithmetic**: the equality against the blob's
+   own length is now what bounds every allocation below it.
+2. **`unpack_v2` (`store/latestage.rs`)** checked the v2 token header's
+   `rows` against the byte count and `dim` only against zero — then all three
+   callers did `Vec::with_capacity(rows · dim)` on a `dim` the blob alone had
+   declared. One hmac-only row with `dim = u32::MAX` reserves 16 GiB inside
+   `token_artifact`, which `export` and `backup create` call for EVERY
+   drawer, so both die on a vault `verify` calls clean; the FDE backfill
+   reaches the same site at search time. `dim` must now equal the codebook's
+   reconstruction width (`ProductQuantizer::dim`), the only authority on it.
+3. **The FDE construction (`store/fdeidx.rs`, `core/fde.rs`)** had no
+   ceiling on either side. A 25-byte persisted `params` blob with `ksim = 40`
+   makes the first encode allocate `reps · 2^40 · dproj` floats, and the
+   declaration was worse: `UNDERCROFT_FDE_REPS` and `_DPROJ` were bare
+   `usize ≥ 1`, so `UNDERCROFT_FDE_REPS=100000000` passed `config check` and
+   allocated ~200 GB of SimHash planes at the first build — a class-1
+   instance on the declaration axis, a knob with no ceiling. Now
+   `FdeParams::dim_for` is the ONE door (zero fields, checked arithmetic,
+   `FDE_DIM_MAX` = 2²⁰ floats), the two knobs are `RangeUsize` rows with
+   `FDE_REPS_MAX` 64 / `FDE_DPROJ_MAX` 4096 that the pre-flight prints, and
+   the product is checked at first build too (three in-range values compose
+   to 2²⁹). **The persisted blob is refused only where it CANNOT WORK**, not
+   above a declaration ceiling: refusing a working construction an operator
+   chose under an older build would rebuild every FDE from the stored token
+   matrices for nothing, and the counterfactual arm pins that it is kept.
+4. **The request body (`cli/http.rs`, `cli/tenant.rs`) had no ceiling** —
+   `read_to_string` on whatever arrived, after the bearer gate — while the
+   orchestrator in front of the same engine `take`s 256 MiB and **forwarded
+   the prefix**: a tenant import one byte over the cap wrote a prefix of its
+   corpus at 200. The sweep rated the engine half a residue because the
+   bearer gate runs first, which is right about WHO and wrong about what it
+   costs: an authenticated peer is exactly who O109 was filed for. One
+   ceiling now, `undercroft_net::MAX_BODY_BYTES` (256 MiB, the largest
+   legitimate body any surface takes), enforced by one bounded reader on
+   both listeners, the proxy, the engine client's response, and the five
+   outbound hops that read a remote peer's reply with `ureq`'s unbounded
+   `into_json` (four index backends, both LLM calls, the OTLP exporter) —
+   the "untrusted accelerator" had an availability lever the doctrine never
+   granted it. A declared length above the ceiling is **413 before a byte is
+   read**; a body arriving past it is 413 on arrival; refuse, never truncate.
+   A body that is not UTF-8 is 400 where `/v1` used to route it as the EMPTY
+   string. Also closed in passing: O109's one surviving arm — a frame
+   declaring NO content size still reserved the whole 16 MiB bound, so it now
+   streams under the bound (`zstd::stream`), pinned with a frame a streaming
+   encoder made and the premise that its header really carries no size.
+
+**Gates.** `a_header_that_wraps_the_length_check_is_refused` (both
+quantizers; the premise arm proves the wrapped product plus the header IS
+the blob length), `a_v2_header_dim_is_checked_against_the_codebook_width`,
+`a_construction_that_cannot_work_has_no_width` (`ksim = 40`, the composed
+product, and the KEPT wide-`reps` construction),
+`a_persisted_params_blob_past_the_ceilings_reads_as_no_params`,
+`a_body_past_the_ceiling_is_refused_not_truncated` (declared over, arrived
+over, exactly at), `a_frame_declaring_no_size_streams_under_the_bound`; four
+e2e checks (a `Content-Length` of 300,000,000 over a two-byte body is 413
+naming the ceiling on `/v1` and on `/mcp`, and the server answers afterwards
+— the premise that the refusal did not park the single-threaded loop) and two
+on the orchestrator suite (413 through `/t/`, and `/healthz` after).
+**The first version of those checks declared a terabyte, and on CI it killed
+both processes**: tiny_http allocates the declared remainder when an unread
+request drops, which is older than this branch, unauthenticated, and filed
+as **O114** (CRITICAL). The 413 checks were narrowed so they measure the
+413; O114 owes the terabyte gate. Tests
+818 → 824, e2e 474 → 478, orchestrator 127 → 129.
+Counterfactuals: the quantizer test aborts or panics out of bounds on the
+old check (24 GiB or `data[9..13]`), the v2 test parses the forged header,
+the body test truncates to the ceiling.
+
+**Checked and found fine, since a reader would expect otherwise**:
+`dequantize_tokens` and `pq_page_unpack` prove length equality before
+allocating and a wrap needs a ≥ 4 GiB blob; the KG blind-term length is used
+only through `get()`; every bundle field is fixed-width behind `Truncated`
+guards; `decompress_frame`'s sized arm is exact after O109; hydration
+buffers are data-sized. What is data-sized and still whole-corpus is filed
+as O113.
+
+**The same round's other three dimensions.** The doc-attribution scan over
+the 372 docs O110 added found **twelve false about the item they head** —
+my own, from the previous session: `LlmClient::new` described `from_env`'s
+key read, `IndexError::UnknownBackend` named a variable that does not exist,
+`SearchOptions` claimed one construction site where there are three,
+`SearchHit.score` claimed `[0, 1]` while a date window reaches 1.15,
+`ReadOnlyUnmigrated.missing` said "the first" of a comma-separated list,
+`Language::English` claimed ordinals the scanner never reads,
+`RotationReport.audit_entries` said "re-keyed" of the one table rotation
+preserves verbatim, `KeyError::CorruptKeyFile` and `KEY_LEN` each named half
+their scope, `BundleError::Expired` described a refusal minted NOWHERE
+(both importers raised it by hand — it is minted through the variant now),
+`VaultError::CorruptManifest` omitted the content-frame arm it also serves,
+`DrawerMeta` claimed full coverage over two fields `meta_at_rest` empties —
+plus the stranded `HASH_EMBEDDER_V1` block (the O99 shape, still there
+after O99's sweep because its glue is lowercase), the five-legs `verify`
+doc under a seven-leg struct, two `unhealed` docs claiming "always empty on
+a writable open" that CLAUDE.md records as already fixed and were not,
+`Namespace::Retention` claiming its removal beside the variant that IS its
+removal, `Namespace::Egress` missing `egress/refine`, and a chunker header
+in characters over a struct in bytes. The pattern: every false doc sits on
+an item whose NEIGHBOUR does the thing described, which neither the lint
+nor the glue scanner can see — only reading the body next to the doc. The
+naming scan (O7's class) found the `palace.db` residue in four platform
+views and the landing tamper demo — the drift O105 predicts, four days after
+O7 — and one open question, filed as O112. The O108 re-verification on a
+served embedder is recorded under O108.
+
+---
 
 ### O110 — CLOSED 2026-09-07: the `missing_docs` ruling — enabled everywhere, and the cost was 372 items, not 113
 
@@ -5152,6 +5286,20 @@ The unit-test corpus taught one thing worth writing down: a filler that says
 its own merits — correctly — so the first fixture "failed" by being right.
 MINOR: the unreleased section is `1.4.0` now. A read-only allowlist row in
 `docs/AGENTS.md` §10 that O100 missed was corrected in passing.
+
+**Re-verified on a served embedder 2026-09-07 (round seven, the item the
+closure left open).** bge-m3 through the shipped terminator, both passes on
+one binary, dated harness: the baseline reproduces O76's served run by id
+(188 never-covered, the same 188), and the arm reaches **14** and loses 2
+(`conv-44_q46`, `conv-48_q78`) — 176, floor 9.5% → 8.9%, session R@10
+97.8% → 98.6%, search cost flat (150.7 → 147.5 ms/q). What the hash row
+could not show: the two filed ids are already reached by bge-m3 without the
+window, and the served gain lands in single-hop (31 → 23 never-covered) and
+adversarial (15 → 12) questions that name a date, while the temporal
+category's never-covered count does not move (15 → 15; its turn-level
+coverage does, 85.0 → 86.9%). A date is evidence about WHICH drawer in any
+category; a served embedder had already spent the temporal paraphrase
+headroom the hash row cashed in. Logs and table in `benchmarks/RESULTS.md`.
 
 ---
 
@@ -11378,6 +11526,137 @@ obvious replacement was `vault`, and `vault` already names a different
 concept — the isolation and crypto unit — so reusing it would have been worse
 than the status quo. That search is over: the ruling above is that no target
 word is needed, because no rename is owed.
+
+### O114 — CRITICAL: `tiny_http` allocates the client's declared `Content-Length` when an unread request is dropped, so one header kills every listener, unauthenticated
+
+**Found 2026-09-07 by O111's own e2e gate, on CI and not locally.** The
+check declares `Content-Length: 999999999999` over a two-byte body and
+expects 413 and a server that still answers. Locally it passed. On CI both
+suites lost every check after it with `code 000`: the engine and the
+orchestrator had DIED. Read in the crate (`tiny_http 0.12.0`,
+`src/util/equal_reader.rs:66-86`): when a `Request` is dropped with its body
+unread, `EqualReader::drop` drains the remainder with
+`let mut buf = vec![0; remaining_to_read]` — an allocation sized by the
+CLIENT's declaration, taken before a byte is read. A terabyte of `calloc`
+succeeds under WSL's overcommit and aborts under a heuristic-overcommit
+kernel (`handle_alloc_error`, no unwinding, no catch), which is why the
+local battery and CI disagreed. Upstream knows: tiny-http issue **#290**
+(open, "Drain unread request bodies with a fixed-size buffer (unbounded
+allocation from declared Content-Length)"), no tagged release since 0.12.0.
+
+**It is not O111's regression; O111 made it VISIBLE.** Every refusal that
+answers without reading the body drops the request unread, and the oldest
+one is the palace bearer gate: an UNAUTHENTICATED peer sends one header and
+a 401 is written, the request drops, and the process allocates whatever the
+header said — on `serve-http` (both `/v1` and `/mcp`), and on the
+orchestrator's every route. This has been true for as long as the tree has
+used tiny_http. O111's 413 is one more such path, and its e2e check is the
+first thing in this tree that ever sent the header.
+
+**Why this is filed and not fixed in the same unit.** The fix is not in this
+tree's code: no public `Request` API removes the reader without dropping it
+(`respond`, `into_writer` and `Drop` all end in the same drain), and
+`mem::forget` trades the abort for a leaked thread and socket per request.
+It is a ten-line change INSIDE the crate — drain with a fixed buffer, stop
+after a bounded total and let the connection close — which means one of:
+
+- **A. Vendor the crate under `[patch.crates-io]`** (`vendor/tiny_http`,
+  MIT/Apache-2.0, attributed in `NOTICE` like `calendrical_calculations`),
+  carrying the fix and nothing else, with the diff against 0.12.0 pinned by
+  a preflight so it cannot drift silently. Cheapest and fully in this
+  tree's control; costs a tracked copy of a third-party crate.
+- **B. A fork under `github.com/sealcroft`** with the fix, as a `git`
+  dependency pinned to a rev. Same fix, one more repository to keep public
+  and one more supply-chain edge the doctrine's own transport rules would
+  have to reason about.
+- **C. Replace the HTTP server library** in both binaries. The right
+  long-term answer if tiny_http stays unmaintained; a unit of its own.
+
+A supply-chain shape is the maintainer's to choose; this entry is the
+record that the defect is known, CRITICAL, unauthenticated, and older than
+the branch that found it. **Until it is ruled, `serve-http` and the
+orchestrator should not face an untrusted network segment**, which the
+transport doctrine already advises for other reasons.
+
+**Gate, owed by the closure**: the terabyte header on the 401 path with no
+bearer (unauthenticated), on the 413 path, and on the orchestrator, each
+followed by a check that the process still answers — the exact check O111
+had to narrow to 300,000,000 to keep its own gate measuring the 413 rather
+than this. And the crate diff pinned, both directions.
+
+### O112 — `palace` still names ONE vault in the code and on three surfaces, and whether that is O7's defect or O5's ruling is the maintainer's
+
+**Filed 2026-09-07 by the seventh round's naming scan**, which asked O7's
+question of every other word in the tree — does one word denote two levels
+of one hierarchy? — and tested twenty-two of them (vault, manifest, index,
+key, receipt, record, chain, anchor, screen/gate/fence, floor, session,
+hall/hallway, room, wing, closet, tunnel, drawer, export/bundle/backup,
+tenant/instance/engine, backend, store, level). Every one but the first
+cleared: qualified polysemy or unrelated domains. The one that did not is
+O7's own word, everywhere except the file O7 renamed.
+
+"The palace" is the installation on every doctrinal surface
+(`architecture/index.html:377` *"Palace contains vaults; a vault contains
+wings"*, `vault/lib.rs:3`, `main.rs:94` *"Initialize the palace: master key +
+a default vault"*). And ONE vault is a `PalaceStore` (`store/lib.rs:2575`,
+*"One open vault"*), reports `PalaceStats`, is exported by *"Export the
+palace as JSONL"* on a command taking `--vault`, says `"Palace is empty"` on
+the CLI and `"palace is empty"` over MCP where `/v1` says `"the vault is
+empty"` for the same condition, and `docs/AGENTS.md:1245` called a vault's
+export "the whole palace" (corrected to "the whole vault" by this round,
+along with `MULTI_TENANCY.md:21`'s "per-vault memory store" for the engine
+and the `manifest` qualifiers at `AGENTS.md:970/1245`). Read together: the
+palace contains vaults, and a vault is a PalaceStore.
+
+**Why this is a ruling and not a fix.** O5 ruled *"the architectural
+components keep their names"* and O7 ruled *"the installation keeps the
+word"*; neither says whether `PalaceStore`/`PalaceStats` and the per-vault
+wording are components keeping a name or the two-level defect surviving in
+identifiers. The options, with their costs, so the answer is one word:
+
+- **A. Rename the per-vault referents** — `PalaceStore → VaultStore`,
+  `PalaceStats → VaultStats` (297 + 28 sites, no wire change since serde
+  emits fields, `pub type PalaceStore = VaultStore;` keeps the crate API),
+  "Export a vault", "Vault is empty" on all three surfaces (closing a
+  three-way wording drift), `palace.bundle → vault.bundle` in the docs.
+  Leave `Palace Monitor`, `PalaceTamperDetected` and the Grafana dashboard,
+  which are palace-wide. Doctrine-grounded: provenance says the installation
+  is the palace.
+- **B. Leave the identifiers, fix the prose** — the struct names are
+  MemPalace heritage a reader meets once; the sentences are what mislead.
+  Cheapest; leaves the self-containing reading in the type names.
+- **C. Nothing** — O5 read literally.
+
+Gate for A or B: a grep of `palace` across `crates/` and `docs/` finds the
+installation only, pinned by the trace verifier's method (a needle assembled
+from fragments, a premise probe). Until ruled, this entry is the record that
+the question is open and was not decided by taste.
+
+### O113 — three whole-corpus copies in RAM on export, one on rotate and on a deep page: data-sized, and still the corpus
+
+**Filed 2026-09-07 by the same sweep**, as the residue O109's fix left:
+every allocation is sized by its data now, and on four paths the data is the
+whole vault. `export` (`store/lib.rs:5377`, `tenant.rs:2756`) holds every
+drawer plus embedding as a `Vec`, then the NDJSON `String`, then the framed
+payload — three simultaneous copies, a fourth on the CLI for the AEAD
+output; `rotate` holds every re-sealed content and embedding until its one
+UPDATE loop (the one-transaction contract, so this one is a cost to state,
+not to remove); `rebuild_fts` holds every content blob (hmac-only only); and
+a deep `offset` hydrates `max(256, 32·(offset+limit))` candidates with their
+token vectors — after O109 that is a whole-corpus copy per request rather
+than a crash, ~13 KB per row at the 10⁶ measurement, selected by one JSON
+field from any authenticated caller.
+
+**Fix shape, when it is taken:** stream export as NDJSON rows straight to
+the writer (one row in RAM; the manifest's counts and digest are computed
+over the stream and written FIRST by buffering only the digest state, or
+LAST with the format bumped — a format decision); cap `offset` at the
+corpus, which O23 measured as legitimate, and state the per-row cost in the
+`/v1` reference so a caller sizing a page knows what a deep one buys. Gate:
+a peak-RSS assertion on `export` over a mined corpus at two sizes, linear in
+ROWS, not in copies. Not taken in this round because none of the four is a
+crash, all are bounded by the corpus, and the export one changes a file
+format's write order.
 
 ### O6 — the repo social preview is still not uploaded
 GitHub exposes **no REST endpoint** for org avatars (`avatar_url` is read-only

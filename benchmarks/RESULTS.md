@@ -569,3 +569,34 @@ were not before; every category is equal or better. The mechanism that
 reached them is the score term on the drawer's own resolved mention — the
 chunk was in the 1,600-row pool and below the fifty cut — not the pool
 top-up, which only fires for a drawer the prefilter left out entirely.
+
+#### The same arm on a served embedder (ROADMAP O111's re-verification, 2026-09-07)
+
+Same protocol, bge-m3 through the shipped TLS terminator, dated harness,
+both passes on one binary. Logs: `logs/o111_locomo10_bge-m3_dated_pool50.log`,
+`logs/o111_locomo10_bge-m3_when-from-query_pool50.log`. The dated baseline
+reproduces the O76 served run **by id** — 188 never-covered, the same 188 —
+so the date stamp moves nothing on a served embedder either, and the arm's
+diff is the window's alone.
+
+| Metric | bge-m3 | bge-m3 + `when_from_query` |
+|---|---|---|
+| Session R@10 | 97.8% | 98.6% |
+| Gold covered anywhere in the pool | 90.5% | 91.1% |
+| Never covered, by id | 188 | 176 (14 reached, 2 new: `conv-44_q46`, `conv-48_q78`) |
+| … of which temporal (category 2) | 15 | 15 |
+| Category 2, all gold turns delivered | 85.0% | 86.9% |
+| Search cost | 150.7 ms per q | 147.5 ms per q (noise; ingest 821 s / 858 s) |
+
+Two things the hash row could not show. The two ids O108 was filed on are
+NOT in the served baseline's miss list — bge-m3 already reached them by
+paraphrase (O76 said so) — so on a served embedder the window's gain is
+elsewhere: the fourteen it reaches are eight single-hop (category 4, 31 →
+23), three adversarial (15 → 12), one open-domain and two multi-hop, while
+the temporal category's never-covered count does not move at all (15 → 15;
+its turn-level coverage does, 85.0 → 86.9%). A date in the question is
+evidence about WHICH drawer regardless of the question's category, and a
+served embedder had already spent the temporal paraphrase headroom the hash
+row was cashing in. The window's two losses are the same shape as the hash
+row's one: a drawer dated inside the window outranks the gold turn, which
+names no day.

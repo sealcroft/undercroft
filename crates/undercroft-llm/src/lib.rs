@@ -87,7 +87,9 @@ pub struct LlmClient {
 const UNPARSEABLE_DESTINATION: &str = "<unparseable base url>";
 
 impl LlmClient {
-    /// Build a client for `base_url` and `model`, reading `UNDERCROFT_LLM_KEY` for the bearer; cleartext to a non-loopback host is refused.
+    /// Build a client for `base_url` and `model` with NO bearer — `with_key`
+    /// takes one, and only `from_env` reads `UNDERCROFT_LLM_KEY`. Cleartext
+    /// to a non-loopback host is refused.
     pub fn new(base_url: &str, model: &str, kind: ApiKind) -> Result<Self, LlmError> {
         Self::with_key(base_url, model, kind, "")
     }
@@ -301,11 +303,11 @@ impl LlmClient {
         if !self.key.is_empty() {
             req = req.set("Authorization", &format!("Bearer {}", self.key));
         }
-        let resp: Value = req
-            .send_json(body)
-            .map_err(|e| LlmError::Http(e.to_string()))?
-            .into_json()
-            .map_err(|e| LlmError::BadOutput(e.to_string()))?;
+        let resp: Value = undercroft_net::read_json_bounded(
+            req.send_json(body)
+                .map_err(|e| LlmError::Http(e.to_string()))?,
+        )
+        .map_err(|e| LlmError::BadOutput(e.to_string()))?;
         let text = match self.kind {
             ApiKind::Ollama => resp.pointer("/message/content").and_then(Value::as_str),
             ApiKind::OpenAi => resp

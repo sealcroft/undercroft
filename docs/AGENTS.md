@@ -477,8 +477,13 @@ entered a fifty-hit pool. Over `locomo10` at pool 50 (`benchmarks/RESULTS.md`),
 `when_from_query` on the hash embedder turns 23 never-covered questions into
 covered ones and loses 1, floor 12.5% → 11.4%, session R@10 95.5% → 96.6%,
 at a 3% search-cost increase and no ingest cost; the temporal category goes
-22 → 18 misses and no category regresses. Off by default because it changes
-what is retrievable, which is this project's MINOR test.
+22 → 18 misses and no category regresses. On a served embedder (bge-m3, same
+protocol) it reaches 14 and loses 2, floor 9.5% → 8.9%, at no measurable
+search cost — and the gain lands in single-hop and adversarial questions
+that name a date, because the model had already reached the temporal ones
+by paraphrase; a date is evidence about which drawer in any category. Off by
+default because it changes what is retrievable, which is this project's
+MINOR test.
 
 ### `room_cap` — what the knob does, measured
 
@@ -967,8 +972,8 @@ corrected it: verification runs against `sender`, the public key, so a
 document carrying a signature with no sender can be checked by nobody. That
 shape used to be skipped rather than refused while the CLI printed
 `"; sender signature verified"` over it; it is now `ATTESTATION FAILED`, and
-the line names the sender that was actually checked. But a rolled-back database, or a manifest edited
-offline, is detected **when the vault opens** — before any command's own
+the line names the sender that was actually checked. But a rolled-back database, or a vault manifest
+(`vault.json`, the rollback anchor) edited offline, is detected **when the vault opens** — before any command's own
 checks begin — so `search`, `stats`, `recent` and `drawer get` reach it too,
 and since 1.0.0 they exit 2 as well. They used to exit 1, i.e. the same
 code as "no such vault", which a compliance script retries forever against a
@@ -1242,8 +1247,8 @@ classifies it deliberately:
 | GET | `/v1/vaults/{id}/history` | the audit chain: `subject?` (a drawer, fact or entity id, or a whole label), `limit?` (≤1000, default 50), `offset?`. OPERATOR scope — every namespace. A read, so a `--read-only` server serves it |
 | POST | `/v1/vaults/{id}/anchor` | fast-forward the manifest rollback anchor onto the committed audit-chain head, and report how far behind it was (`behind_by`). **The surface this capability exists for**: `store_for` caches its handle, so a long-lived server never re-opens and never reconciles by itself, while `POST …/verify` is a genuine read and does not anchor (ROADMAP A31/R3). A write — refused 403 on a `--read-only` server, and deliberately absent from MCP (`OPERATOR_ONLY`), because it moves the out-of-database evidence a rollback is detected against |
 | POST | `/v1/vaults/{id}/rotate` | rotate the vault onto fresh keys (sole-writer contract — **409** for the vault this same process also serves over `/mcp`, i.e. the one named by `--vault`: rotating retires the keys under that second live handle, which then reports every read as TAMPERED and re-anchors the manifest from its stale cache. Stop the server and run `undercroft vault rotate <name>`, which holds the only handle) |
-| GET | `/v1/vaults/{id}/export` | lossless NDJSON: a manifest first line (counts, provenance, unsigned on this surface), then drawers (vectors + token artifacts), KG entities, facts (a receipt's fingerprint is keyed to its own vault, so import RE-DERIVES it from the source drawer that travelled with it — drawers are written before facts for exactly that; a fact whose cited drawer is not in the payload imports `unreceipted`) and tunnels — the whole palace |
-| POST | `/v1/vaults/{id}/import` | parse-before-write import; accepts manifest-era typed records and legacy drawer-only NDJSON; enforces the manifest's payload digest and expiry when present. The response carries `quarantined` beside `imported` — how many records the admission screen diverted (0 while screening is off). Every imported record's `added_by` is **re-stamped `import`**, overwriting whatever the payload claimed: that field is the key the trusted-source auto-admit rides, so a bundle claiming `added_by: "cli"` must not inherit a save surface's standing. Declare `UNDERCROFT_ADMIT_TRUSTED_SOURCES=import` to trust the import act itself. A record whose `wing` or `room` fails the name guard is **400** naming which record and which field — and since 2026-08-13 that holds even when the content trips the admission screen. It did not: the screen ran first and a diversion moves the declared wing into `intended_wing`, so such a record was quarantined instead of refused and could then never be allowed out of the queue (ROADMAP O30). This route is where that was reachable, because the three SAVE surfaces validate before they reach the store and this one deserializes a whole drawer out of the payload |
+| GET | `/v1/vaults/{id}/export` | lossless NDJSON: an export manifest as the first line (counts, provenance, unsigned on this surface), then drawers (vectors + token artifacts), KG entities, facts (a receipt's fingerprint is keyed to its own vault, so import RE-DERIVES it from the source drawer that travelled with it — drawers are written before facts for exactly that; a fact whose cited drawer is not in the payload imports `unreceipted`) and tunnels — the whole vault |
+| POST | `/v1/vaults/{id}/import` | parse-before-write import; accepts manifest-era typed records and legacy drawer-only NDJSON; enforces the manifest's payload digest and expiry when present. The response carries `quarantined` beside `imported` — how many records the admission screen diverted (0 while screening is off). Every imported record's `added_by` is **re-stamped `import`**, overwriting whatever the payload claimed: that field is the key the trusted-source auto-admit rides, so a bundle claiming `added_by: "cli"` must not inherit a save surface's standing. Declare `UNDERCROFT_ADMIT_TRUSTED_SOURCES=import` to trust the import act itself. A record whose `wing` or `room` fails the name guard is **400** naming which record and which field — and since 2026-08-13 that holds even when the content trips the admission screen. It did not: the screen ran first and a diversion moves the declared wing into `intended_wing`, so such a record was quarantined instead of refused and could then never be allowed out of the queue (ROADMAP O30). This route is where that was reachable, because the three SAVE surfaces validate before they reach the store and this one deserializes a whole drawer out of the payload. **A body above 256 MiB is 413** — on every route, refused on the declared `Content-Length` before a byte is read, never imported as a prefix (ROADMAP O111); split the payload, or import from disk with `undercroft import` |
 | GET | `/ui` | vault admin console (static page, served in front of the bearer gate on every build — the operator pastes the bearer into the page) |
 | GET | `/metrics`, `/monitor`, `/v1/…/stream` | telemetry builds only |
 

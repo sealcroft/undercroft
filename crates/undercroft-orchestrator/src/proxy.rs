@@ -787,19 +787,25 @@ pub fn serve(orch: &Orch, addr: &str, role: Role<'_>) -> anyhow::Result<()> {
             .split_once('?')
             .map(|(_, q)| q.to_string())
             .unwrap_or_default();
-        let mut body = Vec::new();
-        use std::io::Read;
-        let _ = request
-            .as_reader()
-            .take(256 * 1024 * 1024)
-            .read_to_end(&mut body);
+        // Under the one ceiling every hop shares, and REFUSED past it: this
+        // used to `take(256 MiB)` and route the prefix, so a tenant import
+        // one byte over the cap wrote a prefix of its corpus at 200
+        // (ROADMAP O111).
+        let declared = request.body_length();
+        let body = undercroft_net::read_body_bounded(request.as_reader(), declared);
 
         let target = Target {
             path: &path,
             query: &query,
         };
         let started = std::time::Instant::now();
-        let response = route(orch, &role, &limiter, &request, &method, target, &body);
+        let response = match &body {
+            Ok(body) => route(orch, &role, &limiter, &request, &method, target, body),
+            Err(e @ undercroft_net::BodyError::TooLarge { .. }) => {
+                json_response(413, &serde_json::json!({ "error": format!("request {e}") }))
+            }
+            Err(e) => json_response(400, &serde_json::json!({ "error": format!("request {e}") })),
+        };
         // A route CLASS from a closed set, never the URL. The reason is
         // CARDINALITY, not confidentiality: the forwarded query string
         // carries `wing=` and `room=`, whose value set is created BY USE, and

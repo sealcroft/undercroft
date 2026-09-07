@@ -101,6 +101,9 @@ pub enum BundleError {
     #[error("manifest is malformed: {0}")]
     BadManifest(String),
     /// The bundle declared an expiry that has passed (the instant, RFC 3339).
+    /// Raised by the two importers (`undercroft import`, `POST …/import`)
+    /// after `BundleManifest::expired_at` — the check lives with the caller
+    /// because the clock does.
     #[error("bundle expired at {0}")]
     Expired(String),
 }

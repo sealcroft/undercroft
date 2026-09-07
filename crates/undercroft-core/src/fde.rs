@@ -59,6 +59,51 @@ pub const FDE_SEED_DEFAULT: u64 = 0x6d75_7665_7261_2e31;
 /// the construction agree. It used to be a `.clamp(1, 16)` applied AFTER an
 /// `unwrap_or`, so `UNDERCROFT_FDE_KSIM=32` was silently taken as 16.
 pub const FDE_KSIM_MAX: usize = 16;
+/// The inclusive upper bound on a DECLARED `reps` (`UNDERCROFT_FDE_REPS`,
+/// through the store's `TUNED` row, so `config check` sees it). It had
+/// none, so `UNDERCROFT_FDE_REPS=100000000` passed the pre-flight and
+/// allocated ~200 GB of SimHash planes at the first build (ROADMAP O111).
+/// The paper's largest configuration uses 20; 64 leaves that a 3× margin
+/// and nothing else. A PERSISTED construction is bounded by
+/// [`FdeParams::dim_for`] alone.
+pub const FDE_REPS_MAX: usize = 64;
+/// The inclusive upper bound on a DECLARED `dproj`. A projection wider than
+/// the token dimension is already the identity (see [`FdeEncoder::new`]), so
+/// nothing above any served model's width means anything; 4096 covers every
+/// late-interaction export this project has measured with room to spare.
+pub const FDE_DPROJ_MAX: usize = 4096;
+/// The most floats one FDE may hold: `reps · 2^ksim · dproj_eff`. The three
+/// per-field ceilings compose to ~1.7·10¹⁰, so the PRODUCT needs its own
+/// bound — `FdeEncoder::encode` allocates exactly this many floats per call,
+/// and a persisted `params` blob that an offline writer wrote (clear and
+/// untagged on an hmac-only vault) chose the construction for every later
+/// open. 2²⁰ floats is 4 MiB per vector, five hundred times the default.
+pub const FDE_DIM_MAX: usize = 1 << 20;
+
+impl FdeParams {
+    /// The FDE width this construction produces for token dimension `d`, or
+    /// `None` where it CANNOT WORK: a zero field, a product that wraps, or
+    /// a width past [`FDE_DIM_MAX`] — checked arithmetic throughout, because
+    /// a wrapped product is how a length check stops being a bound (ROADMAP
+    /// O111). The one door both the declaration and the persisted blob go
+    /// through before an encoder is built. Deliberately NOT the per-field
+    /// ceilings: those bound the DECLARATION (the `TUNED` rows, where
+    /// `config check` sees them), while a persisted construction an operator
+    /// chose under an older build is kept for as long as it works, since
+    /// refusing it costs a rebuild of every FDE from the stored token
+    /// matrices.
+    pub fn dim_for(&self, d: usize) -> Option<usize> {
+        if self.reps == 0 || self.ksim == 0 || self.dproj == 0 || d == 0 {
+            return None;
+        }
+        let dproj_eff = if self.dproj >= d { d } else { self.dproj };
+        let dim = self
+            .reps
+            .checked_mul(1usize.checked_shl(self.ksim as u32)?)?
+            .checked_mul(dproj_eff)?;
+        (dim <= FDE_DIM_MAX).then_some(dim)
+    }
+}
 
 impl Default for FdeParams {
     /// `8 × 2^4 × 16` → 2048-dim FDEs (8 KB f32 per drawer): the small end
@@ -256,6 +301,54 @@ pub fn fde_dot(a: &[f32], b: &[f32]) -> f32 {
 mod tests {
     use super::*;
     use crate::late::maxsim;
+
+    /// ROADMAP O111: the product ceiling is one door, and the door is
+    /// checked arithmetic. `ksim = 40` is the value a 25-byte persisted blob
+    /// could carry (2^40 buckets — the product wraps rather than merely
+    /// exceeding); three fields each inside its declaration ceiling still
+    /// compose past `FDE_DIM_MAX`; a construction above a per-field ceiling
+    /// but inside the product one is KEPT, because it works; and the default
+    /// passes.
+    #[test]
+    fn a_construction_that_cannot_work_has_no_width() {
+        let d = 128;
+        assert_eq!(FdeParams::default().dim_for(d), Some(8 * 16 * 16));
+        let over_ksim = FdeParams {
+            ksim: 40,
+            ..FdeParams::default()
+        };
+        assert_eq!(over_ksim.dim_for(d), None);
+        // Every field within its declaration range, the product past the
+        // ceiling: 64 · 2^16 · 128 = 2^29 floats.
+        let composed = FdeParams {
+            reps: FDE_REPS_MAX,
+            ksim: FDE_KSIM_MAX,
+            dproj: FDE_DPROJ_MAX,
+            ..FdeParams::default()
+        };
+        assert_eq!(composed.dim_for(d), None);
+        // Above the declaration ceiling on `reps`, inside the product one:
+        // a persisted construction that works is not refused.
+        let wide_reps = FdeParams {
+            reps: FDE_REPS_MAX + 1,
+            ..FdeParams::default()
+        };
+        assert_eq!(wide_reps.dim_for(d), Some((FDE_REPS_MAX + 1) * 16 * 16));
+        assert_eq!(
+            FdeParams {
+                reps: 0,
+                ..FdeParams::default()
+            }
+            .dim_for(d),
+            None
+        );
+        // And the identity rule: a dproj above the token dim projects to d.
+        let wide = FdeParams {
+            dproj: 4096,
+            ..FdeParams::default()
+        };
+        assert_eq!(wide.dim_for(16), Some(8 * 16 * 16));
+    }
 
     /// Deterministic pseudo-random unit token: direction picked from `topic`
     /// with small per-token jitter, so same-topic matrices are close in

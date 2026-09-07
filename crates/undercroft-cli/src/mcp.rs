@@ -1035,11 +1035,14 @@ fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String
             Ok(lines.join("\n"))
         }
         "undercroft_list_hallways" => {
-            let halls = store.hallways(
+            // `hallways`, not `halls`: a hall is the grouping ABOVE wings and
+            // a hallway is entity co-occurrence WITHIN one — two levels, and
+            // a local named for the wrong one reads as the other (O7's shape).
+            let hallways = store.hallways(
                 req_str(args, "wing")?,
                 opt_u64(args, "top").unwrap_or(20) as usize,
             )?;
-            Ok(serde_json::to_string_pretty(&halls)?)
+            Ok(serde_json::to_string_pretty(&hallways)?)
         }
         "undercroft_kg_add" => {
             let id = store.kg_add(

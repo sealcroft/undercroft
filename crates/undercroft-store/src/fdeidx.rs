@@ -178,15 +178,23 @@ fn params_unpack(b: &[u8]) -> Option<(FdeParams, usize)> {
         return None;
     }
     let u32at = |i: usize| u32::from_le_bytes(b[i..i + 4].try_into().unwrap()) as usize;
-    Some((
-        FdeParams {
-            reps: u32at(1),
-            ksim: u32at(5),
-            dproj: u32at(9),
-            seed: u64::from_le_bytes(b[13..21].try_into().unwrap()),
-        },
-        u32at(21),
-    ))
+    let p = FdeParams {
+        reps: u32at(1),
+        ksim: u32at(5),
+        dproj: u32at(9),
+        seed: u64::from_le_bytes(b[13..21].try_into().unwrap()),
+    };
+    let tokdim = u32at(21);
+    // The persisted blob chooses the construction for every later open and
+    // is clear and untagged on an hmac-only vault, so it goes through the
+    // product ceiling before anything is built from it: a 25-byte blob with
+    // `ksim = 40` made the first encode allocate `reps · 2^40 · dproj`
+    // floats (ROADMAP O111). A construction that cannot work reads as "no
+    // params", which the writable open treats exactly as it treats a
+    // token-dim change — rebuild every FDE from the stored token matrices
+    // under the declaration — and the read-only open reports as a fallback.
+    p.dim_for(tokdim)?;
+    Some((p, tokdim))
 }
 
 /// First-build parameters: defaults, overridable via `UNDERCROFT_FDE_REPS` /
@@ -201,13 +209,37 @@ fn params_unpack(b: &[u8]) -> Option<(FdeParams, usize)> {
 /// typo was swallowed and then an out-of-range value was swallowed again: a
 /// declared `ksim` of 32 was silently taken as 16. The bounds are part of the
 /// table now, which is also what lets the pre-flight agree with this.
-fn params_from_env() -> FdeParams {
-    FdeParams {
+fn params_from_env(tokdim: usize) -> FdeParams {
+    let p = FdeParams {
         reps: crate::tuned("UNDERCROFT_FDE_REPS"),
         ksim: crate::tuned("UNDERCROFT_FDE_KSIM"),
         dproj: crate::tuned("UNDERCROFT_FDE_DPROJ"),
         seed: crate::tuned_u64("UNDERCROFT_FDE_SEED"),
+    };
+    // Each knob is bounded by its own `TUNED` row; the PRODUCT is what an
+    // encode allocates, and three in-range values can still compose to a
+    // vector no process can hold (`FDE_DIM_MAX`). A tuning declaration that
+    // cannot work warns and keeps the default — the `Tunes` class — rather
+    // than aborting the first build.
+    if p.dim_for(tokdim).is_some() {
+        return p;
     }
+    let d = FdeParams::default();
+    eprintln!(
+        "warning: UNDERCROFT_FDE_REPS/_KSIM/_DPROJ = {}/{}/{} build a {}-float FDE at token \
+         dim {tokdim}, above the {}-float ceiling; using the defaults {}/{}/{}",
+        p.reps,
+        p.ksim,
+        p.dproj,
+        p.reps
+            .saturating_mul(1usize << p.ksim.min(63))
+            .saturating_mul(p.dproj.min(tokdim)),
+        undercroft_core::fde::FDE_DIM_MAX,
+        d.reps,
+        d.ksim,
+        d.dproj
+    );
+    d
 }
 
 impl PalaceStore {
@@ -283,18 +315,26 @@ impl PalaceStore {
             return Ok(true);
         }
         self.fde_schema()?;
-        let stored = self.fde_meta_get("params")?.and_then(|b| params_unpack(&b));
+        let stored_blob = self.fde_meta_get("params")?;
+        let stored = stored_blob.as_deref().and_then(params_unpack);
         let params = match stored {
             Some((p, d)) if d == tokdim => p,
-            other => {
-                if other.is_some() {
+            _ => {
+                // Any persisted blob that is not THIS construction — a
+                // different token dim, or one `params_unpack` refuses
+                // because it cannot work (ROADMAP O111) — drops every row
+                // built under it before a new construction is minted. It
+                // used to drop rows only for a blob that PARSED, so a
+                // refused blob would have left its rows beside the new
+                // construction's, which is the mixing this module forbids.
+                if stored_blob.is_some() {
                     self.conn.execute("DELETE FROM drawer_fde", [])?;
                     self.conn
                         .execute("DELETE FROM fde_meta WHERE key != 'params'", [])?;
                     self.fde_cache.borrow_mut().take();
                     *self.fde_pq.borrow_mut() = None;
                 }
-                let p = params_from_env();
+                let p = params_from_env(tokdim);
                 self.fde_meta_put("params", &params_pack(p, tokdim))?;
                 p
             }
@@ -433,7 +473,7 @@ impl PalaceStore {
                 };
                 let matrix: Option<(Vec<f32>, usize)> = match packed.first() {
                     Some(2) => tok_pq.as_ref().and_then(|pq| {
-                        crate::latestage::unpack_v2(&packed, pq.code_len()).map(
+                        crate::latestage::unpack_v2(&packed, pq.code_len(), pq.dim()).map(
                             |(dim, _rows, codes)| {
                                 let mut m = Vec::with_capacity(codes.len() / pq.code_len() * dim);
                                 for code in codes.chunks_exact(pq.code_len()) {
@@ -924,5 +964,38 @@ impl PalaceStore {
             scored.truncate(k);
         }
         Ok(Some(scored.into_iter().map(|(_, seq)| seq).collect()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// ROADMAP O111: the persisted `params` blob goes through the same
+    /// ceilings as the declaration. A 25-byte blob with `ksim = 40` parsed
+    /// before this, and the first encode then allocated `reps · 2^40 ·
+    /// dproj` floats. The PREMISE arm is the same blob with the default
+    /// `ksim`, which must parse, or the refusal is measuring the wrong byte.
+    #[test]
+    fn a_persisted_params_blob_past_the_ceilings_reads_as_no_params() {
+        let tokdim = 128;
+        let ok = params_pack(FdeParams::default(), tokdim);
+        assert_eq!(ok.len(), 25);
+        assert!(
+            params_unpack(&ok).is_some(),
+            "PREMISE: the default construction parses"
+        );
+        let mut forged = ok.clone();
+        forged[5..9].copy_from_slice(&40u32.to_le_bytes());
+        assert!(params_unpack(&forged).is_none());
+        let mut forged = ok.clone();
+        forged[1..5].copy_from_slice(&(u32::MAX).to_le_bytes());
+        assert!(params_unpack(&forged).is_none());
+        // A construction above a DECLARATION ceiling that still works is
+        // kept: refusing it would rebuild every FDE for no gain.
+        let mut wide = ok;
+        wide[1..5]
+            .copy_from_slice(&((undercroft_core::fde::FDE_REPS_MAX + 1) as u32).to_le_bytes());
+        assert!(params_unpack(&wide).is_some());
     }
 }
