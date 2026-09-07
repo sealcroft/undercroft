@@ -67,7 +67,7 @@ so rather than implying it checked them.
 
 ---
 
-## 1.5.1 (unreleased)
+## 1.5.1 (released 2026-09-07)
 
 ### a request's header block is bounded, and a connection ends behind a body that was refused
 

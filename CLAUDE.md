@@ -7,25 +7,29 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
 
 Published by **Sealcroft** at `github.com/sealcroft/undercroft`, site at
 `https://sealcroft.com/undercroft/`, house page at `https://sealcroft.com/`
-(repo `sealcroft/sealcroft.github.io`). Current release **1.5.0** — a MINOR
-over `1.4.0`, itself a MINOR over `1.3.0`. MINOR is right by this file's own
-test: the per-vault database gains a name beside the one it had — `vault.db`,
-beside `vault.json` (O7) — and nothing documented stops being accepted,
-because a vault created under the old name opens with no verdict, verifies,
-and is renamed in place. That compat path is what keeps it off MAJOR; the
-ROADMAP had said MAJOR for a month on the *"unless it ships with a compat
-path that opens both"* clause. Two things are worth knowing before an
-upgrade. **The rename happens at the first WRITABLE open, after a WAL
-checkpoint**: a WAL database is three files SQLite finds by the database's
-name, so a bare rename orphans every committed frame in a hot `-wal`; a
-read-only open serves `palace.db` where it is and reports the pending rename
-on `unhealed`, and a directory holding BOTH files refuses on either posture
-as an integrity verdict. And **anything outside the engine that names the
-file must follow** — backups, monitors, the observability README's tamper
-demo — which `UPGRADING.md` carries, since `config check` cannot see
-per-vault on-disk state. **The tree carries `1.5.0` only once the release
-PR merges; the TAG is a separate, explicit step** — a build reporting a
-version it was never tagged as is worse than one reporting the last release. `main` is branch
+(repo `sealcroft/sealcroft.github.io`). Current release **1.5.1** — a PATCH
+over `1.5.0`, itself a MINOR over `1.4.0`. PATCH is right by this file's own
+test: no documented contract moves. What it carries is one CRITICAL and two
+closures. **One header killed every listener (O114)**: the HTTP server crate
+both binaries run on drained an unread request body on drop with an
+allocation of the client's declared `Content-Length`, on every refusal path
+including the unauthenticated bearer 401, so `serve-http` and the
+orchestrator died on a heuristic-overcommit kernel — found by this release's
+own e2e gate on CI, invisible to the local battery because WSL overcommits.
+The crate is vendored and patched (`vendor/tiny_http`, ruled option A): the
+drop drains nothing and the connection ENDS behind a refused body, since the
+crate sets no socket read timeout and any drain parks the single-threaded
+loop on a silent peer. **O109's class swept tree-wide (O111)**: three at-rest
+decoders whose length check wrapped in release, an FDE construction with no
+ceiling, and a request body with none — one 256 MiB ceiling now, refused on
+the declaration, never truncated. **Every public item documented (O110)**,
+with the lint that keeps it so. Two things a script could meet, both in
+`UPGRADING.md`: a body above 256 MiB is 413, and a header line above 16 KiB
+or more than 128 headers is refused — tightening of input never documented
+as valid, which is a fix and not a break. **The tree carries `1.5.1` only
+once the release PR merges; the TAG is a separate, explicit step** — a build
+reporting a version it was never tagged as is worse than one reporting the
+last release. `main` is branch
 protected on both repos: force pushes and deletions blocked, admins exempt.
 Forking cannot be disabled while the repos are public, and they must stay
 public — GitHub Free will not serve Pages from a private repo.
