@@ -145,10 +145,12 @@ impl PalaceStore {
                         let text = String::from_utf8(plain).map_err(|_| {
                             StoreError::Invalid(format!("drawer {id} content is not UTF-8"))
                         })?;
-                        let mut buf = Vec::with_capacity(text.len() + 3);
-                        buf.extend_from_slice(b"fp\x1f");
-                        buf.extend_from_slice(text.as_bytes());
-                        Some(next.tag(&buf)[..16].to_vec())
+                        // The lookup's own recipe under the next key — over
+                        // `match_key(text)`, never the raw bytes. A second
+                        // copy of the recipe lived here over the raw bytes,
+                        // so a rotated vault stopped finding any duplicate
+                        // whose content was not already NFC (ROADMAP O116).
+                        Some(crate::manage::fingerprint_with(&next, &text))
                     }
                     None => None,
                 };
@@ -781,6 +783,15 @@ impl PalaceStore {
     /// Drop every RAM cache holding plaintext derived under the previous
     /// keys; they rebuild lazily from the re-sealed rows.
     pub(crate) fn drop_derived_caches(&self) {
+        // The HNSW index too (ROADMAP O119): `repair` re-embeds every drawer
+        // and reached this helper through `invalidate_embedding_space`, yet
+        // the in-memory graph was dropped only by delete, rotate and the
+        // embedder migration — so a served `--features hnsw` process kept
+        // prefiltering on pre-repair vectors. Every derived cache, one place.
+        #[cfg(feature = "hnsw")]
+        {
+            *self.hnsw.borrow_mut() = None;
+        }
         *self.emb_cache.borrow_mut() = None;
         *self.pq.borrow_mut() = None;
         *self.ivf.borrow_mut() = None;
@@ -2020,5 +2031,50 @@ mod tests {
             );
             assert!(store.verify().unwrap().ok());
         }
+    }
+
+    /// ROADMAP O116: rotation recomputes the dedup fingerprint under the
+    /// NEXT key with the LOOKUP's recipe — over `match_key(content)` — so a
+    /// duplicate lookup still finds a drawer whose stored bytes are not
+    /// NFC. Rotation carried its own copy of the recipe over the raw bytes,
+    /// so after any rotation `check_duplicate` missed every such drawer
+    /// while the ASCII-only tests beside it stayed green: for ASCII the two
+    /// recipes coincide. The PREMISE arm proves the fixture is not NFC.
+    #[test]
+    fn a_rotated_vault_still_finds_a_duplicate_of_non_nfc_content() {
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.create("r", SecurityLevel::Sealed).unwrap();
+        let mut store = PalaceStore::open(vault).unwrap();
+        // "café" with a DECOMPOSED e + combining acute; the lookup below
+        // spells it composed.
+        let decomposed = "the cafe\u{301} on the corner files verbatim drawers";
+        let composed = "the caf\u{e9} on the corner files verbatim drawers";
+        assert_ne!(
+            decomposed.as_bytes(),
+            composed.as_bytes(),
+            "PREMISE: the fixture must not already be NFC"
+        );
+        assert_eq!(
+            undercroft_core::normalize::match_key(decomposed),
+            undercroft_core::normalize::match_key(composed),
+            "PREMISE: the two spellings share one comparison key"
+        );
+        let d = drawer(decomposed, 0);
+        store.upsert(&d).unwrap();
+        assert_eq!(
+            store.check_duplicate(composed).unwrap().as_deref(),
+            Some(d.id.as_str()),
+            "before rotation the composed lookup finds the decomposed drawer"
+        );
+        let candidate = mgr.rotation_candidate("r").unwrap();
+        store.rotate_keys(candidate).unwrap();
+        assert_eq!(
+            store.check_duplicate(composed).unwrap().as_deref(),
+            Some(d.id.as_str()),
+            "after rotation the lookup must still find it: the fingerprint was re-keyed \
+             under the lookup's own recipe"
+        );
+        assert!(store.verify().unwrap().ok());
     }
 }

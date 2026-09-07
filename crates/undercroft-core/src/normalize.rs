@@ -255,7 +255,9 @@ const ASCII_DIGITS: [&str; 10] = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "
 /// The guard is what keeps this from becoming blanket NFKC: `ﷺ` (18 chars,
 /// category So) would inject a whole phrase into every religious drawer's term
 /// frequency, and `﷼` (Sc) would turn a delimiter into letters and manufacture
-/// cross-word bigrams. Only alphanumeric-to-alphanumeric expansions are taken.
+/// cross-word bigrams. Only alphanumeric-to-alphanumeric expansions are taken
+/// for the Arabic and width forms; CJK radicals (themselves So) are the
+/// deliberate exception, expanded on the target side alone.
 fn expand_compat(s: &str) -> Option<String> {
     use unicode_normalization::char::decompose_compatible;
     if !s.chars().any(|c| {
@@ -384,10 +386,11 @@ pub enum NormalizeMode {
     /// inside a fenced code block.
     #[default]
     Prose,
-    /// Code and scripts: apply only the safety rules. Every byte of
-    /// indentation and every blank line is preserved, because in a Python
-    /// file leading whitespace *is* the semantics and a diff over trailing
-    /// whitespace is a real change.
+    /// Code and scripts: the safety rules plus a trim of leading/trailing
+    /// newlines. Every interior byte — indentation, trailing space, blank
+    /// runs — is preserved, because in a Python file leading whitespace
+    /// *is* the semantics and a diff over trailing whitespace is a real
+    /// change.
     Code,
 }
 
@@ -413,8 +416,9 @@ fn is_fence(line: &str) -> bool {
 /// characters and normalizes CRLF to LF in every mode; in
 /// [`NormalizeMode::Prose`] it additionally trims trailing whitespace per
 /// line and collapses 3+ blank lines to 2 — but not inside fenced code
-/// blocks. The text is otherwise preserved byte-for-byte: Undercroft stores
-/// verbatim, not summaries.
+/// blocks; in [`NormalizeMode::Code`] it trims only the outer newlines.
+/// Every interior byte is otherwise preserved: Undercroft stores verbatim,
+/// not summaries.
 pub fn normalize_content_mode(input: &str, mode: NormalizeMode) -> String {
     let cleaned = make_safe(input);
     if mode == NormalizeMode::Code {

@@ -12,8 +12,9 @@
 //! AAD both carry the vault id).
 //!
 //! **Admin plane** — `/admin/*` behind `UNDERCROFT_ORCH_ADMIN_TOKEN`:
-//! instance registry, tenant lifecycle (create = pick instance → create
-//! engine vault → record mapping → return the token once), migration
+//! instance registry, tenant lifecycle (create = pick instance → record
+//! mapping → create engine vault, rolling the mapping back on failure →
+//! return the token once), migration
 //! (export → import → count-verified → mapping flip → source delete), and
 //! the **operator plane** `/admin/tenants/{id}/ops/<subpath>` — attested
 //! forgetting, retention policy, wing trust, admission review and verify,
@@ -39,8 +40,11 @@ use crate::state::{Orch, StateError};
 use subtle_ct::ct_eq;
 use tiny_http::{Header, Method, Response, Server};
 
-/// Constant-time string compare without pulling `subtle` into this crate's
-/// public surface — a length leak here is fine (token lengths are public).
+/// Constant-time string compare — a second implementation of one compare:
+/// `subtle` IS a dependency of this crate (`bytes_eq`, the metrics-bearer
+/// compare, uses its `ConstantTimeEq`), and this module predates that edge.
+/// Two bodies for one decision, stated rather than hidden; a length leak
+/// here is fine (token lengths are public).
 mod subtle_ct {
     pub fn ct_eq(a: &str, b: &str) -> bool {
         if a.len() != b.len() {
@@ -55,7 +59,9 @@ mod subtle_ct {
 }
 
 /// Per-tenant fixed-window rate limiter (requests per minute). Off unless
-/// `UNDERCROFT_ORCH_RATE_LIMIT` is set to a positive integer. Single-writer
+/// `UNDERCROFT_ORCH_RATE_LIMIT` is set to a positive integer; a value that
+/// is not one REFUSES TO START (`resolve_rate_limit`), never falls back to
+/// off. Single-writer
 /// like the serve loop itself, so plain interior state suffices. Windows
 /// are keyed by tenant id — one noisy tenant is throttled, the rest are
 /// untouched (the blast-radius posture, applied to request volume).
@@ -117,10 +123,12 @@ impl RateLimiter {
     }
 }
 
-/// Subpath allowlist for the data plane: the first segment must be one of
-/// the engine's vault subroutes. An empty subpath (the vault root — its
-/// DELETE endpoint) is refused: vault lifecycle belongs to the admin
-/// plane, not to a data token.
+/// Subpath allowlist for the data plane: the WHOLE subpath is matched
+/// against a closed vocabulary of shapes (every segment shape-checked
+/// first, so nothing that could normalize reaches the match) — never a
+/// first-segment prefix, for the traversal reason the body records. An
+/// empty subpath (the vault root — its DELETE endpoint) is refused: vault
+/// lifecycle belongs to the admin plane, not to a data token.
 fn data_subpath_ok(subpath: &str) -> bool {
     // The WHOLE subpath, never its first segment — because an approved
     // prefix used to authorize an arbitrary suffix. `drawers/../admission`

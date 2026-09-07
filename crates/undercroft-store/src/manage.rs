@@ -15,6 +15,24 @@ use undercroft_core::{entity::extract_entities, Drawer};
 
 use crate::{chain_append, PalaceStore, SaveOutcome, StoreError};
 
+/// The ONE keyed content-fingerprint recipe: `HMAC(mac_key, "fp\x1f" ‖
+/// match_key(content))`, truncated to 16 bytes. Comparison is over the NFC
+/// `match_key`, never the stored bytes, so two spellings that render
+/// identically are one duplicate. It takes the vault as a parameter because
+/// rotation has to recompute every fingerprint under the NEXT key — and
+/// rotation used to carry its own copy of this recipe over the raw
+/// plaintext bytes, so after any rotation `check_duplicate` missed every
+/// drawer whose content was not already NFC (ROADMAP O116). Two copies of a
+/// lookup key are two chances for the lookup to stop finding what the write
+/// filed.
+pub(crate) fn fingerprint_with(vault: &undercroft_vault::Vault, content: &str) -> Vec<u8> {
+    let key = undercroft_core::normalize::match_key(content);
+    let mut buf = Vec::with_capacity(key.len() + 3);
+    buf.extend_from_slice(b"fp\x1f");
+    buf.extend_from_slice(key.as_bytes());
+    vault.tag(&buf)[..16].to_vec()
+}
+
 /// Whether a delete may destroy a drawer that is still awaiting an
 /// admission ruling. Stated by every caller of the delete choke point —
 /// a required argument cannot be forgotten the way a call-site check can,
@@ -510,7 +528,9 @@ impl PalaceStore {
     }
 
     /// Resolve a trust floor into the clause the candidate machinery
-    /// applies BEFORE candidates are drawn. `None` = no floor active.
+    /// applies BEFORE candidates are drawn. `None` = the floor narrows
+    /// nothing — no floor, or a `standard` floor with no wing assigned
+    /// below it.
     ///
     /// Two arms because the unassigned-wing default is `standard`:
     /// a `standard` floor excludes only the (few, assigned) quarantined
@@ -544,7 +564,11 @@ impl PalaceStore {
     /// How many wings a trust floor excludes — the honest-exclusion
     /// count the surfaces report beside a trust-filtered result, so a
     /// thin answer under a floor is distinguishable from a thin corpus
-    /// (the `unlabeled_excluded` policy, one label over).
+    /// (the `unlabeled_excluded` policy, one label over). Two populations,
+    /// by arm: an `Exclude` clause counts ASSIGNMENTS below the floor
+    /// (whether or not the wing holds drawers), an `Allow` clause counts
+    /// DISTINCT wings present in `drawers` and not allowed — unfenced, so
+    /// the reserved review wing counts among them.
     pub fn trust_excluded_wing_count(&self, floor: &str) -> Result<u64, StoreError> {
         match self.trust_clause(floor)? {
             None => Ok(0),
@@ -632,11 +656,7 @@ impl PalaceStore {
     /// duplicate. The stored text is untouched — only the key we compare by
     /// is folded.
     pub(crate) fn fingerprint(&self, content: &str) -> Vec<u8> {
-        let key = undercroft_core::normalize::match_key(content);
-        let mut buf = Vec::with_capacity(key.len() + 3);
-        buf.extend_from_slice(b"fp\x1f");
-        buf.extend_from_slice(key.as_bytes());
-        self.vault.tag(&buf)[..16].to_vec()
+        fingerprint_with(&self.vault, content)
     }
 
     /// Exact-duplicate lookup by content. Returns the existing drawer id.
@@ -750,9 +770,11 @@ impl PalaceStore {
     /// The delete choke point. Every caller states whether it may destroy
     /// pending review evidence, so a new delete path does not compile until
     /// its author decides — the same shape the write choke point uses for
-    /// the admission screen, and the reason `delete_by_source`,
-    /// `forget_with_proof` and the retention sweep all inherit the fence
-    /// without repeating it.
+    /// the admission screen. `delete_drawer` states `Protect` and inherits
+    /// the fence; the bulk callers — `delete_by_source`, `forget_with_proof`
+    /// and the retention sweep through it — PRE-FLIGHT it with
+    /// `is_quarantine_pending` before the loop, so a refused id stops the
+    /// batch before anything is destroyed rather than midway.
     pub(crate) fn delete_drawer_ruled(
         &mut self,
         id: &str,
@@ -2007,7 +2029,10 @@ pub enum Namespace {
     /// Key rotation. Minted by `rotate.rs`'s own `INSERT INTO audit` rather
     /// than by `chain_append` — see `fence_inventory` for why that matters.
     Rotate,
-    /// An at-rest migration (the blind-index walk, the fingerprint re-key).
+    /// An at-rest migration: `migrate/{kind}` for the four kinds the store
+    /// mints — `kg-blind` (the blind-index walk), `content-fp` (the
+    /// fingerprint re-key), `embedding-space` (the hash-embedder upgrade
+    /// walk) and `repair`.
     Migrate,
     /// A distilled fact, and the authority tier's promotions.
     Kg,
@@ -2106,7 +2131,8 @@ impl Namespace {
             // surface — filed as an open question rather than taken on the
             // strength of a mismatched comment.
             Namespace::Del => true,
-            // Egress: a full-palace export, or a push to a remote mirror.
+            // Egress: a full-palace export, a push to a remote mirror, or a
+            // `refine` run that POSTs drawer text to an LLM endpoint (O79).
             // Operator acts on the corpus, and this one really is only that.
             Namespace::Egress => true,
             // The read-audit trail. An agent reading which queries were run
@@ -2118,9 +2144,10 @@ impl Namespace {
             // At-rest migrations, for the reason directly above. A
             // blind-index walk re-tags every graph row, re-derives every id
             // and bulk-rewrites `audit.record_id`; a fingerprint re-key
-            // re-tags every receipt. Both are operations ON the integrity
-            // machinery, both run unattended at an open nobody asked for, and
-            // both were reachable from `undercroft_history` at
+            // re-tags every receipt; the embedding-space walk and `repair`
+            // rewrite the whole derived layer. All are operations ON the
+            // integrity machinery, the first three run unattended at an open
+            // nobody asked for, and the first two were reachable from `undercroft_history` at
             // `HistoryScope::Agent` the moment they started recording
             // themselves — because a namespace was only fenced if somebody
             // added it to a list, which is the arrangement this enum ends.

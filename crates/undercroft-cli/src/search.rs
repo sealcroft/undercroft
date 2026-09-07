@@ -135,7 +135,9 @@ pub fn evidence(hit: &SearchHit) -> String {
 /// What a filter kept OUT of the competition, counted.
 ///
 /// Both filters that narrow the candidate set before scoring owe the caller
-/// this: a thin answer under a `kind` filter or a `min_trust` floor is
+/// this: a thin answer under a `kind` filter or an EFFECTIVE trust floor
+/// (the request's `min_trust`, composed with the vault's declared
+/// `UNDERCROFT_TRUST_FLOOR`) is
 /// otherwise indistinguishable from a thin corpus, and the caller has no way
 /// to ask. The policy is docs/LABELS.md's and it was implemented twice, each
 /// time missing one leg — `/v1` and the CLI reported the trust count and MCP
@@ -144,14 +146,18 @@ pub fn evidence(hit: &SearchHit) -> String {
 pub struct Exclusions {
     /// In-scope drawers carrying no declared kind, while a `kind` filter is set.
     pub unlabeled: Option<u64>,
-    /// Wings below the declared floor, while `min_trust` is set.
+    /// Wings below the EFFECTIVE floor — the request's `min_trust`, else
+    /// the vault's `UNDERCROFT_TRUST_FLOOR` unless an explicit wing scope
+    /// bypasses it — while one is in force.
     pub trust_excluded: Option<u64>,
 }
 
 impl Exclusions {
-    /// Count what this request's own filters excluded. Absent filter ⇒ `None`,
-    /// never `Some(0)`: "you set no floor" and "your floor excluded nothing"
-    /// are different statements and the surfaces render them differently.
+    /// Count what this request's filters excluded — the `kind` filter it
+    /// set, and the EFFECTIVE trust floor (request floor, else the vault's
+    /// declared one). Absent filter ⇒ `None`, never `Some(0)`: "no floor was
+    /// in force" and "the floor excluded nothing" are different statements
+    /// and the surfaces render them differently.
     pub fn measure(store: &PalaceStore, opts: &SearchOptions) -> Result<Self, StoreError> {
         let unlabeled = match opts.kind {
             Some(_) => Some(store.unkinded_in_scope(opts)?),

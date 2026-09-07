@@ -5,7 +5,7 @@
 //! the crates that need it cannot link each other, that implementation gets a
 //! home neither of them owns. `undercroft-net` was carved out because the
 //! transport policy lived in `undercroft-llm` while the index backends had
-//! none at all. This is the same shape one layer over: three
+//! none at all. This is the same shape one layer over: five
 //! `UNDERCROFT_ORCH_*` declarations are read by `undercroft-orchestrator` and
 //! must ALSO be pre-flighted by `undercroft config check`, and the engine
 //! deliberately never links the control plane (`CLAUDE.md`: *"Pure `/v1`
@@ -23,7 +23,7 @@
 //! **The dependency list is the design.** `thiserror` and `hex`, nothing
 //! else. Both consumers pay for whatever lands here, and a control plane has
 //! no use for a domain model — which is why these did not go into
-//! `undercroft-core` (unicode normalization and a calendar library for three
+//! `undercroft-core` (unicode normalization and a calendar library for five
 //! string parses) nor into `undercroft-net`, whose domain is transport and
 //! which correctly owns the two declaration resolvers that ARE transport
 //! (`declared_pin`, `declared_endpoint`).
@@ -185,7 +185,7 @@ pub fn resolve_metrics_addr(declared: Option<&str>) -> Result<Option<String>, Co
 }
 
 /// The bearer for the metrics listener, **required when that listener is not
-/// loopback** and refused as pointless when it is not needed to be set.
+/// loopback**; on loopback it is optional and honoured when set.
 ///
 /// Mirrors the engine's refuse-to-bind rule (`a network-exposed memory server
 /// must require a bearer token`) rather than inventing a second posture. It is

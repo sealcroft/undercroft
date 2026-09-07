@@ -476,8 +476,10 @@ impl Orch {
     // -- tenants -----------------------------------------------------------
 
     /// Create the tenant row and mint its token (returned exactly once —
-    /// only the MAC is stored). The caller creates the engine vault first;
-    /// this only records the mapping.
+    /// only the MAC is stored). This only records the mapping; the caller
+    /// (`proxy::create_tenant`) records it FIRST, then creates the engine
+    /// vault, and rolls the row back with `tenant_delete` if that fails —
+    /// so a crash cannot leave an unmapped vault holding data.
     pub fn tenant_create(
         &self,
         name: &str,

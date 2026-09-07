@@ -13,9 +13,10 @@
 //!   embedding) is encrypted with XChaCha20-Poly1305; the AAD binds vault
 //!   id + record id so blobs cannot be replayed across vaults or slots.
 //! * **HMAC integrity** — every record carries an HMAC-SHA256 tag over its
-//!   canonical bytes (independent MAC key), and the vault manifest keeps a
-//!   tamper-evident HMAC chain over all writes. `undercroft verify` walks
-//!   both.
+//!   canonical bytes (independent MAC key); the store's `chain_meta` row
+//!   carries the tamper-evident HMAC chain over all writes, and the vault
+//!   manifest holds a MAC'd, lagging rollback anchor reconciled at open.
+//!   `undercroft verify` walks both.
 //!
 //! Threat model: protects memories at rest against disk theft, cross-vault
 //! bleed, and offline tampering of the database or manifest. It does not
@@ -56,8 +57,10 @@ pub enum VaultError {
     AlreadyExists(String),
     /// The manifest could not be read as one — or a sealed content frame
     /// could not be decoded (`decompress_frame` raises this variant for a
-    /// frame past the content bound or a failed zstd decode); the message
-    /// says which. Both are integrity verdicts on the CLI (exit 2).
+    /// frame past the content bound or a failed zstd decode) — or a chain
+    /// head handed to `chain_next_hex` is not hex (the message names the
+    /// manifest even then); the message says which. All are integrity
+    /// verdicts on the CLI (exit 2).
     #[error("vault manifest is corrupt: {0}")]
     CorruptManifest(String),
     /// The manifest's HMAC does not verify under the vault's keys — evidence of tampering, and an integrity verdict on every surface.
@@ -399,11 +402,12 @@ impl Vault {
     /// caller). Token embeddings are plaintext-derived like the sentence
     /// embedding, so sealed vaults seal them — under the `/tok` AAD domain,
     /// distinct from content and `/emb`, so at-rest blobs of one drawer can
-    /// never be swapped for each other. This is the sealed tier's first
-    /// encrypted-at-rest derived store: unlike the PQ/FTS *prefilters*
-    /// (plaintext side-tables, hmac-only vaults only), a per-candidate
-    /// rescore store can exist for sealed vaults because nothing derived
-    /// ever touches disk in clear.
+    /// never be swapped for each other. This was the sealed tier's first
+    /// encrypted-at-rest derived store. Only the FTS *prefilter* remains an
+    /// hmac-only plaintext side-table; PQ artifacts are sealed through
+    /// `index_at_rest` under `/pq`, and a per-candidate rescore store can
+    /// exist for sealed vaults because nothing derived ever touches disk
+    /// in clear.
     pub fn tokens_at_rest(&self, record_id: &str, packed: &[u8]) -> Vec<u8> {
         match self.level {
             SecurityLevel::Sealed => {
@@ -1003,8 +1007,10 @@ impl VaultManager {
     /// ([`Vault::sample_rank`]), so a *future* retrain in a rotated vault draws
     /// a different sample; rotation itself only re-seals, never re-quantizes,
     /// so nothing already on disk changes.
-    /// Nothing is written here — the store's rotation stages the manifest
-    /// once it has replayed the chain under the new keys.
+    /// Nothing is staged here — the store's rotation stages the manifest
+    /// once it has replayed the chain under the new keys. The unlock is
+    /// writable, so a torn staging manifest (`vault.json.next`) met on the
+    /// way is removed.
     pub fn rotation_candidate(&self, id: &str) -> Result<Vault, VaultError> {
         let current = self.unlock(id)?;
         let mut manifest = current.manifest.clone();
@@ -1076,7 +1082,7 @@ fn decompress_frame(framed: &[u8]) -> Result<Vec<u8>, VaultError> {
             // compressor always writes. A frame declaring more than the bound
             // is REFUSED here rather than decoded into a fixed buffer that
             // then overflows; a frame declaring nothing (no writer of ours
-            // produces one) keeps exactly the old capacity, so nothing that
+            // produces one) is streamed under the bound, so nothing that
             // opened before stops opening.
             let capacity = match zstd::zstd_safe::get_frame_content_size(data) {
                 Ok(Some(n)) if n > MAX_CONTENT_BYTES as u64 => {

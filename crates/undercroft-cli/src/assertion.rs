@@ -58,8 +58,10 @@ fn signed_message(ts: i64, vault_id: &str) -> String {
 }
 
 /// Compute the hex HMAC an authorized caller would send for
-/// `(vault_id, ts)`. Used by the verifier and by tests to mint assertions;
-/// the caller platform reimplements this same one-liner in its own stack.
+/// `(vault_id, ts)`. Used by [`header_value`] to mint assertions and by
+/// nothing else in the engine ([`verify`] recomputes the MAC inline and
+/// compares it in constant time rather than calling this); the caller
+/// platform reimplements this same one-liner in its own stack.
 pub fn sign(secret: &[u8], vault_id: &str, ts: i64) -> String {
     let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts any key length");
     mac.update(signed_message(ts, vault_id).as_bytes());

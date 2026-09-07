@@ -34,9 +34,12 @@ pub enum SealError {
     /// The record's HMAC does not match — the integrity verdict.
     #[error("integrity check failed: record HMAC does not match")]
     BadHmac,
-    /// The opened content is not UTF-8.
-    #[error("stored content is not valid UTF-8")]
-    Utf8(#[from] std::string::FromUtf8Error),
+    // A `Utf8(#[from] FromUtf8Error)` variant stood here, documented as
+    // "the opened content is not UTF-8", and nothing ever converted into
+    // it: `open_content` returns bytes, and both store readers map a UTF-8
+    // failure to their own verdicts. Deleted under ROADMAP O115 — its
+    // `#[from]` is what the mint-site gate exempts, so this one was found
+    // by reading, and the exemption is that gate's stated residue.
 }
 
 fn aad(vault_id: &str, record_id: &str) -> Vec<u8> {

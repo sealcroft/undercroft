@@ -1,8 +1,10 @@
 //! # undercroft-obs
 //!
-//! Observability shim for Undercroft. The entire public surface below is
-//! stable regardless of build features so call sites in the other crates
-//! never need `#[cfg(...)]`.
+//! Observability shim for Undercroft. The public surface below is stable
+//! regardless of build features so call sites in the other crates never
+//! need `#[cfg(...)]` — with one carve-out: the live-frame BROKER surface
+//! (`publish_sample`, `history`, `subscribed_vaults`, `run_sse`) exists
+//! only under `telemetry`, and its callers are gated the same way.
 //!
 //! * **Without** the `telemetry` feature (the default): every function is
 //!   an inlined no-op, the diagnostic macros expand to `eprintln!`, and
@@ -10,8 +12,8 @@
 //!   unaffected beyond routing the handful of pre-existing `eprintln!`
 //!   diagnostics through one macro.
 //! * **With** `telemetry`: structured logs (`tracing`), a Prometheus
-//!   registry, and OTLP export (traces + metrics) come online. See the
-//!   [`imp`] module.
+//!   registry (metrics are PULL-only, scraped at `/metrics`), and OTLP
+//!   export of traces come online. See the [`imp`] module.
 //!
 //! Everything reported here is **metadata and counts only** — never drawer
 //! content or key material — matching Undercroft's local-first, opt-in
@@ -125,7 +127,8 @@ impl KgKind {
 }
 
 /// Record a completed search: wall-clock duration, hit count, the active
-/// fusion mode, and whether the FTS BM25 prefilter fired.
+/// fusion mode, and whether any candidate prefilter (FTS, PQ, wing-PQ, FDE
+/// or HNSW) drew the pool rather than the exact scan.
 #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
 pub fn search_completed(
     duration: std::time::Duration,
@@ -148,7 +151,8 @@ pub fn search_wings_probed(wings: u64) {
     imp::counter_add("undercroft_search_wings_probed_total", wings, &[]);
 }
 
-/// Record a drawer write (created or deduplicated).
+/// Record a drawer write (created, deduplicated, or quarantined — the
+/// three values of the counter's one `outcome` label).
 #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
 pub fn drawer_write(outcome: WriteOutcome) {
     #[cfg(feature = "telemetry")]
@@ -445,8 +449,9 @@ pub fn series_names() -> Vec<String> {
         .collect()
 }
 
-/// Set a gauge value for a vault. Atomic-backed and Send-safe; read on
-/// scrape by both the Prometheus renderer and the OTLP observable gauges.
+/// Set a gauge value for a vault. A Mutex-guarded map, Send-safe; read on
+/// scrape by the Prometheus renderer through the SDK's observable gauges
+/// (pull-only — there is no OTLP metric push).
 /// `name` must be one of [`GAUGE_NAMES`] — anything else is dropped without
 /// a trace.
 #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
@@ -461,7 +466,8 @@ pub fn set_gauge(name: &str, vault: &str, value: f64) {
 
 /// RAII guard returned by [`init`]. Hold it for the lifetime of the
 /// process; its `Drop` flushes and shuts telemetry providers down, so
-/// buffered OTLP spans/metrics are exported even on early `?` returns.
+/// buffered OTLP spans are exported even on early `?` returns (metrics are
+/// pull-only and have nothing to flush).
 #[must_use = "hold the telemetry guard until process exit so telemetry is flushed"]
 pub struct TelemetryGuard(());
 
@@ -478,7 +484,8 @@ impl Drop for TelemetryGuard {
 ///
 /// Reads: `UNDERCROFT_LOG` (EnvFilter directives), `UNDERCROFT_LOG_FORMAT`
 /// (`json`|`text`), `UNDERCROFT_OTLP_ENDPOINT` (unset ⇒ no network egress),
-/// `UNDERCROFT_SERVICE_NAME`, `UNDERCROFT_OTLP_HEADERS`.
+/// `UNDERCROFT_SERVICE_NAME`, `UNDERCROFT_OTLP_HEADERS`, and
+/// `UNDERCROFT_OTLP_CA` (the pin for the traces hop).
 pub fn init() -> Result<TelemetryGuard, ObsError> {
     init_as("undercroft")
 }
@@ -744,7 +751,8 @@ pub fn subscribed_vaults() -> Vec<String> {
 /// history, then stream live frames until the client disconnects. `writer`
 /// is the hijacked socket (`tiny_http::Request::into_writer()`), kept out of
 /// this crate's type surface so obs never depends on the HTTP server.
-/// Returns `false` if the subscriber cap is reached (caller should 503).
+/// Returns `false` if the subscriber cap is reached — the 503 has already
+/// been written to `writer`, so the caller only needs to drop it.
 #[cfg(feature = "telemetry")]
 pub fn run_sse(writer: Box<dyn std::io::Write + Send>, vault: String) -> bool {
     imp::run_sse(writer, vault)

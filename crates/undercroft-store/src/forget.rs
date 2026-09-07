@@ -1,4 +1,5 @@
-//! Provable forgetting (C3.2 phase 1): `forget --prove` destroys named
+//! Provable forgetting (C3.2 phase 1): `undercroft forget` (and
+//! `POST …/forget`, the retention sweep, and `admission deny`) destroys named
 //! drawers **through the audit chain** and emits an attestation that the
 //! named content was destroyed and nothing else changed in the same
 //! breath.
@@ -159,7 +160,8 @@ pub struct AttestedRecord {
     pub at: String,
 }
 
-/// The attestation `forget --prove` emits.
+/// The attestation `undercroft forget` emits — and the retention sweep and
+/// `admission deny`, which destroy through the same `forget_with_proof`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ForgetAttestation {
     /// Attestation format version.
@@ -430,9 +432,12 @@ impl PalaceStore {
     /// pushed: nothing is claimed, and the canonical is byte-identical to
     /// what every build before this one produced.
     fn mirror_note(&self, mirror: &MirrorDelete) -> Option<String> {
-        // **Decided off the CHAIN, not off the `meta` row.**
+        // **Decided off the CHAIN first; the legacy `meta` row is a second,
+        // disclose-only signal.** Either one makes the note appear, neither
+        // can suppress it: a vault pushed before `egress/index-push` existed
+        // has only the row, and a stripped row still has the chain record.
         //
-        // The first version asked `pushed_embedder()`, which reads an
+        // The first version asked `pushed_embedder()` ALONE, which reads an
         // untagged, unsealed `INSERT INTO meta`. One offline
         // `DELETE FROM meta WHERE key='index_pushed_embedder'` and every
         // later attestation silently drops the disclosure — and still
@@ -443,8 +448,9 @@ impl PalaceStore {
         // records `egress/index-push` on the tamper-evident chain
         // unconditionally. A28's rule, on a decision this unit introduced.
         //
-        // `meta` is still consulted, for the embedder NAME only — a label in
-        // a warning, not the decision.
+        // `meta` is still consulted for the embedder NAME — a label in a
+        // warning — and, on the OR below, as the second signal that can only
+        // ADD the disclosure, never remove it.
         let pushed: bool = self
             .conn
             .query_row(
@@ -560,8 +566,9 @@ impl PalaceStore {
 
         // Which posture can this vault take? The keyed replay needs the MAC
         // key that MADE these tombstones, and `rotate_keys` destroys it by
-        // design. An attestation that spans a rotation cannot exist — one
-        // `forget` is one transaction under one key — so this is all-or-
+        // design. An attestation that spans a rotation cannot exist — the
+        // per-id deletes run on the exclusive handle a rotation also needs,
+        // so one `forget` is made under one key — so this is all-or-
         // nothing: any tag that will not verify takes the WHOLE document to
         // the recorded-evidence path.
         //

@@ -695,8 +695,9 @@ impl PalaceStore {
     /// coded rows, coarse centroids (`nlist ≈ √N`, clamp 16..=4096) train
     /// over the palace's own decoded FDEs, every row's reserved list field
     /// rewrites in place (the v2 pack anticipated this — no migration), and
-    /// the cache regroups. Centroids retrain when the corpus doubles past
-    /// their training size. Advisory like every derived artifact.
+    /// the cache regroups. Centroids retrain when the corpus grows past
+    /// 1.5× their training size (`pqidx::ivf_fresh`). Advisory like every
+    /// derived artifact.
     ///
     /// It must never `BEGIN` **inside a caller's transaction** — the rule that
     /// keeps `upsert_many`'s batch working, and the reason this rewrite was
@@ -895,8 +896,9 @@ impl PalaceStore {
                 .map(|(seq, fde)| (fde_dot(&qfde, fde), *seq))
                 .collect(),
             Some(FdeCache::Coded { code_len, slabs }) if !slabs.is_empty() && *code_len > 0 => {
-                // ADC over the codes: per-query dot LUTs, 16 table adds per
-                // doc. With live centroids only the probed lists' slabs are
+                // ADC over the codes: per-query dot LUTs, m (= fde_dim/8, or
+                // /4 when 8 does not divide it) table adds per doc. With live
+                // centroids only the probed lists' slabs are
                 // scanned (plus -1); skewed partitions that return fewer
                 // than `k` rows widen to the full scan rather than starve
                 // the candidate pool.

@@ -68,9 +68,10 @@ pub struct DrawerMeta {
     /// The date the content was written or is about (`YYYY-MM-DD`), when known: the anchor relative dates in the text resolve against, and what a declared date window narrows on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_date: Option<String>,
-    /// Dates and times written into the content itself, preserved verbatim
-    /// and resolved against `content_date` where that is possible. Derived
-    /// structure, like `entities` — the text is never altered.
+    /// Dates and times written into the content itself, resolved against
+    /// `content_date` where that is possible. Derived structure, like
+    /// `entities` — the text is never altered, and the verbatim `text` of
+    /// each mention is dropped at rest (`meta_at_rest`) and read live.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub time_mentions: Vec<crate::temporal::TimeMention>,
     /// The hall the drawer is filed under, when one was declared — a grouping above wings.

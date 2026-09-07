@@ -11,7 +11,8 @@
 //! latency is independent of `top_n` and of core count.
 //!
 //! Security tiering: token matrices are plaintext-derived, but unlike the
-//! PQ/FTS *prefilters* (plaintext side-tables, hmac-only only) this is a
+//! FTS *prefilter* (a plaintext side-table, hmac-only only; PQ artifacts are
+//! sealed under `/pq` for sealed vaults) this is a
 //! per-candidate **rescore** store — sealed vaults get it too, because every
 //! blob is AEAD-sealed under the `/tok` AAD domain. The
 //! no-plaintext-derived-data-in-clear invariant holds at every level.

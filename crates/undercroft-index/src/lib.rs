@@ -1,4 +1,5 @@
-//! Remote vector indexes for Undercroft — Qdrant, Chroma, and pgvector.
+//! Remote vector indexes for Undercroft — Qdrant, Chroma, pgvector, Milvus
+//! and Weaviate.
 //!
 //! Design differs deliberately from MemPalace, which shipped
 //! plaintext documents to these servers. Here a remote backend is an
@@ -108,9 +109,10 @@ pub trait VectorIndex {
     /// WITHOUT creating one** (ROADMAP O83).
     ///
     /// `index_status` used to be `ensure()` followed by `count()`, and
-    /// `ensure` CREATES: `PUT /collections` on qdrant, a `CREATE EXTENSION`
-    /// and `CREATE TABLE` pair on pgvector, `POST /collections` on chroma,
-    /// milvus and weaviate. Harmless while the only caller was an operator's own CLI;
+    /// `ensure` CREATES: `PUT /collections/{name}` on qdrant, a
+    /// `CREATE EXTENSION` and `CREATE TABLE` pair on pgvector,
+    /// `POST /collections` on chroma, `POST …/collections/create` on milvus
+    /// and `POST /v1/schema` on weaviate. Harmless while the only caller was an operator's own CLI;
     /// O68 then exposed it as a GET on `/v1`, an MCP read tool and a tenant
     /// data-plane route, so a READ issued DDL against operator
     /// infrastructure — from a `--read-only` server and from a tenant
@@ -127,8 +129,9 @@ pub trait VectorIndex {
     /// the live backend rather than inferred from its neighbour, because
     /// the five APIs disagree about this in ways documentation does not
     /// advertise: chroma's collection path takes the NAME (an id 404s) while
-    /// its `/count` needs the ID, and milvus has an explicit
-    /// `collections/has` where the others rely on a 404.
+    /// its `/count` needs the ID, milvus has an explicit `collections/has`
+    /// where the three HTTP-404 backends (qdrant, chroma, weaviate) rely on
+    /// a 404, and pgvector asks `to_regclass`.
     fn status(&mut self, collection: &str) -> Result<Option<u64>, IndexError>;
 }
 
@@ -150,20 +153,6 @@ pub(crate) fn backend_agent(base_url: &str) -> Result<ureq::Agent, IndexError> {
     backend_agent_with(base_url, std::time::Duration::from_secs(30))
 }
 
-/// A GET whose **404 means ABSENT** and whose every other failure is still a
-/// failure (ROADMAP O83).
-///
-/// The distinction is the whole point of [`VectorIndex::status`]. *"There is
-/// no mirror"* and *"I could not reach the backend"* are different answers,
-/// and the existing `ensure` implementations conflate them deliberately —
-/// qdrant's is `if exists.is_ok() { return }` and weaviate's the same shape,
-/// so a network blip reads as "absent" and the next line CREATES. That is
-/// harmless when the next step is to create and dishonest when the next step
-/// is to REPORT: it would tell an operator their mirror is gone because a
-/// TLS handshake failed.
-///
-/// Shared because all three HTTP backends have byte-identical `call` error
-/// mapping, and a second copy of this decision is how the two would drift.
 /// A backend's reply as JSON: `Null` where the body is not JSON (an empty
 /// 200 is ordinary for these backends and always read that way), but a body
 /// past the shared ceiling is REFUSED rather than read whole — the mirror is
@@ -179,6 +168,21 @@ pub(crate) fn json_or_null(r: ureq::Response) -> Result<serde_json::Value, Index
     }
 }
 
+/// A GET whose **404 means ABSENT** and whose every other failure is still a
+/// failure (ROADMAP O83).
+///
+/// The distinction is the whole point of [`VectorIndex::status`]. *"There is
+/// no mirror"* and *"I could not reach the backend"* are different answers,
+/// and the existing `ensure` implementations conflate them deliberately —
+/// qdrant's is `if exists.is_ok() { return }` and weaviate's the same shape,
+/// so a network blip reads as "absent" and the next line CREATES. That is
+/// harmless when the next step is to create and dishonest when the next step
+/// is to REPORT: it would tell an operator their mirror is gone because a
+/// TLS handshake failed.
+///
+/// Shared because the three 404-signalling HTTP backends (qdrant, chroma,
+/// weaviate) have byte-identical `call` error mapping, and a second copy of
+/// this decision is how they would drift.
 pub(crate) fn get_or_absent(
     agent: &ureq::Agent,
     url: &str,
@@ -210,7 +214,8 @@ pub(crate) fn backend_agent_with(
 }
 
 /// Construct a backend by name from environment configuration
-/// (`UNDERCROFT_QDRANT_URL`, `UNDERCROFT_CHROMA_URL`, `UNDERCROFT_PGVECTOR_DSN`).
+/// (`UNDERCROFT_QDRANT_URL`, `UNDERCROFT_CHROMA_URL`, `UNDERCROFT_PGVECTOR_DSN`,
+/// `UNDERCROFT_MILVUS_URL`, `UNDERCROFT_WEAVIATE_URL`).
 pub fn from_env(backend: &str) -> Result<Box<dyn VectorIndex>, IndexError> {
     match backend {
         "qdrant" => {
@@ -419,7 +424,8 @@ pub mod chroma {
     use serde_json::{json, Value};
 
     /// Chroma server (REST v2 API). Collection ids are resolved by name and
-    /// cached per process.
+    /// cached per INSTANCE (the `ids` map below), so `ensure`/`status` must
+    /// run on this instance before the id-keyed calls.
     pub struct ChromaIndex {
         base: String,
         agent: ureq::Agent,
@@ -498,7 +504,9 @@ pub mod chroma {
             let body = json!({
                 "ids": records.iter().map(|r| r.id.clone()).collect::<Vec<_>>(),
                 "embeddings": records.iter().map(|r| r.embedding.clone()).collect::<Vec<_>>(),
-                // Documents carry only sealed bytes; metadata carries structure.
+                // Documents carry the at-rest blob (plaintext for an
+                // hmac-only vault pushed with --allow-plaintext); metadata
+                // carries structure.
                 "documents": records.iter().map(|r| r.sealed_b64.clone()).collect::<Vec<_>>(),
                 "metadatas": records
                     .iter()
@@ -770,8 +778,9 @@ pub mod pgvector {
         }
 
         fn table(collection: &str) -> String {
-            // Collection names are vault ids (validate_name'd), but quote
-            // defensively into a fixed alphabet anyway.
+            // The store passes `undercroft_{vault id}` (the id itself is
+            // validate_name'd), but quote defensively into a fixed alphabet
+            // anyway.
             let safe: String = collection
                 .chars()
                 .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
@@ -1095,7 +1104,9 @@ pub mod weaviate {
 
     /// Weaviate (REST v1 + GraphQL). Classes are created with
     /// `vectorizer: none` — vectors always come from the client, and the
-    /// stored document is the sealed blob, never plaintext.
+    /// stored document is the vault's at-rest blob: sealed for a sealed
+    /// vault, PLAINTEXT for an hmac-only vault pushed with
+    /// `--allow-plaintext` (see `PlaintextPush` in the store).
     pub struct WeaviateIndex {
         base: String,
         agent: ureq::Agent,

@@ -37,11 +37,14 @@
 //!
 //! * **Density.** An attacker owning a fraction *f* of the corpus gets ≈*f* of
 //!   any uniform sample, hence competes for ≈*f* of the centroids. No sampling
-//!   scheme fixes this; a per-source cap on candidate sets does.
-//! * **Non-finite input.** A NaN or infinity reaching a vector escapes the
-//!   bound completely — `normalized()` propagates it and every distance
+//!   scheme fixes this; the per-wing / per-agent-claim cap on the TRAINING
+//!   DRAW does (`pqidx::keyed_sample_capped`, `UNDERCROFT_TRAIN_SOURCE_CAP`).
+//! * **Non-finite input.** A NaN or infinity reaching a vector would escape
+//!   the bound completely — `normalized()` propagates it and every distance
 //!   comparison against it is false, so it silently owns or breaks a cluster.
-//!   Vectors arriving from `external:` embedders are the path worth guarding.
+//!   Vectors arriving from `external:` embedders are the path worth guarding,
+//!   which is why it is REFUSED at the write choke point
+//!   (`write_drawer_stmts`) on every path, the batch included.
 //!
 //! Which rows train is the caller's job: see `pqidx::stratified_keyed` for the keyed
 //! draw that replaced a guessable even stride.
@@ -365,8 +368,8 @@ impl ProductQuantizer {
 }
 
 /// k-means over `subs` (each `dsub` long) → `k` centroids, flattened. Seeds by
-/// an even stride for determinism; empty clusters are re-seeded to the farthest
-/// assigned point so all k codes stay usable.
+/// an even stride for determinism; an empty cluster keeps its centroid from
+/// the previous iteration (no re-seeding), so a code can go unused.
 fn kmeans(subs: &[&[f32]], dsub: usize, k: usize, iters: usize) -> Vec<f32> {
     let n = subs.len();
     let mut centroids = vec![0f32; k * dsub];
@@ -442,7 +445,8 @@ pub struct CoarseQuantizer {
     /// Number of inverted lists (centroids).
     nlist: usize,
     /// Corpus size at training time. Partitions trained on a much smaller
-    /// corpus go stale as it grows; the index layer retrains past 2×.
+    /// corpus go stale as it grows; the index layer retrains past 1.5×
+    /// (`pqidx::ivf_fresh`).
     trained_n: u64,
     /// `nlist × dim` centroids, flattened.
     centroids: Vec<f32>,

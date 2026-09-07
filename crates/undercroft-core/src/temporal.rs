@@ -49,8 +49,10 @@
 //!   anchor's time, and the anchor is a `Date` — `parse_anchor` reduces the
 //!   timestamp to its local day.
 //! * **Non-English text.** Month names, weekday names, "ago" and the number
-//!   words are English only, so a non-English drawer yields no mentions
-//!   unless `Locale::ARABIC` is asked for.
+//!   words are English only, so a non-English drawer yields only numeric
+//!   dates and era-marked years (`numeric_or_era` reads seven numeral
+//!   systems and the era markers first) unless `Locale::ARABIC` is asked
+//!   for.
 //! * **Ambiguous numeric dates resolve by convention, not by evidence.**
 //!   `05/07/2023` is 5 July or 7 May and the token does not say. Four signals
 //!   are consulted in order: a `date_order` declared on `Locale`; an
@@ -61,21 +63,11 @@
 //!   The last is a reading asserted where the text is silent — a US corpus
 //!   that never declares `MonthFirst` reads `07/05` as 7 May — taken because a
 //!   date the reader can see and correct beats one they cannot use.
-//! * **A month NAME joined by hyphens is not read at all.** `-` is a token
-//!   character, which is what makes `2023-05-07` a single token — so
-//!   `٢٠٢٣-أيار-٠٧` arrives as ONE token carrying a month name: the numeric
-//!   readers decline it for not being all digits, and the month-name arm
-//!   never sees `أيار` alone. Isolated against both variables — separator and
-//!   field order — the separator is what does it, and it does it in **both**
-//!   languages:
-//!
-//!   ```text
-//!   ٧ أيار ٢٠٢٣     -> 2023-05-07      07-May-2023 -> nothing
-//!   ٠٧-أيار-٢٠٢٣    -> nothing         2023-May-07 -> nothing
-//!   ```
-//!
-//!   Closing it means splitting a mixed token, which is a tokenizer change
-//!   and moves every offset in both scanners.
+//! * **A month NAME joined by hyphens with two four-digit outer fields is
+//!   refused.** `named_date_token` reads `07-May-2023`, `2023-May-07` and
+//!   `٢٠٢٣-أيار-٠٧` (it is the first reader `numeric_or_era` tries); the
+//!   residue is a token where both outer fields could be years, which is
+//!   returned as nothing rather than guessed.
 //! * **A month name written year-first strands its numbers.** Separate and
 //!   milder than the hyphen case, and found by isolating it: with spaces,
 //!   `٢٠٢٣ أيار ٠٧` records `أيار` as a bare month and leaves it
@@ -93,18 +85,15 @@
 //!   reads years as written, so a Thai date reads 543 years high until someone
 //!   says the calendar — visible and correctable, where a dropped date is
 //!   neither.
-//! * **Era markers written in the text are not read yet** — `พ.ศ.`, `ค.ศ.`,
-//!   `هـ`, `م`, 令和, 民國. These would outrank a declared calendar, being the
-//!   writer's own statement about a specific date rather than the caller's
-//!   about a corpus. Attached forms (`1447هـ`, `令和7年`, `2568พ.ศ.`) arrive as
-//!   ONE token because `tokens` keeps alphanumerics together, so reading them
-//!   needs the same tokenizer split as the hyphen-joined month name above.
+//! * **Era markers reach the numeric readers and the bare year only.**
+//!   `พ.ศ.`, `ค.ศ.`, `هـ`, `م`, 令和, 民國 are read (`ERA_MARKERS`,
+//!   `era_beside`; `push_run` splits the attached forms `1447هـ`, `令和7年`)
+//!   and outrank a declared calendar, being the writer's own statement about
+//!   a specific date rather than the caller's about a corpus. The month-name
+//!   arms build Gregorian-only and a marker beside one does not reach them.
 //! * **"Next Friday" said on a Wednesday** resolves to the coming Friday.
 //!   Speakers who mean the following week's get a wrong date, and nothing in
 //!   the text separates them.
-//! * **Ambiguous numeric dates.** "05/07/2023" is recorded unresolved,
-//!   because May 7th and the 5th of July are both real readings of it. Where
-//!   only one reading is a date — "13/05/2023", "05/13/2023" — it resolves.
 
 use serde::{Deserialize, Serialize};
 use time::{Date, Duration, Month, Weekday};
@@ -368,8 +357,10 @@ pub struct Locale {
     /// Which day starts the week; it moves "last week" and every week count.
     pub week_start: WeekStart,
     /// Which field a bare numeric date puts first. `07/05/2023` is 7 May or
-    /// 5 July depending on the writer's convention, and no amount of reading
-    /// the text settles it — so it is declared, exactly as `week_start` is.
+    /// 5 July depending on the writer's convention, and that token alone
+    /// does not settle it — so it is declared, exactly as `week_start` is;
+    /// undeclared, an unambiguous date elsewhere in the same text decides
+    /// (`order_demonstrated_by`), else day-first.
     pub date_order: DateOrder,
     /// Which calendar counted the years. Declared, never inferred: `2566` may
     /// be Buddhist Era 2566 or the Gregorian year 2566 in a novel.
@@ -417,8 +408,7 @@ pub enum DateOrder {
 /// typed beside the year. `พ.ศ.`, `هـ`, `民國`, `令和` are the writer's
 /// statement about one date and outrank the caller's statement about a corpus.
 ///
-/// Only the calendars whose conversion is exact arithmetic are here. A
-/// renumbered year is all Buddhist, Minguo and the Japanese eras are: same
+/// A renumbered year is all Buddhist, Minguo and the Japanese eras are: same
 /// months, same lengths, same leap rule, a different count. Hijri is lunar and
 /// drifts about eleven days a year, and Jalali turns at the vernal equinox with
 /// different month lengths — neither is reachable by subtracting a constant, so
@@ -538,9 +528,10 @@ impl Calendar {
                 date_from_rata_die(persian::fixed_from_fast_persian(y, m, d))?
             }
         };
-        // A date is a date. `time::Date` spans +/-9999 and a memory may hold
-        // a year in a novel, an astronomy note or a century-scale plan, so the
-        // only bound here is what the type can represent.
+        // A date is a date. A memory may hold a year in a novel, an astronomy
+        // note or a century-scale plan, so the bound here is 1..=9999 — the
+        // positive half of what `time::Date` represents — and nothing
+        // narrower.
         (1..=9999).contains(&date.year()).then_some(date)
     }
 }
@@ -635,9 +626,11 @@ const ERA_MARKERS: &[(&str, Calendar)] = &[
 ///
 /// **The cost of signal 2 is real, and pinned by test.** Arabic geography
 /// writes `على ارتفاع ٢٥٠٠م` — an altitude — glued, and that now reads as the
-/// year 2500. The collision is confined to four-digit quantities written
-/// without their space: `٥٠٠م` is out of reach already, since the Gregorian
-/// gate wants four digits. Taken deliberately, and the trade is the one
+/// year 2500. For `م` the collision is confined to four-digit quantities
+/// written without their space: `٥٠٠م` is out of reach already, since the
+/// Gregorian gate wants four digits. For `ه` there is no such floor — a
+/// declared non-Gregorian calendar accepts any year ≥ 1, so any glued
+/// positive number reads as a Hijri year. Taken deliberately, and the trade is the one
 /// `DateOrder`'s last step takes — a wrong year is visible in the record and
 /// correctable, where the alternative left the commonest written form of a
 /// Gregorian year in Arabic unreadable.
@@ -863,8 +856,9 @@ pub fn calendar_weeks_between(from: &str, to: &str) -> Option<i64> {
 }
 
 /// As [`calendar_weeks_between`], under an explicit week-start convention.
-/// A caller that knows its user's locale should say so; the two conventions
-/// genuinely disagree for dates that fall on a Sunday.
+/// A caller that knows its user's locale should say so; the three
+/// conventions (Monday, Sunday, Saturday) genuinely disagree for dates that
+/// fall on the days between their starts.
 pub fn calendar_weeks_between_with(from: &str, to: &str, ws: WeekStart) -> Option<i64> {
     let a = week_start_of(parse_anchor(from)?, ws)?;
     let b = week_start_of(parse_anchor(to)?, ws)?;
@@ -1152,8 +1146,8 @@ fn month_name_is_deliberate(text: &str, off: usize) -> bool {
 /// region, script or software — an instance they wrote is read, in the same
 /// text, where only one parse exists. It is the same class of signal as
 /// `month_name_is_deliberate` using capitalisation, and it fails closed: a
-/// text with no unambiguous date yields nothing and the ambiguous ones stay
-/// recorded-and-unresolved.
+/// text with no unambiguous date yields `Undeclared` here — the scanners
+/// then fall to the language's convention, and failing that read day-first.
 ///
 /// Contradictory evidence yields nothing rather than a majority vote. A drawer
 /// holding both `13/05/2023` and `05/13/2023` was written by someone
@@ -1273,7 +1267,8 @@ const AR_WEEKDAYS: [(&str, Weekday); 7] = [
     ("الأحد", Weekday::Sunday),
 ];
 
-/// Counting words three to ten, in both genders. Arabic numerals agree in
+/// Counting words one and three to ten, in both genders (two is the dual,
+/// carried on the unit noun itself). Arabic numerals agree in
 /// gender with the counted noun *inversely*, so both forms appear in ordinary
 /// text and both have to be read: ثلاثة أيام but ثلاث سنوات.
 const AR_NUMBERS: [(&str, i64); 18] = [
@@ -1604,13 +1599,17 @@ pub fn resolve_claimed_span_with(
 /// date whenever either number exceeds twelve, which covers most of the
 /// calendar. So this returns
 ///
-/// * `Some(Some(date))` — one reading is a date and the other is not,
-/// * `Some(None)` — both are dates, so the token names a day we cannot
-///   identify. It is still a date expression and the caller records it
-///   unresolved rather than dropping it,
+/// * `Some(Some(date))` — one reading is a date and the other is not, or
+///   both are and the order (declared, else demonstrated, else day-first)
+///   picks one,
+/// * `Some(None)` — the year falls outside the declared calendar's range,
+///   so the token names a day we cannot place. It is still a date
+///   expression and the caller records it unresolved rather than dropping
+///   it,
 /// * `None` — neither reading is a date, so this is not one.
 ///
-/// Two-digit years are not read at all; the century is not in the token.
+/// Two-digit years are refused under Gregorian only (the century is not in
+/// the token); a declared non-Gregorian calendar accepts any year ≥ 1.
 fn dmy_token(tok: &str, cal: Calendar, order: DateOrder) -> Option<Option<Date>> {
     let norm = tok.replace(['/', '.'], "-");
     let parts: Vec<&str> = norm.split('-').collect();
@@ -1637,8 +1636,8 @@ fn dmy_token(tok: &str, cal: Calendar, order: DateOrder) -> Option<Option<Date>>
         (Some(d), None) | (None, Some(d)) => Some(Some(d)),
         // Both readings are real dates. A DECLARED order settles it — the
         // caller has already told us the convention, and refusing to use it
-        // discards information they supplied. Undeclared stays recorded and
-        // unresolved: `07/05/2023` is 7 May or 5 July and the text does not say.
+        // discards information they supplied. `07/05/2023` is 7 May or 5
+        // July and the text does not say; undeclared reads day-first.
         (Some(df), Some(mf)) => Some(Some(match order {
             DateOrder::MonthFirst => mf,
             // The scanners never pass `Undeclared` — they resolve it to the
@@ -1703,8 +1702,10 @@ fn numeric_or_era(
     } else {
         let (cal, _, _) = era?;
         let y: i32 = ascii_digits(w)?.parse().ok()?;
-        // The same gate every other year passes, so a marker cannot smuggle a
-        // two-digit year past the rule that this module never guesses a century.
+        // The same gate every other year passes, under the MARKER's calendar:
+        // Gregorian (`ค.ศ.`, glued `م`) refuses a two-digit year rather than
+        // guess a century, while an era calendar applies its own year gate
+        // (`令和6` is one digit and legitimate).
         read_date(cal, y, 1, 1)?;
         era_year_range(cal, y)
     };
@@ -1790,7 +1791,16 @@ fn scan_arabic(text: &str, anchor: Option<Date>, loc: Locale) -> Vec<TimeMention
     let mut i = 0usize;
 
     let span = |from: usize, to_tok: usize| -> String {
-        let end = toks
+        // The end offset comes from the RAW token, never the folded one:
+        // `match_key` composes, so a final token written decomposed folds
+        // shorter than it is on the page, and `o + folded.len()` cut the
+        // recorded span short by the composed delta — "the span exactly as
+        // written" was false on exactly the text a fold exists for
+        // (ROADMAP O117). Residual, stated: `raw` is the lowercased token,
+        // so a character whose lowercase differs in byte length (İ, the
+        // Kelvin sign) still moves the end; Arabic has no case, and the
+        // English scanner shares the residual.
+        let end = raw
             .get(to_tok)
             .map(|(o, w)| o + w.len())
             .unwrap_or(text.len());
@@ -2160,6 +2170,33 @@ fn scan_english(text: &str, anchor: Option<Date>, loc: Locale) -> Vec<TimeMentio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ROADMAP O117: a mention's recorded span is the text exactly as
+    /// written, even when its final token is spelled decomposed. The
+    /// Arabic scanner folds tokens through `match_key` to compare and used
+    /// the FOLDED length to end the span, so "قبل ثلاثة أيام" with a
+    /// decomposed hamza (U+0627 U+0654 for U+0623) recorded a span two
+    /// bytes short. The PREMISE arm proves the fixture is not NFC.
+    #[test]
+    fn a_decomposed_final_token_keeps_its_whole_span() {
+        let composed = "\u{642}\u{628}\u{644} \u{62b}\u{644}\u{627}\u{62b}\u{629} \u{623}\u{64a}\u{627}\u{645}";
+        let decomposed = composed.replace('\u{623}', "\u{627}\u{654}");
+        assert_ne!(
+            decomposed, composed,
+            "PREMISE: the fixture must be decomposed"
+        );
+        assert!(
+            decomposed.len() > composed.len(),
+            "PREMISE: decomposed is longer on the page than folded"
+        );
+        let anchor = Date::from_calendar_date(2024, time::Month::May, 10).ok();
+        let ms = extract_time_mentions_in(&decomposed, anchor, Locale::ARABIC);
+        assert_eq!(ms.len(), 1, "one relative mention: {ms:?}");
+        assert_eq!(
+            ms[0].text, decomposed,
+            "the recorded span is the text as written, not cut by the fold"
+        );
+    }
 
     fn anchor() -> Option<Date> {
         parse_anchor("2023-05-08T13:56:00+00:00")

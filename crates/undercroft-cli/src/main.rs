@@ -562,7 +562,7 @@ enum Command {
     /// documented, so `config-check --help` described hooks and `hooks` had
     /// no help at all. Nothing in this tree can see that class — clap accepts
     /// it, rustfmt accepts it, and no gate reads help strings — which is why
-    /// it is gated below by `every_subcommand_has_its_own_about`.
+    /// it is gated below by `every_subcommand_has_its_own_about_and_config_check_runs`.
     Hooks {
         /// Client: claude-code
         #[arg(default_value = "claude-code")]

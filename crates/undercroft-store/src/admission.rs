@@ -348,8 +348,9 @@ impl PalaceStore {
     /// quarantine instead of where it was headed. The diverted drawer
     /// keeps the verbatim content (sealed like any other), records the
     /// signal codes + offsets and the intended destination, and derives
-    /// its id in the quarantine wing — deterministic, so a crashed and
-    /// retried save converges on one row.
+    /// its id through the domain-tagged recipe over the ORIGIN wing
+    /// (`ids::quarantine_drawer_id`, keeping all four components) —
+    /// deterministic, so a crashed and retried save converges on one row.
     ///
     /// **Private to this module on purpose** (R5): reachable only through
     /// [`Self::screen_and_divert`], so the screening decision exists once

@@ -216,8 +216,9 @@ fn speaker_label(m: &Message) -> String {
 }
 
 /// Pack messages into verbatim chunks, breaking only on message boundaries.
-/// Each message is rendered as `User:` / `Assistant:` prefixed text, exactly
-/// as spoken (never summarized). Oversized single messages are passed through
+/// Each message is prefixed with its speaker label (a named speaker, else
+/// the capitalised role — see [`label`]), and rendered exactly as spoken
+/// (never summarized). Oversized single messages are passed through
 /// whole — the drawer chunker downstream handles windows.
 pub fn chunk_exchanges(messages: &[Message], chunk_size: usize) -> Vec<String> {
     chunk_exchanges_dated(messages, chunk_size)

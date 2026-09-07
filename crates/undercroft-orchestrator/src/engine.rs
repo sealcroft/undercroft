@@ -73,7 +73,13 @@ fn resolve_engine_pin(declared: Option<&str>) -> Result<Option<undercroft_net::P
              nothing; unset it to use the public roots, or point it at a PEM. There is no \
              silent fallback"
         )),
-        Some(p) => undercroft_net::resolve_pin("the engine", p)
+        // TRIMMED, exactly as `undercroft_net::declared_pin` — the resolver
+        // `config check` runs for this variable — trims it. This arm did
+        // not, so `$(cat …)` over a file ending in a newline passed the
+        // pre-flight and refused at `serve`: the O24 class, a second copy
+        // of one parse (ROADMAP O118). The path is a filename, not a
+        // secret; trimming it changes nothing a client presents.
+        Some(p) => undercroft_net::resolve_pin("the engine", p.trim())
             .map(Some)
             .map_err(|e| e.to_string()),
         None => Ok(None),
@@ -88,7 +94,9 @@ fn engine_pin() -> &'static Result<Option<undercroft_net::Pin>, String> {
 ///
 /// Called first thing in `main`, so every subcommand — not only `serve` —
 /// refuses a bad declaration at its own construction moment rather than at
-/// its first request.
+/// its first request. The one exception is `config check`, which warns and
+/// continues: a command whose job is diagnosing an environment that will
+/// not start is useless if it cannot start in one.
 pub fn init_transport() -> Result<(), String> {
     engine_pin().as_ref().map(|_| ()).map_err(Clone::clone)
 }
@@ -409,6 +417,20 @@ mod tests {
             assert!(err.contains(CA_VAR), "{err}");
             assert!(err.contains("no silent fallback"), "{err}");
         }
+        // ROADMAP O118: a trailing newline — `$(cat …)` over a file that
+        // ends in one — resolves exactly as the bare path does, because
+        // `config check` trims through `declared_pin` and this arm did not:
+        // the pre-flight passed a path `serve` then refused. Both paths are
+        // absent here, so both refuse; the refusal must be the SAME one.
+        let bare = resolve_engine_pin(Some("/nowhere/undercroft-engine-root.pem"))
+            .expect_err("an absent PEM refuses");
+        let newline = resolve_engine_pin(Some("/nowhere/undercroft-engine-root.pem\n"))
+            .expect_err("an absent PEM refuses");
+        assert_eq!(
+            bare, newline,
+            "the trailing newline must be trimmed before the path is read, as the pre-flight \
+             trims it"
+        );
         let dir = tempfile::TempDir::new().unwrap();
         // Unreadable: the path names nothing.
         let missing = dir.path().join("nope.pem");

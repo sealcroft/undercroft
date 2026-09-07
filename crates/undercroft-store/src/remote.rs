@@ -1,7 +1,7 @@
 //! Remote vector-index integration.
 //!
-//! A remote backend (Qdrant / Chroma / pgvector) is an *untrusted search
-//! accelerator*, never the system of record:
+//! A remote backend (Qdrant / Chroma / pgvector / Milvus / Weaviate) is an
+//! *untrusted search accelerator*, never the system of record:
 //!
 //! * `index_push` uploads each drawer's **at-rest** content blob (base64 of
 //!   the AEAD output — ciphertext for sealed vaults) plus its embedding and

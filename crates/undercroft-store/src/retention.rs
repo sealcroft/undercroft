@@ -285,13 +285,23 @@ impl PalaceStore {
     }
 
     /// Drawer ids in scope whose **tag-verified** `meta.filed_at` is
-    /// strictly before `cutoff`, oldest first. Ids come from the scope
-    /// columns, but every dating decision reads the hydrated drawer —
-    /// [`PalaceStore::get`] verifies the record HMAC — so a clear-text
-    /// column flip can neither accelerate nor evade a sweep (module
-    /// header). An unparseable covered `filed_at` fails the sweep: a
-    /// sweep must neither destroy what it cannot date nor skip it
-    /// silently.
+    /// strictly before `cutoff`, in insertion order. Candidate ids come
+    /// from the clear `wing`/`room` mirror columns — the accelerator — but
+    /// every DECISION reads the hydrated drawer, whose record HMAC
+    /// [`PalaceStore::get`] verifies: the clock is the covered
+    /// `meta.filed_at`, and since ROADMAP O120 the scope membership is the
+    /// covered `meta.wing`/`meta.room` too. It was the mirror alone, which
+    /// is A28 one table over: an offline `UPDATE drawers SET wing = …` moved
+    /// a drawer INTO a retention scope and a keyed sweep destroyed it. A
+    /// drawer whose covered scope disagrees with its mirror is skipped with
+    /// a warning and left for `verify`'s `mirror_drift` leg, which is the
+    /// detector for that flip. The other direction — a flip that moves a
+    /// drawer OUT of the mirror's scope — evades the candidate SELECT and
+    /// is an availability cost the same leg reports; a sweep that scanned
+    /// every drawer's covered scope would close it at O(corpus) per policy,
+    /// which is filed with the residue rather than paid silently. An
+    /// unparseable covered `filed_at` fails the sweep: a sweep must neither
+    /// destroy what it cannot date nor skip it silently.
     fn expired_in(
         &self,
         wing: &str,
@@ -322,6 +332,16 @@ impl PalaceStore {
             else {
                 continue;
             };
+            if d.meta.wing != wing || (!room.is_empty() && d.meta.room != room) {
+                undercroft_obs::diag_warn!(
+                    "retention: drawer {id} is filed under {}/{} by its HMAC-covered meta but \
+                     its clear mirror says {wing}/{room}; skipping it — a sweep destroys only \
+                     what the covered copy places in scope. `verify` reports the drift",
+                    d.meta.wing,
+                    d.meta.room
+                );
+                continue;
+            }
             let filed_at = &d.meta.filed_at;
             let filed =
                 OffsetDateTime::parse(filed_at, &Rfc3339).map_err(|e| StoreError::CorruptRow {
@@ -333,5 +353,78 @@ impl PalaceStore {
             }
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{InternalRead, PalaceStore, Read};
+    use tempfile::TempDir;
+    use undercroft_core::Drawer;
+    use undercroft_vault::{SecurityLevel, VaultManager};
+
+    /// ROADMAP O120 (A28 one table over): a sweep destroys only what the
+    /// HMAC-covered `meta.wing`/`meta.room` places in scope. The candidate
+    /// SELECT rides the clear mirror columns, and until this fix so did the
+    /// decision, so one offline `UPDATE drawers SET wing = …` moved a drawer
+    /// INTO a retention scope and a keyed sweep destroyed it — the mirror
+    /// was the whole membership test. The PREMISE arm proves the same
+    /// drawer IS swept when its covered scope really is the policy's.
+    #[test]
+    fn a_flipped_wing_mirror_cannot_move_a_drawer_into_a_retention_scope() {
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.create("r", SecurityLevel::Sealed).unwrap();
+        let mut store = PalaceStore::open(vault).unwrap();
+        // An old drawer filed under `archive`, which has no retention.
+        let mut kept = Drawer::new(
+            "archive",
+            "r",
+            "an old memory the archive keeps".into(),
+            Some("t.md".into()),
+            0,
+            "t",
+        );
+        kept.meta.filed_at = "2020-01-01T00:00:00Z".into();
+        // And an old drawer genuinely filed under `scratch`, which expires.
+        let mut swept = Drawer::new(
+            "scratch",
+            "r",
+            "an old note scratch forgets".into(),
+            Some("t.md".into()),
+            1,
+            "t",
+        );
+        swept.meta.filed_at = "2020-01-01T00:00:00Z".into();
+        store.upsert(&kept).unwrap();
+        store.upsert(&swept).unwrap();
+        store.set_retention("scratch", None, 30).unwrap();
+        // The offline writer: flip `kept`'s clear mirror into the scope.
+        store
+            .conn
+            .execute(
+                "UPDATE drawers SET wing = 'scratch' WHERE id = ?1",
+                [&kept.id],
+            )
+            .unwrap();
+        let sweep = store.retention_sweep(false).unwrap();
+        // PREMISE: the sweep ran and destroyed the drawer whose covered
+        // scope really is `scratch`.
+        assert_eq!(sweep.destroyed, 1, "{sweep:?}");
+        assert_eq!(sweep.policies[0].expired, vec![swept.id.clone()]);
+        assert!(store
+            .get(&swept.id, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .is_none());
+        // The flipped drawer survives: its covered wing is `archive`.
+        assert!(
+            store
+                .get(&kept.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .is_some(),
+            "a clear mirror flip must not put a drawer inside a sweep"
+        );
+        // And the flip is what `verify` reports.
+        assert!(!store.verify().unwrap().mirror_drift.is_empty());
     }
 }

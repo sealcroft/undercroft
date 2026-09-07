@@ -290,8 +290,8 @@ impl HashEmbedder {
 /// Identity of the first hashed token space: no fold, no segmentation. A
 /// vault recording it is migrated to v3 at open.
 pub const HASH_EMBEDDER_V1: &str = "undercroft-hash-v1";
-/// Identity of the second hashed token space (`search_key` +
-/// `script::segment`). Shipped in no tag but built on the branch, so a vault
+/// Identity of the second hashed token space (`match_key` + lowercase +
+/// `script::segment`, no fold). Shipped in no tag but built on the branch, so a vault
 /// carrying it is migrated to v3 at open like a v1 one.
 pub const HASH_EMBEDDER_V2: &str = "undercroft-hash-v2";
 /// Identity of the default embedder — the current hashed vector space, what
@@ -304,8 +304,9 @@ pub const HASH_EMBEDDER_V2: &str = "undercroft-hash-v2";
 /// finds a different one is a migration, not a silent swap. See
 /// `PalaceStore::open_with_embedder`.
 ///
-/// v2 was never released — no tag carries it and `origin/main` still holds v1 —
-/// so it could have been redefined in place a second time, and the research
+/// v2 was never released — no tag carries it, and every release since 1.0.0
+/// ships v3 — so it could have been redefined in place a second time, and
+/// the research
 /// recommended exactly that to avoid a permanent migration row for a version
 /// nobody ran. Minting v3 anyway, because the argument cuts the other way once
 /// the token set changes twice on one branch: anyone who built a vault from an

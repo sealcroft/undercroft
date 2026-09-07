@@ -613,8 +613,9 @@ impl LlmClient {
         Ok(memories_from_output(&self.complete(MEMORY_SYSTEM, text)?))
     }
 
-    /// Classify text into one of the given labels (used by room
-    /// classification and the calibration eval).
+    /// Classify text into one of the given labels (used by the bench's
+    /// `tagcost` instrument and its `model-eval --task calibration` arm;
+    /// nothing in the engine calls it).
     pub fn classify(&self, text: &str, labels: &[String]) -> Result<String, LlmError> {
         let system = format!(
             "Classify the user's text into exactly one of these labels: {}. \

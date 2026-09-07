@@ -53,8 +53,9 @@
 //! the first search after open or after a write that couldn't encode, never
 //! per query (measured at N=50k, the per-search join cost more than the
 //! probed scan it guarded). The IVF partitions are additionally retrained
-//! when the corpus **doubles** past their training size (centroids trained on
-//! a small corpus mis-partition a large one), and dropped by any rebuild that
+//! when the corpus grows past **1.5×** their training size (`ivf_fresh`;
+//! centroids trained on a small corpus mis-partition a large one), and
+//! dropped by any rebuild that
 //! finds the corpus below `ivf_min`. `delete_drawer` purges its code row;
 //! an orphan surviving a crash window merely wastes a candidate slot (the
 //! hydration query filters against live drawers) until the next rebuild.
@@ -439,7 +440,7 @@ impl PalaceStore {
     /// Tune the corpus-scaled candidate pool (candidates ≥ live/div;
     /// `usize::MAX` ⇒ fixed floor only, the measured-leaky pre-fix
     /// behavior). Default from `UNDERCROFT_POOL_DIV` at open (`off` ⇒
-    /// scaling off). See [`POOL_DIV_DEFAULT`] for why 512.
+    /// scaling off). See [`POOL_DIV_DEFAULT`] for why 64.
     pub fn set_pool_div(&mut self, div: usize) {
         self.pool_div = div.max(1);
     }
@@ -735,7 +736,7 @@ impl PalaceStore {
             // Self-heal: every live drawer must have a code row (orphans
             // from deletes are excluded by the join and are harmless), and —
             // when the corpus is IVF-sized — the partitions must exist and
-            // not be outgrown (2× their training size). On the page tier
+            // not be outgrown (1.5× their training size, `ivf_fresh`). On the page tier
             // the equation extends: matched = tail rows (joined against
             // live drawers, as always) + the sealed page commitment
             // (`rowcount` − `deleted`) — pages can't be joined without
@@ -795,7 +796,10 @@ impl PalaceStore {
         }
         // Corpus-scaled pool, applied against the verified live count: a
         // fixed floor is the measured recall-leak defect (R@5 100 → 96.8
-        // over 131k → 1M at 256 candidates; 100.0% restored at live/512).
+        // over 131k → 1M at 256 candidates; live/512 recovered 524k and 1M
+        // but not 262k, and the shipped live/64 stage-1 net cut to live/512
+        // by exact cosine restored 100.0% at every checkpoint — see
+        // `POOL_DIV_DEFAULT`).
         // A NARROWED call arrives already scaled to its scope's population.
         // An exclusion has been scaled by nothing and must keep the corpus
         // divisor: gating on `is_some()` let one quarantined row pin stage
@@ -807,7 +811,7 @@ impl PalaceStore {
             k.max(live as usize / self.pool_div.max(1))
         };
         // Growth re-check on the fast path (cheap, cached counters): a
-        // corpus that crossed the IVF threshold, or doubled past the
+        // corpus that crossed the IVF threshold, or grew past 1.5× the
         // partitions' training size, re-verifies once so they (re)train
         // rather than silently degrading recall. Skipped when this call
         // just verified — whatever state the verify pass left (including
@@ -1270,9 +1274,12 @@ impl PalaceStore {
     ///   no-op, and a corpus whose wings and agents sit inside their
     ///   quotas keeps byte-identical codebooks.
     /// - **Soft, never starving.** When honest rows cannot fill the
-    ///   freed slots, the capped groups' own next rows refill last — the
-    ///   sample never shrinks, because a smaller training sample is a
-    ///   quality cost every wing pays.
+    ///   freed slots, the capped groups' own next rows refill last, so a
+    ///   smaller training sample — a quality cost every wing pays — is
+    ///   avoided wherever unpicked rows exist. The bound, stated honestly:
+    ///   a dropped pick is never readmitted, so the sample CAN shrink when
+    ///   the unpicked rows are fewer than the picks the cap dropped (a
+    ///   corpus that is nearly all one wing or one agent claim).
     pub(crate) fn keyed_sample_capped<T>(
         &self,
         label: &str,
@@ -1857,7 +1864,7 @@ impl PalaceStore {
             self.wing_pq.borrow_mut().insert(wing.to_string(), built);
         }
         // Growth re-check on the fast path (cheap, in-RAM counters): a wing
-        // that crossed the IVF threshold, or doubled past its partitions'
+        // that crossed the IVF threshold, or grew past 1.5× its partitions'
         // training size, rebuilds once rather than silently degrading.
         // A read-only store may not rebuild (R1) — it keeps the index its
         // writer left, which is a recall cost and not a wrong answer.

@@ -14,7 +14,10 @@
 //! non-loopback bind** — the server refuses to start without one. The
 //! transport itself is plaintext HTTP; for anything beyond a trusted
 //! private network, front it with a TLS-terminating reverse proxy.
-//! `/healthz` is unauthenticated for load-balancer probes.
+//! `/healthz` is unauthenticated for load-balancer probes, and so are the
+//! two `include_str!`'d consoles, `/ui` and (telemetry builds) `/monitor`
+//! — static pages served in FRONT of the gate, whose every data call then
+//! goes through it.
 //!
 //! When `UNDERCROFT_ASSERTION_SECRET` is declared, **both** transports
 //! require a valid `X-Vault-Assertion` for the vault they address: `/v1`
@@ -231,7 +234,8 @@ pub fn serve_http(
         );
     }
 
-    // Prometheus /metrics is opt-in (loopback + behind the bearer gate).
+    // Prometheus /metrics is opt-in (behind the bearer gate; no bind-address
+    // check of its own — the bind rule above is the whole listener's).
     let metrics_enabled = match resolve_metrics(std::env::var("UNDERCROFT_METRICS").ok().as_deref())
     {
         Ok(on) => on,
@@ -350,7 +354,9 @@ pub fn serve_http(
             undercroft_obs::http_request("ui", 200, start.elapsed());
             continue;
         }
-        // Palace-wide bearer gates every non-health route (MCP and REST).
+        // Palace-wide bearer gates every route except `/healthz`, `/ui` and
+        // (telemetry) `/monitor`, which are answered above it (MCP and
+        // REST, `/metrics` included, are behind it).
         //
         // Compared in CONSTANT TIME. This was `==` on a `format!`, which
         // short-circuits on the first differing byte and so leaks the shared

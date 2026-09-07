@@ -3988,7 +3988,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**144** of the **159** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**151** of the **166** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4159,6 +4159,134 @@ touching anyone's existing corpus.
 **Gate:** a vault written under the old constant must still open without an
 integrity verdict, and two different model files must produce two different
 identities.
+
+## 1.5.2 — unreleased
+
+A gate for the class O111 found by hand, and O113 measured.
+
+PATCH: nothing observable changes. Filed here until the tag exists.
+
+### O116 — CLOSED 2026-09-07: rotation recomputed the dedup fingerprint with a second copy of the recipe, over the wrong bytes
+
+**Found by the round's doc read** (`rotate.rs:10-11` claimed the fingerprints
+were "recomputed over the new at-rest bytes"; reading what it recomputed
+found worse). `PalaceStore::fingerprint` — the LOOKUP — hashes
+`fp\x1f ‖ match_key(content)` (NFC, so two spellings that render alike are
+one duplicate); rotation carried its own copy over `fp\x1f ‖ raw text
+bytes`. After any rotation `check_duplicate` therefore missed every drawer
+whose stored content was not already NFC, and every dedup test beside it
+used ASCII, where the two recipes coincide — the rotation gate asserts only
+that the fingerprint CHANGED. **One recipe now** (`manage::fingerprint_with`,
+taking the vault, used by the lookup and by rotation under the next key).
+Gate: `a_rotated_vault_still_finds_a_duplicate_of_non_nfc_content`, a
+decomposed "café" written, the composed spelling looked up before and after
+rotation, with a premise arm that the fixture is not NFC; counterfactual run
+with the raw-bytes recipe restored — fails on the post-rotation lookup.
+Residue, stated: a vault rotated under the old recipe holds raw-byte
+fingerprints for its non-NFC drawers until its next rotation recomputes
+them; no migration, because the lookup key is recomputable and nothing
+holds a reference to it.
+
+### O117 — CLOSED 2026-09-07: the Arabic scanner ended a mention's span at the FOLDED token's length
+
+`scan_arabic` folds each token through `match_key` to compare and ended the
+recorded span at `offset + folded.len()` — so a final token written
+decomposed (U+0627 U+0654 for U+0623) recorded `TimeMention.text` two bytes
+short, on exactly the text a fold exists for, while its doc said "the span
+exactly as written, preserved verbatim". The end now comes from the raw
+token. Gate: `a_decomposed_final_token_keeps_its_whole_span`, premise arms
+on the fixture being decomposed and longer. Residue, stated: the raw token
+is the LOWERCASED one, so a character whose lowercase differs in byte length
+(İ, the Kelvin sign) still moves the end, in both scanners; Arabic has no
+case, and the English scanner shares it.
+
+### O118 — CLOSED 2026-09-07: the orchestrator's engine pin was resolved twice, and only the pre-flight trimmed it
+
+`config_check.rs` promises every arm calls the resolver `serve` calls.
+`UNDERCROFT_ORCH_ENGINE_CA`'s arm called `undercroft_net::declared_pin`,
+which trims the path; `serve` called `resolve_engine_pin`, a second copy
+that did not — so `$(cat …)` over a file ending in a newline passed the
+pre-flight and refused at start. O24's class (one declaration, two
+parses). The serve arm trims now; gate: the trailing-newline path must
+resolve to the SAME refusal as the bare path, inside the existing pin test.
+
+### O119 — CLOSED 2026-09-07: `repair` re-embedded every drawer and left the HNSW graph standing
+
+`repair` replaces every embedding, clears the embedding cache and drops the
+PQ tables through `invalidate_embedding_space` — which never took
+`self.hnsw`; only delete, rotate and the embedder migration did. A served
+`--features hnsw` process kept prefiltering on pre-repair vectors. The graph
+is dropped in `drop_derived_caches` now, the one helper every invalidation
+reaches, under the feature's cfg. No default-build gate can drive it (the
+feature is experimental and outside the battery); recorded as such.
+
+### O120 — CLOSED 2026-09-07: a retention sweep took scope membership from the clear mirror — A28 one table over
+
+`expired_in` selected its candidates `WHERE wing = ?` over the clear mirror
+columns and then read only the CLOCK from the HMAC-covered copy, so one
+offline `UPDATE drawers SET wing = 'scratch'` moved a drawer INTO a
+retention scope and a keyed sweep destroyed it — the module doc said a
+column flip "can neither accelerate nor evade a sweep". The decision reads
+the covered `meta.wing`/`meta.room` now; a drawer whose covered scope
+disagrees with its mirror is skipped with a warning and left to `verify`'s
+`mirror_drift` leg. Gate:
+`a_flipped_wing_mirror_cannot_move_a_drawer_into_a_retention_scope`, with a
+premise arm that a drawer genuinely in scope IS swept; counterfactual run
+with the check neutered — the flipped drawer dies. Residue, stated: the
+other direction (a flip OUT of the mirror's scope) evades the candidate
+SELECT and is an availability cost the same leg reports; closing it means
+scanning every drawer's covered scope per policy, O(corpus), filed here
+rather than paid silently.
+
+### O121 — CLOSED 2026-09-07: `UNDERCROFT_RERANKER` was classed `Tunes` while a bad value stops the process
+
+`attach_reranker` refuses an unknown spelling and a backend the build lacks
+(`check_reranker`'s own doc: "hard errors that stop start-up"), but
+`ENGINE_ENV_VARS` classed it `Tunes`, so `config check` printed *"warn …
+keeps the conservative default rather than refusing"* for a declaration
+that refused — the `UNDERCROFT_OTLP_ENDPOINT` misclass one row over.
+`Protects` now, which is the class the doctrine gives a declaration that
+turns a second stage ON. Gate: the row is one of the 81 `parity.rs`
+`ENGINE_ENV_VARS` rows the inventory test counts against the code in both
+directions, and the class is what `check_declaration` prints; verified on
+the built binary, `UNDERCROFT_RERANKER=bogus undercroft config check`
+reports `1 would REFUSE to start` where it reported `0 … 1 would warn`
+before — the counterfactual is the old binary's own output, recorded above.
+
+### O115 — CLOSED 2026-09-07: every error variant is minted or matched somewhere, counted against the code
+
+**The O111 finding one gate over.** `BundleError::Expired` was declared,
+documented as *"the bundle declared an expiry that has passed"*, and
+constructed NOWHERE: both importers raised the refusal by hand beside it, so
+the type promised a boundary the code enforced through a different door,
+and `#![warn(missing_docs)]` (O110) is what made that doc mandatory — a lint
+that requires a sentence about behaviour cannot tell whether the behaviour
+exists. Nothing in the tree counted a variant against its mint sites; the
+by-eye read found one, and a read finds what it happens to look at.
+
+**Gate.** `parity.rs::every_error_variant_is_minted_or_matched_somewhere`
+walks every `.rs` under `crates/`, parses every `pub enum *Error` (sixteen
+enums; the reader is hand-rolled because the crate carries no regex
+dependency, and the shape is fixed by rustfmt), and requires each variant
+to be referenced as `Enum::Variant` or `Self::Variant` somewhere outside
+its own definition span, `#[from]` variants exempt (minted by `?`). Two
+premise arms: the walk must find at least ten enums and sixty variants, and
+a synthetic enum with a dead variant must be reported as exactly that one.
+Counterfactual on the real tree: a `Probe(String)` planted in
+`BundleError` fails the gate naming `BundleError::Probe`; the tree as it
+stands passes, which says the O111 fix was the only instance the gate can
+see. Scope, stated: a variant only ever MATCHED and never constructed
+passes, because a reference is what a source scan can see; and a `#[from]`
+variant is exempt because `?` mints it invisibly — which is how
+`SealError::Utf8` (a `FromUtf8Error` conversion nothing in the tree ever
+performed) stayed declared and documented until the same round's doc read
+found it; deleted. Tests 824 → 828 with O116–O120's gates.
+
+**O113 measured the same day** — see its entry: export holds 2.7× its own
+size at 361k drawers, linear in rows; the streaming shape stays open with
+the number.
+
+---
 
 ## 1.5.1 — released 2026-09-07
 
@@ -11704,6 +11832,25 @@ a peak-RSS assertion on `export` over a mined corpus at two sizes, linear in
 ROWS, not in copies. Not taken in this round because none of the four is a
 crash, all are bounded by the corpus, and the export one changes a file
 format's write order.
+
+**MEASURED 2026-09-07 (the argument replaced by a number, on the CLI
+export)** — four vaults mined from this repository, the export written to
+a file while the process's `VmHWM` was sampled every 20 ms:
+
+| corpus | drawers | export | `vault.db` | peak RSS | RSS ÷ export |
+|---|---|---|---|---|---|
+| empty vault | 0 | 381 B | 120 KB | 9.0 MB | (baseline) |
+| one file (`docs/AGENTS.md`) | 212 | 202 KB | 496 KB | 10.6 MB | — |
+| the crate sources | 2,988 | 3.5 MB | 5.1 MB | 23.0 MB | 6.7× |
+| `docs/research/` (gitignored working sets) | 361,009 | 468 MB | 818 MB | **1,258 MB** | **2.75×** |
+
+Linear in rows above the baseline — ~4.7 KB per drawer at 3k, ~3.5 KB at
+361k — and **2.7× the export's own size held at once at scale**, which is
+the whole-corpus `Vec<(Drawer, Vec<f32>)>` plus the serialized `String`
+the filing names (the CLI writes to stdout, so it carries one copy fewer
+than `/v1`'s framed payload). A 10⁶-drawer vault of this shape exports
+through ~3.5 GB of resident memory. The streaming shape above is what
+closes it; this entry stays open with the number rather than the argument.
 
 ### O6 — the repo social preview is still not uploaded
 GitHub exposes **no REST endpoint** for org avatars (`avatar_url` is read-only
