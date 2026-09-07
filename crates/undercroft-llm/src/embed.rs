@@ -31,8 +31,9 @@
 //! trusts — the bundled public roots are out. A declared root that fails to
 //! parse refuses construction rather than falling back, because a silent
 //! fallback would un-pin exactly when the operator believes they pinned.
-//! Certificate verification itself has no bypass: an unknown issuer is a
-//! construction error (`invalid peer certificate: UnknownIssuer`), and no
+//! Certificate verification itself has no bypass: an unknown issuer is an
+//! error (`invalid peer certificate: UnknownIssuer`) — at construction when
+//! the dimension is probed, otherwise on the first embed — and no
 //! skip-verify knob exists or will.
 //!
 //! # The hazard that remains, stated
@@ -87,8 +88,9 @@ pub struct HttpEmbedder {
 impl HttpEmbedder {
     /// Build from `UNDERCROFT_EMBED_URL`, `UNDERCROFT_EMBED_MODEL`, optional
     /// `UNDERCROFT_EMBED_API` (`openai` | `ollama`; guessed from the URL like
-    /// the LLM client does), optional `UNDERCROFT_EMBED_KEY`, and optional
-    /// `UNDERCROFT_EMBED_DIM`.
+    /// the LLM client does), optional `UNDERCROFT_EMBED_KEY`, optional
+    /// `UNDERCROFT_EMBED_DIM`, and — read by [`Self::connect`] through
+    /// `agent_from_env` — optional `UNDERCROFT_EMBED_CA`, the pin.
     ///
     /// Without a declared dimension the endpoint is **asked** — one probe
     /// embed at construction, whose length is the dimension. Reading it is
@@ -119,8 +121,9 @@ impl HttpEmbedder {
         Self::connect(&base, &model, kind, &key, declared)
     }
 
-    /// As [`Self::from_env`], with everything supplied. `dim` of `None` probes
-    /// the endpoint.
+    /// As [`Self::from_env`], with everything supplied except the CA pin,
+    /// which this reads from `UNDERCROFT_EMBED_CA` via `agent_from_env`.
+    /// `dim` of `None` or `Some(0)` probes the endpoint.
     pub fn connect(
         base_url: &str,
         model: &str,

@@ -7,8 +7,10 @@
 //!
 //! Security: triples live in the vault database and follow the vault's
 //! rules — in sealed vaults the *object* (the fact's value) is AEAD-
-//! encrypted at rest, while subject/predicate stay queryable structure
-//! (the same trade-off as plaintext wing/room names on sealed drawers).
+//! encrypted at rest, and subject/predicate (and entity names) are a keyed
+//! blind index since A10: a truncated HMAC in the column so SQL equality
+//! stays indexed, the words themselves in sealed blobs. `canonical_key`
+//! alone stays clear, as declared taxonomy.
 //! Every entity and triple carries an HMAC tag, verified on read and
 //! covered by `verify`, and every graph write advances the audit chain.
 
@@ -123,7 +125,8 @@ fn temporal_key(value: &str) -> String {
 /// The blind index for one knowledge-graph TERM — a subject, a predicate,
 /// or an entity name (A10).
 ///
-/// `HMAC(mac_key, "kgterm" ‖ kind ‖ term)`, truncated and hexed, so the
+/// `HMAC(kg_secret, "kgterm" ‖ kind ‖ term)` — the STORED blind-index
+/// secret, never a vault key, so rotation moves nothing — truncated and hexed, so the
 /// column stays TEXT, its index keeps working, and every lookup in this
 /// module stays an indexed equality. The shape is `fingerprint`'s, one
 /// table over, for the same reason: deterministic for equality, useless
@@ -426,7 +429,7 @@ pub(crate) fn authority_ext(
 
 /// Canonical bytes of an entity row. ONE definition, and now genuinely one:
 /// the tag over these fields is written in three places here and verified in
-/// three, and a canonical that drifts between them reports tampering on a row
+/// four (plus `rotate.rs`), and a canonical that drifts between them reports tampering on a row
 /// nobody touched. `rotate.rs` used to build its own inline copy — same bytes
 /// at the time, which is exactly why it was safe right up until this gained
 /// the extension below, at which point rotation would have silently kept
@@ -619,9 +622,11 @@ fn check_authority_declaration(
 /// The UNKEYED SHA-256 of a drawer's verbatim content.
 ///
 /// **This is no longer what goes on disk** — see [`keyed_content_fp`], which
-/// wraps it. Two callers remain, and both are deliberate:
+/// wraps it. Three callers remain, and all are deliberate:
 ///
-/// * the inner digest of the keyed recipe below, and
+/// * the inner digest of the keyed recipe below,
+/// * `fp_matches`, which compares a pre-U12 legacy row under the unkeyed
+///   recipe because a read-only open cannot migrate it, and
 /// * `forget.rs`'s Ed25519 attestation, whose entire third-party posture is
 ///   that a data subject holding the destroyed content verifies the
 ///   commitment **without the vault key**. Keying it there would destroy the
@@ -1049,10 +1054,10 @@ impl PalaceStore {
     /// [`audit_migration`](Self::audit_migration) for a caller that owns no
     /// transaction: opens one, appends, commits, anchors.
     ///
-    /// The two at-rest walks append inside a transaction they already hold.
-    /// `migrate_embedding_space` and `repair` do not — they commit their own
-    /// work first — so they get this, which keeps the record in ONE shape
-    /// rather than two hand-rolled ones.
+    /// The two at-rest walks and `repair` append inside a transaction they
+    /// already hold (through `audit_migration`). `migrate_embedding_space`
+    /// does not — it commits its own work first — so it gets this, which
+    /// keeps the record in ONE shape rather than two hand-rolled ones.
     pub(crate) fn audit_migration_standalone(
         &mut self,
         kind: &str,
@@ -1154,8 +1159,9 @@ impl PalaceStore {
     /// settled one module over. It warns, leaves the row alone, and
     /// `verify` still reports it.
     ///
-    /// Idempotent and crash-safe: the marker is written LAST, inside the
-    /// same transaction as the rows, so a crash mid-walk simply repeats it.
+    /// Idempotent and crash-safe: the marker is written LAST — after the
+    /// rows' commit AND after the VACUUM that scrubs the old row images —
+    /// so a crash anywhere before it simply repeats the walk.
     pub(crate) fn blind_existing_kg_rows(&mut self) -> Result<(), StoreError> {
         if !matches!(self.vault.level(), undercroft_vault::SecurityLevel::Sealed) {
             return Ok(());
@@ -1807,7 +1813,8 @@ impl PalaceStore {
     /// stands in front of is record-scoped.
     ///
     /// So the screen now runs over EVERY field a read returns, named by
-    /// [`KG_SCREENED_FIELDS`], and the refusal says which field tripped.
+    /// [`crate::admission::SCREENED_FIELDS`] (keyed by `(owner, field)`
+    /// since O29), and the refusal says which field tripped.
     /// Both of the drawer choke point's content guards apply here:
     ///
     /// * the SIZE bound, **unconditionally** — the same argument
@@ -1944,7 +1951,7 @@ impl PalaceStore {
     ///
     /// **Re-adding the same (subject, predicate, object, valid_from) is a
     /// REWRITE, not a no-op.** Those four are the whole of `triple_id`, and
-    /// the insert is a fourteen-column upsert: `valid_to`, `confidence`, the
+    /// the insert is a fifteen-column upsert: `valid_to`, `confidence`, the
     /// citation, the receipt, the sealed support, the extractor and the three
     /// authority columns are all replaced by what this call declares, and the
     /// tag is recomputed to match. This doc said "idempotent" from the port
@@ -1985,8 +1992,9 @@ impl PalaceStore {
 
     /// Add a distilled fact **with a receipt**: an HMAC-covered citation to
     /// the verbatim `source` drawer it was derived from. `source` is
-    /// `(drawer_id, drawer_content)`; the content is fingerprinted (unkeyed
-    /// SHA-256) so the receipt later proves both *which* drawer the fact
+    /// `(drawer_id, drawer_content)`; the content is fingerprinted — its
+    /// SHA-256 keyed with the stored graph secret on a sealed vault (U12),
+    /// never a vault key — so the receipt later proves both *which* drawer the fact
     /// came from and that the drawer has not changed under it. The fact's
     /// verbatim source is never altered — this only *adds* a provable link.
     #[allow(clippy::too_many_arguments)]
@@ -2406,9 +2414,11 @@ impl PalaceStore {
 
     /// Import one exported fact into this vault: re-sealed under this
     /// vault's keys, re-tagged with every extension the fact carries
-    /// (support, authority, extractor), the receipt re-keyed from the
-    /// traveling fingerprint. History imports as history — a closed fact
-    /// stays closed.
+    /// (support, authority, extractor), the receipt re-derived from the
+    /// source drawer THIS vault holds (a keyed fingerprint cannot be
+    /// recomputed from the traveling one; absent the drawer, no binding is
+    /// written and the fact reports `Unreceipted`). History imports as
+    /// history — a closed fact stays closed.
     ///
     /// Idempotent by fact id: re-importing the SAME record is allowed even
     /// when the fact is a local approved canonical holder, because it leaves
@@ -2996,10 +3006,11 @@ impl PalaceStore {
     }
 
     /// The whole graph, decoded and tag-verified. **Private, and it takes
-    /// no `Read` witness on purpose** (ROADMAP O51): it is not a door. Two
-    /// of its four callers are WRITE paths (`kg_invalidate`,
-    /// `kg_supersede`) that decode in order to decide what to close, and
-    /// the two that are doors filter afterwards — so the count that belongs
+    /// no `Read` witness on purpose** (ROADMAP O51): it is not a door. One
+    /// of its four callers is a WRITE path (`kg_invalidate`) that decodes
+    /// in order to decide what to close, and the three that are doors
+    /// (`kg_query_entity`, `kg_query_relationship`, `kg_timeline`) filter
+    /// afterwards — so the count that belongs
     /// in a record is the door's, not this walk's. The witness therefore
     /// lives on the `pub` readers, which is the boundary a surface author
     /// actually writes against. Residual, stated: a NEW `pub` door built on

@@ -165,8 +165,9 @@ pub struct Tenancy {
     /// binary is running `serve-http` (which opens one store for MCP and
     /// lets `Tenancy` open its own per vault). Two independent handles over
     /// one vault directory is fine for reads and ordinary writes — SQLite
-    /// arbitrates those — but not for an operation that retires the keys or
-    /// removes the files under the other handle. See [`Self::deny_co_resident`].
+    /// arbitrates those — but not for an operation that retires the keys,
+    /// rewrites the whole derived layer (`repair`) or removes the files
+    /// under the other handle. See [`Self::deny_co_resident`].
     mcp_vault: Option<String>,
     /// Per-request vault-assertion secret; when present every vault-
     /// addressing request must carry a valid `X-Vault-Assertion`.
@@ -189,9 +190,11 @@ pub(crate) struct RestError {
     /// Only `"integrity"` today, and only for the family the CLI exits 2
     /// on: an HMAC that does not verify, an attestation that does not
     /// describe this vault, a tampered or unparseable manifest, a manifest
-    /// whose database is absent. All of those answer 409 — and so does a
-    /// co-resident refusal and a wrong read-only posture, which are not
-    /// integrity verdicts and must not page anyone.
+    /// whose database is absent, a directory holding BOTH database names
+    /// (`DatabaseAmbiguous`, O7). All of those answer 409 — and so does a
+    /// co-resident refusal and a wrong read-only posture
+    /// (`ReadOnlyUnmigrated`), which are not integrity verdicts and must not
+    /// page anyone.
     class: Option<&'static str>,
 }
 
@@ -226,7 +229,7 @@ impl Tenancy {
     /// minting side hard-errored on it while this side treated it as
     /// "assertions off" and answered 200 to everyone.
     ///
-    /// Constructing it is where the refusal belongs, not each of the ~35
+    /// Constructing it is where the refusal belongs, not each of the ~57
     /// `assert_or_401` call sites: a new one is written by someone who is
     /// thinking about a route, not about configuration.
     pub fn new(
@@ -250,10 +253,10 @@ impl Tenancy {
         })
     }
 
-    /// Declare the vault this process also serves over `/mcp`, so the two
+    /// Declare the vault this process also serves over `/mcp`, so the three
     /// routes that would pull the ground out from under that second handle
-    /// — key rotation and vault deletion — can refuse instead of corrupting
-    /// it. `serve-http` is the only caller; a bare `/v1` deployment holds
+    /// — vault deletion, repair and key rotation — can refuse instead of
+    /// corrupting it. `serve-http` is the only caller; a bare `/v1` deployment holds
     /// exactly one handle per vault and needs none of this.
     pub fn with_mcp_vault(mut self, vault: impl Into<String>) -> Self {
         self.mcp_vault = Some(vault.into());
@@ -386,10 +389,6 @@ impl Tenancy {
             ("GET", &["v1", "vaults", id, "supersessions"]) => {
                 self.drawer_supersessions(id, req, now)
             }
-            // Backups (ROADMAP O68), vault-scoped rather than a palace-level
-            // family — see `backup_create` for why. All three are OPERATOR
-            // routes on a fleet and are on the orchestrator's OPS plane, never
-            // its tenant data plane.
             ("GET", &["v1", "vaults", id, "kg", "rel"]) => self.kg_rel(id, req, now),
             // A GET since O83: `VectorIndex::status` creates on none of the
             // five backends, so this is a read and the read-only gate is
@@ -397,6 +396,10 @@ impl Tenancy {
             // `ensure`, which CREATES — and `mutates()` never refuses a GET,
             // so a GET then meant a `--read-only` server issuing DDL.
             ("GET", &["v1", "vaults", id, "index", "status"]) => self.index_status(id, req, now),
+            // Backups (ROADMAP O68), vault-scoped rather than a palace-level
+            // family — see `backup_create` for why. All three are OPERATOR
+            // routes on a fleet and are on the orchestrator's OPS plane, never
+            // its tenant data plane.
             ("POST", &["v1", "vaults", id, "backups"]) => self.backup_create(id, req, now),
             ("GET", &["v1", "vaults", id, "backups"]) => self.backup_list(id, req, now),
             ("POST", &["v1", "vaults", id, "backups", "restore"]) => {
@@ -420,9 +423,10 @@ impl Tenancy {
             ("GET", &["v1", "vaults", id, "wake-up"]) => self.wake_up(id, req, now),
             ("GET", &["v1", "vaults", id, "closets"]) => self.closets(id, req, now),
             ("GET", &["v1", "vaults", id, "hallways"]) => self.hallways(id, req, now),
-            // Tunnels (ROADMAP O68). `traverse` is a LITERAL and must precede
-            // the `{tid}` binding below — both are five segments, and a
-            // binding placed first would swallow it silently.
+            // Tunnels (ROADMAP O68). `traverse` is a LITERAL five-segment
+            // GET; the five-segment `{tid}` binding below is DELETE only, so
+            // the order is not load-bearing today — it is kept literal-first
+            // so a future GET binding cannot swallow it silently.
             ("POST", &["v1", "vaults", id, "tunnels"]) => self.tunnel_create(id, req, body, now),
             ("GET", &["v1", "vaults", id, "tunnels"]) => self.tunnel_list(id, req, now),
             ("GET", &["v1", "vaults", id, "tunnels", "traverse"]) => {
@@ -547,8 +551,8 @@ impl Tenancy {
         undercroft_obs::set_gauge("audit_chain_height", id, full.writes as f64);
         // Original fields kept verbatim (clients depend on them); the
         // management fields ride along. Wing names are fine here — this
-        // route is authorized per vault, unlike the telemetry sampler which
-        // withholds them for sealed vaults.
+        // route is authorized per vault, and since M6 the telemetry sampler
+        // carries them on every level for the same reason.
         Ok((
             200,
             Body::Json(json!({
@@ -659,8 +663,8 @@ impl Tenancy {
 
     /// Authorize a stream connection: verify the per-vault assertion and open
     /// (cache) the store so the sampler can read it. Returns whether the
-    /// vault is sealed, or the HTTP status to reject with. `telemetry` only.
-    #[cfg(feature = "telemetry")]
+    /// vault is sealed, or the `RestError` to reject with. `telemetry` only.
+    ///
     /// **Returns the error, not a bare status** (ROADMAP O82a).
     ///
     /// This used to be `Result<bool, u16>`, and the SSE route — its only
@@ -669,6 +673,7 @@ impl Tenancy {
     /// tampered vault answered `409 {"error":…,"class":"integrity"}` on
     /// `…/stats` and a bare, bodyless `409` on `…/stream`: one condition,
     /// two shapes, decided by which route the caller happened to be on.
+    #[cfg(feature = "telemetry")]
     pub fn authorize(&mut self, id: &str, req: &Request, now: i64) -> Result<bool, RestError> {
         self.assert_or_401(id, req, now)?;
         let store = self.store_for(id)?;
@@ -1224,18 +1229,6 @@ impl Tenancy {
         Ok((200, Body::Json(json!({ "wings": wings }))))
     }
 
-    /// `POST /v1/vaults/{id}/verify` — walk every record verifying its
-    /// HMAC, replay the audit chain, and check every drawer supersession
-    /// receipt. Read-only despite the verb (POST because it is an
-    /// expensive action, not a resource read).
-    ///
-    /// `ok` is the vault's whole verdict, the same one CLI `verify` exits
-    /// 2 on and MCP prints as VERIFY FAILED. It used to be narrower here:
-    /// the supersession leg was a second store call only those two
-    /// surfaces made, so this route — and the admin console reading it —
-    /// answered green on a vault with a tampered link. The counts are the
-    /// same breakdown `GET …/supersessions` returns, so an alert can stay
-    /// on this one route.
     /// `POST /v1/vaults/{id}/anchor` — fast-forward the manifest rollback
     /// anchor onto the committed chain head (ROADMAP R3).
     ///
@@ -1306,6 +1299,19 @@ impl Tenancy {
         ))
     }
 
+    /// `POST /v1/vaults/{id}/verify` — the whole `VerifyReport`, all seven
+    /// legs: every record's HMAC, the chain replay, drawer supersession
+    /// receipts, KG fact receipts, orphan graph labels, mirror drift and
+    /// declared-policy drift. Read-only despite the verb (POST because it is
+    /// an expensive action, not a resource read).
+    ///
+    /// `ok` is the vault's whole verdict, the same one CLI `verify` exits
+    /// 2 on and MCP prints as VERIFY FAILED. It used to be narrower here:
+    /// the supersession leg was a second store call only those two
+    /// surfaces made, so this route — and the admin console reading it —
+    /// answered green on a vault with a tampered link. The counts are the
+    /// same breakdown `GET …/supersessions` returns, so an alert can stay
+    /// on this one route.
     fn verify(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
         self.assert_or_401(id, req, now)?;
         let store = self.store_for(id)?;
@@ -1431,8 +1437,9 @@ impl Tenancy {
     }
 
     /// `POST /v1/vaults/{id}/rotate` — rotate the vault onto fresh keys
-    /// (fresh salt ⇒ all three derived keys change; every artifact is
-    /// re-sealed in one transaction). The caller must be the only writer —
+    /// (fresh salt ⇒ all four derived keys — enc, mac, manifest, sample —
+    /// change; every artifact is re-sealed in one transaction). The caller
+    /// must be the only writer —
     /// same contract as the CLI `vault rotate` — and, since that contract is
     /// about being the ONLY handle, this refuses (409) for the vault the same
     /// process also serves over `/mcp`. Remote-index copies go stale; the
@@ -1711,8 +1718,9 @@ impl Tenancy {
 
     /// `GET /v1/vaults/{id}/supersessions` — verify every drawer's declared
     /// supersession link against the drawer it claims to replace, the
-    /// drawer-level analogue of `/kg/receipts` with the same verdicts plus
-    /// `unreceipted` (link written while its target was absent). The
+    /// drawer-level analogue of `/kg/receipts` with the same five verdicts
+    /// (`unreceipted` — link written while its target was absent — is one
+    /// of the five on both). The
     /// summary counts let a caller alert on `tampered` without walking the
     /// list.
     fn drawer_supersessions(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
@@ -2124,7 +2132,8 @@ impl Tenancy {
         Ok((200, Body::Json(json!({ "vault": id, "backups": names }))))
     }
 
-    /// `POST /v1/vaults/{id}/backups/{name}/restore` — restore this vault.
+    /// `POST /v1/vaults/{id}/backups/restore` (the backup `name` in the
+    /// body) — restore this vault.
     ///
     /// **The addressed vault must MATCH the backup manifest's own id**, and
     /// that check does not exist on the CLI. It is what makes the route safer
@@ -2529,9 +2538,9 @@ impl Tenancy {
     /// from a start wing over tunnels, breadth-first.
     ///
     /// Returns wing NAMES and depths, never content, so it is not a `ReadOp`
-    /// door. The literal `traverse` arm is matched BEFORE `{tid}` in the
-    /// dispatch, since both are five segments and a binding would otherwise
-    /// swallow it.
+    /// door. The literal `traverse` arm sits BEFORE `{tid}` in the dispatch;
+    /// today that is not load-bearing (the `{tid}` arm is DELETE only), but
+    /// literal-first is what keeps a future GET binding from swallowing it.
     fn tunnel_traverse(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
         self.assert_or_401(id, req, now)?;
         let start =
@@ -2570,8 +2579,6 @@ impl Tenancy {
         ))
     }
 
-    /// `GET /v1/vaults/{id}/trust` — every assigned wing trust class,
-    /// tag-verified. Wings absent here read as `standard`.
     /// `GET /v1/vaults/{id}/history` — the audit chain, readable at last.
     ///
     /// The chain was tamper-EVIDENT and not BROWSABLE: `verify` replayed it
@@ -2616,6 +2623,8 @@ impl Tenancy {
         ))
     }
 
+    /// `GET /v1/vaults/{id}/trust` — every assigned wing trust class,
+    /// tag-verified. Wings absent here read as `standard`.
     fn list_trust(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
         self.assert_or_401(id, req, now)?;
         let store = self.store_for(id)?;
@@ -2634,7 +2643,7 @@ impl Tenancy {
     /// into receipted knowledge-graph facts, and mirror each fact as a
     /// searchable drawer so distillation reaches the retrieval surface.
     ///
-    /// Body: `{ wing?, room?, limit?, fact_room? }`. `wing`/`room` scope
+    /// Body: `{ wing?, room?, limit?, fact_room?, dry_run? }`. `wing`/`room` scope
     /// which verbatim drawers are read (`room` defaults to everything except
     /// `fact_room`, so re-running never distils its own output); `fact_room`
     /// (default `facts`) is the room the fact-drawers land in, inside their
@@ -3154,9 +3163,11 @@ impl Tenancy {
         Ok(self.stores.get_mut(vault_id).expect("just inserted"))
     }
 
-    /// Refuse an operation that would retire the keys of, or delete the
-    /// files under, a vault a SECOND live handle in this same process is
-    /// holding — the `/mcp` store `serve-http` opened at start-up.
+    /// Refuse an operation that would retire the keys of, rewrite the whole
+    /// derived layer of (`repair`), or delete the files under, a vault a
+    /// SECOND live handle in this same process is holding — the `/mcp`
+    /// store `serve-http` opened at start-up. Three callers: `delete_vault`,
+    /// `repair`, `rotate`.
     ///
     /// `rotate_keys` documents a sole-writer contract, and every doc states
     /// it at PROCESS granularity ("do not rotate a vault another process is
@@ -3524,13 +3535,14 @@ fn store_err(e: StoreError) -> RestError {
             undercroft_vault::VaultError::ManifestTampered
             | undercroft_vault::VaultError::CorruptManifest(_),
         ) => 409,
-        // Two more verdicts about the vault's own state rather than about
-        // the request, and neither is transient: a manifest whose database
-        // is absent (R4/A33 — "empty" is not "absent"), and a schema a
-        // read-only role would have had to migrate. 409 is the class that
-        // says a retry only re-detects it; the remedy is in the message.
-        // Only the first is an INTEGRITY verdict — the vault contradicts
-        // itself — so only the first exits 2 on the CLI.
+        // Three more verdicts about the vault's own state rather than about
+        // the request, and none is transient: a manifest whose database is
+        // absent (R4/A33 — "empty" is not "absent"), a directory holding
+        // BOTH database names (O7), and a schema a read-only role would have
+        // had to migrate. 409 is the class that says a retry only re-detects
+        // it; the remedy is in the message. The first two are INTEGRITY
+        // verdicts — the vault contradicts itself — so those two exit 2 on
+        // the CLI; the third is a posture error and does not.
         StoreError::DatabaseMissing { .. }
         | StoreError::DatabaseAmbiguous { .. }
         | StoreError::ReadOnlyUnmigrated { .. } => 409,

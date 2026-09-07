@@ -6,7 +6,10 @@
 
 use sha2::{Digest, Sha256};
 
-/// Recipe tag stored in drawer metadata (mempalace's `id_recipe`).
+/// Recipe tag stored in drawer metadata (mempalace's `id_recipe`). It names
+/// the ORDINARY recipe: a quarantine-pending row's id comes from
+/// [`quarantine_drawer_id`] regardless, while its `id_recipe` still carries
+/// this tag.
 pub const ID_RECIPE: &str = "sha256/wing|room|source|chunk|v1";
 
 /// Domain tag separating the quarantine id space from the ordinary one.

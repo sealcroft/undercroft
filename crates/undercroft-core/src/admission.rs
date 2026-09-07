@@ -37,8 +37,10 @@ pub struct AdmissionSignal {
     pub offset: u32,
 }
 
-/// The closed vocabulary of signal classes. The first four are the
-/// deterministic tier's; `llm-advisory` is emitted only by the optional
+/// The closed vocabulary of signal classes. The first five are the
+/// deterministic tier's ([`screen`] emits all five); `rate-anomaly` and
+/// `destination-anomaly` come from the store's own screens; `llm-advisory`
+/// is emitted only by the optional
 /// tier-2 advisor (never by [`screen`]) and carries offset 0 — a model's
 /// opinion has no byte position, and a model's REASONING never enters
 /// the signal (it could carry content, and it could carry the injection).
@@ -229,8 +231,9 @@ fn fixture_vectors() -> &'static Vec<Vec<f32>> {
 /// test reads raw scores). Deterministic: the hash embedder is a pure
 /// function and the window grid is fixed.
 pub fn fixture_score(text: &str) -> Option<(u32, f32)> {
-    // Word start offsets (bytes) — whitespace splitting, same notion of
-    // a word the hash embedder's unigrams use.
+    // Word start offsets (bytes) — whitespace splitting, a coarser grid
+    // than the embedder's own tokenizer (`segment(search_key(text))`);
+    // the windows only need to land near word starts.
     let mut starts: Vec<usize> = Vec::new();
     let mut in_word = false;
     for (i, c) in text.char_indices() {

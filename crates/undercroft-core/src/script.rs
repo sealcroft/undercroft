@@ -45,20 +45,18 @@
 //!
 //! ## Known gaps, recorded rather than discovered
 //!
-//! * **Hebrew and Yiddish get nothing.** `script_of` returns `Script::Other`
-//!   for `U+0590..U+05FF`, so there are no bigrams, and `search_key` is the
-//!   identity on Hebrew — no niqqud strip. Measured: `בְּרֵאשִׁית` and `בראשית`
-//!   share no token, no n-gram at any n, no embedder trigram, and score
-//!   exactly 0.5000, so pointed Hebrew cannot find its own unpointed spelling.
-//!   Hebrew also attaches its clitics at the *front* (ה ו ב ל כ מ ש), so a
-//!   prefix rule is structurally the wrong shape for it. Separately
-//!   `ספר`/`ספרים` — a three-letter root and its plural, i.e. the common case —
-//!   has zero evidence on every channel and would not be fixed by a fold.
-//! * **Brahmic conjuncts shatter.** The virama is not `Other_Alphabetic`
-//!   (Devanagari `U+094D`, and the same in Bengali, Gurmukhi, Gujarati, Oriya,
-//!   Tamil, Telugu, Kannada, Malayalam, Sinhala), so `नमस्ते` splits at the
-//!   conjunct into `नमस` + `ते` — the Khmer-COENG failure this module was
-//!   written to fix, in a script family it does not cover.
+//! * **Hebrew — history, and what remains.** `script_of` used to return
+//!   `Script::Other` for `U+0590..U+05FF`, so there were no bigrams, and
+//!   `search_key` was the identity on Hebrew — measured then, `בְּרֵאשִׁית` and
+//!   `בראשית` shared no token and scored exactly 0.5000. Both are closed:
+//!   Hebrew is `Script::Hebrew` (`attaches_without_delimiter`, bigrams over
+//!   its runs, whole-word containment for the front-attached clitics
+//!   ה ו ב ל כ מ ש) and `search_key` strips the points (S5e). The residual is
+//!   `ספר`/`ספרים` — a three-letter root and its plural, i.e. the common
+//!   case — which has zero evidence on every channel and is not fixed by a
+//!   fold. (Brahmic conjuncts no longer shatter — a virama is word-internal
+//!   in a delimiting script; the live Brahmic gap is the case suffix, pinned
+//!   by `brahmic_case_suffixes_are_still_unreachable`.)
 //! * **A one-syllable Korean noun cannot find itself inflected.** `집` emits
 //!   `["집"]` while `집에서` emits `["집에","에서","집에서"]`: intersection empty,
 //!   and `fuzzy_eq` is excluded by its own two-character minimum. Note this
@@ -193,7 +191,7 @@ pub struct Segmented {
     pub tokens: Vec<String>,
     /// Parallel to `tokens`: true where the token is a character n-gram from a
     /// script that attaches without a delimiter and is **not** logographic —
-    /// Arabic, Kana, Hangul, Khmer, Thai, Lao, Myanmar, Bopomofo.
+    /// Arabic, Hebrew, Kana, Hangul, Khmer, Thai, Lao, Myanmar, Bopomofo.
     ///
     /// The caller needs this because such an n-gram is not a word and must not
     /// be treated as one. Measured on a real 50k-word Arabic corpus, matching

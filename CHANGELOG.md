@@ -1,5 +1,56 @@
 # Changelog
 
+## Unreleased — 1.5.2
+
+PATCH: nothing observable changes. A gate for the class the previous release
+found by hand, and a measurement.
+
+### every error variant is minted or matched somewhere (O115)
+
+**ROADMAP O115 FILED AND CLOSED 2026-09-07.** `BundleError::Expired` was
+declared, documented and constructed nowhere until O111 read it; nothing
+counted a variant against its mint sites. `parity.rs` now walks every
+`pub enum *Error` in `crates/` (sixteen) and requires each variant to be
+referenced outside its own definition, `#[from]` exempt, with a premise
+arm on the walk, a premise arm on a synthetic dead variant, and a
+counterfactual on the real tree (a planted `BundleError::Probe` fails the
+gate by name). `#[from]` variants are exempt, which is how `SealError::Utf8`
+was found by reading instead. Tests 824 → 825.
+
+### six code defects the doc read found, fixed (O116–O121)
+
+The by-eye doc read over every crate (about 145 corrected doc lines, all
+comments) surfaced six claims that were false because the CODE was wrong:
+
+- **O116** — rotation recomputed the dedup fingerprint with its own copy of
+  the recipe over raw bytes, so a rotated vault stopped finding duplicates of
+  any non-NFC content; one recipe now, taking the vault.
+- **O117** — the Arabic scanner ended a mention's span at the folded token's
+  length, cutting a decomposed final token short; the raw token ends it.
+- **O118** — the orchestrator's engine pin was parsed twice and only the
+  pre-flight trimmed it; a trailing newline passed `config check` and
+  refused at `serve`.
+- **O119** — `repair` left the HNSW graph standing over re-embedded vectors;
+  every invalidation drops it now.
+- **O120** — a retention sweep took scope membership from the clear mirror
+  columns, so one offline column flip moved a drawer into a scope and a
+  keyed sweep destroyed it; the covered copy decides now, drift is skipped
+  and warned.
+- **O121** — `UNDERCROFT_RERANKER` was classed `Tunes` while a bad value
+  stops the process; `Protects`, and `config check` says so.
+
+Each with a gate and a counterfactual where one can run (O119 is behind the
+experimental feature). Also deleted: `SealError::Utf8`, declared and
+documented and never converted into. Tests 825 → 828.
+
+### O113 measured: export holds 2.7× its own size in memory
+
+Four vaults mined from this repository, `VmHWM` sampled while `undercroft
+export` ran: 9 MB baseline, 23 MB for 3k drawers, **1,258 MB for 361k
+drawers whose export is 468 MB** — linear in rows, ~3.5 KB per drawer, the
+whole-corpus `Vec` plus the serialized `String` the entry names. The
+streaming shape stays open with the number in place of the argument.
+
 ## 1.5.1 — 2026-09-07
 
 PATCH: no documented contract moves. Every public item in the eight library

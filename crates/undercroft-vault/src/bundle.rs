@@ -357,9 +357,11 @@ fn seal(
 // error, but a caller that demands a sender gets `BadSignature` rather
 // than silence.
 
-/// Record counts a manifest declares, verified against the payload at
-/// import so a truncated or padded record stream is caught even when the
-/// signature is not checked.
+/// Record counts a manifest declares. Inside the signature and inside the
+/// `egress/export` audit record; neither importer reads them — the
+/// orchestrator's migration compares them to the destination's stats
+/// after import. A truncated or padded record stream is caught by
+/// `payload_sha256`, which is checked unconditionally.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ManifestCounts {
     /// How many drawer records the payload holds.

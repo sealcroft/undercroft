@@ -1150,7 +1150,12 @@ Consequences that are binding, not advisory:
   + the quarantine fence and the authority fence over raw arguments;
   parity.rs: the surface inventory the code is COUNTED AGAINST in both
   directions — a tool advertised without a line fails the build, a line
-  naming a dead tool fails it too (that second half was written but never
+  naming a dead tool fails it too; **and every `pub enum *Error` variant
+  is counted against its mint sites (O115)**, because `BundleError::Expired`
+  was declared, documented under the `missing_docs` lint, and constructed
+  nowhere — a lint that requires a sentence about a behaviour cannot tell
+  whether the behaviour exists, and the by-eye read that found it finds
+  what it happens to look at (that second half was written but never
   RUN: the check went `MCP_TOOLS → WRITE_TOOLS` only, so `WRITE_TOOLS` kept
   naming the removed authority tool and passed), and `OPERATOR_ONLY`
   (admission/trust/retention/forget/rotate/**authority** — promotion closes
@@ -1694,8 +1699,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (824 run,
-                                      # 4 #[ignore]d = 828 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (828 run,
+                                      # 4 #[ignore]d = 832 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote

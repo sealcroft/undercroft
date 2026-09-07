@@ -1,6 +1,8 @@
 //! Text chunking, mirroring mempalace's miner defaults:
-//! 800-byte chunks, 100-byte overlap, 50-byte minimum (`len()` over the
-//! normalized UTF-8, so a CJK paragraph holds fewer characters), split on
+//! 800-byte chunks, 100-byte overlap, and a 50-byte `min_chunk` that only
+//! a trailing runt is measured against — it is merged into its
+//! predecessor; earlier chunks are not floored (`len()` over the
+//! normalized UTF-8, so a CJK paragraph holds fewer characters). Split on
 //! paragraph boundaries where possible so drawers stay readable.
 
 /// How a document is cut into drawers — mempalace's miner defaults: 800-byte chunks, 100 bytes of overlap, a 50-byte minimum.

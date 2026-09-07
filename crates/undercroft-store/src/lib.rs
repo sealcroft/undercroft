@@ -1811,9 +1811,11 @@ pub struct SearchHit {
     /// if it had said the word.
     pub lexical_exact: f32,
     /// Lexical evidence that the drawer holds a *morphological relative* of a
-    /// query term rather than the term itself — today, and only, a whole word
-    /// contained inside a longer one (`Dampfschiff` in
-    /// `Donaudampfschifffahrt`).
+    /// query term rather than the term itself — the pairwise morphological
+    /// relations `morph_relation` admits: a whole word contained inside a
+    /// longer one (`Dampfschiff` in `Donaudampfschifffahrt`), an `IRREGULAR`
+    /// pair, a `suffix_family` ending, the per-language inflection tables
+    /// and `ar_root_family`. See `morph_relation` for the exact set.
     ///
     /// This admits, like `lexical_exact`, and unlike the approximate channel.
     /// The reason it is a separate field rather than folded into either is
@@ -2057,8 +2059,10 @@ pub(crate) enum BypassReason {
     OperatorRuling,
 }
 
-/// Result of [`PalaceStore::save_with_dedup`] and
-/// [`PalaceStore::upsert_screened`]: the drawer id that now holds the
+/// Result of every screened save arm — [`PalaceStore::save_with_dedup`],
+/// [`PalaceStore::save_with_dedup_vec`], [`PalaceStore::upsert_screened`],
+/// [`PalaceStore::upsert_external`], [`PalaceStore::import_record`] and
+/// [`PalaceStore::diary_write`]: the drawer id that now holds the
 /// content, whether it was a fresh insert, whether an existing
 /// near-duplicate was refreshed in place, and whether the admission
 /// screen diverted the write to the quarantine wing.
@@ -2171,8 +2175,9 @@ pub struct SearchOptions {
     /// Filter to drawers whose DECLARED kind equals this value (one of
     /// [`undercroft_core::KIND_VOCAB`]; an unknown value is an error, never
     /// an empty result — the closed vocabulary catching a typo). Drawers
-    /// with no declared kind are excluded while the filter is set; the
-    /// `/v1` surface reports how many, so a caller can tell a thin result
+    /// with no declared kind are excluded while the filter is set; every
+    /// surface reports how many (`Exclusions` in `cli/search.rs`), so a
+    /// caller can tell a thin result
     /// from a thinly-labeled corpus. Rides the same scope-resolved
     /// candidate machinery as `wing`/`room` — a kind filter cannot be
     /// starved by the corpus top-k.
@@ -2619,8 +2624,8 @@ pub struct PalaceStore {
     /// The vault-level trust floor (`UNDERCROFT_TRUST_FLOOR`), resolved once
     /// at open: unscoped searches exclude wings assigned below it.
     /// `None` (the default) is byte-identical pre-floor behavior. Declared,
-    /// never detected; garbage warns and stays off — a typo must not
-    /// silently reshape retrieval.
+    /// never detected; a value outside the trust vocabulary REFUSES to open
+    /// (`resolve_trust_floor`) — a typo must not silently reshape retrieval.
     trust_floor: Option<String>,
     /// The cosine→`semantic` calibration zero — the raw cosine this
     /// embedder gives its worst known-unrelated probe pair, resolved once
@@ -2650,9 +2655,10 @@ pub struct PalaceStore {
     admission_rate: Option<(u32, u32)>,
     /// Chain-audit reads (`UNDERCROFT_READ_AUDIT=chain`; unset = off — a
     /// per-query chain append is a durability cost a sovereign deployment
-    /// DECLARES). When on, every search appends a read record: a keyed
-    /// fingerprint of the query (never its text), the declared scope, and
-    /// the hit count. Disabled with a warning on read-only opens (the
+    /// DECLARES). When on, every content-returning read appends a read
+    /// record (`ReadOp`, O50/O51): a keyed fingerprint of the subject
+    /// (never its text), the declared scope, and the count returned.
+    /// Disabled with a warning on read-only opens (the
     /// replica precedent: warn and serve). Exports are audited
     /// unconditionally — egress is rare and high-value.
     read_audit: bool,
@@ -2807,8 +2813,10 @@ pub struct PalaceStore {
     /// warning per search would bury the one line that matters.
     ro_prefilter_warned: std::cell::RefCell<std::collections::HashSet<&'static str>>,
     /// What this open found and deliberately did **not** repair, in the
-    /// operator's words (R4). Always empty on a writable open, which heals
-    /// each of them instead. Warned once at open and readable afterwards, so
+    /// operator's words (R4). Empty on a writable open, which heals each of
+    /// them instead — except for at-rest-migration rows the open skipped
+    /// because they fail verification (A10/U12), which both postures report
+    /// (see [`unhealed`](Self::unhealed)). Warned once at open and readable afterwards, so
     /// a long-lived read-only server can put the same sentences on a status
     /// surface rather than only in a log line nobody kept.
     unhealed: Vec<String>,
@@ -2878,9 +2886,14 @@ impl PalaceStore {
     /// does not rebuild the FTS index, does not create
     /// `idx_drawers_filed_at`, and — the one A32 called evidence
     /// destruction — does not promote or delete a writer's `vault.json.next`.
-    /// Every one of those is *detected and reported* instead: the vault
-    /// opens, serves reads, and names what it left alone on
-    /// [`unhealed`](Self::unhealed).
+    /// What it left alone is handled three ways. *Reported* on
+    /// [`unhealed`](Self::unhealed): an unseeded `chain_meta`, a lagging
+    /// anchor, a staged `vault.json.next`, and A10/U12 rows skipped for
+    /// failing verification. *Warned only*, once per tier: a missing or
+    /// stale FTS index (`probe_fts_read_only` → exact scan). *Not examined
+    /// at all*: `journal_mode` and `idx_drawers_filed_at` — neither is read
+    /// on this path, so neither is reported. A schema that would need a
+    /// migration is the refusal below.
     ///
     /// Two conditions refuse rather than report, because serving through
     /// them would answer a question wrongly rather than partially: an absent
@@ -3051,8 +3064,10 @@ impl PalaceStore {
     /// walk to the same result.
     ///
     /// Every drawer is read through `get`, so the pass verifies each record's
-    /// HMAC on the way past. A tampered vault fails the migration rather than
-    /// quietly re-embedding corrupt content.
+    /// HMAC on the way past. A row that fails is left untouched and counted
+    /// (one stderr line for the batch), never re-embedded; the walk
+    /// completes, because a walk that aborts inside `open` would leave the
+    /// vault unopenable for `verify` and `repair` too.
     fn migrate_embedding_space(&mut self) -> Result<(), StoreError> {
         let ids: Vec<String> = self
             .conn
@@ -4092,8 +4107,9 @@ impl PalaceStore {
     }
 
     /// hmac-only vaults keep a plaintext FTS5 index over drawer content as
-    /// a BM25 prefilter (triggers keep it coherent through every insert /
-    /// content update / delete). Sealed vaults never get one. Returns
+    /// a BM25 prefilter, kept coherent from the write path through every
+    /// insert / content update / delete — never by triggers; `rebuild_fts`
+    /// drops the ones older builds created. Sealed vaults never get one. Returns
     /// whether the index is usable; `false` (e.g. an SQLite build without
     /// the fts5 module) means search falls back to the full scan.
     fn init_fts_schema(&self) -> Result<bool, StoreError> {
@@ -4337,8 +4353,9 @@ impl PalaceStore {
         &self.vault
     }
 
-    /// Whether this vault seals content at rest. Used to suppress wing/room
-    /// names in live telemetry events for sealed vaults.
+    /// Whether this vault seals content at rest. Gates the sealed PQ page
+    /// tier's post-batch fold (its one caller); wing/room names travel in
+    /// telemetry events on every level since M6.
     fn is_sealed(&self) -> bool {
         matches!(self.vault.level(), SecurityLevel::Sealed)
     }
@@ -4420,8 +4437,12 @@ impl PalaceStore {
     /// different one. SQLite's `AUTOINCREMENT` sequence never reuses a rowid,
     /// so it only ever moves forward.
     ///
-    /// Identical to `count()` for any vault that has never deleted, so
-    /// existing ids are unaffected.
+    /// NOT `count()`, even on a vault that has never deleted: SQLite advances
+    /// `sqlite_sequence` on every conflicting `INSERT … ON CONFLICT DO
+    /// UPDATE` too — every re-mine, update and dedup refresh — so this only
+    /// ever moves forward and can run well ahead of the row count. That is
+    /// the property an append index needs (uniqueness); equality with the
+    /// count was never one of them, and this doc used to claim it.
     pub fn next_append_index(&self) -> Result<u64, StoreError> {
         let n: i64 = self.conn.query_row(
             "SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'drawers'), 0)",
@@ -5719,8 +5740,9 @@ impl PalaceStore {
         }
     }
 
-    /// Most recently filed drawers (optionally scoped to a wing) — the
-    /// palace's "essential story" feed used by wake-up.
+    /// Most recently written drawers (`ORDER BY updated_at`, so an edit
+    /// resurfaces a drawer; optionally scoped to a wing) — the palace's
+    /// "essential story" feed used by wake-up.
     pub fn recent(
         &self,
         wing: Option<&str>,
@@ -6760,8 +6782,10 @@ impl PalaceStore {
     /// made it eight — which is how the write side's screen came to be
     /// applied per call site with three ways past it. `Internal` never
     /// records, by the reason its variant carries; a read-only handle never
-    /// records because `open_read_only` force-disables the flag, and that
-    /// flag is the only thing keeping such a handle from writing.
+    /// records because `open_read_only` force-disables the flag — the
+    /// connection is `SQLITE_OPEN_READ_ONLY` under `PRAGMA query_only`, so
+    /// clearing the flag turns a hard refusal on the first audited read into
+    /// warn-and-serve.
     fn record_read(
         &self,
         read: Read,
@@ -7273,7 +7297,9 @@ impl PalaceStore {
     /// policy from docs/LABELS.md: a filter over a thinly-labeled corpus
     /// must say what it silently passed over, or an honest empty result is
     /// indistinguishable from a label-coverage gap.
-    /// **Under the SAME policy the search itself ran under** (ROADMAP M21).
+    /// **Under the same trust floor and quarantine fence the search itself
+    /// ran under** (ROADMAP M21); a declared date window (O108) is NOT
+    /// applied here, so under one the count is over the undated scope.
     ///
     /// This counted `kind IS NULL` within the wing/room scope and nothing
     /// else — no trust floor, no quarantine fence — while
@@ -7427,11 +7453,14 @@ impl PalaceStore {
     /// that verified only what the first two legs returned answered green
     /// on a tampered link.
     pub fn verify(&self) -> Result<VerifyReport, StoreError> {
-        // The mirror columns come along: `wing`, `room`, `kind`, `supersedes`
-        // and `filed_at` are indexed copies of values whose authoritative
-        // form lives inside the HMAC-covered `meta_json`, and nothing
-        // compared the two. See `mirror_drift` on the report — a flipped
-        // mirror is not an HMAC failure, so it needs its own leg.
+        // The mirror columns come along: `wing`, `room`, `kind` and
+        // `supersedes` are indexed copies of values whose authoritative form
+        // lives inside the HMAC-covered `meta_json`, and nothing compared
+        // the two. See `mirror_drift` on the report — a flipped mirror is
+        // not an HMAC failure, so it needs its own leg. `filed_at` is
+        // selected but deliberately NOT compared: the column takes the
+        // write path's own clock and differs from the covered field in
+        // normal operation.
         let mut stmt = self.conn.prepare(
             "SELECT id, meta_json, content, tag, wing, room, kind, supersedes, filed_at \
              FROM drawers ORDER BY seq",
@@ -7568,7 +7597,8 @@ impl PalaceStore {
             Err(StoreError::Integrity(_)) if !bad.is_empty() => Vec::new(),
             Err(e) => return Err(e),
         };
-        // The sixth leg, on the same terms as the fifth directly above: the
+        // The KG-receipt leg, on the same terms as the supersession leg
+        // directly above: the
         // receipt binding a distilled FACT to its verbatim source is keyed,
         // and it lives in `kg_triples` columns that no drawer HMAC and no
         // chain step covers. `kg_verify_receipts` reads each cited drawer
@@ -7662,11 +7692,12 @@ impl PalaceStore {
             // a correctness-of-cost decision rather than style.** A bare
             // label exists per drawer WRITE, so the loop above would issue at
             // least one round trip per drawer on every `verify` — invisible
-            // on a test fixture and O(N) on a real corpus — and `audit` has
-            // no index on `record_id`, so each tombstone probe would be a
-            // full scan of a table that grows with every write, read and
-            // export. Two full scans of `audit` plus an indexed probe of
-            // `drawers` per candidate is what that costs set-based, and
+            // on a test fixture and O(N) on a real corpus. `audit` has an
+            // index on `record_id` (`idx_audit_record_id`), so each tombstone
+            // probe is indexed, but N probes are still N round trips over a
+            // table that grows with every write, read and export. One scan
+            // of `audit` plus an indexed probe of `drawers` and of `audit`
+            // per candidate is what that costs set-based, and
             // SQLite resolves the first `NOT EXISTS` on the `drawers`
             // primary key, so the second runs only for labels whose drawer is
             // already gone.
@@ -7693,9 +7724,10 @@ impl PalaceStore {
         // ── The seventh leg: declared policy vs the chain that recorded it.
         //
         // ONE ordered pass over `audit` and nothing per-row, for the reason
-        // the comment above gives: `audit` has no index on `record_id`, so a
-        // correlated `MAX(seq)` subquery would be a full scan per policy and
-        // this is the third scan of that table rather than the Nth.
+        // the comment above gives: a correlated `MAX(seq)` subquery would be
+        // a round trip per policy (indexed, since `idx_audit_record_id`
+        // exists, but still N of them), and this is one more ordered pass
+        // over that table rather than the Nth.
         let mut policy_drift: Vec<String> = Vec::new();
         {
             use std::collections::HashMap;
@@ -7936,8 +7968,9 @@ struct Candidate {
 ///
 /// Boundaries then come from `script::segment`. `is_alphanumeric` is
 /// Unicode-aware, but being aware of a character is not the same as knowing
-/// where its words end: in Han, Kana, Hangul, Arabic, Khmer, Thai, Lao and
-/// Myanmar it finds no boundary the writer intended, and a whole clause
+/// where its words end: in Han, Kana, Hangul, Arabic, Hebrew, Khmer, Thai,
+/// Lao and Myanmar it finds no boundary the writer intended (Hebrew and
+/// Arabic space their words but attach their clitics), and a whole clause
 /// became one token. See that module for what each script actually does.
 fn tokenize(content: &str) -> Vec<String> {
     // The historical minimum-length rule, kept exactly: it is a *byte* test,
@@ -7963,7 +7996,9 @@ fn segment(content: &str) -> undercroft_core::script::Segmented {
     undercroft_core::script::segment(&undercroft_core::normalize::search_key(content))
 }
 
-/// Whether a query term matches a document token, tolerating one edit.
+/// Whether a query term matches a document token approximately: one
+/// forgiven edit (length-gated), or `same_word_family`, or
+/// `contains_a_long_word`. Ranks only — see `lexical` on `SearchHit`.
 ///
 /// The tolerance is a port of mempalace's spellcheck extra and it is gated by
 /// length, because a single edit is a large fraction of a short word. That
@@ -8010,8 +8045,8 @@ fn fuzzy_eq(q: &str, tok: &str) -> bool {
 /// One word contains the other, in a script that attaches without a delimiter
 /// and is not logographic.
 ///
-/// This is `contains_a_long_word`'s counterpart for Arabic, Kana, Hangul,
-/// Khmer, Thai, Lao and Myanmar. It is what carries `كتاب` to `الكتاب` and
+/// This is `contains_a_long_word`'s counterpart for Arabic, Hebrew, Kana,
+/// Hangul, Khmer, Thai, Lao and Myanmar. It is what carries `كتاب` to `الكتاب` and
 /// `مكتبة` to `بالمكتبة` once bigram-to-bigram equality stops being exact
 /// evidence: the whole-subrun tokens still contain one another, which is a
 /// contiguous chain over the stem rather than one shared fragment.
@@ -8075,8 +8110,10 @@ fn shares_a_stem(q: &str, tok: &str) -> bool {
 /// The residue it does create is real morphology far more often than noise —
 /// `unresolved`/`resolved`, `incompatible`/`compatible`,
 /// `autoincrement`/`increment` — with `counting`/`accounting` and
-/// `knowledge`/`acknowledged` as the sharpest genuine false pairs. All of it
-/// lands in the approximate channel, so none of it can admit a drawer.
+/// `knowledge`/`acknowledged` as the sharpest genuine false pairs. Through
+/// `fuzzy_eq` it lands in the approximate channel and ranks only; on the
+/// default path the same relation is also reached by `morph_relation` and
+/// ADMITS via `lexical_morph`, labelled and discounted.
 /// Critically, it creates none of gap (a)'s false friends: containment is
 /// false for `город`/`горох`, `книга`/`книге` and `positive`/`position`.
 fn contains_a_long_word(q: &str, tok: &str) -> bool {
@@ -8142,21 +8179,25 @@ fn skeleton_with(w: &str, weak: fn(char) -> bool) -> String {
     w.chars().filter(|c| !weak(*c)).collect()
 }
 
-/// Whose inflection applies to a comparison, declared by the caller.
+/// Whose inflection applies to a comparison.
 ///
-/// Not detected, and not detectable: German and English share a script, so
-/// nothing in the bytes says which endings are legal. This is the same class of
-/// read-time declaration as [`undercroft_core::temporal::Locale`]'s `calendar`
-/// and `date_order` — the caller knows their corpus and the engine does not
-/// guess.
+/// Declared FIRST, then detected: a declaration outranks the text, and it is
+/// the same class of read-time declaration as
+/// [`undercroft_core::temporal::Locale`]'s `calendar` and `date_order`. When
+/// the caller declares nothing, the drawer's own closed-class function words
+/// decide, per CANDIDATE (`language_of_drawer`; script settles Greek,
+/// Georgian and Hangul through `morph_lang_by_script`) — a vault may hold
+/// several languages and the drawer is the unit that has one. A word two
+/// languages both claim votes for neither.
 ///
 /// It exists because one suffix set demonstrably cannot serve two languages.
 /// See [`suffixes_for`].
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum MorphLang {
-    /// Nothing declared: only the endings that are safe in every delimiting
-    /// script. Exactly what shipped before this existed, so an undeclared
-    /// corpus behaves as it always did.
+    /// Nothing declared: the language is detected per candidate from the
+    /// drawer's own function words (`language_of_drawer`), and a drawer that
+    /// identifies as nothing gets only the endings that are safe in every
+    /// delimiting script — exactly what shipped before detection existed.
     #[default]
     Undeclared,
     /// English suffix families — `-er` is NOT among them (`flow`/`flower`).
@@ -8645,9 +8686,10 @@ fn agglutinative_family(q: &str, tok: &str, lang: MorphLang) -> bool {
 /// door — again five characters against four.
 ///
 /// This IS a length threshold, which is the instrument that produced the
-/// floor-8→5 mistake, so it is deliberately confined: two languages, three
-/// endings, and every pair it decides is pinned as a control on one side or the
-/// other. It is not a general permission to lower floors.
+/// floor-8→5 mistake, so it is deliberately confined: two languages, five
+/// endings (three English, two French), and every pair it decides is pinned
+/// as a control on one side or the other. It is not a general permission to
+/// lower floors.
 fn derivations_for(lang: MorphLang) -> (&'static [(&'static str, &'static str)], usize) {
     const NONE: &[(&str, &str)] = &[];
     const EN: &[(&str, &str)] = &[("", "ion"), ("", "ation"), ("e", "ion")];
@@ -8956,8 +8998,9 @@ const SUFFIX_STEM_FLOOR: usize = 3;
 /// catastrophic. Containment asks "does `run` appear ANYWHERE in this word" and
 /// answers yes for `brunt`, `prune`, `grunt`, `runway`; measured, it reached a
 /// mean of 33 English words per query. This asks "is this word exactly `run`
-/// plus one ending from a six-item list", which admits `runs`, `running`,
-/// `runner` and nothing else. And unlike a stemmer it builds no equivalence
+/// plus one ending from a four-item list" (six under German, which adds
+/// `-en`/`-er`), which admits `runs`, `running` and nothing else — `runner`
+/// only under German. And unlike a stemmer it builds no equivalence
 /// class — it answers about two strings, so a bad ending cannot poison a class
 /// the way `πολύ`/`πόλη` poisons Snowball Greek's.
 ///
@@ -8996,9 +9039,9 @@ fn suffix_family(q: &str, tok: &str, lang: MorphLang) -> bool {
 ///
 /// A table is honest about being a table. It is data, reviewable line by line,
 /// and it creates no equivalence class beyond the pair written down. What it is
-/// NOT is complete: this is the frequent core of English irregular verbs and
-/// plurals plus German strong verbs, not a lexicon, and a form absent from it is
-/// simply not reached.
+/// NOT is complete: this is the frequent core of twelve languages' irregular
+/// verbs and plurals (201 pairs — count `),` terminators, not lines), not a
+/// lexicon, and a form absent from it is simply not reached.
 const IRREGULAR: &[(&str, &str)] = &[
     // English — irregular plurals.
     ("child", "children"),
@@ -9515,8 +9558,8 @@ fn same_word_family(q: &str, tok: &str) -> bool {
 /// `init_fts_schema`, which explains why it is no longer external-content over
 /// raw bytes. Folding the index fixed the *fold* disagreement; it does not fix
 /// the *segmentation* one, and that is what this predicate is still for: our
-/// tokens for Han, Kana, Hangul, Arabic, Khmer, Thai, Lao and Myanmar are
-/// character bigrams, and unicode61 does not bigram anything.
+/// tokens for Han, Kana, Hangul, Arabic, Hebrew, Khmer, Thai, Lao and
+/// Myanmar are character bigrams, and unicode61 does not bigram anything.
 ///
 /// The prefilter is only safe when it finds nothing: `fts_candidates` returns
 /// `None` on an empty result and search falls back to a full scan. A

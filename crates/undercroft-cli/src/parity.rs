@@ -61,9 +61,10 @@ pub enum ConfigClass {
 
 /// **Whether `undercroft config check` runs a real parse for a declaration.**
 ///
-/// ROADMAP O52 (round-four #25, the reporting half). `check_one` falls to a
-/// catch-all that renders an unknown name as `Finding::Accepted`, printed as
-/// *"no parse to run; the consumer validates it"* — and that message is
+/// ROADMAP O52 (round-four #25, the reporting half). `check_one` fell to a
+/// catch-all that rendered an unknown name as `Finding::Accepted`, printed
+/// as *"no parse to run; the consumer validates it"* (it prints *"declared
+/// Opaque: no parse exists…"* now) — and that message was
 /// indistinguishable between a variable that genuinely has nothing to parse
 /// (a path, a URL, a bearer, a model name) and one whose parse somebody
 /// forgot to wire up. The `Protects` half of that gap was closed by
@@ -176,7 +177,15 @@ pub const ENGINE_ENV_VARS: &[(&str, ConfigClass, Parse)] = &[
     ("UNDERCROFT_PQ_PAGE_MIN", Tunes, Checked),
     ("UNDERCROFT_QDRANT_URL", Tunes, Opaque),
     ("UNDERCROFT_READ_AUDIT", Protects, Checked),
-    ("UNDERCROFT_RERANKER", Tunes, Checked),
+    // `Protects`, not `Tunes`: an unknown spelling, or a backend this build
+    // lacks, makes `attach_reranker` REFUSE at start-up (`check_reranker`'s
+    // own words: "hard errors that stop start-up"), and the class is what
+    // decides whether `config check` prints that as a refusal or as
+    // "warn … keeps the default". It printed the latter for a value that
+    // stopped the process — the `UNDERCROFT_OTLP_ENDPOINT` misclass one row
+    // over (ROADMAP O121). The declaration turns a second stage ON; a
+    // silent fallback would run without the accuracy the operator asked for.
+    ("UNDERCROFT_RERANKER", Protects, Checked),
     ("UNDERCROFT_RERANK_MODEL", Tunes, Opaque),
     ("UNDERCROFT_RERANK_NAME", Tunes, Opaque),
     ("UNDERCROFT_RERANK_TOKENIZER", Tunes, Opaque),
@@ -404,6 +413,8 @@ pub const SURFACE_ABSENCES: &[(&str, &str, Absence, &str)] = &[
      "it IS the /v1 surface; a running server cannot expose the act of starting itself, and a route that spawned another would be a process manager rather than a memory engine"),
     ("DaemonAction::Run", "mcp+v1", Absence::Structural,
      "a process mode, not a capability"),
+    // ---- Boundaries of the installation itself: local acts a server ----
+    // ---- cannot perform for you ------------------------------------------
     ("Command::AssertHeader", "mcp+v1", Absence::Boundary,
      "mints a per-vault assertion from a local secret. A server that minted your credential for you would be the thing the assertion exists to prove against"),
     ("Command::Init", "mcp+v1", Absence::Boundary,
@@ -461,13 +472,17 @@ pub const SURFACE_ABSENCES: &[(&str, &str, Absence, &str)] = &[
     // missing the word for the bad case cannot record the bad case. It is
     // now carrying that weight rather than sitting unused.
 
-    // ---- RULED 2026-08-21 (M26): all of these came back `Drift` -----------
-    // This block was headed "Unruled: measured, and the decision is the
-    // maintainer's" until every row in it was ruled, and the header outlived
-    // the state by one commit — there are now ZERO `Unruled` rows in this
-    // file. Kept as a lesson rather than silently retitled: a section header
-    // is a claim about what is under it, and it goes stale the moment the
-    // rows do.
+    // ---- RULED 2026-08-21 (M26/O66): the `/v1` two-of-three block --------
+    // Every `Drift` row this block once held has since CLOSED (O68 landed
+    // the routes) and left the table, so what remains under this header is
+    // the kg WRITE family — three `Boundary` rows — and the RECORD of the
+    // rulings that emptied it. This block was headed "Unruled: measured, and
+    // the decision is the maintainer's" until every row in it was ruled, and
+    // the header outlived the state by one commit — there are now ZERO
+    // `Unruled` rows in this file. Then it was headed "all of these came
+    // back `Drift`" after every Drift row had gone. Kept as a lesson rather
+    // than silently retitled twice: a section header is a claim about what
+    // is under it, and it goes stale the moment the rows do.
     //
     // Each row below is a capability reachable from the CLI and from MCP but
     // NOT from `/v1`. That is the classic two-of-three shape, and whether the
@@ -484,9 +499,12 @@ pub const SURFACE_ABSENCES: &[(&str, &str, Absence, &str)] = &[
     // **RULED 2026-08-21 (ROADMAP O66): `/v1` carries the agent-facing
     // memory surface.** The maintainer was given three readings — full agent
     // surface, operator-and-search plane, or reads-yes-writes-no — and took
-    // the first. So every row below is a GAP, not a boundary, and
-    // `docs/remote-server.md`'s "for programmatic (non-MCP) callers" is kept
-    // as written because the ruling makes it true rather than aspirational.
+    // the first. So every two-of-three row this block held was a GAP, not a
+    // boundary (all closed by O68 and gone from the table; the three rows
+    // still below are the kg WRITE family, ruled `Boundary` on their own
+    // argument), and `docs/remote-server.md`'s "for programmatic (non-MCP)
+    // callers" is kept as written because the ruling makes it true rather
+    // than aspirational.
     //
     // **Target: O68**, which is the scheduling decision, deliberately not a
     // version. Ruling that something is a gap and deciding when it is closed
@@ -530,10 +548,13 @@ pub const SURFACE_ABSENCES: &[(&str, &str, Absence, &str)] = &[
     // destructive half on the engine host. Two consequences are recorded
     // here because the ruling does not remove them, it schedules them:
     //
-    // * These are PALACE-scoped filesystem operations on the palace root —
-    //   `list` opens no vault at all — so they do not fit `/v1/vaults/{id}/`
-    //   and need a new path family (`/v1/backups`). That is a shape decision
-    //   the route work owes, not a reason to leave them out.
+    // * These are filesystem operations on the palace root — `list` opens
+    //   no vault at all — and the filing expected a new path family
+    //   (`/v1/backups`). They LANDED vault-scoped instead, under
+    //   `/v1/vaults/{id}/backups`, `…/backups` (GET) and
+    //   `…/backups/restore` (name in the body) — see `backup_create` for
+    //   why, and note the vault-id-must-match check that scoping made
+    //   possible.
     // * `restore` calls `remove_dir_all` on a live vault directory. On Linux
     //   that succeeds with a server holding an open SQLite handle, leaving
     //   the process serving unlinked inodes and writing them back. A route
@@ -711,8 +732,7 @@ pub const HAND_PROJECTED: &[(&str, &str, &str, &str)] = &[
     ),
     // MCP serializes `DedupReport` whole and the CLI hand-projects it, so
     // `dates_kept` — "the difference between collapsing text and losing
-    // history", by its own doc comment — reached one surface only. `/v1`
-    // has no dedup route at all.
+    // history", by its own doc comment — reached one surface only.
     (
         "undercroft-store/src/manage.rs",
         "DedupReport",
@@ -807,6 +827,167 @@ pub const HAND_PROJECTED: &[(&str, &str, &str, &str)] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The variants of every `pub enum *Error` in `crates/`, each with the
+    /// files that reference it as `Enum::Variant` or `Self::Variant`
+    /// outside its own definition, and whether `#[from]` mints it
+    /// implicitly. Hand-parsed — a variant is a line at four-space indent
+    /// starting with a capital inside the enum's braces, and its span runs
+    /// to the next such line — because the crate carries no regex
+    /// dependency and the shape is fixed by rustfmt.
+    fn error_variants(files: &[(String, String)]) -> Vec<(String, String, bool, usize)> {
+        let mut out = Vec::new();
+        for (path, text) in files {
+            let lines: Vec<&str> = text.lines().collect();
+            let mut i = 0;
+            while i < lines.len() {
+                let l = lines[i];
+                let Some(rest) = l.strip_prefix("pub enum ") else {
+                    i += 1;
+                    continue;
+                };
+                let name: String = rest.chars().take_while(|c| c.is_alphanumeric()).collect();
+                if !name.ends_with("Error") {
+                    i += 1;
+                    continue;
+                }
+                // The enum body: from this line to the first `}` at column 0.
+                let start = i + 1;
+                let mut end = start;
+                while end < lines.len() && lines[end] != "}" {
+                    end += 1;
+                }
+                let body = &lines[start..end];
+                let variant_at = |k: usize| -> Option<String> {
+                    let l = body[k];
+                    let s = l.strip_prefix("    ")?;
+                    if s.starts_with(' ') || s.starts_with('#') || s.starts_with('/') {
+                        return None;
+                    }
+                    let v: String = s.chars().take_while(|c| c.is_alphanumeric()).collect();
+                    (v.chars().next().is_some_and(|c| c.is_ascii_uppercase())).then_some(v)
+                };
+                let mut k = 0;
+                while k < body.len() {
+                    let Some(variant) = variant_at(k) else {
+                        k += 1;
+                        continue;
+                    };
+                    let mut span_end = k + 1;
+                    while span_end < body.len() && variant_at(span_end).is_none() {
+                        span_end += 1;
+                    }
+                    let from = body[k..span_end].iter().any(|l| l.contains("#[from]"));
+                    let needle_a = format!("{name}::{variant}");
+                    let needle_b = format!("Self::{variant}");
+                    let mut refs = 0usize;
+                    for (p2, t2) in files {
+                        for (n, l2) in t2.lines().enumerate() {
+                            // Its own definition span does not count.
+                            if p2 == path && n >= start + k && n < start + span_end {
+                                continue;
+                            }
+                            if l2.contains(&needle_a) || (p2 == path && l2.contains(&needle_b)) {
+                                refs += 1;
+                            }
+                        }
+                    }
+                    out.push((name.clone(), variant, from, refs));
+                    k = span_end;
+                }
+                i = end + 1;
+            }
+        }
+        out
+    }
+
+    /// **Every error variant is minted or matched somewhere outside its
+    /// definition** (ROADMAP O115 — the O111 finding one gate over).
+    /// `BundleError::Expired` was declared, documented as "the bundle
+    /// declared an expiry that has passed", and constructed NOWHERE: both
+    /// importers raised the refusal by hand beside it, so the type promised
+    /// a boundary the code enforced through a different door. A variant no
+    /// line references is a doc about behaviour that does not exist, and
+    /// the `missing_docs` lint is what makes such a doc mandatory.
+    ///
+    /// Scope, stated: a variant only ever MATCHED (`match … X::V => …`)
+    /// passes, since the reference is what the scan can see; `#[from]`
+    /// variants are minted by `?` and exempt. Two premise arms — the walk
+    /// must find real enums, and the parser must flag a synthetic dead
+    /// variant — because a reader that finds nothing reports what a clean
+    /// tree reports.
+    #[test]
+    fn every_error_variant_is_minted_or_matched_somewhere() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .canonicalize()
+            .expect("the crates directory is one level up from this crate");
+        let mut files: Vec<(String, String)> = Vec::new();
+        let mut stack = vec![root.clone()];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for e in entries.flatten() {
+                let p = e.path();
+                let name = p
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                if p.is_dir() {
+                    if name != "target" && !name.starts_with('.') {
+                        stack.push(p);
+                    }
+                    continue;
+                }
+                if p.extension().and_then(|s| s.to_str()) == Some("rs") {
+                    if let Ok(t) = std::fs::read_to_string(&p) {
+                        files.push((p.to_string_lossy().to_string(), t));
+                    }
+                }
+            }
+        }
+        let found = error_variants(&files);
+        let enums: std::collections::BTreeSet<&str> =
+            found.iter().map(|(e, _, _, _)| e.as_str()).collect();
+        assert!(
+            enums.len() >= 10 && found.len() >= 60,
+            "PREMISE: the walk found {} error enums with {} variants; the tree has more than \
+             ten and sixty, so the reader is broken",
+            enums.len(),
+            found.len()
+        );
+        // PREMISE, the other way: a synthetic dead variant is reported.
+        let synthetic = vec![(
+            "synthetic.rs".to_string(),
+            "pub enum FakeError {\n    /// minted\n    Live(String),\n    /// dead\n    \
+             Dead(String),\n    Wrapped(#[from] std::io::Error),\n}\nfn f() -> FakeError { \
+             FakeError::Live(String::new()) }\n"
+                .to_string(),
+        )];
+        let probe = error_variants(&synthetic);
+        assert_eq!(
+            probe
+                .iter()
+                .filter(|(_, _, from, refs)| !from && *refs == 0)
+                .map(|(_, v, _, _)| v.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Dead"],
+            "PREMISE: the parser must flag exactly the dead variant: {probe:?}"
+        );
+        let dead: Vec<String> = found
+            .iter()
+            .filter(|(_, _, from, refs)| !from && *refs == 0)
+            .map(|(e, v, _, _)| format!("{e}::{v}"))
+            .collect();
+        assert!(
+            dead.is_empty(),
+            "error variants declared and documented but minted or matched nowhere — a \
+             boundary enforced against nothing (route the refusal through the variant, or \
+             delete it): {dead:?}"
+        );
+    }
 
     /// **No tracked text file carries a CRLF line ending.**
     ///

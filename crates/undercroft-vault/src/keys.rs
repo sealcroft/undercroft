@@ -1,7 +1,8 @@
 //! Key material management.
 //!
 //! One master key per palace, from either a generated key file (default,
-//! `master.key`, mode 0600) or an Argon2id-derived passphrase
+//! `master.key`, mode 0600 on Unix; not narrowed on Windows) or an
+//! Argon2id-derived passphrase
 //! (`UNDERCROFT_PASSPHRASE`). Per-vault keys are derived with HKDF-SHA256
 //! using the vault id and a per-vault random salt as domain separation:
 //!
@@ -72,7 +73,8 @@ impl std::fmt::Debug for SecretKey {
 /// If `passphrase` is provided, the key is derived with Argon2id (64 MiB,
 /// t=3, p=1) from the passphrase and a palace-level salt persisted at
 /// `<dir>/kdf.salt`; no key material touches disk. Otherwise a random key
-/// is generated once at `<dir>/master.key` with permissions 0600.
+/// is generated once at `<dir>/master.key` with permissions 0600 on Unix
+/// (not narrowed on Windows).
 pub fn load_or_create_master(dir: &Path, passphrase: Option<&str>) -> Result<SecretKey, KeyError> {
     fs::create_dir_all(dir)?;
     match passphrase {

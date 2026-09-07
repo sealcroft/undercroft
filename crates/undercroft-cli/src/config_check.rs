@@ -16,9 +16,10 @@
 //! environment and fail there rather than at restart.
 //!
 //! **The classification is the inventory's, not a second copy.**
-//! `ENGINE_ENV_VARS` carries `(name, ConfigClass)` and is counted against
-//! the code in both directions, so a variable this command does not know
-//! about cannot exist.
+//! `ENGINE_ENV_VARS` carries `(name, ConfigClass, Parse)` and is counted
+//! against the code in both directions on both axes, so a variable this
+//! command does not know about cannot exist, and a `Checked` one it runs
+//! no parse for cannot either.
 
 use crate::parity::{ConfigClass, ENGINE_ENV_VARS};
 

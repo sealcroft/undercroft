@@ -32,9 +32,10 @@ const PROTOCOL_VERSION: &str = "2024-11-05";
 /// until it is listed. That is a read that does not answer, against a write
 /// that does; the asymmetry is deliberate and it is the safe direction.
 ///
-/// `WRITE_TOOLS` is DERIVED from this (`MCP_TOOLS` minus these), so there
-/// is one list and it cannot disagree with itself. `parity.rs` counts both
-/// directions against the advertised surface.
+/// `WRITE_TOOLS` (`#[cfg(test)]`, hand-written) is the other half of a
+/// PARTITION a gate counts: `parity.rs` requires every advertised tool to
+/// be in exactly one of the two lists, so the pair cannot disagree with the
+/// surface without failing the build.
 pub(crate) const READ_TOOLS: &[&str] = &[
     "undercroft_search",
     "undercroft_get_drawer",
@@ -120,11 +121,11 @@ pub(crate) const WRITE_TOOLS: &[&str] = &[
 /// argument names a drawer inside it", which holds for arguments that do
 /// not exist yet.
 ///
-/// Scope, stated: it fences CONTENT and LIFECYCLE, not existence. The wing
-/// still appears in `undercroft_list_wings`/`undercroft_get_taxonomy` with
-/// its count, because the operator drives those surfaces too and hiding a
-/// review queue's existence from its own inventory buys nothing once
-/// naming it is refused.
+/// Scope, stated: it fences CONTENT and LIFECYCLE at this layer. The wing's
+/// EXISTENCE is not this fence's doing either way — the store omits it one
+/// layer below (`wings()` and `taxonomy()` filter the reserved wing out),
+/// so `undercroft_list_wings`/`undercroft_get_taxonomy` never show it; the
+/// operator reaches the review queue through `admission list`.
 ///
 /// The price of the wing rule being blunt is pinned rather than hidden: it
 /// matches the value, not the key, so saving a drawer whose entire content
@@ -175,9 +176,11 @@ fn quarantine_fence(store: &PalaceStore, tool: &str, args: &Value) -> Result<()>
 /// the exact-authority door without writing an authority field.
 ///
 /// A list rather than a name heuristic, in one place, above dispatch: the two
-/// entries are the only tools that reach `kg_invalidate`, and `parity.rs`
-/// counts every `_invalidate`/`_supersede` tool against `WRITE_TOOLS`, so a
-/// third one cannot appear without an author reading that list.
+/// entries are the only tools that reach `kg_invalidate`. Stated honestly,
+/// NO gate counts this list: `parity.rs`'s name heuristic only refuses an
+/// `_invalidate`/`_supersede` tool that lands in `READ_TOOLS`, so a third
+/// window-closing tool would be a write the fence below does not know —
+/// its author has to add it here by hand.
 const CLOSES_A_VALIDITY_WINDOW: &[&str] = &["undercroft_kg_invalidate", "undercroft_kg_supersede"];
 
 /// **The authority fence.** `parity.rs`'s `OPERATOR_ONLY` states the rule as
@@ -344,11 +347,6 @@ impl McpHandler {
     }
 }
 
-/// Serve MCP over stdio. `read_only` is the same posture `serve-http`
-/// takes: it serves only `READ_TOOLS` and refuses the rest, and the caller is
-/// expected to have opened the store read-only as well — the flag alone
-/// would leave the open-time writes (embedder migration, read-audit
-/// records) happening on a server that says it does not write.
 /// Why a content read came back with nothing: genuinely empty, or emptied
 /// by a declared trust floor the caller cannot see. Saying "empty" for the
 /// second is a false statement about the vault, and it is the regression
@@ -363,6 +361,11 @@ fn empty_reason(store: &PalaceStore) -> String {
     }
 }
 
+/// Serve MCP over stdio. `read_only` is the same posture `serve-http`
+/// takes: it serves only `READ_TOOLS` and refuses the rest, and the caller is
+/// expected to have opened the store read-only as well — the flag alone
+/// would leave the open-time writes (embedder migration, read-audit
+/// records) happening on a server that says it does not write.
 pub fn serve(store: PalaceStore, read_only: bool) -> Result<()> {
     let mut handler = McpHandler::new(store, read_only);
     let stdin = std::io::stdin();

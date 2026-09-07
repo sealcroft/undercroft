@@ -206,8 +206,9 @@ pub fn resolve_pin(what: &'static str, path: &str) -> Result<Pin, NetError> {
     pinned_roots_from_file(what, path).map(Pin)
 }
 
-/// What a DECLARED CA setting resolves to — the one place the four pins
-/// agree about what an empty value means.
+/// What a DECLARED CA setting resolves to — the one place the five pins
+/// (`EMBED`, `LLM`, `INDEX`, `ORCH_ENGINE`, `OTLP`) agree about what an
+/// empty value means.
 ///
 /// They did not agree. `UNDERCROFT_ORCH_ENGINE_CA=""` refused explicitly,
 /// `UNDERCROFT_INDEX_CA=""` refused by accident (via `fs::read("")`), and
@@ -294,8 +295,9 @@ static PINS: std::sync::OnceLock<PinCache> = std::sync::OnceLock::new();
 /// Resolving a pin per outbound call was a defect on the orchestrator hop —
 /// a bad declaration bound the port and then failed every request — and the
 /// remote-index hop had the same shape. Caching the `Result`, not just the
-/// success, is the point: a declaration that does not resolve must keep
-/// refusing identically for the life of the process, and re-reading the file
+/// success, is the point: a declaration that does not resolve keeps
+/// refusing for the life of the process — re-minted on each call as a
+/// `Config` error carrying the first refusal's text — and re-reading the file
 /// per call makes the pin mutable at runtime by anything that can rewrite
 /// it, which is silent un-pinning by another name.
 ///
@@ -388,10 +390,13 @@ pub fn agent(
 
 /// [`agent`] with the pin already resolved.
 ///
-/// The two share ONE body — the cleartext refusal and the root replacement
-/// happen here and nowhere else — so a caller that pre-resolves its pin
-/// cannot end up under a different policy from one that does not. That is
-/// the whole reason this crate exists as a crate.
+/// The two share ONE body — the root replacement happens here only, and
+/// the cleartext refusal (`require_secure_transport`) is repeated at each
+/// entry point (`declared_endpoint`, `agent_from_env`, `agent`, and here)
+/// so none of them can skip it — so a caller that pre-resolves its pin
+/// cannot end up under a different
+/// policy from one that does not. That is the whole reason this crate
+/// exists as a crate.
 pub fn agent_pinned(
     what: &'static str,
     base: &str,

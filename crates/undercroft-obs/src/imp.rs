@@ -280,7 +280,8 @@ fn real_init(default_service: &str) -> Result<(), String> {
     // above — the OTLP metric push path needs a periodic-reader runtime
     // this fully-synchronous stack deliberately avoids.
     if let Some(endpoint) = otlp_endpoint {
-        // UNDERCROFT_OTLP_ENDPOINT is a base URL (e.g. http://collector:4318);
+        // UNDERCROFT_OTLP_ENDPOINT is a base URL (e.g. https://collector:4318,
+        // or http://127.0.0.1:4318 — cleartext beyond loopback is refused);
         // `with_endpoint` wants the full per-signal path, so append the
         // standard OTLP/HTTP traces path unless the caller already did.
         let traces_endpoint = if endpoint.ends_with("/v1/traces") {

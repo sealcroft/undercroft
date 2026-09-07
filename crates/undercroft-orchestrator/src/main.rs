@@ -6,12 +6,18 @@
 //! their documented `/v1` surface. The engine remains tree-blind and never
 //! depends on this crate.
 //!
-//! Environment:
+//! Environment — the authority is `config_check::ORCH_ENV_VARS` (eight
+//! `UNDERCROFT_ORCH_*` variables, each with its class and parse, counted
+//! against the engine's inventory by a battery preflight). The four a
+//! first deployment needs:
 //! - `UNDERCROFT_ORCH_DB`     — state database path (default `orchestrator.db`)
 //! - `UNDERCROFT_ORCH_KEY`    — 32-byte hex key sealing instance credentials
 //!   and MAC-ing tenant tokens (generate one with `keygen`)
 //! - `UNDERCROFT_ORCH_ADMIN_TOKEN` — bearer for the `/admin` plane (`serve`)
 //! - `UNDERCROFT_ORCH_ADDR`   — listen address (default `127.0.0.1:8900`)
+//!
+//! The rest — `_ENGINE_CA`, `_RATE_LIMIT`, `_METRICS_ADDR`, `_METRICS_TOKEN`
+//! — are documented on their resolvers.
 
 mod config_check;
 mod engine;
@@ -109,7 +115,7 @@ enum Command {
     /// and rulings, wing trust, retention, attested forgetting, anchor
     /// tightening, supersession receipts.
     ///
-    /// These eleven routes landed on the admin plane on the argument that they
+    /// These routes (eleven when C9 filed them; `OPS_ROUTES` is the count today) landed on the admin plane on the argument that they
     /// "were reachable from nowhere in a fleet", and then WERE reachable
     /// from nowhere but `curl`: the console has no element for any of them
     /// and this CLI had no subcommand, while docs/MULTI_TENANCY.md said the

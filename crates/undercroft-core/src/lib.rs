@@ -56,8 +56,8 @@ pub enum CoreError {
     ContentTooLarge(usize, usize),
 }
 
-/// Validate a wing / room / vault name: 1..=128 chars, no path separators,
-/// no control characters, not "." or "..". Mirrors mempalace's
+/// Validate a wing / room / vault name: 1..=128 bytes after trimming, no
+/// path separators, no control characters, not "." or "..". Mirrors mempalace's
 /// `sanitize_name` contract so mined palaces stay compatible.
 pub fn validate_name(value: &str, what: &'static str) -> Result<(), CoreError> {
     let v = value.trim();

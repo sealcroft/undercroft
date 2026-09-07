@@ -16,13 +16,17 @@
 //! render the report. A future change to what distillation *does* cannot
 //! land on one surface again without landing on the other.
 //!
-//! That claim was true for exactly one commit. `abe5167` converted the CLI
-//! arm to call this function; the seven-cluster integration merge `45f3daa`
-//! took the old loop back while the CHANGELOG bullet describing the fix
-//! survived — the "union is right for prose and wrong for code" hazard, one
-//! level worse, because four governance surfaces then stated the opposite of
-//! the tree and the battery could not tell (`tests/e2e.sh:269` only checks
-//! that `refine` demands an LLM URL, which both implementations did). The
+//! That claim was true for exactly one commit. The commit that converted the
+//! CLI arm to call this function was undone by the seven-cluster integration
+//! merge that followed it (neither hash resolves in this repository's
+//! history any more; the record is CHANGELOG 1.0.0, *"`refine` is one
+//! implementation now"*), which took the old loop back while the CHANGELOG bullet describing
+//! the fix survived — the "union is right for prose and wrong for code"
+//! hazard, one level worse, because four governance surfaces then stated the
+//! opposite of the tree and the battery could not tell (`tests/e2e.sh`'s
+//! "refine needs llm url" check, line 405, only asks that `refine` demands
+//! an LLM URL, which both implementations did; the dry-run egress check at
+//! lines 409–424 is O79's and postdates this). The
 //! shape that makes a repeat visible is `distillation_has_exactly_one_
 //! implementation` below: it counts the extractor calls in this crate's
 //! sources and fails the build if a second one appears anywhere.
