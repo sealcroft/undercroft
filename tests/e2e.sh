@@ -1681,6 +1681,16 @@ if grep -q "read-only" <<<"$out"; then
 else
   echo "FAIL  read-only rejects writes"; echo "$out" | head -3 | sed 's/^/      /'; FAIL=$((FAIL+1))
 fi
+# ROADMAP O111: the same ceiling on /mcp, refused on the declaration. Bounded
+# by `timeout` because the client side of a refused body is the one thing
+# here that could wait forever; the server side must not, and the history
+# check below is the premise that it did not.
+out="$(timeout 15 bash -c 'exec 3<>/dev/tcp/127.0.0.1/18766; printf "POST /mcp HTTP/1.0\r\nContent-Type: application/json\r\nAuthorization: Bearer e2e-secret-token\r\nContent-Length: 999999999999\r\n\r\n{}" >&3; cat <&3' 2>&1 || true)"
+if grep -q "413" <<<"$out" && grep -q "ceiling" <<<"$out"; then
+  echo "ok    mcp refuses an oversized body 413"; PASS=$((PASS+1))
+else
+  echo "FAIL  mcp refuses an oversized body 413"; echo "$out" | head -3 | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
 # The audit chain is browsable, on the agent surface, FENCED. Driven through
 # MCP because that is where the fence lives and where a raw log would have
 # handed an agent the reviewer's view of the queue that screened its writes.
@@ -2108,6 +2118,18 @@ rest_body "import with artifact" '"imported":1'   -- -X POST "$API/vaults/acme2/
 BAD_LINE="$(grep -m1 '"drawer"' /tmp/acme.jsonl | sed 's/}$/,"tok":{"model":"m","b64":"AAAA"}}/')"
 rest_code "garbage artifact 400" 400 -- -X POST "$API/vaults/acme2/import" \
   -H "X-Vault-Assertion: $(sign acme2)" --data-binary "$BAD_LINE"
+
+# ROADMAP O111: a request body is bounded, and the bound refuses on the
+# DECLARATION before a byte is read — a Content-Length above the 256 MiB
+# ceiling over a two-byte body is 413, naming the ceiling. The follow-up is
+# the PREMISE that the refusal did not park the single-threaded loop on a
+# body that never arrives: the server still answers.
+rest_code "oversized body declared 413 on /v1" 413 -- --max-time 15 -X POST "$API/vaults/acme2/import" \
+  -H "X-Vault-Assertion: $(sign acme2)" -H "Content-Length: 999999999999" --data-binary '{}'
+rest_body "413 names the ceiling" 'ceiling' -- --max-time 15 -X POST "$API/vaults/acme2/import" \
+  -H "X-Vault-Assertion: $(sign acme2)" -H "Content-Length: 999999999999" --data-binary '{}'
+rest_code "server answers after the refusal" 200 -- --max-time 15 "$API/vaults/acme2/stats" \
+  -H "X-Vault-Assertion: $(sign acme2)"
 
 # Semantic dedup-refresh: re-ingesting the same fact refreshes, not piles up.
 rest_body "dedup first insert"  '"deduped":false' -- -X POST "$API/vaults/acme/drawers" \

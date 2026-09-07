@@ -3511,6 +3511,7 @@ dependencies = [
  "undercroft-embed-ort",
  "undercroft-index",
  "undercroft-llm",
+ "undercroft-net",
  "undercroft-obs",
  "undercroft-store",
  "undercroft-vault",
@@ -3600,6 +3601,7 @@ version = "1.5.0"
 dependencies = [
  "rustls",
  "rustls-pemfile",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.18",
  "ureq 2.12.1",

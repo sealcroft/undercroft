@@ -18,7 +18,7 @@ is cryptographic, not merely logical (see [Cross-vault isolation](#cross-vault-i
 Multi-tenant memory splits cleanly into two concerns, and Undercroft keeps
 them apart on purpose:
 
-- **Engine** — the per-vault memory store. It is *tree-blind*: it knows
+- **Engine** — the memory store: one process, one palace, many vaults. It is *tree-blind*: it knows
   vaults, wings, rooms, and drawers, but nothing about which tenant maps to
   which vault, how to route a request, how to migrate a vault between hosts,
   or how to mint keys for a new customer. This is what ships in the box:
@@ -530,7 +530,7 @@ before the flip leaves the source authoritative and removes the partial
 copy. The import half is admission-screened like any other write — a
 migration used to be a re-admission of the whole corpus past the screen,
 because every export line carries a `vector` and a caller-supplied vector
-reached the raw writer (§4). The e2e suite (`tests/e2e-orchestrator.sh`, 127 checks,
+reached the raw writer (§4). The e2e suite (`tests/e2e-orchestrator.sh`, 129 checks,
 `docker compose run --rm orchestrator-e2e`) exercises the whole story
 against two live engine instances, including the source engine provably
 losing the vault after migration and a read replica converging on the

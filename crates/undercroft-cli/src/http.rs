@@ -133,6 +133,27 @@ pub(crate) fn resolve_sample_interval_ms(declared: Option<&str>) -> Result<u64, 
     .map_err(|f| f.why)
 }
 
+/// One request body, whole, or the status and message it is refused with.
+/// Both listeners in this process — `/mcp` here and every `/v1` route in
+/// `tenant.rs` — read their body through this, so the ceiling is one
+/// decision (`undercroft_net::MAX_BODY_BYTES`, ROADMAP O111). They used to
+/// `read_to_string` whatever arrived: an authenticated peer could stream a
+/// body the size of the host's memory before any route looked at it, while
+/// the orchestrator in front of the same engine capped its own reads. A
+/// declared length above the ceiling is 413 before a byte is read; a body
+/// that arrives past it is 413 on arrival; a body that is not UTF-8 is 400,
+/// where it used to be routed as an EMPTY string.
+pub(crate) fn read_body(req: &mut tiny_http::Request) -> Result<String, (u16, String)> {
+    let declared = req.body_length();
+    match undercroft_net::read_body_bounded(req.as_reader(), declared) {
+        Ok(bytes) => {
+            String::from_utf8(bytes).map_err(|_| (400, "request body is not UTF-8".to_string()))
+        }
+        Err(e @ undercroft_net::BodyError::TooLarge { .. }) => Err((413, format!("request {e}"))),
+        Err(e) => Err((400, format!("request {e}"))),
+    }
+}
+
 /// The declared bearer for `/mcp` and `/v1`. `None` when unset — the
 /// documented default, which a non-loopback bind then refuses outright.
 ///
@@ -449,13 +470,14 @@ pub fn serve_http(
                     undercroft_obs::http_request("mcp", code, start.elapsed());
                     continue;
                 }
-                let mut body = String::new();
-                if std::io::Read::read_to_string(request.as_reader(), &mut body).is_err() {
-                    let _ =
-                        request.respond(Response::from_string("bad request").with_status_code(400));
-                    undercroft_obs::http_request("mcp", 400, start.elapsed());
-                    continue;
-                }
+                let body = match read_body(&mut request) {
+                    Ok(b) => b,
+                    Err((code, msg)) => {
+                        let _ = request.respond(Response::from_string(msg).with_status_code(code));
+                        undercroft_obs::http_request("mcp", code, start.elapsed());
+                        continue;
+                    }
+                };
                 let msg: Value = match serde_json::from_str(&body) {
                     Ok(v) => v,
                     Err(e) => {

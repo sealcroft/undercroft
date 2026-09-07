@@ -50,14 +50,29 @@ fn pack_v2(dim: usize, rows: usize, codes: &[u8]) -> Vec<u8> {
     out
 }
 
-pub(crate) fn unpack_v2(data: &[u8], code_len: usize) -> Option<(usize, usize, &[u8])> {
+/// Inverse of [`pack_v2`] against the codebook that will decode it:
+/// `(dim, rows, codes)`, or `None` on any structural mismatch.
+///
+/// `width` is the codebook's reconstruction width (`ProductQuantizer::dim`)
+/// and the header's `dim` MUST equal it — the header used to be checked
+/// only against zero, so every caller then did `Vec::with_capacity(rows *
+/// dim)` on a `dim` the blob alone had declared: one hmac-only row (where
+/// token blobs are clear and untagged) carrying `dim = u32::MAX` reserved 16
+/// GiB inside `token_artifact`, which `export` and `backup create` call for
+/// every drawer (ROADMAP O111). The codebook is what the codes reconstruct
+/// to, so it is the only authority on the width.
+pub(crate) fn unpack_v2(
+    data: &[u8],
+    code_len: usize,
+    width: usize,
+) -> Option<(usize, usize, &[u8])> {
     if data.len() < 9 || data[0] != 2 {
         return None;
     }
     let dim = u32::from_le_bytes(data[1..5].try_into().ok()?) as usize;
     let rows = u32::from_le_bytes(data[5..9].try_into().ok()?) as usize;
     let codes = &data[9..];
-    if dim == 0 || codes.len() != rows * code_len {
+    if dim == 0 || dim != width || codes.len() != rows.checked_mul(code_len)? {
         return None;
     }
     Some((dim, rows, codes))
@@ -433,7 +448,7 @@ impl PalaceStore {
                     reason: "v2 token matrix without a codebook".into(),
                 });
             };
-            let Some((dim, rows, codes)) = unpack_v2(&packed, pq.code_len()) else {
+            let Some((dim, rows, codes)) = unpack_v2(&packed, pq.code_len(), pq.dim()) else {
                 return Err(StoreError::CorruptRow {
                     id: id.to_string(),
                     reason: "v2 token matrix does not parse".into(),
@@ -640,7 +655,8 @@ impl PalaceStore {
                     let (Some(pq), Some(qtables)) = (tok_pq.as_ref(), qtables.as_ref()) else {
                         continue;
                     };
-                    let Some((vdim, rows, codes)) = unpack_v2(&packed, pq.code_len()) else {
+                    let Some((vdim, rows, codes)) = unpack_v2(&packed, pq.code_len(), pq.dim())
+                    else {
                         continue;
                     };
                     if vdim != dim || rows == 0 {
@@ -685,6 +701,26 @@ impl PalaceStore {
 
 #[cfg(test)]
 mod tests {
+    /// ROADMAP O111: a v2 token header's `dim` is checked against the
+    /// codebook that decodes it, never trusted on its own. The forged header
+    /// below parsed before this check existed, and every caller then
+    /// reserved `rows · dim` floats — 16 GiB for one row.
+    #[test]
+    fn a_v2_header_dim_is_checked_against_the_codebook_width() {
+        let code_len = 4;
+        let width = 16;
+        let codes = vec![0u8; code_len];
+        // PREMISE: a truthful header parses against its codebook.
+        assert!(super::unpack_v2(&super::pack_v2(width, 1, &codes), code_len, width).is_some());
+        let forged = super::pack_v2(u32::MAX as usize, 1, &codes);
+        assert!(
+            super::unpack_v2(&forged, code_len, width).is_none(),
+            "a header claiming a width the codebook cannot produce must be refused"
+        );
+        // And a merely wrong width is refused too, not decoded into a
+        // matrix whose shape disagrees with its own header.
+        assert!(super::unpack_v2(&super::pack_v2(width + 1, 1, &codes), code_len, width).is_none());
+    }
     use crate::PalaceStore;
     use undercroft_vault::{SecurityLevel, VaultManager};
 

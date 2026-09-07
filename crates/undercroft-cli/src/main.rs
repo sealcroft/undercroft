@@ -2961,9 +2961,17 @@ fn run(cli: Cli) -> Result<()> {
                 let now = time::OffsetDateTime::now_utc()
                     .format(&time::format_description::well_known::Rfc3339)?;
                 if m.expired_at(&now) {
+                    // Minted through the variant, so the refusal the type
+                    // declares is the refusal the surface raises (ROADMAP
+                    // O111: it was raised by hand here and on `/v1`, and the
+                    // variant was minted nowhere).
                     bail!(
-                        "bundle expired at {} — the sender bounded its validity, refusing",
-                        m.expires.as_deref().unwrap_or("(unparseable expiry)")
+                        "{} — the sender bounded its validity, refusing",
+                        undercroft_vault::bundle::BundleError::Expired(
+                            m.expires
+                                .clone()
+                                .unwrap_or_else(|| "(unparseable expiry)".into())
+                        )
                     );
                 }
             }

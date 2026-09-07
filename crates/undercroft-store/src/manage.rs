@@ -39,7 +39,7 @@ pub struct DrawerSummary {
     pub wing: String,
     /// The room it is filed in.
     pub room: String,
-    /// The first bytes of the content, for a listing.
+    /// The first 120 characters of the content, for a listing.
     pub preview: String,
     /// When it was filed (RFC 3339).
     pub filed_at: String,
@@ -121,8 +121,10 @@ pub struct PalaceStats {
     /// Whether this handle was opened for a role that must not write.
     pub read_only: bool,
     /// Repairs the OPEN found and declined to make, in the operator's words
-    /// (R4). Always empty on a writable open, which heals each of them
-    /// instead. It is on `stats` rather than only in a start-up log line
+    /// (R4). Empty on a writable open — which heals each of them instead —
+    /// except for at-rest-migration rows skipped because they fail
+    /// verification (A10/U12), reported here and retried at the next open
+    /// rather than laundered. It is on `stats` rather than only in a start-up log line
     /// because a long-lived read-only server's start-up was hours ago, and
     /// "the anchor is N behind" and "a writer's staging manifest is still
     /// there" are exactly the facts an operator goes looking for later.
@@ -1989,13 +1991,16 @@ pub enum Namespace {
     Admission,
     /// Wing trust-class assignment.
     Trust,
-    /// A declared retention policy, and its removal.
+    /// A declared retention policy: `retention/{wing}[/{room}]`. Its
+    /// removal is [`Namespace::RetentionClear`], the next variant.
     Retention,
     /// The removal of a declared retention policy: `retention-clear/{wing}[/{room}]`.
     RetentionClear,
     /// Destruction — `del/{id}` for a drawer, `del/tunnel/{id}` for a tunnel.
     Del,
-    /// Leaving the vault: a full-palace export, a remote index push.
+    /// Content leaving the vault: a full export (`egress/export`), a remote
+    /// index push, and an LLM distillation run (`egress/refine`, dry runs
+    /// included — the network egress is byte-identical).
     Egress,
     /// The read-audit trail, under `UNDERCROFT_READ_AUDIT=chain`.
     Read,

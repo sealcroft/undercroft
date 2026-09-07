@@ -308,8 +308,17 @@ impl Tenancy {
         let start = std::time::Instant::now();
         let route_label = rest_route_label(req.url());
         let _span = undercroft_obs::scope_request(route_label, None);
-        let mut body = String::new();
-        let _ = std::io::Read::read_to_string(req.as_reader(), &mut body);
+        // Bounded, and a refusal is answered as one — see `http::read_body`.
+        // A read error used to be discarded here, so a body that was not
+        // UTF-8 was routed as the empty string.
+        let body = match crate::http::read_body(&mut req) {
+            Ok(b) => b,
+            Err((code, msg)) => {
+                undercroft_obs::http_request(route_label, code, start.elapsed());
+                respond_err(req, RestError::new(code, msg));
+                return;
+            }
+        };
         let reply = self.route(&req, &body, now);
         let status = match &reply {
             Ok((code, _)) => *code,
@@ -2850,12 +2859,15 @@ impl Tenancy {
             .map_err(|e| RestError::new(400, format!("bundle manifest: {e}")))?;
         if let Some(m) = &manifest {
             if m.expired_at(&rfc3339_now()) {
+                // The variant is the message (ROADMAP O111).
                 return Err(RestError::new(
                     400,
-                    format!(
-                        "bundle expired at {}",
-                        m.expires.as_deref().unwrap_or("(unparseable expiry)")
-                    ),
+                    undercroft_vault::bundle::BundleError::Expired(
+                        m.expires
+                            .clone()
+                            .unwrap_or_else(|| "(unparseable expiry)".into()),
+                    )
+                    .to_string(),
                 ));
             }
         }

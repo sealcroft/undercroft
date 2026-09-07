@@ -42,7 +42,8 @@ pub enum IndexError {
     /// did not resolve. Construction-time, before a byte moves.
     #[error("{0}")]
     Transport(String),
-    /// `UNDERCROFT_INDEX` names no backend this build has.
+    /// The declared backend name — `--backend` on the CLI, a request's
+    /// `backend` on `/v1` — is none of the five this build has.
     #[error("unknown backend {0:?} (expected: qdrant, chroma, pgvector, milvus, weaviate)")]
     UnknownBackend(String),
     /// The named backend has no endpoint declared: `(backend, the variable to set)`.
@@ -163,12 +164,27 @@ pub(crate) fn backend_agent(base_url: &str) -> Result<ureq::Agent, IndexError> {
 ///
 /// Shared because all three HTTP backends have byte-identical `call` error
 /// mapping, and a second copy of this decision is how the two would drift.
+/// A backend's reply as JSON: `Null` where the body is not JSON (an empty
+/// 200 is ordinary for these backends and always read that way), but a body
+/// past the shared ceiling is REFUSED rather than read whole — the mirror is
+/// an untrusted accelerator, and an unbounded read of its reply was an
+/// availability lever the doctrine never granted it (ROADMAP O111).
+pub(crate) fn json_or_null(r: ureq::Response) -> Result<serde_json::Value, IndexError> {
+    match undercroft_net::read_json_bounded(r) {
+        Ok(v) => Ok(v),
+        Err(e @ undercroft_net::BodyError::TooLarge { .. }) => {
+            Err(IndexError::BadResponse(e.to_string()))
+        }
+        Err(_) => Ok(serde_json::Value::Null),
+    }
+}
+
 pub(crate) fn get_or_absent(
     agent: &ureq::Agent,
     url: &str,
 ) -> Result<Option<serde_json::Value>, IndexError> {
     match agent.get(url).call() {
-        Ok(r) => Ok(Some(r.into_json().unwrap_or(serde_json::Value::Null))),
+        Ok(r) => Ok(Some(json_or_null(r)?)),
         Err(ureq::Error::Status(404, _)) => Ok(None),
         Err(ureq::Error::Status(code, r)) => Err(IndexError::Http(format!(
             "GET {url} -> {code}: {}",
@@ -254,8 +270,7 @@ pub mod qdrant {
                 None => req.call(),
             };
             match resp {
-                Ok(r) => r
-                    .into_json()
+                Ok(r) => undercroft_net::read_json_bounded(r)
                     .map_err(|e| IndexError::BadResponse(e.to_string())),
                 Err(ureq::Error::Status(code, r)) => Err(IndexError::Http(format!(
                     "{method} {url} -> {code}: {}",
@@ -432,7 +447,7 @@ pub mod chroma {
                 None => req.call(),
             };
             match resp {
-                Ok(r) => Ok(r.into_json().unwrap_or(Value::Null)),
+                Ok(r) => Ok(json_or_null(r)?),
                 Err(ureq::Error::Status(code, r)) => Err(IndexError::Http(format!(
                     "{method} {url} -> {code}: {}",
                     r.into_string().unwrap_or_default()
@@ -940,8 +955,7 @@ pub mod milvus {
                 .post(&url)
                 .send_json(body)
                 .map_err(|e| IndexError::Http(format!("POST {url}: {e}")))?;
-            let v: Value = resp
-                .into_json()
+            let v: Value = undercroft_net::read_json_bounded(resp)
                 .map_err(|e| IndexError::BadResponse(e.to_string()))?;
             let code = v.get("code").and_then(Value::as_i64).unwrap_or(0);
             if code != 0 && code != 200 {
@@ -1126,7 +1140,7 @@ pub mod weaviate {
                 None => req.call(),
             };
             match resp {
-                Ok(r) => Ok(r.into_json().unwrap_or(Value::Null)),
+                Ok(r) => Ok(json_or_null(r)?),
                 Err(ureq::Error::Status(code, r)) => Err(IndexError::Http(format!(
                     "{method} {url} -> {code}: {}",
                     r.into_string().unwrap_or_default()

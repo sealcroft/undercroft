@@ -54,7 +54,10 @@ pub enum VaultError {
     /// A vault of this id already has a manifest.
     #[error("vault {0:?} already exists")]
     AlreadyExists(String),
-    /// The manifest could not be read as one; the message says what was wrong.
+    /// The manifest could not be read as one — or a sealed content frame
+    /// could not be decoded (`decompress_frame` raises this variant for a
+    /// frame past the content bound or a failed zstd decode); the message
+    /// says which. Both are integrity verdicts on the CLI (exit 2).
     #[error("vault manifest is corrupt: {0}")]
     CorruptManifest(String),
     /// The manifest's HMAC does not verify under the vault's keys — evidence of tampering, and an integrity verdict on every surface.
@@ -823,7 +826,8 @@ impl VaultManager {
         })
     }
 
-    /// The palace root: the data directory holding `master.key` and `vaults/`.
+    /// The palace root: the data directory holding `vaults/` and the master
+    /// key material (`master.key`, or `kdf.salt` under a passphrase).
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -1082,7 +1086,27 @@ fn decompress_frame(framed: &[u8]) -> Result<Vec<u8>, VaultError> {
                     )));
                 }
                 Ok(Some(n)) => n as usize,
-                Ok(None) => MAX_CONTENT_BYTES,
+                Ok(None) => {
+                    // A frame declaring no size is STREAMED under the bound
+                    // rather than decoded into a bound-sized reservation —
+                    // O109's mapping survived on this one arm (ROADMAP
+                    // O111). No writer of ours produces such a frame (the
+                    // bulk compressor always writes the size), so this is
+                    // the arm a future streaming writer would silently take.
+                    use std::io::Read;
+                    let mut out = Vec::new();
+                    zstd::stream::read::Decoder::new(data)
+                        .map_err(|e| VaultError::CorruptManifest(format!("zstd: {e}")))?
+                        .take(MAX_CONTENT_BYTES as u64 + 1)
+                        .read_to_end(&mut out)
+                        .map_err(|e| VaultError::CorruptManifest(format!("zstd: {e}")))?;
+                    if out.len() > MAX_CONTENT_BYTES {
+                        return Err(VaultError::CorruptManifest(format!(
+                            "zstd: frame decodes past the {MAX_CONTENT_BYTES}-byte bound"
+                        )));
+                    }
+                    return Ok(out);
+                }
                 Err(e) => {
                     return Err(VaultError::CorruptManifest(format!("zstd: {e:?}")));
                 }
@@ -1271,6 +1295,38 @@ mod tests {
             v.content_from_rest("rec1", &blob).unwrap().len(),
             MAX_CONTENT_BYTES
         );
+    }
+
+    /// ROADMAP O111: a frame that declares no content size — the one arm
+    /// O109 left reserving the whole bound — streams under the bound and is
+    /// refused past it. The PREMISE arm proves the frame really carries no
+    /// size, because a sized frame takes the other arm and would pass this
+    /// test without touching the code it is for.
+    #[test]
+    fn a_frame_declaring_no_size_streams_under_the_bound() {
+        let text = vec![b'x'; 200_000];
+        let z = zstd::stream::encode_all(&text[..], 3).unwrap();
+        assert!(
+            zstd::zstd_safe::get_frame_content_size(&z)
+                .unwrap()
+                .is_none(),
+            "PREMISE: a streaming encoder pledges no size, so the header carries none"
+        );
+        let mut framed = vec![FRAME_ZSTD];
+        framed.extend_from_slice(&z);
+        let out = decompress_frame(&framed).unwrap();
+        assert_eq!(out, text);
+        assert!(
+            out.capacity() < MAX_CONTENT_BYTES / 4,
+            "the buffer grew from the bytes decoded, not from the bound: {}",
+            out.capacity()
+        );
+        let big = vec![b'x'; MAX_CONTENT_BYTES + 1];
+        let z = zstd::stream::encode_all(&big[..], 3).unwrap();
+        let mut framed = vec![FRAME_ZSTD];
+        framed.extend_from_slice(&z);
+        let err = decompress_frame(&framed).unwrap_err();
+        assert!(err.to_string().contains("past the"), "{err}");
     }
 
     /// The training-sample draw must be reproducible for the key holder,

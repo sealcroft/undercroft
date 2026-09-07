@@ -28,7 +28,9 @@ use std::io;
 use std::path::Path;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-/// Length of every key this crate handles, in bytes.
+/// Length of every symmetric key and every X25519 / Ed25519 key this crate
+/// handles, in bytes. The ML-KEM-768 halves of a hybrid bundle identity are
+/// their own sizes (`bundle.rs`).
 pub const KEY_LEN: usize = 32;
 /// Length of a vault's key-derivation salt, in bytes.
 pub const SALT_LEN: usize = 16;
@@ -39,8 +41,9 @@ pub enum KeyError {
     /// Reading or writing the key file failed.
     #[error("io error: {0}")]
     Io(#[from] io::Error),
-    /// The master key file is not exactly `KEY_LEN` bytes.
-    #[error("master key file is corrupt (expected {KEY_LEN} bytes)")]
+    /// `master.key` is not exactly `KEY_LEN` bytes, or, under a passphrase,
+    /// `kdf.salt` is not exactly `SALT_LEN` bytes.
+    #[error("master key material is corrupt (expected a {KEY_LEN}-byte master.key or a {SALT_LEN}-byte kdf.salt)")]
     CorruptKeyFile,
     /// Argon2id refused; the message is the library's.
     #[error("argon2 failure: {0}")]

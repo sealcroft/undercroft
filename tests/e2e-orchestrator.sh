@@ -593,6 +593,11 @@ for i in 1 2 3 4 5 6 7 8; do
   [ "$code" = "429" ] && LIMITED=1
 done
 [ "$LIMITED" = "1" ] && ok "burst over the limit trips 429" || fail "burst over the limit trips 429"
+# ROADMAP O111: the proxy refuses a body past the shared ceiling on the
+# declaration, 413 — it used to `take` 256 MiB and forward the prefix.
+code_is "oversized tenant body is 413" 413 -- --max-time 15 -X POST "${AUTH_ACME2[@]}" \
+  -H "Content-Length: 999999999999" -d '{"query":"flux"}' "$O/t/search"
+code_is "the plane answers after the refusal" 200 -- --max-time 15 "$O/healthz"
 code_is "another tenant is untouched" 200 -- -X POST "${AUTH_GLOBEX[@]}" \
   -d '{"query":"anything"}' "$O/t/search"
 

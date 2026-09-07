@@ -1015,9 +1015,10 @@ pub(crate) const TUNED: &[(&str, TuneShape, &str)] = &[
     // `.clamp(1, 16)`, so a typo was swallowed twice over.
     (
         "UNDERCROFT_FDE_REPS",
-        TuneShape::BareUsize {
+        TuneShape::RangeUsize {
             unset: undercroft_core::fde::FDE_REPS_DEFAULT,
             min: 1,
+            max: undercroft_core::fde::FDE_REPS_MAX,
         },
         "FDE repetitions (first build only; the persisted copy wins afterwards)",
     ),
@@ -1032,9 +1033,10 @@ pub(crate) const TUNED: &[(&str, TuneShape, &str)] = &[
     ),
     (
         "UNDERCROFT_FDE_DPROJ",
-        TuneShape::BareUsize {
+        TuneShape::RangeUsize {
             unset: undercroft_core::fde::FDE_DPROJ_DEFAULT,
             min: 1,
+            max: undercroft_core::fde::FDE_DPROJ_MAX,
         },
         "FDE projection dimension (first build only)",
     ),
@@ -1624,7 +1626,8 @@ pub enum StoreError {
          command, or `undercroft verify`) to migrate, then retry read-only."
     )]
     ReadOnlyUnmigrated {
-        /// The first schema element this build expects and the database lacks.
+        /// Every schema element this build expects and the database lacks,
+        /// as `table.column`, comma-separated.
         missing: String,
     },
 }
@@ -1790,7 +1793,10 @@ pub struct SearchPage {
 pub struct SearchHit {
     /// The drawer, HMAC-verified and decrypted.
     pub drawer: Drawer,
-    /// The fused score in `[0, 1]`, calibrated absolutely — never against the other hits.
+    /// The fused score, calibrated absolutely — never against the other
+    /// hits. `[0, 1]` without a date window; up to `1 + DATE_HIT_WEIGHT`
+    /// (1.15) with one, since a hit dated inside the window takes that term
+    /// on top.
     pub score: f32,
     /// The calibrated cosine channel.
     pub semantic: f32,
@@ -2148,7 +2154,9 @@ pub struct BulkOutcome {
     pub quarantined: usize,
 }
 
-/// What a search declares. Built once for all three surfaces (`cli/search.rs`); every field is a declaration, none is inferred.
+/// What a search declares — every field a declaration, none inferred. Each
+/// surface builds its own from the parses `cli/search.rs` shares (the
+/// locale, the morphology language, the window, the default limit).
 #[derive(Debug, Default, Clone)]
 pub struct SearchOptions {
     /// Whose inflection applies. **A declaration outranks the text**; leaving
@@ -2913,7 +2921,10 @@ impl PalaceStore {
     }
 
     /// Repairs this open found and declined to make, in the operator's
-    /// words. Empty on every writable open (R4).
+    /// words (R4). Empty on a writable open except for at-rest-migration
+    /// rows the open skipped because they fail verification (A10/U12),
+    /// which a writable open reports and retries rather than launders —
+    /// `note_unblinded_kg` runs on both postures.
     pub fn unhealed(&self) -> &[String] {
         &self.unhealed
     }
@@ -7401,16 +7412,20 @@ impl PalaceStore {
     }
 
     /// Walk every record verifying its HMAC, replay the audit chain
-    /// against the manifest head, and check every drawer supersession
-    /// receipt, resolve every graph audit label, and compare every mirror
-    /// column against the covered meta. **All FIVE legs are in the one
-    /// report** — it was three until 2026-08-06, and the two additions are
-    /// there because each covers a mutation the others structurally cannot
-    /// see (`orphan_labels`: `record_id` is outside the chain hash;
-    /// `mirror_drift`: a mirror column is outside the drawer HMAC). The
-    /// receipt columns
-    /// sit outside the drawer HMAC, so a caller that verified only what
-    /// the first two legs returned answered green on a tampered link.
+    /// against the manifest head, check every drawer supersession receipt
+    /// and every graph fact receipt, resolve every graph audit label,
+    /// compare every mirror column against the covered meta, and re-tag
+    /// every declared policy row. **All SEVEN legs are in the one report**
+    /// — it was three until 2026-08-06, and each addition is there because
+    /// it covers a mutation the others structurally cannot see
+    /// (`orphan_labels`: `record_id` is outside the chain hash;
+    /// `mirror_drift`: a mirror column is outside the drawer HMAC;
+    /// `receipts`: a fact's receipt columns are outside the fact's own
+    /// canonical, added 2026-08-10; `policy_drift`: `wing_trust` and
+    /// `retention_policy` are outside every drawer's coverage, O94). The
+    /// supersession receipt columns sit outside the drawer HMAC, so a caller
+    /// that verified only what the first two legs returned answered green
+    /// on a tampered link.
     pub fn verify(&self) -> Result<VerifyReport, StoreError> {
         // The mirror columns come along: `wing`, `room`, `kind`, `supersedes`
         // and `filed_at` are indexed copies of values whose authoritative

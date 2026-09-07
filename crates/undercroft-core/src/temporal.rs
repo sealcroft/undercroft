@@ -774,7 +774,10 @@ fn era_year_range(cal: Calendar, y: i32) -> Option<(Date, Date)> {
 /// language.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Language {
-    /// English: the marker after the count ("three days ago"), month names and ordinals; the numeric date order is left to `DateOrder`, since US and Commonwealth English differ.
+    /// English: the marker after the count ("three days ago") and month
+    /// names; the numeric date order is left to `DateOrder`, since US and
+    /// Commonwealth English differ. An ordinal day (`May 5th`) is not read —
+    /// `5th` is an identifier to the tokenizer, deliberately.
     #[default]
     English,
     /// Arabic: the marker before the count (قبل ثلاثة أيام), a dual number, both the Levantine and the Roman month systems, Arabic-Indic digits.

@@ -962,7 +962,13 @@ Consequences that are binding, not advisory:
   **TLS or loopback, nothing else, no override** (refused at construction,
   before a byte moves) plus CA pinning, where a declared root REPLACES the
   public roots rather than adding to them and a file that pins nothing
-  refuses instead of falling back. It is its own crate because it was
+  refuses instead of falling back — **and, since O111, the one body ceiling
+  every listener and every hop reads through** (`MAX_BODY_BYTES`,
+  `read_body_bounded`, `read_json_bounded`: 256 MiB, a declared length over
+  it refused before a byte is read, an arriving body refused one past it,
+  never truncated). It lives here rather than in the CLI because the
+  orchestrator, the index backends, the LLM client and the OTLP exporter all
+  need it and none can link the CLI. It is its own crate because it was
   implemented once in `undercroft-llm` for the embedder and LLM clients
   while the remote **index** backends had no transport policy at all
   (ROADMAP C8) — and every index push carries EMBEDDINGS, which are
@@ -1660,8 +1666,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (818 run,
-                                      # 4 #[ignore]d = 822 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (824 run,
+                                      # 4 #[ignore]d = 828 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1778,8 +1784,8 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (474 checks)
-docker compose run --rm orchestrator-e2e  # two engines + orchestrator (127 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (478 checks)
+docker compose run --rm orchestrator-e2e  # two engines + orchestrator (129 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (53 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (82 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
@@ -2422,6 +2428,22 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   Found by O23's instrument, which was built to measure a COST and measured
   a crash instead; the lesson is the pqscale one again — a claim about 10⁶
   is settled at 10⁶, and this one had been argued from 10³.
+  **The class was then swept tree-wide (O111, 2026-09-07), and a length
+  check is a bound only while its arithmetic cannot WRAP**: both quantizer
+  decoders checked `data.len() == 9 + m·K·dsub·4` unchecked, release builds
+  carry no overflow checks, so a nine-byte blob whose header wrapped that
+  product to zero passed the equality and reserved 24 GiB; the v2 token
+  header's `dim` was compared with nothing and every caller reserved
+  `rows·dim`; the FDE params blob had no ceiling on either side. All three
+  are clear and untagged on an hmac-only vault. The doors now: checked
+  arithmetic against the blob's own length, `dim == ProductQuantizer::dim`,
+  `FdeParams::dim_for`. The same round gave every HTTP body ONE ceiling
+  (`undercroft_net::MAX_BODY_BYTES`, 256 MiB): the engine had none and the
+  orchestrator truncated to 256 MiB and forwarded the PREFIX, so a tenant
+  import one byte over wrote part of its corpus at 200; refuse, never
+  truncate, on both listeners, the proxy, and the six outbound reads. And
+  O109's own surviving arm — a frame declaring no size — streams under the
+  bound now instead of reserving it.
 - **Independent per-item scoring is a poison-resistance property, and
   spending it is a decision.** A poisoned drawer can win its own slot and
   nothing else: `HashEmbedder` is a function of one drawer's text, `maxsim`

@@ -218,11 +218,11 @@ impl HttpEmbedder {
         if !self.key.is_empty() {
             req = req.set("Authorization", &format!("Bearer {}", self.key));
         }
-        let resp: Value = req
-            .send_json(body)
-            .map_err(|e| LlmError::Http(e.to_string()))?
-            .into_json()
-            .map_err(|e| LlmError::BadOutput(e.to_string()))?;
+        let resp: Value = undercroft_net::read_json_bounded(
+            req.send_json(body)
+                .map_err(|e| LlmError::Http(e.to_string()))?,
+        )
+        .map_err(|e| LlmError::BadOutput(e.to_string()))?;
         parse_embedding(&resp)
             .ok_or_else(|| LlmError::BadOutput(format!("no embedding in response: {resp}")))
     }
