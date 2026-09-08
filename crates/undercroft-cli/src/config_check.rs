@@ -170,7 +170,18 @@ fn check_one(name: &str, raw: &str) -> Finding {
             undercroft_llm::check_api_kind(name, Some(raw))
                 .map(|k| format!("the served runtime speaks {k:?}")),
         ),
-        "UNDERCROFT_EMBED_DIM" | "UNDERCROFT_ORT_POOL" => Some(
+        // The dimension goes through `embed_dim`, the embedder's own parse,
+        // so a declared 2-modulo-4 width is reported here and not first at
+        // the write choke point (ROADMAP O123).
+        "UNDERCROFT_EMBED_DIM" => Some(
+            undercroft_core::config::embed_dim(name, Some(raw))
+                .map(|n| match n {
+                    Some(n) => format!("declared as {n}"),
+                    None => "derived at start-up".into(),
+                })
+                .map_err(|f| f.why),
+        ),
+        "UNDERCROFT_ORT_POOL" => Some(
             undercroft_core::config::positive_usize(name, Some(raw))
                 .map(|n| match n {
                     Some(n) => format!("declared as {n}"),

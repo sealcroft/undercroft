@@ -2081,6 +2081,16 @@ impl PalaceStore {
             .map_err(|e| StoreError::Invalid(e.to_string()))?;
         undercroft_core::validate_name(predicate, "predicate")
             .map_err(|e| StoreError::Invalid(e.to_string()))?;
+        // `confidence` is advertised as `0..1` on every surface and was
+        // stored unchecked — a NaN, a negative or a 7.0 landed in the
+        // column and reached every later reader as a number to rank by
+        // (ROADMAP O124). One door, so MCP, the CLI and `/v1` refuse alike.
+        if !confidence.is_finite() || !(0.0..=1.0).contains(&confidence) {
+            return Err(StoreError::Invalid(format!(
+                "confidence {confidence} is outside 0..=1 (or not a number); a fact's \
+                 confidence is a probability"
+            )));
+        }
         // The object is content and reaches the agent verbatim — screened
         // and bounded here, at the graph's one write path.
         self.screen_kg_record(
@@ -3646,9 +3656,26 @@ mod tests {
         .unwrap()
     }
 
+    /// ROADMAP O124: `confidence` is a probability on every surface's
+    /// contract (`0..1`) and was stored unchecked. Refused at the graph's
+    /// one write door; the premise arm is that the bounds themselves pass.
+    #[test]
+    fn a_confidence_outside_zero_to_one_is_refused() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        for bad in [7.0, -0.1, f64::NAN, f64::INFINITY] {
+            let err = s
+                .kg_add("ana", "knows", "bob", None, None, bad, None)
+                .expect_err("outside 0..=1 must refuse");
+            assert!(matches!(err, StoreError::Invalid(_)), "{bad}: {err}");
+        }
+        s.kg_add("ana", "knows", "bob", None, None, 0.0, None)
+            .unwrap();
+        s.kg_add("ana", "likes", "bob", None, None, 1.0, None)
+            .unwrap();
+    }
+
     /// The three states have to survive a round trip through sealing and the
     /// tamper tag, because that is where the distinction actually lives.
-
     #[test]
     fn grounding_survives_a_round_trip() {
         use undercroft_core::support::Grounding;

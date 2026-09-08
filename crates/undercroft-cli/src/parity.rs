@@ -739,6 +739,16 @@ pub const HAND_PROJECTED: &[(&str, &str, &str, &str)] = &[
         "undercroft-cli/src/main.rs",
         "Command::Dedup",
     ),
+    // `POST …/dedup` hand-builds its reply (`json!({ … })`) rather than
+    // serializing the struct, so a sixth field would reach the CLI and not
+    // the wire — the row the O115 unit's review found missing (ROADMAP
+    // O130). One row per (struct, renderer) pair, as the doctrine says.
+    (
+        "undercroft-store/src/manage.rs",
+        "DedupReport",
+        "undercroft-cli/src/tenant.rs",
+        "fn dedup(&mut self",
+    ),
     // **The four the inventory did not name**, each with a
     // whole-serializing counterpart on another surface, so each is exactly
     // the shape this gate exists for: `/v1` reports a new field for free

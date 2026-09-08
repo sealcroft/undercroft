@@ -188,6 +188,53 @@ pub fn positive_usize(
     }
 }
 
+/// A declared embedding DIMENSION: [`positive_usize`] plus the one shape the
+/// at-rest frame cannot store — a dimension ≡ 2 (mod 4), whose quantized
+/// frame (`6 + dim` bytes) is a multiple of four and reads back as legacy
+/// f32s with no error (ROADMAP O123). Refused here so the embedder that
+/// reads the declaration and `undercroft config check` give one answer; the
+/// write choke point refuses the same dimension for a vault that reached it
+/// another way. The fallback is `None` — probe the endpoint — because a
+/// declaration that cannot work is not a pin.
+pub fn embed_dim(name: &str, raw: Option<&str>) -> Result<Option<usize>, Fallback<Option<usize>>> {
+    match positive_usize(name, raw)? {
+        Some(d) if (6 + d).is_multiple_of(4) => Err(Fallback {
+            value: None,
+            why: format!(
+                "{name}={d} is a dimension 2 modulo 4, which the at-rest embedding frame \
+                 cannot store unambiguously (its quantized frame would be a multiple of \
+                 four bytes and read back as legacy f32s); ignoring the declaration and \
+                 probing the endpoint — use an embedder whose dimension is not 2 modulo 4"
+            ),
+        }),
+        other => Ok(other),
+    }
+}
+
+#[cfg(test)]
+mod embed_dim_tests {
+    /// ROADMAP O123: 1026 is refused with the reason, 1024 and 384 pass,
+    /// and the fallback is "probe", not a number.
+    #[test]
+    fn a_dimension_two_mod_four_is_refused_at_the_declaration() {
+        let bad = super::embed_dim("UNDERCROFT_EMBED_DIM", Some("1026")).unwrap_err();
+        assert!(bad.value.is_none());
+        assert!(bad.why.contains("2 modulo 4"), "{}", bad.why);
+        assert_eq!(
+            super::embed_dim("UNDERCROFT_EMBED_DIM", Some("1024")).unwrap(),
+            Some(1024)
+        );
+        assert_eq!(
+            super::embed_dim("UNDERCROFT_EMBED_DIM", Some("384")).unwrap(),
+            Some(384)
+        );
+        assert_eq!(
+            super::embed_dim("UNDERCROFT_EMBED_DIM", None).unwrap(),
+            None
+        );
+    }
+}
+
 /// A closed vocabulary. Returns the matched spelling, lowercased.
 pub fn one_of(
     name: &str,

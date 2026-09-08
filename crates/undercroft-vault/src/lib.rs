@@ -569,15 +569,14 @@ impl Vault {
         Ok(records)
     }
 
-    /// Recompute the audit chain from an ordered list of record tags and
-    /// compare with the stored head.
-    pub fn verify_chain(&self, ordered_tags: &[Vec<u8>]) -> bool {
-        let mut head = vec![0u8; HMAC_LEN];
-        for tag in ordered_tags {
-            head = chain_next(&self.mac_key, &head, tag).to_vec();
-        }
-        hex::encode(head) == self.manifest.chain_head_hex
-    }
+    // A `verify_chain(&[tags]) -> bool` stood here, documented as the chain
+    // verify, and no production code ever called it: it compared against
+    // THIS HANDLE's cached manifest anchor, which a long-lived server never
+    // reloads (the `anchored_head` doc records why), so the one answer it
+    // could give was stale on exactly the deployment it would be reached
+    // from. The store's `verify` replays the chain against `chain_meta`
+    // through `chain_next_hex`. Deleted under ROADMAP O126 — a public door
+    // with a contract nothing kept.
 
     /// Value proving which key generation a database was last sealed under:
     /// a fixed-domain HMAC under the vault's mac key. The store keeps it in
@@ -1168,6 +1167,22 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    /// ROADMAP O123 — the WHY behind the store's refusal of a dimension
+    /// 2 modulo 4: the quantized frame is told from a legacy f32 blob by
+    /// its length not being a multiple of four, and `6 + dim` is one
+    /// exactly then, so the frame reads back as `(6 + dim) / 4` garbage
+    /// floats with no error. Pinned so the discriminator's premise is
+    /// written down beside it; the refusal lives at the write choke point.
+    #[test]
+    fn a_dimension_two_mod_four_reads_back_as_the_wrong_vector() {
+        let six = [1.0f32, -1.0, 0.5, -0.5, 0.25, -0.25];
+        let back = dequantize_embedding(&quantize_embedding(&six));
+        assert_eq!(back.len(), 3, "misread as three legacy f32s: {back:?}");
+        let eight = [1.0f32, -1.0, 0.5, -0.5, 0.25, -0.25, 0.125, -0.125];
+        let back = dequantize_embedding(&quantize_embedding(&eight));
+        assert_eq!(back.len(), 8, "a dimension not 2 mod 4 round-trips");
+    }
+
     #[test]
     fn create_unlock_roundtrip() {
         let dir = tempdir().unwrap();
@@ -1407,8 +1422,16 @@ mod tests {
         let h1 = v.chain_next_hex(&Vault::chain_genesis_hex(), &t1).unwrap();
         let h2 = v.chain_next_hex(&h1, &t2).unwrap();
         v.anchor_manifest(&h2, 2).unwrap();
-        assert!(v.verify_chain(&[t1.clone(), t2.clone()]));
-        assert!(!v.verify_chain(&[t2, t1]));
+        assert_eq!(v.chain_head_hex(), h2, "the anchor is the replayed head");
+        // Order matters: the same two tags the other way round replay to a
+        // different head.
+        let swapped = v
+            .chain_next_hex(
+                &v.chain_next_hex(&Vault::chain_genesis_hex(), &t2).unwrap(),
+                &t1,
+            )
+            .unwrap();
+        assert_ne!(swapped, h2);
         assert_eq!(v.writes(), 2);
     }
 

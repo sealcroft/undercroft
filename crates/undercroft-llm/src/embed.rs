@@ -108,16 +108,14 @@ impl HttpEmbedder {
         // width silently became a suggestion. It still falls back to probing —
         // that is what absence gives — but it says so first.
         let dim_raw = std::env::var("UNDERCROFT_EMBED_DIM").ok();
-        let declared = match undercroft_core::config::positive_usize(
-            "UNDERCROFT_EMBED_DIM",
-            dim_raw.as_deref(),
-        ) {
-            Ok(d) => d,
-            Err(f) => {
-                undercroft_obs::diag_warn!("{}", f.why);
-                f.value
-            }
-        };
+        let declared =
+            match undercroft_core::config::embed_dim("UNDERCROFT_EMBED_DIM", dim_raw.as_deref()) {
+                Ok(d) => d,
+                Err(f) => {
+                    undercroft_obs::diag_warn!("{}", f.why);
+                    f.value
+                }
+            };
         Self::connect(&base, &model, kind, &key, declared)
     }
 

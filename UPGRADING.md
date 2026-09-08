@@ -67,6 +67,30 @@ so rather than implying it checked them.
 
 ---
 
+## 1.5.2 (unreleased)
+
+### an embedding dimension 2 modulo 4 is refused; `confidence` outside 0..1 is 400; the orchestrator's `created_at` is RFC 3339
+
+**Who is affected, in turn:** (1) a deployment whose served or external
+embedder has a dimension ≡ 2 (mod 4) — 1026, say — which the at-rest frame
+could never store correctly (it read back as garbage floats, ROADMAP O123):
+every write to such a vault is now refused with a message naming the
+dimension, `undercroft config check` reports a declared `UNDERCROFT_EMBED_DIM`
+of that shape, and a served embedder that declares one warns and probes the
+endpoint instead; the fix is an embedder whose dimension is not 2 modulo 4.
+(2) A client writing a fact with `confidence` outside `0..=1`, or NaN, which
+was stored as written and ranked by; it is 400 now on MCP, the CLI and
+`/v1` (O124). (3) A reader parsing `created_at` on `/admin/tenants` as the
+`unix:{secs}` string it used to be; it is RFC 3339 for rows written from
+this release on, and rows written before keep the old string (O127).
+
+Also in this release, from the previous unit: a bad `UNDERCROFT_RERANKER`
+value is reported by `config check` as a refusal rather than a warning,
+which is what the process always did with it (O121); and a retention sweep
+skips, with a warning, a drawer whose clear `wing`/`room` mirror disagrees
+with its HMAC-covered copy, where it used to destroy it (O120) — `verify`
+names the drift.
+
 ## 1.5.1 (released 2026-09-07)
 
 ### a request's header block is bounded, and a connection ends behind a body that was refused

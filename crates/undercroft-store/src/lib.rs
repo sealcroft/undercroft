@@ -677,7 +677,9 @@ pub(crate) const CODEBOOK_ARTIFACTS: [&str; 5] = [
 /// post-commit [`Vault::anchor_manifest`] call. Every mutation site pairs
 /// its data statements with exactly one `chain_append` in one transaction —
 /// the invariant that makes a crash unable to separate a record from its
-/// chain entry.
+/// chain entry. One stated exception: rotation writes its own `audit` row
+/// (`rotate.rs`) because it computes the head over PRESERVED tags under
+/// the next key, which this helper cannot do.
 ///
 /// **The namespace is a required argument, not part of `rest`** (ROADMAP
 /// O80). Call sites used to compose the whole label inline, so the set of
@@ -4832,6 +4834,23 @@ impl PalaceStore {
                 drawer.id
             )));
         }
+        // The at-rest embedding frame is `[0x02, 'Q', scale, i8 × dim]` and
+        // is told apart from a legacy f32 blob by its LENGTH not being a
+        // multiple of four — which holds for every dimension except those
+        // ≡ 2 (mod 4), where `6 + dim` IS a multiple of four and the frame
+        // reads back as garbage floats with no error. Refused here, at the
+        // one door every write path passes, rather than stored and misread
+        // (ROADMAP O123; found by the round's doc read of `EMB_MAGIC`).
+        if (6 + embedding.len()).is_multiple_of(4) {
+            return Err(StoreError::Invalid(format!(
+                "embedding for {:?} has dimension {}, which the at-rest frame cannot store \
+                 unambiguously (a dimension 2 modulo 4 makes the quantized frame a multiple \
+                 of four bytes, indistinguishable from a legacy f32 blob); use an embedder \
+                 whose dimension is not 2 modulo 4",
+                drawer.id,
+                embedding.len()
+            )));
+        }
         // What a caller may DECLARE about a drawer, decided at the same
         // choke point as the names above — because both import surfaces
         // deserialize a whole `Drawer` out of a payload, so every field in
@@ -5232,6 +5251,11 @@ impl PalaceStore {
                     Ok(v) => v,
                     Err(e) => {
                         let _ = self.conn.execute_batch("ROLLBACK");
+                        // The rows this batch already wrote are gone with the
+                        // rollback; the RAM caches `post_write` fed for them
+                        // are not (ROADMAP O129). Drop every derived cache so
+                        // the next search reloads from what committed.
+                        self.drop_derived_caches();
                         return Err(e);
                     }
                 };
@@ -5243,6 +5267,7 @@ impl PalaceStore {
         }
         if let Err(e) = self.conn.execute_batch("COMMIT") {
             let _ = self.conn.execute_batch("ROLLBACK");
+            self.drop_derived_caches();
             return Err(e.into());
         }
         if let Some((head, writes)) = anchor {
@@ -11744,6 +11769,25 @@ mod tests {
     /// means and cosine sums. Every internal embedder is finite by
     /// construction; the caller-supplied external path was the one door,
     /// and it refuses at the write.
+    /// ROADMAP O123: a dimension 2 modulo 4 is refused at the write, because
+    /// its quantized frame is a multiple of four bytes and reads back as
+    /// legacy f32s (`undercroft-vault`'s
+    /// `a_dimension_two_mod_four_reads_back_as_the_wrong_vector` is the
+    /// why). A 6-dim external vault is the counterfactual: it wrote and
+    /// misread before this. A dimension not 2 mod 4 is untouched.
+    #[test]
+    fn an_ambiguous_embedding_dimension_is_refused_at_the_door() {
+        let (_d, mut s) = external_store(SecurityLevel::Sealed, 6);
+        let dr = drawer("w", "r", "a note with a six-wide vector", 0);
+        let err = s
+            .upsert_external(&dr, vec![0.5; 6])
+            .expect_err("6 is 2 modulo 4");
+        assert!(matches!(err, StoreError::Invalid(_)), "{err}");
+        assert!(err.to_string().contains("2 modulo 4"), "{err}");
+        let (_d8, mut s8) = external_store(SecurityLevel::Sealed, 8);
+        s8.upsert_external(&dr, vec![0.5; 8]).unwrap();
+    }
+
     #[test]
     fn an_external_vector_with_nan_or_inf_is_refused_at_the_door() {
         let (_d, mut s) = external_store(SecurityLevel::Sealed, 4);
