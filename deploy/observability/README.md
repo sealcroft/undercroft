@@ -94,6 +94,8 @@ Defined in `alerts.yml`:
 | **HighSearchLatencyP95** | warning | search p95 > 500ms (10m). |
 | **HttpServerErrors** | warning | any HTTP 5xx (5m). |
 | **EmbedFailures** | warning | any `undercroft_embed_failures_total` increase (10m window, fires at the first) — the embedder degraded an embed to a zero vector, so a drawer landed lexically findable and semantically invisible (ROADMAP O122). |
+| **RerankFailures** | warning | any `undercroft_rerank_failures_total` increase — a cross-encoder pass degraded to `0.0`, which `search` writes over the fusion score, so the candidate SINKS and is then indistinguishable from an irrelevant passage (ROADMAP O131). |
+| **LateInteractionFailures** | warning | any `undercroft_late_failures_total` increase, **per `side`** — `doc` left a drawer with no token matrix at rest (re-encode with `repair`), `query` retired the late stage for those searches (ROADMAP O131). |
 | **AuthRejectionsSpike** | warning | elevated bearer/assertion rejections (10m). |
 
 A firing tamper alert links to the [**runbook**](RUNBOOK.md) (published at

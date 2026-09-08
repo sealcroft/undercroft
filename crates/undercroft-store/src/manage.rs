@@ -171,6 +171,40 @@ pub struct PalaceStats {
     /// vault, so every vault's stats report the same process-wide count.
     /// Zero on the default vault always: the hash embedder cannot fail.
     pub embed_failures: u64,
+    /// `(query, passage)` scores the attached reranker has degraded to `0.0`
+    /// since it was constructed, or 0 when no reranker is attached (ROADMAP
+    /// O131 — the sibling O122 filed).
+    ///
+    /// **A degraded score is the worst of the three, because of where the
+    /// number lands.** `search` overwrites a candidate's fusion score with
+    /// the reranker's and re-sorts, so a failed pass writes `0.0` and sinks
+    /// that candidate to the bottom of the reranked window — and a genuinely
+    /// irrelevant passage scores `0.0` too, so nothing afterwards can tell
+    /// them apart. A failed embed at least leaves a zero vector `repair` can
+    /// find; this leaves no artifact at all, which is why the count is the
+    /// only evidence there is.
+    ///
+    /// Read live from the reranker, process-lifetime, exactly as
+    /// [`embed_failures`](Self::embed_failures) is.
+    pub rerank_failures: u64,
+    /// Late-interaction encodes degraded to an EMPTY matrix since the encoder
+    /// was constructed — document side and query side both — or 0 when no
+    /// ColBERT encoder is attached (ROADMAP O131).
+    ///
+    /// The two sides fail differently. A failed `encode_doc` on the write
+    /// path stores no token matrix, so that drawer is a durable hole in the
+    /// token space — the ColBERT counterpart of a zero vector. A failed
+    /// `encode_query` is transient but total: MaxSim scores zero for every
+    /// candidate, so the late stage silently contributes nothing to that one
+    /// search. Both are safer than a degraded rerank — a candidate with no
+    /// matrix keeps its fusion rank rather than being sunk — and neither is
+    /// any more visible.
+    ///
+    /// The `side` that failed is on the
+    /// `undercroft_late_failures_total{backend,side}` counter rather than
+    /// here: this field is the one number an operator needs to know that
+    /// something is wrong, and the breakdown is a query-surface concern.
+    pub late_failures: u64,
     /// The semantic channel as this vault is ACTUALLY configured
     /// (ROADMAP O72): the admission gate in force, the calibration floor, and
     /// where the gate came from.
@@ -1205,6 +1239,10 @@ impl PalaceStore {
             // O122: the embedder's own number, read at call time — a
             // snapshot taken at open would freeze at the calibration probes.
             embed_failures: self.embedder.embed_failures(),
+            // O131: read live like the embedder's, and 0 when the stage is
+            // not attached at all — which is the default on both.
+            rerank_failures: self.reranker.as_ref().map_or(0, |r| r.score_failures()),
+            late_failures: self.late.as_ref().map_or(0, |l| l.encode_failures()),
             semantic: self.semantic_channel(),
         })
     }

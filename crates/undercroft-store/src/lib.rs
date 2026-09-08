@@ -11004,6 +11004,9 @@ mod tests {
         fn score(&self, _query: &str, passage: &str) -> f32 {
             passage.chars().count() as f32
         }
+        fn score_failures(&self) -> u64 {
+            0
+        }
     }
 
     /// A deterministic late-interaction encoder: one "token" per word,
@@ -11030,6 +11033,9 @@ mod tests {
         }
         fn encode_query(&self, text: &str) -> Vec<f32> {
             self.encode_doc(text)
+        }
+        fn encode_failures(&self) -> u64 {
+            0
         }
     }
 
@@ -11483,6 +11489,9 @@ mod tests {
         }
         fn encode_query(&self, text: &str) -> Vec<f32> {
             WordLate.encode_doc(text)
+        }
+        fn encode_failures(&self) -> u64 {
+            0
         }
     }
 
@@ -17671,6 +17680,9 @@ mod tests {
         fn encode_query(&self, text: &str) -> Vec<f32> {
             self.encode_doc(text)
         }
+        fn encode_failures(&self) -> u64 {
+            0
+        }
     }
 
     /// The late stage must rescore to its OWN depth, not the reranker's cap.
@@ -20357,6 +20369,191 @@ mod tests {
             s.stats().unwrap().embed_failures,
             2,
             "a healthy embed does not count"
+        );
+    }
+
+    /// A reranker that works until told not to, counting exactly as the two
+    /// shipped backends do (ROADMAP O131).
+    struct FlakyReranker {
+        broken: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        failures: std::sync::atomic::AtomicU64,
+    }
+
+    impl Reranker for FlakyReranker {
+        fn model_name(&self) -> &str {
+            "test-flaky-rerank"
+        }
+        fn score(&self, _query: &str, passage: &str) -> f32 {
+            use std::sync::atomic::Ordering;
+            if self.broken.load(Ordering::SeqCst) {
+                self.failures.fetch_add(1, Ordering::SeqCst);
+                return 0.0;
+            }
+            passage.chars().count() as f32
+        }
+        fn score_failures(&self) -> u64 {
+            self.failures.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    /// A late-interaction encoder that works until told not to, degrading to
+    /// the empty matrix the real ones return (ROADMAP O131).
+    struct FlakyLate {
+        broken: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        failures: std::sync::atomic::AtomicU64,
+    }
+
+    impl undercroft_core::late::LateInteraction for FlakyLate {
+        fn model_name(&self) -> &str {
+            "word-mock"
+        }
+        fn dim(&self) -> usize {
+            16
+        }
+        fn encode_doc(&self, text: &str) -> Vec<f32> {
+            use std::sync::atomic::Ordering;
+            if self.broken.load(Ordering::SeqCst) {
+                self.failures.fetch_add(1, Ordering::SeqCst);
+                return Vec::new();
+            }
+            WordLate.encode_doc(text)
+        }
+        fn encode_query(&self, text: &str) -> Vec<f32> {
+            self.encode_doc(text)
+        }
+        fn encode_failures(&self) -> u64 {
+            self.failures.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    /// **A degraded rerank score does not go missing — it SINKS the
+    /// candidate, and only this count says so** (ROADMAP O131).
+    ///
+    /// `search` overwrites each candidate's fusion score with the reranker's
+    /// and re-sorts, so a failed pass writes `0.0` — the same value a
+    /// genuinely irrelevant passage earns. Both halves are asserted: the
+    /// count reaches `PalaceStats`, and the ordering damage it is the only
+    /// evidence of is pinned, so nobody can read the counter as cosmetic.
+    #[test]
+    fn stats_reports_every_rerank_score_the_model_degraded() {
+        use std::sync::atomic::Ordering;
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        for (i, text) in [
+            "kelp harvest quota short",
+            "kelp harvest quota discussed at length in a much longer note about the quota",
+            "unrelated filler about tulips",
+        ]
+        .iter()
+        .enumerate()
+        {
+            s.upsert_screened(&drawer("notes", "r", text, i as u32))
+                .unwrap();
+        }
+        let broken = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        s.set_reranker(Some(Box::new(FlakyReranker {
+            broken: broken.clone(),
+            failures: Default::default(),
+        })));
+
+        // Premise: a healthy reranker counts nothing, and its ordering is the
+        // one the count will later be shown to destroy — longest first.
+        let ok = s
+            .search("kelp harvest quota", &SearchOptions::default())
+            .unwrap();
+        assert_eq!(
+            s.stats().unwrap().rerank_failures,
+            0,
+            "premise: a healthy reranker degrades nothing"
+        );
+        assert!(ok.len() >= 2, "premise: the pool has something to re-order");
+        let longest = ok[0].drawer.content.clone();
+        assert!(
+            longest.contains("much longer note"),
+            "premise: the length reranker put the longest passage first, so a collapse to 0.0 is observable"
+        );
+
+        broken.store(true, Ordering::SeqCst);
+        let sunk = s
+            .search("kelp harvest quota", &SearchOptions::default())
+            .unwrap();
+        let n = s.stats().unwrap().rerank_failures;
+        assert_eq!(
+            n as usize,
+            sunk.len(),
+            "one failure per candidate the reranker was handed, not one per search"
+        );
+        // The damage, pinned: every score is now 0.0, so the ordering the
+        // reranker existed to produce is gone and nothing else reports it.
+        assert!(
+            sunk.iter().all(|h| h.score == 0.0),
+            "every degraded candidate scored 0.0 — indistinguishable from irrelevant"
+        );
+
+        broken.store(false, Ordering::SeqCst);
+        let _ = s
+            .search("kelp harvest quota", &SearchOptions::default())
+            .unwrap();
+        assert_eq!(
+            s.stats().unwrap().rerank_failures,
+            n,
+            "a healthy score does not count"
+        );
+
+        // Not attached is 0, never a panic: the default vault has no reranker.
+        s.set_reranker(None);
+        assert_eq!(s.stats().unwrap().rerank_failures, 0);
+    }
+
+    /// The late-interaction half of the same rule (ROADMAP O131): a doc-side
+    /// failure at WRITE time leaves the drawer with no token matrix at rest,
+    /// and a query-side failure retires the stage for that search. Both are
+    /// counted through one number on `PalaceStats`.
+    #[test]
+    fn stats_reports_every_late_encode_the_model_degraded() {
+        use std::sync::atomic::Ordering;
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        let broken = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        s.set_late(Some(Box::new(FlakyLate {
+            broken: broken.clone(),
+            failures: Default::default(),
+        })));
+        s.upsert_screened(&drawer("notes", "r", "kelp harvest quota healthy row", 0))
+            .unwrap();
+        assert_eq!(
+            s.stats().unwrap().late_failures,
+            0,
+            "premise: a healthy encoder degrades nothing on the write path"
+        );
+
+        // The write path: one degraded encode_doc, and the row lands anyway.
+        broken.store(true, Ordering::SeqCst);
+        let d = drawer("notes", "r", "kelp harvest quota row with no tokens", 1);
+        s.upsert_screened(&d).unwrap();
+        assert_eq!(
+            s.stats().unwrap().late_failures,
+            1,
+            "a degraded doc encode is counted"
+        );
+        assert!(
+            s.get(&d.id, Read::Returned(ReadOp::Get)).unwrap().is_some(),
+            "and the drawer is stored regardless — an encode failure never fails a write"
+        );
+
+        // The query path: the search encodes once more, and that fails too.
+        let before = s.stats().unwrap().late_failures;
+        let _ = s
+            .search("kelp harvest quota", &SearchOptions::default())
+            .unwrap();
+        assert!(
+            s.stats().unwrap().late_failures > before,
+            "a degraded query encode counts too — it retires the whole late stage for that search"
+        );
+
+        s.set_late(None);
+        assert_eq!(
+            s.stats().unwrap().late_failures,
+            0,
+            "not attached is zero, not a panic"
         );
     }
 

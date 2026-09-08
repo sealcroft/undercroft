@@ -1637,6 +1637,11 @@ impl undercroft_core::rerank::Reranker for SharedOrtReranker {
     fn score_batch(&self, query: &str, passages: &[&str]) -> Vec<f32> {
         self.0.score_batch(query, passages)
     }
+    /// The shared model's count — process-wide, because every tenant vault
+    /// scores against the one reranker (ROADMAP O131).
+    fn score_failures(&self) -> u64 {
+        self.0.score_failures()
+    }
 }
 
 /// A cheap handle onto the one shared [`OnnxReranker`] the multi-tenant server
@@ -1651,6 +1656,10 @@ impl undercroft_core::rerank::Reranker for SharedReranker {
     }
     fn score(&self, query: &str, passage: &str) -> f32 {
         self.0.score(query, passage)
+    }
+    /// The shared model's count — process-wide (ROADMAP O131).
+    fn score_failures(&self) -> u64 {
+        self.0.score_failures()
     }
 }
 
@@ -3716,6 +3725,24 @@ fn run(cli: Cli) -> Result<()> {
                     "embed failures: {} (zero vectors — lexically findable, semantically \
                      invisible until re-embedded with UNDERCROFT_FORCE_EMBEDDER=1 + repair)",
                     st.embed_failures
+                );
+            }
+            // ROADMAP O131, the same rule: printed only when non-zero, since
+            // the default vault attaches neither stage and three reassuring
+            // zeroes would bury the one line that means something.
+            if st.rerank_failures > 0 {
+                println!(
+                    "rerank failures: {} (scored 0.0 — those candidates sank to the bottom \
+                     of the reranked window and cannot be told from irrelevant passages)",
+                    st.rerank_failures
+                );
+            }
+            if st.late_failures > 0 {
+                println!(
+                    "late-interaction failures: {} (empty matrices — a doc failure leaves a \
+                     drawer with no tokens at rest, a query failure retires the late stage \
+                     for that search)",
+                    st.late_failures
                 );
             }
             println!("wings:");

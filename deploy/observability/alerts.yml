@@ -106,6 +106,46 @@ groups:
             endpoint or model, then re-embed with UNDERCROFT_FORCE_EMBEDDER=1 +
             `undercroft repair`.
 
+      - alert: RerankFailures
+        # ROADMAP O131. A cross-encoder pass failed and the candidate was
+        # scored 0.0 — which `search` writes over its fusion score before
+        # re-sorting, so the candidate SINKS and is then indistinguishable
+        # from a genuinely irrelevant passage. Unlike a degraded embed it
+        # leaves no artifact at rest, so this counter is the only evidence
+        # the failure happened at all. Its own series rather than a label on
+        # the embed counter (maintainer ruling, 2026-09-08).
+        expr: sum by (instance) (increase(undercroft_rerank_failures_total[10m])) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Reranker scores are degrading to zero"
+          description: >-
+            The cross-encoder behind this instance degraded at least one score
+            to 0.0 in the last 10m. Those candidates sank to the bottom of the
+            reranked window and cannot be told from irrelevant passages
+            afterwards. Check the reranker model and endpoint; searches served
+            meanwhile were ranked on incomplete evidence.
+
+      - alert: LateInteractionFailures
+        # ROADMAP O131. The `side` label says which half failed and they are
+        # not equally bad: `doc` is a WRITE-path failure that leaves the
+        # drawer with no token matrix at rest (a durable hole), `query`
+        # retires the late stage for one search. Aggregated by instance AND
+        # side so the alert can say which — both survive the sum.
+        expr: sum by (instance, side) (increase(undercroft_late_failures_total[10m])) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Late-interaction encodes are degrading ({{ $labels.side }} side)"
+          description: >-
+            The ColBERT encoder degraded at least one {{ $labels.side }}-side
+            encode to an empty matrix in the last 10m. A doc-side failure
+            leaves that drawer with no token matrix at rest — re-encode with
+            `undercroft repair`; a query-side failure silently retired the
+            late stage for those searches.
+
       - alert: AuthRejectionsSpike
         expr: sum by (instance) (rate(undercroft_auth_rejections_total[5m])) > 0.2
         for: 10m

@@ -634,6 +634,12 @@ impl Tenancy {
                 // never the database's: a restart reads 0 while the rows at
                 // rest keep their zero vectors.
                 "embed_failures": full.embed_failures,
+                // ROADMAP O131: the other two model roles, same contract —
+                // process-lifetime, 0 when the stage is not attached. The
+                // `side` breakdown for the late stage is on the counter, not
+                // here.
+                "rerank_failures": full.rerank_failures,
+                "late_failures": full.late_failures,
             })),
         ))
     }

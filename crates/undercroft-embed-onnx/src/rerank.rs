@@ -24,6 +24,9 @@ pub struct OnnxReranker {
     tokenizer: Tokenizer,
     n_inputs: usize,
     name: String,
+    /// Scores degraded to 0.0 (ROADMAP O131). Atomic because `score_batch`
+    /// fans the independent passes across rayon workers.
+    failures: std::sync::atomic::AtomicU64,
 }
 
 impl OnnxReranker {
@@ -63,6 +66,7 @@ impl OnnxReranker {
             tokenizer,
             n_inputs,
             name: model_name.to_string(),
+            failures: std::sync::atomic::AtomicU64::new(0),
         };
         // Fail-fast probe: exercise the full pair-encode + forward path.
         me.score_inner("query", "passage")
@@ -156,7 +160,32 @@ impl Reranker for OnnxReranker {
         // Infallible on the hot path: a runtime failure degrades to a neutral
         // low score rather than aborting the search. `load` already ran a
         // probe, so failures here are rare (e.g. a pathological input).
-        self.score_inner(query, passage).unwrap_or(0.0)
+        //
+        // ROADMAP O131: "neutral" is generous. The store overwrites the
+        // candidate's fusion score with this and re-sorts, so 0.0 SINKS it —
+        // and a genuinely irrelevant passage scores 0.0 too, so nothing
+        // downstream can tell them apart. This was `.unwrap_or(0.0)` with no
+        // count and no line; it is counted and said now.
+        match self.score_inner(query, passage) {
+            Ok(s) => s,
+            Err(e) => {
+                let n = self
+                    .failures
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                    + 1;
+                undercroft_obs::rerank_failed("onnx", 1);
+                undercroft_obs::diag_error!(
+                    "rerank failed ({e}); scoring this candidate 0.0 — it sinks to the \
+                     bottom of the reranked window and is indistinguishable from an \
+                     irrelevant passage. Failures so far: {n}"
+                );
+                0.0
+            }
+        }
+    }
+
+    fn score_failures(&self) -> u64 {
+        self.failures.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     fn score_batch(&self, query: &str, passages: &[&str]) -> Vec<f32> {
