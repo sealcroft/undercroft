@@ -3988,7 +3988,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**151** of the **166** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**160** of the **175** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4165,6 +4165,101 @@ identities.
 A gate for the class O111 found by hand, and O113 measured.
 
 PATCH: nothing observable changes. Filed here until the tag exists.
+
+### O122 — a served embedder counts its failed embeds, and nothing reads the count
+
+**Filed 2026-09-08 from the doc read's PLAUSIBLE list, verified.** `HttpEmbedder`
+degrades a failed embed to a counted zero vector (a write must not fail on
+the endpoint) and keeps the count in `failures()`; the only readers are its
+own tests. An operator learns of a corpus of zero vectors from one stderr
+line per failure, which a served process's log may or may not keep. Fix
+shape: the count on `PalaceStats` beside `unhealed` (four renderers, one row
+each in `HAND_PROJECTED`), or a `drawer_embed_failures_total` counter in
+the `undercroft-obs` inventory; either is a report struct or an inventory
+change and gets its own unit. Gate: a served embedder that answers 500 to
+one embed, then the count on the surface chosen.
+
+### O123 — CLOSED 2026-09-08: an embedding dimension 2 modulo 4 was stored in a frame that read back as garbage, silently
+
+The at-rest embedding frame is `[0x02, 'Q', scale, i8 × dim]`, told from a
+legacy f32 blob by its length NOT being a multiple of four — which is every
+dimension except those ≡ 2 (mod 4), where `6 + dim` is one, and the frame
+read back as `(6 + dim) / 4` floats with no error. Any `external:<name>@<dim>`
+vault or `UNDERCROFT_EMBED_DIM` could declare one. Refused now at the write
+choke point (`write_drawer_stmts`, beside the non-finite refusal, so every
+write path inherits it) and at the declaration (`UNDERCROFT_EMBED_DIM`, where
+the embedder warns and probes instead, and `config check` prints it). Gates:
+the vault crate pins the WHY (`a_dimension_two_mod_four_reads_back_as_the_wrong_vector`
+— a six-wide vector round-trips to three floats), the store pins the refusal
+(`an_ambiguous_embedding_dimension_is_refused_at_the_door`, with an
+eight-wide premise), and the core parser pins the declaration arm
+(`a_dimension_two_mod_four_is_refused_at_the_declaration`). `UPGRADING.md`
+carries it. Tests +3.
+
+### O124 — CLOSED 2026-09-08: `confidence` was advertised as `0..1` and stored unchecked
+
+`kg_add` took any `f64` — a NaN, a negative, a 7.0 — and every later reader
+ranked by it. Refused at `kg_add_inner`, the graph's one write door, so MCP,
+the CLI and `/v1` refuse alike (400). Gate:
+`a_confidence_outside_zero_to_one_is_refused`, both bounds admitted as the
+premise. `UPGRADING.md` carries the 400.
+
+### O125 — CLOSED 2026-09-08: a Hijri 30th in a 29-day month read as the next month's first
+
+`Calendar::to_gregorian` checked the day against 30 (Hijri) and 31 (Jalali)
+and then handed it to day-count arithmetic, which carries an invalid day
+over — a written date that does not exist read as one that does, the
+opposite of "never guessed". A day is valid exactly when it converts back to
+itself, so both arms round-trip through the calendar crate's inverse. Gate:
+`a_day_the_month_does_not_have_is_not_a_date`, whose fixture the calendar
+finds itself (the first 29-day month of 1445), with a premise that one exists.
+
+### O126 — CLOSED 2026-09-08: `Vault::verify_chain` was a public chain verify no production code called, against an anchor that goes stale
+
+It compared a replay to THIS HANDLE's cached manifest anchor, which a
+long-lived server never reloads, so its one answer was stale on exactly the
+deployment it would be reached from; the store's `verify` replays against
+`chain_meta`. Deleted; its two test uses rewritten on the pure arithmetic
+(`chain_next_hex`), keeping the order-sensitivity assertion.
+
+### O127 — CLOSED 2026-09-08: `now_rfc3339` wrote `unix:{secs}` into `Tenant.created_at`
+
+A function so named that produced a shape no RFC 3339 reader accepts, served
+on `/admin/tenants`. Real RFC 3339 now, computed without a time dependency
+(days-from-civil inverted); rows written before carry the old shape and are
+displayed, never parsed. Gate: `the_stamp_is_rfc3339` at the epoch, a leap
+day and a known instant. `UPGRADING.md` notes the shape.
+
+### O128 — CLOSED 2026-09-08: the CLI declared one reading convention where MCP and `/v1` declare four — a boundary whose reason O108 removed
+
+`docs/AGENTS.md` stated the absence and its reason: CLI search prints no
+in-text dates, so `week_start`, `date_order` and `calendar` had nothing to
+act on. O108 gave `--when-from-query` to the CLI, which reads the QUESTION
+under those conventions — `07/05/2023` is a different window day-first and
+month-first — so the reason was gone and the absence became a drift. Three
+flags now, through the ONE parse (`search::locale_from`) every surface uses.
+Gate: an e2e check drives all four through the binary. The guide's paragraph
+is corrected, with the history.
+
+### O129 — CLOSED 2026-09-08: a rolled-back batch left its rows in the RAM caches
+
+`upsert_many` feeds the embedding, PQ and token caches per row inside its
+transaction; on a mid-batch failure the ROLLBACK removed the rows and left
+the cache entries, so a search could draw candidates for drawers that do not
+exist until the next open. Both rollback sites drop every derived cache
+(`drop_derived_caches`, the one helper). No behavioural gate: the caches are
+private and the failure needs a mid-batch write error; recorded as such.
+
+### O130 — CLOSED 2026-09-08: `DedupReport` had a CLI row in `HAND_PROJECTED` and no `/v1` row, while `POST …/dedup` hand-builds its reply
+
+The question the O115 review left open. The route projects every field by
+hand, so a sixth field would reach the CLI and not the wire and nothing would
+say so. One row per (struct, renderer) pair — the row is added, the gate
+passes on the five fields it finds. Five wording rows from the same read
+(`BundleError::Open`'s second mint, `calibrate_admission_gate`'s phrasing,
+`pq_page_min`'s "RAM trigger", `PendingMeta`'s wing claim, `hallways`'
+10,000-row bound) were imprecise rather than false and are left as they
+were, stated here rather than absorbed.
 
 ### O116 — CLOSED 2026-09-07: rotation recomputed the dedup fingerprint with a second copy of the recipe, over the wrong bytes
 

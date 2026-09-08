@@ -322,6 +322,7 @@ undercroft mine <dir> [--mode files|convos]  # documents, or Claude Code/Codex J
 undercroft sweep <dir>                # one verbatim drawer per transcript message (idempotent)
 undercroft search <query> [--vault --wing --room --kind --min-trust -n N]
 undercroft search <query> --language de   # declared morphology (en de nl it es fr pt tr ru el hi ka ko)
+undercroft search <query> --week-start sunday --date-order month_first --calendar buddhist   # the other three reading conventions, as on MCP and /v1
 undercroft search <query> --offset N --ranked-at <rfc3339>  # page one ranking, clock pinned
 undercroft search <query> --room-cap N    # spread hits across rooms, not the most verbose one
 undercroft wake-up [--vault --wing]   # L0 identity + L1 essential story

@@ -90,6 +90,10 @@ check "query-read window is said"  0 "(date window 2023-10-03 read from the quer
 check "a window must be a date"   1 "--when"                          -- "$BIN" search artists --when soon
 check "search finds relevant"     0 "eng/decisions"                  -- "$BIN" search "why rust migration"
 check "search scoped empty"       0 "No memories matched"            -- "$BIN" search "rust" --wing social
+# ROADMAP O128: the four reading conventions reach the CLI as they reach
+# MCP and /v1 — `language` alone did until this. Through the binary, so a
+# flag clap does not know is exit 2 here rather than a doc claim.
+check "search takes the reading conventions" 0 "eng/decisions"      -- "$BIN" search "why rust migration" --language en --week-start sunday --date-order month_first --calendar gregorian
 # Page 2 of a two-hit ranking: one hit, numbered by absolute rank.
 check "search offset pages deeper" 0 "2. ["                          -- "$BIN" search "search thursday" -n 1 --offset 1
 check "wake-up shows layers"      0 "L1 — ESSENTIAL STORY"           -- "$BIN" wake-up

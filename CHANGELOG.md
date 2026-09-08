@@ -17,6 +17,30 @@ counterfactual on the real tree (a planted `BundleError::Probe` fails the
 gate by name). `#[from]` variants are exempt, which is how `SealError::Utf8`
 was found by reading instead. Tests 824 → 825.
 
+### the doc read's plausible rows, verified: seven more fixes (O123–O130) and one filed (O122)
+
+- **O123** — an embedding dimension 2 modulo 4 produced an at-rest frame
+  indistinguishable from a legacy f32 blob and read back as garbage; refused
+  at the write choke point and at the `UNDERCROFT_EMBED_DIM` declaration.
+- **O124** — `confidence` outside `0..=1` (or NaN) was stored; 400 on every
+  surface through the graph's one write door.
+- **O125** — a Hijri 30th in a 29-day month (and a Jalali 31st) converted
+  to the next month's first; a day is a date only when it round-trips.
+- **O126** — `Vault::verify_chain`, a public verify nothing called against
+  an anchor that goes stale, deleted.
+- **O127** — the orchestrator's `created_at` was `unix:{secs}` under a
+  function named `now_rfc3339`; real RFC 3339 now.
+- **O128** — `undercroft search` takes `--week-start`, `--date-order` and
+  `--calendar` beside `--language`, through the one parse MCP and `/v1` use;
+  the documented boundary's reason had been removed by O108.
+- **O129** — a rolled-back batch left its rows in the RAM caches; every
+  derived cache is dropped on rollback.
+- **O130** — `DedupReport` gains its `/v1` renderer row in `HAND_PROJECTED`.
+- **O122 (filed, open)** — a served embedder's failed-embed count reaches no
+  operator surface.
+
+Tests 828 → 834, e2e 483 → 484. `UPGRADING.md` carries O123, O124 and O127.
+
 ### six code defects the doc read found, fixed (O116–O121)
 
 The by-eye doc read over every crate (about 145 corrected doc lines, all

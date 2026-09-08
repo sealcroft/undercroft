@@ -190,6 +190,20 @@ enum Command {
         /// Romance/Dutch/Turkish tables need saying too
         #[arg(long)]
         language: Option<String>,
+        /// Which day begins a week (`monday`, `sunday`, `saturday`): moves
+        /// "last week" inside a drawer and every week count. Read-time.
+        #[arg(long)]
+        week_start: Option<String>,
+        /// Which field a bare numeric date puts first (`day_first`,
+        /// `month_first`). Read-time; an unambiguous date in the same text
+        /// outranks it.
+        #[arg(long)]
+        date_order: Option<String>,
+        /// The calendar a bare year is written in (`gregorian`, `buddhist`,
+        /// `minguo`, `hijri`, `jalali`, `reiwa`, …). Read-time; an era
+        /// marker beside a year outranks it.
+        #[arg(long)]
+        calendar: Option<String>,
         /// Max results
         #[arg(short = 'n', long, default_value_t = search::DEFAULT_LIMIT)]
         limit: usize,
@@ -2157,6 +2171,9 @@ fn run(cli: Cli) -> Result<()> {
             kind,
             min_trust,
             language,
+            week_start,
+            date_order,
+            calendar,
             limit,
             offset,
             ranked_at,
@@ -2207,7 +2224,16 @@ fn run(cli: Cli) -> Result<()> {
                     .map_err(|e| anyhow::anyhow!("--when: {e}"))?,
                 when_from_query: *when_from_query,
                 when_slack_days: *when_slack_days,
-                locale: search::locale_from(&serde_json::json!({ "language": language })),
+                // The same four reading conventions MCP and `/v1` accept,
+                // through the same parse: the CLI took only `language` until
+                // ROADMAP O128, so "last week" in a drawer resolved under a
+                // week start and a date order the CLI could not declare.
+                locale: search::locale_from(&serde_json::json!({
+                    "language": language,
+                    "week_start": week_start,
+                    "date_order": date_order,
+                    "calendar": calendar,
+                })),
             };
             // ROADMAP O73. Only the local path can answer exactly: the page
             // signals come off the engine's own cut. The remote path ranks

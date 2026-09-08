@@ -589,11 +589,13 @@ already-ingested corpus answers correctly the moment you declare its conventions
 | `date_order` | `day_first`, `month_first` | see below | which field a bare numeric date puts first |
 | `calendar` | `gregorian`, `buddhist`, `minguo`, `hijri`, `jalali`, `reiwa`, `heisei`, `showa`, `taisho`, `meiji` | `gregorian` | which calendar counted the year, **unless a drawer names its own era** |
 
-All four are accepted on `POST /v1/vaults/{id}/search` and on `undercroft_search`
-— the same key names, parsed by the same code. The CLI takes the one of them it
-has a consumer for, `undercroft search --language <code>`, which selects the
-retrieval morphology; CLI search prints no in-text dates, so the three
-date-reading conventions have nothing to act on there.
+All four are accepted on `POST /v1/vaults/{id}/search`, on `undercroft_search`
+and on `undercroft search` (`--language`, `--week-start`, `--date-order`,
+`--calendar`) — the same key names, parsed by the same code. The CLI took only
+`--language` until ROADMAP O128, on the argument that CLI search prints no
+in-text dates so the other three had nothing to act on; that stopped being
+true when `--when-from-query` (O108) began reading the QUESTION under them —
+`07/05/2023` in a query is a different window day-first and month-first.
 
 **`date_order`** — `07/05/2023` is 7 May or 5 July and the token does not say.
 Four signals are consulted, strongest first:

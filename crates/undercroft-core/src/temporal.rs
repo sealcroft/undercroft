@@ -519,13 +519,29 @@ impl Calendar {
                 if !(1..=12).contains(&m) || !(1..=30).contains(&d) {
                     return None;
                 }
-                date_from_rata_die(islamic::fixed_from_saudi_islamic(y, m, d))?
+                // The day is checked against the MONTH, not against 30: the
+                // conversion is pure day-count arithmetic, so a 30th in a
+                // 29-day Umm al-Qura month landed on the next month's first
+                // with no error — a written date that does not exist read
+                // as one that does (ROADMAP O125). A day is valid exactly
+                // when it converts back to itself.
+                let rd = islamic::fixed_from_saudi_islamic(y, m, d);
+                if islamic::saudi_islamic_from_fixed(rd) != (y, m, d) {
+                    return None;
+                }
+                date_from_rata_die(rd)?
             }
             Calendar::Jalali => {
                 if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
                     return None;
                 }
-                date_from_rata_die(persian::fixed_from_fast_persian(y, m, d))?
+                // Same round trip: months 7–11 have 30 days and Esfand 29
+                // or 30, and the arithmetic would carry a 31st over.
+                let rd = persian::fixed_from_fast_persian(y, m, d);
+                if persian::fast_persian_from_fixed(rd).ok()? != (y, m, d) {
+                    return None;
+                }
+                date_from_rata_die(rd)?
             }
         };
         // A date is a date. A memory may hold a year in a novel, an astronomy
@@ -2170,6 +2186,33 @@ fn scan_english(text: &str, anchor: Option<Date>, loc: Locale) -> Vec<TimeMentio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ROADMAP O125: a Hijri or Jalali day is valid exactly when it converts
+    /// back to itself. The conversion is day-count arithmetic, so a 30th in
+    /// a 29-day Umm al-Qura month landed on the next month's first with no
+    /// error. The fixture is found by the calendar itself — the first month
+    /// of 1445 whose 30th does not round-trip — with a premise arm that one
+    /// exists, so the test is not pinned to a table nobody re-derives.
+    #[test]
+    fn a_day_the_month_does_not_have_is_not_a_date() {
+        use calendrical_calculations::islamic;
+        let short = (1..=12u8).find(|&m| {
+            islamic::saudi_islamic_from_fixed(islamic::fixed_from_saudi_islamic(1445, m, 30))
+                != (1445, m, 30)
+        });
+        let m = short.expect("PREMISE: 1445 has a 29-day month");
+        assert!(
+            Calendar::Hijri.to_gregorian(1445, m, 29).is_some(),
+            "the 29th of a 29-day month is a date"
+        );
+        assert!(
+            Calendar::Hijri.to_gregorian(1445, m, 30).is_none(),
+            "the 30th of a 29-day month is not, and used to read as next month's first"
+        );
+        // Jalali: month 7 has 30 days; a 31st carries over.
+        assert!(Calendar::Jalali.to_gregorian(1403, 7, 30).is_some());
+        assert!(Calendar::Jalali.to_gregorian(1403, 7, 31).is_none());
+    }
 
     /// ROADMAP O117: a mention's recorded span is the text exactly as
     /// written, even when its final token is spelled decomposed. The
