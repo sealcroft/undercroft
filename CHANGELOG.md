@@ -2,12 +2,22 @@
 
 ## Unreleased — 1.5.2
 
-Filed as PATCH: a gate for the class the previous release found by hand, a
-measurement, seven fixes from the doc read, and the failed-embed count
-reaching every surface. Note that O128 (three CLI flags) and O122 (a stats
-field, a metric series, an alert; O131 two more of each) ADD surface — backward compatible, and
-whether additive surface makes this a MINOR under the doctrine's own test is
-a release-prep ruling, not settled here.
+PATCH: a fix whose only observable change is that a defect is gone. No
+documented contract moves.
+
+**Three entries add SURFACE and it is still a PATCH — ruled 2026-09-08, and
+the reasoning matters more than the verdict.** O122 and O131 add stats
+fields, metric series and alerts; O128 adds three CLI flags. None of them is
+a new capability: the counters REPORT failures that were already happening
+silently, so the defect is the silence and the surface is how you see it is
+gone; and O128's three flags close a DRIFT — MCP and `/v1` already parsed
+those declarations through the same function, and the CLI's absence was
+itself the defect. A capability that is new to one surface and old to the
+product is a drift closure, not a feature.
+
+That is the doctrine's existing test applied, not a new one. It reclassifies
+nothing: `1.5.0` stays MINOR (the per-vault database genuinely gained a
+name, which no surface had), and `1.2.1`/`1.2.2` stay PATCH.
 
 ### every error variant is minted or matched somewhere (O115)
 

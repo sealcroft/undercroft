@@ -4165,11 +4165,16 @@ identities.
 A gate for the class O111 found by hand, O113 measured, seven fixes from the
 doc read, and every model role's silent failures counted (O122, O131).
 
-Filed as PATCH. Three entries ADD surface — O128 (three CLI flags), O122 (a
-stats field, a metric series, an alert) and O131 (two more of each), all
-backward compatible — and
-whether additive surface reads as MINOR under the doctrine's own test is a
-release-prep ruling. Filed here until the tag exists.
+**PATCH — ruled 2026-09-08.** Three entries add SURFACE (O128's three CLI
+flags; O122 and O131's stats fields, metric series and alerts) and it is
+still a PATCH, because none of them is a new capability. The counters REPORT
+failures that were already happening silently — the defect is the silence,
+and the surface is how an operator sees it is gone. O128 closes a DRIFT: MCP
+and `/v1` already parsed those declarations through the same function, so the
+CLI's absence was the defect, and a capability new to one surface but old to
+the product is a drift closure rather than a feature. The doctrine's existing
+test, applied; it reclassifies nothing (`1.5.0` stays MINOR, `1.2.1` and
+`1.2.2` stay PATCH). Filed here until the tag exists.
 
 ### O122 — CLOSED 2026-09-08: the served embedder counted its failed embeds and nothing read the count; the two in-process embedders counted nothing
 

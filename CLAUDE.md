@@ -3292,6 +3292,17 @@ unwritten because a half-correct verdict is worse than a known-wrong one.
   match the contract, and a deployment that "worked" on the old behaviour was
   running without the protection it declared. Say that plainly rather than
   reaching for a major.
+  **Surface added to REPORT an existing silent defect, or to close a drift,
+  is a fix too** (ruled 2026-09-08 for `1.5.2`). A counter, a stats field or
+  an alert that makes a failure visible adds no capability — the defect was
+  the silence, and the surface is how an operator sees it is gone; a flag
+  that gives one surface a parse the other surfaces already shared is a
+  drift closure, and a capability new to one surface but old to the product
+  is not a feature. Applied backwards this reclassifies **nothing** — `1.5.0`
+  stays MINOR because the per-vault database genuinely gained a name no
+  surface had, and `1.2.1`/`1.2.2` stay PATCH — so it is describing what the
+  tree already does, which is the honest thing to say about it rather than
+  dressing it up as a new rule. Its whole history is one release.
   What such a fix DOES owe is warning: **anything that can stop a running
   deployment gets an `UPGRADING.md` entry in the same unit**, with symptom,
   cause and fix, and `undercroft config check` must be able to detect it
