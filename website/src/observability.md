@@ -326,10 +326,10 @@ them. Against a server that sends no names (an older engine), the page falls
 back to one locked `◈ sealed` block and keeps working.
 
 The beacon is not decorative. Corrupt a single drawer's bytes on disk and the
-next read fails its HMAC; a genuine `hmac-fail` stream event floods the palace
+next read fails its HMAC; a genuine `hmac-fail` stream event floods the vault
 red. It fires only on real integrity failure — never a synthetic alarm.
 
-![The same monitor in its tamper state: the whole palace flushed red under the
+![The same monitor in its tamper state: the whole vault flushed red under the
 integrity-alert beacon after a real HMAC-verify failure.](images/palace-monitor-tamper.png)
 
 The page uses `fetch()` streaming (not `EventSource`, which can't send an

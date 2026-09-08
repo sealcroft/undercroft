@@ -22,7 +22,7 @@ The engineering rationale is in
 ```mermaid
 flowchart TB
     subgraph c["Candidate tier — pick one (UNDERCROFT_RETRIEVAL)"]
-        scan["full cosine scan<br/><i>default, small palaces</i>"]
+        scan["full cosine scan<br/><i>default, small vaults</i>"]
         ftsx["FTS5 BM25 prefilter<br/><i>hmac-only, ≥2k drawers</i>"]
         pqx["PQ / IVF ADC<br/><i>48 B/vector, RAM code cache,<br/>sealed rows AEAD</i>"]
         fdex["MUVERA FDE dot<br/><i>token-aware; 256 B PQ codes,<br/>sealed rows AEAD</i>"]
@@ -286,7 +286,7 @@ pgvector / Milvus / Chroma, but they only return candidate **ids** — every
 candidate is re-verified (HMAC) and re-scored locally. Measured on LoCoMo, the
 remote backends sat at **~0.5% CPU** while the client did all the work, and were
 **slower** than the local full-scan for corpora this size (network + a bounded
-local decrypt per candidate outweigh ANN when the palace is small). They earn
+local decrypt per candidate outweigh ANN when the vault is small). They earn
 their keep only on very large corpora — and even then the scoring stays local.
 Accuracy and integrity never depend on the untrusted index.
 
@@ -378,7 +378,7 @@ Defaults are local-first and pure-Rust; every faster option is opt-in.
 
 | Option | RAM | Best for |
 |---|---|---|
-| Full-scan + BM25 (default) | transient | small palaces |
+| Full-scan + BM25 (default) | transient | small vaults |
 | In-memory HNSW (`hnsw` feature) | O(corpus) | moderate corpora, raw speed |
 | **On-disk PQ/IVF** (both vault levels) | ~O(codebook) | large corpora, edge/IoT |
 | **MUVERA FDE** (`UNDERCROFT_RETRIEVAL=fde`) | ~O(codebook) | token-aware candidates |
@@ -423,7 +423,7 @@ across languages at all); **the reranker is the accuracy lever** (+2.3 pts again
 though that arm was last measured in 2026-07 and has not been re-run) and is
 now affordable (`top_n=20`, ort+int8); **PQ is the bounded-RAM index whose
 recall holds at scale** — 100.0% R@5 measured at every checkpoint from 131k to
-1M drawers; **remote vector DBs never make a small palace faster** — they are
+1M drawers; **remote vector DBs never make a small vault faster** — they are
 for corpora too large to scan locally, and all trust (and all retrieval policy)
 stays local regardless.
 

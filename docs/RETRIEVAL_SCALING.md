@@ -63,7 +63,7 @@ both vault levels the derived artifacts follow the sealing invariant):
 flowchart TB
     scope["Scope resolution<br/><i>wing · room · kind · trust floor · quarantine fence<br/>→ seq set, BEFORE candidates</i>"] --> c
     subgraph c["Candidate tier — pick one (UNDERCROFT_RETRIEVAL)"]
-        scan["full cosine scan<br/><i>default, small palaces</i>"]
+        scan["full cosine scan<br/><i>default, small vaults</i>"]
         ftsx["FTS5 BM25 prefilter<br/><i>hmac-only, ≥2k drawers</i>"]
         pqx["PQ / IVF ADC<br/><i>48 B/vector, slab-grouped RAM cache,<br/>sealed rows AEAD, per-wing tier</i>"]
         fdex["MUVERA FDE dot<br/><i>token-aware; 256 B PQ codes,<br/>sealed rows AEAD</i>"]
@@ -606,7 +606,7 @@ which is precisely why the MaxSim rescore stays.)
 
 **The bounded-RAM tier (v0.24.0, measured):** FDE rows now upgrade
 event-driven exactly like the token store — raw f32 (v1) below
-`UNDERCROFT_FDE_PQ_MIN` (256), then a codebook trains from the palace's own
+`UNDERCROFT_FDE_PQ_MIN` (256), then a codebook trains from the vault's own
 FDEs (sealed in `fde_meta`), every row repacks to `dim/8`-byte PQ codes
 (**32×**, 8 KB → 256 B/drawer) and the scan switches to per-query dot LUTs:
 
@@ -622,7 +622,7 @@ faster than the raw scan. End-to-end, the LoCoMo gate holds exactly: R@10
 candidates — at 61.2 ms/q (parity with raw's 52.9 within the run-to-run
 noise band; the fixed per-query LUT build offsets the ADC savings at
 small per-store corpora, which is why the 256-row threshold keeps small
-palaces raw).
+vaults raw).
 
 **IVF over FDE space: measured net-negative, deliberately not shipped.**
 At every benchable size the coarse-partition probe *lost* containment
@@ -635,7 +635,7 @@ reserves a list field inside the sealed blob so that tier needs no
 migration when a corpus warrants it.
 
 That tier **shipped in v0.39.0 — and its own gate keeps it opt-in**.
-The proper construction (event-driven centroids over the palace's own
+The proper construction (event-driven centroids over the vault's own
 decoded FDEs, in-place list rewrite, contiguous per-list slabs, probe +
 widen-on-skew) was measured with a contiguous-slab harness at
 N=200k/500k, within-run: probed containment stayed *below* flat's
@@ -852,7 +852,7 @@ defaults stay local-first and pure-Rust; every faster option is opt-in.
 
 | Option | RAM | Best for | Status |
 |---|---|---|---|
-| Full-scan cosine + BM25 | O(corpus) transient | small palaces (default) | shipped |
+| Full-scan cosine + BM25 | O(corpus) transient | small vaults (default) | shipped |
 | FTS5 BM25 prefilter | on-disk | hmac-only vaults ≥ `UNDERCROFT_FTS_PREFILTER_MIN` (2k) | shipped |
 | In-memory HNSW (`hnsw`) | O(corpus) | moderate corpora, raw speed | experimental |
 | **On-disk PQ + IVF** (`set_pq`, `UNDERCROFT_RETRIEVAL=pq`) | ~O(codebook) | large corpora, edge/IoT — **both vault levels**, sealed rows AEAD'd with a decrypt-once slab-grouped cache | **shipped** |

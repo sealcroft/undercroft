@@ -4,7 +4,7 @@
 //! Run: cargo run -p undercroft-cli --example convo_import
 
 use undercroft_core::{convo, normalize_content, Drawer};
-use undercroft_store::PalaceStore;
+use undercroft_store::VaultStore;
 use undercroft_vault::{SecurityLevel, VaultManager};
 
 const TRANSCRIPT: &str = r#"{"type":"user","message":{"role":"user","content":"what did we decide about caching?"}}
@@ -13,7 +13,7 @@ const TRANSCRIPT: &str = r#"{"type":"user","message":{"role":"user","content":"w
 fn main() -> anyhow::Result<()> {
     let dir = tempfile::TempDir::new()?;
     let manager = VaultManager::open(dir.path(), None)?;
-    let mut store = PalaceStore::open(manager.create("convos", SecurityLevel::Sealed)?)?;
+    let mut store = VaultStore::open(manager.create("convos", SecurityLevel::Sealed)?)?;
 
     for msg in convo::parse_transcript(TRANSCRIPT) {
         let who = if msg.role == "user" {

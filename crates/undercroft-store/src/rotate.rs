@@ -18,7 +18,7 @@
 //! Crash windows: before the commit, the database still answers to the old
 //! keys and open-time reconciliation discards the staging file; after the
 //! commit, the database answers to the new keys and reconciliation promotes
-//! it. Either way the palace opens clean — a crash is never a tamper alarm.
+//! it. Either way the vault opens clean — a crash is never a tamper alarm.
 //!
 //! Audit history: the tags of superseded or deleted content cannot be
 //! recomputed (their plaintext is gone by design), so rotation preserves
@@ -34,7 +34,7 @@
 use rusqlite::{params, OptionalExtension};
 use undercroft_vault::Vault;
 
-use crate::{canonical, PalaceStore, StoreError};
+use crate::{canonical, StoreError, VaultStore};
 
 /// What one rotation re-sealed / re-tagged.
 #[derive(Debug, Default, serde::Serialize)]
@@ -72,7 +72,7 @@ pub struct RotationReport {
     pub retention_policies: usize,
 }
 
-impl PalaceStore {
+impl VaultStore {
     /// Rotate this vault onto `next`'s keys (obtain `next` from
     /// [`undercroft_vault::VaultManager::rotation_candidate`]). On return the
     /// store itself operates under the new keys; RAM caches of decrypted
@@ -817,8 +817,8 @@ impl PalaceStore {
 
 #[cfg(test)]
 mod tests {
-    use crate::PalaceStore;
     use crate::StoreError;
+    use crate::VaultStore;
     use tempfile::TempDir;
     use undercroft_core::Drawer;
     use undercroft_vault::{SecurityLevel, VaultManager};
@@ -834,11 +834,11 @@ mod tests {
         )
     }
 
-    fn seeded(level: SecurityLevel) -> (TempDir, PalaceStore) {
+    fn seeded(level: SecurityLevel) -> (TempDir, VaultStore) {
         let dir = TempDir::new().unwrap();
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("r", level).unwrap();
-        let mut store = PalaceStore::open(vault).unwrap();
+        let mut store = VaultStore::open(vault).unwrap();
         store
             .upsert(&drawer("the heron files verbatim drawers", 0))
             .unwrap();
@@ -855,9 +855,9 @@ mod tests {
         (dir, store)
     }
 
-    fn reopen(dir: &TempDir) -> PalaceStore {
+    fn reopen(dir: &TempDir) -> VaultStore {
         let mgr = VaultManager::open(dir.path(), None).unwrap();
-        PalaceStore::open(mgr.unlock("r").unwrap()).unwrap()
+        VaultStore::open(mgr.unlock("r").unwrap()).unwrap()
     }
 
     /// Every durable reference this vault hands out, in one snapshot: the
@@ -890,7 +890,7 @@ mod tests {
         verified: Vec<String>,
     }
 
-    fn references(s: &PalaceStore) -> References {
+    fn references(s: &VaultStore) -> References {
         let rows = |sql: &str, tag: &str| -> Vec<String> {
             let mut stmt = s.conn.prepare(sql).unwrap();
             let n = stmt.column_count();
@@ -1159,7 +1159,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("r", SecurityLevel::Sealed).unwrap();
-        let mut store = PalaceStore::open(vault).unwrap();
+        let mut store = VaultStore::open(vault).unwrap();
 
         // One of every referenceable kind, so the snapshot cannot be
         // accidentally narrow.
@@ -1884,7 +1884,7 @@ mod tests {
             let dir = TempDir::new().unwrap();
             let mgr = VaultManager::open(dir.path(), None).unwrap();
             let vault = mgr.create("r", level).unwrap();
-            let mut store = PalaceStore::open(vault).unwrap();
+            let mut store = VaultStore::open(vault).unwrap();
             let note = "Ada migrated auth to PASETO in June.";
             let src = drawer(note, 0);
             let src_id = src.id.clone();
@@ -1975,7 +1975,7 @@ mod tests {
             let dir = TempDir::new().unwrap();
             let mgr = VaultManager::open(dir.path(), None).unwrap();
             let vault = mgr.create("r", level).unwrap();
-            let mut store = PalaceStore::open(vault).unwrap();
+            let mut store = VaultStore::open(vault).unwrap();
             let src = drawer("Ada migrated auth to PASETO in June.", 0);
             let src_id = src.id.clone();
             store.upsert(&src).unwrap();
@@ -2045,7 +2045,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("r", SecurityLevel::Sealed).unwrap();
-        let mut store = PalaceStore::open(vault).unwrap();
+        let mut store = VaultStore::open(vault).unwrap();
         // "café" with a DECOMPOSED e + combining acute; the lookup below
         // spells it composed.
         let decomposed = "the cafe\u{301} on the corner files verbatim drawers";

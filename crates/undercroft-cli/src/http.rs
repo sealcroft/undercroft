@@ -34,7 +34,7 @@ use tiny_http::{Header, Method, Response, Server};
 
 use crate::mcp::McpHandler;
 use crate::tenant::Tenancy;
-use undercroft_store::PalaceStore;
+use undercroft_store::VaultStore;
 
 /// Does `header` carry exactly `Bearer <expected>`, compared in constant
 /// time?
@@ -218,7 +218,7 @@ pub(crate) fn resolve_mcp_token(declared: Option<&str>) -> Result<Option<String>
 }
 
 pub fn serve_http(
-    store: PalaceStore,
+    store: VaultStore,
     tenancy: Tenancy,
     host: &str,
     port: u16,

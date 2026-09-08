@@ -58,7 +58,7 @@ pub enum CoreError {
 
 /// Validate a wing / room / vault name: 1..=128 bytes after trimming, no
 /// path separators, no control characters, not "." or "..". Mirrors mempalace's
-/// `sanitize_name` contract so mined palaces stay compatible.
+/// `sanitize_name` contract so mined vaults stay compatible.
 pub fn validate_name(value: &str, what: &'static str) -> Result<(), CoreError> {
     let v = value.trim();
     if v.is_empty() || v.len() > 128 {
@@ -145,7 +145,7 @@ pub fn validate_kind(value: &str) -> Result<(), CoreError> {
 /// standing; docs/LABELS.md, "a self-declared label is never a trust
 /// boundary"). A wing with no assignment reads as `standard` — a total
 /// default, so a trust filter can never silently empty against an
-/// unlabeled palace.
+/// unlabeled vault.
 pub const TRUST_VOCAB: &[&str] = &["quarantined", "standard", "trusted"];
 
 /// Validate a trust class against [`TRUST_VOCAB`] — rejected, never

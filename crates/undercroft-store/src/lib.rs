@@ -1,4 +1,4 @@
-//! SQLite-backed palace storage, one database per vault.
+//! SQLite-backed vault storage, one database per vault.
 //!
 //! Mirrors mempalace's `sqlite_exact` backend shape (documents +
 //! metadata_json + embedding blob + FTS5 when available) with the vault
@@ -8,7 +8,7 @@
 //!   vaults store only ciphertext, and nothing content-derived (including
 //!   the FTS index) is persisted in plaintext;
 //! * every row carries an HMAC tag over `id \x1f meta_json \x1f content`,
-//!   verified on read and re-walkable via [`PalaceStore::verify`];
+//!   verified on read and re-walkable via [`VaultStore::verify`];
 //! * an append-only `audit` table records the tag of every write in order,
 //!   which must replay to the manifest's HMAC chain head.
 #![warn(missing_docs)]
@@ -31,8 +31,8 @@ pub use admission::{PendingAdmission, QUARANTINE_WING};
 pub use forget::{AttestationVerdict, ForgetAttestation, MirrorDelete};
 pub use kg::{KgStats, ReceiptStatus, ReceiptVerdict, SupersessionStatus, Triple, TripleExport};
 pub use manage::{
-    effective_trust_floor, DedupReport, DrawerSummary, Hallway, Namespace, PalaceStats, Tunnel,
-    UpdateOutcome,
+    effective_trust_floor, DedupReport, DrawerSummary, Hallway, Namespace, Tunnel, UpdateOutcome,
+    VaultStats,
 };
 pub use pqidx::WING_PQ_MIN_DEFAULT;
 pub use remote::PlaintextPush;
@@ -650,7 +650,7 @@ const DEFAULT_RERANK_TOP_N: usize = 50;
 const DEFAULT_LATE_TOP_N: usize = 200;
 
 // The five trained index artifacts. Each name is used for BOTH its generation
-// counter (`PalaceStore::codebook_generation_bump`) and its keyed
+// counter (`VaultStore::codebook_generation_bump`) and its keyed
 // training-sample label (`pqidx::stratified_keyed`) — one string, two roles, so they
 // cannot drift apart: every call site passes the const, never a literal, so
 // changing a value here moves the counter key and the draw together (a literal
@@ -2014,11 +2014,11 @@ pub enum InternalRead {
     /// A read performed to decide a refusal. Recording it would put a read
     /// in the trail the caller never asked for.
     PolicyFence,
-    /// A whole-palace export, already recorded unconditionally by
+    /// A whole-vault export, already recorded unconditionally by
     /// `audit_export` — auditing the rows again would double-count it.
     ExportAudited,
     /// The corpus read for LLM distillation, already recorded
-    /// unconditionally by [`PalaceStore::audit_refine`] (ROADMAP O79).
+    /// unconditionally by [`VaultStore::audit_refine`] (ROADMAP O79).
     ///
     /// The variant above states the RULE this one instantiates: **a read
     /// whose content leaves the vault is internal, and the leaving is what
@@ -2061,10 +2061,10 @@ pub(crate) enum BypassReason {
     OperatorRuling,
 }
 
-/// Result of every screened save arm — [`PalaceStore::save_with_dedup`],
-/// [`PalaceStore::save_with_dedup_vec`], [`PalaceStore::upsert_screened`],
-/// [`PalaceStore::upsert_external`], [`PalaceStore::import_record`] and
-/// [`PalaceStore::diary_write`]: the drawer id that now holds the
+/// Result of every screened save arm — [`VaultStore::save_with_dedup`],
+/// [`VaultStore::save_with_dedup_vec`], [`VaultStore::upsert_screened`],
+/// [`VaultStore::upsert_external`], [`VaultStore::import_record`] and
+/// [`VaultStore::diary_write`]: the drawer id that now holds the
 /// content, whether it was a fresh insert, whether an existing
 /// near-duplicate was refreshed in place, and whether the admission
 /// screen diverted the write to the quarantine wing.
@@ -2091,7 +2091,7 @@ pub struct SaveOutcome {
 /// mean different things to an operator: nothing to do, a database that
 /// predates the transactional head, and a real lag that a crash between a
 /// commit and its anchor leaves behind. The two tamper verdicts are errors,
-/// not states — see [`PalaceStore::tighten_anchor`].
+/// not states — see [`VaultStore::tighten_anchor`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum AnchorState {
@@ -2113,7 +2113,7 @@ pub enum AnchorState {
 /// once so the CLI and `/v1` importers cannot drift apart, and so a
 /// deployment declaring `UNDERCROFT_ADMIT_TRUSTED_SOURCES` can name the
 /// import act explicitly instead of reaching it through a save surface.
-/// See [`PalaceStore::import_stamp`].
+/// See [`VaultStore::import_stamp`].
 pub const IMPORT_SURFACE: &str = "import";
 
 /// How far ahead of this host's clock a declared `meta.filed_at` may sit
@@ -2139,7 +2139,7 @@ pub(crate) fn is_drawer_id(id: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-/// Result of [`PalaceStore::upsert_many`] — the bulk half of
+/// Result of [`VaultStore::upsert_many`] — the bulk half of
 /// [`SaveOutcome`]'s honesty contract.
 ///
 /// The bulk path returned a bare `usize` created-count while screening
@@ -2214,7 +2214,7 @@ pub struct SearchOptions {
     /// fusion (cross-encoder rescore, MaxSim, room diversification) re-order
     /// candidates, so "everything below the last score I saw" names no stable
     /// position in this pipeline, while a rank does. The boundary is exact
-    /// when the palace has not changed between calls and [`Self::ranked_at`]
+    /// when the vault has not changed between calls and [`Self::ranked_at`]
     /// pins the clock; a write in between may shift ranks, and should — new
     /// evidence outranks a stale page boundary.
     pub offset: usize,
@@ -2414,7 +2414,7 @@ pub struct VerifyReport {
     pub chain_ok: bool,
     /// Every drawer supersession link with its verdict (empty when no
     /// drawer declares one). Carried INSIDE the report rather than left to
-    /// a separate [`PalaceStore::verify_supersessions`] call, because the
+    /// a separate [`VaultStore::verify_supersessions`] call, because the
     /// receipt lives in columns outside the drawer's own HMAC and so
     /// `bad_records` structurally cannot see it: while the check was a
     /// second call, `/v1/verify` answered `{"ok": true}` — and the shipped
@@ -2588,7 +2588,7 @@ impl VerifyReport {
 }
 
 /// One open vault: its SQLite connection, keys, embedder, retrieval tiers and caches. Opened writable (`open`) or read-only (`open_read_only`), a posture decided once.
-pub struct PalaceStore {
+pub struct VaultStore {
     conn: Connection,
     vault: Vault,
     embedder: Box<dyn Embedder + Send>,
@@ -2761,12 +2761,12 @@ pub struct PalaceStore {
     /// Depth of the late-interaction rescore, resolved at open from
     /// `UNDERCROFT_LATE_TOP_N` / `UNDERCROFT_RERANK_TOP_N`
     /// ([`DEFAULT_LATE_TOP_N`]). Distinct from the cross-encoder's cap:
-    /// see [`PalaceStore::set_late_top_n`].
+    /// see [`VaultStore::set_late_top_n`].
     late_top_n: usize,
     /// Sealed vaults: corpus size at which PQ codes keep to one AEAD page
     /// per IVF list instead of per-row seals (`usize::MAX` ⇒ never — the
     /// default; the page tier is opt-in until the RAM trigger fires).
-    /// `UNDERCROFT_PQ_PAGE_MIN` / [`PalaceStore::set_pq_pages`]. See `pqidx`.
+    /// `UNDERCROFT_PQ_PAGE_MIN` / [`VaultStore::set_pq_pages`]. See `pqidx`.
     pq_page_min: usize,
     /// When true, search generates candidates by MUVERA FDE dot product
     /// (`UNDERCROFT_RETRIEVAL=fde`; needs the late encoder). See `fdeidx`.
@@ -2800,7 +2800,7 @@ pub struct PalaceStore {
     /// the expensive part of both stages, and one search must pay it once.
     qmatrix_cache: std::cell::RefCell<Option<EncodedQuery>>,
     /// This store was opened for a role that must not write
-    /// ([`PalaceStore::open_read_only`]).
+    /// ([`VaultStore::open_read_only`]).
     ///
     /// Read by the derived-index tiers (R1): a prefilter LOADS an existing
     /// index and never builds one, because building an index is a write and
@@ -2823,7 +2823,7 @@ pub struct PalaceStore {
     /// surface rather than only in a log line nobody kept.
     unhealed: Vec<String>,
     /// The knowledge graph's blind-index secret, decrypted once (A10).
-    /// See [`PalaceStore::kg_secret`] for why it is a stable stored value
+    /// See [`VaultStore::kg_secret`] for why it is a stable stored value
     /// rather than a derived vault key.
     kg_secret: std::cell::RefCell<Option<[u8; 32]>>,
     /// What the OPEN found the manifest anchor to be.
@@ -2839,7 +2839,7 @@ pub struct PalaceStore {
 /// A query's encoded token matrix, keyed by the query text it encodes.
 type EncodedQuery = (String, Vec<f32>);
 
-impl PalaceStore {
+impl VaultStore {
     /// Open with the default deterministic hashed n-gram embedder.
     pub fn open(vault: Vault) -> Result<Self, StoreError> {
         Self::open_with_embedder(vault, Box::new(HashEmbedder))
@@ -4253,7 +4253,7 @@ impl PalaceStore {
     }
 
     /// Tune when the BM25 prefilter engages on hmac-only vaults: it runs
-    /// once the palace holds at least `min` drawers; `None` disables it
+    /// once the vault holds at least `min` drawers; `None` disables it
     /// entirely. Also settable at open via `UNDERCROFT_FTS_PREFILTER_MIN`
     /// (a number, or `off`).
     pub fn set_fts_prefilter_min(&mut self, min: Option<usize>) {
@@ -5133,7 +5133,7 @@ impl PalaceStore {
     /// with a single WAL sync, and the manifest anchors once at the end —
     /// under `synchronous=FULL` this is the difference between several disk
     /// syncs per drawer and one per batch. A mid-batch failure rolls the
-    /// whole batch back (the existing palace is untouched — the append-only
+    /// whole batch back (the existing vault is untouched — the append-only
     /// crash invariant), and the anchor never runs ahead because it is
     /// written only after the commit it describes. Returns a
     /// [`BulkOutcome`] — how many ids were new AND how many the screen
@@ -5157,7 +5157,7 @@ impl PalaceStore {
         // function and never touched it. So an export from any vault that had
         // ever quarantined a drawer was refused by its own importer, and
         // because `INGEST_BATCH` commits per chunk the restore committed the
-        // earlier chunks and then aborted, leaving a silently partial palace
+        // earlier chunks and then aborted, leaving a silently partial vault
         // with none of the KG, entity or tunnel records applied.
         //
         // Fixed in the bulk path itself rather than at the call site in
@@ -5766,7 +5766,7 @@ impl PalaceStore {
     }
 
     /// Most recently written drawers (`ORDER BY updated_at`, so an edit
-    /// resurfaces a drawer; optionally scoped to a wing) — the palace's
+    /// resurfaces a drawer; optionally scoped to a wing) — the vault's
     /// "essential story" feed used by wake-up.
     pub fn recent(
         &self,
@@ -6901,7 +6901,7 @@ impl PalaceStore {
         Ok(())
     }
 
-    /// One chain record for a full-palace egress (C-track export
+    /// One chain record for a whole-vault egress (C-track export
     /// auditing) — unconditional on writable stores: an export is rare,
     /// operator-initiated, and exactly the event a compliance trail is
     /// for. The canonical binds the export's own manifest digest, so the
@@ -7934,7 +7934,7 @@ impl PalaceStore {
     /// (`search`, `recent`, `list_drawers`), so this one was never in scope:
     /// it returns names. But a NAME is agent-chosen text, and this function
     /// is the choke point under `undercroft_list_wings`, `taxonomy` (which
-    /// iterates it) and `PalaceStats.wings` — three agent-readable surfaces.
+    /// iterates it) and `VaultStats.wings` — three agent-readable surfaces.
     /// So a diverted drawer published the ROOM name it kept, and the reserved
     /// wing itself, to every one of them. That was true before the screen
     /// looked at destinations at all: an agent picking a poisoned ROOM plus
@@ -7945,7 +7945,7 @@ impl PalaceStore {
     /// wing, so there is nothing for a reviewer to name. The reviewer's door
     /// is `admission list`, which reads the queue directly.
     ///
-    /// Stated cost: `PalaceStats.wings` no longer counts the reserved wing,
+    /// Stated cost: `VaultStats.wings` no longer counts the reserved wing,
     /// so a vault holding only quarantined rows reports one fewer wing than
     /// it has rows in. That is the same trade every other fenced read makes,
     /// and the queue depth is on the admission surface rather than inferred
@@ -9948,11 +9948,11 @@ mod tests {
     use tempfile::TempDir;
     use undercroft_vault::{SecurityLevel, VaultManager};
 
-    fn store(level: SecurityLevel) -> (TempDir, PalaceStore) {
+    fn store(level: SecurityLevel) -> (TempDir, VaultStore) {
         let dir = TempDir::new().unwrap();
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", level).unwrap();
-        (dir, PalaceStore::open(vault).unwrap())
+        (dir, VaultStore::open(vault).unwrap())
     }
 
     /// ROADMAP O69. The hold must refuse while someone has the vault open,
@@ -10865,7 +10865,7 @@ mod tests {
 
     /// Exactly what `POST /v1/vaults/{id}/drawers` does: index the new
     /// drawer by the store's current row count.
-    fn rest_save(s: &mut PalaceStore, wing: &str, room: &str, text: &str) -> String {
+    fn rest_save(s: &mut VaultStore, wing: &str, room: &str, text: &str) -> String {
         let idx = s.next_append_index().unwrap() as u32;
         let d = Drawer::new(wing, room, text.into(), None, idx, "rest");
         s.upsert(&d).unwrap();
@@ -10937,7 +10937,7 @@ mod tests {
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
         let vault_dir = dir.path().join("vaults/test");
-        let mut store = PalaceStore::open(vault).unwrap();
+        let mut store = VaultStore::open(vault).unwrap();
         store.upsert(&drawer("w", "r", "durable words", 0)).unwrap();
         assert!(vault_dir.join("vault.json").exists());
         assert!(
@@ -10946,12 +10946,12 @@ mod tests {
         );
     }
 
-    fn external_store(level: SecurityLevel, dim: usize) -> (TempDir, PalaceStore) {
+    fn external_store(level: SecurityLevel, dim: usize) -> (TempDir, VaultStore) {
         let dir = TempDir::new().unwrap();
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", level).unwrap();
         let emb = Box::new(undercroft_core::ExternalEmbedder::new("acme-embed", dim));
-        (dir, PalaceStore::open_with_embedder(vault, emb).unwrap())
+        (dir, VaultStore::open_with_embedder(vault, emb).unwrap())
     }
 
     /// Bulk path: the whole batch commits in one transaction, the chain
@@ -10987,7 +10987,7 @@ mod tests {
             assert!(!hits.is_empty());
             drop(store);
             let mgr = VaultManager::open(dir.path(), None).unwrap();
-            let store2 = PalaceStore::open(mgr.unlock("test").unwrap()).unwrap();
+            let store2 = VaultStore::open(mgr.unlock("test").unwrap()).unwrap();
             assert!(store2.verify().unwrap().ok());
             assert_eq!(store2.count().unwrap(), 10);
         }
@@ -11537,7 +11537,7 @@ mod tests {
         // The destination's at-rest blob must be re-sealed under ITS key —
         // not the source's bytes, not plaintext.
         let (src_blob, dst_blob): (Vec<u8>, Vec<u8>) = {
-            let get = |s: &PalaceStore, id: &str| -> Vec<u8> {
+            let get = |s: &VaultStore, id: &str| -> Vec<u8> {
                 s.conn
                     .query_row(
                         "SELECT tok FROM drawer_tok WHERE id = ?1",
@@ -11987,13 +11987,13 @@ mod tests {
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.unlock("test").unwrap();
         assert_eq!(
-            PalaceStore::recorded_embedder(&vault).unwrap(),
+            VaultStore::recorded_embedder(&vault).unwrap(),
             Some(("external:acme-embed".to_string(), 8))
         );
         // Opening the external vault with the plain hash embedder must be
         // refused — a silent embedder swap degrades recall.
         assert!(matches!(
-            PalaceStore::open(mgr.unlock("test").unwrap()),
+            VaultStore::open(mgr.unlock("test").unwrap()),
             Err(StoreError::EmbedderMismatch { .. })
         ));
     }
@@ -12080,9 +12080,9 @@ mod tests {
         drop(s);
 
         // Reopen: reconciliation fast-forwards the anchor to the committed
-        // head and the palace is fully healthy again.
+        // head and the vault is fully healthy again.
         let mgr = VaultManager::open(dir.path(), None).unwrap();
-        let s = PalaceStore::open(mgr.unlock("test").unwrap()).unwrap();
+        let s = VaultStore::open(mgr.unlock("test").unwrap()).unwrap();
         assert_eq!(s.vault.writes(), 3, "anchor fast-forwarded");
         let db_head: String = s
             .conn
@@ -12129,7 +12129,7 @@ mod tests {
         drop(db);
 
         let mgr = VaultManager::open(dir.path(), None).unwrap();
-        match PalaceStore::open(mgr.unlock("test").unwrap()) {
+        match VaultStore::open(mgr.unlock("test").unwrap()) {
             Err(StoreError::Vault(VaultError::ManifestTampered)) => {}
             Err(e) => panic!("rollback must map to ManifestTampered, got: {e}"),
             Ok(_) => panic!("rollback must be detected at open"),
@@ -12831,7 +12831,7 @@ mod tests {
     /// every query term, and a small wing "arctic" whose one relevant drawer
     /// shares only one — so the corpus-wide candidate top-k is filled
     /// entirely by the loud wing and the scoped answer never enters it.
-    fn starved_wing_store() -> (TempDir, PalaceStore, String) {
+    fn starved_wing_store() -> (TempDir, VaultStore, String) {
         let (dir, mut s) = store(SecurityLevel::Sealed);
         for i in 0..400u32 {
             s.upsert(&drawer(
@@ -13446,7 +13446,7 @@ mod tests {
         // THE BULK PATH TOO — this is the half the first fix missed.
         // `import_record` is `/v1` only; CLI `import` and every sealed-bundle
         // restore go through `upsert_many`, which refused the same row and,
-        // because ingest commits per batch, left a partially restored palace.
+        // because ingest commits per batch, left a partially restored vault.
         let (_db, mut bulk) = store(SecurityLevel::Sealed);
         bulk.set_admission(true);
         let out = bulk.upsert_many(std::slice::from_ref(row)).unwrap();
@@ -13519,7 +13519,7 @@ mod tests {
         let q = landed.id.clone();
 
         // Baseline: excluded from all three reads.
-        let sees = |s: &PalaceStore| -> (bool, bool, bool) {
+        let sees = |s: &VaultStore| -> (bool, bool, bool) {
             let hits = s
                 .search(
                     "ignore previous instructions",
@@ -13998,7 +13998,7 @@ mod tests {
         assert!(
             !fdeidx.contains("pool_div"),
             "the FDE tier now consults `pool_div`. That is a real change and \
-             it needs company: the field doc on `PalaceStore::pool_div`, \
+             it needs company: the field doc on `VaultStore::pool_div`, \
              `architecture/index.html`'s env row and `docs/AGENTS.md` all say \
              the FDE tier does NOT consult it. Measure the tier first \
              (`pqscale` has no FDE analogue), then move all three."
@@ -14034,7 +14034,7 @@ mod tests {
         // threw this away and scanned.
         let tiny: Vec<i64> = (0..3).collect();
         assert_eq!(
-            PalaceStore::accept_filtered_pool(tiny.clone(), false, scope, hydrate_k, depth),
+            VaultStore::accept_filtered_pool(tiny.clone(), false, scope, hydrate_k, depth),
             Some(tiny),
             "a complete pool is exact at any size and must not be discarded"
         );
@@ -14043,14 +14043,14 @@ mod tests {
         // accepted it; the scoped floor is 1024, so it surrenders.
         let thin: Vec<i64> = (0..70).collect();
         assert!(
-            PalaceStore::accept_filtered_pool(thin, true, scope, hydrate_k, depth).is_none(),
+            VaultStore::accept_filtered_pool(thin, true, scope, hydrate_k, depth).is_none(),
             "a truncated 70-candidate pool over an 8192-row scope must surrender"
         );
 
         // Truncated and wide: the pool earns its place.
         let wide: Vec<i64> = (0..1024).collect();
         assert!(
-            PalaceStore::accept_filtered_pool(wide, true, scope, hydrate_k, depth).is_some(),
+            VaultStore::accept_filtered_pool(wide, true, scope, hydrate_k, depth).is_some(),
             "a truncated pool at the scoped floor is a fair substitute"
         );
 
@@ -14058,18 +14058,18 @@ mod tests {
         // "surrender when thin" would become "always surrender".
         let all: Vec<i64> = (0..40).collect();
         assert!(
-            PalaceStore::accept_filtered_pool(all, true, Some(40), hydrate_k, depth).is_some(),
+            VaultStore::accept_filtered_pool(all, true, Some(40), hydrate_k, depth).is_some(),
             "a pool holding the whole scope must be accepted"
         );
 
         // Unscoped (no narrowing resolved) keeps the historical `depth` test:
         // there is no scope population to size a floor against.
         assert!(
-            PalaceStore::accept_filtered_pool((0..4).collect(), true, None, hydrate_k, depth)
+            VaultStore::accept_filtered_pool((0..4).collect(), true, None, hydrate_k, depth)
                 .is_none()
         );
         assert!(
-            PalaceStore::accept_filtered_pool((0..5).collect(), true, None, hydrate_k, depth)
+            VaultStore::accept_filtered_pool((0..5).collect(), true, None, hydrate_k, depth)
                 .is_some()
         );
     }
@@ -14112,7 +14112,7 @@ mod tests {
         s.kg_set_authority(&fact, "canonical", "approved", Some("ada-employer"))
             .unwrap();
 
-        let count = |s: &PalaceStore| -> i64 {
+        let count = |s: &VaultStore| -> i64 {
             s.conn
                 .query_row(
                     "SELECT COUNT(*) FROM audit WHERE record_id LIKE 'read/%'",
@@ -14121,7 +14121,7 @@ mod tests {
                 )
                 .unwrap()
         };
-        let seen = |s: &PalaceStore| -> BTreeSet<String> {
+        let seen = |s: &VaultStore| -> BTreeSet<String> {
             let mut st = s
                 .conn
                 .prepare("SELECT DISTINCT record_id FROM audit WHERE record_id LIKE 'read/%'")
@@ -14142,11 +14142,11 @@ mod tests {
         // indistinguishable" trap.
         /// One surface door: its namespace, and a closure that drives it and
         /// reports how many rows of content it returned.
-        type Driver = (&'static str, Box<dyn Fn(&mut PalaceStore) -> usize>);
+        type Driver = (&'static str, Box<dyn Fn(&mut VaultStore) -> usize>);
         let mut drivers: Vec<Driver> = Vec::new();
         drivers.push((
             "search",
-            Box::new(|s: &mut PalaceStore| {
+            Box::new(|s: &mut VaultStore| {
                 s.search("quarterly", &SearchOptions::default())
                     .unwrap()
                     .len()
@@ -14155,7 +14155,7 @@ mod tests {
         let one = ids[0].clone();
         drivers.push((
             "get",
-            Box::new(move |s: &mut PalaceStore| {
+            Box::new(move |s: &mut VaultStore| {
                 s.get(&one, Read::Returned(ReadOp::Get))
                     .unwrap()
                     .iter()
@@ -14164,7 +14164,7 @@ mod tests {
         ));
         drivers.push((
             "recent",
-            Box::new(|s: &mut PalaceStore| {
+            Box::new(|s: &mut VaultStore| {
                 s.recent(Some("w"), 10, Read::Returned(ReadOp::Recent))
                     .unwrap()
                     .len()
@@ -14172,32 +14172,32 @@ mod tests {
         ));
         drivers.push((
             "list",
-            Box::new(|s: &mut PalaceStore| s.list_drawers(Some("w"), None, 50, 0).unwrap().len()),
+            Box::new(|s: &mut VaultStore| s.list_drawers(Some("w"), None, 50, 0).unwrap().len()),
         ));
         drivers.push((
             "diary",
-            Box::new(|s: &mut PalaceStore| s.diary_read("scribe", 10).unwrap().len()),
+            Box::new(|s: &mut VaultStore| s.diary_read("scribe", 10).unwrap().len()),
         ));
         let t = tunnel.clone();
         drivers.push((
             "tunnel",
-            Box::new(move |s: &mut PalaceStore| s.follow_tunnel(&t, 10).unwrap().len()),
+            Box::new(move |s: &mut VaultStore| s.follow_tunnel(&t, 10).unwrap().len()),
         ));
         drivers.push((
             "closet",
-            Box::new(|s: &mut PalaceStore| s.closet_index(Some("w")).unwrap().len()),
+            Box::new(|s: &mut VaultStore| s.closet_index(Some("w")).unwrap().len()),
         ));
         drivers.push((
             "hallways",
-            Box::new(|s: &mut PalaceStore| s.hallways("w", 10).unwrap().len().max(1)),
+            Box::new(|s: &mut VaultStore| s.hallways("w", 10).unwrap().len().max(1)),
         ));
         drivers.push((
             "admission-list",
-            Box::new(|s: &mut PalaceStore| s.admission_pending().unwrap().len().max(1)),
+            Box::new(|s: &mut VaultStore| s.admission_pending().unwrap().len().max(1)),
         ));
         drivers.push((
             "kg-query",
-            Box::new(|s: &mut PalaceStore| {
+            Box::new(|s: &mut VaultStore| {
                 s.kg_query_entity("ada", None, "outgoing", Read::Returned(ReadOp::KgQuery))
                     .unwrap()
                     .len()
@@ -14205,7 +14205,7 @@ mod tests {
         ));
         drivers.push((
             "kg-timeline",
-            Box::new(|s: &mut PalaceStore| {
+            Box::new(|s: &mut VaultStore| {
                 s.kg_timeline(None, Read::Returned(ReadOp::KgTimeline))
                     .unwrap()
                     .len()
@@ -14213,7 +14213,7 @@ mod tests {
         ));
         drivers.push((
             "kg-entities",
-            Box::new(|s: &mut PalaceStore| {
+            Box::new(|s: &mut VaultStore| {
                 s.kg_entities(50, 0, Read::Returned(ReadOp::KgEntities))
                     .unwrap()
                     .len()
@@ -14221,7 +14221,7 @@ mod tests {
         ));
         drivers.push((
             "kg-canonical",
-            Box::new(|s: &mut PalaceStore| {
+            Box::new(|s: &mut VaultStore| {
                 s.lookup_canonical("ada-employer", Read::Returned(ReadOp::KgCanonical))
                     .unwrap()
                     .iter()
@@ -14268,7 +14268,7 @@ mod tests {
             s.upsert(&drawer("w", "r", "the same text repeated", i))
                 .unwrap();
         }
-        let count = |s: &PalaceStore| -> i64 {
+        let count = |s: &VaultStore| -> i64 {
             s.conn
                 .query_row(
                     "SELECT COUNT(*) FROM audit WHERE record_id LIKE 'read/%'",
@@ -14317,7 +14317,7 @@ mod tests {
         let (dir, mut s) = store(SecurityLevel::Sealed);
         s.upsert(&drawer("w", "r", "the quarterly plan is finalized", 0))
             .unwrap();
-        let audit_reads = |s: &PalaceStore| -> i64 {
+        let audit_reads = |s: &VaultStore| -> i64 {
             s.conn
                 .query_row(
                     "SELECT COUNT(*) FROM audit WHERE record_id LIKE 'read/%'",
@@ -14354,7 +14354,7 @@ mod tests {
         assert_eq!(audit_reads(&s), 1);
     }
 
-    /// Export auditing: every full-palace egress leaves a chain record
+    /// Export auditing: every whole-vault egress leaves a chain record
     /// binding the export's own manifest digest, and the chain stays
     /// green through it.
     #[test]
@@ -15711,7 +15711,7 @@ mod tests {
         {
             let mgr = VaultManager::open(dir.path(), None).unwrap();
             let vault = mgr.create("test", SecurityLevel::HmacOnly).unwrap();
-            let mut s = PalaceStore::open(vault).unwrap();
+            let mut s = VaultStore::open(vault).unwrap();
             for i in 0..120 {
                 s.upsert(&drawer("w", "r", &format!("routine note number {i}"), i))
                     .unwrap();
@@ -15752,7 +15752,7 @@ mod tests {
         // a search that never engaged the tier.
         {
             let mgr = VaultManager::open(dir.path(), None).unwrap();
-            let mut s = PalaceStore::open(mgr.unlock("test").unwrap()).unwrap();
+            let mut s = VaultStore::open(mgr.unlock("test").unwrap()).unwrap();
             s.set_pq(true);
             let hits = s.search(query, &SearchOptions::default()).unwrap();
             assert_eq!(
@@ -15993,7 +15993,7 @@ mod tests {
             (0..n).map(|i| (i as i64, wing_of(i))).collect()
         };
         let want = 100usize;
-        let draw = |s: &PalaceStore, items: &[(i64, String)]| {
+        let draw = |s: &VaultStore, items: &[(i64, String)]| {
             s.keyed_sample_capped(
                 "test-cap",
                 items,
@@ -16002,7 +16002,7 @@ mod tests {
                 |(_, w)| (w.clone(), None),
             )
         };
-        let uncapped = |s: &PalaceStore, items: &[(i64, String)]| {
+        let uncapped = |s: &VaultStore, items: &[(i64, String)]| {
             s.keyed_sample("test-cap", items, want, |(seq, _)| {
                 seq.to_le_bytes().to_vec()
             })
@@ -16065,7 +16065,7 @@ mod tests {
         let (_d, mut s) = store(SecurityLevel::Sealed);
         type Row = (i64, String, Option<String>);
         let want = 100usize;
-        let draw = |s: &PalaceStore, items: &[Row]| {
+        let draw = |s: &VaultStore, items: &[Row]| {
             s.keyed_sample_capped(
                 "test-agent-cap",
                 items,
@@ -16613,7 +16613,7 @@ mod tests {
             limit: 5,
             ..Default::default()
         };
-        let top = |s: &PalaceStore| -> String {
+        let top = |s: &VaultStore| -> String {
             s.search("zanzibar sabbatical quorum", &opts)
                 .unwrap()
                 .first()
@@ -17765,7 +17765,7 @@ mod tests {
         // computes them.
         let mut emitted: Vec<String> = CODEBOOK_ARTIFACTS
             .iter()
-            .map(|a| PalaceStore::codebook_gauge_name(a))
+            .map(|a| VaultStore::codebook_gauge_name(a))
             .collect();
 
         // Leg 2: every literal `set_gauge("…"` in the workspace. `crates/` is
@@ -17942,7 +17942,7 @@ mod tests {
         .unwrap();
         drop(conn);
         let mgr = VaultManager::open(dir.path(), None).unwrap();
-        let s = PalaceStore::open(mgr.unlock("test").unwrap()).unwrap();
+        let s = VaultStore::open(mgr.unlock("test").unwrap()).unwrap();
         let report = s.verify().unwrap();
         assert!(!report.ok());
         assert_eq!(report.bad_records, vec![dr.id.clone()]);
@@ -17964,7 +17964,7 @@ mod tests {
         conn.execute("DELETE FROM audit WHERE seq = 1", []).unwrap();
         drop(conn);
         let mgr = VaultManager::open(dir.path(), None).unwrap();
-        let s = PalaceStore::open(mgr.unlock("test").unwrap()).unwrap();
+        let s = VaultStore::open(mgr.unlock("test").unwrap()).unwrap();
         assert!(!s.verify().unwrap().chain_ok);
     }
 
@@ -18055,7 +18055,7 @@ mod tests {
 
     #[test]
     fn fts_index_exists_only_in_hmac_only_vaults() {
-        let count_fts = |s: &PalaceStore| -> i64 {
+        let count_fts = |s: &VaultStore| -> i64 {
             s.conn
                 .query_row(
                     "SELECT COUNT(*) FROM sqlite_master WHERE name LIKE 'drawers_fts%'",
@@ -18105,7 +18105,7 @@ mod tests {
         let (_d, mut s) = store(SecurityLevel::HmacOnly);
         // Assert against the index itself — the full-scan fallback in
         // search() would mask a stale index.
-        let fts_matches = |s: &PalaceStore, term: &str| -> i64 {
+        let fts_matches = |s: &VaultStore, term: &str| -> i64 {
             s.conn
                 .query_row(
                     "SELECT COUNT(*) FROM drawers_fts WHERE drawers_fts MATCH ?1",
@@ -18458,12 +18458,12 @@ mod tests {
             .search("flux capacitor power", &SearchOptions::default())
             .unwrap();
         assert!(hits[0].drawer.content.contains("flux"));
-        let page_count = |s: &PalaceStore| -> i64 {
+        let page_count = |s: &VaultStore| -> i64 {
             s.conn
                 .query_row("SELECT COUNT(*) FROM pq_page", [], |r| r.get(0))
                 .unwrap()
         };
-        let tail_count = |s: &PalaceStore| -> i64 {
+        let tail_count = |s: &VaultStore| -> i64 {
             s.conn
                 .query_row("SELECT COUNT(*) FROM drawer_pq", [], |r| r.get(0))
                 .unwrap()
@@ -18694,7 +18694,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", SecurityLevel::HmacOnly).unwrap();
-        let mut s = PalaceStore::open(vault).unwrap();
+        let mut s = VaultStore::open(vault).unwrap();
         s.upsert(&drawer("w", "r", "memory written before the index", 0))
             .unwrap();
         drop(s);
@@ -18705,7 +18705,7 @@ mod tests {
         conn.execute_batch("DROP TABLE drawers_fts;").unwrap();
         drop(conn);
         let mgr = VaultManager::open(dir.path(), None).unwrap();
-        let mut s = PalaceStore::open(mgr.unlock("test").unwrap()).unwrap();
+        let mut s = VaultStore::open(mgr.unlock("test").unwrap()).unwrap();
         s.set_fts_prefilter_min(Some(0));
         let hits = s
             .search("memory written before", &SearchOptions::default())
@@ -18937,7 +18937,7 @@ mod tests {
     /// identity recorded, and embeddings that are not what v2 would produce.
     /// Junk vectors are the point — if the migration does not actually run,
     /// the drawer stays unfindable and the test says so.
-    fn make_it_look_like_v1(s: &PalaceStore) {
+    fn make_it_look_like_v1(s: &VaultStore) {
         s.conn
             .execute(
                 "UPDATE meta SET value = ?1 WHERE key = 'embedder_name'",
@@ -18964,9 +18964,9 @@ mod tests {
         }
     }
 
-    fn reopen_vault(dir: &TempDir) -> Result<PalaceStore, StoreError> {
+    fn reopen_vault(dir: &TempDir) -> Result<VaultStore, StoreError> {
         let mgr = VaultManager::open(dir.path(), None).unwrap();
-        PalaceStore::open(mgr.unlock("test").unwrap())
+        VaultStore::open(mgr.unlock("test").unwrap())
     }
 
     /// Every known predecessor migrates, not just the oldest. v2 shipped in no
@@ -18982,7 +18982,7 @@ mod tests {
             let mgr = VaultManager::open(dir.path(), None).unwrap();
             let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
             {
-                let mut s = PalaceStore::open(vault).unwrap();
+                let mut s = VaultStore::open(vault).unwrap();
                 s.upsert(&drawer("w", "r", "the heron files verbatim drawers", 0))
                     .unwrap();
                 make_it_look_like_v1(&s);
@@ -19019,7 +19019,7 @@ mod tests {
             let mgr = VaultManager::open(dir.path(), None).unwrap();
             let vault = mgr.create("test", level).unwrap();
             {
-                let mut s = PalaceStore::open(vault).unwrap();
+                let mut s = VaultStore::open(vault).unwrap();
                 s.upsert(&drawer("w", "r", "the heron files verbatim drawers", 0))
                     .unwrap();
                 s.upsert(&drawer("w", "r", "unrelated note about rain", 1))
@@ -19065,8 +19065,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let vdir = dir.path().join("vaults/test");
         let mgr = VaultManager::open(dir.path(), None).unwrap();
-        let mut s =
-            PalaceStore::open(mgr.create("test", SecurityLevel::HmacOnly).unwrap()).unwrap();
+        let mut s = VaultStore::open(mgr.create("test", SecurityLevel::HmacOnly).unwrap()).unwrap();
         s.upsert(&drawer("w", "r", "the heron files verbatim drawers", 0))
             .unwrap();
         let anchored_after_the_write = std::fs::read(vdir.join("vault.json")).unwrap();
@@ -19120,7 +19119,7 @@ mod tests {
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         {
             let mut s =
-                PalaceStore::open(mgr.create("test", SecurityLevel::HmacOnly).unwrap()).unwrap();
+                VaultStore::open(mgr.create("test", SecurityLevel::HmacOnly).unwrap()).unwrap();
             s.upsert(&drawer("w", "r", "the heron files verbatim drawers", 0))
                 .unwrap();
         }
@@ -19130,7 +19129,7 @@ mod tests {
             "a read-only handle must refuse to anchor"
         );
         // Premise: a writable handle on the same vault accepts it.
-        let mut w = PalaceStore::open(mgr.unlock("test").unwrap()).unwrap();
+        let mut w = VaultStore::open(mgr.unlock("test").unwrap()).unwrap();
         assert!(w.tighten_anchor().is_ok());
     }
 
@@ -19182,8 +19181,8 @@ mod tests {
         m.iter().map(|(k, v)| (k.clone(), v.len())).collect()
     }
 
-    fn ro(mgr: &VaultManager, id: &str) -> Result<PalaceStore, StoreError> {
-        PalaceStore::open_read_only(
+    fn ro(mgr: &VaultManager, id: &str) -> Result<VaultStore, StoreError> {
+        VaultStore::open_read_only(
             mgr.unlock_as(id, undercroft_vault::Access::ReadOnly)
                 .unwrap(),
             Box::new(HashEmbedder),
@@ -19200,7 +19199,7 @@ mod tests {
         let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
         let vdir = vault.current_db_path().parent().unwrap().to_path_buf();
         {
-            let mut s = PalaceStore::open(vault).unwrap();
+            let mut s = VaultStore::open(vault).unwrap();
             for i in 0..rows {
                 s.upsert(&drawer(
                     "w",
@@ -19223,7 +19222,7 @@ mod tests {
     fn a_legacy_named_vault_is_renamed_on_a_writable_open_and_verifies() {
         let (_d, mgr, vdir) = legacy_named_vault(3);
         let s =
-            PalaceStore::open(mgr.unlock("test").unwrap()).expect("a legacy name is not a verdict");
+            VaultStore::open(mgr.unlock("test").unwrap()).expect("a legacy name is not a verdict");
         assert_eq!(s.count().unwrap(), 3, "every row came across the rename");
         assert!(
             vdir.join("vault.db").exists(),
@@ -19274,7 +19273,7 @@ mod tests {
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
         let vdir = vault.current_db_path().parent().unwrap().to_path_buf();
-        let mut leaked = PalaceStore::open(vault).unwrap();
+        let mut leaked = VaultStore::open(vault).unwrap();
         for i in 0..5u32 {
             leaked
                 .upsert(&drawer(
@@ -19296,7 +19295,7 @@ mod tests {
             wal > 0,
             "premise: the WAL must be hot, or this test proves nothing ({wal} bytes)"
         );
-        let s = PalaceStore::open(mgr.unlock("test").unwrap()).unwrap();
+        let s = VaultStore::open(mgr.unlock("test").unwrap()).unwrap();
         assert_eq!(
             s.count().unwrap(),
             5,
@@ -19314,7 +19313,7 @@ mod tests {
         std::fs::write(vdir.join("vault.db"), b"a stray copy").unwrap();
         assert!(
             matches!(
-                PalaceStore::open(mgr.unlock("test").unwrap()),
+                VaultStore::open(mgr.unlock("test").unwrap()),
                 Err(StoreError::DatabaseAmbiguous { .. })
             ),
             "a writable open must refuse"
@@ -19346,7 +19345,7 @@ mod tests {
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", SecurityLevel::HmacOnly).unwrap();
         {
-            let mut s = PalaceStore::open(vault).unwrap();
+            let mut s = VaultStore::open(vault).unwrap();
             s.upsert(&drawer("w", "r", "the heron files verbatim drawers", 0))
                 .unwrap();
         }
@@ -19355,7 +19354,7 @@ mod tests {
         // rename leaves behind.
         let lagging = std::fs::read(vdir.join("vault.json")).unwrap();
         {
-            let mut s = PalaceStore::open(mgr.unlock("test").unwrap()).unwrap();
+            let mut s = VaultStore::open(mgr.unlock("test").unwrap()).unwrap();
             s.upsert(&drawer("w", "r", "a second note about the estuary", 1))
                 .unwrap();
         }
@@ -19388,7 +19387,7 @@ mod tests {
         // Premise, both halves: the writable open heals it (so the bytes
         // above were genuinely healable), and once healed it reports nothing.
         {
-            drop(PalaceStore::open(mgr.unlock("test").unwrap()).unwrap());
+            drop(VaultStore::open(mgr.unlock("test").unwrap()).unwrap());
         }
         assert_ne!(
             vault_bytes(&vdir),
@@ -19415,7 +19414,7 @@ mod tests {
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
         {
-            let mut s = PalaceStore::open(vault).unwrap();
+            let mut s = VaultStore::open(vault).unwrap();
             s.upsert(&drawer("w", "r", "the heron files verbatim drawers", 0))
                 .unwrap();
         }
@@ -19438,7 +19437,7 @@ mod tests {
         );
 
         // Premise: the writable open is the one that removes it.
-        drop(PalaceStore::open(mgr.unlock("test").unwrap()).unwrap());
+        drop(VaultStore::open(mgr.unlock("test").unwrap()).unwrap());
         assert!(
             !staging.exists(),
             "premise: a writable open discards a torn staging manifest"
@@ -19475,7 +19474,7 @@ mod tests {
 
         // Premise: the writable open is allowed to create it, so the refusal
         // above is about the posture and not about an unopenable vault.
-        drop(PalaceStore::open(mgr.unlock("test").unwrap()).unwrap());
+        drop(VaultStore::open(mgr.unlock("test").unwrap()).unwrap());
         assert!(db.exists());
         assert!(ro(&mgr, "test").is_ok(), "and it opens read-only after");
     }
@@ -19503,7 +19502,7 @@ mod tests {
         let db = vault.db_path();
         assert!(!db.exists(), "premise: create() writes no database");
 
-        let got = PalaceStore::recorded_embedder(&vault).expect("absent is not an error");
+        let got = VaultStore::recorded_embedder(&vault).expect("absent is not an error");
         assert_eq!(got, None, "nothing is recorded on a vault with no database");
         assert!(
             !db.exists(),
@@ -19522,12 +19521,12 @@ mod tests {
         // Premise: once a database exists this really does read the identity,
         // so the None above is about absence and not about a reader that
         // always answers None.
-        let mut s = PalaceStore::open(mgr.unlock("test").unwrap()).unwrap();
+        let mut s = VaultStore::open(mgr.unlock("test").unwrap()).unwrap();
         s.upsert(&drawer("w", "r", "a drawer, so an identity is recorded", 0))
             .unwrap();
         drop(s);
         let v = mgr.unlock("test").unwrap();
-        let (name, dim) = PalaceStore::recorded_embedder(&v)
+        let (name, dim) = VaultStore::recorded_embedder(&v)
             .unwrap()
             .expect("an identity is recorded once the store has been opened");
         assert!(!name.is_empty() && dim > 0, "got {name:?}/{dim}");
@@ -19555,7 +19554,7 @@ mod tests {
     #[test]
     fn read_schema_covers_every_added_column() {
         let declared = |table: &str| -> Vec<&'static str> {
-            PalaceStore::READ_SCHEMA
+            VaultStore::READ_SCHEMA
                 .iter()
                 .find(|(t, _)| *t == table)
                 .map(|(_, c)| c.to_vec())
@@ -19614,7 +19613,7 @@ mod tests {
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
         {
-            let mut s = PalaceStore::open(vault).unwrap();
+            let mut s = VaultStore::open(vault).unwrap();
             s.upsert(&drawer("w", "r", "the heron files verbatim drawers", 0))
                 .unwrap();
             assert!(ro(&mgr, "test").is_ok(), "premise: it opens before");
@@ -19632,7 +19631,7 @@ mod tests {
             ),
         }
         // Premise: the writable open migrates it, and then read-only works.
-        drop(PalaceStore::open(mgr.unlock("test").unwrap()).unwrap());
+        drop(VaultStore::open(mgr.unlock("test").unwrap()).unwrap());
         assert!(ro(&mgr, "test").is_ok());
 
         // **A missing COLUMN, not just a missing table** — the case A10
@@ -19644,7 +19643,7 @@ mod tests {
         // dropped a whole table, so it could not have seen this.
         for (table, column) in [("kg_triples", "terms"), ("kg_entities", "name_rest")] {
             {
-                let s = PalaceStore::open(mgr.unlock("test").unwrap()).unwrap();
+                let s = VaultStore::open(mgr.unlock("test").unwrap()).unwrap();
                 s.conn
                     .execute_batch(&format!("ALTER TABLE {table} DROP COLUMN {column}"))
                     .unwrap();
@@ -19663,7 +19662,7 @@ mod tests {
             }
             // And the writable open puts it back, so the refusal is about the
             // posture rather than about an unopenable vault.
-            drop(PalaceStore::open(mgr.unlock("test").unwrap()).unwrap());
+            drop(VaultStore::open(mgr.unlock("test").unwrap()).unwrap());
             assert!(ro(&mgr, "test").is_ok(), "{table}.{column} re-added");
         }
     }
@@ -19690,7 +19689,7 @@ mod tests {
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", SecurityLevel::HmacOnly).unwrap();
         {
-            let mut s = PalaceStore::open(vault).unwrap();
+            let mut s = VaultStore::open(vault).unwrap();
             s.upsert(&drawer("w", "r", "the heron files verbatim drawers", 0))
                 .unwrap();
         }
@@ -19721,13 +19720,13 @@ mod tests {
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", SecurityLevel::HmacOnly).unwrap();
         {
-            let mut s = PalaceStore::open(vault).unwrap();
+            let mut s = VaultStore::open(vault).unwrap();
             s.upsert(&drawer("w", "r", "the heron files verbatim drawers", 0))
                 .unwrap();
         }
         let db_after_one = std::fs::read(vdir.join("vault.db")).unwrap();
         {
-            let mut s = PalaceStore::open(mgr.unlock("test").unwrap()).unwrap();
+            let mut s = VaultStore::open(mgr.unlock("test").unwrap()).unwrap();
             s.upsert(&drawer("w", "r", "a second note about the estuary", 1))
                 .unwrap();
         }
@@ -19763,19 +19762,19 @@ mod tests {
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
         {
-            let s = PalaceStore::open(vault).unwrap();
+            let s = VaultStore::open(vault).unwrap();
             s.conn
                 .execute("DELETE FROM meta WHERE key LIKE 'embedder_%'", [])
                 .unwrap();
         }
         assert!(
-            PalaceStore::recorded_embedder(&mgr.unlock("test").unwrap())
+            VaultStore::recorded_embedder(&mgr.unlock("test").unwrap())
                 .unwrap()
                 .is_none(),
             "premise: the vault records no identity going in"
         );
         drop(
-            PalaceStore::open_read_only(
+            VaultStore::open_read_only(
                 mgr.unlock_as("test", undercroft_vault::Access::ReadOnly)
                     .unwrap(),
                 Box::new(undercroft_core::HashEmbedder),
@@ -19783,15 +19782,15 @@ mod tests {
             .unwrap(),
         );
         assert!(
-            PalaceStore::recorded_embedder(&mgr.unlock("test").unwrap())
+            VaultStore::recorded_embedder(&mgr.unlock("test").unwrap())
                 .unwrap()
                 .is_none(),
             "a read-only open stamped an embedder identity"
         );
         // Premise: the writable open does record it, so the assertion above
         // is about the posture and not about the vault being unopenable.
-        drop(PalaceStore::open(mgr.unlock("test").unwrap()).unwrap());
-        assert!(PalaceStore::recorded_embedder(&mgr.unlock("test").unwrap())
+        drop(VaultStore::open(mgr.unlock("test").unwrap()).unwrap());
+        assert!(VaultStore::recorded_embedder(&mgr.unlock("test").unwrap())
             .unwrap()
             .is_some());
     }
@@ -19805,12 +19804,12 @@ mod tests {
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
         {
-            let mut s = PalaceStore::open(vault).unwrap();
+            let mut s = VaultStore::open(vault).unwrap();
             s.upsert(&drawer("w", "r", "the heron files verbatim drawers", 0))
                 .unwrap();
             make_it_look_like_v1(&s);
         }
-        let read_vector = |s: &PalaceStore| -> Vec<f32> {
+        let read_vector = |s: &VaultStore| -> Vec<f32> {
             let (id, blob): (String, Vec<u8>) = s
                 .conn
                 .query_row("SELECT id, embedding FROM drawers", [], |r| {
@@ -19853,7 +19852,7 @@ mod tests {
         let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
         let victim: String;
         {
-            let mut s = PalaceStore::open(vault).unwrap();
+            let mut s = VaultStore::open(vault).unwrap();
             s.upsert(&drawer("w", "r", "the heron files verbatim drawers", 0))
                 .unwrap();
             s.upsert(&drawer("w", "r", "a second intact drawer about rain", 1))
@@ -19914,7 +19913,7 @@ mod tests {
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
         {
-            let mut s = PalaceStore::open(vault).unwrap();
+            let mut s = VaultStore::open(vault).unwrap();
             s.upsert(&drawer("w", "r", "the heron files verbatim drawers", 0))
                 .unwrap();
             // An identity this build does not know how to migrate.
@@ -19953,7 +19952,7 @@ mod tests {
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
         let staged = {
-            let mut s = PalaceStore::open(vault).unwrap();
+            let mut s = VaultStore::open(vault).unwrap();
             s.upsert(&drawer("w", "r", "the heron files verbatim drawers", 0))
                 .unwrap();
             make_it_look_like_v1(&s);
@@ -20014,7 +20013,7 @@ mod tests {
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
         {
-            let mut s = PalaceStore::open(vault).unwrap();
+            let mut s = VaultStore::open(vault).unwrap();
             s.upsert(&drawer("w", "r", "the heron files verbatim drawers", 0))
                 .unwrap();
             make_it_look_like_v1(&s);
@@ -20309,7 +20308,7 @@ mod tests {
     /// releases and nothing read the count; the in-process embedders counted
     /// nothing. This opens a store on a HEALTHY switchable model — so the
     /// open's own calibration probes count nothing, which is the premise —
-    /// breaks it, and watches `PalaceStats.embed_failures` move once per
+    /// breaks it, and watches `VaultStats.embed_failures` move once per
     /// degraded WRITE and once per degraded QUERY, then stop moving once the
     /// model recovers. The write lands verbatim throughout: a failed embed
     /// cannot fail a write, which is exactly why the count is the only
@@ -20321,7 +20320,7 @@ mod tests {
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
         let broken = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let mut s = PalaceStore::open_with_embedder(
+        let mut s = VaultStore::open_with_embedder(
             vault,
             Box::new(FlakyEmbedder {
                 broken: broken.clone(),
@@ -20432,7 +20431,7 @@ mod tests {
     /// `search` overwrites each candidate's fusion score with the reranker's
     /// and re-sorts, so a failed pass writes `0.0` — the same value a
     /// genuinely irrelevant passage earns. Both halves are asserted: the
-    /// count reaches `PalaceStats`, and the ordering damage it is the only
+    /// count reaches `VaultStats`, and the ordering damage it is the only
     /// evidence of is pinned, so nobody can read the counter as cosmetic.
     #[test]
     fn stats_reports_every_rerank_score_the_model_degraded() {
@@ -20507,7 +20506,7 @@ mod tests {
     /// The late-interaction half of the same rule (ROADMAP O131): a doc-side
     /// failure at WRITE time leaves the drawer with no token matrix at rest,
     /// and a query-side failure retires the stage for that search. Both are
-    /// counted through one number on `PalaceStats`.
+    /// counted through one number on `VaultStats`.
     #[test]
     fn stats_reports_every_late_encode_the_model_degraded() {
         use std::sync::atomic::Ordering;
@@ -20622,7 +20621,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
-        let s = PalaceStore::open(vault).unwrap();
+        let s = VaultStore::open(vault).unwrap();
         assert_eq!(s.sem_floor, 0.0, "hash DECLARES floor 0; nothing measures");
     }
 
@@ -20680,7 +20679,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
-        let mut s = PalaceStore::open_with_embedder(vault, Box::new(TopicEmbedder)).unwrap();
+        let mut s = VaultStore::open_with_embedder(vault, Box::new(TopicEmbedder)).unwrap();
         let measured = s.sem_floor;
         assert!(
             (0.40..0.60).contains(&measured),
@@ -20751,7 +20750,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
-        let mut s = PalaceStore::open_with_embedder(vault, Box::new(TopicEmbedder)).unwrap();
+        let mut s = VaultStore::open_with_embedder(vault, Box::new(TopicEmbedder)).unwrap();
         // The gold: the query's topic, in Arabic script — no letter it
         // shares with the query CAN match.
         let gold = drawer("w", "r", "اجتماع موضوع الفا في القاعة الكبيرة", 0);
@@ -20822,7 +20821,7 @@ mod tests {
         );
     }
 
-    /// End to end, through the real [`PalaceStore::search`], and the failure
+    /// End to end, through the real [`VaultStore::search`], and the failure
     /// this whole mechanism exists to close.
     ///
     /// The gate was one const, 0.56, calibrated to the hash embedder's ~0
@@ -20842,7 +20841,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
-        let mut s = PalaceStore::open_with_embedder(vault, Box::new(HighFloorEmbedder)).unwrap();
+        let mut s = VaultStore::open_with_embedder(vault, Box::new(HighFloorEmbedder)).unwrap();
         for (i, body) in [
             "the printer jammed again this morning and the queue backed up",
             "she planted tulips along the fence by the garden shed",
@@ -20881,7 +20880,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
-        let s = PalaceStore::open_with_embedder(
+        let s = VaultStore::open_with_embedder(
             vault,
             Box::new(undercroft_core::embed::ExternalEmbedder::new("gateway", 8)),
         )
@@ -21056,7 +21055,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", SecurityLevel::HmacOnly).unwrap();
-        let mut s = PalaceStore::open(vault).unwrap();
+        let mut s = VaultStore::open(vault).unwrap();
         assert!(s.fts);
         s.set_fts_prefilter_min(Some(1));
         s.upsert(&drawer("w", "r", "das Büro in der Hauptstraße", 0))
@@ -21228,7 +21227,7 @@ mod tests {
     /// cannot justify a precision decision; this is the missing half, and every
     /// rule that ADMITS has to come through here first.
     ///
-    /// Measured end to end through the real [`PalaceStore::search`] at
+    /// Measured end to end through the real [`VaultStore::search`] at
     /// **realistic drawer length**. At one sentence the cosine alone clears
     /// `HASH_ADMISSION_GATE` and masks whatever the lexical channels do —
     /// measured, 62.5% of Greek's supposedly-unreachable rows were admitted by
@@ -22343,7 +22342,7 @@ mod tests {
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
         {
-            let mut s = PalaceStore::open(vault).unwrap();
+            let mut s = VaultStore::open(vault).unwrap();
             s.upsert(&drawer("w", "r", "a note", 0)).unwrap();
             s.conn
                 .execute(
@@ -22367,7 +22366,7 @@ mod tests {
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
         {
-            let mut s = PalaceStore::open(vault).unwrap();
+            let mut s = VaultStore::open(vault).unwrap();
             s.upsert(&drawer("w", "r", "the heron files drawers", 0))
                 .unwrap();
             s.pq_schema().unwrap();
@@ -22402,7 +22401,7 @@ mod tests {
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
         {
-            let mut s = PalaceStore::open(vault).unwrap();
+            let mut s = VaultStore::open(vault).unwrap();
             let batch: Vec<Drawer> = (0..N)
                 .map(|i| {
                     drawer(

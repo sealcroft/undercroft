@@ -55,6 +55,45 @@ was found by reading instead. Tests 824 → 825.
 
 Tests 828 → 834, e2e 483 → 484. `UPGRADING.md` carries O123, O124 and O127.
 
+### the hierarchy word names one level again: `VaultStore`, `VaultStats` (O112)
+
+**ROADMAP O112 RULED AND CLOSED 2026-09-09.** Every doctrinal surface says a
+palace CONTAINS vaults; the code said one vault IS a `PalaceStore`. O7 fixed
+that word on the database filename; this is the same defect in identifiers,
+strings and prose.
+
+Ruled option A by the maintainer after a four-agent analysis — domain model,
+an adversarial case built to REFUTE the rename, blast radius, and precedent —
+all four returning A, the adversarial one reporting that its case failed. The
+decisive findings: O5's closure explicitly disclaims the reading that would
+have kept the names, and `git log -S` shows the struct and the contradicting
+doctrine were introduced in the SAME commit, so neither postdates the other.
+
+`PalaceStore` → `VaultStore` and `PalaceStats` → `VaultStats` (305 + 35 sites,
+a clean rename with no alias: the crates are workspace-internal, and an alias
+would have left the word in place and defeated the gate). Nothing moves on
+disk or on the wire — serde emits field names, not struct names. The
+empty-state wording is unified on "vault" across CLI, MCP and `/v1`; it was
+three different sentences, and the MCP one contradicted itself two lines
+apart. Five CLI `--help` strings, the MCP tool description, `palace.bundle` →
+`vault.bundle`, ~60 comment and prose sites in the crates, 31 in the published
+docs and website, and a re-rendered Mermaid diagram.
+
+Gated by a new preflight scanning `crates docs website/src tests deploy
+architecture README.md CLAUDE.md` — wider than the entry proposed, because its
+own scope excluded `website/` and `README.md` where the most public per-vault
+uses lived — with **94 allowed installation-level shapes carrying a reason
+each, counted in both directions**. Its premise probe caught four real defects
+in the gate during construction, including an allowance that swallowed every
+line in the tree. `ROADMAP` and `CHANGELOG` keep the old names as historical
+record; `CLAUDE.md` is updated, because it describes the tree as it is.
+
+Three of the entry's own claims were wrong and are corrected in it: the site
+counts, the proposed compatibility alias (mutually exclusive with its own
+gate), and `Palace Monitor`, which is per-vault rather than palace-wide — its
+name stays, as a decision with an argument. O133 filed for an unrelated defect
+the analysis surfaced.
+
 ### the other two model roles count their failures too (O131)
 
 **ROADMAP O131 FILED AND CLOSED 2026-09-08.** O122's sweep filed the sibling;

@@ -188,7 +188,7 @@ fn signed_bundle_migrates_a_palace_with_its_knowledge_graph() {
         .expect("sender printed")
         .to_string();
 
-    let bundle_path = work.path().join("palace.bundle");
+    let bundle_path = work.path().join("vault.bundle");
     cmd(&src_home)
         .args([
             "export",
@@ -1099,7 +1099,7 @@ fn a_partial_refine_is_recorded_on_the_cli_and_over_v1_and_an_empty_one_is_not()
     assert_eq!(
         refine_egresses(&home),
         0,
-        "premise: a fresh palace has no refine egress"
+        "premise: a fresh vault has no refine egress"
     );
 
     // CLI: the run fails on the first drawer's write, and one record binds

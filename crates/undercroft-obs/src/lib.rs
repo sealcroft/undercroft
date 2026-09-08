@@ -219,7 +219,7 @@ pub fn hmac_verify_failed(surface: &str) {
 /// nothing else: no vault, no drawer, no text.
 ///
 /// The durable half of the signal. The live half is
-/// `PalaceStats.embed_failures`, read from the embedder itself on every
+/// `VaultStats.embed_failures`, read from the embedder itself on every
 /// stats surface; this counter exists so a served process whose stats
 /// nobody polls still has a series an alert can fire on.
 #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
@@ -437,7 +437,7 @@ pub const GAUGE_NAMES: &[&str] = &[
     "store_bytes",
     // Trained index artifacts: how many times each codebook or centroid set
     // has been trained in this vault (see
-    // `PalaceStore::codebook_generation_bump`). A step means every row coded
+    // `VaultStore::codebook_generation_bump`). A step means every row coded
     // against the previous generation was re-coded.
     "codebook_generation_pq_codebook",
     "codebook_generation_pq_ivf",

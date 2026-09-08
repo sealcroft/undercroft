@@ -333,7 +333,7 @@ impl Vault {
         self.level
     }
 
-    /// The write count the manifest anchor held when THIS handle last anchored — not the live count, which `PalaceStats.writes` reads from `chain_meta`.
+    /// The write count the manifest anchor held when THIS handle last anchored — not the live count, which `VaultStats.writes` reads from `chain_meta`.
     pub fn writes(&self) -> u64 {
         self.manifest.writes
     }

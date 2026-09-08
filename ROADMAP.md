@@ -3988,7 +3988,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**161** of the **176** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**162** of the **177** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4175,6 +4175,134 @@ CLI's absence was the defect, and a capability new to one surface but old to
 the product is a drift closure rather than a feature. The doctrine's existing
 test, applied; it reclassifies nothing (`1.5.0` stays MINOR, `1.2.1` and
 `1.2.2` stay PATCH). Filed here until the tag exists.
+
+### O112 — CLOSED 2026-09-09: ruled A on a four-agent analysis; the per-vault referents are `VaultStore`/`VaultStats` and the word means the installation
+
+**Filed 2026-09-07 by the seventh round's naming scan**, which asked O7's
+question of every other word in the tree — does one word denote two levels
+of one hierarchy? — and tested twenty-two of them (vault, manifest, index,
+key, receipt, record, chain, anchor, screen/gate/fence, floor, session,
+hall/hallway, room, wing, closet, tunnel, drawer, export/bundle/backup,
+tenant/instance/engine, backend, store, level). Every one but the first
+cleared: qualified polysemy or unrelated domains. The one that did not is
+O7's own word, everywhere except the file O7 renamed.
+
+"The palace" is the installation on every doctrinal surface
+(`architecture/index.html:377` *"Palace contains vaults; a vault contains
+wings"*, `vault/lib.rs:3`, `main.rs:94` *"Initialize the palace: master key +
+a default vault"*). And ONE vault is a `PalaceStore` (`store/lib.rs:2575`,
+*"One open vault"*), reports `PalaceStats`, is exported by *"Export the
+palace as JSONL"* on a command taking `--vault`, says `"Palace is empty"` on
+the CLI and `"palace is empty"` over MCP where `/v1` says `"the vault is
+empty"` for the same condition, and `docs/AGENTS.md:1245` called a vault's
+export "the whole palace" (corrected to "the whole vault" by this round,
+along with `MULTI_TENANCY.md:21`'s "per-vault memory store" for the engine
+and the `manifest` qualifiers at `AGENTS.md:970/1245`). Read together: the
+palace contains vaults, and a vault is a PalaceStore.
+
+**Why this is a ruling and not a fix.** O5 ruled *"the architectural
+components keep their names"* and O7 ruled *"the installation keeps the
+word"*; neither says whether `PalaceStore`/`PalaceStats` and the per-vault
+wording are components keeping a name or the two-level defect surviving in
+identifiers. The options, with their costs, so the answer is one word:
+
+- **A. Rename the per-vault referents** — `PalaceStore → VaultStore`,
+  `PalaceStats → VaultStats` (297 + 28 sites, no wire change since serde
+  emits fields, `pub type PalaceStore = VaultStore;` keeps the crate API),
+  "Export a vault", "Vault is empty" on all three surfaces (closing a
+  three-way wording drift), `palace.bundle → vault.bundle` in the docs.
+  Leave `Palace Monitor`, `PalaceTamperDetected` and the Grafana dashboard,
+  which are palace-wide. Doctrine-grounded: provenance says the installation
+  is the palace.
+- **B. Leave the identifiers, fix the prose** — the struct names are
+  MemPalace heritage a reader meets once; the sentences are what mislead.
+  Cheapest; leaves the self-containing reading in the type names.
+- **C. Nothing** — O5 read literally.
+
+Gate for A or B: a grep of `palace` across `crates/` and `docs/` finds the
+installation only, pinned by the trace verifier's method (a needle assembled
+from fragments, a premise probe). Until ruled, this entry is the record that
+the question is open and was not decided by taste.
+
+**RULED A by the maintainer, 2026-09-09**, who asked for the answer to be
+determined rather than guessed: four read-only agents analysed it from
+independent angles — domain model, an adversarial case built expressly to
+REFUTE renaming, blast radius, and precedent/doctrine. All four returned A,
+and the adversarial one reported plainly that its case failed rather than
+manufacturing a defence. What each contributed:
+
+- **Precedent**: O5's closure explicitly disclaims the reading option C rests
+  on — *"What this ruling does NOT settle … `palace` still names two
+  different levels of the hierarchy"* — so "O5 read literally" reads O5 past
+  its own carve-out. And provenance is not "the docs came later": `git log -S`
+  puts `pub struct PalaceStore` and the vault crate's *"a palace holds many
+  vaults"* in the SAME commit. They were born contradicting each other, which
+  removes the new-capability arm and leaves breadth, which is one-sided.
+- **Domain model**: `undercroft --help` carried both senses five commands
+  apart — `init` (installation) beside `mine`/`export`/`serve-mcp`/`closets`,
+  all of which take `--vault`.
+- **Blast radius**: zero bytes move on disk and zero on the wire (plain-struct
+  `Serialize`, no tag, no `Deserialize`, no JSON key, no MCP tool name, no id
+  recipe, no AAD domain, no `record_id` prefix), the compiler covers the
+  identifier half exhaustively, and the one string-keyed gate (`parity.rs`'s
+  three `HAND_PROJECTED` rows) PANICS BY NAME rather than silently passing.
+
+**Three corrections to this entry's own filing**, each found by the analysis:
+
+1. **The counts were wrong and had rotted**: 297 + 28 reproduced at no scope;
+   it was 292 + 26 at the filing commit and **305 + 35** at HEAD — an ungated
+   prose figure in a tree that runs a `prose figures` preflight for that class.
+2. **The proposed `pub type PalaceStore = VaultStore;` and this entry's own
+   gate are mutually exclusive** — the alias leaves the literal word in
+   `crates/`, so the grep could never pass while it existed. The crates are
+   workspace-internal under BUSL and not published, so the alias bought no
+   external compatibility. Done as a **clean rename, no alias**.
+3. **`Palace Monitor` is per-vault, not palace-wide** as the exemption list
+   claimed: it consumes `/v1/vaults/<id>/stream`, the console rebinds it on
+   vault change, and the deploy README says *"pick a vault, watch it work."*
+   **Decision, with an argument rather than a silent exemption: the NAME
+   stays.** It is a published product name on a shipped UI, in the Grafana
+   dashboard title and uid, and in image filenames; renaming it is a
+   user-visible change to a surface this entry was not filed about. Filed as
+   the residue below rather than absorbed.
+
+**The gate's scope is wider than the filing proposed, and that mattered.**
+O112 said *"a grep across `crates/` and `docs/`"*, which excludes `website/`
+and `README.md` — where the densest and most PUBLIC per-vault uses lived,
+including plurals ("small palaces") that contradict *one palace per process*
+outright. That is O29's own lesson — a scoping phrase in a filed question
+decides what the answer can contain — reappearing in the gate of the entry
+meant to fix it. The preflight scans `crates docs website/src tests deploy
+architecture README.md CLAUDE.md`, prunes the 50k word-frequency corpora and
+the DERIVED SVGs, and carries **94 allowed installation-level shapes with a
+reason each, counted in BOTH directions** so a stale allowance fails. Its
+premise probe plants a per-vault use and requires a catch; it fired four
+times during construction and caught four real defects in the gate itself —
+a bare `PALACE` allowance that, under a case-insensitive scan, swallowed
+every line in the tree; a `%%|*` split that truncated alternation patterns
+mid-parenthesis; backticks inside a double-quoted pattern that ran as a
+command; and `PALACE .` matching "palace a".
+
+**What changed**: 305 + 35 identifier sites; the empty-state wording unified
+on "vault" across CLI, MCP and `/v1` (it was three different sentences, and
+`mcp.rs` contradicted ITSELF two lines apart — "the vault is not empty" beside
+"palace is empty"); five CLI `--help` strings; the MCP tool description and
+its "palace core" grouping; `palace.bundle` → `vault.bundle`; ~60 doc comments
+and prose sites across the crates; 31 sites in the published docs and website;
+`CLAUDE.md`'s own type names and its "whole-palace export"; the crate
+description; and the derived Mermaid source plus a re-render of its SVG.
+
+**Left as historical record, deliberately**: `ROADMAP.md` and `CHANGELOG.md`
+entries quote messages and type names as they were on the day, and rewriting
+them would falsify what happened; five code comments quoting the *"Palace is
+empty"* regression do the same. `CLAUDE.md` IS updated, because it describes
+the tree as it is now, so a stale name there is a false claim rather than a
+record.
+
+**Residue, filed rather than absorbed**: `Palace Monitor` keeps a
+palace-level name on a per-vault surface (argued above); a rename of it is a
+product decision nobody has asked for. **O133** carries an unrelated defect
+this analysis surfaced.
 
 ### O122 — CLOSED 2026-09-08: the served embedder counted its failed embeds and nothing read the count; the two in-process embedders counted nothing
 
@@ -11997,54 +12125,6 @@ concept — the isolation and crypto unit — so reusing it would have been wors
 than the status quo. That search is over: the ruling above is that no target
 word is needed, because no rename is owed.
 
-### O112 — `palace` still names ONE vault in the code and on three surfaces, and whether that is O7's defect or O5's ruling is the maintainer's
-
-**Filed 2026-09-07 by the seventh round's naming scan**, which asked O7's
-question of every other word in the tree — does one word denote two levels
-of one hierarchy? — and tested twenty-two of them (vault, manifest, index,
-key, receipt, record, chain, anchor, screen/gate/fence, floor, session,
-hall/hallway, room, wing, closet, tunnel, drawer, export/bundle/backup,
-tenant/instance/engine, backend, store, level). Every one but the first
-cleared: qualified polysemy or unrelated domains. The one that did not is
-O7's own word, everywhere except the file O7 renamed.
-
-"The palace" is the installation on every doctrinal surface
-(`architecture/index.html:377` *"Palace contains vaults; a vault contains
-wings"*, `vault/lib.rs:3`, `main.rs:94` *"Initialize the palace: master key +
-a default vault"*). And ONE vault is a `PalaceStore` (`store/lib.rs:2575`,
-*"One open vault"*), reports `PalaceStats`, is exported by *"Export the
-palace as JSONL"* on a command taking `--vault`, says `"Palace is empty"` on
-the CLI and `"palace is empty"` over MCP where `/v1` says `"the vault is
-empty"` for the same condition, and `docs/AGENTS.md:1245` called a vault's
-export "the whole palace" (corrected to "the whole vault" by this round,
-along with `MULTI_TENANCY.md:21`'s "per-vault memory store" for the engine
-and the `manifest` qualifiers at `AGENTS.md:970/1245`). Read together: the
-palace contains vaults, and a vault is a PalaceStore.
-
-**Why this is a ruling and not a fix.** O5 ruled *"the architectural
-components keep their names"* and O7 ruled *"the installation keeps the
-word"*; neither says whether `PalaceStore`/`PalaceStats` and the per-vault
-wording are components keeping a name or the two-level defect surviving in
-identifiers. The options, with their costs, so the answer is one word:
-
-- **A. Rename the per-vault referents** — `PalaceStore → VaultStore`,
-  `PalaceStats → VaultStats` (297 + 28 sites, no wire change since serde
-  emits fields, `pub type PalaceStore = VaultStore;` keeps the crate API),
-  "Export a vault", "Vault is empty" on all three surfaces (closing a
-  three-way wording drift), `palace.bundle → vault.bundle` in the docs.
-  Leave `Palace Monitor`, `PalaceTamperDetected` and the Grafana dashboard,
-  which are palace-wide. Doctrine-grounded: provenance says the installation
-  is the palace.
-- **B. Leave the identifiers, fix the prose** — the struct names are
-  MemPalace heritage a reader meets once; the sentences are what mislead.
-  Cheapest; leaves the self-containing reading in the type names.
-- **C. Nothing** — O5 read literally.
-
-Gate for A or B: a grep of `palace` across `crates/` and `docs/` finds the
-installation only, pinned by the trace verifier's method (a needle assembled
-from fragments, a premise probe). Until ruled, this entry is the record that
-the question is open and was not decided by taste.
-
 ### O113 — three whole-corpus copies in RAM on export, one on rotate and on a deep page: data-sized, and still the corpus
 
 **Filed 2026-09-07 by the same sweep**, as the residue O109's fix left:
@@ -12089,6 +12169,39 @@ the filing names (the CLI writes to stdout, so it carries one copy fewer
 than `/v1`'s framed payload). A 10⁶-drawer vault of this shape exports
 through ~3.5 GB of resident memory. The streaming shape above is what
 closes it; this entry stays open with the number rather than the argument.
+
+### O133 — a blind substitution in the rename commit corrupted four comments, two of them public docs
+
+**Filed 2026-09-09 by O112's adversarial review, and unrelated to O112.** The
+commit `CLAUDE.md` holds up as the FIX for the five classes a Latin-script
+sweep could not see (`404b956`, *"rename: the classes a Latin-script sweep
+could not see"*) itself ran a blind `upstream` → `MemPalace` substitution — 76
+added lines against 63 removed — and corrupted four comments that are still in
+tracked source a month later:
+
+| site | reads | should read |
+|---|---|---|
+| `store/src/lib.rs:6578` | "clause **MemPalace** is the accelerator" | "clause upstream is" |
+| `store/src/lib.rs:7402` | "`depth` is now bounded **MemPalace**" | "bounded upstream" |
+| `core/src/late.rs:106` | "(treated **MemPalace** as \"no stored tokens\")" | "treated upstream as" |
+| `store/src/kg.rs:115` | "(mirrors `_temporal_start_key` **MemPalace**)" | "`…` upstream" |
+
+Two are `///` doc comments on public items, so O110's `#![warn(missing_docs)]`
+looked straight at them and had nothing to say — *a lint that requires a
+sentence about a behaviour cannot tell whether the sentence is TRUE*, which is
+O115's lesson one lint over. O99's 113-item scan and O110's 372-item pass both
+went past them, and so did every battery since.
+
+The irony is the finding: the commit that taught this project *"a scripted
+edit is a change you have not read"* is itself an unread scripted edit. Fix is
+four one-line corrections; the gate question is harder and is the real content
+of this entry — **what catches a word substituted into a place it does not
+belong, when the word is legitimate elsewhere in the tree?** A spell-checker
+cannot (both are real tokens), the doc lint cannot (the sentence exists), and
+a needle scan cannot (the word is allowed). Candidate: a scan for the heritage
+name in positions where it is not a NOUN PHRASE — preceded by "bounded",
+"treated", "is the" — which is a shape, not a token, and would need its own
+premise probe. Filed rather than half-built.
 
 ### O6 — the repo social preview is still not uploaded
 GitHub exposes **no REST endpoint** for org avatars (`avatar_url` is read-only

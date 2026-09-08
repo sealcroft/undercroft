@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use i18n::{fill, tr};
 use undercroft_core::normalize::mode_for_path;
 use undercroft_core::{chunk_text, normalize_content, ChunkOptions, Drawer};
-use undercroft_store::{PalaceStore, SearchOptions};
+use undercroft_store::{SearchOptions, VaultStore};
 use undercroft_vault::{SecurityLevel, Vault, VaultManager};
 
 #[derive(Parser)]
@@ -59,7 +59,7 @@ struct Cli {
     /// evidence.
     ///
     /// A read-only open DETECTS and REPORTS what it declined to heal
-    /// (`PalaceStats.unhealed`) instead of doing it, and runs under
+    /// (`VaultStats.unhealed`) instead of doing it, and runs under
     /// `PRAGMA query_only=ON` — so a write this flag does not anticipate
     /// fails loudly rather than happening quietly. A mutating subcommand
     /// under this flag is therefore refused by SQLite rather than by a
@@ -143,7 +143,7 @@ enum Command {
         #[arg(long)]
         session: Option<String>,
     },
-    /// Mine a directory into the palace (text files, or agent transcripts)
+    /// Mine a directory into a vault (text files, or agent transcripts)
     Mine {
         /// Directory (or single file) to mine
         path: PathBuf,
@@ -338,7 +338,7 @@ enum Command {
         #[arg(long, global = true, default_value = "default")]
         vault: String,
     },
-    /// Export the palace as JSONL (backup / migration): a signed-able
+    /// Export a vault as JSONL (backup / migration): a signed-able
     /// manifest line, then every drawer, KG entity, fact (receipts and
     /// authority tier included) and tunnel. With --to, the export is
     /// sealed to a recipient's public key instead — the file never exists
@@ -365,7 +365,7 @@ enum Command {
         #[arg(long)]
         expires: Option<String>,
     },
-    /// Serve the MCP stdio server (full palace / KG / diary tool surface)
+    /// Serve the MCP stdio server (full vault / KG / diary tool surface)
     ServeMcp {
         #[arg(long, default_value = "default")]
         vault: String,
@@ -466,7 +466,7 @@ enum Command {
         #[arg(long, global = true, default_value = "default")]
         vault: String,
     },
-    /// Compact LLM-scannable index of the palace (port of AAAK closets)
+    /// Compact LLM-scannable index of a vault (port of AAAK closets)
     Closets {
         #[arg(long)]
         wing: Option<String>,
@@ -503,7 +503,7 @@ enum Command {
         #[arg(long, default_value = "default")]
         vault: String,
     },
-    /// Palace statistics (records, wings, rooms, KG, size)
+    /// Vault statistics (records, wings, rooms, KG, size)
     Stats {
         #[arg(long, default_value = "default")]
         vault: String,
@@ -960,11 +960,11 @@ fn write_identity(path: &std::path::Path, secret_hex: &str) -> Result<()> {
 /// Build the full export payload: a manifest line, then typed records —
 /// every drawer, KG entity, fact (receipts and authority tier included)
 /// and tunnel. This is what closed the meta-rows export gap: an export
-/// used to carry drawers alone, so a migrated palace silently lost its
+/// used to carry drawers alone, so a migrated vault silently lost its
 /// whole knowledge graph. The manifest carries what is NOT importable
 /// state as provenance instead (embedder identity, audit-chain head).
 fn build_export_payload(
-    store: &undercroft_store::PalaceStore,
+    store: &undercroft_store::VaultStore,
     signing_secret: Option<&str>,
     trust: Option<&str>,
     expires: Option<&str>,
@@ -1031,7 +1031,7 @@ const INGEST_BATCH: usize = 256;
 /// bounded chunks, accumulating the per-batch outcomes so a caller can
 /// report the diverted count as well as the created one.
 fn upsert_batched(
-    store: &mut undercroft_store::PalaceStore,
+    store: &mut undercroft_store::VaultStore,
     drawers: &[Drawer],
 ) -> Result<undercroft_store::BulkOutcome> {
     let mut total = undercroft_store::BulkOutcome::default();
@@ -1168,11 +1168,11 @@ impl Cli {
 /// was unconditionally read-write, and `Posture::ReadOnly` had exactly two
 /// call sites in this file — both `serve-* --read-only` — so no CLI command
 /// could inspect a vault without healing it.
-fn open_store(cli: &Cli, vault: &str) -> Result<PalaceStore> {
+fn open_store(cli: &Cli, vault: &str) -> Result<VaultStore> {
     open_store_as(cli, vault, cli.posture())
 }
 
-fn open_store_as(cli: &Cli, vault: &str, posture: Posture) -> Result<PalaceStore> {
+fn open_store_as(cli: &Cli, vault: &str, posture: Posture) -> Result<VaultStore> {
     let mgr = manager(cli)?;
     // The posture reaches the UNLOCK, not only the store open. Unlocking is
     // not passive: it deletes a `vault.json.next` it cannot authenticate, so
@@ -1187,8 +1187,8 @@ fn open_store_as(cli: &Cli, vault: &str, posture: Posture) -> Result<PalaceStore
     // same two opens. `open_read_only` declines the embedder migration (warn
     // and serve, the replica precedent) and force-disables read auditing.
     let open = |v: Vault, e: Box<dyn undercroft_core::embed::Embedder + Send>| match posture {
-        Posture::ReadOnly => PalaceStore::open_read_only(v, e),
-        Posture::ReadWrite => PalaceStore::open_with_embedder(v, e),
+        Posture::ReadOnly => VaultStore::open_read_only(v, e),
+        Posture::ReadWrite => VaultStore::open_with_embedder(v, e),
     };
     // **A vault's RECORDED identity outranks the declaration** — the same
     // order `embedder_factory` uses for `/v1`, and the CLI did not have it
@@ -1203,7 +1203,7 @@ fn open_store_as(cli: &Cli, vault: &str, posture: Posture) -> Result<PalaceStore
     // `recorded_embedder` opens the database read-only to read one meta row,
     // so this costs one extra open on a path that is about to open it anyway.
     let external: Option<Box<dyn undercroft_core::embed::Embedder + Send>> =
-        PalaceStore::recorded_embedder(&v)?.and_then(|(name, dim)| {
+        VaultStore::recorded_embedder(&v)?.and_then(|(name, dim)| {
             name.strip_prefix("external:").map(|bare| {
                 Box::new(undercroft_core::ExternalEmbedder::new(bare, dim))
                     as Box<dyn undercroft_core::embed::Embedder + Send>
@@ -1272,7 +1272,7 @@ fn open_store_as(cli: &Cli, vault: &str, posture: Posture) -> Result<PalaceStore
 /// (`UNDERCROFT_ADMISSION_LLM=advisory` + the `UNDERCROFT_LLM_*` family).
 /// Declared-but-unusable refuses to open — a screen that silently isn't
 /// running is worse than a refusal to start.
-pub(crate) fn attach_admission_advisor(store: &mut PalaceStore) -> Result<()> {
+pub(crate) fn attach_admission_advisor(store: &mut VaultStore) -> Result<()> {
     if let Some(advisor) = undercroft_llm::advisor::LlmAdmissionAdvisor::from_env()
         .map_err(|e| anyhow::anyhow!("admission advisor: {e}"))?
     {
@@ -1350,7 +1350,7 @@ pub(crate) fn check_retrieval(raw: &str) -> Result<(), String> {
 /// the FTS prefilter. `pq` enables the on-disk PQ/IVF prefilter — plain
 /// codes on hmac-only vaults, AEAD-sealed rows + a decrypt-once RAM cache
 /// on sealed vaults.
-fn attach_retrieval(store: &mut PalaceStore) -> Result<()> {
+fn attach_retrieval(store: &mut VaultStore) -> Result<()> {
     let raw = std::env::var("UNDERCROFT_RETRIEVAL").unwrap_or_default();
     // The vocabulary is decided ONCE, by the same function `config check`
     // runs, so the pre-flight and the start-up cannot disagree about what is
@@ -1401,7 +1401,7 @@ pub(crate) fn check_reranker(raw: &str) -> Result<(), String> {
 /// `UNDERCROFT_RERANK_*` / `UNDERCROFT_COLBERT_*` variables either way.
 /// Unset ⇒ first-pass ranking only.
 #[cfg_attr(not(any(feature = "onnx", feature = "ort")), allow(unused_variables))]
-fn attach_reranker(store: &mut PalaceStore) -> Result<()> {
+fn attach_reranker(store: &mut VaultStore) -> Result<()> {
     match std::env::var("UNDERCROFT_RERANKER").as_deref() {
         Ok("onnx") => {
             #[cfg(feature = "onnx")]
@@ -1477,7 +1477,7 @@ pub(crate) fn open_index(backend: &str) -> Result<Box<dyn undercroft_index::Vect
 fn embedder_factory() -> tenant::EmbedderFactory {
     Box::new(
         |vault: &Vault| -> Result<Box<dyn undercroft_core::embed::Embedder + Send>> {
-            if let Some((name, dim)) = PalaceStore::recorded_embedder(vault)? {
+            if let Some((name, dim)) = VaultStore::recorded_embedder(vault)? {
                 if let Some(bare) = name.strip_prefix("external:") {
                     return Ok(Box::new(undercroft_core::ExternalEmbedder::new(bare, dim)));
                 }
@@ -1679,7 +1679,7 @@ const EXIT_FAILURE: u8 = 1;
 /// exited 1.** A vault rolled back under a still-valid manifest, or a manifest
 /// edited offline, is detected inside `open_store`, before any command's own
 /// checking begins: `undercroft search`, `undercroft recent`, `undercroft stats`
-/// on a tampered palace all bubbled that up through `?` as an anyhow error and
+/// on a tampered vault all bubbled that up through `?` as an anyhow error and
 /// exited 1 — the code docs/AGENTS.md promises means "the run failed, retry
 /// it". A compliance script did exactly that, forever, against a vault whose
 /// answer will never change.
@@ -1851,7 +1851,7 @@ fn run(cli: Cli) -> Result<()> {
                      X25519 identities and their bundles keep working."
                 );
                 println!("Recipient (shareable): {recipient_hex}");
-                println!("Seal an export with: undercroft export --to {recipient_hex} --out palace.bundle");
+                println!("Seal an export with: undercroft export --to {recipient_hex} --out vault.bundle");
             }
             BundleAction::Recipient { identity } => {
                 let secret = std::fs::read_to_string(identity)
@@ -1911,7 +1911,7 @@ fn run(cli: Cli) -> Result<()> {
                     println!("No vaults. Run: undercroft init");
                 }
                 // **This loop BYPASSED the posture entirely** (ROADMAP M18).
-                // It called `mgr.unlock` and `PalaceStore::open` directly
+                // It called `mgr.unlock` and `VaultStore::open` directly
                 // rather than going through `open_store_as`, so listing
                 // performed a full read-write unlock and open on EVERY vault
                 // on the host — including ones the operator was not asking
@@ -2380,12 +2380,12 @@ fn run(cli: Cli) -> Result<()> {
                 // corpus is a false statement the caller cannot see through.
                 match store.trust_floor() {
                     Some(f) => println!(
-                        "No drawers meet the declared trust floor '{f}' — the palace is NOT \
+                        "No drawers meet the declared trust floor '{f}' — the vault is NOT \
                          empty. Assign wing trust with `undercroft trust set`, or lower \
                          UNDERCROFT_TRUST_FLOOR."
                     ),
                     None => {
-                        println!("Palace is empty. File memories with: undercroft remember / mine")
+                        println!("Vault is empty. File memories with: undercroft remember / mine")
                     }
                 }
             }
@@ -2802,7 +2802,7 @@ fn run(cli: Cli) -> Result<()> {
                 trust.as_deref(),
                 expires.as_deref(),
             )?;
-            // Every full-palace egress leaves a chain record binding the
+            // Every whole-vault egress leaves a chain record binding the
             // export's own manifest digest — the audit trail and the
             // exported file corroborate each other.
             if let (Some(m), _) = undercroft_vault::bundle::split_payload(&payload)
@@ -3110,15 +3110,12 @@ fn run(cli: Cli) -> Result<()> {
                     // with the importing surface, because that field is the
                     // key the admission screen's trusted-source auto-admit
                     // rides and it is only sound while a caller cannot set
-                    // it (see `PalaceStore::import_stamp`); a bundle
+                    // it (see `VaultStore::import_stamp`); a bundle
                     // claiming `added_by: "cli"` otherwise walks past the
                     // screen on any vault that declares `cli` trusted.
                     let d = serde_json::from_value::<Drawer>(v)
                         .with_context(|| format!("line {}: not a undercroft drawer", lineno + 1))?;
-                    undercroft_store::PalaceStore::import_stamp(
-                        &d,
-                        undercroft_store::IMPORT_SURFACE,
-                    )
+                    undercroft_store::VaultStore::import_stamp(&d, undercroft_store::IMPORT_SURFACE)
                 } else if let Some(doc) = v.get("document").and_then(serde_json::Value::as_str) {
                     // MemPalace export shape: { id?, document, metadata:{wing,room,...} }.
                     let meta = v.get("metadata").cloned().unwrap_or_default();
@@ -3535,7 +3532,7 @@ fn run(cli: Cli) -> Result<()> {
             let store = open_store(&cli, vault)?;
             let lines = store.closet_index(wing.as_deref())?;
             if lines.is_empty() {
-                println!("Palace is empty — nothing to index.");
+                println!("Vault is empty — nothing to index.");
             }
             for line in lines {
                 println!("{line}");
@@ -3825,7 +3822,7 @@ fn run(cli: Cli) -> Result<()> {
             let root = data_dir(&cli);
             match action {
                 BackupAction::Create { vault } => {
-                    // Verify before snapshotting — never archive a bad palace.
+                    // Verify before snapshotting — never archive a bad vault.
                     // The refusal is an integrity verdict, so it exits 2
                     // like `verify` and `repair` rather than 1: a script
                     // that treats 1 as "retry the run" must not retry a
@@ -4062,7 +4059,7 @@ fn print_triples(facts: &[undercroft_store::Triple]) {
 }
 
 fn mine_files(
-    store: &mut undercroft_store::PalaceStore,
+    store: &mut undercroft_store::VaultStore,
     path: &Path,
     wing: &str,
 ) -> Result<(usize, usize)> {
@@ -4108,7 +4105,7 @@ fn mine_files(
 }
 
 fn mine_convos(
-    store: &mut undercroft_store::PalaceStore,
+    store: &mut undercroft_store::VaultStore,
     path: &Path,
     wing: &str,
 ) -> Result<(usize, usize)> {
@@ -4163,7 +4160,7 @@ fn mine_convos(
 /// skipped). With `require_files`, an empty directory is an error (CLI
 /// sweep); the daemon treats it as a quiet pass.
 fn sweep_path(
-    store: &mut undercroft_store::PalaceStore,
+    store: &mut undercroft_store::VaultStore,
     path: &Path,
     wing: &str,
     require_files: bool,
@@ -4637,14 +4634,14 @@ mod tests {
     /// `verify`, `repair`, `backup create` and `verify-forgetting` each call
     /// `process::exit(2)` themselves, so the doctrine looked implemented and
     /// ROADMAP A22 was filed closed. But a rolled-back or offline-edited
-    /// palace is detected in `open_store`, before any of those commands does
+    /// vault is detected in `open_store`, before any of those commands does
     /// its own checking — and every command that merely READS it (`search`,
     /// `stats`, `recent`, `drawer get` …) bubbled that verdict out through
     /// `?` and exited 1, indistinguishable from "no such vault". A compliance
     /// script that retries exit 1 retried tampering forever.
     ///
     /// This drives `run` — the whole dispatch every subcommand goes through —
-    /// over a real palace on disk, not a hand-built error, and it asserts
+    /// over a real vault on disk, not a hand-built error, and it asserts
     /// BOTH directions: the verdict must be 2, and an ordinary run failure
     /// must stay 1, or a classifier that answered 2 for everything would pass.
     #[test]
@@ -4659,7 +4656,7 @@ mod tests {
             Cli::try_parse_from(v).unwrap()
         };
 
-        // Premise: the palace reads clean, so what fails below is the
+        // Premise: the vault reads clean, so what fails below is the
         // tampering and not the fixture.
         run(argv(&["search", "anything", "--vault", "acme"])).unwrap();
 
@@ -4681,12 +4678,12 @@ mod tests {
 
         // Was exit 1 — the same code as the missing vault two lines up.
         let e = run(argv(&["search", "anything", "--vault", "acme"])).unwrap_err();
-        assert!(integrity_verdict(&e), "search on a tampered palace: {e:?}");
-        // A second command, because this is a property of the palace and not
+        assert!(integrity_verdict(&e), "search on a tampered vault: {e:?}");
+        // A second command, because this is a property of the vault and not
         // of `search`: one command classifying correctly is how the four
         // `process::exit(2)` call sites made the gap invisible.
         let e = run(argv(&["stats", "--vault", "acme"])).unwrap_err();
-        assert!(integrity_verdict(&e), "stats on a tampered palace: {e:?}");
+        assert!(integrity_verdict(&e), "stats on a tampered vault: {e:?}");
     }
 
     /// The classes are the ones `/v1` answers 409 for, and no others.

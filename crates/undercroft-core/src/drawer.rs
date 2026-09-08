@@ -1,7 +1,7 @@
-//! The drawer record — one verbatim chunk filed in the palace.
+//! The drawer record — one verbatim chunk filed in a vault.
 //!
 //! Field names mirror mempalace's drawer metadata (`_build_drawer_metadata`
-//! in miner.py) so exported palaces remain recognizable: wing, room,
+//! in miner.py) so exported vaults remain recognizable: wing, room,
 //! source_file, chunk_index, added_by, filed_at, normalize_version,
 //! id_recipe, line_start/line_end, content_date, hall, entities. `occurrences`
 //! is ours: dedup collapses identical text, and the days that text appeared on
@@ -47,7 +47,7 @@ pub struct DrawerMeta {
     /// A save that arrives through an API has no source to be the fourth
     /// chunk of, but its id still has to be unique, and this is the only
     /// field left to carry that. Those paths put a monotonic append index
-    /// here instead (`PalaceStore::next_append_index`). So it orders chunks
+    /// here instead (`VaultStore::next_append_index`). So it orders chunks
     /// within a document, and orders nothing at all across API saves — read
     /// it together with `source_file` or not at all.
     pub chunk_index: u32,
@@ -174,7 +174,7 @@ impl Drawer {
             .format(&Rfc3339)
             .expect("RFC3339 formatting of now() cannot fail");
         // Scanned here rather than at each call site so no write path can
-        // forget: every drawer that enters the palace, by any route, keeps
+        // forget: every drawer that enters a vault, by any route, keeps
         // the times written into it. Resolution needs an anchor and so waits
         // for `with_content_date`.
         let time_mentions = crate::temporal::extract_time_mentions(&content, None);

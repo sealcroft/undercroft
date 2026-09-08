@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 
 use undercroft_core::{normalize_content, Drawer};
-use undercroft_store::{PalaceStore, SearchOptions};
+use undercroft_store::{SearchOptions, VaultStore};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
@@ -86,7 +86,7 @@ pub(crate) fn refused_when_read_only(name: &str) -> bool {
     !READ_TOOLS.contains(&name)
 }
 
-/// Tools that mutate the palace.
+/// Tools that mutate the vault.
 ///
 /// Not consulted at runtime — the gate is [`refused_when_read_only`], which
 /// fails closed off `READ_TOOLS`. This is the other half of the inventory
@@ -134,7 +134,7 @@ pub(crate) const WRITE_TOOLS: &[&str] = &[
 /// checklist that goes stale the moment a tool adds an argument, which is
 /// the failure mode this whole function exists to remove, and the error
 /// says exactly what happened.
-fn quarantine_fence(store: &PalaceStore, tool: &str, args: &Value) -> Result<()> {
+fn quarantine_fence(store: &VaultStore, tool: &str, args: &Value) -> Result<()> {
     let Some(map) = args.as_object() else {
         return Ok(());
     };
@@ -208,7 +208,7 @@ const CLOSES_A_VALIDITY_WINDOW: &[&str] = &["undercroft_kg_invalidate", "undercr
 /// left this half open. The cost is a full graph decode on those two tools
 /// only — which they then pay again inside `kg_invalidate`, so it is one
 /// extra walk on a write, not on any read.
-fn authority_fence(store: &PalaceStore, tool: &str, args: &Value) -> Result<()> {
+fn authority_fence(store: &VaultStore, tool: &str, args: &Value) -> Result<()> {
     if !CLOSES_A_VALIDITY_WINDOW.contains(&tool) {
         return Ok(());
     }
@@ -256,12 +256,12 @@ fn authority_fence(store: &PalaceStore, tool: &str, args: &Value) -> Result<()> 
 /// Transport-independent MCP message handler, shared by the stdio and HTTP
 /// servers.
 pub struct McpHandler {
-    store: PalaceStore,
+    store: VaultStore,
     read_only: bool,
 }
 
 impl McpHandler {
-    pub fn new(store: PalaceStore, read_only: bool) -> Self {
+    pub fn new(store: VaultStore, read_only: bool) -> Self {
         Self { store, read_only }
     }
 
@@ -352,12 +352,12 @@ impl McpHandler {
 /// second is a false statement about the vault, and it is the regression
 /// the trust-floor widening introduced: a floor above `standard` with no
 /// wing yet assigned that class empties `recent` entirely.
-fn empty_reason(store: &PalaceStore) -> String {
+fn empty_reason(store: &VaultStore) -> String {
     match store.trust_floor() {
         Some(f) => format!(
-            "no drawers meet the declared trust floor '{f}' - the vault is not empty. \n             Assign wing trust, or lower UNDERCROFT_TRUST_FLOOR."
+            "no drawers meet the declared trust floor '{f}' — the vault is NOT empty. \n             Assign wing trust, or lower UNDERCROFT_TRUST_FLOOR."
         ),
-        None => "palace is empty".into(),
+        None => "the vault is empty".into(),
     }
 }
 
@@ -366,7 +366,7 @@ fn empty_reason(store: &PalaceStore) -> String {
 /// expected to have opened the store read-only as well — the flag alone
 /// would leave the open-time writes (embedder migration, read-audit
 /// records) happening on a server that says it does not write.
-pub fn serve(store: PalaceStore, read_only: bool) -> Result<()> {
+pub fn serve(store: VaultStore, read_only: bool) -> Result<()> {
     let mut handler = McpHandler::new(store, read_only);
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
@@ -420,7 +420,7 @@ fn tool_definitions() -> Value {
     let b = |d: &str| json!({ "type": "boolean", "description": d });
     let n = |d: &str| json!({ "type": "number", "description": d });
     json!([
-        // --- palace core ---
+        // --- vault core ---
         tool("undercroft_save", "Save one memory verbatim (encrypted + integrity-tagged at rest).",
             json!({ "content": s("verbatim text"), "wing": s("person/project partition"), "room": s("topic"), "kind": s("declared record kind: question|preference|decision|event|procedure|statement — a closed vocabulary, rejected if unknown; omit rather than guess"), "content_date": s("when the content happened, RFC 3339 or YYYY-MM-DD; anchors relative dates in the text"), "supersedes": s("id of the drawer this memory replaces — records a receipted update link; the old drawer is never deleted or hidden"), "agent": s("provenance claim: which agent wrote this (recorded + tamper-covered, never a trust boundary)"), "channel": s("provenance claim: origin class of the content, e.g. user|tool-output|scrape|agent"), "session": s("provenance claim: the session this was written in") }),
             &["content"]),
@@ -437,7 +437,7 @@ fn tool_definitions() -> Value {
             json!({ "wing": s("scope to wing") }), &[]),
         tool("undercroft_verify", "Verify every record's HMAC and the tamper-evident audit chain.",
             json!({}), &[]),
-        tool("undercroft_status", "Palace statistics: records, wings, rooms, KG, size, security level.",
+        tool("undercroft_status", "Vault statistics: records, wings, rooms, KG, size, security level.",
             json!({}), &[]),
         // --- drawers ---
         tool("undercroft_get_drawer", "Fetch one drawer verbatim by id.",
@@ -518,7 +518,7 @@ fn tool_definitions() -> Value {
     ])
 }
 
-fn call_tool(store: &mut PalaceStore, name: &str, args: &Value) -> Result<String> {
+fn call_tool(store: &mut VaultStore, name: &str, args: &Value) -> Result<String> {
     match name {
         "undercroft_save" => {
             let content = args
@@ -1283,7 +1283,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
-        let mut store = PalaceStore::open(vault).unwrap();
+        let mut store = VaultStore::open(vault).unwrap();
         store.set_admission(true);
         (dir, McpHandler::new(store, false))
     }
@@ -1426,18 +1426,18 @@ mod tests {
         assert_eq!(h.store.admission_pending().unwrap().len(), 1);
     }
 
-    fn plain_store() -> (TempDir, PalaceStore) {
+    fn plain_store() -> (TempDir, VaultStore) {
         let dir = TempDir::new().unwrap();
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
-        (dir, PalaceStore::open(vault).unwrap())
+        (dir, VaultStore::open(vault).unwrap())
     }
 
-    fn call_direct(store: &mut PalaceStore, name: &str, args: Value) -> String {
+    fn call_direct(store: &mut VaultStore, name: &str, args: Value) -> String {
         call_tool(store, name, &args).unwrap_or_else(|e| panic!("{name}: {e}"))
     }
 
-    fn search(store: &mut PalaceStore, args: Value) -> String {
+    fn search(store: &mut VaultStore, args: Value) -> String {
         call_direct(store, "undercroft_search", args)
     }
 

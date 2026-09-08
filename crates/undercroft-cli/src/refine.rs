@@ -33,7 +33,7 @@
 
 use undercroft_core::Drawer;
 use undercroft_llm::LlmClient;
-use undercroft_store::{PalaceStore, StoreError, QUARANTINE_WING};
+use undercroft_store::{StoreError, VaultStore, QUARANTINE_WING};
 
 /// What to distil and where the mirrored facts land.
 pub(crate) struct RefineOptions<'a> {
@@ -108,7 +108,7 @@ pub(crate) struct RefineReport {
 /// mirror each new fact as a searchable drawer. The verbatim drawers are
 /// never modified.
 pub(crate) fn refine(
-    store: &mut PalaceStore,
+    store: &mut VaultStore,
     llm: &LlmClient,
     opts: &RefineOptions<'_>,
 ) -> Result<RefineReport, StoreError> {
@@ -208,7 +208,7 @@ pub(crate) fn refine(
 /// of the loop, split out so `refine` can record the egress before an error
 /// from any of its three writes propagates (ROADMAP O95).
 fn distil_one(
-    store: &mut PalaceStore,
+    store: &mut VaultStore,
     llm: &LlmClient,
     opts: &RefineOptions<'_>,
     d: &Drawer,
@@ -352,7 +352,7 @@ fn distil_one(
 /// never `sources.len()`, which on the error path is a count that did not
 /// happen.
 fn record_egress(
-    store: &mut PalaceStore,
+    store: &mut VaultStore,
     llm: &LlmClient,
     opts: &RefineOptions<'_>,
     sent: usize,
@@ -412,11 +412,11 @@ mod tests {
 
     /// One vault holding one clean drawer and one the admission screen
     /// diverted into the reserved wing.
-    fn seeded() -> (TempDir, PalaceStore) {
+    fn seeded() -> (TempDir, VaultStore) {
         let dir = TempDir::new().unwrap();
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("acme", SecurityLevel::Sealed).unwrap();
-        let mut store = PalaceStore::open(vault).unwrap();
+        let mut store = VaultStore::open(vault).unwrap();
         store
             .upsert(&Drawer::new("ops", "r", CLEAN.into(), None, 0, "test"))
             .unwrap();
@@ -433,7 +433,7 @@ mod tests {
     }
 
     /// Count the `egress/refine` rows a store holds.
-    fn egress_records(store: &PalaceStore) -> Vec<String> {
+    fn egress_records(store: &VaultStore) -> Vec<String> {
         store
             .history(
                 undercroft_store::manage::HistoryScope::Operator,
@@ -680,11 +680,11 @@ mod tests {
 
     /// Three clean drawers, screen off: a corpus the extractor will be asked
     /// about three times.
-    fn three_clean() -> (TempDir, PalaceStore) {
+    fn three_clean() -> (TempDir, VaultStore) {
         let dir = TempDir::new().unwrap();
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("acme", SecurityLevel::Sealed).unwrap();
-        let mut store = PalaceStore::open(vault).unwrap();
+        let mut store = VaultStore::open(vault).unwrap();
         for (i, text) in [
             "the release train leaves on friday",
             "the deploy freeze lifts on monday",

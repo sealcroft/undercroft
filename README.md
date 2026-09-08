@@ -132,7 +132,7 @@ supported as **untrusted search accelerators**:
 Unlike MemPalace — which stores plaintext documents in these
 databases — Undercroft uploads only the **sealed** content blob plus the
 embedding and wing/room labels. Remote search returns candidate ids; every
-candidate is re-loaded from the local palace, HMAC-verified, decrypted, and
+candidate is re-loaded from the local vault, HMAC-verified, decrypted, and
 re-ranked locally. A compromised index can hide results but cannot forge,
 alter, or inject them. Retrieval policy is the local path's, from the same
 code: the trust floor, the quarantine fence and the closed-vocabulary
@@ -251,7 +251,7 @@ Runtime backend — recall identical across runtimes. Set
 `_QUERY_MODEL` / `_TOKENIZER` (fixed-shape ONNX exports; recipe in
 [docs/RETRIEVAL_SCALING.md](https://github.com/sealcroft/undercroft/blob/main/docs/RETRIEVAL_SCALING.md)). Token matrices ride
 export bundles as portable artifacts (restore = copy, not re-encode);
-`repair --tokens` backfills palaces that predate the encoder.
+`repair --tokens` backfills vaults that predate the encoder.
 **MUVERA FDE candidates** (`UNDERCROFT_RETRIEVAL=fde`) make the candidate
 stage token-aware too: each matrix compresses to one fixed-dimensional
 vector (sealed at rest, built with zero extra forwards) whose dot product
@@ -334,7 +334,7 @@ undercroft tunnel create|list|follow|delete|traverse   # cross-wing links
 undercroft hallways <wing>            # within-wing entity co-occurrence
 undercroft closets [--wing]           # compact LLM-scannable index (AAAK port)
 undercroft refine [--dry-run]         # local-LLM extraction into the KG (UNDERCROFT_LLM_URL)
-undercroft stats | taxonomy           # palace shape
+undercroft stats | taxonomy           # vault shape
 undercroft dedup [--apply]            # exact-duplicate detection (keyed fingerprints)
 undercroft backup create|list|restore # verified snapshots, keeps last 10
 undercroft repair                     # backfill + vacuum + re-verify
@@ -414,7 +414,7 @@ Passphrase mode: set `UNDERCROFT_PASSPHRASE` before `init` and every command.
 
 | Category | Tools |
 |---|---|
-| Palace core | `save`, `search`, `wake_up`, `verify`, `status`, `history`, `get_closet_index` |
+| Vault core | `save`, `search`, `wake_up`, `verify`, `status`, `history`, `get_closet_index` |
 | Drawers | `get_drawer`, `add_drawer`, `update_drawer`, `delete_drawer`, `list_drawers`, `delete_by_source`, `check_duplicate` |
 | Navigation | `list_wings`, `list_rooms`, `get_taxonomy`, `create_tunnel`, `list_tunnels`, `follow_tunnel`, `delete_tunnel`, `traverse`, `list_hallways` |
 | Knowledge graph | `kg_add`, `kg_query`, `kg_invalidate`, `kg_supersede`, `kg_timeline`, `kg_stats`, `lookup_canonical`, `kg_rel`, `kg_receipts` |
@@ -541,7 +541,7 @@ several releases and contradicted the RESULTS.md this sentence links to.)*
   usually bigger than the text it embeds) with per-vector scaling —
   ranking-neutral (cosine drift < 0.1%) and covered by tests.
 - Exact-duplicate detection (keyed fingerprints), `dedup --apply`, and
-  `repair` (vacuum + re-embed) keep the palace tight.
+  `repair` (vacuum + re-embed) keep the vault tight.
 
 ## More
 

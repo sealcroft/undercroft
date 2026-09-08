@@ -39,7 +39,7 @@ pub trait Embedder {
     /// degrade that way. Until O122 one of them counted it (`http`) while
     /// the count reached no surface, and the other two (`onnx`, `ort`)
     /// counted nothing at all. This is the one door the count leaves
-    /// through: `PalaceStats.embed_failures` reads it live on every renderer.
+    /// through: `VaultStats.embed_failures` reads it live on every renderer.
     ///
     /// **Required rather than defaulted, deliberately.** A default of zero
     /// is exactly the silent shape this closes — a backend that degrades and
@@ -87,7 +87,7 @@ pub trait Embedder {
     /// The distinction is invisible from the value alone and an operator
     /// cannot otherwise recover it: the default implementation probes, while
     /// [`HashEmbedder`] deliberately declares its gate so the default vault
-    /// pays no forward passes at open. Reported on `PalaceStats`, because "my
+    /// pays no forward passes at open. Reported on `VaultStats`, because "my
     /// semantic channel contributes nothing" and "my semantic channel was
     /// never measured" are different situations with different remedies.
     fn semantic_gate_is_measured(&self) -> bool {
@@ -329,7 +329,7 @@ pub const HASH_EMBEDDER_V2: &str = "undercroft-hash-v2";
 /// v3 keeps Brahmic conjuncts as one word rather than fragments. The name is
 /// the thing that makes that visible: a vault records it, and an open that
 /// finds a different one is a migration, not a silent swap. See
-/// `PalaceStore::open_with_embedder`.
+/// `VaultStore::open_with_embedder`.
 ///
 /// v2 was never released — no tag carries it, and every release since 1.0.0
 /// ships v3 — so it could have been redefined in place a second time, and

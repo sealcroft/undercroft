@@ -119,7 +119,7 @@ offline reader of a sealed database reads, in the clear:
 | dates **resolved out of** the content | resolutions only — offsets + ISO dates, never the words |
 | declared `kind` | closed vocabulary, ≤10 bytes, NULL when undeclared (docs/LABELS.md) |
 | `supersedes` link (+ `supersedes_receipt`) | chain topology: which record replaced which. The link is a drawer id (an unkeyed deterministic digest of wing/room/source/chunk, not of content); the receipt is a keyed HMAC |
-| `supersedes_fp`, and `kg_triples.source_fp` | **a keyed fingerprint of a superseded / cited document's verbatim content — CLOSED as ROADMAP U12.** Both were an unkeyed SHA-256 in the clear, and this page called them "HMAC-derived hex", which was wrong twice over. They were a confirmation oracle: an offline reader holding a candidate document hashed it and matched the column, learning byte-exactly that this plaintext was filed here — bounded only by having to reproduce the text, which is weak comfort when a drawer is one line. They are now `HMAC(kg_secret, sha256(content))`, keyed with the long-lived per-vault secret that rotation re-seals and never regenerates, so they stay rotation-stable without being an oracle. What remains readable is EQUALITY: two rows citing identical content still hold identical bytes, so a reader learns that two receipts point at the same text and never what it says. Legacy vaults are migrated at the next writable open; a row whose receipt does not verify is left alone rather than laundered and is reported on `PalaceStats.unhealed` |
+| `supersedes_fp`, and `kg_triples.source_fp` | **a keyed fingerprint of a superseded / cited document's verbatim content — CLOSED as ROADMAP U12.** Both were an unkeyed SHA-256 in the clear, and this page called them "HMAC-derived hex", which was wrong twice over. They were a confirmation oracle: an offline reader holding a candidate document hashed it and matched the column, learning byte-exactly that this plaintext was filed here — bounded only by having to reproduce the text, which is weak comfort when a drawer is one line. They are now `HMAC(kg_secret, sha256(content))`, keyed with the long-lived per-vault secret that rotation re-seals and never regenerates, so they stay rotation-stable without being an oracle. What remains readable is EQUALITY: two rows citing identical content still hold identical bytes, so a reader learns that two receipts point at the same text and never what it says. Legacy vaults are migrated at the next writable open; a row whose receipt does not verify is left alone rather than laundered and is reported on `VaultStats.unhealed` |
 | `agent` / `channel` / `session` claims | writer-declared provenance |
 | `filed_at` / `updated_at` | per-row timestamps |
 | record counts, per-record ciphertext sizes | unavoidable at this layer |
@@ -172,7 +172,7 @@ exists for grep-ability and is labeled, not a default.
 
 *Capability*: read–write access to database and manifest at rest.
 *Goal*: alter a memory, forge a record, delete evidence, or roll the
-palace back to an earlier state without detection.
+vault back to an earlier state without detection.
 
 **Defense (shipped)**: tamper is **detected on read, not merely
 resisted**. Any record, KG triple, or tunnel that fails its HMAC
@@ -191,7 +191,7 @@ evidence.
 
 **Residual (documented)**: an attacker with full disk control who
 restores a **consistent old database + manifest pair together** rewinds
-the palace to a state that was genuine at the time; the chain cannot
+the vault to a state that was genuine at the time; the chain cannot
 distinguish that from the machine having been off. The planned
 mitigation is an external witness (publishing the chain head
 off-machine); until then this is stated, not hidden.
@@ -429,7 +429,7 @@ and the manifest anchor must appear somewhere in that replay — equal in
 steady state, strictly behind after a crash-before-anchor (legal), and
 absent only when the database was rolled back or forked relative to an
 anchor it never produced. A clean verify is a machine-checked
-statement: *every byte this palace will ever return is exactly what was
+statement: *every byte this vault will ever return is exactly what was
 written, in the order recorded, under the keys it claims.* On telemetry
 builds the same real signals — never synthetic — drive the
 `undercroft_hmac_verify_failures_total` metric, the live event stream,

@@ -43,7 +43,7 @@ use time::{Duration, OffsetDateTime};
 
 use crate::admission::QUARANTINE_WING;
 use crate::forget::ForgetAttestation;
-use crate::{chain_append, Namespace, PalaceStore, StoreError};
+use crate::{chain_append, Namespace, StoreError, VaultStore};
 
 /// One declared policy, as listed back to the operator.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -98,7 +98,7 @@ pub(crate) fn retention_canonical(wing: &str, room: &str, days: u32, at: &str) -
     format!("retention\x1f{wing}\x1f{room}\x1f{days}\x1f{at}").into_bytes()
 }
 
-impl PalaceStore {
+impl VaultStore {
     pub(crate) fn init_retention_schema(&self) -> Result<(), StoreError> {
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS retention_policy (
@@ -247,7 +247,7 @@ impl PalaceStore {
 
     /// Run (or preview) a sweep: every declared policy contributes the
     /// drawers older than its age, the distinct set is destroyed through
-    /// [`PalaceStore::forget_with_proof`], and the attestation is the
+    /// [`VaultStore::forget_with_proof`], and the attestation is the
     /// receipt. Dry runs and empty sweeps destroy nothing and attest
     /// nothing.
     pub fn retention_sweep(&mut self, dry_run: bool) -> Result<RetentionSweep, StoreError> {
@@ -288,7 +288,7 @@ impl PalaceStore {
     /// strictly before `cutoff`, in insertion order. Candidate ids come
     /// from the clear `wing`/`room` mirror columns — the accelerator — but
     /// every DECISION reads the hydrated drawer, whose record HMAC
-    /// [`PalaceStore::get`] verifies: the clock is the covered
+    /// [`VaultStore::get`] verifies: the clock is the covered
     /// `meta.filed_at`, and since ROADMAP O120 the scope membership is the
     /// covered `meta.wing`/`meta.room` too. It was the mirror alone, which
     /// is A28 one table over: an offline `UPDATE drawers SET wing = …` moved
@@ -358,7 +358,7 @@ impl PalaceStore {
 
 #[cfg(test)]
 mod tests {
-    use crate::{InternalRead, PalaceStore, Read};
+    use crate::{InternalRead, Read, VaultStore};
     use tempfile::TempDir;
     use undercroft_core::Drawer;
     use undercroft_vault::{SecurityLevel, VaultManager};
@@ -375,7 +375,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("r", SecurityLevel::Sealed).unwrap();
-        let mut store = PalaceStore::open(vault).unwrap();
+        let mut store = VaultStore::open(vault).unwrap();
         // An old drawer filed under `archive`, which has no retention.
         let mut kept = Drawer::new(
             "archive",

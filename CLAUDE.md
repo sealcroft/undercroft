@@ -481,7 +481,7 @@ Consequences that are binding, not advisory:
   unscoped control that differs at 2 of 19 — i.e. the scoped path stopped
   being worse than the prefilter's own baseline. Latency unchanged (69 ms both
   ways), because the scan it surrenders to is bounded by the scope.
-  `PalaceStore::accept_filtered_pool` is the one place both arms ask it.
+  `VaultStore::accept_filtered_pool` is the one place both arms ask it.
   **A NARROWING and an EXCLUSION are not the same relation and
   `SeqFilter::{Only,AllBut}` is what keeps them apart** — one
   representation served both until 2026-08-11 and it was always the wrong
@@ -575,7 +575,7 @@ Consequences that are binding, not advisory:
   console was *"outside that gate"* until 2026-08-19, and it had been inside
   it since the entry that found `orphan_labels` and `mirror_drift` unrendered
   — a doctrine line describing the tree before its own worked example, which
-  is the shape this file keeps recording. `PalaceStats` joined it the same
+  is the shape this file keeps recording. `VaultStats` joined it the same
   day (ROADMAP M5), with the same result: four fields the console had never
   read),
   knowledge graph (kg.rs — incl. the golden-values authority
@@ -619,7 +619,7 @@ Consequences that are binding, not advisory:
   laundering a real `SourceChanged` into `Verified` and leaving the oracle
   in the file forever. The receipt is re-tagged (the fingerprint is inside
   it), so it is VERIFIED first and a failing row is skipped, not laundered
-  — reported on `PalaceStats.unhealed`, marker withheld, retried. Readers
+  — reported on `VaultStats.unhealed`, marker withheld, retried. Readers
   are shape-aware (`fp_matches`): a read-only open cannot migrate, so
   comparing a pre-U12 row under the keyed recipe would call an intact
   vault `SourceChanged`. The cost is PORTABILITY and it is paid at
@@ -637,7 +637,7 @@ Consequences that are binding, not advisory:
   keyed receipt over the superseded content's fingerprint in separate
   columns — the kg source_fp/receipt_tag shape one level up, the receipt
   re-keyed on rotation while the fingerprint does not move; five verdicts
-  via `verify_supersessions`; superseding NEVER deletes), whole-palace export/import (typed records: drawers + KG
+  via `verify_supersessions`; superseding NEVER deletes), whole-vault export/import (typed records: drawers + KG
   entities/facts/tunnels; receipts re-key from the traveling fp at the
   destination; the manifest carries embedder identity and chain head as
   provenance, never as state),
@@ -861,7 +861,7 @@ Consequences that are binding, not advisory:
   `(triple_id, source_drawer_id, verdict)`, so it and `kg_stats` are
   DELIBERATE exclusions carrying that reason on three surfaces — auditing
   them to match a filing would put a read record on a door no content passes
-  through. `PalaceStore::record_read` is the ONE place deciding whether a
+  through. `VaultStore::record_read` is the ONE place deciding whether a
   read is written down; it was three inline copies after O50 and this unit
   would have made it eleven, which is how the write screen came to have three
   ways past it. Residual, stated: a new `pub` STORE reader on `all_triples`
@@ -1062,7 +1062,7 @@ Consequences that are binding, not advisory:
   Offsets and content never travel, which is what the gates pin now. `monitor.html` dispatches on
   `drawer-quarantined`; `website/src/observability.md` documents it.
   **The counter travels with the frame since 2026-08-05 (C11/R5)**: both
-  are emitted by ONE function (`PalaceStore::emit_write_event`) off ONE
+  are emitted by ONE function (`VaultStore::emit_write_event`) off ONE
   `save_event` classification, and `drawer_writes_total` gained a third VALUE on its one
   `outcome` label, `quarantined` (not a third label — the counter has
   exactly one). It used to be a hard-coded
@@ -1117,7 +1117,7 @@ Consequences that are binding, not advisory:
   corpus of holes reported a clean vector space everywhere. Now
   `Embedder::embed_failures` is a REQUIRED trait method (a default of zero
   is exactly the silent shape it closes; the compiler enumerated eleven
-  impls), all three backends count and say so, `PalaceStats.embed_failures`
+  impls), all three backends count and say so, `VaultStats.embed_failures`
   reads it LIVE on all four renderers, and
   `undercroft_embed_failures_total{backend}` is the durable series with an
   `EmbedFailures` alert. It is the EMBEDDER's number for the life of the
@@ -1136,7 +1136,7 @@ Consequences that are binding, not advisory:
   embed at least leaves a zero vector `repair` can find; a failed score
   leaves no artifact at all. `Reranker::score_failures` and
   `LateInteraction::encode_failures` are required the same way,
-  `PalaceStats` gains `rerank_failures`/`late_failures`, and the counters
+  `VaultStats` gains `rerank_failures`/`late_failures`, and the counters
   are `undercroft_rerank_failures_total{backend}` +
   `undercroft_late_failures_total{backend,side}` — three series rather than
   one `stage` label, ruled by the maintainer 2026-09-08 while the embed
@@ -1287,7 +1287,7 @@ Consequences that are binding, not advisory:
   reaches the UNLOCK as well (`unlock_as(Access::ReadOnly)`), because
   unlocking deletes a staging manifest it cannot authenticate and stating
   the posture one call later was already too late. Each of those is
-  DETECTED and REPORTED instead, on `PalaceStats.unhealed` (all three
+  DETECTED and REPORTED instead, on `VaultStats.unhealed` (all three
   surfaces) and as a warning at open. Two conditions refuse rather than
   report, both 409: an absent `vault.db` under a present manifest
   (`DatabaseMissing`, A33 — "empty" is not "absent", and it is an
@@ -1854,7 +1854,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (495 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (496 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (133 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (82 checks; weaviate
@@ -2045,7 +2045,7 @@ own teardown was the place it had not been applied. Gated by the
 `destructive compose scope` preflight, which requires every compose teardown
 in `tests/` to name the project it destroys; `tests/tls-pins.sh`'s two scoped
 teardowns are the accepted shape. Logs land in `.battery/` (gitignored).
-**`bash tests/battery.sh --preflight-only` runs the sixteen host-side preflights
+**`bash tests/battery.sh --preflight-only` runs the seventeen host-side preflights
 and no suite**, which is what CI invokes. **A count the battery cannot trust is never compared to a published figure, and there are TWO ways to earn that (O97/O103): the suite EXITED NON-ZERO — `cargo test` aborts at the first failing target, so a numeric, replay-free count arrives over a fraction of them — or the reader disowned it with a `PREMISE FAILURE` marker. `count_untrustworthy` is the one place that question is answered, because it used to be answered twice and differently: the cargo arm guarded on the marker, the shell arm stripped it with a trailing `.*`, and neither looked at the exit code. It fails either way — a gate that cannot measure must not report clean — and the verdict names WHICH cause, because the message was written for a replay and told the reader to re-run a failure that was deterministic. (This sentence said "seven" while
 the tree ran eight, and nothing could say so — and then "ten" while the tree
 ran eleven, which the gate caught inside the very unit that caused it.
@@ -2432,8 +2432,8 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   the same SQLite transaction (the manifest holds a lagging rollback anchor,
   reconciled at open — crash ⇒ fast-forward, rollback ⇒ tamper). Every read
   must verify the record HMAC before returning data. **Anything that
-  REPORTS the chain reads `chain_meta`** (`PalaceStore::chain_state`, behind
-  `PalaceStats.writes`/`chain_head`), never `Vault::writes()` /
+  REPORTS the chain reads `chain_meta`** (`VaultStore::chain_state`, behind
+  `VaultStats.writes`/`chain_head`), never `Vault::writes()` /
   `chain_head_hex()`: those are the handle's own manifest fields, written
   only by its own `anchor_manifest` and never reloaded, so in `serve-http`
   — two handles on one vault — the handle that did not write reported a
@@ -2595,7 +2595,7 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   same expected capture anyway. Every codebook write bumps a **generation
   counter** in `meta` (not in the artifact's own table —
   `invalidate_embedding_space` drops `pq_meta`, and that drop is the event
-  most worth counting), surfaced on `PalaceStats.codebooks`, `/v1/…/stats`
+  most worth counting), surfaced on `VaultStats.codebooks`, `/v1/…/stats`
   (a hand-projected handler: adding a struct field does not reach the wire),
   and a gauge whose name must be in `undercroft_obs::GAUGE_NAMES` or it is
   silently dropped. A step means **re-quantization** for the three codebooks
@@ -2955,13 +2955,13 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   freed pages, and the early return meant nothing retried. A skipped row — one
   whose tag fails, which must not be re-tagged because that would launder it —
   did the same thing permanently. Rule: **write the marker last, only on a
-  clean walk, and report what is still pending on `PalaceStats.unhealed`**
+  clean walk, and report what is still pending on `VaultStats.unhealed`**
   (which is therefore no longer empty on a writable open — two comments said it
   was). Any future at-rest migration owes the same shape, plus the VACUUM and
   the byte-reading gate.
 - **A struct is not a surface.** `/v1` serializes report structs whole, so a
   new field reaches the wire for free; the CLI prints named fields one by one
-  and silently does not. This has bitten `PalaceStats` and then
+  and silently does not. This has bitten `VaultStats` and then
   `RotationReport` — the second time inside the very unit that existed to fix
   forgotten sweeps. `parity.rs::HAND_PROJECTED` +
   `every_hand_projected_report_field_reaches_the_cli` now fails when a field
@@ -3140,7 +3140,7 @@ had and was still bypassable on the surface most deployments use.
    struct before believing the gate covers it.
    **It happened again, to the struct this rule names first** (ROADMAP M5,
    2026-08-19). The `VerifyReport` row was added and the lesson stopped
-   there, so `PalaceStats` — the struct listed above as the FIRST one this
+   there, so `VaultStats` — the struct listed above as the FIRST one this
    drift bit — still had no `ui.html` row, and adding one found FOUR fields
    the console had never read, including `unhealed` and `read_only`, the two
    an operator opens a console to find. So the rule is not "add the console

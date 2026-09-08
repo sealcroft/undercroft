@@ -1821,6 +1821,177 @@ if ! grep -q 'UNDERCROFT PATCH' vendor/tiny_http/src/util/equal_reader.rs \
 fi
 echo "ok    vendor/ is pinned ($VENDOR_N files, both directions) and carries the O114 patch"
 
+echo "═══ preflight: the hierarchy word names one level ═══"
+# ROADMAP O112, ruled A: "p-a-l-a-c-e" denotes the INSTALLATION (a p... contains
+# vaults). It must never denote ONE VAULT. O7 fixed the instance on the database
+# filename; this is the same defect in identifiers, strings and prose.
+#
+# **Scope is deliberately wider than the filing proposed.** O112's own gate said
+# "a grep across crates/ and docs/", which excludes website/ and README.md --
+# where the densest and most PUBLIC per-vault uses lived, including plurals that
+# contradict "one per process" outright. A scoping phrase in a filed question
+# decides what the answer can contain (O29's lesson, on the gate of the entry
+# that fixes it).
+#
+# Three files are OUT of scope with a reason, not by oversight:
+#   ROADMAP.md, CHANGELOG.md  historical record -- entries quote messages and
+#                             type names as they were on the day, and rewriting
+#                             them would falsify what happened.
+#   tests/battery.sh          this file IS the gate; its own prose names the
+#                             word it hunts. Covered instead by the probe below,
+#                             which plants a per-vault use and requires a catch.
+# CLAUDE.md IS in scope: it describes the tree as it is now, so a stale name
+# there is a false claim rather than a record.
+HIER_W="$(printf '%s%s' 'pal' 'ace')"
+HIER_SCOPE="crates docs website/src tests deploy architecture README.md CLAUDE.md"
+# `crates/undercroft-store/testdata/` holds 50k word-frequency lists (English
+# and German); "palace 20785" there is a corpus row, not prose about this
+# system. Excluded by path rather than by an allowance, because an allowance
+# on the bare word would swallow the tree.
+HIER_PRUNE="crates/undercroft-store/testdata"
+# Every allowed shape, with the reason it is allowed. Counted in BOTH
+# directions below: an entry that matches nothing is stale and fails, so this
+# list cannot rot into decoration.
+HIER_ALLOW=(
+  "MemP${HIER_W#p}::heritage: the upstream project's name (NOTICE, docs/PARITY.md)"
+  "mem${HIER_W}::the same, lowercased in identifiers and the import format"
+  "${HIER_W}[.]db::O7's legacy per-vault filename: served where found, never minted"
+  "${HIER_W}-initialized::i18n key for init, which creates the installation"
+  "${HIER_W}-already::the same"
+  "P${HIER_W#p} initialized::the CLI's init message: master key + a default vault"
+  "P${HIER_W#p} Monitor::product name of the live monitor UI"
+  "loadP${HIER_W#p}::the monitor tab's loader in the console"
+  "P${HIER_W#p}TamperDetected::fleet-wide alert: the counter carries no vault label"
+  "${HIER_W} bearer::the process-wide bearer token"
+  "${HIER_W}-wide::explicitly installation-scoped"
+  "${HIER_W}-scoped::quoting a filing's own words"
+  "${HIER_W} data directory::the installation's directory"
+  "${HIER_W} root::the same"
+  "${HIER_W} master key::one master key per installation"
+  "default ${HIER_W}::the installation at UNDERCROFT_HOME"
+  "opening ${HIER_W} at::opening the installation directory"
+  "one ${HIER_W} per process::the doctrinal statement itself"
+  "not ${HIER_W}s::\"tenancy is vaults, not ...s\" -- the doctrinal statement"
+  "shared ${HIER_W}::one installation shared by a team"
+  "two ${HIER_W}s::two separate installations in the bundle flow"
+  "source ${HIER_W}::one of those two"
+  "destination ${HIER_W}::the other"
+  "outside any ${HIER_W}::the orchestrator's own database"
+  "whole ${HIER_W}::the tamper alarm, which is unlocalised by construction"
+  "${HIER_W} is empty::historical: the wording of a regression, quoted as such"
+  "${HIER_W} silently fell back::historical: the passphrase defect, quoted as such"
+  "${HIER_W} fell::the same"
+  "${HIER_W} scale::the installation's total drawer count"
+  "${HIER_W} → vault::the hierarchy itself, in that order"
+  "Plugs into the ${HIER_W}::the engine as a whole"
+  ">P${HIER_W#p}<::the console tab label, in its own markup"
+  "Initialize the ${HIER_W}::init creates the installation: master key + a default vault"
+  "like the ${HIER_W}::wrapped: \"...permissions (like the ... master key)\""
+  "different ${HIER_W} per::the installation follows the home directory"
+  "existing ${HIER_W}::moving HOME would move the installation"
+  "creates a ${HIER_W} on local disk::bootstrapping the installation is not a remote act"
+  "${HIER_W}-level::explicitly installation-scoped, beside \"vault-scoped\""
+  "P${HIER_W#p}&nbsp;MONITOR::the monitor UI's own title markup"
+  "Enter the ${HIER_W}::wrapped: \"Enter the ... bearer\" in the monitor UI"
+  "tab-${HIER_W}::the console tab's element id"
+  "the ${HIER_W} view::the monitor tab, which a telemetry build serves"
+  "Undercroft — P${HIER_W#p}::the Grafana dashboard's published title"
+  "undercroft-${HIER_W}::the Grafana dashboard uid"
+  "\"${HIER_W}\"::the console tab id in its own list of tab ids"
+  "${HIER_W}, wings, rooms, drawers::the domain model, in hierarchy order"
+  "caller: ${HIER_W}::wrapped: \"...like any other caller: ... bearer\""
+  "${HIER_W}[.] Everything here::wrapped: the tamper alarm's \"the whole ...\""
+  "${HIER_W}'s own::the installation's own keys, beside an identity key"
+  "one master key per ${HIER_W}::the installation's key, by definition"
+  "${HIER_W}-level salt::the same salt, one per installation"
+  "A different ${HIER_W}::a second installation with its own salt"
+  "A [*]${HIER_W}[*]::the vault crate's own definition of the hierarchy"
+  "manifest under the ${HIER_W}::the installation holds every vault manifest"
+  "The ${HIER_W}\" is the whole installation::the doctrine, stated in the code"
+  "vaults under one ${HIER_W} directory::the installation directory"
+  "${HIER_W} (at|dir|directory|location|volume|root)::the installation's own path"
+  "(Open|opening) the ${HIER_W}::opening the installation at its root"
+  "under the ${HIER_W}::every vault sits under one installation"
+  "else in the ${HIER_W}::the rest of the installation, beside one vault"
+  "${HIER_W} store::the engine store, whose contents are sealed VAULTS"
+  "${HIER_W} model::the upstream project model, in the parity table"
+  "First ${HIER_W}::getting-started: creating the installation"
+  "not a ${HIER_W}::the unit of tenancy is a vault, not this"
+  "one ${HIER_W}::one per process, many vaults inside"
+  "${HIER_W}; each::each tenant gets a vault inside it"
+  "served ${HIER_W}::the process serving every vault it holds"
+  "${HIER_W}-monitor::the monitor image and anchor names"
+  "the P${HIER_W#p}$::wrapped: the Monitor name across a line break"
+  "${HIER_W} wrote a random::historical: the passphrase defect, quoted"
+  "in the ${HIER_W}[.]::what the whole installation holds"
+  "${HIER_W} lives elsewhere::UNDERCROFT_HOME points at the installation"
+  "P${HIER_W#p} [(]data dir::the domain-model diagram: the installation IS the data dir"
+  "${HIER_W}: vaults::a compose comment naming what the volume holds"
+  "Personal ${HIER_W}::a deployment shape, sibling to many-core and GPU box"
+  "fresh ${HIER_W}::a test creating a new installation to work in"
+  "not the ${HIER_W}::the tamper alarm names a row, not the whole process"
+  "python ${HIER_W}::the upstream project, in an import-format fixture"
+  "P${HIER_W#p} already initialized::the init message, localized in nine languages"
+  "${HIER_W} tab::the console tab that hosts the monitor"
+  "drawer wing room mnemonic memory ${HIER_W}::the trace verifier CLEAN control string"
+  "Create the ${HIER_W}::compose: bootstrap the installation on first run"
+  "P${HIER_W#p} lives on::compose: the installation lives on a named volume"
+  "2014 P${HIER_W#p}::the Grafana dashboard title, JSON-escaped em dash"
+  "— P${HIER_W#p}::the same title with a literal em dash, in the console"
+  "P${HIER_W#p}, wing, room, drawer::the domain model, singular, in the arch sidebar"
+  "P${HIER_W#p} contains vaults::the domain model, stated in the diagram description"
+  "<!-- P${HIER_W#p}::an SVG layout comment naming the outermost ring"
+  "P${HIER_W#p} boundary::the containment ring a derived key crosses"
+  "PALACE ·::the storage-layout label, with its middle dot"
+  "P${HIER_W#p}, vault, wing, room, drawer::the domain model with the vault level named"
+  "leaving the ${HIER_W}::an egress crosses the installation boundary"
+  "had named both::O7 quoted: the word named two levels, and was fixed"
+  "compose ${HIER_W}::the installation on the compose data volume"
+)
+hier_scan() { # <paths...> -- every hit that no allowed shape explains
+  grep -rniw --exclude='*.svg' -- "$HIER_W" "$@" 2>/dev/null     | grep -v "^${HIER_PRUNE}"     | grep -viE "$(IFS='|'; printf '%s' "${HIER_ALLOW[*]%%::*}")" || true
+}
+# PREMISE. Plant a per-vault use and require the scanner to catch it: a scanner
+# that examines nothing reports exactly what a clean tree reports.
+mkdir -p .battery
+HIER_PROBE=".battery/hier-probe.md"
+printf 'a clean line about vaults
+export the %s as JSONL
+' "$HIER_W" > "$HIER_PROBE"
+if [ -z "$(hier_scan "$HIER_PROBE")" ]; then
+  echo "FAIL  premise: the scanner did not catch a planted per-vault use, so its"
+  echo "      silence over the tree means nothing"
+  rm -f "$HIER_PROBE"
+  echo ""
+  echo "BATTERY FAILED -- preflight"
+  exit 1
+fi
+rm -f "$HIER_PROBE"
+# Direction 2: every allowed shape must still match something.
+HIER_FAIL=0
+for row in "${HIER_ALLOW[@]}"; do
+  pat="${row%%::*}"; why="${row#*::}"
+  if ! grep -rqiE -- "$pat" $HIER_SCOPE 2>/dev/null; then
+    echo "FAIL  the allowance \"$pat\" ($why) matches nothing any more --"
+    echo "      a stale allowance reads as a checked exemption while covering nothing"
+    HIER_FAIL=1
+  fi
+done
+HIER_HITS="$(hier_scan $HIER_SCOPE | grep -v '^tests/battery.sh:' || true)"
+if [ -n "$HIER_HITS" ]; then
+  echo "FAIL  these name ONE VAULT with the installation's word (ROADMAP O112):"
+  printf '%s
+' "$HIER_HITS" | sed 's/^/      /' | head -40
+  echo "      Either say \"vault\", or add the shape to HIER_ALLOW with its reason."
+  HIER_FAIL=1
+fi
+if [ "$HIER_FAIL" -ne 0 ]; then
+  echo ""
+  echo "BATTERY FAILED -- preflight"
+  exit 1
+fi
+echo "ok    ${#HIER_ALLOW[@]} allowed installation-level shapes, all live; no per-vault use"
+
 echo "═══ preflight: prose figures ═══"
 
 pf_word() {

@@ -7,7 +7,7 @@
 //! and to manage vault lifecycle over HTTP. This module adds a versioned
 //! REST layer, in the same process and behind the same bearer, that:
 //!
-//! * resolves `/v1/vaults/{id}/...` to a per-vault [`PalaceStore`] (opened
+//! * resolves `/v1/vaults/{id}/...` to a per-vault [`VaultStore`] (opened
 //!   on demand and cached), picking an external-embedding identity when the
 //!   vault records one;
 //! * requires, when `UNDERCROFT_ASSERTION_SECRET` is set, a valid
@@ -24,7 +24,7 @@ use serde_json::{json, Value};
 use tiny_http::{Header, Request, Response};
 
 use undercroft_core::{normalize_content, validate_name, Drawer};
-use undercroft_store::{PalaceStore, SearchOptions, StoreError};
+use undercroft_store::{SearchOptions, StoreError, VaultStore};
 use undercroft_vault::{SecurityLevel, Vault, VaultManager};
 
 use crate::assertion::{self, AssertionError};
@@ -159,7 +159,7 @@ pub struct Tenancy {
     /// Optional shared second-stage reranker, attached to every store as it
     /// is opened. `None` ⇒ first-pass ranking only (the default).
     reranker: Option<RerankerFactory>,
-    stores: HashMap<String, PalaceStore>,
+    stores: HashMap<String, VaultStore>,
     read_only: bool,
     /// The vault this same process ALSO holds open behind `/mcp`, when the
     /// binary is running `serve-http` (which opens one store for MCP and
@@ -496,7 +496,7 @@ impl Tenancy {
         if let Some(spec) = body.get("embedder").and_then(Value::as_str) {
             if let Some((name, dim)) = undercroft_core::parse_external_spec(spec) {
                 let emb = Box::new(undercroft_core::ExternalEmbedder::new(&name, dim));
-                PalaceStore::open_with_embedder(vault, emb).map_err(store_err)?;
+                VaultStore::open_with_embedder(vault, emb).map_err(store_err)?;
             } else if spec != "hash" && !spec.is_empty() {
                 return Err(RestError::new(
                     400,
@@ -543,7 +543,7 @@ impl Tenancy {
         let full = store.stats().map_err(store_err)?;
         let external = store.is_external();
         undercroft_obs::set_gauge("drawers", id, full.records as f64);
-        // The COMMITTED height (`PalaceStats`, i.e. `chain_meta`), never
+        // The COMMITTED height (`VaultStats`, i.e. `chain_meta`), never
         // this handle's cached manifest: in `serve-http` the MCP store is
         // a second handle on the same vault, and whichever handle did not
         // write kept reporting the head it last anchored — a frozen gauge
@@ -562,7 +562,7 @@ impl Tenancy {
                 "semantic": full.semantic,
                 // **The same number under the name the struct and every
                 // other surface give it** (M2, round-four #45). `records` is
-                // what `PalaceStats` calls it, what the CLI and MCP print,
+                // what `VaultStats` calls it, what the CLI and MCP print,
                 // and — the part that decides the direction of this fix —
                 // what BOTH `/v1` reference documents have always said this
                 // route returns: `docs/AGENTS.md` §10 and
@@ -607,7 +607,7 @@ impl Tenancy {
                 "db_bytes": full.db_bytes,
                 // Trained index artifacts and how many times each has been
                 // trained here. Projected by hand like every field above —
-                // this route does NOT serialize `PalaceStats`, so a field
+                // this route does NOT serialize `VaultStats`, so a field
                 // added to that struct does not reach the wire until it is
                 // added here too.
                 "codebooks": full.codebooks
@@ -1339,7 +1339,7 @@ impl Tenancy {
     /// on the CLI alone, so `/v1` and `/mcp` could both DIAGNOSE and neither
     /// could remediate. That asymmetry has a cost with a name: R4 made a
     /// read-only open REPORT what it declined to heal, on
-    /// `PalaceStats.unhealed`, on all three surfaces — and the door that heals
+    /// `VaultStats.unhealed`, on all three surfaces — and the door that heals
     /// it was on one. `CLAUDE.md` also makes `repair` the mandatory second
     /// half of a model-embedder swap (`UNDERCROFT_FORCE_EMBEDDER=1` +
     /// `repair`), which a fleet operator whose only door is `/v1` therefore
@@ -1364,7 +1364,7 @@ impl Tenancy {
         self.assert_or_401(id, req, now)?;
         // **Sole-handle, for a reason that is NOT rotation's.** `rotate`
         // refuses a co-resident vault because it re-keys and the other handle
-        // holds keys. `repair` re-EMBEDS, and `PalaceStore::repair` opens by
+        // holds keys. `repair` re-EMBEDS, and `VaultStore::repair` opens by
         // dropping its own warmed embedding cache — *"Re-embedding below
         // bypasses upsert; drop any warmed cache"* — which it can only do for
         // the handle it is called on. A vault this process also serves over
@@ -2091,7 +2091,7 @@ impl Tenancy {
     ///
     /// And `create` was already per-vault: it takes one vault and gates on
     /// THAT vault's verify verdict, which is preserved here — never archive a
-    /// palace that fails its own HMACs, and say so as an integrity verdict
+    /// vault that fails its own HMACs, and say so as an integrity verdict
     /// (409 + `class: "integrity"`, the wire form of the CLI's exit 2).
     fn backup_create(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
         self.assert_or_401(id, req, now)?;
@@ -2361,7 +2361,7 @@ impl Tenancy {
     ///
     /// The trust-floor distinction is carried over verbatim, because it is the
     /// one that lies if dropped: an empty result under a declared floor means
-    /// "nothing meets the floor", NOT "the palace is empty", and a caller
+    /// "nothing meets the floor", NOT "the vault is empty", and a caller
     /// cannot see through the difference.
     fn wake_up(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
         self.assert_or_401(id, req, now)?;
@@ -2849,7 +2849,7 @@ impl Tenancy {
         let framed = undercroft_vault::bundle::frame_payload(&manifest, out.as_bytes());
         let framed = String::from_utf8(framed)
             .map_err(|e| RestError::new(500, format!("payload not UTF-8: {e}")))?;
-        // Every full-palace egress leaves a chain record binding the
+        // Every whole-vault egress leaves a chain record binding the
         // export's manifest digest. A read-only replica must not write,
         // so it serves the export and SAYS the egress went unaudited —
         // the replica precedent: warn and serve.
@@ -3090,7 +3090,7 @@ impl Tenancy {
 
     /// Open (or fetch the cached) store for `vault_id`, mapping a missing
     /// vault to 404.
-    fn store_for(&mut self, vault_id: &str) -> Result<&mut PalaceStore, RestError> {
+    fn store_for(&mut self, vault_id: &str) -> Result<&mut VaultStore, RestError> {
         if !self.stores.contains_key(vault_id) {
             if !self.manager.exists(vault_id) {
                 return Err(RestError::new(404, "no such vault"));
@@ -3124,9 +3124,9 @@ impl Tenancy {
             // an embedder migration is a bulk write, and the operator asked
             // this process not to make any.
             let opened = if self.read_only {
-                PalaceStore::open_read_only(vault, embedder)
+                VaultStore::open_read_only(vault, embedder)
             } else {
-                PalaceStore::open_with_embedder(vault, embedder)
+                VaultStore::open_with_embedder(vault, embedder)
             };
             // `store_err`'s wrapped-manifest arm was DEAD CODE until this
             // line: `StoreError::Vault(ManifestTampered)` is raised in
@@ -3894,7 +3894,7 @@ mod tests {
         let vault = mgr.create("acme", SecurityLevel::Sealed).unwrap();
         let clean = Drawer::new("ops", "r", CLEAN.into(), None, 0, "test");
         let quarantined_id = {
-            let mut store = PalaceStore::open(vault).unwrap();
+            let mut store = VaultStore::open(vault).unwrap();
             store.upsert(&clean).unwrap();
             store.set_admission(true);
             store
@@ -4166,7 +4166,7 @@ mod tests {
         // --- the `dedup_threshold` arm ------------------------------------
         {
             let mut s = surface(false);
-            let mut store = PalaceStore::open(s.tenancy.manager.unlock("acme").unwrap()).unwrap();
+            let mut store = VaultStore::open(s.tenancy.manager.unlock("acme").unwrap()).unwrap();
             store.set_admission(true);
             s.tenancy.stores.insert("acme".to_string(), store);
 
@@ -4215,7 +4215,7 @@ mod tests {
                 .manager
                 .create("ext", SecurityLevel::Sealed)
                 .unwrap();
-            let mut store = PalaceStore::open_with_embedder(
+            let mut store = VaultStore::open_with_embedder(
                 vault,
                 Box::new(undercroft_core::ExternalEmbedder::new("acme-embed", 8)),
             )
@@ -4335,7 +4335,7 @@ mod tests {
     #[test]
     fn an_import_declaring_an_invalid_wing_is_refused_even_when_the_screen_would_divert_it() {
         let mut s = surface(false);
-        let mut store = PalaceStore::open(s.tenancy.manager.unlock("acme").unwrap()).unwrap();
+        let mut store = VaultStore::open(s.tenancy.manager.unlock("acme").unwrap()).unwrap();
         store.set_admission(true);
         s.tenancy.stores.insert("acme".to_string(), store);
         let pending_before = |s: &mut Surface| {
@@ -4395,7 +4395,7 @@ mod tests {
     #[test]
     fn an_imported_token_artifact_follows_the_row_and_refuses_a_forged_id() {
         let mut s = surface(false);
-        let mut store = PalaceStore::open(s.tenancy.manager.unlock("acme").unwrap()).unwrap();
+        let mut store = VaultStore::open(s.tenancy.manager.unlock("acme").unwrap()).unwrap();
         store.set_admission(true);
         s.tenancy.stores.insert("acme".to_string(), store);
 
@@ -4469,7 +4469,7 @@ mod tests {
         let lag = 3usize;
         {
             let vault = s.tenancy.manager.unlock("acme").expect("unlock acme");
-            let mut store = PalaceStore::open(vault).expect("open acme");
+            let mut store = VaultStore::open(vault).expect("open acme");
             store.set_read_audit(true);
             for _ in 0..lag {
                 store.search("postgres", &SearchOptions::default()).unwrap();
@@ -4510,7 +4510,7 @@ mod tests {
     /// **M2 (round-four #45): one drawer count, and it answers to both
     /// names from one read.**
     ///
-    /// `PalaceStats.records` reached this route as `"drawers"` alone, so the
+    /// `VaultStats.records` reached this route as `"drawers"` alone, so the
     /// same quantity had a different name depending on which transport an
     /// operator came in by — CLI and MCP said `records`, `/v1` said
     /// `drawers` — and BOTH `/v1` reference documents described a payload
@@ -4539,7 +4539,7 @@ mod tests {
 
         let records = v["records"].as_u64().unwrap_or_else(|| {
             panic!(
-                "`records` is what `PalaceStats` calls this field, what the \
+                "`records` is what `VaultStats` calls this field, what the \
                  CLI and MCP print, and what both `/v1` reference documents \
                  say this route returns: {body}"
             )
@@ -4569,7 +4569,7 @@ mod tests {
         assert!(v["behind_by"].as_u64().is_some(), "{body}");
 
         // M1 on the SECOND route that publishes the height. This one is not
-        // a `PalaceStats` projection, so `HAND_PROJECTED` does not reach it
+        // a `VaultStats` projection, so `HAND_PROJECTED` does not reach it
         // — the pair is asserted here or nowhere.
         let writes = v["writes"]
             .as_u64()

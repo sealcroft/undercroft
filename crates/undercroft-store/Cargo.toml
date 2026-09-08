@@ -1,6 +1,6 @@
 [package]
 name = "undercroft-store"
-description = "SQLite-backed palace storage with hybrid search over sealed or hmac-only vaults"
+description = "SQLite-backed vault storage with hybrid search over sealed or hmac-only vaults"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

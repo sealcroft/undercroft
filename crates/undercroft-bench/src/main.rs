@@ -4,7 +4,7 @@
 //!
 //! * `longmemeval <dataset.json>` — the real LongMemEval(-S) protocol, same
 //!   as MemPalace's `longmemeval_bench.py`: for each question, ingest its
-//!   haystack sessions into a fresh palace, query with the question, and
+//!   haystack sessions into a fresh vault, query with the question, and
 //!   score session-level Recall@k / NDCG@k against the ground-truth answer
 //!   sessions. Dataset is user-supplied (see benchmarks/README.md).
 //! * `synth` — a deterministic, self-contained benchmark that needs no
@@ -26,7 +26,7 @@ use serde_json::Value;
 use std::time::Instant;
 
 use undercroft_core::Drawer;
-use undercroft_store::{PalaceStore, SearchHit, SearchOptions};
+use undercroft_store::{SearchHit, SearchOptions, VaultStore};
 use undercroft_vault::{SecurityLevel, VaultManager};
 
 #[derive(Parser)]
@@ -503,7 +503,7 @@ fn level_of(s: &str) -> SecurityLevel {
     }
 }
 
-fn fresh_store(level: SecurityLevel) -> Result<(tempfile::TempDir, PalaceStore)> {
+fn fresh_store(level: SecurityLevel) -> Result<(tempfile::TempDir, VaultStore)> {
     fresh_store_id(level, "bench")
 }
 
@@ -511,7 +511,7 @@ fn fresh_store(level: SecurityLevel) -> Result<(tempfile::TempDir, PalaceStore)>
 /// LoCoMo path needs one collection per conversation (collection name derives
 /// from the vault id), so it passes a unique id per convo to avoid cross-convo
 /// vector collisions in the shared index.
-fn fresh_store_id(level: SecurityLevel, id: &str) -> Result<(tempfile::TempDir, PalaceStore)> {
+fn fresh_store_id(level: SecurityLevel, id: &str) -> Result<(tempfile::TempDir, VaultStore)> {
     let dir = tempfile::TempDir::new()?;
     let mgr = VaultManager::open(dir.path(), None)?;
     let vault = mgr.create(id, level)?;
@@ -522,11 +522,11 @@ fn fresh_store_id(level: SecurityLevel, id: &str) -> Result<(tempfile::TempDir, 
             // (tract) when both features are built — same model file, faster.
             #[cfg(feature = "ort")]
             {
-                PalaceStore::open_with_embedder(vault, ort_embedder_shared())?
+                VaultStore::open_with_embedder(vault, ort_embedder_shared())?
             }
             #[cfg(all(feature = "onnx", not(feature = "ort")))]
             {
-                PalaceStore::open_with_embedder(vault, onnx_shared())?
+                VaultStore::open_with_embedder(vault, onnx_shared())?
             }
             #[cfg(not(any(feature = "onnx", feature = "ort")))]
             anyhow::bail!("UNDERCROFT_EMBEDDER=onnx requires --features onnx or ort");
@@ -538,9 +538,9 @@ fn fresh_store_id(level: SecurityLevel, id: &str) -> Result<(tempfile::TempDir, 
         Ok("http") => {
             let embedder = undercroft_llm::HttpEmbedder::from_env()
                 .map_err(|e| anyhow::anyhow!("connecting to the embeddings endpoint: {e}"))?;
-            PalaceStore::open_with_embedder(vault, Box::new(embedder))?
+            VaultStore::open_with_embedder(vault, Box::new(embedder))?
         }
-        _ => PalaceStore::open(vault)?,
+        _ => VaultStore::open(vault)?,
     };
     // Optional second-stage reranker (pairs with either embedder). ORT wins
     // over tract when both are built.
@@ -582,7 +582,7 @@ fn fresh_store_id(level: SecurityLevel, id: &str) -> Result<(tempfile::TempDir, 
 }
 
 /// The ONNX model is loaded once and shared across every per-question
-/// palace — model load costs seconds and LongMemEval creates 500 stores.
+/// vault — model load costs seconds and LongMemEval creates 500 stores.
 #[cfg(feature = "onnx")]
 fn onnx_shared() -> Box<dyn undercroft_core::embed::Embedder + Send> {
     use std::sync::{Arc, OnceLock};
@@ -612,7 +612,7 @@ fn onnx_shared() -> Box<dyn undercroft_core::embed::Embedder + Send> {
 }
 
 /// The cross-encoder reranker, loaded once and shared across every per-question
-/// palace (same rationale as `onnx_shared`).
+/// vault (same rationale as `onnx_shared`).
 #[cfg(feature = "onnx")]
 fn rerank_shared() -> Box<dyn undercroft_core::rerank::Reranker + Send + Sync> {
     use std::sync::{Arc, OnceLock};
@@ -642,7 +642,7 @@ fn rerank_shared() -> Box<dyn undercroft_core::rerank::Reranker + Send + Sync> {
 }
 
 /// The ColBERT late-interaction encoder, loaded once and shared across every
-/// per-question palace (same rationale as `onnx_shared`).
+/// per-question vault (same rationale as `onnx_shared`).
 #[cfg(feature = "onnx")]
 fn colbert_shared() -> Box<dyn undercroft_core::late::LateInteraction + Send + Sync> {
     use std::sync::{Arc, OnceLock};
@@ -858,7 +858,7 @@ fn run_longmemeval(
             })
             .unwrap_or_default();
 
-        // Fresh palace per question, one room per haystack session
+        // Fresh vault per question, one room per haystack session
         // (MemPalace's session-granularity protocol).
         let (_tmp, mut store) = fresh_store(level)?;
         for (si, session) in sessions.iter().enumerate() {
@@ -2481,7 +2481,7 @@ struct PhaseTiming {
 /// exactly like the standalone LoCoMo row — the default hash embedder is
 /// the "fully sealed, zero external calls" column.
 struct NativeSystem {
-    store: Option<(tempfile::TempDir, PalaceStore)>,
+    store: Option<(tempfile::TempDir, VaultStore)>,
     chunk_idx: u32,
 }
 
@@ -3351,7 +3351,7 @@ fn locomo_eval(
 /// everything, `Some("locomo")` verbatim-only, `Some("facts")`
 /// distilled-only — the three passes that separate verbatim from KG.
 fn score_pass(
-    store: &mut PalaceStore,
+    store: &mut VaultStore,
     qa_pairs: &[Value],
     k: usize,
     qa_limit: usize,

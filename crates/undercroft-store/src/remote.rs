@@ -10,7 +10,7 @@
 //!   ([`PlaintextPush`], ROADMAP C8) — the field was named `sealed_b64` and
 //!   documented "never plaintext" while nothing checked the level;
 //! * `search_with_index` asks the remote for candidate ids only, then
-//!   re-loads every candidate from the local palace where the HMAC is
+//!   re-loads every candidate from the local vault where the HMAC is
 //!   verified and content decrypted. A compromised index can *omit*
 //!   results, but cannot forge, alter, or inject them;
 //! * final ranking is recomputed locally (semantic + lexical + recency),
@@ -42,7 +42,7 @@ use base64::Engine;
 use rusqlite::{params, OptionalExtension};
 use undercroft_index::{IndexRecord, VectorIndex};
 
-use crate::{Namespace, PalaceStore, SearchHit, SearchOptions, StoreError};
+use crate::{Namespace, SearchHit, SearchOptions, StoreError, VaultStore};
 use undercroft_vault::SecurityLevel;
 
 /// Raw index-push row: (id, wing, room, content, embedding).
@@ -63,7 +63,7 @@ pub enum PlaintextPush {
     Allow,
 }
 
-impl PalaceStore {
+impl VaultStore {
     /// Collection name for this vault on remote backends.
     pub fn index_collection(&self) -> String {
         format!("undercroft_{}", self.vault.id())
@@ -239,7 +239,7 @@ impl PalaceStore {
 
     /// Chain-record one index push under `egress/index-push`.
     ///
-    /// A sibling of [`audit_export`](PalaceStore::audit_export) rather than
+    /// A sibling of [`audit_export`](VaultStore::audit_export) rather than
     /// the same record type: a reader has to be able to tell a
     /// recipient-encrypted bundle handed to a named identity from a mirror
     /// of the whole corpus handed to an untrusted accelerator. The
@@ -629,11 +629,11 @@ mod tests {
         }
     }
 
-    fn store() -> (TempDir, PalaceStore) {
+    fn store() -> (TempDir, VaultStore) {
         let dir = TempDir::new().unwrap();
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
-        (dir, PalaceStore::open(vault).unwrap())
+        (dir, VaultStore::open(vault).unwrap())
     }
 
     fn drawer(wing: &str, content: &str, idx: u32) -> Drawer {
@@ -698,7 +698,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let mut s =
-            PalaceStore::open(mgr.create("plain", SecurityLevel::HmacOnly).unwrap()).unwrap();
+            VaultStore::open(mgr.create("plain", SecurityLevel::HmacOnly).unwrap()).unwrap();
         let d = drawer("notes", "the kelp harvest quota is confidential", 0);
         s.upsert(&d).unwrap();
 
@@ -1190,7 +1190,7 @@ mod tests {
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
         let emb = Box::new(undercroft_core::ExternalEmbedder::new("acme-embed", 8));
-        let s = PalaceStore::open_with_embedder(vault, emb).unwrap();
+        let s = VaultStore::open_with_embedder(vault, emb).unwrap();
         let mut index = EchoIndex::default();
         assert!(matches!(
             s.search("anything", &SearchOptions::default()),

@@ -64,7 +64,7 @@ use rusqlite::{params, OptionalExtension};
 use undercroft_vault::SecurityLevel;
 
 use crate::pq::{CoarseQuantizer, ProductQuantizer};
-use crate::{PalaceStore, StoreError, CODEBOOK_PQ, CODEBOOK_PQ_IVF};
+use crate::{StoreError, VaultStore, CODEBOOK_PQ, CODEBOOK_PQ_IVF};
 
 /// The PQ RAM code cache, slab-grouped by IVF list: `list → (seqs,
 /// contiguous codes)`. A probe scans only its lists' slabs — no per-row
@@ -124,13 +124,13 @@ pub(crate) struct WingPq {
 /// job: the global tier self-heals at the next writable open, the per-wing
 /// tier never does, and a read-only replica heals neither.
 ///
-/// [`PalaceStore::one_rewrite`]'s doc states this rule generally and FDE
+/// [`VaultStore::one_rewrite`]'s doc states this rule generally and FDE
 /// (`fdeidx.rs`) and the token codebook (`latestage.rs`) already follow it.
 /// PQ did not; this is PQ catching up.
 ///
 /// **Buffered rather than wrapped**, deliberately: wrapping the whole build
 /// would hold the write lock across k-means, which is the trade
-/// [`PalaceStore::one_rewrite`]'s doc already argues against. Training stays
+/// [`VaultStore::one_rewrite`]'s doc already argues against. Training stays
 /// outside the transaction and only its *decision* travels in.
 enum PendingMeta {
     /// The stored artifact is reused as-is. A rebuild is not a retrain and
@@ -318,7 +318,7 @@ pub(crate) fn stratified_keyed(n: usize, want: usize, rank: impl Fn(usize) -> u6
 /// IVF partitioning kicks in above this corpus size by default — below it the
 /// flat ADC scan is already a few milliseconds and partitions would only add
 /// recall risk. Tunable: `UNDERCROFT_IVF_MIN` (`off` disables IVF, keeping the
-/// flat PQ scan) / [`PalaceStore::set_ivf`].
+/// flat PQ scan) / [`VaultStore::set_ivf`].
 pub(crate) const IVF_MIN_DEFAULT: usize = 8192;
 const IVF_TRAIN_ITERS: usize = 10;
 
@@ -346,7 +346,7 @@ const PQ_TAIL_FOLD: usize = 256;
 /// `PQ_TRAIN_SAMPLE`: the smallest per-wing codebook trains on a full-size
 /// sample. Tunable: `UNDERCROFT_WING_PQ_MIN` (`off` disables the per-wing
 /// tier — scoped queries then intersect the global candidates, the
-/// pre-tier behavior) / [`PalaceStore::set_wing_pq_min`].
+/// pre-tier behavior) / [`VaultStore::set_wing_pq_min`].
 pub const WING_PQ_MIN_DEFAULT: usize = 4096;
 
 /// Corpus-scaled stage-1 candidate pool divisor: the semantic prefilters
@@ -376,7 +376,7 @@ pub(crate) fn ivf_fresh(live: u64, trained: u64) -> bool {
     live <= trained.saturating_mul(3) / 2
 }
 
-impl PalaceStore {
+impl VaultStore {
     /// Enable (or disable) the on-disk PQ ANN prefilter — both security
     /// levels. hmac-only vaults store plain codes; **sealed vaults store
     /// every row, the codebook, and the IVF centroids AEAD-sealed** (`/pq`
@@ -2395,21 +2395,21 @@ impl PalaceStore {
 #[cfg(test)]
 mod tests {
     use super::{stratified_keyed, PqCache};
-    use crate::{PalaceStore, StoreError, CODEBOOK_PQ, CODEBOOK_PQ_IVF};
+    use crate::{StoreError, VaultStore, CODEBOOK_PQ, CODEBOOK_PQ_IVF};
     use undercroft_core::Drawer;
     use undercroft_vault::{SecurityLevel, VaultManager};
 
-    fn store() -> (tempfile::TempDir, PalaceStore) {
+    fn store() -> (tempfile::TempDir, VaultStore) {
         let dir = tempfile::TempDir::new().unwrap();
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", SecurityLevel::HmacOnly).unwrap();
-        (dir, PalaceStore::open(vault).unwrap())
+        (dir, VaultStore::open(vault).unwrap())
     }
 
     /// A store holding `n` drawers in one wing, with both PQ tiers tuned so
     /// that a corpus this small still trains a codebook AND a centroid set —
     /// the two artifacts M2 is about.
-    fn filled(n: u32) -> (tempfile::TempDir, PalaceStore) {
+    fn filled(n: u32) -> (tempfile::TempDir, VaultStore) {
         let (dir, mut s) = store();
         for i in 0..n {
             s.upsert(&Drawer::new(
@@ -2428,7 +2428,7 @@ mod tests {
         (dir, s)
     }
 
-    fn meta_rows(s: &PalaceStore, key: &str) -> i64 {
+    fn meta_rows(s: &VaultStore, key: &str) -> i64 {
         s.conn
             .query_row("SELECT COUNT(*) FROM pq_meta WHERE key = ?1", [key], |r| {
                 r.get(0)
@@ -2439,7 +2439,7 @@ mod tests {
     /// The interruption, made deterministic: the next row this rebuild
     /// writes aborts, exactly where a power loss would land — after the
     /// artifacts were trained, before the codes they describe exist.
-    fn interrupt_inserts_into(s: &PalaceStore, table: &str) {
+    fn interrupt_inserts_into(s: &VaultStore, table: &str) {
         s.conn
             .execute(
                 &format!(

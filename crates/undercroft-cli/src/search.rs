@@ -15,7 +15,7 @@
 //! arguments use the same key names) share the identical function.
 
 use serde_json::Value;
-use undercroft_store::{PalaceStore, SearchHit, SearchOptions, StoreError};
+use undercroft_store::{SearchHit, SearchOptions, StoreError, VaultStore};
 
 /// How many hits a search returns when the caller does not say.
 ///
@@ -158,7 +158,7 @@ impl Exclusions {
     /// declared one). Absent filter ⇒ `None`, never `Some(0)`: "no floor was
     /// in force" and "the floor excluded nothing" are different statements
     /// and the surfaces render them differently.
-    pub fn measure(store: &PalaceStore, opts: &SearchOptions) -> Result<Self, StoreError> {
+    pub fn measure(store: &VaultStore, opts: &SearchOptions) -> Result<Self, StoreError> {
         let unlabeled = match opts.kind {
             Some(_) => Some(store.unkinded_in_scope(opts)?),
             None => None,

@@ -14,7 +14,7 @@
 //! nearest token by Hamming distance of SimHash codes (the paper's
 //! `fill_empty_clusters`), so sparse matrices still score.
 //!
-//! Everything derives **deterministically from a seed**: two palaces sharing
+//! Everything derives **deterministically from a seed**: two vaults sharing
 //! `(seed, params, dim)` produce identical encoders, so query FDEs computed
 //! at search time match doc FDEs computed at ingest. No external deps, no
 //! `rand` — a splitmix64 stream feeds Box-Muller for the Gaussian planes.

@@ -14,17 +14,17 @@
 //! pattern, applied to FDEs):
 //!
 //! * **v1 (raw)** — `[1][f32le…]`: exact FDEs, 4 B/dim (8 KB at the
-//!   default 2048). What small palaces keep. (Headerless v0.23.0 rows are
+//!   default 2048). What small vaults keep. (Headerless v0.23.0 rows are
 //!   recognized by length and read as v1.)
 //! * **v2 (PQ codes)** — `[2][list:i32le][code…]`: once at least
 //!   `UNDERCROFT_FDE_PQ_MIN` rows exist, a product-quantizer codebook
-//!   trains from the palace's own FDEs (persisted sealed in `fde_meta`),
+//!   trains from the vault's own FDEs (persisted sealed in `fde_meta`),
 //!   every row repacks to `dim/8` bytes (**32×**), and the scan switches
 //!   to per-query dot-product LUTs.
 //!
 //! **The inverted tier** activates past `UNDERCROFT_FDE_IVF_MIN` coded
 //! rows: coarse centroids (`nlist ≈ √N`, clamp 16..=4096) train over the
-//! palace's own decoded FDEs, each row's `list` field (reserved as -1
+//! vault's own decoded FDEs, each row's `list` field (reserved as -1
 //! since v0.24.0 — no migration) rewrites in place, and the RAM cache
 //! groups into per-list **slabs** so a probe scans only its lists
 //! contiguously. The naive attempt (flat cache + per-row membership
@@ -39,7 +39,7 @@
 //! `drawer_fde` keyed by drawer id + model, AEAD-sealed on sealed vaults
 //! under the `/tok` domain with `fde/{id}` labels. The encoder's
 //! parameters + seed persist sealed in `fde_meta` — query-side and
-//! doc-side encoders must agree bit-for-bit, and a palace restored from
+//! doc-side encoders must agree bit-for-bit, and a vault restored from
 //! backup keeps scoring identically.
 //!
 //! Coherence is event-driven like the PQ index: writes with the encoder
@@ -55,7 +55,7 @@ use undercroft_core::fde::{fde_dot, FdeEncoder, FdeParams};
 use undercroft_core::late::dequantize_tokens;
 
 use crate::pq::{CoarseQuantizer, ProductQuantizer};
-use crate::{PalaceStore, StoreError, CODEBOOK_FDE, CODEBOOK_FDE_IVF};
+use crate::{StoreError, VaultStore, CODEBOOK_FDE, CODEBOOK_FDE_IVF};
 
 /// Stored-FDE count at which the FDE codebook trains (v2 packing).
 pub(crate) const FDE_PQ_MIN_DEFAULT: usize = 256;
@@ -198,7 +198,7 @@ fn params_unpack(b: &[u8]) -> Option<(FdeParams, usize)> {
 }
 
 /// First-build parameters: defaults, overridable via `UNDERCROFT_FDE_REPS` /
-/// `_KSIM` / `_DPROJ` / `_SEED`. Only consulted the first time a palace
+/// `_KSIM` / `_DPROJ` / `_SEED`. Only consulted the first time a vault
 /// builds its FDE index — afterwards the persisted copy wins (stored FDEs
 /// and future query FDEs must come from the same construction).
 /// ROADMAP O52: these four went through the store's `TUNED` table, so an
@@ -242,7 +242,7 @@ fn params_from_env(tokdim: usize) -> FdeParams {
     d
 }
 
-impl PalaceStore {
+impl VaultStore {
     /// Enable (or disable) MUVERA FDE candidate generation
     /// (`UNDERCROFT_RETRIEVAL=fde`). Requires the late-interaction encoder
     /// for the query side; without one, searches fall back to the full
@@ -693,7 +693,7 @@ impl PalaceStore {
 
     /// Load-or-train the inverted tier once per session. Past `fde_ivf_min`
     /// coded rows, coarse centroids (`nlist ≈ √N`, clamp 16..=4096) train
-    /// over the palace's own decoded FDEs, every row's reserved list field
+    /// over the vault's own decoded FDEs, every row's reserved list field
     /// rewrites in place (the v2 pack anticipated this — no migration), and
     /// the cache regroups. Centroids retrain when the corpus grows past
     /// 1.5× their training size (`pqidx::ivf_fresh`). Advisory like every
@@ -701,7 +701,7 @@ impl PalaceStore {
     ///
     /// It must never `BEGIN` **inside a caller's transaction** — the rule that
     /// keeps `upsert_many`'s batch working, and the reason this rewrite was
-    /// left un-transacted for so long. [`PalaceStore::one_rewrite`] states the
+    /// left un-transacted for so long. [`VaultStore::one_rewrite`] states the
     /// rule instead of avoiding it: a transaction at the top level, nothing at
     /// all when one is already open.
     fn fde_ivf_ensure(&self, model: &str) -> Result<(), StoreError> {

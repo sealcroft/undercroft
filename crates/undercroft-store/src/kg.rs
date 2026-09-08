@@ -19,7 +19,7 @@ use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
-use crate::{chain_append, Namespace, PalaceStore, StoreError};
+use crate::{chain_append, Namespace, StoreError, VaultStore};
 
 // The screened-field inventory moved to `admission::SCREENED_FIELDS` in O29
 // and gained an owner key, because it had to span two tables: it was scoped
@@ -72,13 +72,13 @@ pub struct Triple {
     /// The authority tier, all three DECLARED and HMAC-covered — never
     /// inferred. `None` throughout means the fact was never placed on the
     /// tier (the default for every extracted or added fact, semantically
-    /// `stated`/`unreviewed`). See [`PalaceStore::kg_set_authority`].
+    /// `stated`/`unreviewed`). See [`VaultStore::kg_set_authority`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authority_class: Option<String>,
     /// The declared review state on the authority tier, when the fact was placed on it — closed vocabulary, HMAC-covered.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review_state: Option<String>,
-    /// The exact-lookup slot [`PalaceStore::lookup_canonical`] answers by.
+    /// The exact-lookup slot [`VaultStore::lookup_canonical`] answers by.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub canonical_key: Option<String>,
     /// Which model/agent extracted this fact — the embedder-identity
@@ -168,7 +168,7 @@ pub(crate) fn kg_term_at_rest(
 /// Columns added to `kg_triples` after its first shipped shape, as
 /// `"name TYPE"`.
 ///
-/// **Named rather than inlined so `PalaceStore::READ_SCHEMA` can be counted
+/// **Named rather than inlined so `VaultStore::READ_SCHEMA` can be counted
 /// against it.** A read-only open refuses a schema it would have to migrate,
 /// which it decides by checking exactly these columns — and when A10 added
 /// `terms` here and `name_rest` next door, `READ_SCHEMA` was not updated. The
@@ -657,7 +657,7 @@ const CONTENT_FP_DOMAIN: &[u8] = b"kgcontentfp";
 const CONTENT_FP_KEYED: u8 = 0x01;
 
 /// The fingerprint of a source drawer's verbatim content **as it is
-/// stored**: keyed with the long-lived per-vault [`PalaceStore::kg_secret`]
+/// stored**: keyed with the long-lived per-vault [`VaultStore::kg_secret`]
 /// on a sealed vault, the bare digest on an hmac-only one (which keeps
 /// plaintext by the operator's explicit choice, so a digest of it adds
 /// nothing).
@@ -818,7 +818,7 @@ pub struct ReceiptStatus {
 
 /// A drawer's supersession link and its verification outcome — the drawer
 /// analogue of [`ReceiptStatus`], produced by
-/// [`PalaceStore::verify_supersessions`](crate::PalaceStore).
+/// [`VaultStore::verify_supersessions`](crate::VaultStore).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SupersessionStatus {
     /// The superseding drawer.
@@ -852,7 +852,7 @@ pub struct TripleExport {
     pub source_fp: Option<String>,
 }
 
-impl PalaceStore {
+impl VaultStore {
     /// The per-vault secret the knowledge graph's blind index and its ids
     /// are keyed with — generated once, sealed in `meta`, and **never
     /// regenerated**.
@@ -1000,7 +1000,7 @@ impl PalaceStore {
              CREATE INDEX IF NOT EXISTS idx_kg_triples_subject ON kg_triples(subject);
              CREATE INDEX IF NOT EXISTS idx_kg_triples_predicate ON kg_triples(predicate);",
         )?;
-        // Migrate palaces created before the receipt columns existed. SQLite
+        // Migrate vaults created before the receipt columns existed. SQLite
         // has no ADD COLUMN IF NOT EXISTS; a duplicate-column error just
         // means the migration already ran, so it is swallowed.
         for col in ADDED_KG_TRIPLES_COLUMNS {
@@ -1197,7 +1197,7 @@ impl PalaceStore {
         // guard: a vault MISSING the columns is refused outright by
         // `check_read_schema` (`ReadOnlyUnmigrated`, which names them since
         // this unit), and a vault that HAS them with rows still pending is
-        // reported on `PalaceStats.unhealed` by `note_unblinded_kg`, which
+        // reported on `VaultStats.unhealed` by `note_unblinded_kg`, which
         // does run on the read-only open.
         let secret = self.kg_secret()?;
         let tx = self.conn.unchecked_transaction()?;
@@ -1437,7 +1437,7 @@ impl PalaceStore {
         //
         // A walk that moved nothing changed nothing, and a chain records
         // writes. The unmigrated exposure is not lost — it is reported on
-        // `PalaceStats.unhealed` and warned at open, which is where a
+        // `VaultStats.unhealed` and warned at open, which is where a
         // condition rather than an event belongs. `relabelled > 0` went with
         // it: every relabel accompanies a move, so it was never a third
         // trigger.
@@ -1520,7 +1520,7 @@ impl PalaceStore {
         // stays unset and every writable open re-attempts; the walk is
         // idempotent, so the retry is a scan and nothing else. That also
         // means the exposure is a REPORTED state rather than a silent one:
-        // see `PalaceStats.unhealed`.
+        // see `VaultStats.unhealed`.
         if skipped > 0 {
             undercroft_obs::diag_warn!(
                 "{skipped} knowledge-graph row(s) failed their own HMAC and were left \
@@ -1834,7 +1834,7 @@ impl PalaceStore {
     /// write IS quarantined for a reviewer. `Invalid`, not `CorruptRow` —
     /// this is caller input and owes a 400.
     ///
-    /// The cost is stated rather than hidden: a whole-palace import
+    /// The cost is stated rather than hidden: a whole-vault import
     /// carrying such a fact fails THAT record instead of admitting it, so
     /// restoring a pre-screening backup into a screening vault is a thing
     /// the operator has to notice. Wrong-and-correctable beats silent.
@@ -2572,7 +2572,7 @@ impl PalaceStore {
             .is_some();
         // Absent cited drawer => no binding, and `kg_verify_receipts`
         // reports `Unreceipted`. NOT `Dangling`, which would claim a receipt
-        // had been written and its target since destroyed. A whole-palace
+        // had been written and its target since destroyed. A whole-vault
         // export orders drawers before facts precisely so this arm is the
         // exception rather than the rule.
         let source_fp = match (claimed, t.source_drawer_id.as_deref()) {
@@ -3622,22 +3622,22 @@ fn valid_at(t: &Triple, as_of_key: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{ReceiptVerdict, Triple, TripleExport};
-    use crate::{PalaceStore, SearchOptions, StoreError};
+    use crate::{SearchOptions, StoreError, VaultStore};
     use tempfile::TempDir;
     use undercroft_vault::{SecurityLevel, VaultManager};
 
-    fn store(level: SecurityLevel) -> (TempDir, PalaceStore) {
+    fn store(level: SecurityLevel) -> (TempDir, VaultStore) {
         let dir = TempDir::new().unwrap();
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("kg-test", level).unwrap();
-        (dir, PalaceStore::open(vault).unwrap())
+        (dir, VaultStore::open(vault).unwrap())
     }
 
     // ---- grounding: where a fact rests ----------------------------------
 
     const NOTE: &str = "Ana works as a radiologist at St. Mary's hospital in Leeds.";
 
-    fn grounded(s: &mut PalaceStore, predicate: &str, object: &str, quote: Option<&str>) -> String {
+    fn grounded(s: &mut VaultStore, predicate: &str, object: &str, quote: Option<&str>) -> String {
         let support = undercroft_core::support::Support::evaluate(
             NOTE,
             quote.map(|q| [q]).unwrap_or_default().as_slice(),
@@ -3920,7 +3920,7 @@ mod tests {
             // recomputed over that shape, so the rows verify as a genuine
             // legacy vault's would.
             let mut s =
-                PalaceStore::open(mgr.create("kg-test", SecurityLevel::Sealed).unwrap()).unwrap();
+                VaultStore::open(mgr.create("kg-test", SecurityLevel::Sealed).unwrap()).unwrap();
             s.kg_add("alice", "works_at", "acme", None, None, 1.0, None)
                 .unwrap();
             s.kg_add("alice", "reports_to", "bob", None, None, 1.0, None)
@@ -4076,7 +4076,7 @@ mod tests {
         }
 
         // The next writable open migrates it.
-        let mut s = PalaceStore::open(mgr.unlock("kg-test").unwrap()).unwrap();
+        let mut s = VaultStore::open(mgr.unlock("kg-test").unwrap()).unwrap();
 
         // **The migration recorded ITSELF (the hole A19 closed for
         // rotation).** This walk re-tags every graph row, re-derives every
@@ -4322,7 +4322,7 @@ mod tests {
         let db = dir.path().join("vaults/kg-test/vault.db");
         {
             let mut s =
-                PalaceStore::open(mgr.create("kg-test", SecurityLevel::Sealed).unwrap()).unwrap();
+                VaultStore::open(mgr.create("kg-test", SecurityLevel::Sealed).unwrap()).unwrap();
             s.kg_add("zebracorp", "employs", "quintus", None, None, 1.0, None)
                 .unwrap();
             // Put the row back into pre-A10 shape (clear columns, no sealed
@@ -4349,7 +4349,7 @@ mod tests {
 
         // A writable open runs the migration, skips the row, and must NOT
         // declare the vault migrated.
-        let s = PalaceStore::open(mgr.unlock("kg-test").unwrap()).unwrap();
+        let s = VaultStore::open(mgr.unlock("kg-test").unwrap()).unwrap();
         // A COUNT, not `query_row(...).ok()`: the latter yields `None` both
         // for "no such row" and for any query error, so it could have passed
         // for the wrong reason.
@@ -4386,7 +4386,7 @@ mod tests {
 
         // And a re-open retries rather than skipping the walk: still unmarked,
         // still reported, and idempotent (no duplicate rows).
-        let s = PalaceStore::open(mgr.unlock("kg-test").unwrap()).unwrap();
+        let s = VaultStore::open(mgr.unlock("kg-test").unwrap()).unwrap();
         assert_eq!(s.kg_stats().unwrap().triples, 1, "no duplicate row");
         assert_eq!(
             s.kg_unblinded_rows().unwrap(),
@@ -4521,7 +4521,7 @@ mod tests {
             .unwrap();
         drop(conn);
         let mgr = VaultManager::open(dir.path(), None).unwrap();
-        let s = PalaceStore::open(mgr.unlock("kg-test").unwrap()).unwrap();
+        let s = VaultStore::open(mgr.unlock("kg-test").unwrap()).unwrap();
         let report = s.verify().unwrap();
         assert!(!report.ok());
         assert!(report.bad_records[0].starts_with("kg/"));
@@ -4693,7 +4693,7 @@ mod tests {
         drop(db);
 
         let mgr = VaultManager::open(dir.path(), None).unwrap();
-        let s2 = PalaceStore::open(mgr.unlock("kg-test").unwrap()).unwrap();
+        let s2 = VaultStore::open(mgr.unlock("kg-test").unwrap()).unwrap();
         let r = s2.kg_verify_receipts().unwrap();
         assert_eq!(r[0].verdict, ReceiptVerdict::Tampered);
     }
@@ -4753,7 +4753,7 @@ mod tests {
         drop(db);
 
         let mgr = VaultManager::open(dir.path(), None).unwrap();
-        let s2 = PalaceStore::open(mgr.unlock("kg-test").unwrap()).unwrap();
+        let s2 = VaultStore::open(mgr.unlock("kg-test").unwrap()).unwrap();
         let after = s2.verify().unwrap();
         assert_eq!(
             after.orphan_labels,
@@ -4823,7 +4823,7 @@ mod tests {
         drop(db);
 
         let mgr = VaultManager::open(dir.path(), None).unwrap();
-        let s2 = PalaceStore::open(mgr.unlock("kg-test").unwrap()).unwrap();
+        let s2 = VaultStore::open(mgr.unlock("kg-test").unwrap()).unwrap();
 
         // The cheap door answers, because it never goes near the drawer.
         assert!(
@@ -4915,7 +4915,7 @@ mod tests {
         .unwrap();
         drop(db);
         let mgr = VaultManager::open(dir.path(), None).unwrap();
-        let s2 = PalaceStore::open(mgr.unlock("kg-test").unwrap()).unwrap();
+        let s2 = VaultStore::open(mgr.unlock("kg-test").unwrap()).unwrap();
         assert!(
             s2.kg_any_receipt_forged().unwrap(),
             "a forged receipt tag must be caught by the cheap door too"
@@ -4981,7 +4981,7 @@ mod tests {
         drop(db);
 
         let mgr = VaultManager::open(dir.path(), None).unwrap();
-        let s2 = PalaceStore::open(mgr.unlock("kg-test").unwrap()).unwrap();
+        let s2 = VaultStore::open(mgr.unlock("kg-test").unwrap()).unwrap();
         let after = s2.verify().unwrap();
         assert_eq!(after.tampered_receipts(), 1);
         assert!(
@@ -5665,7 +5665,7 @@ mod tests {
     #[test]
     fn entity_writes_append_to_the_audit_chain() {
         let (_d, mut s) = store(SecurityLevel::Sealed);
-        let entity_records = |s: &PalaceStore| -> i64 {
+        let entity_records = |s: &VaultStore| -> i64 {
             s.conn
                 .query_row(
                     "SELECT COUNT(*) FROM audit WHERE record_id LIKE 'kg-entity/%'",
@@ -6500,7 +6500,7 @@ mod tests {
     /// migration's inputs — `legacy_triple_id`'s lesson, one unit on: a
     /// fixture that plants an approximation tests the approximation.
     #[cfg(test)]
-    fn plant_pre_u12_fingerprints(s: &mut PalaceStore) -> (String, String, String) {
+    fn plant_pre_u12_fingerprints(s: &mut VaultStore) -> (String, String, String) {
         use undercroft_core::Drawer;
         let cited = Drawer::new(
             "w",
@@ -6574,7 +6574,7 @@ mod tests {
         let db = dir.path().join("vaults/u12/vault.db");
         let (cited_id, content, fact) = {
             let mut s =
-                PalaceStore::open(mgr.create("u12", SecurityLevel::Sealed).unwrap()).unwrap();
+                VaultStore::open(mgr.create("u12", SecurityLevel::Sealed).unwrap()).unwrap();
             let out = plant_pre_u12_fingerprints(&mut s);
             // Premise: the planted state really does verify, so what the
             // migration preserves is a live property and not a broken one.
@@ -6608,7 +6608,7 @@ mod tests {
         // performs, so reading the file with a store still open measures the
         // pre-migration pages and fails for a reason that is not the code's.
         {
-            let s = PalaceStore::open(mgr.unlock("u12").unwrap()).unwrap();
+            let s = VaultStore::open(mgr.unlock("u12").unwrap()).unwrap();
             assert!(
                 s.unhealed().is_empty(),
                 "a clean walk leaves nothing pending: {:?}",
@@ -6695,7 +6695,7 @@ mod tests {
 
         // A `SourceChanged` verdict is still reachable, so `Verified` above
         // is not a comparison that always says yes.
-        let mut s = PalaceStore::open(mgr.unlock("u12").unwrap()).unwrap();
+        let mut s = VaultStore::open(mgr.unlock("u12").unwrap()).unwrap();
         let mut edited = s
             .get(
                 &cited_id,
@@ -6732,7 +6732,7 @@ mod tests {
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let content = {
             let mut s =
-                PalaceStore::open(mgr.create("u12t", SecurityLevel::Sealed).unwrap()).unwrap();
+                VaultStore::open(mgr.create("u12t", SecurityLevel::Sealed).unwrap()).unwrap();
             let (_, content, fact) = plant_pre_u12_fingerprints(&mut s);
             // Offline tampering: the receipt no longer binds its row.
             s.conn
@@ -6743,7 +6743,7 @@ mod tests {
                 .unwrap();
             content
         };
-        let s = PalaceStore::open(mgr.unlock("u12t").unwrap()).unwrap();
+        let s = VaultStore::open(mgr.unlock("u12t").unwrap()).unwrap();
         assert!(
             s.unhealed().iter().any(|u| u.contains("UNKEYED SHA-256")),
             "the remaining exposure must be REPORTED, not merely left: {:?}",
@@ -6790,7 +6790,7 @@ mod tests {
         let cited = Drawer::new("w", "r", "Ptolemy wired the money.".into(), None, 0, "t");
         let exported = {
             let mut src =
-                PalaceStore::open(mgr.create("src", SecurityLevel::Sealed).unwrap()).unwrap();
+                VaultStore::open(mgr.create("src", SecurityLevel::Sealed).unwrap()).unwrap();
             src.upsert(&cited).unwrap();
             src.kg_add_receipted(
                 "ptolemy",
@@ -6811,9 +6811,9 @@ mod tests {
             "premise: the fact travels as a receipted one"
         );
 
-        // Drawers before facts, which is the order a whole-palace export
+        // Drawers before facts, which is the order a whole-vault export
         // writes and the reason this arm is the common case.
-        let mut dst = PalaceStore::open(mgr.create("dst", SecurityLevel::Sealed).unwrap()).unwrap();
+        let mut dst = VaultStore::open(mgr.create("dst", SecurityLevel::Sealed).unwrap()).unwrap();
         dst.upsert(&cited).unwrap();
         dst.kg_import(&exported[0]).unwrap();
         assert_eq!(
@@ -6826,7 +6826,7 @@ mod tests {
         // citation was never bound — NOT `Dangling`, which would claim a
         // receipt had existed and its target since gone.
         let mut bare =
-            PalaceStore::open(mgr.create("bare", SecurityLevel::Sealed).unwrap()).unwrap();
+            VaultStore::open(mgr.create("bare", SecurityLevel::Sealed).unwrap()).unwrap();
         bare.kg_import(&exported[0]).unwrap();
         assert_eq!(
             bare.kg_verify_receipts().unwrap()[0].verdict,

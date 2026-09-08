@@ -880,12 +880,31 @@ check "wake-up sees the work vault" 0 "BLUE HERON"                    -- \
 check "an emptied-by-floor read says which" 0 "trust floor"           -- \
   env UNDERCROFT_TRUST_FLOOR=trusted "$BIN" wake-up --vault work
 WAKE="$(UNDERCROFT_TRUST_FLOOR=trusted "$BIN" wake-up --vault work 2>&1)"
-if grep -qF 'Palace is empty' <<<"$WAKE"; then
-  echo "FAIL  a floored read must not claim the palace is empty"; echo "$WAKE" | sed 's/^/      /'; FAIL=$((FAIL+1))
+# ROADMAP O112. This was a bare NEGATIVE assertion — "the output must not
+# contain 'Palace is empty'" — with a premise probe on the EMPTINESS and none
+# on the NEEDLE. Change the wording and the grep finds nothing, the premise
+# still holds, and the check reports ok while asserting nothing: a gate that
+# cannot fail, which is the class CLAUDE.md names (a broken checker and a
+# clean tree produce the same transcript). It now asserts POSITIVELY on the
+# floored message, and the negative half is backed by a probe proving the
+# empty-state needle is a string this binary can still emit.
+"$BIN" vault create o112empty >/dev/null 2>&1
+EMPTY_WAKE="$("$BIN" wake-up --vault o112empty 2>&1)"
+if grep -qF 'Vault is empty' <<<"$EMPTY_WAKE"; then
+  echo "ok    premise: the empty-state needle is one the binary still emits"; PASS=$((PASS+1))
+else
+  echo "FAIL  premise: 'Vault is empty' is no longer what an empty vault prints —"
+  echo "      the negative assertion below would pass vacuously forever"
+  echo "$EMPTY_WAKE" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+if ! grep -qF 'the vault is NOT empty' <<<"$WAKE"; then
+  echo "FAIL  a floored read must SAY the vault is not empty"; echo "$WAKE" | sed 's/^/      /'; FAIL=$((FAIL+1))
+elif grep -qF 'Vault is empty' <<<"$WAKE"; then
+  echo "FAIL  a floored read must not claim the vault is empty"; echo "$WAKE" | sed 's/^/      /'; FAIL=$((FAIL+1))
 elif grep -qF 'BLUE HERON' <<<"$WAKE"; then
   echo "FAIL  premise: the floor must actually empty this read"; echo "$WAKE" | sed 's/^/      /'; FAIL=$((FAIL+1))
 else
-  echo "ok    a floored read must not claim the palace is empty"; PASS=$((PASS+1))
+  echo "ok    a floored read says the vault is NOT empty, and never that it is"; PASS=$((PASS+1))
 fi
 # The floor is DECLARED, not guessed: a typo must REFUSE, never resolve to
 # no floor. `trust_rank` ranks an unknown class lowest, so an ignored floor
@@ -1275,7 +1294,7 @@ check "daemon result searchable"  0 "runbook"                        -- "$BIN" s
 # A vault holding an UNRULED quarantine row must still export and re-import.
 # `export_all` has no wing predicate, so the payload carries that row, and the
 # importer refused it — committing earlier batches first, since ingest commits
-# per chunk, so a large restore left a partially populated palace with none of
+# per chunk, so a large restore left a partially populated vault with none of
 # its KG or tunnel records. The existing round trip below could not see it:
 # by the time it runs, every quarantined drawer in this vault has been ruled
 # on by the `admission allow`/`deny` checks above, so the export carries none.

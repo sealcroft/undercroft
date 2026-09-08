@@ -4,14 +4,14 @@
 //! Run: cargo run -p undercroft-cli --example basic_mining
 
 use undercroft_core::Drawer;
-use undercroft_store::{PalaceStore, SearchOptions};
+use undercroft_store::{SearchOptions, VaultStore};
 use undercroft_vault::{SecurityLevel, VaultManager};
 
 fn main() -> anyhow::Result<()> {
     let dir = tempfile::TempDir::new()?;
     let manager = VaultManager::open(dir.path(), None)?;
     let vault = manager.create("example", SecurityLevel::Sealed)?;
-    let mut store = PalaceStore::open(vault)?;
+    let mut store = VaultStore::open(vault)?;
 
     let notes = [
         (
