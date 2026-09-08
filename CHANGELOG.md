@@ -5,7 +5,7 @@
 Filed as PATCH: a gate for the class the previous release found by hand, a
 measurement, seven fixes from the doc read, and the failed-embed count
 reaching every surface. Note that O128 (three CLI flags) and O122 (a stats
-field, a metric series, an alert) ADD surface — backward compatible, and
+field, a metric series, an alert; O131 two more of each) ADD surface — backward compatible, and
 whether additive surface makes this a MINOR under the doctrine's own test is
 a release-prep ruling, not settled here.
 
@@ -44,6 +44,36 @@ was found by reading instead. Tests 824 → 825.
   operator surface.
 
 Tests 828 → 834, e2e 483 → 484. `UPGRADING.md` carries O123, O124 and O127.
+
+### the other two model roles count their failures too (O131)
+
+**ROADMAP O131 FILED AND CLOSED 2026-09-08.** O122's sweep filed the sibling;
+reading the half it left open found the class bigger again. Both rerankers
+scored a failed cross-encoder pass `0.0`, and BOTH ColBERT encoders returned
+an empty matrix from `encode_doc` and `encode_query` — four degrade sites,
+each a bare `unwrap_or`, none counted or logged.
+
+The reranker is the worst of the three model roles because of where the
+number lands: `search` overwrites a candidate's fusion score with it and
+re-sorts, so a failed pass does not lose a candidate, it SINKS it — and
+`0.0` is what a genuinely irrelevant passage scores, so the two are
+indistinguishable afterwards. A failed embed at least leaves a zero vector
+`repair` can find. A failed `encode_doc` leaves a drawer with no token matrix
+at rest; a failed `encode_query` retires the late stage for one search.
+
+`Reranker::score_failures` and `LateInteraction::encode_failures` are now
+required trait methods (seven impls each), `PalaceStats` gains
+`rerank_failures` and `late_failures` on all four renderers, and the counters
+are `undercroft_rerank_failures_total{backend}` and
+`undercroft_late_failures_total{backend,side}` with `RerankFailures` and
+`LateInteractionFailures` alerts. **Three separate series rather than one
+`stage` label — maintainer ruling**, taken while the O122 series was still
+unreleased and free to rename. Gates: two store tests, each counterfactualed
+by breaking the plumbing and each failing on its own name, with the ordering
+damage pinned so the counter cannot read as cosmetic; two promtool blocks,
+one asserting that `side` survives aggregation. Residual, stated: the gates
+cover the trait-to-surface plumbing, not the four real degrade sites, which
+need model weights the battery does not carry. Tests 835 → 837, obs-config 11 → 13.
 
 ### the failed-embed count reaches every surface (O122)
 

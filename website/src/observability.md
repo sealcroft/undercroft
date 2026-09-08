@@ -98,6 +98,13 @@ Exposed series (all `undercroft_*`):
   invisible until re-embedded. The live count is `embed_failures` on every
   stats surface; this is its durable half, so a server nobody polls still
   has a series to alert on. A kind, never a model name),
+  `rerank_failures_total{backend}` and `late_failures_total{backend,side}`
+  (the other two model roles, ROADMAP O131 — a cross-encoder score degraded
+  to `0.0`, which SINKS that candidate in the reranked window rather than
+  merely losing it, and a ColBERT encode degraded to an empty matrix, where
+  `side=doc` is a durable hole at rest and `side=query` retires the late
+  stage for one search. Separate series rather than one `stage` label,
+  because the three failures cost different things),
   `kg_writes_total{kind}`, `chain_commits_total` (audit-chain RECORDS,
   not manifest anchors — a 256-drawer bulk transaction anchors once and
   advances this by 256, and records appended without an anchor, such as
@@ -208,6 +215,8 @@ credentials — swap in Slack/email/PagerDuty in `alertmanager/alertmanager.yml`
 | **HighSearchLatencyP95** | warning | search p95 > 500 ms. |
 | **HttpServerErrors** | warning | any HTTP 5xx. |
 | **EmbedFailures** | warning | the embedder degraded an embed to a zero vector — a drawer landed lexically findable and semantically invisible until re-embedded. |
+| **RerankFailures** | warning | a cross-encoder score degraded to `0.0`, sinking that candidate to the bottom of the reranked window with nothing to distinguish it from an irrelevant passage. |
+| **LateInteractionFailures** | warning | a ColBERT encode degraded to an empty matrix; the `side` label says whether a drawer was left with no tokens at rest (`doc`) or a search lost the late stage (`query`). |
 | **AuthRejectionsSpike** | warning | elevated bearer/assertion rejections. |
 
 A firing tamper alert links straight to the [tamper runbook](runbook.md) —

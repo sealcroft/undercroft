@@ -1126,6 +1126,27 @@ Consequences that are binding, not advisory:
   because the multi-tenant server shares one session pool. The durable
   question — how many rows at rest carry a zero vector — has no cheap
   answer on a sealed vault and is filed, not faked.
+  **The same shape held for the OTHER two model roles and cost more (O131,
+  2026-09-08)**: both rerankers scored a failed pass `0.0` and both ColBERT
+  encoders returned an empty matrix, each through a bare `unwrap_or`, none
+  counted. The reranker is the worst of the three because of WHERE the
+  number lands — `search` overwrites the candidate's fusion score with it
+  and re-sorts, so a failed pass does not merely lose a candidate, it SINKS
+  it, and `0.0` is what a genuinely irrelevant passage scores too. A failed
+  embed at least leaves a zero vector `repair` can find; a failed score
+  leaves no artifact at all. `Reranker::score_failures` and
+  `LateInteraction::encode_failures` are required the same way,
+  `PalaceStats` gains `rerank_failures`/`late_failures`, and the counters
+  are `undercroft_rerank_failures_total{backend}` +
+  `undercroft_late_failures_total{backend,side}` — three series rather than
+  one `stage` label, ruled by the maintainer 2026-09-08 while the embed
+  series was still unreleased and free to rename. `side` is load-bearing:
+  a `doc` failure is a durable hole in the token space, a `query` failure
+  retires the late stage for one search. **Residual, stated: the gates
+  cover the trait-to-surface plumbing and NOT the four real degrade sites**,
+  which live in the two model crates and need weights the battery has not
+  got — compile-checked by `onnx-build`/`ort-build`, counterfactualed only
+  through test doubles.
   The same transport policy covers `LlmClient` itself (2026-08-04):
   refine and the admission advisor refuse cleartext beyond loopback,
   `UNDERCROFT_LLM_CA` pins a self-signed root, construction is fallible.
@@ -1715,8 +1736,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (835 run,
-                                      # 4 #[ignore]d = 839 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (837 run,
+                                      # 4 #[ignore]d = 841 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1891,7 +1912,7 @@ docker compose run --rm arch-check    # TWO verifications, one service: the
                                       # a countable population, and inventing
                                       # a metric to satisfy a gate is how a
                                       # figure stops meaning anything
-docker compose run --rm obs-config    # the observability CONFIG suite (11 checks):
+docker compose run --rm obs-config    # the observability CONFIG suite (13 checks):
                                       # promtool check/test rules + amtool
                                       # check-config at the versions the stack
                                       # deploys, plus the join between them —

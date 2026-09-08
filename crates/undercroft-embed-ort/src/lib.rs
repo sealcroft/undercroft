@@ -276,6 +276,9 @@ pub struct OrtReranker {
     tokenizer: Tokenizer,
     n_inputs: usize,
     name: String,
+    /// Scores degraded to 0.0 (ROADMAP O131). Atomic: the pair-forwards fan
+    /// across rayon workers, and the server shares one reranker per process.
+    failures: std::sync::atomic::AtomicU64,
 }
 
 impl OrtReranker {
@@ -320,6 +323,7 @@ impl OrtReranker {
             tokenizer,
             n_inputs,
             name: model_name.to_string(),
+            failures: std::sync::atomic::AtomicU64::new(0),
         };
         // Fail-fast probe.
         me.score_batch_inner("query", &["passage"])?;
@@ -336,6 +340,24 @@ impl OrtReranker {
         // dims: (1, num_labels) — take the last (positive) logit.
         let labels = if dims.len() >= 2 { dims[1].max(1) } else { 1 };
         Ok(sigmoid(data.get(labels - 1).copied().unwrap_or(0.0)))
+    }
+
+    /// Count `n` degraded scores and say so once (ROADMAP O131). One place,
+    /// so the two `Reranker` arms cannot report the failure differently.
+    fn note_failures(&self, n: u64, why: &str) {
+        if n == 0 {
+            return;
+        }
+        let total = self
+            .failures
+            .fetch_add(n, std::sync::atomic::Ordering::SeqCst)
+            + n;
+        undercroft_obs::rerank_failed("ort", n);
+        undercroft_obs::diag_error!(
+            "rerank failed ({why}); scoring {n} candidate(s) 0.0 — they sink to the \
+             bottom of the reranked window and are indistinguishable from irrelevant \
+             passages. Failures so far: {total}"
+        );
     }
 
     /// Fan the independent pair-forwards across the session pool: each rayon
@@ -360,14 +382,32 @@ impl Reranker for OrtReranker {
         &self.name
     }
     fn score(&self, query: &str, passage: &str) -> f32 {
-        self.score_batch_inner(query, &[passage])
-            .ok()
-            .and_then(|v| v.first().copied())
-            .unwrap_or(0.0)
+        match self.score_batch_inner(query, &[passage]) {
+            Ok(v) => v.first().copied().unwrap_or_else(|| {
+                self.note_failures(1, "the model returned no score for the pair");
+                0.0
+            }),
+            Err(e) => {
+                self.note_failures(1, &e.to_string());
+                0.0
+            }
+        }
     }
     fn score_batch(&self, query: &str, passages: &[&str]) -> Vec<f32> {
-        self.score_batch_inner(query, passages)
-            .unwrap_or_else(|_| vec![0.0; passages.len()])
+        match self.score_batch_inner(query, passages) {
+            Ok(v) => v,
+            Err(e) => {
+                // The WHOLE batch degraded, so this is `passages.len()`
+                // failures and not one: every candidate in the reranked
+                // window is about to be scored 0.0 and re-sorted against
+                // the others (ROADMAP O131).
+                self.note_failures(passages.len() as u64, &e.to_string());
+                vec![0.0; passages.len()]
+            }
+        }
+    }
+    fn score_failures(&self) -> u64 {
+        self.failures.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
 

@@ -4163,10 +4163,11 @@ identities.
 ## 1.5.2 — unreleased
 
 A gate for the class O111 found by hand, O113 measured, seven fixes from the
-doc read, and the failed-embed count reaching every surface (O122).
+doc read, and every model role's silent failures counted (O122, O131).
 
-Filed as PATCH. Two entries ADD surface — O128 (three CLI flags) and O122 (a
-stats field, a metric series, an alert), both backward compatible — and
+Filed as PATCH. Three entries ADD surface — O128 (three CLI flags), O122 (a
+stats field, a metric series, an alert) and O131 (two more of each), all
+backward compatible — and
 whether additive surface reads as MINOR under the doctrine's own test is a
 release-prep ruling. Filed here until the tag exists.
 
@@ -4229,6 +4230,92 @@ answering 500 behind a flag file, the CLI (`remember` lands and says so,
 read; the telemetry suite scrapes the series at exactly 1. The stub is
 duplicated in the two suites because each mounts its own script alone.
 Residual, filed as O131: the RERANKERS degrade the same way one trait over.
+
+### O131 — CLOSED 2026-09-08: the rerankers and BOTH ColBERT encoders degrade silently; counted now, and the ruling that shaped it
+
+**Filed 2026-09-08 by O122's own sweep.** `OnnxReranker::score` is
+`self.score_inner(query, passage).unwrap_or(0.0)` and `OrtReranker::score` /
+`score_batch` end in `.unwrap_or(0.0)` / `.unwrap_or_else(|_| vec![0.0; n])`
+— a failed cross-encoder pass scores the passage ZERO and the page is
+re-ordered around a number that was never computed, with nothing counted and
+nothing logged. It is exactly the shape O122 closed for embeds (a bare
+`unwrap_or_else` to a neutral value), and it is worse in one respect: a
+zero embedding is at least visible to a re-embed, while a zero score leaves
+no artifact at all. Still to verify by reading: whether the two ColBERT
+encoders (`late.rs` in both crates) degrade the same way or return `Result`.
+Fix shape, O122's: a REQUIRED `Reranker::score_failures` (and the
+late-interaction trait's equivalent), a `PalaceStats` field or a second
+`backend` value on a shared `undercroft_inference_failures_total` — the
+naming question is whether O122's counter should have been the general one,
+which is a ruling worth making before a second series ships. Gate: a
+reranker whose inner pass fails, then the count on the surface chosen, and
+the page order pinned against silent re-ranking.
+
+**CLOSED the same day, and the filing's open question was RULED.** The
+`late.rs` half the filing left "still to verify by reading" was read: both
+ColBERT encoders degrade too, `.unwrap_or_default()` to an empty matrix on
+`encode_doc` AND `encode_query`. So the class is four degrade sites across
+two crates, not two.
+
+**The ruling (maintainer, 2026-09-08): three separate counters, no rename.**
+The question was whether O122's `undercroft_embed_failures_total` should have
+been a general `undercroft_inference_failures_total{stage,backend}`. What made
+it worth asking THEN rather than later: the embed series is not in `v1.5.1`
+and exists only on unreleased `main`, so a rename cost nothing that day and
+becomes a documented-contract change the moment 1.5.2 is tagged. Ruled
+separate — `undercroft_rerank_failures_total{backend}` and
+`undercroft_late_failures_total{backend,side}` — so an alert names one stage
+without a label matcher, and because the three failures do not cost the same
+thing.
+
+**They genuinely do not, and the reranker is the worst of the three.**
+`search` OVERWRITES a candidate's fusion score with the reranker's and
+re-sorts (`h.score = s`), so a failed pass writes `0.0` and SINKS that
+candidate to the bottom of the reranked window — and `0.0` is also what a
+genuinely irrelevant passage scores, so nothing afterwards can separate them.
+A failed embed at least leaves a zero vector `repair` can find. A failed
+`encode_doc` leaves the drawer with no token matrix at rest (a durable hole,
+the ColBERT counterpart of a zero vector); a failed `encode_query` makes
+MaxSim zero for every candidate, retiring the late stage for one search.
+Those two are SAFER than a degraded rerank — a candidate with no matrix keeps
+its fusion rank rather than being sunk — and no more visible, which is why
+`side` is a label rather than a detail.
+
+`Reranker::score_failures` and `LateInteraction::encode_failures` are
+REQUIRED for O122's reason (a default of zero is the silent shape); the
+compiler enumerated seven impls each. A wholesale `score_batch` failure counts
+its PASSAGES, not one — every candidate in the window was about to be scored
+zero. `PalaceStats` gains `rerank_failures` and `late_failures`, read live and
+0 when the stage is not attached, on all four renderers.
+
+Gates: `stats_reports_every_rerank_score_the_model_degraded` (healthy → 0,
+broken → one per candidate handed, every score pinned at 0.0 so the ORDERING
+damage is on the record and the counter cannot read as cosmetic, recovered →
+no further count, detached → 0 not a panic) and
+`stats_reports_every_late_encode_the_model_degraded` (doc side at write, the
+drawer stored anyway, query side at search); both counterfactualed by breaking
+the `stats()` plumbing, each failing on its own name and nothing else. Two
+promtool blocks, and the `side` label asserted to SURVIVE the aggregation so a
+later `sum by (instance)` cannot collapse two different failures into one
+alert naming neither.
+
+**Residual, stated rather than dressed up: the gates cover the
+trait-to-surface plumbing, not the four real degrade sites.** Those live in
+`undercroft-embed-onnx` and `undercroft-embed-ort`, which need model weights
+the battery does not carry, so they are compile-checked by `onnx-build` /
+`ort-build` and exercised only through test doubles of the same shape. This is
+weaker than O122's gate, which drove a real served endpoint through a stub —
+there is no equivalent for a cross-encoder without a model. A hostile reading
+is that the counting code itself is unexecuted in CI; the honest answer is
+that it is, and closing that needs a tiny fixture model in the tree, which is
+its own decision about repo weight.
+
+**No `runbook_url` on either alert, deliberately.** The adjacent integrity
+rules carry one and it points at the TAMPER runbook; sending a responder
+there for a model failure would have them run `undercroft verify` and find
+nothing. Same rule as `EmbedFailures`, which correctly has none — the
+neighbour-does-it shape this tree keeps catching in docs, caught here in a
+config.
 
 ### O123 — CLOSED 2026-09-08: an embedding dimension 2 modulo 4 was stored in a frame that read back as garbage, silently
 
@@ -11997,26 +12084,6 @@ the filing names (the CLI writes to stdout, so it carries one copy fewer
 than `/v1`'s framed payload). A 10⁶-drawer vault of this shape exports
 through ~3.5 GB of resident memory. The streaming shape above is what
 closes it; this entry stays open with the number rather than the argument.
-
-### O131 — the rerankers degrade a failed score to 0.0 with no count and no trace: O122's class one trait over
-
-**Filed 2026-09-08 by O122's own sweep.** `OnnxReranker::score` is
-`self.score_inner(query, passage).unwrap_or(0.0)` and `OrtReranker::score` /
-`score_batch` end in `.unwrap_or(0.0)` / `.unwrap_or_else(|_| vec![0.0; n])`
-— a failed cross-encoder pass scores the passage ZERO and the page is
-re-ordered around a number that was never computed, with nothing counted and
-nothing logged. It is exactly the shape O122 closed for embeds (a bare
-`unwrap_or_else` to a neutral value), and it is worse in one respect: a
-zero embedding is at least visible to a re-embed, while a zero score leaves
-no artifact at all. Still to verify by reading: whether the two ColBERT
-encoders (`late.rs` in both crates) degrade the same way or return `Result`.
-Fix shape, O122's: a REQUIRED `Reranker::score_failures` (and the
-late-interaction trait's equivalent), a `PalaceStats` field or a second
-`backend` value on a shared `undercroft_inference_failures_total` — the
-naming question is whether O122's counter should have been the general one,
-which is a ruling worth making before a second series ships. Gate: a
-reranker whose inner pass fails, then the count on the surface chosen, and
-the page order pinned against silent re-ranking.
 
 ### O6 — the repo social preview is still not uploaded
 GitHub exposes **no REST endpoint** for org avatars (`avatar_url` is read-only

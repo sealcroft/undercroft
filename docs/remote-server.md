@@ -84,7 +84,11 @@ GET    /v1/vaults/{id}/stats            (records AND drawers — one drawer
                                          read_only, unhealed, codebooks,
                                          embed_failures — zero vectors this
                                          server's embedder degraded to since
-                                         it opened the vault, O122)
+                                         it opened the vault, O122;
+                                         rerank_failures + late_failures —
+                                         the same for the cross-encoder and
+                                         the ColBERT encoder, 0 when the
+                                         stage is not attached, O131)
 GET    /v1/vaults/{id}/stats/history    ?window=N   sample ring buffer
                                          (501 without --features telemetry)
 POST   /v1/vaults/{id}/drawers         {text, wing?, room?, vector?, dedup_threshold?}

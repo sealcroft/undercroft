@@ -634,6 +634,9 @@ fn rerank_shared() -> Box<dyn undercroft_core::rerank::Reranker + Send + Sync> {
         fn score(&self, query: &str, passage: &str) -> f32 {
             self.0.score(query, passage)
         }
+        fn score_failures(&self) -> u64 {
+            self.0.score_failures()
+        }
     }
     Box::new(Shared(arc))
 }
@@ -666,6 +669,9 @@ fn colbert_shared() -> Box<dyn undercroft_core::late::LateInteraction + Send + S
         }
         fn encode_query(&self, text: &str) -> Vec<f32> {
             self.0.encode_query(text)
+        }
+        fn encode_failures(&self) -> u64 {
+            self.0.encode_failures()
         }
     }
     Box::new(Shared(arc))
@@ -724,6 +730,9 @@ fn ort_reranker_shared() -> Box<dyn undercroft_core::rerank::Reranker + Send + S
         fn score_batch(&self, query: &str, passages: &[&str]) -> Vec<f32> {
             self.0.score_batch(query, passages)
         }
+        fn score_failures(&self) -> u64 {
+            self.0.score_failures()
+        }
     }
     Box::new(Shared(arc))
 }
@@ -754,6 +763,9 @@ fn ort_colbert_shared() -> Box<dyn undercroft_core::late::LateInteraction + Send
         }
         fn encode_query(&self, text: &str) -> Vec<f32> {
             self.0.encode_query(text)
+        }
+        fn encode_failures(&self) -> u64 {
+            self.0.encode_failures()
         }
     }
     Box::new(Shared(arc))

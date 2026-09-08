@@ -232,6 +232,14 @@
             <div class="h">EMBED FAILURES — ZERO VECTORS SINCE THIS SERVER OPENED THE VAULT</div>
             <div class="kv" id="sEmbedFail">—</div>
           </div>
+          <!-- ROADMAP O131. The other two model roles, hidden when zero for
+               the same reason. The rerank line is the one worth reading: a
+               degraded score does not merely go missing, it SINKS the
+               candidate to the bottom of the reranked window. -->
+          <div class="sect" id="sModelFailSect" style="display:none">
+            <div class="h">MODEL FAILURES — RERANK AND LATE INTERACTION</div>
+            <div class="kv" id="sModelFail">—</div>
+          </div>
           <div class="sect">
             <div class="h">WINGS — DRAWER DISTRIBUTION</div>
             <table><thead><tr><th>WING</th><th>DRAWERS</th><th style="width:50%">SHARE</th></tr></thead><tbody id="wingRows"></tbody></table>
@@ -1075,6 +1083,16 @@ async function loadOverview() {
     $("sEmbedFail").textContent = ef + " embed" + (ef === 1 ? "" : "s")
       + " degraded to a zero vector — lexically findable, semantically invisible"
       + " until re-embedded (UNDERCROFT_FORCE_EMBEDDER=1 + repair)";
+    // O131: the other two model roles. Shown only when one of them is
+    // non-zero; textContent, so no escaping (numbers and a fixed sentence).
+    const rf = Number(s.rerank_failures || 0);
+    const lf = Number(s.late_failures || 0);
+    $("sModelFailSect").style.display = (rf > 0 || lf > 0) ? "" : "none";
+    $("sModelFail").textContent =
+      rf + " rerank score" + (rf === 1 ? "" : "s") + " degraded to 0.0 (sunk to the bottom"
+      + " of the reranked window, indistinguishable from irrelevant) · "
+      + lf + " late-interaction encode" + (lf === 1 ? "" : "s") + " degraded to an empty"
+      + " matrix (a doc failure is a drawer with no tokens at rest)";
     // M5: R4's report. A non-empty list means either "this replica is
     // serving a vault its writer has not finished with" or "this vault still
     // holds some graph words in clear at rest" — each note says which.

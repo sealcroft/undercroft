@@ -42,6 +42,8 @@ pub struct OnnxColbert {
     tokenizer: Tokenizer,
     dim: usize,
     name: String,
+    /// Encodes degraded to an empty matrix, both sides (ROADMAP O131).
+    failures: std::sync::atomic::AtomicU64,
 }
 
 impl OnnxColbert {
@@ -86,6 +88,7 @@ impl OnnxColbert {
             tokenizer,
             dim: 0,
             name: model_name.to_string(),
+            failures: std::sync::atomic::AtomicU64::new(0),
         };
         let probe = me
             .run(&me.query_model, &[CLS, Q_MARKER, SEP], QUERY_LEN, true, &[])
@@ -194,6 +197,25 @@ impl OnnxColbert {
     }
 }
 
+impl OnnxColbert {
+    /// Count one degraded encode, say so, and hand back the empty matrix the
+    /// callers below return (ROADMAP O131). One place, so the doc and query
+    /// sides cannot report the same failure differently.
+    fn note_failure(&self, side: &str, why: &OnnxError) -> Vec<f32> {
+        let n = self
+            .failures
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        undercroft_obs::late_failed("onnx", side);
+        undercroft_obs::diag_error!(
+            "late-interaction {side} encode failed ({why}); returning an empty matrix — \
+             a doc failure leaves this drawer with no token matrix at rest, a query \
+             failure retires the late stage for this search. Failures so far: {n}"
+        );
+        Vec::new()
+    }
+}
+
 impl LateInteraction for OnnxColbert {
     fn model_name(&self) -> &str {
         &self.name
@@ -207,17 +229,27 @@ impl LateInteraction for OnnxColbert {
         // Infallible like the Embedder: failure degrades to an empty matrix
         // (the candidate keeps its fusion rank; `repair` can re-encode).
         // Punctuation rows attend but aren't stored (ColBERT convention).
+        // ROADMAP O131: counted and said, because `late_encode_row` returns
+        // early on an empty matrix — so the row is a DURABLE hole in the
+        // token space, and nothing at rest distinguishes it from a drawer
+        // that was simply never encoded.
         self.frame(D_MARKER, text, DOC_LEN, true)
             .and_then(|(ids, skip)| self.run(&self.doc_model, &ids, DOC_LEN, false, &skip))
             .map(|(m, _)| m)
-            .unwrap_or_default()
+            .unwrap_or_else(|e| self.note_failure("doc", &e))
     }
 
     fn encode_query(&self, text: &str) -> Vec<f32> {
+        // An empty QUERY matrix makes MaxSim zero for every candidate, so the
+        // late stage silently contributes nothing to this one search.
         self.frame(Q_MARKER, text, QUERY_LEN, false)
             .and_then(|(ids, _)| self.run(&self.query_model, &ids, QUERY_LEN, true, &[]))
             .map(|(m, _)| m)
-            .unwrap_or_default()
+            .unwrap_or_else(|e| self.note_failure("query", &e))
+    }
+
+    fn encode_failures(&self) -> u64 {
+        self.failures.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
 

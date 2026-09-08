@@ -232,6 +232,42 @@ pub fn embed_failed(backend: &str) {
     );
 }
 
+/// Record one `(query, passage)` score the reranker degraded to a neutral
+/// value (ROADMAP O131). `backend` is the kind — `onnx` or `ort` — never a
+/// model name. A count and nothing else: no vault, no query, no passage.
+///
+/// Its own series rather than a `stage` label on
+/// [`embed_failed`](embed_failed) — maintainer ruling, 2026-09-08. The two
+/// failures cost different things (a degraded embed leaves a findable zero
+/// vector; a degraded score sinks a candidate and leaves nothing), so an
+/// alert wants to name one without a label matcher.
+#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+pub fn rerank_failed(backend: &str, count: u64) {
+    #[cfg(feature = "telemetry")]
+    if count > 0 {
+        imp::counter_add(
+            "undercroft_rerank_failures_total",
+            count,
+            &[("backend", backend)],
+        );
+    }
+}
+
+/// Record one late-interaction encode degraded to an empty matrix (ROADMAP
+/// O131). `backend` is the kind — `onnx` or `ort` — and `side` is `doc` or
+/// `query`, a closed vocabulary that matters because the two fail
+/// differently: a `doc` failure is a durable hole in the token space, a
+/// `query` failure silently retires the whole late stage for one search.
+#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+pub fn late_failed(backend: &str, side: &str) {
+    #[cfg(feature = "telemetry")]
+    imp::counter_add(
+        "undercroft_late_failures_total",
+        1,
+        &[("backend", backend), ("side", side)],
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Control plane (ROADMAP O20) — orchestrator-only events
 // ---------------------------------------------------------------------------
@@ -427,6 +463,8 @@ pub const COUNTER_NAMES: &[&str] = &[
     "undercroft_hmac_verify_failures_total",
     "undercroft_http_requests_total",
     "undercroft_kg_writes_total",
+    "undercroft_late_failures_total",
+    "undercroft_rerank_failures_total",
     "undercroft_search_prefiltered_total",
     "undercroft_search_total",
     "undercroft_search_wings_probed_total",

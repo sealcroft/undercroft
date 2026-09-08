@@ -40,6 +40,8 @@ pub struct OrtColbert {
     tokenizer: Tokenizer,
     dim: usize,
     name: String,
+    /// Encodes degraded to an empty matrix, both sides (ROADMAP O131).
+    failures: std::sync::atomic::AtomicU64,
 }
 
 impl OrtColbert {
@@ -65,6 +67,7 @@ impl OrtColbert {
             tokenizer,
             dim: 0,
             name: model_name.to_string(),
+            failures: std::sync::atomic::AtomicU64::new(0),
         };
         let probe = me
             .run(
@@ -182,6 +185,23 @@ impl OrtColbert {
     }
 }
 
+impl OrtColbert {
+    /// Count one degraded encode, say so, and hand back the empty matrix the
+    /// callers below return (ROADMAP O131). One place, so the doc and query
+    /// sides cannot report the same failure differently.
+    fn note_failure(&self, side: &str, why: &OrtError) -> Vec<f32> {
+        let n = self
+            .failures
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        undercroft_obs::late_failed("ort", side);
+        undercroft_obs::diag_error!(
+            "late-interaction {side} encode failed ({why}); returning an empty matrix — a doc failure leaves this drawer with no token matrix at rest, a query failure retires the late stage for this search. Failures so far: {n}"
+        );
+        Vec::new()
+    }
+}
+
 impl LateInteraction for OrtColbert {
     fn model_name(&self) -> &str {
         &self.name
@@ -207,7 +227,7 @@ impl LateInteraction for OrtColbert {
                 )
             })
             .map(|(m, _)| m)
-            .unwrap_or_default()
+            .unwrap_or_else(|e| self.note_failure("doc", &e))
     }
 
     fn encode_query(&self, text: &str) -> Vec<f32> {
@@ -223,7 +243,11 @@ impl LateInteraction for OrtColbert {
                 )
             })
             .map(|(m, _)| m)
-            .unwrap_or_default()
+            .unwrap_or_else(|e| self.note_failure("query", &e))
+    }
+
+    fn encode_failures(&self) -> u64 {
+        self.failures.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
 

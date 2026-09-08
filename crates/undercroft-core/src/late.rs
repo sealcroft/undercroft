@@ -30,6 +30,27 @@ pub trait LateInteraction {
     fn encode_doc(&self, text: &str) -> Vec<f32>;
     /// Encode a search query (query side, `[Q]`-marked / mask-augmented).
     fn encode_query(&self, text: &str) -> Vec<f32>;
+
+    /// How many encodes — document or query — this model has degraded to an
+    /// empty matrix since it was constructed (ROADMAP O131).
+    ///
+    /// The two sides fail differently and both are silent. A failed
+    /// [`encode_doc`](Self::encode_doc) on the write path stores NO token
+    /// matrix for that drawer (`late_encode_row` returns early on an empty
+    /// one), so the row is a durable hole in the token space — the ColBERT
+    /// counterpart of a zero embedding, and equally invisible at rest. A
+    /// failed [`encode_query`](Self::encode_query) is transient but total:
+    /// an empty query matrix makes MaxSim score zero for every candidate,
+    /// so the whole late stage silently stops contributing for that search.
+    ///
+    /// Degradation here is *safer* than the reranker's — a candidate with no
+    /// matrix keeps its fusion rank rather than being sunk — but it is no
+    /// more visible, which is why it is counted rather than trusted.
+    ///
+    /// **Required rather than defaulted**, for the reason
+    /// [`Embedder::embed_failures`](crate::embed::Embedder::embed_failures)
+    /// gives. One per degraded encode; a model that cannot fail returns 0.
+    fn encode_failures(&self) -> u64;
 }
 
 /// MaxSim over two row-major matrices of unit rows: for each query row, the
