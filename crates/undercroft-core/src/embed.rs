@@ -28,6 +28,33 @@ pub trait Embedder {
     /// Embed one text into a vector of `dimension` floats.
     fn embed(&self, text: &str) -> Vec<f32>;
 
+    /// How many calls to [`Self::embed`] this embedder has degraded to a
+    /// zero vector since it was constructed (ROADMAP O122).
+    ///
+    /// `embed` is infallible by design — a write must not fail because a
+    /// served model blinked — so every backend that CAN fail returns a zero
+    /// vector instead: the drawer is stored verbatim and stays findable on
+    /// the lexical channels, but its semantic leg is dead until re-embedded
+    /// (`UNDERCROFT_FORCE_EMBEDDER=1` + `repair`). Three shipped backends
+    /// degrade that way. Until O122 one of them counted it (`http`) while
+    /// the count reached no surface, and the other two (`onnx`, `ort`)
+    /// counted nothing at all. This is the one door the count leaves
+    /// through: `PalaceStats.embed_failures` reads it live on every renderer.
+    ///
+    /// **Required rather than defaulted, deliberately.** A default of zero
+    /// is exactly the silent shape this closes — a backend that degrades and
+    /// forgets to override would report a clean vector space over a corpus
+    /// of holes. Requiring it makes the compiler enumerate every impl, the
+    /// `Screen`/`Read` choke-point shape one trait over. An embedder that
+    /// cannot fail returns 0 and says why.
+    ///
+    /// The count belongs to the embedder INSTANCE for the life of the
+    /// process — a restart reads zero while the holes remain — and it
+    /// counts query embeds on search as well as drawer embeds on write,
+    /// because a zero query vector is the same dead channel seen from the
+    /// other side.
+    fn embed_failures(&self) -> u64;
+
     /// The `semantic` score above which this vector space may admit a drawer
     /// on cosine evidence alone, or `None` for a space whose floor is not
     /// knowable here — in which case admission rests on the lexical channels
@@ -349,6 +376,12 @@ impl Embedder for HashEmbedder {
         EMBED_DIM
     }
 
+    /// Feature hashing over surface forms cannot fail: no model, no I/O,
+    /// no shape to get wrong — so there is nothing to count, ever.
+    fn embed_failures(&self) -> u64 {
+        0
+    }
+
     fn semantic_admission_gate(&self) -> Option<f32> {
         Some(HASH_ADMISSION_GATE)
     }
@@ -397,6 +430,9 @@ impl Embedder for HashEmbedder {
 pub struct ExternalEmbedder {
     name: String,
     dim: usize,
+    /// Times `embed` was reached at all — see [`Embedder::embed_failures`]
+    /// below for why a reached call here is a failure and not a degradation.
+    reached: std::cell::Cell<u64>,
 }
 
 impl ExternalEmbedder {
@@ -406,6 +442,7 @@ impl ExternalEmbedder {
         Self {
             name: format!("external:{name}"),
             dim,
+            reached: std::cell::Cell::new(0),
         }
     }
 }
@@ -424,7 +461,17 @@ impl Embedder for ExternalEmbedder {
         // searched with caller-supplied vectors. A zero vector is a safe
         // degradation (cosine 0) rather than a panic if some path slips
         // through the store's guards.
+        self.reached.set(self.reached.get() + 1);
         vec![0.0; self.dim.max(1)]
+    }
+
+    /// Every call that reached `embed` above. There is no model here, so
+    /// this embedder cannot DEGRADE — but a zero vector it returned is
+    /// still a zero vector in the index, and the only way one arrives is a
+    /// path the store's external-vault guards did not stop. Counting it
+    /// makes a slipped guard visible on `stats` instead of silent.
+    fn embed_failures(&self) -> u64 {
+        self.reached.get()
     }
 
     /// Unknown, and unknowable from here.

@@ -92,6 +92,12 @@ Exposed series (all `undercroft_*`):
   rather than merely missing; the counter and the live frame are now
   emitted from one function so they cannot be classified differently),
   `drawer_deletes_total`,
+  `embed_failures_total{backend}` (`http` / `onnx` / `ort` — an embed the
+  embedder degraded to a ZERO VECTOR rather than failing the write; the
+  drawer is stored verbatim and lexically findable but semantically
+  invisible until re-embedded. The live count is `embed_failures` on every
+  stats surface; this is its durable half, so a server nobody polls still
+  has a series to alert on. A kind, never a model name),
   `kg_writes_total{kind}`, `chain_commits_total` (audit-chain RECORDS,
   not manifest anchors — a 256-drawer bulk transaction anchors once and
   advances this by 256, and records appended without an anchor, such as
@@ -201,6 +207,7 @@ credentials — swap in Slack/email/PagerDuty in `alertmanager/alertmanager.yml`
 | **UndercroftDown** | critical | the `/metrics` target is unscrapable. |
 | **HighSearchLatencyP95** | warning | search p95 > 500 ms. |
 | **HttpServerErrors** | warning | any HTTP 5xx. |
+| **EmbedFailures** | warning | the embedder degraded an embed to a zero vector — a drawer landed lexically findable and semantically invisible until re-embedded. |
 | **AuthRejectionsSpike** | warning | elevated bearer/assertion rejections. |
 
 A firing tamper alert links straight to the [tamper runbook](runbook.md) —

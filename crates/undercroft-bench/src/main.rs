@@ -604,6 +604,9 @@ fn onnx_shared() -> Box<dyn undercroft_core::embed::Embedder + Send> {
         fn embed(&self, text: &str) -> Vec<f32> {
             self.0.embed(text)
         }
+        fn embed_failures(&self) -> u64 {
+            self.0.embed_failures()
+        }
     }
     Box::new(Shared(arc))
 }
@@ -690,6 +693,9 @@ fn ort_embedder_shared() -> Box<dyn undercroft_core::embed::Embedder + Send> {
         }
         fn embed(&self, text: &str) -> Vec<f32> {
             self.0.embed(text)
+        }
+        fn embed_failures(&self) -> u64 {
+            self.0.embed_failures()
         }
     }
     Box::new(Shared(arc))

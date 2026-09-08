@@ -147,6 +147,30 @@ pub struct PalaceStats {
     /// "the anchor is N behind" and "a writer's staging manifest is still
     /// there" are exactly the facts an operator goes looking for later.
     pub unhealed: Vec<String>,
+    /// Embeds this handle's embedder has degraded to a ZERO VECTOR since it
+    /// was constructed (ROADMAP O122) — drawers on write, queries on search.
+    ///
+    /// A failed embed cannot fail a write, so every backend that can fail
+    /// stores the drawer verbatim with a zero vector: lexically findable,
+    /// semantically invisible until re-embedded (`UNDERCROFT_FORCE_EMBEDDER=1`
+    /// plus `repair`). For two releases the served embedder counted those
+    /// and nothing read the count, and the two in-process embedders counted
+    /// nothing — so a corpus of holes reported a clean vector space on every
+    /// surface, and an operator's only evidence was one stderr line per
+    /// failure in a log a served process may not keep.
+    ///
+    /// Read live from the embedder, and it is the EMBEDDER's number, not the
+    /// database's: it belongs to this process for its lifetime. A restart
+    /// reads zero while the holes remain — the durable question ("how many
+    /// rows at rest carry a zero vector?") has no cheap answer, since a
+    /// sealed embedding is opaque until decrypted, and is filed rather than
+    /// faked here. On the CLI every command is its own process, so the count
+    /// is that command's own open (its calibration probes and its one write
+    /// or query); on `serve-http` and MCP stdio it accumulates. Under the
+    /// `ort` posture the multi-tenant server shares one model across every
+    /// vault, so every vault's stats report the same process-wide count.
+    /// Zero on the default vault always: the hash embedder cannot fail.
+    pub embed_failures: u64,
     /// The semantic channel as this vault is ACTUALLY configured
     /// (ROADMAP O72): the admission gate in force, the calibration floor, and
     /// where the gate came from.
@@ -1178,6 +1202,9 @@ impl PalaceStore {
             codebooks: self.codebook_generations(),
             read_only: self.is_read_only(),
             unhealed: self.unhealed().to_vec(),
+            // O122: the embedder's own number, read at call time — a
+            // snapshot taken at open would freeze at the calibration probes.
+            embed_failures: self.embedder.embed_failures(),
             semantic: self.semantic_channel(),
         })
     }

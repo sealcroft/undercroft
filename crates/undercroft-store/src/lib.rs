@@ -20220,6 +20220,9 @@ mod tests {
         fn model_name(&self) -> &str {
             "test-high-floor"
         }
+        fn embed_failures(&self) -> u64 {
+            0
+        }
         fn dimension(&self) -> usize {
             undercroft_core::embed::EMBED_DIM
         }
@@ -20239,8 +20242,10 @@ mod tests {
     }
 
     /// Every text embeds to the zero vector — precisely how both model
-    /// backends report an inference failure.
-    struct BrokenEmbedder;
+    /// backends report an inference failure — and, since ROADMAP O122,
+    /// COUNTS each one exactly as they do.
+    #[derive(Default)]
+    struct BrokenEmbedder(std::cell::Cell<u64>);
 
     impl Embedder for BrokenEmbedder {
         fn model_name(&self) -> &str {
@@ -20250,8 +20255,109 @@ mod tests {
             undercroft_core::embed::EMBED_DIM
         }
         fn embed(&self, _text: &str) -> Vec<f32> {
+            self.0.set(self.0.get() + 1);
             vec![0.0; undercroft_core::embed::EMBED_DIM]
         }
+        fn embed_failures(&self) -> u64 {
+            self.0.get()
+        }
+    }
+
+    /// A model that works until told not to: the hash embedder behind a
+    /// switch, so ONE test can open a store on a healthy vector space and
+    /// then watch the count move (ROADMAP O122). Counts exactly as the
+    /// shipped backends do — one per degraded call, queries included.
+    struct FlakyEmbedder {
+        broken: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        failures: std::sync::atomic::AtomicU64,
+    }
+
+    impl Embedder for FlakyEmbedder {
+        fn model_name(&self) -> &str {
+            "test-flaky"
+        }
+        fn dimension(&self) -> usize {
+            undercroft_core::embed::EMBED_DIM
+        }
+        fn embed(&self, text: &str) -> Vec<f32> {
+            use std::sync::atomic::Ordering;
+            if self.broken.load(Ordering::SeqCst) {
+                self.failures.fetch_add(1, Ordering::SeqCst);
+                return vec![0.0; undercroft_core::embed::EMBED_DIM];
+            }
+            HashEmbedder.embed(text)
+        }
+        fn embed_failures(&self) -> u64 {
+            self.failures.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    /// **The count reaches `stats`, and it counts both doors** (ROADMAP
+    /// O122). The served embedder counted its degraded embeds for two
+    /// releases and nothing read the count; the in-process embedders counted
+    /// nothing. This opens a store on a HEALTHY switchable model — so the
+    /// open's own calibration probes count nothing, which is the premise —
+    /// breaks it, and watches `PalaceStats.embed_failures` move once per
+    /// degraded WRITE and once per degraded QUERY, then stop moving once the
+    /// model recovers. The write lands verbatim throughout: a failed embed
+    /// cannot fail a write, which is exactly why the count is the only
+    /// evidence that anything went wrong.
+    #[test]
+    fn stats_reports_every_embed_the_embedder_degraded() {
+        use std::sync::atomic::Ordering;
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
+        let broken = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut s = PalaceStore::open_with_embedder(
+            vault,
+            Box::new(FlakyEmbedder {
+                broken: broken.clone(),
+                failures: Default::default(),
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            s.stats().unwrap().embed_failures,
+            0,
+            "premise: a healthy open — calibration probes included — counts nothing"
+        );
+
+        broken.store(true, Ordering::SeqCst);
+        let d = drawer("notes", "r", "a drawer written while the model was down", 1);
+        s.upsert_screened(&d).unwrap();
+        assert_eq!(
+            s.stats().unwrap().embed_failures,
+            1,
+            "one degraded WRITE is one"
+        );
+        let back = s
+            .get(&d.id, Read::Returned(ReadOp::Get))
+            .unwrap()
+            .expect("the write landed — a failed embed never fails a write");
+        assert_eq!(back.content, d.content, "and it landed verbatim");
+        let _ = s.search("model down", &SearchOptions::default()).unwrap();
+        assert_eq!(
+            s.stats().unwrap().embed_failures,
+            2,
+            "a degraded QUERY counts too — a zero query vector is the same dead \
+             channel seen from the other side"
+        );
+
+        broken.store(false, Ordering::SeqCst);
+        s.upsert_screened(&drawer(
+            "notes",
+            "r",
+            "a drawer written after it recovered",
+            2,
+        ))
+        .unwrap();
+        let _ = s.search("recovered", &SearchOptions::default()).unwrap();
+        assert_eq!(
+            s.stats().unwrap().embed_failures,
+            2,
+            "a healthy embed does not count"
+        );
     }
 
     /// A high-floor space is RECALIBRATED, not out-gated: the measured raw
@@ -20333,6 +20439,9 @@ mod tests {
     impl Embedder for TopicEmbedder {
         fn model_name(&self) -> &str {
             "test-topic"
+        }
+        fn embed_failures(&self) -> u64 {
+            0
         }
         fn dimension(&self) -> usize {
             undercroft_core::embed::EMBED_DIM
@@ -20589,7 +20698,7 @@ mod tests {
     /// returning through the door marked "degraded gracefully".
     #[test]
     fn calibration_refuses_an_embedder_that_is_failing() {
-        assert_eq!(BrokenEmbedder.semantic_admission_gate(), None);
+        assert_eq!(BrokenEmbedder::default().semantic_admission_gate(), None);
     }
 
     /// The refactor must not move the default vault by a hundredth. 0.56 is

@@ -2638,6 +2638,103 @@ rest_body "/ui tells the two verdicts apart" 'ATTESTATION RECORDED' -- "http://1
 
 kill "$SRV" 2>/dev/null; wait "$SRV" 2>/dev/null
 
+echo "== A served embedder that fails: the count reaches every surface (ROADMAP O122) =="
+# The gate the entry filed: a served embedder that answers 500 to ONE embed,
+# then the count on the surface. A perl stub on loopback stands in for the
+# endpoint. It answers a body-shaped vector until a flag file appears, then
+# 500 — so a vault opens on a HEALTHY vector space (the open's calibration
+# probes count nothing, which is the premise) and exactly one embed is
+# degraded afterwards. The same stub lives in e2e-telemetry.sh: each suite
+# mounts its own script alone, so the fixture is duplicated, not shared.
+EF_HOME="$(mktemp -d)"
+EF_FLAG="$EF_HOME/fail-now"
+EF_PORT=18997
+# PREMISE: the stub needs a listening socket. A missing module FAILS the
+# suite; "absent" reading as a skip is this file's oldest trap.
+if perl -MIO::Socket::INET -e1 2>/dev/null; then
+  echo "ok    premise: perl can listen on a socket"; PASS=$((PASS+1))
+else
+  echo "FAIL  premise: perl lacks IO::Socket::INET — the O122 block measures nothing"; FAIL=$((FAIL+1))
+fi
+cat >"$EF_HOME/stub.pl" <<'PERL'
+use strict; use IO::Socket::INET;
+my ($port, $flag) = @ARGV;
+my $srv = IO::Socket::INET->new(LocalAddr => "127.0.0.1", LocalPort => $port, Listen => 16, Reuse => 1)
+  or die "listen: $!";
+$| = 1;
+while (my $c = $srv->accept) {
+  my $len = 0;
+  while (defined(my $l = <$c>)) { $len = $1 if $l =~ /^Content-Length:\s*(\d+)/i; last if $l =~ /^\r?\n$/; }
+  my $body = ""; read($c, $body, $len) if $len;
+  if (-e $flag) {
+    print $c "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+  } else {
+    # Body-shaped rather than constant, so the open's calibration pairs do
+    # not all collapse onto one direction.
+    my $n = length $body;
+    my $j = sprintf('{"embedding":[%.3f,%.3f,%.3f,0.5]}',
+                    ($n % 7) / 7 + 0.1, ($n % 11) / 11 + 0.1, ($n % 13) / 13 + 0.1);
+    print $c "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+             . length($j) . "\r\nConnection: close\r\n\r\n$j";
+  }
+  close $c;
+}
+PERL
+perl "$EF_HOME/stub.pl" "$EF_PORT" "$EF_FLAG" >"$EF_HOME/stub.log" 2>&1 &
+EF_STUB=$!
+for _ in $(seq 1 40); do
+  curl -sf -o /dev/null -X POST "http://127.0.0.1:$EF_PORT/embeddings" -d '{}' 2>/dev/null && break; sleep 0.25
+done
+ef_env() {
+  env UNDERCROFT_HOME="$EF_HOME" UNDERCROFT_EMBEDDER=http \
+      UNDERCROFT_EMBED_URL="http://127.0.0.1:$EF_PORT" UNDERCROFT_EMBED_MODEL=stub \
+      UNDERCROFT_EMBED_API=openai UNDERCROFT_EMBED_DIM=4 "$@"
+}
+ef_env "$BIN" init >/dev/null 2>&1
+check "served embedder: a healthy write lands" 0 "" -- \
+  ef_env "$BIN" remember --wing notes --room r "written while the endpoint was healthy"
+touch "$EF_FLAG"
+# A failed embed cannot fail a write — the drawer lands, and the process
+# says what it stored instead of a vector.
+check "served embedder: a write under a 500 still lands, and says so" 0 "storing a zero vector" -- \
+  ef_env "$BIN" remember --wing notes --room r "written while the endpoint answered 500"
+# The CLI: every command is its own process, so `stats` reports ITS OWN open
+# — under a failing endpoint the calibration probes at open ARE the failures
+# it counts — and the line exists only when the count is non-zero.
+check "cli stats names embed failures while the endpoint fails" 0 "embed failures: " -- \
+  ef_env "$BIN" stats
+rm -f "$EF_FLAG"
+out="$(ef_env "$BIN" stats 2>&1)"
+if [ $? -eq 0 ] && ! grep -q "embed failures:" <<<"$out" && grep -q "^wings:" <<<"$out"; then
+  echo "ok    cli stats is silent once the endpoint recovers"; PASS=$((PASS+1))
+else
+  echo "FAIL  cli stats is silent once the endpoint recovers"; echo "$out" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+# The served surface, where the count is worth something: one process, one
+# embedder, accumulating. Opened healthy (0), then ONE write under a 500
+# (1), a healthy write after (still 1) — read on /v1 and named on the
+# console.
+ef_env "$BIN" serve-http --host 127.0.0.1 --port 18998 >"$EF_HOME/serve.log" 2>&1 &
+EF_SRV=$!
+for _ in $(seq 1 40); do curl -sf http://127.0.0.1:18998/healthz >/dev/null 2>&1 && break; sleep 0.25; done
+rest_body "/v1 stats: a healthy server reports zero embed failures" '"embed_failures":0' -- \
+  http://127.0.0.1:18998/v1/vaults/default/stats
+touch "$EF_FLAG"
+rest_code "/v1: a POST under a failing embedder still lands" 200 -- \
+  -X POST http://127.0.0.1:18998/v1/vaults/default/drawers -H 'content-type: application/json' \
+  -d '{"text":"posted while the endpoint answered 500","wing":"notes","room":"r"}'
+rest_body "/v1 stats: exactly that one failure is counted" '"embed_failures":1' -- \
+  http://127.0.0.1:18998/v1/vaults/default/stats
+rm -f "$EF_FLAG"
+rest_code "/v1: a POST after recovery lands" 200 -- \
+  -X POST http://127.0.0.1:18998/v1/vaults/default/drawers -H 'content-type: application/json' \
+  -d '{"text":"posted after the endpoint recovered","wing":"notes","room":"r"}'
+rest_body "/v1 stats: a healthy embed does not count" '"embed_failures":1' -- \
+  http://127.0.0.1:18998/v1/vaults/default/stats
+rest_body "/ui reads embed failures" 's.embed_failures' -- http://127.0.0.1:18998/ui
+kill "$EF_SRV" 2>/dev/null; wait "$EF_SRV" 2>/dev/null
+kill "$EF_STUB" 2>/dev/null; wait "$EF_STUB" 2>/dev/null
+
 echo
 echo "e2e results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

@@ -63,6 +63,81 @@ grep -q "undercroft_search_total" <<<"$out" && pass "search_total recorded after
 kill "$S1" 2>/dev/null
 wait "$S1" 2>/dev/null
 
+echo "== a degraded embed is a series (ROADMAP O122) =="
+# The durable half of O122: the live count is `embed_failures` on every
+# stats surface (e2e.sh drives that), and this is the counter a server
+# nobody polls can alert on. Same perl stub as e2e.sh — each suite mounts
+# its own script alone, so the fixture is duplicated rather than shared.
+EFT_HOME="$(mktemp -d)"
+EFT_FLAG="$EFT_HOME/fail-now"
+EFT_PORT=8793
+perl -MIO::Socket::INET -e1 2>/dev/null && pass "premise: perl can listen on a socket" \
+  || fail "premise: perl lacks IO::Socket::INET — the O122 block measures nothing"
+cat >"$EFT_HOME/stub.pl" <<'PERL'
+use strict; use IO::Socket::INET;
+my ($port, $flag) = @ARGV;
+my $srv = IO::Socket::INET->new(LocalAddr => "127.0.0.1", LocalPort => $port, Listen => 16, Reuse => 1)
+  or die "listen: $!";
+$| = 1;
+while (my $c = $srv->accept) {
+  my $len = 0;
+  while (defined(my $l = <$c>)) { $len = $1 if $l =~ /^Content-Length:\s*(\d+)/i; last if $l =~ /^\r?\n$/; }
+  my $body = ""; read($c, $body, $len) if $len;
+  if (-e $flag) {
+    print $c "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+  } else {
+    my $n = length $body;
+    my $j = sprintf('{"embedding":[%.3f,%.3f,%.3f,0.5]}',
+                    ($n % 7) / 7 + 0.1, ($n % 11) / 11 + 0.1, ($n % 13) / 13 + 0.1);
+    print $c "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+             . length($j) . "\r\nConnection: close\r\n\r\n$j";
+  }
+  close $c;
+}
+PERL
+perl "$EFT_HOME/stub.pl" "$EFT_PORT" "$EFT_FLAG" >"$EFT_HOME/stub.log" 2>&1 &
+EFT_STUB=$!
+for _ in $(seq 1 40); do
+  curl -sf -o /dev/null -X POST "http://127.0.0.1:$EFT_PORT/embeddings" -d '{}' 2>/dev/null && break; sleep 0.25
+done
+eft_env() {
+  env UNDERCROFT_HOME="$EFT_HOME" UNDERCROFT_EMBEDDER=http \
+      UNDERCROFT_EMBED_URL="http://127.0.0.1:$EFT_PORT" UNDERCROFT_EMBED_MODEL=stub \
+      UNDERCROFT_EMBED_API=openai UNDERCROFT_EMBED_DIM=4 "$@"
+}
+eft_env "$BIN" init >/dev/null 2>&1
+eft_env env UNDERCROFT_MCP_HTTP_TOKEN="$TOKEN" UNDERCROFT_METRICS=1 \
+  "$BIN" serve-http --host 127.0.0.1 --port 8794 >"$EFT_HOME/serve.log" 2>&1 &
+S6=$!
+wait_up 8794 || fail "embed-failure server did not start" "$(cat "$EFT_HOME/serve.log")"
+m0=$(curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8794/metrics)
+# PREMISE: a counter never incremented is never exported, so a healthy open
+# shows no series — and an "after" that would also pass on the "before"
+# measures nothing.
+if grep -q "undercroft_embed_failures_total" <<<"$m0"; then
+  fail "premise: a healthy open already exports embed failures" "$(grep embed_failures <<<"$m0")"
+else
+  pass "premise: a healthy open exports no embed-failure series"
+fi
+touch "$EFT_FLAG"
+body='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"undercroft_add_drawer","arguments":{"content":"added while the endpoint answered 500","wing":"notes","room":"r"}}}'
+resp=$(curl -s -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d "$body" http://127.0.0.1:8794/mcp)
+if grep -qE '"isError": ?false' <<<"$resp"; then
+  pass "a write under a failing embedder still lands"
+else
+  fail "the write under a failing embedder did not land" "$resp"
+fi
+m1=$(curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8794/metrics)
+if grep -E 'undercroft_embed_failures_total\{[^}]*backend="http"[^}]*\} 1(\.0)?$' <<<"$m1" >/dev/null; then
+  pass "embed_failures_total{backend=\"http\"} reads 1 after one degraded write"
+else
+  fail "embed_failures_total{backend=\"http\"} missing or not 1" "$(grep embed_failures <<<"$m1")"
+fi
+rm -f "$EFT_FLAG"
+kill "$S6" 2>/dev/null; wait "$S6" 2>/dev/null
+kill "$EFT_STUB" 2>/dev/null; wait "$EFT_STUB" 2>/dev/null
+
 echo "== /metrics under a declared assertion secret (ROADMAP O25) =="
 # `/metrics` is served after the palace bearer and BEFORE per-vault assertion,
 # because the route addresses no single vault — so the gate whose contract is

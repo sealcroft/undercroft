@@ -78,6 +78,17 @@ suggested:
 
 A failed embed can never fail a write: it degrades to a counted zero
 vector (lexically findable, semantically invisible until re-embedded).
+**The count is read, not merely kept** (ROADMAP O122): `undercroft stats`,
+`GET /v1/vaults/{id}/stats`, MCP `undercroft_status` and the console all
+report it as `embed_failures` — the embedder's own number, for the life of
+the process (on the CLI that is the one command's open, on a server it
+accumulates; a restart reads zero while the rows at rest keep their zero
+vectors). With `--features telemetry` it is also the
+`undercroft_embed_failures_total{backend}` series, and the shipped
+observability stack fires `EmbedFailures` on the first one. The in-process
+`onnx` and `ort` embedders degrade the same way and are counted the same
+way; until O122 they counted nothing. The remedy is the same for all three:
+`UNDERCROFT_FORCE_EMBEDDER=1` + `undercroft repair` re-embeds every row.
 
 ## `onnx` / `ort` — in-process, nothing leaves
 

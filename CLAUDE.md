@@ -1110,6 +1110,22 @@ Consequences that are binding, not advisory:
   handed to another process; in-process onnx/ort close it), and a failed
   embed cannot fail a write, so it degrades to a **counted** zero vector
   (lexically findable, semantically invisible until re-embedded).
+  **"Counted" reached no surface for two releases, and two of the three
+  degrading backends counted nothing (ROADMAP O122, 2026-09-08)**:
+  `HttpEmbedder::failures()` was read by its own tests alone, while `onnx`
+  and `ort` degraded through a bare `.unwrap_or_else(|_| zeros)` — so a
+  corpus of holes reported a clean vector space everywhere. Now
+  `Embedder::embed_failures` is a REQUIRED trait method (a default of zero
+  is exactly the silent shape it closes; the compiler enumerated eleven
+  impls), all three backends count and say so, `PalaceStats.embed_failures`
+  reads it LIVE on all four renderers, and
+  `undercroft_embed_failures_total{backend}` is the durable series with an
+  `EmbedFailures` alert. It is the EMBEDDER's number for the life of the
+  process, never the database's: on the CLI each command's own open, on a
+  server accumulating, and under `ort` process-wide across every vault
+  because the multi-tenant server shares one session pool. The durable
+  question — how many rows at rest carry a zero vector — has no cheap
+  answer on a sealed vault and is filed, not faked.
   The same transport policy covers `LlmClient` itself (2026-08-04):
   refine and the admission advisor refuse cleartext beyond loopback,
   `UNDERCROFT_LLM_CA` pins a self-signed root, construction is fallible.
@@ -1699,8 +1715,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (834 run,
-                                      # 4 #[ignore]d = 838 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (835 run,
+                                      # 4 #[ignore]d = 839 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1817,9 +1833,9 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (484 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (495 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (133 checks)
-docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (53 checks)
+docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (82 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
                                       # answers HTTP before its Raft leader exists)
@@ -1875,7 +1891,7 @@ docker compose run --rm arch-check    # TWO verifications, one service: the
                                       # a countable population, and inventing
                                       # a metric to satisfy a gate is how a
                                       # figure stops meaning anything
-docker compose run --rm obs-config    # the observability CONFIG suite (10 checks):
+docker compose run --rm obs-config    # the observability CONFIG suite (11 checks):
                                       # promtool check/test rules + amtool
                                       # check-config at the versions the stack
                                       # deploys, plus the join between them —
