@@ -81,7 +81,10 @@ GET    /v1/vaults/{id}/stats            (records AND drawers — one drawer
                                          it counts exports and audited
                                          reads too; chain head,
                                          wings, rooms, kg, tunnels, db_bytes,
-                                         read_only, unhealed, codebooks)
+                                         read_only, unhealed, codebooks,
+                                         embed_failures — zero vectors this
+                                         server's embedder degraded to since
+                                         it opened the vault, O122)
 GET    /v1/vaults/{id}/stats/history    ?window=N   sample ring buffer
                                          (501 without --features telemetry)
 POST   /v1/vaults/{id}/drawers         {text, wing?, room?, vector?, dedup_threshold?}

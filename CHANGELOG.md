@@ -2,8 +2,12 @@
 
 ## Unreleased — 1.5.2
 
-PATCH: nothing observable changes. A gate for the class the previous release
-found by hand, and a measurement.
+Filed as PATCH: a gate for the class the previous release found by hand, a
+measurement, seven fixes from the doc read, and the failed-embed count
+reaching every surface. Note that O128 (three CLI flags) and O122 (a stats
+field, a metric series, an alert) ADD surface — backward compatible, and
+whether additive surface makes this a MINOR under the doctrine's own test is
+a release-prep ruling, not settled here.
 
 ### every error variant is minted or matched somewhere (O115)
 
@@ -40,6 +44,30 @@ was found by reading instead. Tests 824 → 825.
   operator surface.
 
 Tests 828 → 834, e2e 483 → 484. `UPGRADING.md` carries O123, O124 and O127.
+
+### the failed-embed count reaches every surface (O122)
+
+**ROADMAP O122 FILED 2026-09-08 AND CLOSED THE SAME DAY, wider than filed.**
+A served embedder degrades a failed embed to a zero vector rather than
+failing the write — the drawer lands verbatim, lexically findable and
+semantically invisible until re-embedded — and counted them in
+`HttpEmbedder::failures()`, which its own tests read and nothing else did.
+Reading the other backends before choosing a shape found the class larger
+than the filing: the in-process `onnx` and `ort` embedders degraded the same
+way through a bare `.unwrap_or_else(|_| zeros)` and counted nothing at all.
+Now `Embedder::embed_failures` is a REQUIRED trait method (a default of zero
+is the silent shape this closes; the compiler enumerated eleven impls), all
+three backends count and log each one, `PalaceStats.embed_failures` reads
+the count live on the CLI, MCP, `/v1` and the console, and
+`undercroft_embed_failures_total{backend}` is a counter with an
+`EmbedFailures` alert in the shipped stack (rule, promtool block, both
+alert tables). Process-lifetime by nature — the embedder's number, never the
+database's — and every surface says so. Gates: a store test with a
+switchable embedder (0 after a healthy open → 1 after one degraded write,
+the write verbatim → 2 after one degraded query → still 2 once recovered),
+an e2e block driving a perl stub endpoint through 500 on the CLI and `/v1`
+plus the console's read, and a telemetry scrape at exactly 1. The reranker
+sibling is filed as O131. Tests 834 → 835, e2e 484 → 495, telemetry 53 → 57.
 
 ### six code defects the doc read found, fixed (O116–O121)
 

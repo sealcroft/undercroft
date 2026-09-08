@@ -223,6 +223,15 @@
             <div class="h">SEMANTIC CHANNEL</div>
             <div class="kv" id="sSemantic">—</div>
           </div>
+          <!-- ROADMAP O122. Zero vectors this server's embedder has written
+               or queried with since the vault was opened. Hidden when zero
+               for the same reason `unhealed` is: the default vault cannot
+               fail, and a reassuring "0" nobody reads would bury the one
+               figure that means the vector space has holes. -->
+          <div class="sect" id="sEmbedFailSect" style="display:none">
+            <div class="h">EMBED FAILURES — ZERO VECTORS SINCE THIS SERVER OPENED THE VAULT</div>
+            <div class="kv" id="sEmbedFail">—</div>
+          </div>
           <div class="sect">
             <div class="h">WINGS — DRAWER DISTRIBUTION</div>
             <table><thead><tr><th>WING</th><th>DRAWERS</th><th style="width:50%">SHARE</th></tr></thead><tbody id="wingRows"></tbody></table>
@@ -1058,6 +1067,14 @@ async function loadOverview() {
         + " · floor " + Number(sem.floor).toFixed(3)
         + " · " + sem.gate_source
       : "—";
+    // O122: the embedder's own count of degraded embeds, process-lifetime.
+    // Shown only when non-zero (see the markup). textContent, so no escaping
+    // — it is a number and a fixed sentence.
+    const ef = Number(s.embed_failures || 0);
+    $("sEmbedFailSect").style.display = ef > 0 ? "" : "none";
+    $("sEmbedFail").textContent = ef + " embed" + (ef === 1 ? "" : "s")
+      + " degraded to a zero vector — lexically findable, semantically invisible"
+      + " until re-embedded (UNDERCROFT_FORCE_EMBEDDER=1 + repair)";
     // M5: R4's report. A non-empty list means either "this replica is
     // serving a vault its writer has not finished with" or "this vault still
     // holds some graph words in clear at rest" — each note says which.

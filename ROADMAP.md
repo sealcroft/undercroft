@@ -3988,7 +3988,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**160** of the **175** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**161** of the **176** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4162,11 +4162,15 @@ identities.
 
 ## 1.5.2 — unreleased
 
-A gate for the class O111 found by hand, and O113 measured.
+A gate for the class O111 found by hand, O113 measured, seven fixes from the
+doc read, and the failed-embed count reaching every surface (O122).
 
-PATCH: nothing observable changes. Filed here until the tag exists.
+Filed as PATCH. Two entries ADD surface — O128 (three CLI flags) and O122 (a
+stats field, a metric series, an alert), both backward compatible — and
+whether additive surface reads as MINOR under the doctrine's own test is a
+release-prep ruling. Filed here until the tag exists.
 
-### O122 — a served embedder counts its failed embeds, and nothing reads the count
+### O122 — CLOSED 2026-09-08: the served embedder counted its failed embeds and nothing read the count; the two in-process embedders counted nothing
 
 **Filed 2026-09-08 from the doc read's PLAUSIBLE list, verified.** `HttpEmbedder`
 degrades a failed embed to a counted zero vector (a write must not fail on
@@ -4178,6 +4182,53 @@ each in `HAND_PROJECTED`), or a `drawer_embed_failures_total` counter in
 the `undercroft-obs` inventory; either is a report struct or an inventory
 change and gets its own unit. Gate: a served embedder that answers 500 to
 one embed, then the count on the surface chosen.
+
+**CLOSED the same day, wider than filed.** Reading the other backends before
+choosing a shape — the sweep this file's own doctrine asks for when a rule
+names a pattern — found that the filing undercounted the class: `onnx` and
+`ort` degrade a failed inference to a zero vector through a bare
+`.unwrap_or_else(|_| zeros)` with no count, no log line and no trace, so the
+one backend that counted was the one the entry was about. Both shapes were
+built, on the codebook-generation precedent (a count on `PalaceStats` AND a
+telemetry series), because they answer different operators: the field is on
+every build and every renderer, the counter is what a server nobody polls
+can alert on.
+
+- `Embedder::embed_failures` is a **REQUIRED** trait method — a default of
+  zero is exactly the silent shape this closes, so the compiler enumerated
+  the eleven impls (two shipped backends that cannot fail return 0 and say
+  why; `ExternalEmbedder` counts every REACHED call, since the only way its
+  zero vector enters an index is a guard that slipped).
+- All three degrading backends count, log the same line, and emit
+  `undercroft_embed_failures_total{backend}` (`http`/`onnx`/`ort` — a kind,
+  never a model name). In the inventory, so the emit-site gate counts it.
+- `PalaceStats.embed_failures`, read LIVE from the embedder at call time —
+  a snapshot at open would freeze at the calibration probes — and projected
+  on the CLI (only when non-zero, the `codebooks`/`posture` rule), `/v1`,
+  the console (hidden when zero, the `unhealed` rule) and MCP whole-struct.
+  `HAND_PROJECTED` already carried the three rows, so the gate forced them.
+- `EmbedFailures` alert: `sum by (instance)` (the inhibition rule),
+  `for: 0m`, with its promtool block and rows in both alert tables.
+- **Process-lifetime, and every surface says so**: on the CLI each command
+  is its own open, so a non-zero `stats` there means the endpoint is failing
+  NOW (its calibration probes are the failures it counts); on a server it
+  accumulates; under `ort` the multi-tenant server shares one model, so every
+  vault reports the process-wide count. The durable question — how many rows
+  at rest carry a zero vector — has no cheap answer on a sealed vault and is
+  stated as such, not faked; `UNDERCROFT_FORCE_EMBEDDER=1` + `repair` remains
+  the remedy for the rows.
+
+Gates: `stats_reports_every_embed_the_embedder_degraded` (store — a
+switchable embedder, 0 after a healthy open → 1 after one degraded write,
+the write verbatim → 2 after one degraded QUERY → still 2 once recovered),
+the trait door asserted beside the inherent one in the served embedder's
+own test, and the filed gate verbatim in e2e: a perl stub on loopback
+answering 500 behind a flag file, the CLI (`remember` lands and says so,
+`stats` names the count while failing and is silent recovered) and `/v1`
+(0 → one POST under 500 → 1 → a healthy POST → still 1) plus the console's
+read; the telemetry suite scrapes the series at exactly 1. The stub is
+duplicated in the two suites because each mounts its own script alone.
+Residual, filed as O131: the RERANKERS degrade the same way one trait over.
 
 ### O123 — CLOSED 2026-09-08: an embedding dimension 2 modulo 4 was stored in a frame that read back as garbage, silently
 
@@ -11946,6 +11997,26 @@ the filing names (the CLI writes to stdout, so it carries one copy fewer
 than `/v1`'s framed payload). A 10⁶-drawer vault of this shape exports
 through ~3.5 GB of resident memory. The streaming shape above is what
 closes it; this entry stays open with the number rather than the argument.
+
+### O131 — the rerankers degrade a failed score to 0.0 with no count and no trace: O122's class one trait over
+
+**Filed 2026-09-08 by O122's own sweep.** `OnnxReranker::score` is
+`self.score_inner(query, passage).unwrap_or(0.0)` and `OrtReranker::score` /
+`score_batch` end in `.unwrap_or(0.0)` / `.unwrap_or_else(|_| vec![0.0; n])`
+— a failed cross-encoder pass scores the passage ZERO and the page is
+re-ordered around a number that was never computed, with nothing counted and
+nothing logged. It is exactly the shape O122 closed for embeds (a bare
+`unwrap_or_else` to a neutral value), and it is worse in one respect: a
+zero embedding is at least visible to a re-embed, while a zero score leaves
+no artifact at all. Still to verify by reading: whether the two ColBERT
+encoders (`late.rs` in both crates) degrade the same way or return `Result`.
+Fix shape, O122's: a REQUIRED `Reranker::score_failures` (and the
+late-interaction trait's equivalent), a `PalaceStats` field or a second
+`backend` value on a shared `undercroft_inference_failures_total` — the
+naming question is whether O122's counter should have been the general one,
+which is a ruling worth making before a second series ships. Gate: a
+reranker whose inner pass fails, then the count on the surface chosen, and
+the page order pinned against silent re-ranking.
 
 ### O6 — the repo social preview is still not uploaded
 GitHub exposes **no REST endpoint** for org avatars (`avatar_url` is read-only

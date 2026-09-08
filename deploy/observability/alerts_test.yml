@@ -140,6 +140,28 @@ tests:
               summary: "Undercroft is returning HTTP 5xx"
               description: "5xx responses observed for 5m — the server is erroring on some requests."
 
+  # ── EmbedFailures (ROADMAP O122) ─────────────────────────────────────────
+  # Two backends' series on one instance fold into ONE alert, and `instance`
+  # survives the sum — the label every rule must keep for the inhibition to
+  # scope itself. Fires at the first increase: `for: 0m`.
+  - interval: 1m
+    input_series:
+      - series: 'undercroft_embed_failures_total{job="undercroft",instance="undercroft:8765",service="undercroft",backend="http"}'
+        values: "0+1x20"
+      - series: 'undercroft_embed_failures_total{job="undercroft",instance="undercroft:8765",service="undercroft",backend="onnx"}'
+        values: "0+0x20"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: EmbedFailures
+        exp_alerts:
+          - exp_labels:
+              alertname: EmbedFailures
+              severity: warning
+              instance: undercroft:8765
+            exp_annotations:
+              summary: "Embeds are degrading to zero vectors"
+              description: "The embedder behind this instance degraded at least one embed to a zero vector in the last 10m — drawers written meanwhile are lexically findable but semantically invisible. Check the embeddings endpoint or model, then re-embed with UNDERCROFT_FORCE_EMBEDDER=1 + `undercroft repair`."
+
   # ── AuthRejectionsSpike ──────────────────────────────────────────────────
   # 30/min = 0.5/s, over the 0.2/s threshold.
   - interval: 1m

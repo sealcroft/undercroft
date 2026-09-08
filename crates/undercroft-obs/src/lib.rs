@@ -212,6 +212,26 @@ pub fn hmac_verify_failed(surface: &str) {
     }
 }
 
+/// Record one embed the embedder in hand degraded to a zero vector
+/// (ROADMAP O122). `backend` is the embedder KIND — `http`, `onnx` or
+/// `ort`, the three that can fail — and never a model name, whose value set
+/// is created by configuration and belongs on a query surface. A count and
+/// nothing else: no vault, no drawer, no text.
+///
+/// The durable half of the signal. The live half is
+/// `PalaceStats.embed_failures`, read from the embedder itself on every
+/// stats surface; this counter exists so a served process whose stats
+/// nobody polls still has a series an alert can fire on.
+#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+pub fn embed_failed(backend: &str) {
+    #[cfg(feature = "telemetry")]
+    imp::counter_add(
+        "undercroft_embed_failures_total",
+        1,
+        &[("backend", backend)],
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Control plane (ROADMAP O20) — orchestrator-only events
 // ---------------------------------------------------------------------------
@@ -403,6 +423,7 @@ pub const COUNTER_NAMES: &[&str] = &[
     "undercroft_chain_commits_total",
     "undercroft_drawer_deletes_total",
     "undercroft_drawer_writes_total",
+    "undercroft_embed_failures_total",
     "undercroft_hmac_verify_failures_total",
     "undercroft_http_requests_total",
     "undercroft_kg_writes_total",

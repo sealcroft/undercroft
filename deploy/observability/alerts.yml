@@ -85,6 +85,27 @@ groups:
           summary: "Undercroft is returning HTTP 5xx"
           description: "5xx responses observed for 5m — the server is erroring on some requests."
 
+      - alert: EmbedFailures
+        # ROADMAP O122. A served or in-process embedder degraded an embed to
+        # a ZERO VECTOR: the drawer landed verbatim and stays lexically
+        # findable, but its semantic leg is dead until re-embedded. The write
+        # path never fails on this by design, so the counter is the only
+        # durable evidence — the live count is `embed_failures` on stats.
+        # Fires on the first one: a single hole is a hole, and the endpoint
+        # that produced it is usually still failing.
+        expr: sum by (instance) (increase(undercroft_embed_failures_total[10m])) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Embeds are degrading to zero vectors"
+          description: >-
+            The embedder behind this instance degraded at least one embed to a
+            zero vector in the last 10m — drawers written meanwhile are
+            lexically findable but semantically invisible. Check the embeddings
+            endpoint or model, then re-embed with UNDERCROFT_FORCE_EMBEDDER=1 +
+            `undercroft repair`.
+
       - alert: AuthRejectionsSpike
         expr: sum by (instance) (rate(undercroft_auth_rejections_total[5m])) > 0.2
         for: 10m

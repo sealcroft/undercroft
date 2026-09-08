@@ -93,6 +93,7 @@ Defined in `alerts.yml`:
 | **UndercroftDown** | critical | the `/metrics` target is unscrapable (1m). |
 | **HighSearchLatencyP95** | warning | search p95 > 500ms (10m). |
 | **HttpServerErrors** | warning | any HTTP 5xx (5m). |
+| **EmbedFailures** | warning | any `undercroft_embed_failures_total` increase (10m window, fires at the first) — the embedder degraded an embed to a zero vector, so a drawer landed lexically findable and semantically invisible (ROADMAP O122). |
 | **AuthRejectionsSpike** | warning | elevated bearer/assertion rejections (10m). |
 
 A firing tamper alert links to the [**runbook**](RUNBOOK.md) (published at

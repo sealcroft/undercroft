@@ -284,6 +284,11 @@ impl Embedder for HttpEmbedder {
             }
         }
         self.failures.set(self.failures.get() + 1);
+        // ROADMAP O122: the durable signal beside the live one — the count
+        // reaches `PalaceStats.embed_failures` through the trait method below
+        // and `/metrics` through this counter, so a served process whose
+        // stats nobody polls still has an alert to fire.
+        undercroft_obs::embed_failed("http");
         undercroft_obs::diag_error!(
             "embed failed ({last}); storing a zero vector — this drawer is \
              lexically findable but semantically invisible until re-embedded. \
@@ -291,6 +296,13 @@ impl Embedder for HttpEmbedder {
             self.failures.get()
         );
         vec![0.0; self.dim.max(1)]
+    }
+
+    /// The same number as [`HttpEmbedder::failures`], through the door the
+    /// store reads (ROADMAP O122). The inherent method kept its name because
+    /// `docs/EMBEDDERS.md` cites it; this is the one every surface consumes.
+    fn embed_failures(&self) -> u64 {
+        self.failures.get()
     }
 }
 
@@ -378,6 +390,19 @@ mod tests {
         let v = dead.embed("text");
         assert_eq!(v, vec![0.0, 0.0, 0.0], "zero vector of the right shape");
         assert_eq!(dead.failures(), 1, "and the failure is counted, not hidden");
+        // ROADMAP O122: and the count leaves through the trait, which is the
+        // door `PalaceStats` reads — the inherent method above was the ONLY
+        // reader for two releases, and it was read by these tests alone.
+        assert_eq!(
+            Embedder::embed_failures(&dead),
+            1,
+            "the trait reports the same count the inherent method does"
+        );
+        assert_eq!(
+            Embedder::embed_failures(&e),
+            0,
+            "a healthy embedder reports none"
+        );
     }
 
     /// The wrong-length case is the dangerous one: a served model swapped

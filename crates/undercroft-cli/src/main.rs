@@ -1558,6 +1558,11 @@ impl undercroft_core::embed::Embedder for SharedOrtEmbedder {
     fn embed(&self, text: &str) -> Vec<f32> {
         self.0.embed(text)
     }
+    /// The shared model's count — process-wide, because every vault on this
+    /// server embeds through the one session pool (ROADMAP O122).
+    fn embed_failures(&self) -> u64 {
+        self.0.embed_failures()
+    }
 }
 
 /// Build the shared reranker factory for the multi-tenant server. When
@@ -3699,6 +3704,20 @@ fn run(cli: Cli) -> Result<()> {
                 st.semantic.floor,
                 st.semantic.gate_source
             );
+            // ROADMAP O122. Zero vectors this process's embedder wrote or
+            // queried with. Printed only when non-zero: the default vault
+            // cannot fail and a reassuring `0` on every `stats` would bury
+            // the one line that matters — the same rule `codebooks` and
+            // `posture` follow above. On the CLI this is THIS command's own
+            // open (its calibration probes, then its one query or write),
+            // so a non-zero here means the endpoint is failing right now.
+            if st.embed_failures > 0 {
+                println!(
+                    "embed failures: {} (zero vectors — lexically findable, semantically \
+                     invisible until re-embedded with UNDERCROFT_FORCE_EMBEDDER=1 + repair)",
+                    st.embed_failures
+                );
+            }
             println!("wings:");
             for (w, n) in st.wings {
                 println!("  {w:<24} {n}");

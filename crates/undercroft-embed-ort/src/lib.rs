@@ -128,6 +128,10 @@ pub struct OrtEmbedder {
     n_inputs: usize,
     dim: usize,
     name: String,
+    /// Embeds degraded to a zero vector (ROADMAP O122). Atomic because the
+    /// multi-tenant server shares ONE of these across every vault, so the
+    /// count is process-wide there and `stats` on any vault reports it.
+    failures: std::sync::atomic::AtomicU64,
 }
 
 impl OrtEmbedder {
@@ -145,6 +149,7 @@ impl OrtEmbedder {
             n_inputs,
             dim: 0,
             name: model_name.to_string(),
+            failures: std::sync::atomic::AtomicU64::new(0),
         };
         me.dim = me.embed_inner("dimension probe")?.len();
         Ok(me)
@@ -205,8 +210,30 @@ impl Embedder for OrtEmbedder {
         self.dim
     }
     fn embed(&self, text: &str) -> Vec<f32> {
-        self.embed_inner(text)
-            .unwrap_or_else(|_| vec![0.0; self.dim.max(1)])
+        // Infallible by contract, so a runtime failure degrades to a zero
+        // vector rather than failing the write — and since ROADMAP O122 it
+        // is COUNTED and said, exactly as the served embedder's is. It was
+        // `.unwrap_or_else(|_| zeros)` with no trace at all: a corpus of
+        // holes that reported a clean vector space on every surface.
+        match self.embed_inner(text) {
+            Ok(v) => v,
+            Err(e) => {
+                let n = self
+                    .failures
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                    + 1;
+                undercroft_obs::embed_failed("ort");
+                undercroft_obs::diag_error!(
+                    "embed failed ({e}); storing a zero vector — this drawer is \
+                     lexically findable but semantically invisible until re-embedded. \
+                     Failures so far: {n}"
+                );
+                vec![0.0; self.dim.max(1)]
+            }
+        }
+    }
+    fn embed_failures(&self) -> u64 {
+        self.failures.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
 

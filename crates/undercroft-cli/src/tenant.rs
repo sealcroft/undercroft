@@ -627,6 +627,13 @@ impl Tenancy {
                 // some graph words in clear at rest" — each note says which.
                 "read_only": full.read_only,
                 "unhealed": full.unhealed,
+                // ROADMAP O122: zero vectors this server's embedder for the
+                // vault has written or queried with since it was opened —
+                // the live half of a signal whose durable half is the
+                // `undercroft_embed_failures_total` counter. Process-lifetime,
+                // never the database's: a restart reads 0 while the rows at
+                // rest keep their zero vectors.
+                "embed_failures": full.embed_failures,
             })),
         ))
     }
