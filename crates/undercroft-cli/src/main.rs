@@ -970,13 +970,27 @@ fn build_export_payload(
     expires: Option<&str>,
 ) -> Result<Vec<u8>> {
     use undercroft_vault::bundle;
-    let mut records = Vec::new();
+    // ROADMAP O113. Pre-sized from the vault's own size: a `Vec` growing by
+    // doubling to 468 MB holds ~805 MB across its final realloc, which is
+    // arithmetically the largest single term in the measured peak and costs
+    // nothing to remove. The estimate only has to be close — too low costs one
+    // realloc, too high costs untouched address space.
+    let mut records = Vec::with_capacity(store.export_size_hint());
     let mut counts = bundle::ManifestCounts::default();
-    for drawer in store.export_all()? {
-        serde_json::to_writer(&mut records, &serde_json::json!({ "drawer": drawer }))?;
+    // Streamed one drawer at a time (O113). What this used to iterate was a
+    // whole-corpus `Vec` built from a SECOND whole-corpus `Vec` inside the
+    // store — the raw sealed rows — neither of which the filing named.
+    store.export_each(|drawer| {
+        serde_json::to_writer(&mut records, &serde_json::json!({ "drawer": drawer })).map_err(
+            |e| undercroft_store::StoreError::CorruptRow {
+                id: drawer.id.clone(),
+                reason: e.to_string(),
+            },
+        )?;
         records.push(b'\n');
         counts.drawers += 1;
-    }
+        Ok(())
+    })?;
     for (name, etype) in store.kg_export_entities(undercroft_store::Read::Internal(
         undercroft_store::InternalRead::ExportAudited,
     ))? {
@@ -1020,7 +1034,11 @@ fn build_export_payload(
             .sign(secret)
             .map_err(|e| anyhow::anyhow!("signing manifest: {e}"))?;
     }
-    Ok(bundle::frame_payload(&manifest, &records))
+    // O113: framed IN PLACE. `frame_payload` allocates a second whole-payload
+    // buffer and copies, so both are live at once — the largest single term in
+    // the measured peak.
+    bundle::frame_payload_into(&manifest, &mut records);
+    Ok(records)
 }
 
 /// Bulk-ingest batch size: bounds RAM (embeddings in flight) and how long

@@ -626,13 +626,42 @@ pub fn verify_detached(sender_hex: &str, bytes: &[u8], sig_hex: &str) -> Result<
 }
 
 /// Frame a payload: the manifest line, then the record bytes verbatim.
+///
+/// **Prefer [`frame_payload_into`]** where the caller owns `records` — this
+/// allocates a second whole-payload buffer and copies into it, so both are
+/// live at once. ROADMAP O113 measured that as the largest single contributor
+/// to a 1,258 MB export peak, and the filing did not name it: it attributed
+/// the cost to a store-side `Vec` that is not even on the path it measured.
 pub fn frame_payload(manifest: &BundleManifest, records: &[u8]) -> Vec<u8> {
-    let line = serde_json::json!({ MANIFEST_LINE_KEY: manifest }).to_string();
+    let line = manifest_line(manifest);
     let mut out = Vec::with_capacity(line.len() + 1 + records.len());
     out.extend_from_slice(line.as_bytes());
     out.push(b'\n');
     out.extend_from_slice(records);
     out
+}
+
+/// Frame in place: prepend the manifest line to a buffer the caller already
+/// owns, so the payload exists ONCE (ROADMAP O113).
+///
+/// The insert shifts `records` rather than copying it into a second
+/// allocation, and reserves first so the shift happens at most once. Output is
+/// byte-identical to [`frame_payload`] — the format does not move, which is
+/// the whole point: every reader, every shell suite and every third party
+/// keeps working, and `BundleManifest.version` stays honestly 1.
+pub fn frame_payload_into(manifest: &BundleManifest, records: &mut Vec<u8>) {
+    let line = manifest_line(manifest);
+    records.reserve(line.len() + 1);
+    records.splice(
+        0..0,
+        line.into_bytes().into_iter().chain(std::iter::once(b'\n')),
+    );
+}
+
+/// The manifest's own line, without the trailing newline. One spelling, so the
+/// two framing functions cannot drift into different bytes.
+fn manifest_line(manifest: &BundleManifest) -> String {
+    serde_json::json!({ MANIFEST_LINE_KEY: manifest }).to_string()
 }
 
 /// Split a payload into its manifest (when the first line declares one)

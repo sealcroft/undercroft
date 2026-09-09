@@ -3988,7 +3988,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**162** of the **177** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**166** of the **181** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4175,6 +4175,90 @@ CLI's absence was the defect, and a capability new to one surface but old to
 the product is a drift closure rather than a feature. The doctrine's existing
 test, applied; it reclassifies nothing (`1.5.0` stays MINOR, `1.2.1` and
 `1.2.2` stay PATCH). Filed here until the tag exists.
+
+### O113 — CLOSED 2026-09-09: export peak 1,258 MB -> 480 MB (2.75x -> 1.02x) on the same corpus, and five of the filing's own claims were wrong
+
+**CLOSED 2026-09-09 on a four-agent analysis (format practice, integrity,
+blast radius, adversarial refuter) after the maintainer asked for the correct
+answer rather than the convenient one. The agents split A / B / D / B, and the
+split is what found the defects below.**
+
+**Measured, same corpus, same instrument as the row above:**
+
+| | filed | now |
+|---|---|---|
+| drawers | 361,009 | 361,009 |
+| export | 468 MB | 469 MB |
+| **peak RSS** | **1,258 MB** | **480 MB** |
+| **RSS / export** | **2.75x** | **1.02x** |
+
+Small corpus, also the row above's: 2,988 drawers, peak 23.0 -> 14.2 MB, i.e.
+14.0 -> 5.4 MB above the 8.8 MB process baseline.
+
+**Five claims in this entry were wrong, and the first inverted the fix.**
+
+1. **The named cause is not on the path that was measured.** The entry blames
+   "every drawer plus embedding as a `Vec`" — that type exists only in
+   `export_all_with_vectors`, which is `/v1`-only. The 1,258 MB row is the CLI,
+   which calls `export_all` and carries NO embeddings. `/v1` is the expensive
+   path and was never measured.
+2. **The three copies were not simultaneous, and the largest one was
+   unnamed**: `frame_payload` allocated `line + records` and copied, so both
+   were live — the single biggest term. `export_all` also held TWO
+   whole-corpus `Vec`s (raw sealed rows, then decoded), not one.
+3. **"the CLI carries one copy fewer than `/v1`'s framed payload"** — false.
+   Both call `frame_payload`. What the CLI lacks is the response copy.
+4. **The preferred fix does not exist.** "Computed over the stream and written
+   FIRST by buffering only the digest state" is not a shape: at the moment the
+   header must be written, the digest state is the digest of nothing. The rule
+   is this file's own — *counterfactual the FIX, not only the defect*.
+5. **Both line references were stale** (`store/lib.rs:5377` is inside
+   `save_with_dedup`; `tenant.rs:2756` is inside `refine`).
+
+**What was done — no format change, so `version` stays honestly 1 and every
+reader, shell suite and third party keeps working.** `export_each` /
+`export_each_with_vectors` hand over one drawer at a time (`export_all` is a
+wrapper); the collect was never borrow-forced, and `rotate.rs` has done the
+harder version under `&mut self` since it was written, which is what proved
+the shape rather than an argument that it ought to compile.
+`frame_payload_into` frames in place. Both buffers are pre-sized from the
+vault's own size — a `Vec` doubling to 468 MB holds ~805 MB across its final
+realloc, arithmetically the largest single term. `/v1`'s NDJSON response hands
+its bytes over by value (`respond_owned`) instead of copying them for the
+socket write.
+
+**The three shapes that were REJECTED, on correctness rather than effort.**
+*Temp file*: violates *"sealed vaults must never persist plaintext ... in clear
+on disk"*, writes under `serve-http --read-only` where `open_read_only` guards
+the database and nothing guards the filesystem (the O91 shape), and survives
+the SIGKILL the fix exists to prevent. *Two passes*: the export runs in no
+transaction, so in WAL mode two passes are two snapshots and an ordinary
+concurrent write makes the manifest describe bytes the payload never contained
+— a manufactured 409 `class: "integrity"`, which is O13 one path over.
+*Trailer manifest*: the manifest is an AUTHORIZATION gate (`attest`, expiry,
+the orchestrator's `level` cross-check), and a bare trailer makes truncation
+indistinguishable from a legacy unattested export. See O137.
+
+**The residual is the format floor, and it is O137's, not a gap left here.**
+1.02x is `records` itself: the digest must be known before the manifest and
+the manifest is first, so the payload exists once. Going below that needs
+per-chunk authentication, which also fixes `--to` — filed as O137 rather than
+recorded in this closed body, which is the drift O134 was filed for.
+
+**Gates.** `the_export_walk_does_not_materialize_the_corpus` (source, with a
+premise probe) — **and its first version measured nothing**: it counted decoded
+drawers alive inside the visitor's closure, which is 1 whether or not the store
+collected everything first, so the counterfactual PASSED. No test that drives
+the export can see the store's own `Vec`; the property is on the other side of
+the call. Recorded in the test because it is *ask what a gate can SEE* firing
+on the fix's own gate. Plus `export_each_visits_every_row_once_in_order` and
+`a_tampered_row_stops_the_export_walk` — an export is evidence, so "N-1 rows
+and no error" is the one outcome it must never produce.
+
+**The other three paths in this entry are untouched and stay as filed**:
+`rotate`'s accumulation is the one-transaction contract (a cost to state),
+`rebuild_fts`'s collect is justified by the DDL between its read and write,
+and the deep-`offset` hydration is O23's cap, still owed.
 
 ### O133 — CLOSED 2026-09-09: SIX comments, not four, and a gate that says what it cannot do
 
@@ -11655,6 +11739,131 @@ paragraphs contains. Detecting "this closed entry contains an open item" needs
 a semantic reading, which this file has repeatedly refused to fake with a
 scanner (O33, O47). The mechanism here is a heading, not a gate.
 
+
+
+
+### O134 — the four real degrade sites are compile-checked and never executed, because the battery carries no model weights
+
+**Filed 2026-09-09, lifted out of the body of O131** — an entry whose heading
+declares it done, where this was recorded
+as a residual, which is exactly the drift `## Open`'s own preamble describes
+and which the heading gate cannot catch (its evidence arm is satisfied by the
+word "gate", and that paragraph contains it). Filed as my own defect: O131 was
+finished in the same session that read the warning.
+
+O122 and O131 made every model role count the failures it used to swallow, and
+the gates cover the trait-to-surface plumbing — trait method, `VaultStats`
+field, four renderers, counter, alert — through TEST DOUBLES. The four sites
+that actually degrade live in `undercroft-embed-onnx` and `undercroft-embed-ort`
+and need model weights the battery does not carry, so they are compile-checked
+by `onnx-build`/`ort-build` and executed by nothing. A hostile reading is that
+the counting code itself is unexercised in CI, and the honest answer is that it
+is.
+
+**The decision, not yet taken: does a tiny fixture model belong in the tree?**
+A few-hundred-KB ONNX export that produces deterministic garbage would let a
+test drive a real `OnnxEmbedder`/`OnnxReranker`/`OnnxColbert` and fail its
+inference on purpose. Against it: repo weight, a binary blob in a
+source-available tree, and a second thing to keep current with tract's
+supported op set. For it: it is the only way these four sites are ever run, and
+this project's own rule is that a gap is a gap rather than a principled
+refusal. Alternatives worth pricing first — a hand-built ONNX graph emitted by
+the test itself (no blob, but it must stay within tract's ops), or a
+`#[cfg(test)]` seam that injects a failing inference into the real `embed`
+path without a model at all (cheapest, and it tests the counting rather than
+the runtime, which is what the residual is actually about).
+
+Gate, whichever is chosen: the real backend's `embed`/`score`/`encode_doc`
+degrades, the count moves, and the counterfactual removes the counting and
+fails by name — the thing the test doubles cannot do.
+
+### O135 — three reads the audit has never run, carried in a gitignored file
+
+**Filed 2026-09-09.** Three carry-ins have been recorded across sessions in
+`.handover/AUDIT_CONTINUATION.md` alone. That file is a governance surface and
+is deliberately NOT committed, so work recorded only there is invisible to a
+fresh clone, to `git status` and to every gate — while this file's own rule is
+that open threads are written down AS WORK, here.
+
+1. **The "neighbour does it" doc read over `tests/*.sh`, `deploy/` and
+   `website/src/*.md`.** The same read was run tree-wide over `crates/` (PR
+   #158) and returned ~145 confirmed doc corrections plus SEVEN code defects
+   wearing docs. Nothing has ever read these three trees in that shape.
+2. **A mint-site gate for `pub fn` items with zero non-test callers.** O115
+   did this for error variants and found `BundleError::Expired`; O126 found
+   `Vault::verify_chain` — public, uncalled, checking a stale anchor — by
+   reading rather than by a gate. The class has two instances and no gate.
+3. **A drift pass over the CLI's per-command FLAGS against MCP and `/v1`
+   parameters.** O128's class: `SURFACE_ABSENCES` partitions by COMMAND and is
+   structurally blind to a command that exists everywhere while missing a flag
+   on one surface.
+
+Each is a read, not a fix, so each may return nothing — which is a result and
+must be recorded as one rather than left as a carry-in that quietly never moves.
+
+
+### O136 — a vault whose export exceeds 256 MiB cannot be migrated or imported over `/v1` at all
+
+**Filed 2026-09-09 by the O113 analysis, which three of four agents found
+independently and none of which O113 names.** O111 gave every HTTP body one
+256 MiB ceiling (`undercroft_net::MAX_BODY_BYTES`) — correctly, and that entry
+is not in question. The consequence nobody traced is that the ceiling also
+governs the ENGINE'S OWN REPLY on the migration path: the orchestrator reads
+`GET /v1/vaults/{id}/export` through `read_body_bounded`
+(`orchestrator/src/engine.rs`), and `/v1 POST …/import` reads its body the same
+way.
+
+So a tenant whose export exceeds 256 MiB is **un-migratable and un-importable
+over `/v1`**, as a hard refusal rather than as memory pressure. O113's own
+measured vault exports 468 MB — 1.8x the ceiling — so the corpus this project
+used to argue that "none of the four is a crash" is a corpus the control plane
+cannot move. That reasoning does not survive the finding.
+
+Undocumented on every surface checked: `UPGRADING.md` records the 1.5.1
+REQUEST ceiling and says nothing about a reply or a migration, and
+`docs/MULTI_TENANCY.md` describes migration without a size bound.
+
+**Not a memory question, and streaming the export does not fix it** — the
+ceiling refuses before size matters. The options are a declared ceiling for
+this hop, a chunked/paged migration protocol, or a documented limit with a
+pre-flight refusal that names it. Gate: an orchestrator e2e migrating a tenant
+whose export exceeds the ceiling, which fails TODAY.
+
+### O137 — `--to` cannot stream under any manifest position, because the bundle is one AEAD over the whole payload
+
+**Filed 2026-09-09 by the O113 analysis (all four agents), as the boundary of
+what O113 could reach.** `bundle::encrypt_for` takes the plaintext as one
+slice and `seal()` runs a single XChaCha20-Poly1305 over it, so a sealed export
+buffers the whole payload no matter where the manifest sits or how the rows are
+produced. The same holds in reverse for `decrypt_with`. O113's fix shape reads
+as though it covered `export`; it covers the UNSEALED export only, and that
+narrowing is now stated there.
+
+**The shape, if it is taken: per-chunk authenticated framing** — age's STREAM
+construction (Hoang-Reyhanitabar-Rogaway), which this tree already has the
+instinct for: the at-rest AAD domains carry an index (`pqrow/{seq}/pq`,
+`{id}/tok`) precisely so one drawer's blobs cannot be swapped for another's,
+and a chunk counter in the nonce is that rule on the wire. It is the only
+design that lets export AND import stream while the attestation is still
+checked before the first write — a trailer manifest cannot, because the
+manifest here is an authorization gate (`attest`, the expiry check, the
+orchestrator's `level` cross-check) and RFC 9110 forbids trailer fields
+affecting authentication for the same reason.
+
+**It is a MAJOR and it owes C3.4's four properties**, which are the precedent
+for how this project versions a bundle: a fixed discriminator at the HEAD,
+cryptographically bound as AAD, a typed refusal to old readers, and no silent
+downgrade in either direction. Not to be smuggled in under a memory fix.
+
+Recorded against a bare trailer, so nobody re-proposes it: `split_payload`
+identifies a manifest only as the FIRST line, so under a trailer format
+**truncating the payload becomes indistinguishable from a legacy unattested
+export** — the digest, signature and expiry checks are all skipped and both
+importers accept the prefix. `BundleManifest.version` cannot save it: it is
+written at two sites and READ nowhere, which is O115's class one shape over (a
+struct field, not an enum variant).
+
+
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 
 Code comments and documents across this tree cite ids of the form
@@ -12202,52 +12411,6 @@ obvious replacement was `vault`, and `vault` already names a different
 concept — the isolation and crypto unit — so reusing it would have been worse
 than the status quo. That search is over: the ruling above is that no target
 word is needed, because no rename is owed.
-
-### O113 — three whole-corpus copies in RAM on export, one on rotate and on a deep page: data-sized, and still the corpus
-
-**Filed 2026-09-07 by the same sweep**, as the residue O109's fix left:
-every allocation is sized by its data now, and on four paths the data is the
-whole vault. `export` (`store/lib.rs:5377`, `tenant.rs:2756`) holds every
-drawer plus embedding as a `Vec`, then the NDJSON `String`, then the framed
-payload — three simultaneous copies, a fourth on the CLI for the AEAD
-output; `rotate` holds every re-sealed content and embedding until its one
-UPDATE loop (the one-transaction contract, so this one is a cost to state,
-not to remove); `rebuild_fts` holds every content blob (hmac-only only); and
-a deep `offset` hydrates `max(256, 32·(offset+limit))` candidates with their
-token vectors — after O109 that is a whole-corpus copy per request rather
-than a crash, ~13 KB per row at the 10⁶ measurement, selected by one JSON
-field from any authenticated caller.
-
-**Fix shape, when it is taken:** stream export as NDJSON rows straight to
-the writer (one row in RAM; the manifest's counts and digest are computed
-over the stream and written FIRST by buffering only the digest state, or
-LAST with the format bumped — a format decision); cap `offset` at the
-corpus, which O23 measured as legitimate, and state the per-row cost in the
-`/v1` reference so a caller sizing a page knows what a deep one buys. Gate:
-a peak-RSS assertion on `export` over a mined corpus at two sizes, linear in
-ROWS, not in copies. Not taken in this round because none of the four is a
-crash, all are bounded by the corpus, and the export one changes a file
-format's write order.
-
-**MEASURED 2026-09-07 (the argument replaced by a number, on the CLI
-export)** — four vaults mined from this repository, the export written to
-a file while the process's `VmHWM` was sampled every 20 ms:
-
-| corpus | drawers | export | `vault.db` | peak RSS | RSS ÷ export |
-|---|---|---|---|---|---|
-| empty vault | 0 | 381 B | 120 KB | 9.0 MB | (baseline) |
-| one file (`docs/AGENTS.md`) | 212 | 202 KB | 496 KB | 10.6 MB | — |
-| the crate sources | 2,988 | 3.5 MB | 5.1 MB | 23.0 MB | 6.7× |
-| `docs/research/` (gitignored working sets) | 361,009 | 468 MB | 818 MB | **1,258 MB** | **2.75×** |
-
-Linear in rows above the baseline — ~4.7 KB per drawer at 3k, ~3.5 KB at
-361k — and **2.7× the export's own size held at once at scale**, which is
-the whole-corpus `Vec<(Drawer, Vec<f32>)>` plus the serialized `String`
-the filing names (the CLI writes to stdout, so it carries one copy fewer
-than `/v1`'s framed payload). A 10⁶-drawer vault of this shape exports
-through ~3.5 GB of resident memory. The streaming shape above is what
-closes it; this entry stays open with the number rather than the argument.
-
 
 ### O6 — the repo social preview is still not uploaded
 GitHub exposes **no REST endpoint** for org avatars (`avatar_url` is read-only
