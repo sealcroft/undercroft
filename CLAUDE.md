@@ -638,8 +638,16 @@ Consequences that are binding, not advisory:
   columns — the kg source_fp/receipt_tag shape one level up, the receipt
   re-keyed on rotation while the fingerprint does not move; five verdicts
   via `verify_supersessions`; superseding NEVER deletes), whole-vault export/import (typed records: drawers + KG
-  entities/facts/tunnels; receipts re-key from the traveling fp at the
-  destination; the manifest carries embedder identity and chain head as
+  entities/facts/tunnels; a receipt is RE-DERIVED at the destination from the
+  drawer it just imported, never re-keyed from the traveling value — this line
+  said "receipts re-key from the traveling fp" until 2026-09-09 and that
+  contradicted the U12 paragraph two bullets down, which states the mechanism
+  correctly and which the code agrees with (`kg_import` calls
+  `keyed_content_fp` over the imported source; a keyed fingerprint cannot be
+  recomputed anywhere else, which is the whole reason U12 keys the DIGEST
+  rather than the content). One claim, two places, and the wrong one was the
+  summary — the shape this file records for headings, one bullet over;
+  the manifest carries embedder identity and chain head as
   provenance, never as state),
   write-path admission control (admission.rs + core admission.rs — C3.3
   phase 2: deterministic tier-1 detector, closed signal vocabulary,
@@ -1736,8 +1744,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (837 run,
-                                      # 4 #[ignore]d = 841 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (840 run,
+                                      # 4 #[ignore]d = 844 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote

@@ -55,6 +55,36 @@ was found by reading instead. Tests 824 → 825.
 
 Tests 828 → 834, e2e 483 → 484. `UPGRADING.md` carries O123, O124 and O127.
 
+### the export stops holding the corpus: 1,258 MB -> 480 MB on the same vault (O113)
+
+**ROADMAP O113 CLOSED 2026-09-09**, on a four-agent analysis run because the
+maintainer asked for the correct answer rather than the convenient one. Same
+corpus and instrument as the filing's own measurement — 361,009 drawers, a
+469 MB export — peak RSS falls from **1,258 MB to 480 MB**, i.e. 2.75x the
+export's own size to **1.02x**. On the small corpus, 23.0 -> 14.2 MB.
+
+**No format change.** `version` stays honestly 1 and every reader, shell suite
+and third party keeps working. The export now hands over one drawer at a time
+(`export_each`; the collect was never borrow-forced), frames the payload in
+place instead of allocating a second whole copy, pre-sizes both buffers, and
+hands `/v1`'s NDJSON response its bytes by value rather than copying them for
+the socket write.
+
+**Five of the entry's own claims were wrong**, including the one that named the
+cause: it blamed a `Vec<(Drawer, Vec<f32>)>` that exists only on `/v1`, while
+the 1,258 MB figure was measured on the CLI, which carries no embeddings. The
+largest actual term — a full second copy inside `frame_payload` — went unnamed,
+and the fix the entry preferred is not implementable as written.
+
+Three shapes were rejected on correctness: a temp file (plaintext at rest for a
+sealed vault, and a filesystem write under `--read-only` that no gate can see),
+two passes (no transaction, so two WAL snapshots turn an ordinary concurrent
+write into a false 409 integrity verdict), and a trailer manifest (the manifest
+is an authorization gate, and a bare trailer makes truncation indistinguishable
+from a legacy unattested export). O136 and O137 filed for what remains: a
+468 MB vault is un-migratable over `/v1` today, and `--to` cannot stream under
+any manifest position because the bundle is one AEAD over the whole payload.
+
 ### six comments a blind substitution corrupted, and a gate that states its own limits (O133)
 
 **ROADMAP O133 FILED AND CLOSED 2026-09-09.** The commit this project's guide

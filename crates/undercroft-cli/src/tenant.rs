@@ -330,7 +330,15 @@ impl Tenancy {
         undercroft_obs::http_request(route_label, status, start.elapsed());
         match reply {
             Ok((code, Body::Json(v))) => respond(req, code, &v.to_string(), "application/json"),
-            Ok((code, Body::Ndjson(s))) => respond(req, code, &s, "application/x-ndjson"),
+            // ROADMAP O113: NDJSON is the whole-vault export, so this is the
+            // one body worth handing over by VALUE. `respond` takes `&str` and
+            // `Response::from_string` allocates a fresh copy, which stays live
+            // beside `s` for the entire socket write — a second whole-corpus
+            // copy on the surface that already carries the expensive export
+            // (drawers plus embeddings plus base64 token artifacts). Every
+            // other arm keeps `respond`: their bodies are small and the
+            // borrow reads better.
+            Ok((code, Body::Ndjson(s))) => respond_owned(req, code, s, "application/x-ndjson"),
             Err(e) => {
                 // `class` is additive and present only for the integrity
                 // family. Status alone cannot carry it: 409 is also how a
@@ -2784,23 +2792,47 @@ impl Tenancy {
     fn export(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
         self.assert_or_401(id, req, now)?;
         let store = self.store_for(id)?;
-        let records = store.export_all_with_vectors().map_err(store_err)?;
         // JSONL: one {drawer, vector[, tok]} object per line. `tok` is the
         // drawer's late-interaction token matrix as a portable artifact
         // (model name + base64 of the packed plaintext) — the expensive
         // derived data, carried so an import restores it by copy instead of
         // re-running one transformer forward per drawer.
-        let mut out = String::new();
+        //
+        // ROADMAP O113: streamed a drawer at a time, and pre-sized. This is
+        // the EXPENSIVE export path, not the one the filing measured — the CLI
+        // carries no embeddings, while at dim 384 the vectors alone are ~1.5 KB
+        // per drawer here, on top of the content and the base64 token
+        // artifacts. The whole-corpus `Vec<(Drawer, Vec<f32>)>` this replaces
+        // is the one the entry names, and it lives only on this surface.
+        let mut out = String::with_capacity(store.export_size_hint());
         let mut counts = undercroft_vault::bundle::ManifestCounts::default();
-        for (drawer, vector) in records {
-            let mut line = json!({ "drawer": drawer, "vector": vector });
-            if let Some((model, packed)) = store.token_artifact(&drawer.id).map_err(store_err)? {
-                line["tok"] = json!({ "model": model, "b64": b64encode(&packed) });
-            }
-            out.push_str(&line.to_string());
-            out.push('\n');
-            counts.drawers += 1;
-        }
+        let mut tok_err = None;
+        store
+            .export_each_with_vectors(|drawer, vector| {
+                let mut line = json!({ "drawer": drawer, "vector": vector });
+                match store.token_artifact(&drawer.id) {
+                    Ok(Some((model, packed))) => {
+                        line["tok"] = json!({ "model": model, "b64": b64encode(&packed) });
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        // Reported through the same `store_err` mapping as
+                        // before rather than collapsed into the walk's own
+                        // error type, which would relabel a token-store fault
+                        // as a corrupt drawer row.
+                        tok_err = Some(e);
+                        return Err(undercroft_store::StoreError::ExternalVault);
+                    }
+                }
+                out.push_str(&line.to_string());
+                out.push('\n');
+                counts.drawers += 1;
+                Ok(())
+            })
+            .map_err(|e| match tok_err.take() {
+                Some(inner) => store_err(inner),
+                None => store_err(e),
+            })?;
         // The meta-rows gap, closed on this surface too: entities, facts
         // (receipts and authority tier travel; receipt tags re-key at the
         // destination) and tunnels ride the same NDJSON stream.
@@ -2846,7 +2878,9 @@ impl Tenancy {
             payload_sha256: undercroft_vault::bundle::payload_digest(out.as_bytes()),
             sig: None,
         };
-        let framed = undercroft_vault::bundle::frame_payload(&manifest, out.as_bytes());
+        // O113: framed IN PLACE, so the payload exists once rather than twice.
+        let mut framed = std::mem::take(&mut out).into_bytes();
+        undercroft_vault::bundle::frame_payload_into(&manifest, &mut framed);
         let framed = String::from_utf8(framed)
             .map_err(|e| RestError::new(500, format!("payload not UTF-8: {e}")))?;
         // Every whole-vault egress leaves a chain record binding the
@@ -3640,6 +3674,30 @@ pub(crate) fn respond_err(req: Request, e: RestError) {
         None => json!({ "error": e.message }),
     };
     respond(req, e.code, &payload.to_string(), "application/json")
+}
+
+/// [`respond`] for a body the caller can give up (ROADMAP O113).
+///
+/// `Response::from_data` takes the buffer by value, so a whole-vault export is
+/// written from the bytes that already exist instead of from a copy held
+/// beside them until the socket write finishes. Byte-identical response; the
+/// only difference is who owns the bytes.
+///
+/// **It deliberately does NOT carry `respond`'s 401 challenge (O64), and that
+/// is a reachability argument rather than an omission**: this is called from
+/// one arm, `Ok((code, Body::Ndjson(..)))`, and the single producer of that
+/// body answers 200. Every refusal goes through `respond_err` → `respond`.
+/// Copying the challenge here would be a second implementation of one
+/// decision, which is the shape this tree removes rather than spreads — so if
+/// a future Ok-arm can answer 401 with an NDJSON body, the fix is to route it
+/// through `respond`, not to duplicate the header here.
+fn respond_owned(req: Request, code: u16, body: String, content_type: &str) {
+    let header = Header::from_bytes(&b"Content-Type"[..], content_type.as_bytes())
+        .expect("valid content-type header");
+    let resp = Response::from_data(body.into_bytes())
+        .with_status_code(code)
+        .with_header(header);
+    let _ = req.respond(resp);
 }
 
 fn respond(req: Request, code: u16, body: &str, content_type: &str) {

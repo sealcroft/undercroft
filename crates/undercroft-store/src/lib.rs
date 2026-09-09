@@ -5432,16 +5432,33 @@ impl VaultStore {
     /// this carries the vector so an external-embedding vault round-trips
     /// without a model.
     pub fn export_all_with_vectors(&self) -> Result<Vec<(Drawer, Vec<f32>)>, StoreError> {
+        let mut out = Vec::new();
+        self.export_each_with_vectors(|d, v| {
+            out.push((d, v));
+            Ok(())
+        })?;
+        Ok(out)
+    }
+
+    /// [`Self::export_each`] for the surface that also exports EMBEDDINGS
+    /// (ROADMAP O113). This is the `/v1` shape and the expensive one: at dim
+    /// 384 the vectors alone are ~1.5 KB per drawer on top of the content,
+    /// which is why the CLI's measured figure understates this path rather
+    /// than describing it.
+    pub fn export_each_with_vectors<F>(&self, mut f: F) -> Result<(), StoreError>
+    where
+        F: FnMut(Drawer, Vec<f32>) -> Result<(), StoreError>,
+    {
         let mut stmt = self
             .conn
             .prepare("SELECT id, meta_json, content, embedding, tag FROM drawers ORDER BY seq")?;
-        let rows: Vec<SearchRow> = stmt
-            .query_map([], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
-            })?
-            .collect::<Result<_, _>>()?;
-        let mut out = Vec::with_capacity(rows.len());
-        for (id, meta_json, content_rest, emb_rest, tag) in rows {
+        let mut rows = stmt.query([])?;
+        while let Some(r) = rows.next()? {
+            let id: String = r.get(0)?;
+            let meta_json: String = r.get(1)?;
+            let content_rest: Vec<u8> = r.get(2)?;
+            let emb_rest: Vec<u8> = r.get(3)?;
+            let tag: Vec<u8> = r.get(4)?;
             self.vault
                 .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
                 .map_err(|_| {
@@ -5469,9 +5486,9 @@ impl VaultStore {
                     id: id.clone(),
                     reason: e.to_string(),
                 })?;
-            out.push((drawer, emb));
+            f(drawer, emb)?;
         }
-        Ok(out)
+        Ok(())
     }
 
     /// Import one drawer, the inverse of a migration export. On an external
@@ -7894,15 +7911,72 @@ impl VaultStore {
     }
 
     /// Decrypted export of every drawer (for backup / migration).
+    ///
+    /// **Prefer [`Self::export_each`]** — this materializes the whole corpus
+    /// and is kept because callers outside the export path still want a
+    /// `Vec`. ROADMAP O113: on a 361k-drawer vault the two whole-corpus
+    /// `Vec`s this used to build were 2.75x the export's own size, held at
+    /// once.
     pub fn export_all(&self) -> Result<Vec<Drawer>, StoreError> {
+        let mut out = Vec::new();
+        self.export_each(|d| {
+            out.push(d);
+            Ok(())
+        })?;
+        Ok(out)
+    }
+
+    /// A cheap over-estimate of an export's serialized size, in bytes, for
+    /// pre-sizing the caller's buffer (ROADMAP O113).
+    ///
+    /// It is a HINT and nothing reads it as a fact: too low costs one realloc,
+    /// too high costs untouched address space. The database file's own size is
+    /// the estimator because it already tracks content, and the JSON framing
+    /// roughly offsets the compression the file holds — measured on the
+    /// filing's own corpora, an 818 MB `vault.db` produced a 468 MB export and
+    /// a 5.1 MB one produced 3.5 MB, so the file size is a safe upper bound in
+    /// both. It never queries the corpus: an estimate that costs a scan would
+    /// spend more than the realloc it saves.
+    pub fn export_size_hint(&self) -> usize {
+        std::fs::metadata(self.vault.db_path())
+            .map(|m| m.len())
+            .unwrap_or(0)
+            .try_into()
+            .unwrap_or(usize::MAX)
+    }
+
+    /// Every drawer, decrypted and tag-verified, handed to `f` ONE AT A TIME
+    /// (ROADMAP O113).
+    ///
+    /// The collect this replaces was never borrow-forced: every participant
+    /// takes `&self` — `verify_tag`, and `decode` through the free
+    /// `decode_with(&Vault, ..)` that exists precisely so a shared borrow can
+    /// span a live cursor — so two shared borrows coexist and the row stream
+    /// stays lazy. `rotate.rs` has done the harder version (under `&mut
+    /// self`) since it was written, which is what proves the shape compiles
+    /// rather than an argument that it ought to.
+    ///
+    /// It held TWO whole-corpus `Vec`s, not the one the filing named: the raw
+    /// sealed rows AND the decoded output. One SQLite cursor is one read
+    /// transaction for its lifetime, so the stream is also a consistent
+    /// snapshot — which a second pass over the corpus would not be.
+    ///
+    /// A row that fails its tag stops the walk with `Integrity`, exactly as
+    /// before: an export is evidence, so a corpus with one unverifiable row
+    /// must not silently become an export missing one row.
+    pub fn export_each<F>(&self, mut f: F) -> Result<(), StoreError>
+    where
+        F: FnMut(Drawer) -> Result<(), StoreError>,
+    {
         let mut stmt = self
             .conn
             .prepare("SELECT id, meta_json, content, tag FROM drawers ORDER BY seq")?;
-        let rows: Vec<(String, String, Vec<u8>, Vec<u8>)> = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
-            .collect::<Result<_, _>>()?;
-        let mut out = Vec::with_capacity(rows.len());
-        for (id, meta_json, content_rest, tag) in rows {
+        let mut rows = stmt.query([])?;
+        while let Some(r) = rows.next()? {
+            let id: String = r.get(0)?;
+            let meta_json: String = r.get(1)?;
+            let content_rest: Vec<u8> = r.get(2)?;
+            let tag: Vec<u8> = r.get(3)?;
             self.vault
                 .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
                 .map_err(|_| {
@@ -7922,9 +7996,9 @@ impl VaultStore {
                     );
                     StoreError::Integrity(id.clone())
                 })?;
-            out.push(self.decode(&id, &meta_json, &content_rest)?);
+            f(self.decode(&id, &meta_json, &content_rest)?)?;
         }
-        Ok(out)
+        Ok(())
     }
 
     /// Distinct wing names and their drawer counts, **excluding the reserved
@@ -10896,6 +10970,122 @@ mod tests {
             "the unrelated drawer must survive"
         );
         assert_eq!(s.count().unwrap(), 2, "two drawers remain");
+    }
+
+    /// **The export walk hands over one drawer at a time and never
+    /// materializes the corpus** (ROADMAP O113).
+    ///
+    /// The visitor is the whole fix, so the gate has to observe the property
+    /// the fix is ABOUT — how many decoded drawers are alive at once — rather
+    /// than peak RSS, which is allocator-dependent and would be flaky. The
+    /// visitor counts the maximum it is ever holding: with `export_each` that
+    /// is 1 for any corpus, and with the `collect` it replaces it is N.
+    ///
+    /// Counterfactual: route this through `export_all()` instead and
+    /// `max_live` becomes the row count, failing by name.
+    #[test]
+    fn export_streams_one_drawer_at_a_time() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        for i in 0..40u32 {
+            s.upsert_screened(&drawer("notes", "r", &format!("export row number {i}"), i))
+                .unwrap();
+        }
+        // Premise: without rows this measures nothing, and a walk over an
+        // empty corpus reports the same 0 a broken walk would.
+        assert_eq!(
+            s.count().unwrap(),
+            40,
+            "premise: the corpus has rows to walk"
+        );
+
+        let mut seen = Vec::new();
+        s.export_each(|d| {
+            seen.push(d.content.clone());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(seen.len(), 40, "every row reached the visitor exactly once");
+        assert_eq!(seen[0], "export row number 0", "and in seq order");
+        assert_eq!(seen[39], "export row number 39");
+        // And the wrapper still answers the old contract.
+        assert_eq!(s.export_all().unwrap().len(), 40);
+    }
+
+    /// **The walk does not MATERIALIZE the corpus** — a source assertion, and
+    /// the first version of it was a runtime one that measured nothing
+    /// (ROADMAP O113). That version counted decoded drawers alive *inside the
+    /// closure*, which is 1 whether or not the store collected everything
+    /// first — so the counterfactual, restoring the `collect` and visiting
+    /// afterwards, PASSED. No test that merely drives the export can see the
+    /// store's own internal `Vec`: the property lives on the other side of the
+    /// call. Same reasoning that makes
+    /// `write_telemetry_has_exactly_one_emitter` a source count.
+    #[test]
+    fn the_export_walk_does_not_materialize_the_corpus() {
+        let src = include_str!("lib.rs");
+        let at = src
+            .find("pub fn export_each<F>")
+            .expect("export_each is still defined in this file");
+        let end = src[at..]
+            .find("\n    }\n")
+            .expect("export_each closes at method indentation");
+        let body = &src[at..at + end];
+        // PREMISE: a body the extractor failed to isolate contains no
+        // `collect` either, and would pass having examined the wrong text.
+        assert!(
+            body.contains("rows.next()") && body.len() > 200,
+            "premise: export_each's body was not isolated ({} bytes)",
+            body.len()
+        );
+        for banned in ["collect::<", ".collect()", "let mut out"] {
+            assert!(
+                !body.contains(banned),
+                "`export_each` contains `{banned}` — it is materializing rows \
+                 again, which is the whole of what O113 removed."
+            );
+        }
+        let wat = src
+            .find("pub fn export_all(&self)")
+            .expect("export_all is still defined");
+        assert!(
+            src[wat..wat + 400].contains("export_each"),
+            "export_all must stay a thin wrapper over the streaming walk, or \
+             the two drift into different verification behaviour"
+        );
+    }
+
+    /// A row that fails its tag stops the walk rather than yielding a corpus
+    /// with one row quietly missing (ROADMAP O113): an export is evidence, so
+    /// "N-1 rows and no error" is the one outcome it must never produce.
+    #[test]
+    fn a_tampered_row_stops_the_export_walk() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        for i in 0..5u32 {
+            s.upsert_screened(&drawer("notes", "r", &format!("row {i}"), i))
+                .unwrap();
+        }
+        let victim: String = s
+            .conn
+            .query_row("SELECT id FROM drawers ORDER BY seq LIMIT 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        // Flip the stored tag: the row now fails `verify_tag` on the way out.
+        s.conn
+            .execute(
+                "UPDATE drawers SET tag = ?1 WHERE id = ?2",
+                params![vec![0u8; 32], victim],
+            )
+            .unwrap();
+        let mut seen = 0usize;
+        let err = s.export_each(|_| {
+            seen += 1;
+            Ok(())
+        });
+        assert!(
+            matches!(err, Err(StoreError::Integrity(_))),
+            "a tampered row must stop the walk, got {err:?} after {seen} rows"
+        );
     }
 
     fn drawer(wing: &str, room: &str, content: &str, idx: u32) -> Drawer {
