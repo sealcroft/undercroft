@@ -30,7 +30,7 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use undercroft_core::Drawer;
 
-use crate::{chain_append, Namespace, PalaceStore, StoreError};
+use crate::{chain_append, Namespace, StoreError, VaultStore};
 
 /// The reserved wing flagged writes land in. Reserved by convention and
 /// guarded at the save surfaces: a caller cannot aim a save here
@@ -65,7 +65,7 @@ fn now_rfc3339() -> String {
 /// validates `meta.wing`/`meta.room` at the write choke point, which is where
 /// CLAUDE.md puts it so no write path can forget — but the admission screen
 /// runs BEFORE that, and the screen is the step that **rewrites the fields
-/// validation reads**: [`PalaceStore::admission_divert`] moves the declared
+/// validation reads**: [`VaultStore::admission_divert`] moves the declared
 /// wing into `intended_wing` and writes the reserved constant into
 /// `meta.wing`. So a write declaring an invalid wing was not refused at the
 /// door; it was screened, and if the content tripped the detector it was
@@ -185,7 +185,7 @@ pub(crate) fn save_event(drawer: &Drawer) -> SaveEvent<'_> {
     }
 }
 
-impl PalaceStore {
+impl VaultStore {
     /// Whether admission screening diverts flagged writes on this store.
     pub fn admission_on(&self) -> bool {
         self.admission_quarantine

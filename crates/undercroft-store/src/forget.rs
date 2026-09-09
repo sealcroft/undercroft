@@ -8,7 +8,7 @@
 //! (`next = HMAC(mac_key, prev ‖ tag)`), so replaying heads requires the
 //! vault key. Two verification postures follow, and both are real:
 //!
-//! * **vault-verifiable** — [`PalaceStore::verify_forget_attestation`]
+//! * **vault-verifiable** — [`VaultStore::verify_forget_attestation`]
 //!   replays the recorded segment with the key in hand and checks four
 //!   things: the heads chain exactly through the recorded tombstones;
 //!   every record IS a tombstone for a named drawer (nothing else
@@ -42,7 +42,7 @@ use rusqlite::params;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
-use crate::{PalaceStore, StoreError};
+use crate::{StoreError, VaultStore};
 
 /// Whether this destruction also issued a delete to a remote mirror.
 ///
@@ -63,7 +63,7 @@ pub enum MirrorDelete {
 /// What this vault can say about an attestation it is handed.
 ///
 /// **Three outcomes, because two of them were one.** The keyed replay needs
-/// the MAC key that MADE the tombstones, and [`PalaceStore::rotate_keys`]
+/// the MAC key that MADE the tombstones, and [`VaultStore::rotate_keys`]
 /// destroys that key — that is what a rotation IS. So after any rotation
 /// every tombstone tag failed `verify_tag` and the recorded heads no longer
 /// corresponded to the re-keyed chain, and a genuine attestation was reported
@@ -256,7 +256,7 @@ impl ForgetAttestation {
     }
 }
 
-impl PalaceStore {
+impl VaultStore {
     /// Destroy the named drawers and attest it. Every id must exist —
     /// attesting the destruction of what was never there is a claim this
     /// store refuses to mint.
@@ -853,7 +853,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("r", SecurityLevel::Sealed).unwrap();
-        let mut store = PalaceStore::open(vault).unwrap();
+        let mut store = VaultStore::open(vault).unwrap();
 
         // THREE destroyed together, so the attested interval has a middle
         // to omit, and one kept so "nothing else changed" has something to
@@ -1001,7 +1001,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("s", SecurityLevel::Sealed).unwrap();
-        let mut store = PalaceStore::open(vault).unwrap();
+        let mut store = VaultStore::open(vault).unwrap();
 
         let gone = drawer("a note the subject asked us to erase", 0);
         let keep = drawer("an unrelated note that must survive", 1);

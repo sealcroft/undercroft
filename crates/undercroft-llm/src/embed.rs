@@ -285,7 +285,7 @@ impl Embedder for HttpEmbedder {
         }
         self.failures.set(self.failures.get() + 1);
         // ROADMAP O122: the durable signal beside the live one — the count
-        // reaches `PalaceStats.embed_failures` through the trait method below
+        // reaches `VaultStats.embed_failures` through the trait method below
         // and `/metrics` through this counter, so a served process whose
         // stats nobody polls still has an alert to fire.
         undercroft_obs::embed_failed("http");
@@ -391,7 +391,7 @@ mod tests {
         assert_eq!(v, vec![0.0, 0.0, 0.0], "zero vector of the right shape");
         assert_eq!(dead.failures(), 1, "and the failure is counted, not hidden");
         // ROADMAP O122: and the count leaves through the trait, which is the
-        // door `PalaceStats` reads — the inherent method above was the ONLY
+        // door `VaultStats` reads — the inherent method above was the ONLY
         // reader for two releases, and it was read by these tests alone.
         assert_eq!(
             Embedder::embed_failures(&dead),

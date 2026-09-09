@@ -1,4 +1,4 @@
-# Undercroft auto-save daemon — sweeps agent transcripts into the palace.
+# Undercroft auto-save daemon — sweeps agent transcripts into a vault.
 #
 #   sudo cp deploy/undercroft-daemon.service /etc/systemd/system/
 #   systemctl --user daemon-reload && systemctl --user enable --now undercroft-daemon

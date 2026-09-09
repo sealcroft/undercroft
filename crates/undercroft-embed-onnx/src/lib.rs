@@ -45,7 +45,7 @@ pub struct OnnxEmbedder {
 
 impl OnnxEmbedder {
     /// Load a sentence-transformer ONNX export + its `tokenizer.json`.
-    /// `model_name` is the identity recorded in the palace (pick something
+    /// `model_name` is the identity recorded in the vault (pick something
     /// stable like `"all-MiniLM-L6-v2"`).
     pub fn load(
         model_path: &std::path::Path,

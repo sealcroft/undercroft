@@ -21,7 +21,7 @@
 //! * wing/room labels ride along as filterable payload, matching the
 //!   visibility they already have inside a sealed vault;
 //! * queries return candidate ids only — the caller re-loads records from
-//!   the local palace, where HMAC verification and decryption happen. A
+//!   the local vault, where HMAC verification and decryption happen. A
 //!   lying index can hide results, but cannot forge or alter them.
 #![warn(missing_docs)]
 

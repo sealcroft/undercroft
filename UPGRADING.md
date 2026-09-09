@@ -69,6 +69,22 @@ so rather than implying it checked them.
 
 ## 1.5.2 (unreleased)
 
+### the empty-vault message says "Vault", not "Palace" (O112)
+
+**Who is affected:** anything that greps CLI or MCP output for the literal
+`Palace is empty`. `undercroft wake-up` and `undercroft index` now print
+`Vault is empty …`, MCP's `empty_reason` returns `the vault is empty`, and the
+trust-floor branch says `the vault is NOT empty` on all three surfaces — where
+CLI and MCP previously disagreed with `/v1` and MCP disagreed with itself.
+
+**Why:** the word `palace` denotes the whole INSTALLATION (a palace contains
+vaults); using it for one vault was the defect O7 fixed on the database
+filename, surviving in strings. ROADMAP O112.
+
+**What to do:** match on `is empty` rather than on the noun, or on the `/v1`
+JSON, which already said `the vault is empty` and has not changed. No exit
+code, route, JSON key or tool name moves.
+
 ### an embedding dimension 2 modulo 4 is refused; `confidence` outside 0..1 is 400; the orchestrator's `created_at` is RFC 3339
 
 **Who is affected, in turn:** (1) a deployment whose served or external

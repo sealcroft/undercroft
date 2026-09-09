@@ -28,7 +28,7 @@ use rusqlite::{params, OptionalExtension};
 use undercroft_core::late::{dequantize_tokens, maxsim, quantize_tokens, LateInteraction};
 
 use crate::pq::ProductQuantizer;
-use crate::{PalaceStore, SearchHit, StoreError, CODEBOOK_TOK};
+use crate::{SearchHit, StoreError, VaultStore, CODEBOOK_TOK};
 
 /// Stored-matrix count at which the token codebook trains (v2 packing).
 /// Below it, int8 (v1) is already small and PQ would train on too few
@@ -90,7 +90,7 @@ fn tok_row_ident(id: &str, row: u32) -> Vec<u8> {
     out
 }
 
-impl PalaceStore {
+impl VaultStore {
     /// The token codebook's training draw over the flattened `(drawer, row)`
     /// walk: keyed, stratified, and **capped per source** — the quota
     /// grouping by the DRAWER's wing and agent claim, because that is where
@@ -526,7 +526,7 @@ impl PalaceStore {
     }
 
     /// Backfill token matrices for up to `limit` drawers that lack one under
-    /// the attached encoder's model — the recovery path for palaces ingested
+    /// the attached encoder's model — the recovery path for vaults ingested
     /// before the encoder was attached, or restored from artifact-less
     /// bundles. Each pass is bounded so callers (CLI `repair`, a daemon
     /// tick) can spread the transformer forwards over time; searches served
@@ -722,14 +722,14 @@ mod tests {
         // matrix whose shape disagrees with its own header.
         assert!(super::unpack_v2(&super::pack_v2(width + 1, 1, &codes), code_len, width).is_none());
     }
-    use crate::PalaceStore;
+    use crate::VaultStore;
     use undercroft_vault::{SecurityLevel, VaultManager};
 
-    fn store() -> (tempfile::TempDir, PalaceStore) {
+    fn store() -> (tempfile::TempDir, VaultStore) {
         let dir = tempfile::TempDir::new().unwrap();
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", SecurityLevel::HmacOnly).unwrap();
-        (dir, PalaceStore::open(vault).unwrap())
+        (dir, VaultStore::open(vault).unwrap())
     }
 
     /// One wing floods the corpus; a second holds a handful of drawers. The

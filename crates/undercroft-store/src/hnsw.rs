@@ -4,7 +4,7 @@
 //! embeddings, used to cut the candidate set to the vector top-K before the
 //! usual verify + hybrid-fusion pipeline — the semantic analogue of the FTS5
 //! BM25 prefilter. It replaces the O(n) full cosine scan with an O(log n)
-//! graph walk for large palaces.
+//! graph walk for large vaults.
 //!
 //! **Invariant:** this index lives in RAM only and is never persisted. It is
 //! built on demand from embeddings that are decrypted transiently during a

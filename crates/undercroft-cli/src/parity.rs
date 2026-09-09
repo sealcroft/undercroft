@@ -297,7 +297,7 @@ pub const OPERATOR_ONLY: &[&str] = &[
     //
     // `export` moves the whole corpus out of the vault in the clear. It is
     // the egress act — chain-audited on every surface that has it — and an
-    // agent that could call it could exfiltrate a palace in one tool call,
+    // agent that could call it could exfiltrate a vault in one tool call,
     // which no amount of per-drawer fencing would bound.
     "export",
     // `import` writes records the agent did not compose, carrying
@@ -690,14 +690,14 @@ pub const HAND_PROJECTED: &[(&str, &str, &str, &str)] = &[
         "undercroft-cli/src/ui.html",
         "async function runVerify()",
     ),
-    // `PalaceStats` is the struct CLAUDE.md names as the FIRST one this
+    // `VaultStats` is the struct CLAUDE.md names as the FIRST one this
     // class of drift bit, and it was the one struct missing from this list
     // — so the gate written after it went straight past it. Added with two
     // live omissions on the CLI (`chain_head`, `read_only`), which is what
     // an inventory nobody counts against looks like from the inside.
     (
         "undercroft-store/src/manage.rs",
-        "PalaceStats",
+        "VaultStats",
         "undercroft-cli/src/main.rs",
         "Command::Stats",
     ),
@@ -708,7 +708,7 @@ pub const HAND_PROJECTED: &[(&str, &str, &str, &str)] = &[
     // enough.
     (
         "undercroft-store/src/manage.rs",
-        "PalaceStats",
+        "VaultStats",
         "undercroft-cli/src/tenant.rs",
         "fn stats(&mut self",
     ),
@@ -726,7 +726,7 @@ pub const HAND_PROJECTED: &[(&str, &str, &str, &str)] = &[
     // file, same shape: which is the argument for the row, made by the row.
     (
         "undercroft-store/src/manage.rs",
-        "PalaceStats",
+        "VaultStats",
         "undercroft-cli/src/ui.html",
         "async function loadOverview()",
     ),
@@ -1337,14 +1337,14 @@ mod tests {
                 window.len()
             );
             // **And the field must be ACCESSED, not merely spelled.** For 8
-            // of 12 `PalaceStats` fields the printed label equals the field
+            // of 12 `VaultStats` fields the printed label equals the field
             // name, so substring containment could not tell "prints the
             // value" from "prints the word" — a projection that dropped the
             // value and kept the label passed. `.field` is what a
             // projection has to write to read one.
             // **A field ACCESS, and neither a method call nor a longer
             // name.** Bare `.{field}` containment is receiver-blind and
-            // prefix-blind: `PalaceStats.level` was reported satisfied by
+            // prefix-blind: `VaultStats.level` was reported satisfied by
             // `/v1`'s `vault.level()` — a different object's METHOD, while
             // the struct field was never read — and `.tag` would match
             // `.tags`, `.at` would match `.attestation`, `.kg` would match

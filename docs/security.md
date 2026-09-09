@@ -105,7 +105,7 @@ stateDiagram-v2
   hybrid recipient never gets a v1 bundle, and an X25519-only secret
   handed a v2 bundle gets a typed refusal, pinned by test. A bundle alone
   reveals nothing without the identity key, and the identity key is
-  unrelated to the palace's own at-rest keys. `import --identity
+  unrelated to the vault's own at-rest keys. `import --identity
   <keyfile>` opens it. Full posture and compatibility matrix: [PQ.md](https://sealcroft.com/undercroft/docs/pq.html).
 - **Signed manifests** beside the recipient flow: encryption says who may
   *read* a bundle, an Ed25519 sender attestation (`bundle sign-keygen`,
