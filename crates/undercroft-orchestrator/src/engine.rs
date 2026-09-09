@@ -131,6 +131,50 @@ fn agent(base: &str) -> Result<ureq::Agent, String> {
     .map_err(|e| e.to_string())
 }
 
+/// Why a call to an engine did not produce a response to relay (ROADMAP
+/// O136).
+///
+/// It exists for ONE distinction the control plane could not previously
+/// make: a reply refused for SIZE is not a transport fault and not an engine
+/// refusal — it is this hop's own ceiling, and the operator's remedy is
+/// different. Everything else keeps its old shape, and `Display` reproduces
+/// the previous strings verbatim, so no message a user has ever seen moves.
+///
+/// `From<EngineError> for String` keeps every existing `?` site compiling
+/// against `Result<_, String>`: the type is here to be MATCHED where the
+/// distinction matters, not to be threaded through call sites that do not
+/// care.
+#[derive(Debug, thiserror::Error)]
+pub enum EngineError {
+    /// The transport policy refused before a byte moved (TLS/loopback, pin).
+    #[error("{0}")]
+    Refused(String),
+    /// The engine could not be reached.
+    #[error("engine unreachable: {0}")]
+    Unreachable(String),
+    /// The engine answered, and the answer is larger than THIS HOP will read
+    /// (`undercroft_net::MAX_BODY_BYTES`). `declared` is the exact
+    /// `Content-Length` when the refusal came from the declaration, which is
+    /// the case that matters: it is the vault's real export size, and an
+    /// operator needs the number rather than a ceiling.
+    #[error("engine response read: {0}")]
+    BodyTooLarge(String, Option<usize>),
+    /// The reply failed to read for any other reason.
+    #[error("engine response read: {0}")]
+    Body(String),
+    /// The engine answered with a status this call's contract does not
+    /// accept. `Display` is the message verbatim, so nothing an operator has
+    /// seen before moves.
+    #[error("{0}")]
+    Status(String),
+}
+
+impl From<EngineError> for String {
+    fn from(e: EngineError) -> String {
+        e.to_string()
+    }
+}
+
 /// Send `method` + `body` to `{url}/v1/vaults/{vault}/{subpath}` (or the
 /// vault root when `subpath` is empty) with bearer + assertion attached.
 /// Engine error statuses are *relayed*, not treated as transport failures.
@@ -150,7 +194,7 @@ pub fn vault_request(
     query: &str,
     content_type: &str,
     body: &[u8],
-) -> Result<EngineResponse, String> {
+) -> Result<EngineResponse, EngineError> {
     let path = if subpath.is_empty() {
         format!("{}/v1/vaults/{vault}", creds.url)
     } else {
@@ -170,7 +214,7 @@ pub fn vault_request(
         Ok(a) => a,
         Err(e) => {
             undercroft_obs::orch_engine_call("refused");
-            return Err(e);
+            return Err(EngineError::Refused(e));
         }
     }
     .request(method, &path)
@@ -191,7 +235,7 @@ pub fn vault_request(
         Err(ureq::Error::Status(_, r)) => r,
         Err(ureq::Error::Transport(t)) => {
             undercroft_obs::orch_engine_call("unreachable");
-            return Err(format!("engine unreachable: {t}"));
+            return Err(EngineError::Unreachable(t.to_string()));
         }
     };
     let status = resp.status();
@@ -208,8 +252,15 @@ pub fn vault_request(
     let declared = resp
         .header("Content-Length")
         .and_then(|v| v.trim().parse::<usize>().ok());
-    let body = undercroft_net::read_body_bounded(resp.into_reader(), declared)
-        .map_err(|e| format!("engine response read: {e}"))?;
+    // O136: the SIZE refusal keeps its declared length, because that number
+    // is the vault's real export size and is what an operator needs.
+    let body =
+        undercroft_net::read_body_bounded(resp.into_reader(), declared).map_err(|e| match e {
+            undercroft_net::BodyError::TooLarge { declared } => {
+                EngineError::BodyTooLarge(e.to_string(), declared)
+            }
+            other => EngineError::Body(other.to_string()),
+        })?;
     Ok(EngineResponse {
         status,
         content_type,
@@ -249,21 +300,24 @@ pub fn delete_vault(creds: &InstanceCreds, vault: &str) -> Result<(), String> {
             r.status,
             String::from_utf8_lossy(&r.body)
         )),
-        Err(e) => Err(e),
+        Err(e) => Err(e.into()),
     }
 }
 
 /// Export a vault as NDJSON (v0.18 artifact-carrying format).
-pub fn export_vault(creds: &InstanceCreds, vault: &str) -> Result<String, String> {
+/// The whole-vault export, TYPED (ROADMAP O136) — the one caller that needs
+/// to tell a size refusal from every other failure, because a migration's
+/// remedy for it is different and no retry helps.
+pub fn export_vault(creds: &InstanceCreds, vault: &str) -> Result<String, EngineError> {
     let r = vault_request(creds, vault, "GET", "export", "", "application/json", &[])?;
     if r.status != 200 {
-        return Err(format!(
+        return Err(EngineError::Status(format!(
             "engine export failed ({}): {}",
             r.status,
             String::from_utf8_lossy(&r.body)
-        ));
+        )));
     }
-    String::from_utf8(r.body).map_err(|_| "export was not UTF-8".into())
+    String::from_utf8(r.body).map_err(|_| EngineError::Body("export was not UTF-8".into()))
 }
 
 /// What one engine import reported: drawers plus (since the manifest-era

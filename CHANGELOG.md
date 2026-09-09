@@ -55,6 +55,36 @@ was found by reading instead. Tests 824 → 825.
 
 Tests 828 → 834, e2e 483 → 484. `UPGRADING.md` carries O123, O124 and O127.
 
+### a migration refused for size says so, and names the remedy (O136)
+
+**ROADMAP O136 FILED AND CLOSED 2026-09-09.** A tenant whose whole-vault
+export exceeds 256 MiB cannot be migrated over `/v1` — the control plane reads
+the engine's export reply through the one body ceiling `1.5.1` introduced.
+Reachable by an ordinary large tenant: a 361,009-drawer vault exports 469 MB.
+
+**The capability did not change and the ceiling is not raised** — that is the
+decision, not an omission. The ceiling is what stops an unbounded reply, and
+raising it would trade a clean refusal for an out-of-memory kill on the
+process that fronts every tenant.
+
+What changed is the diagnosis. The failure was a bare transport string —
+*"engine response read: body exceeds the 268435456-byte ceiling"* — from an
+operation the operator had already asked for, naming neither the tenant, nor
+the limit's purpose, nor a way forward, and reading like an engine fault when
+both engines behaved correctly. It is now a typed **413** that names the
+tenant, states the export's real size from the engine's own `Content-Length`,
+says the source is untouched and still authoritative, and gives the remedy
+(`undercroft export`/`import` between hosts, then `PATCH /admin/tenants/{id}`).
+Documented in `UPGRADING.md` and `docs/MULTI_TENANCY.md`, where the limit had
+never appeared.
+
+Getting there needed a typed engine error, which also removed an existing
+string parse: `engine_err` used to recover a status code by scanning the
+message for a parenthesised three-digit number. `Display` reproduces every
+previous message verbatim, so nothing a user has seen moves. The remaining
+capability gap — migrating a vault larger than the ceiling — is O137's,
+because it needs the same chunked framing that would let `--to` stream.
+
 ### the export stops holding the corpus: 1,258 MB -> 480 MB on the same vault (O113)
 
 **ROADMAP O113 CLOSED 2026-09-09**, on a four-agent analysis run because the
