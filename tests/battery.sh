@@ -1992,6 +1992,94 @@ if [ "$HIER_FAIL" -ne 0 ]; then
 fi
 echo "ok    ${#HIER_ALLOW[@]} allowed installation-level shapes, all live; no per-vault use"
 
+echo "═══ preflight: the heritage name sits where a name can sit ═══"
+# ROADMAP O133. The commit this guide holds up as the FIX for the five classes
+# a Latin-script sweep could not see was itself an unread scripted edit: it
+# substituted the heritage project name for the ordinary English word
+# "upstream" across 76 lines, and SIX of those were the ordinary sense --
+# "clause upstream is the accelerator", "bounded upstream", "treated upstream
+# as", "played upstream", "mirrors `x` upstream", "Upstream of multi-hop
+# quality". Two were `///` doc comments on public items, so O110's
+# missing_docs lint looked straight at them and had nothing to say: a lint
+# that requires a sentence about a behaviour cannot tell whether the sentence
+# is TRUE. Every battery since went past them.
+#
+# **What this can and cannot do, stated.** No gate reads meaning, so this does
+# not detect a wrong word. What it does is force CLASSIFICATION: the heritage
+# name is allowed only in contexts where a PROJECT NAME can grammatically sit,
+# each listed with its reason and counted in both directions. A substitution
+# that drops the name into a verb or participle slot -- which is exactly what
+# happened -- matches no context and fails. A future blind substitution of
+# some OTHER word is NOT caught by this; the control for that remains the
+# read-the-diff rule, which is what failed here.
+HERITAGE_N="$(printf '%s%s' 'Mem' 'Palace')"
+HERITAGE_SCOPE="crates docs website/src README.md"
+HERITAGE_ALLOW=(
+  "${HERITAGE_N}'s::possessive: the project's own file, harness, numbers or schema"
+  "(Parity|comparison) with ${HERITAGE_N}::the parity document's title and links"
+  "Relationship to ${HERITAGE_N}::the README section naming the provenance"
+  "(from|against|beyond|than) ${HERITAGE_N}::a preposition governs the name"
+  "Unlike ${HERITAGE_N}::a contrast opens the sentence"
+  "${HERITAGE_N} and then proposed::the consultation note's own sentence"
+  "${HERITAGE_N} export shape::the import parser naming the upstream format"
+  "${HERITAGE_N} is Python::the parity document's licence paragraph"
+  "no ${HERITAGE_N} (source code|counterpart)::the no-shared-code claim"
+  "${HERITAGE_N} (uploads|uploaded|stored|sent) plaintext::the security contrast, project as subject"
+  "[|] ${HERITAGE_N} [|]::a comparison-table header cell"
+  "Ported from ${HERITAGE_N}::the port's provenance line"
+  "${HERITAGE_N} API::the benchmark client absorbing upstream drift"
+  "conversion of ${HERITAGE_N}::this project is a conversion of it"
+  "${HERITAGE_N}/mempalace::the upstream repository path"
+  "${HERITAGE_N} project::the project, as a noun phrase"
+  "${HERITAGE_N}, which shipped::a relative clause about the project"
+  "launched ${HERITAGE_N}::a person launched the project"
+  "${HERITAGE_N}: content is filed::the inherited-idea sentence"
+  "${HERITAGE_N} .main. has since::the benchmark note about its default branch"
+  "the class ${HERITAGE_N} used::a reduced relative clause -- the class THAT it used"
+  "Python ${HERITAGE_N}::the consultation note distinguishing the Python original"
+  "as the ${HERITAGE_N}::a comparison wrapping across a line break"
+  "${HERITAGE_N} source code::wrapped: \"contains no / ... source code\" (grep output carries a file: prefix, so ^ cannot anchor here)"
+  "[(]${HERITAGE_N}:::a parenthetical citing the project's own scores"
+  "${HERITAGE_N} stored everything::the security-layer contrast"
+)
+heritage_scan() { # every occurrence no allowed context explains
+  grep -rn --exclude='*.svg' -- "$HERITAGE_N" "$@" 2>/dev/null     | grep -vE "$(IFS='|'; printf '%s' "${HERITAGE_ALLOW[*]%%::*}")" || true
+}
+# PREMISE: plant the name in a verb slot -- the shape the real defect took --
+# and require a catch, or this gate's silence means nothing.
+mkdir -p .battery
+HERITAGE_PROBE=".battery/heritage-probe.md"
+printf 'a clean line about the port
+the clause %s is the accelerator
+' "$HERITAGE_N" > "$HERITAGE_PROBE"
+if [ -z "$(heritage_scan "$HERITAGE_PROBE")" ]; then
+  echo "FAIL  premise: the scanner did not catch the name planted in a verb slot,"
+  echo "      which is the exact shape O133 records, so its silence proves nothing"
+  rm -f "$HERITAGE_PROBE"; echo ""; echo "BATTERY FAILED -- preflight"; exit 1
+fi
+rm -f "$HERITAGE_PROBE"
+HERITAGE_FAIL=0
+for row in "${HERITAGE_ALLOW[@]}"; do
+  pat="${row%%::*}"; why="${row#*::}"
+  if ! grep -rqE -- "$pat" $HERITAGE_SCOPE 2>/dev/null; then
+    echo "FAIL  the context \"$pat\" ($why) matches nothing any more -- a stale"
+    echo "      allowance reads as a checked exemption while covering nothing"
+    HERITAGE_FAIL=1
+  fi
+done
+HERITAGE_HITS="$(heritage_scan $HERITAGE_SCOPE)"
+if [ -n "$HERITAGE_HITS" ]; then
+  echo "FAIL  the heritage name sits where a project name cannot (ROADMAP O133):"
+  printf '%s
+' "$HERITAGE_HITS" | sed 's/^/      /' | head -20
+  echo "      Either the word is wrong, or the context belongs in HERITAGE_ALLOW."
+  HERITAGE_FAIL=1
+fi
+if [ "$HERITAGE_FAIL" -ne 0 ]; then
+  echo ""; echo "BATTERY FAILED -- preflight"; exit 1
+fi
+echo "ok    ${#HERITAGE_ALLOW[@]} contexts where the heritage name may sit, all live"
+
 echo "═══ preflight: prose figures ═══"
 
 pf_word() {

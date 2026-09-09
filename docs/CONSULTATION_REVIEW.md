@@ -237,7 +237,7 @@ Confirmed real, most already tracked, now with external confirmation:
   the manifest, so they anchor at the next store open — until then a
   stripped unanchored tail is indistinguishable from a crash.
 - **Entity resolution.** `kg_entities` is name-unique; no aliasing or merge.
-  MemPalace of multi-hop quality.
+  Upstream of multi-hop quality.
 - **Multi-hop retrieval depth.** Measured weakest category (AMB: multi-hop
   71.9% accuracy, 53.9% gold-recall). Already C2.5 on the roadmap.
 - **Large artifacts.** Image *bytes* are a recorded gap (37.9% of LoCoMo

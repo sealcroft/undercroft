@@ -112,7 +112,7 @@ pub struct KgStats {
 
 /// Normalize a date or datetime string to a sortable comparison key.
 /// Date-only values are treated as midnight UTC so mixed granularity
-/// compares correctly (mirrors `_temporal_start_key` MemPalace).
+/// compares correctly (mirrors `_temporal_start_key` upstream).
 fn temporal_key(value: &str) -> String {
     let v = value.trim();
     if v.len() == 10 && v.as_bytes().get(4) == Some(&b'-') {
