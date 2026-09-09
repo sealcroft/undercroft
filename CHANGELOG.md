@@ -55,6 +55,30 @@ was found by reading instead. Tests 824 → 825.
 
 Tests 828 → 834, e2e 483 → 484. `UPGRADING.md` carries O123, O124 and O127.
 
+### six comments a blind substitution corrupted, and a gate that states its own limits (O133)
+
+**ROADMAP O133 FILED AND CLOSED 2026-09-09.** The commit this project's guide
+holds up as the FIX for the five classes a Latin-script sweep could not see was
+itself an unread scripted edit: it substituted the heritage project name for
+the ordinary English word "upstream" across 76 lines, and six of those were the
+ordinary sense — including one that has been a broken sentence ever since
+("Upstream of multi-hop quality" became "MemPalace of multi-hop quality"). Two
+were `///` doc comments on public items, so the `missing_docs` lint looked
+straight at them and had nothing to say: a lint that demands a sentence about a
+behaviour cannot tell whether the sentence is true. Every battery since went
+past them. The filing said four; reading every surviving occurrence found six,
+and each is restored to the exact prior wording recovered from git.
+
+The gate is the interesting half. A grammatical shape rule was tried first and
+its premise probe killed it: the allowance for "the project as the subject of a
+verb" matched `MemPalace is`, which is exactly the corrupted `clause MemPalace
+is the accelerator` — it would have admitted the defect it was written for. Nor
+can it be repaired, since `the class MemPalace used` is legitimate and
+grammatically identical to `the clause MemPalace is`. The shipped gate is 26
+precise allowed phrases with reasons, counted both ways, and its comment states
+plainly that it forces classification rather than detecting meaning, and that a
+blind substitution of some other word is NOT caught by it.
+
 ### the hierarchy word names one level again: `VaultStore`, `VaultStats` (O112)
 
 **ROADMAP O112 RULED AND CLOSED 2026-09-09.** Every doctrinal surface says a

@@ -4176,6 +4176,84 @@ the product is a drift closure rather than a feature. The doctrine's existing
 test, applied; it reclassifies nothing (`1.5.0` stays MINOR, `1.2.1` and
 `1.2.2` stay PATCH). Filed here until the tag exists.
 
+### O133 — CLOSED 2026-09-09: SIX comments, not four, and a gate that says what it cannot do
+
+**Filed 2026-09-09 by O112's adversarial review, and unrelated to O112.** The
+commit `CLAUDE.md` holds up as the FIX for the five classes a Latin-script
+sweep could not see (`404b956`, *"rename: the classes a Latin-script sweep
+could not see"*) itself ran a blind `upstream` → `MemPalace` substitution — 76
+added lines against 63 removed — and corrupted four comments that are still in
+tracked source a month later:
+
+| site | reads | should read |
+|---|---|---|
+| `store/src/lib.rs:6578` | "clause **MemPalace** is the accelerator" | "clause upstream is" |
+| `store/src/lib.rs:7402` | "`depth` is now bounded **MemPalace**" | "bounded upstream" |
+| `core/src/late.rs:106` | "(treated **MemPalace** as \"no stored tokens\")" | "treated upstream as" |
+| `store/src/kg.rs:115` | "(mirrors `_temporal_start_key` **MemPalace**)" | "`…` upstream" |
+
+Two are `///` doc comments on public items, so O110's `#![warn(missing_docs)]`
+looked straight at them and had nothing to say — *a lint that requires a
+sentence about a behaviour cannot tell whether the sentence is TRUE*, which is
+O115's lesson one lint over. O99's 113-item scan and O110's 372-item pass both
+went past them, and so did every battery since.
+
+The irony is the finding: the commit that taught this project *"a scripted
+edit is a change you have not read"* is itself an unread scripted edit. Fix is
+four one-line corrections; the gate question is harder and is the real content
+of this entry — **what catches a word substituted into a place it does not
+belong, when the word is legitimate elsewhere in the tree?** A spell-checker
+cannot (both are real tokens), the doc lint cannot (the sentence exists), and
+a needle scan cannot (the word is allowed). Candidate: a scan for the heritage
+name in positions where it is not a NOUN PHRASE — preceded by "bounded",
+"treated", "is the" — which is a shape, not a token, and would need its own
+premise probe. Filed rather than half-built.
+
+**CLOSED 2026-09-09, and this filing undercounted its own class — the fourth
+consecutive entry to do so.** It named four corrupted comments; there are
+**six**. The two it missed were found by reading every surviving occurrence
+instead of trusting the list:
+
+| site | was | had become |
+|---|---|---|
+| `store/lib.rs:2608` | "the in-memory role embedded ChromaDB's index played **upstream**" | "…played **MemPalace**" |
+| `docs/CONSULTATION_REVIEW.md:240` | "**Upstream** of multi-hop quality." | "**MemPalace** of multi-hop quality." |
+
+The second is not merely wrong; it is a broken sentence, and has read as one
+since the rename. Every restoration is the exact prior wording recovered from
+`git show 404b956^`, never a reconstruction, and all 76 substituted lines were
+re-read to confirm the other 70 are genuine references to the project.
+
+**The gate question, answered honestly.** The first attempt was the shape rule
+this entry proposed — the name is legitimate after a preposition or as a
+sentence subject, suspect after a noun or participle. **Its premise probe
+killed it**, and how it died is the finding: the allowance for "the project as
+the SUBJECT of a verb" matched `MemPalace is`, which is exactly the corrupted
+`clause MemPalace is the accelerator`. The rule would have admitted the very
+defect it was written for. And it cannot be repaired — `the class MemPalace
+used` is LEGITIMATE (a reduced relative clause: the class *that* it used) and
+is grammatically indistinguishable from `the clause MemPalace is`. English
+does not separate them; only meaning does, and no gate reads meaning.
+
+The shipped gate is therefore **26 precise allowed PHRASES**, each with its
+reason, counted in both directions. Its own comment states the limits rather
+than leaving them implied: it forces CLASSIFICATION of every occurrence, it
+does NOT detect a wrong word, and **a blind substitution of some other word is
+not caught by it** — the control for that remains the read-the-diff rule,
+which is what failed here. A gate whose limits are unstated gets trusted past
+them.
+
+Two more defects the probe and the both-directions arm caught during
+construction: the `is` over-match above, and a `^` anchor that could never
+fire, because the scan runs over `grep -rn` output where every line carries a
+`file:line:` prefix. Either would have shipped a gate reporting a clean tree
+having examined nothing.
+
+Gate: `tests/battery.sh` preflight #18, scope `crates docs website/src
+README.md`. `tests/battery.sh` itself is excluded by construction — it names
+the word it hunts — and is covered instead by the probe, which plants the name
+in a verb slot and requires a catch.
+
 ### O112 — CLOSED 2026-09-09: ruled A on a four-agent analysis; the per-vault referents are `VaultStore`/`VaultStats` and the word means the installation
 
 **Filed 2026-09-07 by the seventh round's naming scan**, which asked O7's
@@ -12170,38 +12248,6 @@ than `/v1`'s framed payload). A 10⁶-drawer vault of this shape exports
 through ~3.5 GB of resident memory. The streaming shape above is what
 closes it; this entry stays open with the number rather than the argument.
 
-### O133 — a blind substitution in the rename commit corrupted four comments, two of them public docs
-
-**Filed 2026-09-09 by O112's adversarial review, and unrelated to O112.** The
-commit `CLAUDE.md` holds up as the FIX for the five classes a Latin-script
-sweep could not see (`404b956`, *"rename: the classes a Latin-script sweep
-could not see"*) itself ran a blind `upstream` → `MemPalace` substitution — 76
-added lines against 63 removed — and corrupted four comments that are still in
-tracked source a month later:
-
-| site | reads | should read |
-|---|---|---|
-| `store/src/lib.rs:6578` | "clause **MemPalace** is the accelerator" | "clause upstream is" |
-| `store/src/lib.rs:7402` | "`depth` is now bounded **MemPalace**" | "bounded upstream" |
-| `core/src/late.rs:106` | "(treated **MemPalace** as \"no stored tokens\")" | "treated upstream as" |
-| `store/src/kg.rs:115` | "(mirrors `_temporal_start_key` **MemPalace**)" | "`…` upstream" |
-
-Two are `///` doc comments on public items, so O110's `#![warn(missing_docs)]`
-looked straight at them and had nothing to say — *a lint that requires a
-sentence about a behaviour cannot tell whether the sentence is TRUE*, which is
-O115's lesson one lint over. O99's 113-item scan and O110's 372-item pass both
-went past them, and so did every battery since.
-
-The irony is the finding: the commit that taught this project *"a scripted
-edit is a change you have not read"* is itself an unread scripted edit. Fix is
-four one-line corrections; the gate question is harder and is the real content
-of this entry — **what catches a word substituted into a place it does not
-belong, when the word is legitimate elsewhere in the tree?** A spell-checker
-cannot (both are real tokens), the doc lint cannot (the sentence exists), and
-a needle scan cannot (the word is allowed). Candidate: a scan for the heritage
-name in positions where it is not a NOUN PHRASE — preceded by "bounded",
-"treated", "is the" — which is a shape, not a token, and would need its own
-premise probe. Filed rather than half-built.
 
 ### O6 — the repo social preview is still not uploaded
 GitHub exposes **no REST endpoint** for org avatars (`avatar_url` is read-only
