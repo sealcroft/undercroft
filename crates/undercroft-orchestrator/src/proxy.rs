@@ -1044,7 +1044,7 @@ fn data_plane(
                     return relay(r);
                 }
             }
-            Err(e) => return engine_response(&e),
+            Err(e) => return engine_response(&e.to_string()),
         }
     }
     match engine::vault_request(
@@ -1078,7 +1078,7 @@ fn data_plane(
             }
             relay(r)
         }
-        Err(e) => engine_response(&e),
+        Err(e) => engine_response(&e.to_string()),
     }
 }
 
@@ -1278,7 +1278,7 @@ fn tenant_ops(
         body,
     ) {
         Ok(r) => relay(r),
-        Err(e) => engine_response(&e),
+        Err(e) => engine_response(&e.to_string()),
     }
 }
 
@@ -1300,7 +1300,7 @@ fn create_tenant(
     };
     if let Err(e) = engine::create_vault(&creds, &tenant.vault, level) {
         let _ = orch.tenant_delete(&tenant.id);
-        return engine_response(&e);
+        return engine_response(&e.to_string());
     }
     // The token appears in this response and nowhere else, ever.
     json_response(
@@ -1337,7 +1337,7 @@ fn tenant_stats(orch: &Orch, id: &str) -> Response<std::io::Cursor<Vec<u8>>> {
             .with_header(
                 Header::from_bytes("Content-Type", "application/json").expect("static header"),
             ),
-        Err(e) => engine_response(&e),
+        Err(e) => engine_response(&e.to_string()),
     }
 }
 
@@ -1361,7 +1361,7 @@ fn delete_tenant(orch: &Orch, id: &str) -> Response<std::io::Cursor<Vec<u8>>> {
         Err(e) => return state_error_response(&e),
     };
     if let Err(e) = engine::delete_vault(&creds, &tenant.vault) {
-        return engine_response(&e);
+        return engine_response(&e.to_string());
     }
     match orch.tenant_delete(id) {
         Ok(true) => json_response(200, &serde_json::json!({ "deleted": id })),
@@ -1405,6 +1405,40 @@ pub enum MigrateError {
     /// a retry.
     #[error("{0}")]
     Unfaithful(String),
+    /// The source vault's export is larger than this hop will read (ROADMAP
+    /// O136).
+    ///
+    /// **A capability limit of the control plane, not a fault of either
+    /// engine**, and it needs its own variant because everything an operator
+    /// does next is different: retrying cannot help, the source is untouched,
+    /// and the remedy is a direct `undercroft export` / `import` between the
+    /// hosts. Before this it surfaced as a bare transport string — *"engine
+    /// response read: body exceeds the …-byte ceiling"* — from a migration
+    /// that had already been asked for, naming neither the vault, the limit's
+    /// purpose, nor a way forward.
+    ///
+    /// 413 rather than 502: the request was well-formed and the engine
+    /// answered correctly; what is too large is the payload this hop would
+    /// have to hold.
+    #[error(
+        "the export of tenant {tenant:?} is {size} and this control plane reads at most \
+         {ceiling} bytes per migration, so it cannot be moved over /v1. The source is \
+         untouched and still authoritative. Migrate it directly between the hosts with \
+         `undercroft export` on the source and `undercroft import` on the destination, \
+         then re-point the tenant with `PATCH /admin/tenants/{tenant}`",
+        size = declared
+            .map(|n| format!("{n} bytes"))
+            .unwrap_or_else(|| "larger than that".into()),
+        ceiling = undercroft_net::MAX_BODY_BYTES
+    )]
+    ExportTooLarge {
+        /// The tenant whose export will not fit.
+        tenant: String,
+        /// The engine's declared `Content-Length` — the export's real size —
+        /// when the refusal came from the declaration rather than from the
+        /// bytes arriving.
+        declared: Option<usize>,
+    },
 }
 
 impl MigrateError {
@@ -1416,6 +1450,11 @@ impl MigrateError {
             MigrateError::AlreadyThere => 409,
             MigrateError::Engine(status, _) => *status,
             MigrateError::Unfaithful(_) => 409,
+            // O136. The request was well-formed and both engines behaved; what
+            // exceeds a limit is the payload THIS hop would have to hold, which
+            // is what 413 says. A 502 would blame an engine that answered
+            // correctly, and a 409 would suggest a conflict a retry could clear.
+            MigrateError::ExportTooLarge { .. } => 413,
         }
     }
 }
@@ -1501,7 +1540,16 @@ pub(crate) fn migrate_tenant(
         other => MigrateError::State(other),
     })?;
 
-    let ndjson = engine::export_vault(&src, &tenant.vault).map_err(engine_err)?;
+    // O136: a size refusal is this hop's own ceiling and gets its own verdict,
+    // with the vault named and the remedy stated. Everything else keeps the
+    // old string classification.
+    let ndjson = engine::export_vault(&src, &tenant.vault).map_err(|e| match e {
+        engine::EngineError::BodyTooLarge(_, declared) => MigrateError::ExportTooLarge {
+            tenant: id.to_string(),
+            declared,
+        },
+        other => engine_err(other.to_string()),
+    })?;
     // The export leads with a manifest line since 0.43.0, and it DECLARES
     // the record counts — the count-verify below checks against that
     // declaration rather than a raw line count, which the manifest line
@@ -1634,6 +1682,73 @@ pub(crate) fn migrate_tenant(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **A migration refused for SIZE says so, names the vault, and states
+    /// the remedy** (ROADMAP O136).
+    ///
+    /// The defect this pins is not that the migration fails — it must — but
+    /// that it used to fail as a bare transport string, *"engine response
+    /// read: body exceeds the …-byte ceiling"*, from an operation that had
+    /// already been asked for. That names neither the tenant, nor why the
+    /// limit exists, nor what to do instead, and it reads like an engine
+    /// fault when both engines behaved correctly.
+    ///
+    /// Both directions: the size refusal must map to this verdict, and every
+    /// OTHER engine failure must keep its old classification — a variant that
+    /// swallowed the general case would hide real faults behind a capacity
+    /// message.
+    #[test]
+    fn an_export_too_large_to_migrate_says_so_and_names_the_remedy() {
+        let e = MigrateError::ExportTooLarge {
+            tenant: "acme".into(),
+            declared: Some(469_162_454),
+        };
+        assert_eq!(
+            e.status(),
+            413,
+            "the payload is what is too large, not the request"
+        );
+        let msg = e.to_string();
+        // In order: WHICH tenant, its real size (from the engine's own
+        // declaration), that the source is untouched, and both halves of the
+        // remedy plus the re-point that completes it.
+        for needle in [
+            "\"acme\"",
+            "469162454 bytes",
+            "still",
+            "undercroft export",
+            "undercroft import",
+            "PATCH /admin/tenants/acme",
+        ] {
+            assert!(
+                msg.contains(needle),
+                "the refusal must contain {needle:?} — an operator reading it has to know \
+                 which vault, how big, that nothing was lost, and what to do. Got: {msg}"
+            );
+        }
+        assert!(
+            msg.contains(&undercroft_net::MAX_BODY_BYTES.to_string()),
+            "and the ceiling itself, so the number is not folklore: {msg}"
+        );
+
+        // A refusal that could not read the declaration still refuses, and
+        // still says the useful half.
+        let vague = MigrateError::ExportTooLarge {
+            tenant: "acme".into(),
+            declared: None,
+        };
+        assert_eq!(vague.status(), 413);
+        assert!(vague.to_string().contains("undercroft export"));
+
+        // The OTHER direction: an ordinary engine failure keeps its old
+        // verdict and does not get dressed as a capacity limit.
+        let ordinary = engine_err("engine export failed (409): integrity".into());
+        assert!(
+            matches!(ordinary, MigrateError::Engine(409, _)),
+            "a relayed engine status must stay one, got {ordinary:?}"
+        );
+        assert_ne!(ordinary.status(), 413);
+    }
 
     /// C9: the scripted door and the HTTP door are the SAME door.
     ///

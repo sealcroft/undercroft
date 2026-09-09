@@ -69,6 +69,43 @@ so rather than implying it checked them.
 
 ## 1.5.2 (unreleased)
 
+### a tenant whose export exceeds 256 MiB cannot be migrated over `/v1` (O136)
+
+**Who is affected:** a fleet running `undercroft-orchestrator` with a tenant
+whose whole-vault export is larger than `256 MiB`. Measured for scale: a
+361,009-drawer vault exports 469 MB, so this is reachable by an ordinary large
+tenant rather than a pathological one.
+
+**Symptom, before this release:** `POST /admin/tenants/{id}/migrate` failed
+with a bare transport string — *"engine response read: body exceeds the
+268435456-byte ceiling"* — naming neither the tenant, nor the limit's purpose,
+nor a way forward, and reading like an engine fault when both engines behaved
+correctly.
+
+**Cause:** the control plane reads the engine's export reply through the one
+256 MiB body ceiling introduced in `1.5.1` (O111). That ceiling is correct and
+is not changing: it is what stops an unbounded reply, and raising it would
+trade a clean refusal for an out-of-memory kill on the control plane. The same
+ceiling governs `POST /v1/…/import`, so such a payload cannot be imported over
+`/v1` either.
+
+**What changed now:** the refusal is a typed verdict — **HTTP 413** — that
+names the tenant, states the export's real size from the engine's own
+`Content-Length`, says the source is untouched and still authoritative, and
+gives the remedy. Nothing about which vaults can be migrated changed; what
+changed is that the limit tells you it is the limit.
+
+**Fix / workaround:** migrate the vault directly between the hosts —
+`undercroft export --vault <v>` on the source, `undercroft import` on the
+destination — then re-point the tenant with
+`PATCH /admin/tenants/{id}` `{"instance": "<destination>"}`. The CLI path has
+no such ceiling.
+
+**Detection before a restart:** none is possible from `config check` — this is
+a property of a tenant's data size, not of a declaration. Compare a tenant's
+`db_bytes` on `GET /v1/vaults/{id}/stats` against the ceiling; an export runs
+roughly 0.55–0.7x the database file.
+
 ### the empty-vault message says "Vault", not "Palace" (O112)
 
 **Who is affected:** anything that greps CLI or MCP output for the literal

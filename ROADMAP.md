@@ -4176,6 +4176,55 @@ the product is a drift closure rather than a feature. The doctrine's existing
 test, applied; it reclassifies nothing (`1.5.0` stays MINOR, `1.2.1` and
 `1.2.2` stay PATCH). Filed here until the tag exists.
 
+### O136 — CLOSED 2026-09-09: the migration ceiling is a NAMED verdict with the remedy, and the ceiling itself stays
+
+**CLOSED 2026-09-09, and what closed is the DIAGNOSIS, not the capability —
+stated plainly rather than dressed up.** A vault whose export exceeds
+256 MiB still cannot be moved over `/v1`. What changed is that the refusal
+now says so.
+
+**The ceiling is not raised, and that is the decision.** It is what stops an
+unbounded reply (O111), and raising it would trade a clean refusal for an
+out-of-memory kill on the control plane — the process that fronts every
+tenant. Trading a bounded failure for an unbounded one is not a fix.
+O113 removed the ENGINE's whole-corpus copies; it cannot help here, because
+this hop refuses on the declared `Content-Length` before a byte is read.
+
+**What the operator got before:** `engine response read: body exceeds the
+268435456-byte ceiling` — from an operation they had already asked for,
+naming neither the tenant, nor the limit's purpose, nor a way forward, and
+reading like an engine fault when both engines behaved correctly.
+
+**What they get now:** `MigrateError::ExportTooLarge`, **HTTP 413** — the
+request was well-formed and both engines answered; what is too large is the
+payload THIS hop would have to hold. It names the tenant, states the export's
+real size (the engine's own `Content-Length`, which the refusal already had
+and threw away), says the source is untouched and still authoritative, and
+gives the remedy: `undercroft export` / `import` between the hosts, then
+`PATCH /admin/tenants/{id}`. Documented in `UPGRADING.md` and
+`docs/MULTI_TENANCY.md`, where the limit had never appeared at all.
+
+**A typed engine error, which also removed an existing string parse.**
+`vault_request` returned `Result<_, String>`, so the size refusal was
+indistinguishable from a transport fault, and `engine_err` recovered a status
+code by SCANNING the message for a parenthesised three-digit number.
+`EngineError` is matched now. `Display` reproduces every previous message
+verbatim and `From<EngineError> for String` keeps the call sites that do not
+care compiling unchanged — the type is there to be matched where the
+distinction matters.
+
+Gate: `an_export_too_large_to_migrate_says_so_and_names_the_remedy`, both
+directions — the size refusal must be 413 and carry tenant, size, the
+untouched-source claim, both halves of the remedy and the ceiling itself;
+and an ordinary engine failure must KEEP its relayed status rather than be
+dressed as a capacity limit. Counterfactualed: reverting the status to 502
+fails it by name.
+
+**The capability gap remains and is O137's.** Migrating a vault larger than
+the ceiling needs a chunked or paged protocol — the same per-chunk framing
+that would let `--to` stream — and that is a format decision with its own
+entry, not something to smuggle in under a diagnosis fix.
+
 ### O113 — CLOSED 2026-09-09: export peak 1,258 MB -> 480 MB (2.75x -> 1.02x) on the same corpus, and five of the filing's own claims were wrong
 
 **CLOSED 2026-09-09 on a four-agent analysis (format practice, integrity,
@@ -11802,32 +11851,7 @@ Each is a read, not a fix, so each may return nothing — which is a result and
 must be recorded as one rather than left as a carry-in that quietly never moves.
 
 
-### O136 — a vault whose export exceeds 256 MiB cannot be migrated or imported over `/v1` at all
 
-**Filed 2026-09-09 by the O113 analysis, which three of four agents found
-independently and none of which O113 names.** O111 gave every HTTP body one
-256 MiB ceiling (`undercroft_net::MAX_BODY_BYTES`) — correctly, and that entry
-is not in question. The consequence nobody traced is that the ceiling also
-governs the ENGINE'S OWN REPLY on the migration path: the orchestrator reads
-`GET /v1/vaults/{id}/export` through `read_body_bounded`
-(`orchestrator/src/engine.rs`), and `/v1 POST …/import` reads its body the same
-way.
-
-So a tenant whose export exceeds 256 MiB is **un-migratable and un-importable
-over `/v1`**, as a hard refusal rather than as memory pressure. O113's own
-measured vault exports 468 MB — 1.8x the ceiling — so the corpus this project
-used to argue that "none of the four is a crash" is a corpus the control plane
-cannot move. That reasoning does not survive the finding.
-
-Undocumented on every surface checked: `UPGRADING.md` records the 1.5.1
-REQUEST ceiling and says nothing about a reply or a migration, and
-`docs/MULTI_TENANCY.md` describes migration without a size bound.
-
-**Not a memory question, and streaming the export does not fix it** — the
-ceiling refuses before size matters. The options are a declared ceiling for
-this hop, a chunked/paged migration protocol, or a documented limit with a
-pre-flight refusal that names it. Gate: an orchestrator e2e migrating a tenant
-whose export exceeds the ceiling, which fails TODAY.
 
 ### O137 — `--to` cannot stream under any manifest position, because the bundle is one AEAD over the whole payload
 
