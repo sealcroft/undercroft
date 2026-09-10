@@ -19,6 +19,34 @@ That is the doctrine's existing test applied, not a new one. It reclassifies
 nothing: `1.5.0` stays MINOR (the per-vault database genuinely gained a
 name, which no surface had), and `1.2.1`/`1.2.2` stay PATCH.
 
+### O138 — the sealed export and the import stop holding the corpus twice
+
+`undercroft export --to` held **three** whole-payload buffers and
+`undercroft import` of the resulting bundle held **five**. Measured on
+361,779 drawers whose export is 467.7 MB: the sealed export peaked at
+**1,349 MB (3.02x)** and the import at **2,002 MB (4.49x)** — both worse
+than the 1,258 MB unsealed peak O113 was filed to fix, and neither ever
+measured, because O113 measured the one path that carries no envelope.
+
+- sealed export **1,349 MB -> 457 MB (3.02x -> 1.02x)**, wall 7.3s -> 4.7s
+- sealed import **2,002 MB -> 914 MB (4.49x -> 2.05x)**
+- unsealed export unchanged at 1.02x, which is the premise probe
+
+**No format change.** The bundle is byte-identical; `split_payload`,
+`frame_payload_into`, `canonical()` and the unsealed NDJSON contract are
+untouched. `encrypt_for_into` seals in place and streams to the sink;
+`decrypt_with_owned` opens in place; the importer borrows the record slice
+instead of copying it and deduplicates on the store's own keyed fingerprint
+rather than a clone of every drawer's content (identical outcome: 262,048
+imported / 99,731 skipped, before and after). `kg_export`/`kg_export_entities`
+gained streaming visitors — each had held the whole graph twice, inside the
+export path O113 streamed for drawers. The CLI also stopped hashing every
+export twice.
+
+Import remains 2.05x: the rest is the parse-everything-then-write buffer,
+whose removal would change what a malformed record does. Filed as O139
+rather than smuggled in here.
+
 ### every error variant is minted or matched somewhere (O115)
 
 **ROADMAP O115 FILED AND CLOSED 2026-09-07.** `BundleError::Expired` was

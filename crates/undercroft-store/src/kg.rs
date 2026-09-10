@@ -2352,31 +2352,50 @@ impl VaultStore {
     /// CLAIM only; see [`TripleExport`] for why the destination re-derives
     /// rather than re-keys it.
     pub fn kg_export(&self, read: crate::Read) -> Result<Vec<TripleExport>, StoreError> {
+        let mut out = Vec::new();
+        self.kg_export_each(read, |e| {
+            out.push(e);
+            Ok(())
+        })?;
+        Ok(out)
+    }
+
+    /// Visit every fact for export, one at a time.
+    ///
+    /// The graph's half of O113's shape, left behind inside the very export
+    /// path O113 streamed for drawers (ROADMAP O138): this held **two**
+    /// whole-graph `Vec`s at once — the raw rows, then the decoded exports
+    /// — so a vault's whole knowledge graph existed twice in memory to be
+    /// written out once. Neither collect was borrow-forced;
+    /// [`VaultStore::decode_triple`] takes `&self`, exactly as the drawer
+    /// decode does.
+    pub fn kg_export_each<F>(&self, read: crate::Read, mut f: F) -> Result<(), StoreError>
+    where
+        F: FnMut(TripleExport) -> Result<(), StoreError>,
+    {
         let sql =
             format!("SELECT {TRIPLE_COLUMNS}, source_fp, receipt_tag FROM kg_triples ORDER BY seq");
         let mut stmt = self.conn.prepare(&sql)?;
-        // (row, source fingerprint, receipt tag)
-        type ExportRow = (TripleRow, Option<Vec<u8>>, Option<Vec<u8>>);
-        let rows: Vec<ExportRow> = stmt
-            .query_map([], |r| {
-                Ok((TripleRow::from_row(r)?, r.get(16)?, r.get(17)?))
-            })?
-            .collect::<Result<_, _>>()?;
-        let mut out = Vec::with_capacity(rows.len());
-        for (row, fp, receipt) in rows {
+        let mut rows = stmt.query([])?;
+        let mut n = 0usize;
+        while let Some(r) = rows.next()? {
+            let row = TripleRow::from_row(r)?;
+            let fp: Option<Vec<u8>> = r.get(16)?;
+            let receipt: Option<Vec<u8>> = r.get(17)?;
             let triple = self.decode_triple(row)?;
-            out.push(TripleExport {
+            f(TripleExport {
                 triple,
                 // The fingerprint is receipt material: exported only when
                 // a receipt exists to re-key at the destination.
                 source_fp: receipt.and(fp).map(hex::encode),
-            });
+            })?;
+            n += 1;
         }
         // Takes the witness so a new caller has to state one; every caller
         // today is ExportAudited, which records nothing here because
         // `audit_export` already records the egress unconditionally.
-        self.record_read(read, "", crate::ReadScope::none(), out.len())?;
-        Ok(out)
+        self.record_read(read, "", crate::ReadScope::none(), n)?;
+        Ok(())
     }
 
     /// Entity rows for export: `(name, etype)`, tag-verified.
@@ -2384,26 +2403,35 @@ impl VaultStore {
         &self,
         read: crate::Read,
     ) -> Result<Vec<(String, String)>, StoreError> {
+        let mut out = Vec::new();
+        self.kg_export_entities_each(read, |e| {
+            out.push(e);
+            Ok(())
+        })?;
+        Ok(out)
+    }
+
+    /// Visit every entity for export, one at a time — the sibling of
+    /// [`VaultStore::kg_export_each`], and it carried the same two
+    /// whole-graph `Vec`s (ROADMAP O138).
+    pub fn kg_export_entities_each<F>(&self, read: crate::Read, mut f: F) -> Result<(), StoreError>
+    where
+        F: FnMut((String, String)) -> Result<(), StoreError>,
+    {
         let mut stmt = self
             .conn
             .prepare(
                 "SELECT id, name, etype, tag, created_at, name_rest FROM kg_entities                  ORDER BY name",
             )?;
-        type EntityRow = (String, String, String, Vec<u8>, String, Option<Vec<u8>>);
-        let rows: Vec<EntityRow> = stmt
-            .query_map([], |r| {
-                Ok((
-                    r.get(0)?,
-                    r.get(1)?,
-                    r.get(2)?,
-                    r.get(3)?,
-                    r.get(4)?,
-                    r.get(5)?,
-                ))
-            })?
-            .collect::<Result<_, _>>()?;
-        let mut out = Vec::with_capacity(rows.len());
-        for (id, name, etype, tag, created, name_rest) in rows {
+        let mut rows = stmt.query([])?;
+        let mut n = 0usize;
+        while let Some(r) = rows.next()? {
+            let id: String = r.get(0)?;
+            let name: String = r.get(1)?;
+            let etype: String = r.get(2)?;
+            let tag: Vec<u8> = r.get(3)?;
+            let created: String = r.get(4)?;
+            let name_rest: Option<Vec<u8>> = r.get(5)?;
             // The canonical covers what is AT REST, which on a sealed vault
             // is the blind index — verify against that, then decrypt the
             // word for the caller (A10).
@@ -2411,15 +2439,16 @@ impl VaultStore {
             self.vault
                 .verify_tag(&canonical, &tag)
                 .map_err(|_| StoreError::Integrity(id.clone()))?;
-            out.push((
+            f((
                 entity_name_from_rest(&self.vault, &name, name_rest.as_deref())?,
                 etype,
-            ));
+            ))?;
+            n += 1;
         }
         // As kg_export: the witness forces a decision, and every caller
         // today is ExportAudited.
-        self.record_read(read, "", crate::ReadScope::none(), out.len())?;
-        Ok(out)
+        self.record_read(read, "", crate::ReadScope::none(), n)?;
+        Ok(())
     }
 
     /// Import one exported fact into this vault: re-sealed under this
@@ -3625,6 +3654,61 @@ mod tests {
     use crate::{SearchOptions, StoreError, VaultStore};
     use tempfile::TempDir;
     use undercroft_vault::{SecurityLevel, VaultManager};
+
+    /// **The graph export walks do not MATERIALIZE the graph** — a source
+    /// assertion for the same reason O113's drawer version is one: the
+    /// property lives on the store's side of the call, so no test that
+    /// merely drives an export can see an internal `Vec`. Counting what
+    /// reaches the visitor is 1 either way, which is exactly how O113's
+    /// first gate passed while measuring nothing.
+    ///
+    /// Both walks held the whole graph TWICE — raw rows, then decoded
+    /// exports — inside the export path O113 had already streamed for
+    /// drawers (ROADMAP O138).
+    #[test]
+    fn the_graph_export_walks_do_not_materialize_the_graph() {
+        let src = include_str!("kg.rs");
+        for (name, needle) in [
+            ("kg_export_each", "pub fn kg_export_each<F>"),
+            (
+                "kg_export_entities_each",
+                "pub fn kg_export_entities_each<F>",
+            ),
+        ] {
+            let at = src
+                .find(needle)
+                .unwrap_or_else(|| panic!("{name} is still defined in this file"));
+            let end = src[at..]
+                .find("\n    }\n")
+                .unwrap_or_else(|| panic!("{name} closes at method indentation"));
+            let body = &src[at..at + end];
+            // PREMISE: a body the extractor failed to isolate contains no
+            // `collect` either, and would pass having examined nothing.
+            assert!(
+                body.contains("rows.next()") && body.len() > 200,
+                "premise: {name}'s body was not isolated ({} bytes)",
+                body.len()
+            );
+            for banned in ["collect::<", ".collect()", "let rows: Vec"] {
+                assert!(
+                    !body.contains(banned),
+                    "`{name}` contains `{banned}` — it is materializing the graph again"
+                );
+            }
+        }
+        // And the collecting forms stay thin wrappers, or the two drift
+        // into different verification behaviour.
+        for (wrapper, needle) in [
+            ("kg_export", "pub fn kg_export(&self"),
+            ("kg_export_entities", "pub fn kg_export_entities("),
+        ] {
+            let at = src.find(needle).expect("the wrapper is still defined");
+            assert!(
+                src[at..at + 400].contains("_each("),
+                "{wrapper} must stay a thin wrapper over the streaming walk"
+            );
+        }
+    }
 
     fn store(level: SecurityLevel) -> (TempDir, VaultStore) {
         let dir = TempDir::new().unwrap();

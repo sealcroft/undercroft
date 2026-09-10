@@ -2217,6 +2217,42 @@ mod tests {
         }
     }
 
+    /// **The vault-sized bundle paths use the CONSUMING API.**
+    ///
+    /// ROADMAP O138 measured `undercroft export --to` at **1,349 MB peak
+    /// RSS (3.02x its own output)** and `undercroft import` of that bundle
+    /// at **2,002 MB (4.49x)**, on a 361,779-drawer vault whose export is
+    /// 467.7 MB — both worse than the unsealed export peak O113 was filed
+    /// to fix, and neither ever measured by O113 or O137.
+    ///
+    /// The property is WHICH function these two arms call: the borrowing
+    /// forms (`encrypt_for`, `decrypt_with`) allocate a second whole
+    /// payload beside the one the caller is already holding, and the
+    /// consuming forms do not. No test that merely drives an export can
+    /// see that — both produce identical bytes — so the gate reads the
+    /// call, which is the observable the defect actually moves.
+    #[test]
+    fn the_sealed_export_and_import_use_the_consuming_bundle_api() {
+        let src = include_str!("main.rs");
+        // PREMISE: both consuming calls must be present, or an extraction
+        // that found nothing would report exactly what a clean tree does.
+        assert!(
+            src.contains("bundle::encrypt_for_into(")
+                && src.contains("bundle::decrypt_with_owned("),
+            "premise: neither consuming call is in main.rs — this gate is reading the wrong file"
+        );
+        assert!(
+            !src.contains("bundle::encrypt_for("),
+            "the sealed export is back on `encrypt_for`, which returns the whole bundle \
+             beside the payload the caller still holds — ROADMAP O138 measured that at 3.02x"
+        );
+        assert!(
+            !src.contains("bundle::decrypt_with("),
+            "the importer is back on `decrypt_with`, which allocates the plaintext beside \
+             the sealed file — ROADMAP O138 measured the import path at 4.49x"
+        );
+    }
+
     /// **The browser importer must refuse every encrypted bundle, not the
     /// one version that existed when the guard was written.**
     ///
