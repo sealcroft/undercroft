@@ -114,8 +114,12 @@ jobs:
         # cannot drift into different sets" — measured, the sets differ in BOTH
         # directions and always have: the matrix has `onnx-build` and the
         # battery does not; the battery has `lint` and `site`, which CI runs as
-        # their own jobs; and `ort-build` is a compose service run by neither,
-        # while `release.yml` ships an `ort` binary for all five targets.
+        # their own jobs. `ort-build` WAS a compose service run by neither
+        # while `release.yml` shipped an `ort` binary for all five targets;
+        # O141 added it to this matrix, so what remains is that the two
+        # model-crate legs run in CI and not in a local battery — deliberate
+        # (both are heavy and one needs a C++ toolchain), and stated rather
+        # than left looking like a gap.
         # Nothing counted them, so the claim survived by assertion. The
         # reconciliation is filed in ROADMAP O9 — what is fixed here is the
         # verdict, not yet the sets.
@@ -131,6 +135,12 @@ jobs:
         #                    every check green
         #   backends-e2e     five live vector DBs over TLS
         #   onnx-build       ONNX embedder + reranker compile check
+        #   ort-build        the ONNX Runtime backend, which `release.yml`
+        #                    SHIPS for five targets. Added by O141: it was a
+        #                    compose service run by neither CI nor the
+        #                    battery, so a published artifact compiled on no
+        #                    pull request — the `windows-check` shape (O102)
+        #                    on the feature axis instead of the platform one
         #   arch-check       the architecture reference is what diagrams/ and
         #                    its own headings derive to — no build, a stock
         #                    python image, and a read-only mount because the
@@ -144,6 +154,7 @@ jobs:
           - e2e-telemetry
           - backends-e2e
           - onnx-build
+          - ort-build
     steps:
       - uses: actions/checkout@v5
       # Through `battery.sh`, not `docker compose run` directly. The script

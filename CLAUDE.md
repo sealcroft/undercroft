@@ -1754,8 +1754,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (845 run,
-                                      # 4 #[ignore]d = 849 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (847 run,
+                                      # 4 #[ignore]d = 851 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1872,7 +1872,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (496 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (499 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (133 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (82 checks; weaviate
@@ -2306,11 +2306,18 @@ while the matrix leg published one literally called `test`. (2) *"needs:
 suites"* left five jobs outside the verdict. (3) *"named from the same strings
 `tests/battery.sh` uses so CI and a local battery cannot drift into different
 sets"* — measured, the sets differ in BOTH directions and always have: the
-matrix carries `onnx-build` and the battery does not, the battery carries
-`lint` and `site` which CI runs as their own jobs, and `ort-build` is a
-compose service **run by neither** while `release.yml` ships an `ort` binary
-for five targets. Each survived because it was asserted in prose beside the
-thing it described and nothing counted it — *a comment is not a gate*, which
+matrix carries the two model-crate legs and the battery does not, and the
+battery carries `lint` and `site` which CI runs as their own jobs. **`ort-build`
+was a compose service run by NEITHER** while `release.yml` shipped an `ort`
+binary for five targets — a published artifact compiled on no pull request,
+which is O102's *"a target you SHIP is a target that must be compiled on a
+pull request"* on the FEATURE axis rather than the platform one. O141 added it
+to the matrix (verified green locally first, because a leg that fails on
+arrival teaches everyone to ignore it). What remains of the difference is a
+DECISION and is stated as one: the two model-crate legs run in CI and not in a
+local battery, both being heavy and one needing a C++ toolchain. Each of the
+three survived because it was asserted in prose beside the thing it described
+and nothing counted it — *a comment is not a gate*, which
 is this file's own first rule applied to this file.
 Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
 (host bind-mounted `target/` SIGBUSes under memory pressure).

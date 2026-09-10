@@ -3016,6 +3016,16 @@ fn run(cli: Cli) -> Result<()> {
             let mut store = open_store(&cli, vault)?;
             let raw = std::fs::read(file).with_context(|| format!("reading {}", file.display()))?;
             let text = if undercroft_vault::bundle::is_bundle(&raw) {
+                // Version before identity (O141): a bundle this build cannot
+                // open is not a missing-key problem, and demanding a key
+                // first sends the operator hunting for the wrong thing.
+                if let Some(v) = undercroft_vault::bundle::unsupported_version(&raw) {
+                    bail!(
+                        "{} is a version {v} bundle — this build of undercroft cannot open it; \
+                         upgrade to a build that supports it",
+                        file.display()
+                    );
+                }
                 let id_path = identity.as_ref().ok_or_else(|| {
                     anyhow::anyhow!(
                         "{} is an encrypted bundle — pass --identity <keyfile> to open it",

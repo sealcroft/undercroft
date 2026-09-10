@@ -60,6 +60,18 @@ pub const BUNDLE_MAGIC: &[u8; 19] = b"UNDERCROFT-BUNDLE-1";
 /// key and the KEM ciphertext).
 pub const BUNDLE_MAGIC_V2: &[u8; 19] = b"UNDERCROFT-BUNDLE-2";
 
+/// The version-agnostic stem both magics share, and the one every reader
+/// should ask "is this a bundle?" with.
+///
+/// Deliberately NOT named `BUNDLE_MAGIC_*`: `parity.rs`'s browser gate
+/// collects every `const BUNDLE_MAGIC` line and requires `ui.html`'s guard
+/// to equal their longest common prefix. Sweeping this constant into that
+/// set would make the comparison tautological — the LCP would be this
+/// literal by construction, and a v3 magic on a different stem would stop
+/// being caught. `the_prefix_is_a_prefix_of_every_magic` pins the relation
+/// instead.
+pub const BUNDLE_PREFIX: &[u8; 18] = b"UNDERCROFT-BUNDLE-";
+
 /// Prefix on hybrid identity/recipient strings. A bare 64-char hex string
 /// remains a legacy X25519 key; the prefix is a declared format, not an
 /// inference.
@@ -114,6 +126,18 @@ pub enum BundleError {
     /// because the clock does.
     #[error("bundle expired at {0}")]
     Expired(String),
+    /// The file IS a bundle, of a version this build does not know.
+    ///
+    /// C3.4's "typed refusal to old readers", made reachable (O141). It
+    /// cannot help binaries already shipped — nothing can teach those — but
+    /// it is what makes THIS build a good ancestor: a reader that
+    /// recognises the stem and refuses by version is the difference between
+    /// "upgrade undercroft" and a sentence about UTF-8.
+    #[error(
+        "this bundle is version {0}, which this build of undercroft cannot open — \
+         upgrade to a build that supports it"
+    )]
+    UnsupportedVersion(String),
     /// Writing a sealed bundle to its sink failed.
     ///
     /// Only [`encrypt_for_into`] can raise this: it hands the caller's sink
@@ -211,11 +235,51 @@ pub fn recipient_of(secret_hex: &str) -> Result<String, BundleError> {
     }
 }
 
-/// True if `bytes` starts with either bundle magic.
+/// True if `bytes` is a bundle of ANY version — the shared stem, not one
+/// version's magic.
+///
+/// This asked for `BUNDLE_MAGIC` or `BUNDLE_MAGIC_V2` exactly until O141,
+/// which made it answer `false` for any format newer than the binary. The
+/// consequence was not a refusal but a MISREADING: `undercroft import`
+/// fell to its plaintext branch and told the operator the file "is not
+/// UTF-8 text" — a statement about a sealed bundle that is true and
+/// useless, and the exact defect fixed on the browser side long ago
+/// (`ui.html` has guarded the stem since; the inversion was that only the
+/// browser was forward-compatible, and only the browser had a gate).
+///
+/// Recognising a version is not supporting it: [`unsupported_version`] is
+/// the second half, and [`open_header`] refuses rather than guessing.
 pub fn is_bundle(bytes: &[u8]) -> bool {
-    bytes.len() >= BUNDLE_MAGIC.len()
-        && (&bytes[..BUNDLE_MAGIC.len()] == BUNDLE_MAGIC
-            || &bytes[..BUNDLE_MAGIC_V2.len()] == BUNDLE_MAGIC_V2)
+    bytes.starts_with(BUNDLE_PREFIX)
+}
+
+/// The version a bundle DECLARES, when this build cannot open it.
+///
+/// `None` for a version this build supports (and for anything that is not
+/// a bundle at all). `Some(v)` is what a caller should refuse by name, so
+/// that an operator is told to upgrade rather than sent looking for a key
+/// or a corrupt file.
+pub fn unsupported_version(bytes: &[u8]) -> Option<String> {
+    if !is_bundle(bytes) {
+        return None;
+    }
+    if bytes.starts_with(BUNDLE_MAGIC) || bytes.starts_with(BUNDLE_MAGIC_V2) {
+        return None;
+    }
+    // Whatever the writer put after the stem, bounded and rendered
+    // conservatively: this string reaches an error message, so it may not
+    // carry arbitrary bytes out of an untrusted file.
+    let declared: String = bytes[BUNDLE_PREFIX.len()..]
+        .iter()
+        .take(8)
+        .take_while(|b| b.is_ascii_alphanumeric())
+        .map(|&b| b as char)
+        .collect();
+    Some(if declared.is_empty() {
+        "(unreadable)".to_string()
+    } else {
+        declared
+    })
 }
 
 /// A bundle's header, which is also its AAD, paired with the file key it
@@ -364,6 +428,13 @@ fn open_header(secret_hex: &str, bundle: &[u8]) -> Result<OpenedHeader, BundleEr
             key,
             nonce,
         ));
+    }
+    // Recognising the stem is not the same as knowing the format. Without
+    // this, a newer bundle reached the v1 parse and was MISREAD as v1 —
+    // reported as a wrong key or a corrupt file, which sends an operator
+    // hunting for the wrong thing (O141).
+    if let Some(v) = unsupported_version(bundle) {
+        return Err(BundleError::UnsupportedVersion(v));
     }
     let rest = &bundle[BUNDLE_MAGIC.len()..];
     if rest.len() < 32 + NONCE_LEN + TAG_LEN {
@@ -861,6 +932,74 @@ mod tests {
             hex::encode(secret.as_bytes()),
             hex::encode(public.as_bytes()),
         )
+    }
+
+    /// `BUNDLE_PREFIX` is deliberately outside the browser gate's view, so
+    /// the relation it depends on is pinned HERE instead: every declared
+    /// magic must actually start with the stem every reader tests for.
+    /// Without this, a `BUNDLE_MAGIC_V3` on a different stem would leave
+    /// `is_bundle` answering `false` for it — the O141 defect returning by
+    /// the one route the browser gate cannot see.
+    #[test]
+    fn the_prefix_is_a_prefix_of_every_magic() {
+        for (name, magic) in [
+            ("BUNDLE_MAGIC", BUNDLE_MAGIC.as_slice()),
+            ("BUNDLE_MAGIC_V2", BUNDLE_MAGIC_V2.as_slice()),
+        ] {
+            assert!(
+                magic.starts_with(BUNDLE_PREFIX),
+                "{name} does not start with BUNDLE_PREFIX — is_bundle would not recognise it"
+            );
+            assert!(
+                magic.len() > BUNDLE_PREFIX.len(),
+                "{name} carries no version after the stem"
+            );
+        }
+    }
+
+    /// **A bundle from the future is RECOGNISED and refused by version.**
+    ///
+    /// The property O141 exists for, and the one no round trip can show:
+    /// every test here writes a bundle this build can read. This one
+    /// fabricates a version the build does not know and asserts the reader
+    /// says so — rather than answering "not a bundle" (which sent the CLI
+    /// to its plaintext branch and produced a sentence about UTF-8) or
+    /// misreading it as v1 (a wrong-key or corrupt-file verdict, sending an
+    /// operator after the wrong thing).
+    #[test]
+    fn a_bundle_from_the_future_is_recognised_and_refused_by_version() {
+        let (secret, _recipient) = keygen();
+        let mut future = BUNDLE_PREFIX.to_vec();
+        future.extend_from_slice(b"9");
+        future.extend_from_slice(&[0u8; 32 + NONCE_LEN + TAG_LEN]);
+
+        assert!(
+            is_bundle(&future),
+            "a v9 bundle must be RECOGNISED as a bundle; answering false is what \
+             sent `undercroft import` to its plaintext branch"
+        );
+        assert_eq!(
+            unsupported_version(&future).as_deref(),
+            Some("9"),
+            "the declared version must be reported so the refusal can name it"
+        );
+        match decrypt_with(&secret, &future) {
+            Err(BundleError::UnsupportedVersion(v)) => assert_eq!(v, "9"),
+            other => panic!("expected UnsupportedVersion, got {other:?}"),
+        }
+
+        // The versions this build DOES know are unaffected in both answers.
+        for known in [BUNDLE_MAGIC.as_slice(), BUNDLE_MAGIC_V2.as_slice()] {
+            assert_eq!(
+                unsupported_version(known),
+                None,
+                "a supported version must not be refused as unsupported"
+            );
+        }
+        // And a non-bundle is still not a bundle: the widened guard must not
+        // start claiming arbitrary files.
+        assert!(!is_bundle(b"{\"drawer\":{}}"));
+        assert_eq!(unsupported_version(b"{\"drawer\":{}}"), None);
     }
 
     /// O138 changed HOW a bundle is assembled and must not have changed

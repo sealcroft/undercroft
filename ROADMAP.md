@@ -3988,7 +3988,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**169** of the **184** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**171** of the **186** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4175,6 +4175,105 @@ CLI's absence was the defect, and a capability new to one surface but old to
 the product is a drift closure rather than a feature. The doctrine's existing
 test, applied; it reclassifies nothing (`1.5.0` stays MINOR, `1.2.1` and
 `1.2.2` stay PATCH). Filed here until the tag exists.
+
+### O142 — CLOSED 2026-09-10: the ORT backend is compiled on a pull request, and O9's residual is out of a closed body
+
+**`ort-build` was a compose service run by NEITHER CI nor the battery, while
+`release.yml` ships an `ort` binary for all five targets.** A published
+artifact compiled by nothing. Verified rather than assumed: its only
+appearance in `ci.yml` was a comment saying exactly that, and
+`tests/battery.sh`'s suite list excludes it.
+
+**This is O102's shape on a different axis.** That entry closed "nothing here
+compiled for Windows on a pull request", and its lesson — *a target you SHIP
+is a target that must be compiled on a pull request* — was written about the
+platform axis. The same sentence applies unchanged to the FEATURE axis, and
+the instance was sitting in the file that quotes it. `1.2.1` shipped 16 assets
+instead of 20 the last time this class went unnoticed, and the symptom arrived
+at a tag, which is the one moment it cannot be fixed without a new version.
+
+**Confirmed green before it was added.** A leg that fails the moment it is
+introduced makes `main` red and teaches everyone to ignore it, so `ort-build`
+was run locally first (`bash tests/battery.sh --no-preflight ort-build`) and
+only then wired in.
+
+**It is a matrix LEG, not a job**, so `verdict`'s `needs:` does not move and
+the CI-inventory preflight still reads 10 of 11 — checked, because the
+opposite would have been a silent narrowing of the verdict.
+
+**The filing residual, lifted.** `ci.yml`'s own comment ended *"The
+reconciliation is filed in ROADMAP O9 — what is fixed here is the verdict, not
+yet the sets."* **O9 is `CLOSED 2026-08-11`**, so that work had been living
+inside the body of a closed entry — the exact drift `## Open`'s preamble
+describes and O134 was filed for, and invisible to the heading gate, whose
+three arms all judge an entry's own status. Recorded here instead.
+
+**What remains of the set difference, as a DECISION rather than a gap**: the
+two model-crate legs (`onnx-build`, `ort-build`) run in CI and not in a local
+battery. That is deliberate — both are heavy and one needs a C++ toolchain —
+and `ci.yml` now says so where it used to describe an unreconciled set.
+
+**One more thing the leg surfaced, in scope because adding it caused it.** A
+compile-check suite prints no summary line, so the O27 reader answered *"no
+results line found — this reader examined nothing"* for it. `battery.sh` keeps
+a NAMED set for that case, whose own comment explains why: the same string is
+a real signal for every other suite, so printing it routinely teaches the
+reader to skip it. That set held `lint` and `arch-check`; `onnx-build` had
+been outside it all along, and `ort-build` would have joined it. Both are in
+it now — and the comment beside it already predicted this, having been written
+when `arch-check` made the class two: *"a class of two written as two special
+cases becomes a class of three written as three."*
+
+### O141 — CLOSED 2026-09-10: the CLI recognises a bundle from the future, and refuses it by version
+
+**Found by the O137 fanout's adversarial agent, which went looking for what
+everyone had missed and found the drift running the WRONG WAY.** `ui.html`
+guards the version-agnostic stem `UNDERCROFT-BUNDLE-`, and
+`the_browser_importer_refuses_every_bundle_version` pins that guard to the
+longest common prefix of every declared magic — so the BROWSER was
+forward-compatible and gated. `is_bundle` compared the two magics EXACTLY, so
+the CLI was neither.
+
+**The consequence was a misreading, not a refusal.** `undercroft import`
+handed any newer bundle to its plaintext branch, where it became
+`"<file> is not UTF-8 text"` — a statement about a sealed binary file that is
+true and useless. That is the same defect the browser guard was widened to
+remove, surviving on the other surface, with the gate covering only the
+surface that had already been fixed.
+
+**Recognising a version is not supporting it, and the fix needs both halves.**
+Widening `is_bundle` alone would have been worse than the defect: a v3 file
+would have been recognised, then fallen through to the v1 parse and been
+MISREAD — reported as a wrong key or a corrupt file, sending an operator after
+a key that is not the problem. So `unsupported_version` reports the declared
+version, `open_header` refuses with a typed `BundleError::UnsupportedVersion`
+before any parse, and `undercroft import` checks the version BEFORE demanding
+`--identity`, because a bundle this build cannot open is not a missing-key
+problem.
+
+**What it does and does not buy.** It cannot help binaries already shipped —
+nothing can teach those, and a 1.5.x binary meeting a future format will still
+say "not UTF-8 text". What it buys is that THIS build is a good ancestor: it
+is C3.4's fourth property ("a typed refusal to old readers") made reachable,
+and it is the prerequisite for any future format shipping cleanly. That is why
+it is worth doing now, with no v3 in sight.
+
+**`BUNDLE_PREFIX` is deliberately NOT named `BUNDLE_MAGIC_*`.** The browser
+gate collects every `const BUNDLE_MAGIC` line and requires `ui.html`'s guard
+to equal their longest common prefix. Sweeping the stem into that set would
+make the comparison TAUTOLOGICAL — the LCP would be the stem by construction,
+and a v3 magic on a different stem would stop being caught. The relation is
+pinned separately by `the_prefix_is_a_prefix_of_every_magic`, which is the
+half the browser gate cannot see.
+
+**Gates.** `a_bundle_from_the_future_is_recognised_and_refused_by_version`
+fabricates a version this build does not know and asserts all three answers —
+recognised, named, refused — plus that supported versions are unaffected and
+that a non-bundle is still not a bundle (the widened guard must not start
+claiming arbitrary files). Counterfactualed: restoring the exact-magic
+comparison fails it by name, on the assertion that states the defect. No round
+trip could have caught this, because every other test in the file writes a
+bundle this build can read.
 
 ### O138 — CLOSED 2026-09-10: the sealed export and the import were the expensive paths, and nothing had ever measured either
 

@@ -71,7 +71,7 @@ OVERALL=0
 # population, and inventing a metric so it could satisfy a reader is how a
 # figure stops meaning anything. Both also publish no check count, which is
 # consistent: nothing to compare, so nothing skipped silently.
-NO_SUMMARY_SUITES=(lint arch-check)
+NO_SUMMARY_SUITES=(lint arch-check onnx-build ort-build)
 
 if [ "$PREFLIGHT_ONLY" -eq 1 ] && [ "$NO_PREFLIGHT" -eq 1 ]; then
   echo "--preflight-only and --no-preflight are contradictory" >&2
