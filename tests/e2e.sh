@@ -1447,6 +1447,24 @@ else
   echo "FAIL  bundle leaked plaintext"; FAIL=$((FAIL+1))
 fi
 check "bundle import needs key"   1 "encrypted bundle"               -- env UNDERCROFT_HOME="$IMPORT_HOME" "$BIN" import "$BUNDLE_FILE"
+
+# ROADMAP O141. A bundle from a FUTURE version, through the surface an
+# operator drives. `is_bundle` compared the two magics exactly, so this file
+# reached the plaintext branch and the operator was told it "is not UTF-8
+# text" — true of a sealed binary, and useless. The version check runs BEFORE
+# the identity demand, so no key is passed here: a format this build cannot
+# open is not a missing-key problem.
+FUTURE_BUNDLE="$(mktemp -u)"
+{ printf 'UNDERCROFT-BUNDLE-9'; head -c 128 /dev/zero; } > "$FUTURE_BUNDLE"
+check "future bundle names its version"  1 "version 9"      -- env UNDERCROFT_HOME="$IMPORT_HOME" "$BIN" import "$FUTURE_BUNDLE"
+check "future bundle says upgrade"       1 "upgrade"        -- env UNDERCROFT_HOME="$IMPORT_HOME" "$BIN" import "$FUTURE_BUNDLE"
+# The negative half: it must NOT be mistaken for plaintext any more.
+if UNDERCROFT_HOME="$IMPORT_HOME" "$BIN" import "$FUTURE_BUNDLE" 2>&1 | grep -q "not UTF-8 text"; then
+  echo "FAIL  future bundle still reaches the plaintext branch"; FAIL=$((FAIL+1))
+else
+  echo "ok    future bundle no longer reads as plaintext"; PASS=$((PASS+1))
+fi
+rm -f "$FUTURE_BUNDLE"
 out="$(UNDERCROFT_HOME="$IMPORT_HOME" "$BIN" import "$BUNDLE_FILE" --identity "$BUNDLE_KEY" 2>&1)"; code=$?
 if [ $code -eq 0 ] && grep -q "Imported" <<<"$out"; then
   echo "ok    bundle import with identity"; PASS=$((PASS+1))

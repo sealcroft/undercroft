@@ -19,6 +19,32 @@ That is the doctrine's existing test applied, not a new one. It reclassifies
 nothing: `1.5.0` stays MINOR (the per-vault database genuinely gained a
 name, which no surface had), and `1.2.1`/`1.2.2` stay PATCH.
 
+### O141/O142 — a bundle from the future is recognised, and the ORT backend is compiled on a pull request
+
+**O141.** `ui.html` guarded the version-agnostic `UNDERCROFT-BUNDLE-` stem
+and had a gate pinning it to every declared magic; `is_bundle` compared the
+two magics exactly and had neither. So the **browser** was forward-compatible
+and the **CLI** was not, and `undercroft import` handed any newer bundle to
+its plaintext branch — telling the operator a sealed binary file "is not
+UTF-8 text". `is_bundle` matches the stem now, `unsupported_version` reports
+what the file declares, and `BundleError::UnsupportedVersion` refuses before
+any parse — because recognising a version without refusing it would have been
+worse: a v3 file would have been misread as v1 and reported as a wrong key.
+The CLI checks the version BEFORE demanding `--identity`, since a format this
+build cannot open is not a missing-key problem. It cannot help binaries
+already shipped; it is what makes this build a good ancestor, and it is
+C3.4's "typed refusal to old readers" finally made reachable.
+
+**O142.** `ort-build` was a compose service run by **neither** CI nor the
+battery, while `release.yml` ships an `ort` binary for five targets — a
+published artifact compiled on no pull request. That is O102's *"a target you
+SHIP is a target that must be compiled on a pull request"* on the feature axis
+rather than the platform one. It is a ninth matrix leg now, verified green
+locally before being wired in. The set-reconciliation residual that had been
+living inside the body of the CLOSED O9 is recorded as its own entry, and what
+remains of the CI-vs-battery difference is stated as a decision rather than
+left looking like a gap.
+
 ### O138 — the sealed export and the import stop holding the corpus twice
 
 `undercroft export --to` held **three** whole-payload buffers and
