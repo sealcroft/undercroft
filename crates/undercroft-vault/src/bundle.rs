@@ -35,7 +35,7 @@
 //! **cryptography** — nothing here processes anything on a quantum
 //! computer, and no such claim exists anywhere in this project.
 
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
+use chacha20poly1305::aead::{AeadInPlace, KeyInit};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use hkdf::Hkdf;
@@ -48,6 +48,11 @@ use x25519_dalek::{EphemeralSecret, PublicKey, StaticSecret};
 
 type KemDk = ml_kem::kem::DecapsulationKey<MlKem768Params>;
 type KemEk = ml_kem::kem::EncapsulationKey<MlKem768Params>;
+
+/// What `open_header` recovers from a bundle's head: how many leading bytes
+/// the header and nonce occupy, the AAD (which IS the header), the file key,
+/// and the nonce.
+type OpenedHeader = (usize, Vec<u8>, [u8; KEY_LEN], [u8; NONCE_LEN]);
 
 /// v1 bundle file magic (also AAD, with the ephemeral key).
 pub const BUNDLE_MAGIC: &[u8; 19] = b"UNDERCROFT-BUNDLE-1";
@@ -62,6 +67,9 @@ pub const HYBRID_PREFIX: &str = "pq1";
 
 const NONCE_LEN: usize = 24;
 const KEY_LEN: usize = 32;
+/// The Poly1305 tag the AEAD appends to every ciphertext. Named because
+/// `encrypt_for_into` must reserve room for it before sealing in place.
+const TAG_LEN: usize = 16;
 /// ML-KEM-768 encoded sizes (FIPS 203).
 const KEM_EK_LEN: usize = 1184;
 const KEM_DK_LEN: usize = 2400;
@@ -106,6 +114,14 @@ pub enum BundleError {
     /// because the clock does.
     #[error("bundle expired at {0}")]
     Expired(String),
+    /// Writing a sealed bundle to its sink failed.
+    ///
+    /// Only [`encrypt_for_into`] can raise this: it hands the caller's sink
+    /// the bytes as they are produced instead of returning one buffer, so
+    /// unlike every other variant here the failure can be the sink's rather
+    /// than the format's.
+    #[error("writing bundle: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 /// What [`BundleManifest::attest`] concluded about a payload's provenance.
@@ -202,27 +218,27 @@ pub fn is_bundle(bytes: &[u8]) -> bool {
             || &bytes[..BUNDLE_MAGIC_V2.len()] == BUNDLE_MAGIC_V2)
 }
 
-/// Seal `plaintext` so only `recipient_hex`'s identity can open it. The
-/// recipient string selects the format: a hybrid (`pq1`) recipient always
-/// produces a v2 hybrid bundle — never a silent downgrade — and a legacy
-/// bare-hex recipient produces a v1 bundle it can actually open.
-pub fn encrypt_for(recipient_hex: &str, plaintext: &[u8]) -> Result<Vec<u8>, BundleError> {
+/// A bundle's header, which is also its AAD, paired with the file key it
+/// was derived alongside: magic ‖ ephemeral public key, plus the KEM
+/// ciphertext on v2.
+///
+/// One function because those are one decision. Every byte a reader needs
+/// in order to re-derive the key is exactly the run of bytes the AEAD
+/// authenticates, so producing them separately is producing two copies of
+/// one fact. The recipient string selects the format: a hybrid (`pq1`)
+/// recipient always produces a v2 header — never a silent downgrade — and
+/// a legacy bare-hex recipient produces a v1 header it can actually open.
+fn seal_header(recipient_hex: &str) -> Result<(Vec<u8>, [u8; KEY_LEN]), BundleError> {
     match parse_public(recipient_hex)? {
         Recipient::X25519(recipient) => {
             let eph = EphemeralSecret::random_from_rng(OsRng);
             let eph_pub = PublicKey::from(&eph);
             let shared = eph.diffie_hellman(&recipient);
             let key = file_key(eph_pub.as_bytes(), recipient.as_bytes(), shared.as_bytes());
-            let mut aad = Vec::with_capacity(BUNDLE_MAGIC.len() + 32);
-            aad.extend_from_slice(BUNDLE_MAGIC);
-            aad.extend_from_slice(eph_pub.as_bytes());
-            let (nonce, ct) = seal(&key, plaintext, &aad)?;
-            let mut out = Vec::with_capacity(BUNDLE_MAGIC.len() + 32 + NONCE_LEN + ct.len());
-            out.extend_from_slice(BUNDLE_MAGIC);
-            out.extend_from_slice(eph_pub.as_bytes());
-            out.extend_from_slice(&nonce);
-            out.extend_from_slice(&ct);
-            Ok(out)
+            let mut header = Vec::with_capacity(BUNDLE_MAGIC.len() + 32);
+            header.extend_from_slice(BUNDLE_MAGIC);
+            header.extend_from_slice(eph_pub.as_bytes());
+            Ok((header, key))
         }
         Recipient::Hybrid(recipient_x, ek) => {
             let eph = EphemeralSecret::random_from_rng(OsRng);
@@ -237,43 +253,91 @@ pub fn encrypt_for(recipient_hex: &str, plaintext: &[u8]) -> Result<Vec<u8>, Bun
                 x_shared.as_bytes(),
                 &kem_shared,
             );
-            let mut aad = Vec::with_capacity(BUNDLE_MAGIC_V2.len() + 32 + KEM_CT_LEN);
-            aad.extend_from_slice(BUNDLE_MAGIC_V2);
-            aad.extend_from_slice(eph_pub.as_bytes());
-            aad.extend_from_slice(&kem_ct);
-            let (nonce, ct) = seal(&key, plaintext, &aad)?;
-            let mut out =
-                Vec::with_capacity(BUNDLE_MAGIC_V2.len() + 32 + KEM_CT_LEN + NONCE_LEN + ct.len());
-            out.extend_from_slice(BUNDLE_MAGIC_V2);
-            out.extend_from_slice(eph_pub.as_bytes());
-            out.extend_from_slice(&kem_ct);
-            out.extend_from_slice(&nonce);
-            out.extend_from_slice(&ct);
-            Ok(out)
+            let mut header = Vec::with_capacity(BUNDLE_MAGIC_V2.len() + 32 + KEM_CT_LEN);
+            header.extend_from_slice(BUNDLE_MAGIC_V2);
+            header.extend_from_slice(eph_pub.as_bytes());
+            header.extend_from_slice(&kem_ct);
+            Ok((header, key))
         }
     }
 }
 
-/// Open a bundle with the identity secret that matches its recipient. The
-/// bundle's magic selects the path: a v2 bundle demands the hybrid
-/// identity's KEM half (an X25519-only secret gets [`BundleError::NeedsHybrid`],
-/// never a downgraded attempt); a v1 bundle opens with the X25519 half of
-/// either identity form.
-pub fn decrypt_with(secret_hex: &str, bundle: &[u8]) -> Result<Vec<u8>, BundleError> {
+/// Seal `plaintext` to `recipient_hex`, writing the bundle to `out` and
+/// consuming the caller's buffer.
+///
+/// Byte-for-byte the bundle [`encrypt_for`] produces — **the format does
+/// not move** (ROADMAP O138). What moves is the peak. The previous shape
+/// asked for an owned ciphertext and then copied it into a second owned
+/// buffer, so a sealed export held THREE whole-payload allocations at
+/// once: the caller's plaintext, the ciphertext, and the assembled bundle.
+/// Measured on a 361,779-drawer vault whose export is 467.7 MB, that was
+/// **1,349 MB peak RSS (3.02x)** — worse than the unsealed peak O113 was
+/// filed to fix, on a path neither O113 nor O137 ever measured.
+///
+/// Here the caller hands its buffer over, the tag is appended IN PLACE,
+/// and the header reaches the sink ahead of it, so one allocation serves.
+pub fn encrypt_for_into<W: std::io::Write>(
+    recipient_hex: &str,
+    mut plaintext: Vec<u8>,
+    out: &mut W,
+) -> Result<u64, BundleError> {
+    let (header, key) = seal_header(recipient_hex)?;
+    let mut nonce = [0u8; NONCE_LEN];
+    OsRng.fill_bytes(&mut nonce);
+    // Ask for the tag's room before the AEAD does. `encrypt_in_place`
+    // appends TAG_LEN bytes, and a Vec that must grow for them reallocates
+    // by DOUBLING — which on a 467 MB payload is this entire defect back
+    // again, transiently, at the worst possible moment.
+    plaintext.reserve(TAG_LEN);
+    XChaCha20Poly1305::new((&key).into())
+        .encrypt_in_place(XNonce::from_slice(&nonce), &header, &mut plaintext)
+        .map_err(|_| BundleError::Open)?;
+    out.write_all(&header)?;
+    out.write_all(&nonce)?;
+    out.write_all(&plaintext)?;
+    Ok((header.len() + NONCE_LEN + plaintext.len()) as u64)
+}
+
+/// Seal `plaintext` so only `recipient_hex`'s identity can open it,
+/// returning the whole bundle in one buffer.
+///
+/// Prefer [`encrypt_for_into`] for anything vault-sized: this has to copy
+/// the caller's slice so the AEAD has a buffer it owns.
+pub fn encrypt_for(recipient_hex: &str, plaintext: &[u8]) -> Result<Vec<u8>, BundleError> {
+    // The v2 header is the larger of the two, so this over-reserves by
+    // KEM_CT_LEN on a v1 bundle and never reallocates on either.
+    let mut out = Vec::with_capacity(
+        plaintext.len() + BUNDLE_MAGIC_V2.len() + 32 + KEM_CT_LEN + NONCE_LEN + TAG_LEN,
+    );
+    encrypt_for_into(recipient_hex, plaintext.to_vec(), &mut out)?;
+    Ok(out)
+}
+
+/// Re-derive a bundle's file key from its header, and report how many
+/// leading bytes that header and the nonce occupy.
+///
+/// The reading half of [`seal_header`], and it exists for the same reason:
+/// the AAD and the key come out of one run of bytes, so one function
+/// yields both and they cannot drift apart. The bundle's magic selects the
+/// path — a v2 bundle demands the hybrid identity's KEM half (an
+/// X25519-only secret gets [`BundleError::NeedsHybrid`], never a
+/// downgraded attempt); a v1 bundle opens with the X25519 half of either
+/// identity form, so upgrading an identity never orphans old backups.
+fn open_header(secret_hex: &str, bundle: &[u8]) -> Result<OpenedHeader, BundleError> {
     if !is_bundle(bundle) {
         return Err(BundleError::BadMagic);
     }
     if &bundle[..BUNDLE_MAGIC_V2.len()] == BUNDLE_MAGIC_V2 {
         let rest = &bundle[BUNDLE_MAGIC_V2.len()..];
-        if rest.len() < 32 + KEM_CT_LEN + NONCE_LEN + 16 {
+        if rest.len() < 32 + KEM_CT_LEN + NONCE_LEN + TAG_LEN {
             return Err(BundleError::Truncated);
         }
         let Identity::Hybrid(secret, dk) = parse_secret(secret_hex)? else {
             return Err(BundleError::NeedsHybrid);
         };
-        let (eph_pub_bytes, rest) = rest.split_at(32);
-        let (kem_ct_bytes, rest) = rest.split_at(KEM_CT_LEN);
-        let (nonce, ct) = rest.split_at(NONCE_LEN);
+        let (eph_pub_bytes, after_eph) = rest.split_at(32);
+        let (kem_ct_bytes, after_kem) = after_eph.split_at(KEM_CT_LEN);
+        let (nonce_bytes, _) = after_kem.split_at(NONCE_LEN);
         let eph_pub_arr: [u8; 32] = eph_pub_bytes.try_into().expect("split_at(32)");
         let eph_pub = PublicKey::from(eph_pub_arr);
         let my_pub = PublicKey::from(&secret);
@@ -293,56 +357,62 @@ pub fn decrypt_with(secret_hex: &str, bundle: &[u8]) -> Result<Vec<u8>, BundleEr
         aad.extend_from_slice(BUNDLE_MAGIC_V2);
         aad.extend_from_slice(eph_pub_bytes);
         aad.extend_from_slice(kem_ct_bytes);
-        let cipher = XChaCha20Poly1305::new((&key).into());
-        return cipher
-            .decrypt(XNonce::from_slice(nonce), Payload { msg: ct, aad: &aad })
-            .map_err(|_| BundleError::Open);
+        let nonce: [u8; NONCE_LEN] = nonce_bytes.try_into().expect("split_at(NONCE_LEN)");
+        return Ok((
+            BUNDLE_MAGIC_V2.len() + 32 + KEM_CT_LEN + NONCE_LEN,
+            aad,
+            key,
+            nonce,
+        ));
     }
-    // v1: X25519 only — a hybrid identity opens it with its curve half,
-    // so upgrading an identity never orphans old backups.
     let rest = &bundle[BUNDLE_MAGIC.len()..];
-    if rest.len() < 32 + NONCE_LEN + 16 {
+    if rest.len() < 32 + NONCE_LEN + TAG_LEN {
         return Err(BundleError::Truncated);
     }
     let secret = match parse_secret(secret_hex)? {
         Identity::X25519(s) => s,
         Identity::Hybrid(s, _) => s,
     };
-    let (eph_pub_bytes, rest) = rest.split_at(32);
-    let (nonce, ct) = rest.split_at(NONCE_LEN);
+    let (eph_pub_bytes, after_eph) = rest.split_at(32);
+    let (nonce_bytes, _) = after_eph.split_at(NONCE_LEN);
     let eph_pub_arr: [u8; 32] = eph_pub_bytes.try_into().expect("split_at(32)");
     let eph_pub = PublicKey::from(eph_pub_arr);
     let my_pub = PublicKey::from(&secret);
     let shared = secret.diffie_hellman(&eph_pub);
     let key = file_key(eph_pub.as_bytes(), my_pub.as_bytes(), shared.as_bytes());
-    let cipher = XChaCha20Poly1305::new((&key).into());
     let mut aad = Vec::with_capacity(BUNDLE_MAGIC.len() + 32);
     aad.extend_from_slice(BUNDLE_MAGIC);
     aad.extend_from_slice(eph_pub_bytes);
-    cipher
-        .decrypt(XNonce::from_slice(nonce), Payload { msg: ct, aad: &aad })
-        .map_err(|_| BundleError::Open)
+    let nonce: [u8; NONCE_LEN] = nonce_bytes.try_into().expect("split_at(NONCE_LEN)");
+    Ok((BUNDLE_MAGIC.len() + 32 + NONCE_LEN, aad, key, nonce))
 }
 
-/// Random-nonce AEAD seal shared by both formats.
-fn seal(
-    key: &[u8; KEY_LEN],
-    plaintext: &[u8],
-    aad: &[u8],
-) -> Result<([u8; NONCE_LEN], Vec<u8>), BundleError> {
-    let mut nonce = [0u8; NONCE_LEN];
-    OsRng.fill_bytes(&mut nonce);
-    let cipher = XChaCha20Poly1305::new(key.into());
-    let ct = cipher
-        .encrypt(
-            XNonce::from_slice(&nonce),
-            Payload {
-                msg: plaintext,
-                aad,
-            },
-        )
+/// Open a bundle with the identity secret that matches its recipient,
+/// consuming the caller's buffer and returning the plaintext in it.
+///
+/// The one implementation; [`decrypt_with`] is a borrowing wrapper over
+/// this. ROADMAP O138: the returning shape allocated the plaintext beside
+/// a bundle the caller was still holding, which on the CLI's restore path
+/// was two of the **2,002 MB peak RSS (4.49x)** measured for importing a
+/// 467.7 MB bundle — the worst path in the export/import family, and one
+/// nothing had ever measured.
+pub fn decrypt_with_owned(secret_hex: &str, mut bundle: Vec<u8>) -> Result<Vec<u8>, BundleError> {
+    let (prefix, aad, key, nonce) = open_header(secret_hex, &bundle)?;
+    // The ciphertext moves down over the header rather than into a second
+    // allocation: a memmove inside the buffer already in hand.
+    bundle.drain(..prefix);
+    XChaCha20Poly1305::new((&key).into())
+        .decrypt_in_place(XNonce::from_slice(&nonce), &aad, &mut bundle)
         .map_err(|_| BundleError::Open)?;
-    Ok((nonce, ct))
+    Ok(bundle)
+}
+
+/// Open a bundle held by reference.
+///
+/// Prefer [`decrypt_with_owned`] for anything vault-sized: this has to
+/// copy the bundle so the AEAD has a buffer it owns.
+pub fn decrypt_with(secret_hex: &str, bundle: &[u8]) -> Result<Vec<u8>, BundleError> {
+    decrypt_with_owned(secret_hex, bundle.to_vec())
 }
 
 // ---- signed manifests -------------------------------------------------
@@ -791,6 +861,104 @@ mod tests {
             hex::encode(secret.as_bytes()),
             hex::encode(public.as_bytes()),
         )
+    }
+
+    /// O138 changed HOW a bundle is assembled and must not have changed
+    /// WHAT one is. A round trip through the current code cannot see that
+    /// distinction, because both halves moved together — so this carries an
+    /// INDEPENDENT implementation of the previous assembly (one-shot AEAD,
+    /// ciphertext copied in behind the header) and requires today's reader
+    /// to open it, which is the only claim an old backup cares about.
+    #[test]
+    fn a_bundle_assembled_the_previous_way_still_opens() {
+        use chacha20poly1305::aead::{Aead, Payload};
+        let (secret, recipient) = legacy_keygen();
+        let Recipient::X25519(recipient_pub) = parse_public(&recipient).expect("recipient parses")
+        else {
+            panic!("legacy_keygen produces an X25519 recipient");
+        };
+        let plaintext = b"a manifest line\nand a drawer\n".to_vec();
+
+        // --- the pre-O138 assembly, written out here rather than called ---
+        let eph = EphemeralSecret::random_from_rng(OsRng);
+        let eph_pub = PublicKey::from(&eph);
+        let shared = eph.diffie_hellman(&recipient_pub);
+        let key = file_key(
+            eph_pub.as_bytes(),
+            recipient_pub.as_bytes(),
+            shared.as_bytes(),
+        );
+        let mut aad = Vec::new();
+        aad.extend_from_slice(BUNDLE_MAGIC);
+        aad.extend_from_slice(eph_pub.as_bytes());
+        let mut nonce = [0u8; NONCE_LEN];
+        OsRng.fill_bytes(&mut nonce);
+        let ct = XChaCha20Poly1305::new((&key).into())
+            .encrypt(
+                XNonce::from_slice(&nonce),
+                Payload {
+                    msg: &plaintext,
+                    aad: &aad,
+                },
+            )
+            .expect("the previous seal");
+        let mut old = Vec::new();
+        old.extend_from_slice(BUNDLE_MAGIC);
+        old.extend_from_slice(eph_pub.as_bytes());
+        old.extend_from_slice(&nonce);
+        old.extend_from_slice(&ct);
+
+        assert_eq!(
+            decrypt_with(&secret, &old).expect("a pre-O138 bundle still opens"),
+            plaintext,
+            "a bundle assembled the previous way no longer opens — the format moved"
+        );
+
+        // And what the current sealer emits has that same shape: every
+        // field whose value is not random sits at the same offset, and the
+        // length is the layout's own arithmetic.
+        let new = encrypt_for(&recipient, &plaintext).expect("seal");
+        assert_eq!(new.len(), old.len(), "the sealed length moved");
+        assert_eq!(&new[..BUNDLE_MAGIC.len()], BUNDLE_MAGIC, "magic moved");
+        assert_eq!(
+            new.len(),
+            BUNDLE_MAGIC.len() + 32 + NONCE_LEN + plaintext.len() + TAG_LEN,
+            "the v1 layout is magic, ephemeral key, nonce, ciphertext+tag"
+        );
+    }
+
+    /// The streaming sealer and the buffering one produce the same format,
+    /// and the sink gets every byte. Without this, `encrypt_for_into` could
+    /// write a bundle only it can read — the whole risk of the change.
+    #[test]
+    fn the_streaming_sealer_and_the_buffering_one_agree() {
+        let (secret, recipient) = keygen();
+        let plaintext = b"streamed".to_vec();
+        let mut sink = Vec::new();
+        let written =
+            encrypt_for_into(&recipient, plaintext.clone(), &mut sink).expect("seal into a sink");
+        assert_eq!(
+            written as usize,
+            sink.len(),
+            "the reported byte count is not what reached the sink"
+        );
+        assert_eq!(
+            decrypt_with(&secret, &sink).expect("open the streamed bundle"),
+            plaintext,
+            "the buffering reader cannot open the streaming sealer's bundle"
+        );
+        // The other direction, so neither half can drift alone.
+        let buffered = encrypt_for(&recipient, &plaintext).expect("seal");
+        assert_eq!(
+            decrypt_with_owned(&secret, buffered).expect("open"),
+            plaintext,
+            "the consuming reader cannot open the buffering sealer's bundle"
+        );
+        assert_eq!(
+            sink.len(),
+            BUNDLE_MAGIC_V2.len() + 32 + KEM_CT_LEN + NONCE_LEN + plaintext.len() + TAG_LEN,
+            "the v2 layout is magic, ephemeral key, KEM ciphertext, nonce, ciphertext+tag"
+        );
     }
 
     #[test]

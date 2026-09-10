@@ -968,7 +968,7 @@ fn build_export_payload(
     signing_secret: Option<&str>,
     trust: Option<&str>,
     expires: Option<&str>,
-) -> Result<Vec<u8>> {
+) -> Result<(Vec<u8>, undercroft_vault::bundle::BundleManifest)> {
     use undercroft_vault::bundle;
     // ROADMAP O113. Pre-sized from the vault's own size: a `Vec` growing by
     // doubling to 468 MB holds ~805 MB across its final realloc, which is
@@ -991,23 +991,39 @@ fn build_export_payload(
         counts.drawers += 1;
         Ok(())
     })?;
-    for (name, etype) in store.kg_export_entities(undercroft_store::Read::Internal(
-        undercroft_store::InternalRead::ExportAudited,
-    ))? {
-        serde_json::to_writer(
-            &mut records,
-            &serde_json::json!({ "entity": { "name": name, "etype": etype } }),
-        )?;
-        records.push(b'\n');
-        counts.kg_entities += 1;
-    }
-    for exp in store.kg_export(undercroft_store::Read::Internal(
-        undercroft_store::InternalRead::ExportAudited,
-    ))? {
-        serde_json::to_writer(&mut records, &serde_json::json!({ "triple": exp }))?;
-        records.push(b'\n');
-        counts.kg_triples += 1;
-    }
+    // Streamed, like the drawers above (ROADMAP O138). These two held the
+    // whole graph TWICE apiece — raw rows, then decoded exports — inside
+    // the export path O113 had already streamed for drawers.
+    store.kg_export_entities_each(
+        undercroft_store::Read::Internal(undercroft_store::InternalRead::ExportAudited),
+        |(name, etype)| {
+            serde_json::to_writer(
+                &mut records,
+                &serde_json::json!({ "entity": { "name": &name, "etype": &etype } }),
+            )
+            .map_err(|e| undercroft_store::StoreError::CorruptRow {
+                id: name.clone(),
+                reason: e.to_string(),
+            })?;
+            records.push(b'\n');
+            counts.kg_entities += 1;
+            Ok(())
+        },
+    )?;
+    store.kg_export_each(
+        undercroft_store::Read::Internal(undercroft_store::InternalRead::ExportAudited),
+        |exp| {
+            serde_json::to_writer(&mut records, &serde_json::json!({ "triple": &exp })).map_err(
+                |e| undercroft_store::StoreError::CorruptRow {
+                    id: exp.triple.id.clone(),
+                    reason: e.to_string(),
+                },
+            )?;
+            records.push(b'\n');
+            counts.kg_triples += 1;
+            Ok(())
+        },
+    )?;
     for t in store.list_tunnels(None)? {
         serde_json::to_writer(&mut records, &serde_json::json!({ "tunnel": t }))?;
         records.push(b'\n');
@@ -1038,7 +1054,11 @@ fn build_export_payload(
     // buffer and copies, so both are live at once — the largest single term in
     // the measured peak.
     bundle::frame_payload_into(&manifest, &mut records);
-    Ok(records)
+    // The manifest goes back with the payload (ROADMAP O138). The one
+    // caller used to recover it by calling `split_payload` on the finished
+    // bytes, which re-hashes the ENTIRE record stream — a second SHA-256
+    // over 467 MB to reconstruct a value this function had in hand.
+    Ok((records, manifest))
 }
 
 /// Bulk-ingest batch size: bounds RAM (embeddings in flight) and how long
@@ -2814,7 +2834,7 @@ fn run(cli: Cli) -> Result<()> {
                         .with_context(|| format!("reading signing identity {}", p.display()))
                 })
                 .transpose()?;
-            let payload = build_export_payload(
+            let (payload, manifest) = build_export_payload(
                 &store,
                 signing.as_deref(),
                 trust.as_deref(),
@@ -2822,26 +2842,40 @@ fn run(cli: Cli) -> Result<()> {
             )?;
             // Every whole-vault egress leaves a chain record binding the
             // export's own manifest digest — the audit trail and the
-            // exported file corroborate each other.
-            if let (Some(m), _) = undercroft_vault::bundle::split_payload(&payload)
-                .map_err(|e| anyhow::anyhow!("{e}"))?
-            {
-                store.audit_export("cli", &m.counts, &m.payload_sha256, to.as_deref())?;
-            }
+            // exported file corroborate each other. The manifest arrives
+            // from the builder now rather than being re-derived from the
+            // finished bytes; unconditional because the builder always
+            // frames one, where the `if let` this replaces had a silent
+            // no-record branch that could never be taken.
+            store.audit_export(
+                "cli",
+                &manifest.counts,
+                &manifest.payload_sha256,
+                to.as_deref(),
+            )?;
             match to {
                 Some(recipient) => {
                     let path = out
                         .as_ref()
                         .ok_or_else(|| anyhow::anyhow!("--to requires --out <file>"))?;
-                    let sealed = undercroft_vault::bundle::encrypt_for(recipient, &payload)
-                        .map_err(|e| anyhow::anyhow!("sealing bundle: {e}"))?;
-                    std::fs::write(path, &sealed)?;
+                    // ROADMAP O138: the payload is HANDED OVER, not lent.
+                    // `encrypt_for` returned the whole sealed bundle, so this
+                    // arm held the plaintext, the ciphertext and the assembled
+                    // bundle at once — measured at 1,349 MB (3.02x) for a
+                    // 467.7 MB export, worse than the unsealed peak O113 was
+                    // filed to fix. Sealing in place and writing straight to
+                    // the file leaves one buffer. The bytes are identical.
+                    let mut sink = std::io::BufWriter::new(std::fs::File::create(path)?);
+                    let written =
+                        undercroft_vault::bundle::encrypt_for_into(recipient, payload, &mut sink)
+                            .map_err(|e| anyhow::anyhow!("sealing bundle: {e}"))?;
+                    sink.flush()?;
                     println!(
                         "Sealed bundle written to {} ({} drawers, {} bytes{}) — only the \
                          matching identity key can open it.",
                         path.display(),
                         store.count()?,
-                        sealed.len(),
+                        written,
                         if signing.is_some() {
                             ", sender-signed"
                         } else {
@@ -2990,7 +3024,11 @@ fn run(cli: Cli) -> Result<()> {
                 })?;
                 let secret = std::fs::read_to_string(id_path)
                     .with_context(|| format!("reading identity {}", id_path.display()))?;
-                let plain = undercroft_vault::bundle::decrypt_with(&secret, &raw)
+                // ROADMAP O138: the sealed file is HANDED OVER, so the
+                // plaintext lands in the buffer the ciphertext occupied
+                // instead of beside it. `decrypt_with` allocated the
+                // plaintext while this arm still held `raw`.
+                let plain = undercroft_vault::bundle::decrypt_with_owned(&secret, raw)
                     .map_err(|e| anyhow::anyhow!("opening bundle: {e}"))?;
                 String::from_utf8(plain).context("bundle payload is not UTF-8 JSONL")?
             } else {
@@ -3003,8 +3041,11 @@ fn run(cli: Cli) -> Result<()> {
             // export imports as before, unattested and said so.
             let (manifest, record_bytes) = undercroft_vault::bundle::split_payload(text.as_bytes())
                 .map_err(|e| anyhow::anyhow!("bundle manifest: {e}"))?;
-            let text = String::from_utf8(record_bytes.to_vec())
-                .context("bundle records are not UTF-8 JSONL")?;
+            // Borrowed, never copied (ROADMAP O138). This was a second
+            // whole-payload `String`, built while the first was still live,
+            // purely to drop one manifest line from the front.
+            let records =
+                std::str::from_utf8(record_bytes).context("bundle records are not UTF-8 JSONL")?;
             // The attestation decision is `BundleManifest::attest`, the same
             // call `/v1` makes (ROADMAP C5). This surface used to make its
             // own, and it had no `else`: with no `--sender` it printed
@@ -3073,12 +3114,12 @@ fn run(cli: Cli) -> Result<()> {
             let mut kg_facts = 0usize;
             let mut kg_entities = 0usize;
             let mut tunnels = 0usize;
-            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut seen: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
             let mut batch: Vec<Drawer> = Vec::new();
             let mut kg_batch: Vec<undercroft_store::TripleExport> = Vec::new();
             let mut entity_batch: Vec<(String, String)> = Vec::new();
             let mut tunnel_batch: Vec<(String, String, String)> = Vec::new();
-            for (lineno, line) in text.lines().enumerate() {
+            for (lineno, line) in records.lines().enumerate() {
                 let line = line.trim();
                 if line.is_empty() {
                     continue;
@@ -3164,13 +3205,17 @@ fn run(cli: Cli) -> Result<()> {
                         lineno + 1
                     );
                 };
-                if seen.contains(&drawer.content)
-                    || store.check_duplicate(&drawer.content)?.is_some()
-                {
+                // ROADMAP O138: the in-payload dedup set holds the store's
+                // own keyed fingerprint, not a clone of every drawer's
+                // content. Same question, same recipe as the
+                // `check_duplicate` on the next line — 32 bytes a drawer
+                // instead of the drawer.
+                let fp = store.content_fingerprint(&drawer.content);
+                if seen.contains(&fp) || store.check_duplicate(&drawer.content)?.is_some() {
                     skipped += 1;
                     continue;
                 }
-                seen.insert(drawer.content.clone());
+                seen.insert(fp);
                 batch.push(drawer);
             }
             let imported = batch.len();

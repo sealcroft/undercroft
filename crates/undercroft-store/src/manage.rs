@@ -717,6 +717,23 @@ impl VaultStore {
         fingerprint_with(&self.vault, content)
     }
 
+    /// The keyed content fingerprint [`VaultStore::check_duplicate`] looks
+    /// up, for a caller deduplicating a batch before it reaches the store.
+    ///
+    /// Exposed so that question has ONE recipe. `undercroft import` used to
+    /// answer it by keeping a clone of every drawer's content in a
+    /// `HashSet<String>` — a whole second copy of the payload, and part of
+    /// the 2,002 MB peak ROADMAP O138 measured — and the alternative to
+    /// this method was a hash invented at the call site, i.e. a second
+    /// implementation of a decision the store already makes one line later.
+    ///
+    /// A LOOKUP key, never an identifier: rotation recomputes it, so
+    /// nothing may hold a durable reference to one (CLAUDE.md's
+    /// rotatable-key-material rule).
+    pub fn content_fingerprint(&self, content: &str) -> Vec<u8> {
+        self.fingerprint(content)
+    }
+
     /// Exact-duplicate lookup by content. Returns the existing drawer id.
     ///
     /// Quarantine-pending rows do not answer: this is an oracle any writer

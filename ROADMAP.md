@@ -3988,7 +3988,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**166** of the **181** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**169** of the **184** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4175,6 +4175,83 @@ CLI's absence was the defect, and a capability new to one surface but old to
 the product is a drift closure rather than a feature. The doctrine's existing
 test, applied; it reclassifies nothing (`1.5.0` stays MINOR, `1.2.1` and
 `1.2.2` stay PATCH). Filed here until the tag exists.
+
+### O138 — CLOSED 2026-09-10: the sealed export and the import were the expensive paths, and nothing had ever measured either
+
+**Filed and closed together, out of the O137 analysis.** Four independent
+agents (format practice, integrity/threat model, blast radius, adversarial
+refuter) were asked where a v3 bundle's payload digest should live. All four
+returned the same structural answer — *v3 should be the envelope only* — and
+three of them, separately, found that the entry's motivating claims did not
+hold. The maintainer ruled the re-scope: fix what is measurable now, as a
+PATCH, and re-file O137 around what is left.
+
+**Measured, one corpus, one instrument.** 361,779 drawers mined from `docs/`,
+`VmHWM` via `/usr/bin/time -v`, the same shape O113 used. The first row is a
+PREMISE PROBE: it reproduces O113's published 1.02x, which is what makes the
+other two rows comparable to anything.
+
+| path | before | after |
+|---|---|---|
+| `export` to stdout (unsealed — O113's path) | 457 MB / **1.02x** | 457 MB / **1.02x** (untouched) |
+| `export --to` (sealed) | 1,349 MB / **3.02x** | **457 MB / 1.02x** |
+| `import` of that bundle | 2,002 MB / **4.49x** | **914 MB / 2.05x** |
+
+**The sealed export was worse than the number O113 was filed to fix**, and the
+import worse again — 2.0 GB to restore a 467.7 MB backup, on the surface
+CLAUDE.md calls "the surface every operator backup restore uses". O113
+measured the one path with no envelope on it; O137 then proposed a format
+change reasoning from that measurement.
+
+**What was wrong, and none of it needed a format change.**
+
+1. `encrypt_for` asked `seal()` for an owned ciphertext and copied it into a
+   second owned buffer, so the caller's plaintext, the ciphertext and the
+   assembled bundle were live at once. `encrypt_for_into` seals IN PLACE and
+   writes the header ahead of the buffer: one allocation.
+2. The importer held the sealed file and the plaintext simultaneously.
+   `decrypt_with_owned` consumes the buffer, decrypting in place.
+3. The importer then built a SECOND whole-payload `String` (`record_bytes
+   .to_vec()`) purely to drop one manifest line from the front. Borrowed now.
+4. The in-payload dedup set kept a clone of every drawer's content. It holds
+   the store's own keyed fingerprint now — `content_fingerprint`, the recipe
+   `check_duplicate` uses one line later, rather than a hash invented at the
+   call site. Identical outcome, verified: 262,048 imported / 99,731 skipped
+   both before and after.
+5. `kg_export` and `kg_export_entities` each held the whole graph TWICE — raw
+   rows, then decoded exports — inside the export path O113 had already
+   streamed for drawers. `kg_export_each` / `kg_export_entities_each` visit;
+   the collecting forms are thin wrappers, the `export_all`/`export_each`
+   arrangement.
+6. The CLI hashed the payload TWICE per export: `build_export_payload`
+   computed `payload_sha256`, then the caller ran `split_payload` over the
+   finished bytes to recover a manifest the builder already had. The builder
+   returns it. That also removed an `if let` whose no-record branch could
+   never be taken.
+
+**The format does not move.** `split_payload`, `frame_payload_into`,
+`canonical()`, `attest`, `BundleManifest` and the unsealed NDJSON contract are
+untouched, and the bundle layout is byte-identical.
+
+**Gates.** `a_bundle_assembled_the_previous_way_still_opens` carries an
+INDEPENDENT implementation of the pre-O138 assembly and requires today's
+reader to open it — a round trip through the current code cannot see a format
+change, because both halves move together. `the_streaming_sealer_and_the
+_buffering_one_agree` pins both directions. `the_graph_export_walks_do_not
+_materialize_the_graph` and `the_sealed_export_and_import_use_the_consuming
+_bundle_api` are SOURCE assertions with premise probes, for O113's reason: the
+property lives on the other side of the call, so counting what reaches a
+visitor is 1 either way. All four counterfactualed — reordering the header
+write fails 8 tests by name, a reintroduced `collect::<` and a reverted
+`decrypt_with` each fail by name.
+
+**Residual, stated.** Import is 2.05x, not ~1x. The remainder is
+`batch: Vec<Drawer>`, which accumulates every drawer before the first write —
+and emptying it changes FAILURE behaviour: today a malformed line at record N
+writes nothing, because the CLI parses the whole payload before it writes.
+That is a contract question (`ui.html` and `docs/AGENTS.md` already document
+partial-on-failure for STORE refusals, not for parse errors), so it is not
+smuggled in under a memory fix. Filed as O139.
 
 ### O136 — CLOSED 2026-09-09: the migration ceiling is a NAMED verdict with the remedy, and the ceiling itself stays
 
@@ -11790,6 +11867,74 @@ scanner (O33, O47). The mechanism here is a heading, not a gate.
 
 
 
+
+### O140 — an unsigned manifest's own fields are bound by nothing, and the orchestrator reads two of them to decide a migration
+
+**Filed 2026-09-10, found by the O137 fanout (two agents, independently) and
+re-verified here by reading `split_payload`.** Not a defect in the digest: the
+digest does exactly what it says. `payload_digest(rest)` covers the bytes
+AFTER the manifest line and is checked unconditionally (`bundle.rs`), so the
+RECORDS cannot be swapped. What it does not cover is the manifest line itself.
+
+The manifest's other declared fields — `counts`, `level`, `trust`, `vault`,
+`embedder`, `chain_head` — are protected only by the Ed25519 signature, via
+`canonical()`. So **on an unsigned manifest they are freely rewritable and the
+digest still verifies**, because rewriting them does not touch `rest`.
+
+**Why that is not merely cosmetic.** `/v1` exports are unconditionally
+unsigned (`tenant.rs` sets `sender: None, sig: None` — the signing key is an
+operator file, not a server secret), and the orchestrator's migration reads
+`level` and `counts` out of that same first line to decide whether a
+migration is faithful, refusing with `MigrateError::Unfaithful`. So the input
+to that decision is attacker-mutable by anyone who can rewrite the body in
+flight, on a hop where nothing signs.
+
+**What it is NOT.** The transport is TLS-or-loopback with no override, so this
+needs an attacker who is already inside that boundary, and the drawer content
+itself stays covered. This is an integrity gap in a cross-check, not a route
+to forged content.
+
+**Shapes, not yet ruled.** Fold a digest of the manifest line into the
+`egress/export` audit record so a rewritten line is detectable after the fact;
+or have the orchestrator take `level` and `counts` from the engine's own
+`/v1/…/stats` rather than from the payload it is relaying; or sign `/v1`
+exports, which needs a server-held key and is the largest change of the three.
+The middle one is closest to the tree's own doctrine — *ask the authority, not
+the artifact*, which is A28 one hop out.
+
+**Gate**: a migration whose relayed export has had `level` or `counts`
+rewritten in flight is refused or recorded, and the test rewrites the line
+without touching the records so the digest still passes.
+
+### O139 — import still holds the whole payload as parsed drawers, and emptying that buffer changes what a malformed record does
+
+**Filed 2026-09-10 by O138, which measured it and deliberately did not take
+it.** O138 took `undercroft import` of a sealed bundle from **2,002 MB peak
+RSS (4.49x the bundle) to 914 MB (2.05x)**. The remaining 2.05x is one
+buffer: `batch: Vec<Drawer>` in the CLI's import arm accumulates EVERY
+drawer, parsed, before `upsert_batched` writes the first one.
+
+**It was left because emptying it is not a memory change, it is a contract
+change.** Today a malformed record at line N aborts with nothing written,
+because the whole payload is parsed before any write. Flushing as the parse
+proceeds means the records before the bad line are already in the vault.
+That is a real difference to an operator restoring a backup, and it is worth
+noting that the tree documents the OPPOSITE case already: `ui.html` and
+`docs/AGENTS.md` say an import "fails mid-import, and the records before it
+are already written" — for a record the STORE refuses, not for one that
+fails to parse. So the two halves of import's failure behaviour differ
+today, and only one of them is written down.
+
+**What it needs before it can be built**: a ruling on whether parse-then-write
+is a promise. If it is, the buffer stays and 2.05x is the floor for this
+surface. If it is not, the fix is a chunked flush (the 256-drawer shape
+`upsert_batched` already uses) plus a doc correction on both surfaces that
+describe the failure, and an e2e check pinning whichever behaviour is
+chosen — `tests/e2e.sh:2650` already pins the store-refusal half by literal.
+
+**Gate**: an import whose payload carries a malformed line at a known offset
+leaves the vault in the ruled state — empty, or holding exactly the records
+before it — asserted through the CLI, not through the store.
 
 ### O134 — the four real degrade sites are compile-checked and never executed, because the battery carries no model weights
 

@@ -304,7 +304,17 @@ Consequences that are binding, not advisory:
   anchor + pure chain arithmetic + key rotation primitives
   (rotation_candidate, byte-exact reseal_at_rest, two-phase
   vault.json.next staging, keycheck marker); bundle.rs:
-  recipient-encrypted export bundles — **hybrid post-quantum since
+  recipient-encrypted export bundles — **the vault-sized paths take the
+  buffer rather than borrowing it** (`encrypt_for_into` seals IN PLACE and
+  writes the header ahead of it; `decrypt_with_owned` opens in place;
+  `encrypt_for`/`decrypt_with` are the borrowing wrappers, fine for a test
+  and not for a corpus). The returning forms allocated a second whole
+  payload beside the caller's, which measured **3.02x on `export --to` and
+  4.49x on `import`** — both worse than the unsealed peak O113 was filed to
+  fix, on the two paths O113 and O137 never measured (O138). One
+  implementation each way: `seal_header`/`open_header` yield the AAD and the
+  key together, because they come out of one run of bytes and must not
+  drift. **Hybrid post-quantum since
   C3.4**: `keygen` = X25519 + ML-KEM-768 (`pq1` strings), v2 bundles
   derive the file key from BOTH shared secrets (HKDF ikm = DH ‖
   kem_shared, magic+eph+kem_ct all AAD), closing
@@ -1744,8 +1754,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (841 run,
-                                      # 4 #[ignore]d = 845 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (845 run,
+                                      # 4 #[ignore]d = 849 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
