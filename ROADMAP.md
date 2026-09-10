@@ -3988,7 +3988,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**171** of the **186** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**173** of the **188** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4224,6 +4224,60 @@ it now — and the comment beside it already predicted this, having been written
 when `arch-check` made the class two: *"a class of two written as two special
 cases becomes a class of three written as three."*
 
+### O137 — SUPERSEDED 2026-09-10: the framing shape stands, three of its claims do not, and what is left is filed as O144
+
+**Kept, not deleted, on the O24a precedent — the reasoning error is the
+lesson.** This entry asked for a chunked bundle format (v3) and was taken up
+on 2026-09-10. Before any code, four independent read-only agents were given
+the same brief and no sight of each other: format practice, integrity and
+threat model, blast radius, and an adversarial refuter told to kill the
+emerging answer. All four returned the same structural verdict — **a v3
+bundle should be the ENVELOPE only** — and three of them separately found
+that this entry's motivating claims do not hold.
+
+**What was refuted.**
+
+1. *"the only design that lets export AND import stream while the attestation
+   is still checked before the first write."* **False.** A digest's POSITION
+   constrains the PRODUCER, never the consumer: a head digest over a 469 MB
+   payload is unverifiable until the last record byte either way, so a head
+   manifest streams import exactly as well as a trailer does. The claim
+   conflates ATTESTATION (in chunk 0, and genuinely checkable first) with
+   COMPLETENESS (never knowable before the end, under any framing).
+2. *the `/v1` migration ceiling is the second motivation.* **Unreachable by
+   any bundle format** — that hop carries unsealed NDJSON, never touches a
+   bundle, and refuses on the declared `Content-Length` before a byte is
+   read. Inherited from O136's closing paragraph, which is corrected there.
+   Filed properly as O143.
+3. *"It is a MAJOR."* **Not by this project's own test.** New code opens
+   every v1 and v2, no documented value stops being accepted, and nothing
+   retrievable stops being retrievable. The breakage is old-code-on-new-files,
+   the opposite direction from the doctrine's worked example. And the C3.4
+   precedent it cites shipped inside `1.0.0` — a version RESET, under which
+   CLAUDE.md says nothing promised an upgrade path — so it establishes
+   neither half of the claim.
+
+**What SURVIVED, and it is the useful part.** The framing shape itself is
+sound: per-chunk authenticated framing on age's STREAM construction (chunk
+counter + final-chunk flag in the nonce), envelope only, with the payload
+format untouched. The **bare trailer** remains correctly rejected —
+`split_payload` identifies a manifest only as the FIRST line, so truncating a
+trailer payload becomes indistinguishable from a legacy unattested export.
+Note the RFC 9110 citation this entry used for that is an analogy rather than
+authority (that section governs HTTP trailer fields; a bundle is a file); the
+tar/ZIP truncation argument is the one that actually holds.
+
+**Two facts it asked to re-verify, both now checked.**
+`BundleManifest.version` is written at **three** production sites, not two,
+read as a discriminator nowhere — but it IS field 0 of `canonical()`, so it
+is signed and never checked. And `payload_sha256` covers the records AFTER
+the manifest line, not the whole payload, which is its own finding (O140).
+
+**What was BUILT instead**, after the maintainer ruled the re-scope: O138
+(the measurable memory work, as a PATCH — the sealed export and import were
+3.02x and 4.49x, both worse than the peak O113 was filed to fix, and neither
+had ever been measured), O141 and O142. The remaining envelope-streaming
+question is filed as **O144**, with correct motivation and correct scope.
 ### O141 — CLOSED 2026-09-10: the CLI recognises a bundle from the future, and refuses it by version
 
 **Found by the O137 fanout's adversarial agent, which went looking for what
@@ -4396,10 +4450,22 @@ and an ordinary engine failure must KEEP its relayed status rather than be
 dressed as a capacity limit. Counterfactualed: reverting the status to 502
 fails it by name.
 
-**The capability gap remains and is O137's.** Migrating a vault larger than
-the ceiling needs a chunked or paged protocol — the same per-chunk framing
-that would let `--to` stream — and that is a format decision with its own
-entry, not something to smuggle in under a diagnosis fix.
+**The capability gap remains, and this paragraph named the wrong fix for it
+— corrected 2026-09-10 by the O137 fanout, which refuted the claim
+unanimously.** Migrating a vault larger than the ceiling needs a **paged
+`/v1` protocol**, and that is NOT "the same per-chunk framing that would let
+`--to` stream". The two are unrelated: this hop carries **unsealed NDJSON**
+and never touches a bundle, and it refuses on the declared `Content-Length`
+before a byte is read, so no envelope format reaches it. A chunked bundle
+could ship in full and leave this gap exactly where it is.
+
+The error was one of proximity — two things that both contain the word
+"chunked", filed a paragraph apart — and it is worth recording because it
+PROPAGATED: the handover copied this sentence into its open-work table, and
+from there it became the second motivation on O137, where it survived until
+four independent readers each flagged it. **A closed entry's last paragraph
+is read as settled**, which is exactly what makes a wrong one expensive. The
+paged protocol is filed separately as O143.
 
 ### O113 — CLOSED 2026-09-09: export peak 1,258 MB -> 480 MB (2.75x -> 1.02x) on the same corpus, and five of the filing's own claims were wrong
 
@@ -12097,40 +12163,76 @@ must be recorded as one rather than left as a carry-in that quietly never moves.
 
 
 
-### O137 — `--to` cannot stream under any manifest position, because the bundle is one AEAD over the whole payload
+### O143 — a vault larger than the body ceiling cannot be migrated over `/v1`, and only a PAGED protocol fixes it
 
-**Filed 2026-09-09 by the O113 analysis (all four agents), as the boundary of
-what O113 could reach.** `bundle::encrypt_for` takes the plaintext as one
-slice and `seal()` runs a single XChaCha20-Poly1305 over it, so a sealed export
-buffers the whole payload no matter where the manifest sits or how the rows are
-produced. The same holds in reverse for `decrypt_with`. O113's fix shape reads
-as though it covered `export`; it covers the UNSEALED export only, and that
-narrowing is now stated there.
+**Filed 2026-09-10, lifted out of O136's closing paragraph where it had been
+attributed to the wrong fix.** O136 closed the DIAGNOSIS: a tenant whose
+export exceeds `MAX_BODY_BYTES` now gets a typed 413 naming the tenant, the
+size, the untouched source and a remedy. The capability is still missing.
 
-**The shape, if it is taken: per-chunk authenticated framing** — age's STREAM
-construction (Hoang-Reyhanitabar-Rogaway), which this tree already has the
-instinct for: the at-rest AAD domains carry an index (`pqrow/{seq}/pq`,
-`{id}/tok`) precisely so one drawer's blobs cannot be swapped for another's,
-and a chunk counter in the nonce is that rule on the wire. It is the only
-design that lets export AND import stream while the attestation is still
-checked before the first write — a trailer manifest cannot, because the
-manifest here is an authorization gate (`attest`, the expiry check, the
-orchestrator's `level` cross-check) and RFC 9110 forbids trailer fields
-affecting authentication for the same reason.
+**Why no bundle format reaches it.** The orchestrator's migration reads
+`GET /v1/…/export` as **plaintext NDJSON** and never constructs or opens a
+bundle; both hops refuse on the declared `Content-Length` before a byte is
+read; and the control plane holds the corpus as one `String`. A chunked
+envelope could ship in full and change none of that. All four O137 agents
+established this independently, which is the only reason it is stated with
+confidence here rather than repeated as inherited prose.
 
-**It is a MAJOR and it owes C3.4's four properties**, which are the precedent
-for how this project versions a bundle: a fixed discriminator at the HEAD,
-cryptographically bound as AAD, a typed refusal to old readers, and no silent
-downgrade in either direction. Not to be smuggled in under a memory fix.
+**The shape, and what it costs.** A cursor or page protocol on `/v1` export
+and import — `?offset=&limit=`, or a session — with the orchestrator
+streaming page to page rather than buffering. Not free, and the costs are the
+design:
 
-Recorded against a bare trailer, so nobody re-proposes it: `split_payload`
-identifies a manifest only as the FIRST line, so under a trailer format
-**truncating the payload becomes indistinguishable from a legacy unattested
-export** — the digest, signature and expiry checks are all skipped and both
-importers accept the prefix. `BundleManifest.version` cannot save it: it is
-written at two sites and READ nowhere, which is O115's class one shape over (a
-struct field, not an enum variant).
+- **the egress record**: one `egress/export` per migration today, binding the
+  manifest digest. N pages means N records, or a session id that opens and
+  closes one — a decision, since O79/O95 make the record's coverage the
+  point.
+- **the manifest**: it is an AUTHORIZATION gate (`attest`, expiry, the
+  `level` cross-check) and it currently arrives as line 1 of a single body.
+  A paged protocol has to decide where it lives and how a partial transfer
+  is refused.
+- **`assert_or_401` per page**, and a partial migration's failure mode: a
+  destination holding half a corpus is worse than a clean refusal unless the
+  protocol can resume or roll back.
 
+**Gate**: a vault whose export exceeds the ceiling migrates end to end, and a
+transfer interrupted mid-way leaves the destination in a state the entry
+names — with the egress trail showing what actually left.
+
+### O144 — the sealed envelope is one AEAD, so `export --to` and `import` cannot reach O(chunk)
+
+**Filed 2026-09-10 as what genuinely survives O137, with its motivation
+corrected.** `encrypt_for_into` seals in place and `decrypt_with_owned` opens
+in place (O138), so the sealed paths now hold the payload ONCE — measured
+1.02x on export. What they cannot do is hold only a chunk: `seal()` runs a
+single XChaCha20-Poly1305 over the whole payload, and the same holds in
+reverse.
+
+**Scope, stated honestly, because O137's was not.** This is worth **457 MB →
+a few MB** on a 361,779-drawer vault's sealed export — real for a large vault
+on a small host, and NOT the 3.02x → 1.02x that O138 already took. It does
+**not** touch the `/v1` migration ceiling (O143), it does **not** make
+`import` all-or-nothing (O139), and it is **not** a MAJOR by this project's
+test: old bundles keep opening, no documented value stops being accepted.
+
+**The shape that survived four independent reviews**: per-chunk authenticated
+framing on age's STREAM construction — chunk counter plus a final-chunk flag
+in the nonce — **envelope only**. `split_payload`, `frame_payload_into`,
+`canonical()`, `attest`, `BundleManifest` and the unsealed NDJSON contract do
+not move. The digest stays at the HEAD; a bare trailer stays rejected, on the
+tar/ZIP truncation argument rather than the RFC 9110 one.
+
+**The prerequisite is already in.** O141 made `is_bundle` match the shared
+stem and gave unknown versions a typed `UnsupportedVersion`, so a v3 file
+meeting a current binary is named rather than misread — which is what makes
+shipping a new format survivable at all.
+
+**One decision nobody has taken**: how a v3 export is SELECTED. The recipient
+string is the only channel and v3 changes framing rather than key agreement,
+so `pq1` carries no signal for it. Unconditional breaks every shipped reader;
+a new recipient prefix is an identity-format change; a CLI flag makes it
+opt-in, and therefore MINOR. **That choice sets the version, not the
+framing.**
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 
