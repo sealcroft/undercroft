@@ -19,6 +19,27 @@ That is the doctrine's existing test applied, not a new one. It reclassifies
 nothing: `1.5.0` stays MINOR (the per-vault database genuinely gained a
 name, which no surface had), and `1.2.1`/`1.2.2` stay PATCH.
 
+### O137 superseded, and two entries filed with the motivation it got wrong
+
+O137 asked for a chunked bundle format and was taken up. Four independent
+read-only agents — format practice, integrity and threat model, blast radius,
+and an adversarial refuter told to kill the emerging answer — all returned
+*envelope only*, and three separately refuted its motivating claims: that
+per-chunk framing is the only shape that streams both directions (a digest's
+position constrains the producer, not the consumer), that it closes the `/v1`
+migration ceiling (unreachable by any bundle format — that hop carries
+unsealed NDJSON and refuses on `Content-Length`), and that it is a MAJOR
+(nothing documented stops being accepted).
+
+The entry is kept rather than deleted, on the O24a precedent: the reasoning
+error is the lesson. What survives is filed with correct scope — **O143**, the
+paged `/v1` protocol that actually closes the migration gap, and **O144**, the
+envelope-only streaming that is worth 457 MB → a few MB on a large sealed
+export and nothing else. O136's closing paragraph and this changelog both
+attributed the migration gap to the wrong fix; both are corrected, and the
+propagation path is recorded, because a closed entry's last paragraph reads as
+settled.
+
 ### O141/O142 — a bundle from the future is recognised, and the ORT backend is compiled on a pull request
 
 **O141.** `ui.html` guarded the version-agnostic `UNDERCROFT-BUNDLE-` stem
@@ -136,8 +157,12 @@ Getting there needed a typed engine error, which also removed an existing
 string parse: `engine_err` used to recover a status code by scanning the
 message for a parenthesised three-digit number. `Display` reproduces every
 previous message verbatim, so nothing a user has seen moves. The remaining
-capability gap — migrating a vault larger than the ceiling — is O137's,
-because it needs the same chunked framing that would let `--to` stream.
+capability gap — migrating a vault larger than the ceiling — needs a PAGED
+`/v1` protocol, not a bundle format: that hop carries unsealed NDJSON, never
+touches a bundle, and refuses on the declared `Content-Length` before a byte
+is read. (This sentence originally attributed the gap to O137's chunked
+framing; corrected before release, after four independent readers refuted
+it. Filed as O143.)
 
 ### the export stops holding the corpus: 1,258 MB -> 480 MB on the same vault (O113)
 
