@@ -67,7 +67,7 @@ so rather than implying it checked them.
 
 ---
 
-## 1.5.2 (unreleased)
+## 1.5.2 (released 2026-09-11)
 
 ### a tenant whose export exceeds 256 MiB cannot be migrated over `/v1` (O136)
 

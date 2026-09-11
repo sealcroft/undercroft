@@ -7,26 +7,36 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
 
 Published by **Sealcroft** at `github.com/sealcroft/undercroft`, site at
 `https://sealcroft.com/undercroft/`, house page at `https://sealcroft.com/`
-(repo `sealcroft/sealcroft.github.io`). Current release **1.5.1** — a PATCH
-over `1.5.0`, itself a MINOR over `1.4.0`. PATCH is right by this file's own
-test: no documented contract moves. What it carries is one CRITICAL and two
-closures. **One header killed every listener (O114)**: the HTTP server crate
-both binaries run on drained an unread request body on drop with an
-allocation of the client's declared `Content-Length`, on every refusal path
-including the unauthenticated bearer 401, so `serve-http` and the
-orchestrator died on a heuristic-overcommit kernel — found by this release's
-own e2e gate on CI, invisible to the local battery because WSL overcommits.
-The crate is vendored and patched (`vendor/tiny_http`, ruled option A): the
-drop drains nothing and the connection ENDS behind a refused body, since the
-crate sets no socket read timeout and any drain parks the single-threaded
-loop on a silent peer. **O109's class swept tree-wide (O111)**: three at-rest
-decoders whose length check wrapped in release, an FDE construction with no
-ceiling, and a request body with none — one 256 MiB ceiling now, refused on
-the declaration, never truncated. **Every public item documented (O110)**,
-with the lint that keeps it so. Two things a script could meet, both in
-`UPGRADING.md`: a body above 256 MiB is 413, and a header line above 16 KiB
-or more than 128 headers is refused — tightening of input never documented
-as valid, which is a fix and not a break. **The tree carries `1.5.1` only
+(repo `sealcroft/sealcroft.github.io`). Current release **1.5.2** — a PATCH
+over `1.5.1`, itself a PATCH over `1.5.0`. PATCH is right by this file's own
+test: no documented contract moves. **Surface that REPORTS an existing silent
+defect is a fix, not a feature** — ruled 2026-09-08 and applied here, where
+several entries add a stats field, a counter or an alert and none adds a
+capability: the defect was the silence. What it carries, in four groups.
+**Every model role now counts what it used to swallow (O122, O131)**: a
+failed embed degraded to a zero vector and a failed rerank to `0.0` — which
+SINKS a candidate, since `0.0` is also what a genuinely irrelevant passage
+scores — across six sites in three roles, none of them counted anywhere.
+Three counters, four renderers, three alerts. **Two paths nobody had measured
+were the expensive ones (O138)**: `export --to` held the corpus THREE times
+and `import` FIVE, measuring **3.02x** and **4.49x** on a 467.7 MB export —
+both worse than the peak O113 was filed to fix, because O113 measured the one
+path carrying no envelope. Sealing and opening in place took them to 1.02x
+and 2.05x with the bundle format byte-identical. **A bundle from the future
+is recognised and refused by version (O141)**: `ui.html` guarded the shared
+magic stem and had a gate pinning it; `is_bundle` compared magics exactly and
+had neither, so the CLI told operators a sealed binary "is not UTF-8 text" —
+the browser was forward-compatible and the CLI was not. **A shipped artifact
+compiled on no pull request (O142)**: `ort-build` was run by neither CI nor
+the battery while `release.yml` ships an `ort` binary for five targets, which
+is O102's rule on the feature axis instead of the platform one.
+`UPGRADING.md` carries what a script could meet — the `/v1` migration ceiling
+named with its remedy (O136), an embedding dimension refused, a confidence
+bound, an RFC 3339 `created_at`. **O137 is SUPERSEDED here rather than
+built**: it asked for a chunked bundle format and a four-agent fanout refuted
+three of its claims, so what survives is filed as O143 and O144 with honest
+scope, and the entry is kept because the reasoning error is the lesson.
+**The tree carries `1.5.2` only
 once the release PR merges; the TAG is a separate, explicit step** — a build
 reporting a version it was never tagged as is worse than one reporting the
 last release. `main` is branch
