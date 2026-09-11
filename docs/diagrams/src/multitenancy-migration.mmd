@@ -4,15 +4,18 @@ sequenceDiagram
     participant S as source engine
     participant D as target engine
     A->>O: POST /admin/tenants/{id}/migrate {to}
+    O->>S: GET /v1/vaults/{v}/stats (records + chain head, BEFORE the export)
     O->>S: GET /v1/vaults/{v}/export (NDJSON + manifest with counts)
     O->>D: POST /v1/vaults (create — same security level, or refuse)
     O->>D: POST /v1/vaults/{v}/import
     D-->>O: {imported: n, quarantined: q}
-    alt drawers, triples, entities, tunnels all equal the manifest, and q == 0
-        O->>O: flip tenant→instance mapping
-        O->>S: DELETE /v1/vaults/{v} (unless keep_source)
-        O-->>A: {records, source_deleted}
-    else any count differs, an import error, or q > 0 without keep_source
+    O->>D: GET /v1/vaults/{v}/stats (what the destination HOLDS)
+    O->>S: GET /v1/vaults/{v}/stats + history (what changed during the export)
+    alt source quiet, export matches the snapshot, destination holds it, q == 0
+        O->>O: flip tenant→instance mapping (compare-and-set)
+        O->>S: DELETE /v1/vaults/{v} (unless keep_source, and only if still quiet)
+        O-->>A: {records, source_deleted, verified}
+    else source changed, a count differs, an import error, or q > 0 without keep_source
         O->>D: DELETE partial copy
         O-->>A: error — source left authoritative
     end

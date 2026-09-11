@@ -2,9 +2,10 @@
 # End-to-end suite for the multi-tenant orchestrator: two real engine
 # instances + the orchestrator control plane in one container. Exercises
 # the whole story — instance registry, tenant creation with token minting,
-# the routed data plane, cross-tenant isolation through the proxy, a
-# count-verified live migration between instances, and a read replica
-# converging on the writer's state.
+# the routed data plane, cross-tenant isolation through the proxy, a live
+# migration judged against the source vault's own snapshot (including one
+# refused because the source changed while its export was being drawn), and a
+# read replica converging on the writer's state.
 
 set -uo pipefail
 
@@ -178,9 +179,74 @@ grep -qF 'gigawatts' <<<"$GX_SEARCH" \
   && fail "globex cannot see acme data" "$GX_SEARCH" \
   || ok "globex cannot see acme data"
 
+echo "== A migration refuses when the source changes while its export is drawn =="
+# ROADMAP O140. Deterministic and timing-free: with the DESTINATION engine
+# stopped, the migration blocks at "create vault" — which happens AFTER the
+# export has been drawn — so the window stays open for as long as this arm
+# needs. Nothing here races.
+#
+# A THROWAWAY drawer is what gets deleted, so the corpus the checks below rely
+# on is unchanged: acme is back to its single `gigawatts` drawer afterwards.
+THROWAWAY="$(curl -s -X POST "${AUTH_ACME[@]}" \
+  -d '{"text":"scratch drawer for the concurrent-delete arm","wing":"eng","room":"notes"}' \
+  "$O/t/drawers")"
+THROWAWAY_ID="$(grep -o '"id":"[0-9a-f]*"' <<<"$THROWAWAY" | head -1 | cut -d'"' -f4)"
+[ -n "$THROWAWAY_ID" ] && ok "throwaway drawer saved" || fail "throwaway drawer saved" "$THROWAWAY"
+
+kill -STOP "$ENGINE_B"
+MIG_OUT="$(mktemp)"
+curl -s -o "$MIG_OUT" -w '%{http_code}' -X POST "${ADMIN[@]}" -d '{"to":"engine-b"}' \
+  "$O/admin/tenants/$ACME_ID/migrate" > "$MIG_OUT.code" 2>/dev/null &
+MIG_PID=$!
+
+# Wait until the export has actually been drawn, by asking the SOURCE engine
+# for its own newest audit record — the orchestrator's single loop is busy
+# holding this migration, so the question goes engine-direct. BOUNDED, with the
+# migration still running as its premise: an unbounded poll on a sentinel that
+# may never arrive is a hang, not a wait.
+SIGN_A="$(UNDERCROFT_ASSERTION_SECRET="$SECRET_A" "$BIN" assert-header "tenant-$ACME_ID")"
+SAW_EXPORT=0
+for _ in $(seq 1 100); do
+  kill -0 "$MIG_PID" 2>/dev/null || break
+  H="$(curl -s -H "Authorization: Bearer $BEARER_A" -H "X-Vault-Assertion: $SIGN_A" \
+    "http://127.0.0.1:$PORT_A/v1/vaults/tenant-$ACME_ID/history?limit=1")"
+  grep -qF 'egress/export' <<<"$H" && { SAW_EXPORT=1; break; }
+  sleep 0.1
+done
+[ "$SAW_EXPORT" = 1 ] && ok "the export is drawn before the destination is touched" \
+  || fail "the export is drawn before the destination is touched" "premise failed: no egress/export record appeared while the migration was running"
+
+# The concurrent change: an ordinary delete, engine-direct, exactly what an
+# operator or a retention sweep does on a live tenant.
+code_is "a drawer is deleted at the source mid-migration" 200 -- -X DELETE \
+  -H "Authorization: Bearer $BEARER_A" -H "X-Vault-Assertion: $SIGN_A" \
+  "http://127.0.0.1:$PORT_A/v1/vaults/tenant-$ACME_ID/drawers/$THROWAWAY_ID"
+
+kill -CONT "$ENGINE_B"
+wait "$MIG_PID" 2>/dev/null
+MIG_CODE="$(cat "$MIG_OUT.code" 2>/dev/null)"
+MIG_BODY="$(cat "$MIG_OUT" 2>/dev/null)"
+[ "$MIG_CODE" = "409" ] && ok "a source that changed mid-export refuses with 409" \
+  || fail "a source that changed mid-export refuses with 409" "code=$MIG_CODE body=$MIG_BODY"
+grep -qF 'del/' <<<"$MIG_BODY" && ok "the refusal names the audit record it saw" \
+  || fail "the refusal names the audit record it saw" "$MIG_BODY"
+# The shipped refusal blamed loss in transit for what is ordinary traffic, which
+# sends an operator to a tamper runbook when the remedy is to run it again.
+grep -qF 'transit' <<<"$MIG_BODY" \
+  && fail "an ordinary delete is not blamed on transit" "$MIG_BODY" \
+  || ok "an ordinary delete is not blamed on transit"
+body_has "the source still serves the vault after a refusal" 'gigawatts' -- -X POST "${AUTH_ACME[@]}" \
+  -d '{"query":"flux capacitor power"}' "$O/t/search"
+body_has "a refused migration does not flip the mapping" '"instance":"engine-a"' -- \
+  "${ADMIN[@]}" "$O/admin/tenants"
+rm -f "$MIG_OUT" "$MIG_OUT.code"
+
 echo "== Live migration engine-a → engine-b =="
 MIG="$(curl -s -X POST "${ADMIN[@]}" -d '{"to":"engine-b"}' "$O/admin/tenants/$ACME_ID/migrate")"
-grep -qF '"records":1' <<<"$MIG" && ok "migration count-verified" || fail "migration count-verified" "$MIG"
+grep -qF '"records":1' <<<"$MIG" && ok "migration judged against the source" || fail "migration judged against the source" "$MIG"
+grep -qF '"destination_records":1' <<<"$MIG" \
+  && ok "the response reports what the destination HOLDS" \
+  || fail "the response reports what the destination HOLDS" "$MIG"
 grep -qF '"source_deleted":true' <<<"$MIG" && ok "source vault deleted" || fail "source vault deleted" "$MIG"
 body_has "same token still works post-migration" 'gigawatts' -- -X POST "${AUTH_ACME[@]}" \
   -d '{"query":"flux capacitor power"}' "$O/t/search"

@@ -15,7 +15,8 @@
 //! instance registry, tenant lifecycle (create = pick instance → record
 //! mapping → create engine vault, rolling the mapping back on failure →
 //! return the token once), migration
-//! (export → import → count-verified → mapping flip → source delete), and
+//! (snapshot the source → export → import → judge the copy against that
+//! snapshot → mapping flip → source delete), and
 //! the **operator plane** `/admin/tenants/{id}/ops/<subpath>` — attested
 //! forgetting, retention policy, wing trust, admission review and verify,
 //! forwarded to the tenant's engine over a closed vocabulary
@@ -527,16 +528,16 @@ pub(crate) const OPS_DELIBERATELY_ABSENT: &[(&str, &str)] = &[
         "search",
         "content belongs to the tenant's own token, not the admin bearer",
     ),
-    // Whole-corpus movement. `migrate` is the supported path and it is
-    // count-verified end to end; a bare export or import through the ops
-    // plane would be the same egress with none of that.
+    // Whole-corpus movement. `migrate` is the supported path and it judges
+    // the copy against the source's own snapshot end to end; a bare export or
+    // import through the ops plane would be the same egress with none of that.
     (
         "export",
-        "use `migrate`, which count-verifies; a bare egress has no such check",
+        "use `migrate`, which judges the copy against the source; a bare egress has no such check",
     ),
     (
         "import",
-        "use `migrate`, which count-verifies; a bare ingest has no such check",
+        "use `migrate`, which judges the copy against the source; a bare ingest has no such check",
     ),
     // Distillation calls an LLM and WRITES facts. It is a content-producing
     // operation, not an operator one, and it needs `UNDERCROFT_LLM_*` on the
@@ -1405,6 +1406,29 @@ pub enum MigrateError {
     /// a retry.
     #[error("{0}")]
     Unfaithful(String),
+    /// The source could not be bound to a snapshot, so the copy cannot be
+    /// judged (ROADMAP O140).
+    ///
+    /// **Refused before anything is created on the destination**, which is the
+    /// opposite of what O140 shipped: there, a source engine that did not
+    /// answer degraded to no check at all and still authorised
+    /// `delete_vault(&src)`. *A check that cannot run must not become a
+    /// verdict* is the right rule, and for a step that destroys the only other
+    /// copy its conservative reading is to refuse rather than to proceed.
+    ///
+    /// Retryable in principle — an older engine, an export with no manifest
+    /// line, or a stats call that failed — so the message names the missing
+    /// piece and states that nothing was created or deleted.
+    #[error("{0}")]
+    Unbound(String),
+    /// Another migration moved this tenant while this one ran (ROADMAP O140).
+    ///
+    /// The mapping flip is a compare-and-set, so the loser refuses instead of
+    /// overwriting the winner. Without it the later flip won, and the earlier
+    /// migration's destination kept a full copy of the corpus that nothing
+    /// routed to, with every write acknowledged against it stranded.
+    #[error("{0}")]
+    TenantMoved(String),
     /// The source vault's export is larger than this hop will read (ROADMAP
     /// O136).
     ///
@@ -1450,6 +1474,12 @@ impl MigrateError {
             MigrateError::AlreadyThere => 409,
             MigrateError::Engine(status, _) => *status,
             MigrateError::Unfaithful(_) => 409,
+            // Both are preconditions this hop could not satisfy, and in both
+            // the source is untouched and still authoritative — the same
+            // class `Unfaithful` already carries, and the same 409 a client's
+            // retry logic must not treat as a transient gateway fault.
+            MigrateError::Unbound(_) => 409,
+            MigrateError::TenantMoved(_) => 409,
             // O136. The request was well-formed and both engines behaved; what
             // exceeds a limit is the payload THIS hop would have to hold, which
             // is what 413 says. A 502 would blame an engine that answered
@@ -1518,37 +1548,164 @@ fn engine_err(msg: String) -> MigrateError {
     MigrateError::Engine(502, msg)
 }
 
-/// Migration: export (artifact-carrying, v0.18) → import on the target →
-/// **count-verified** → mapping flip → source delete (unless kept). Any
-/// failure before the flip leaves the tenant untouched on its source.
-/// Shared by the HTTP admin plane and the CLI `migrate` subcommand.
-/// How many drawers a migrated copy is SHORT of what the source engine
-/// reported, or `None` when it is not short.
+/// One page of audit history per request. The engine caps `limit` at 1,000,
+/// so asking for more would silently get 1,000 back and make the paging
+/// arithmetic wrong rather than slow.
+const DELTA_PAGE: usize = 1000;
+
+/// How many such pages this hop will read before refusing to judge.
 ///
-/// ROADMAP O140. The faithfulness check this sits in front of verifies the
-/// payload against numbers carried by that same payload — `expected` from
-/// the export's manifest line, `got` from importing that export — and
-/// passing it is what authorises deleting the source. A relayed body that
-/// arrives truncated, with its manifest counts lowered and its payload
-/// digest recomputed to match, satisfies every check on that path. So the
-/// expected size is taken from the source ENGINE instead, which is A28's
-/// rule one hop out: ask the covered copy, never the artifact offering
-/// itself for verification.
+/// A bound rather than an unbounded walk: under `UNDERCROFT_READ_AUDIT=chain`
+/// a tenant being read continuously appends records faster than a large import
+/// completes, and the honest answer to "the delta is bigger than I will read"
+/// is a refusal that names the bound — never a verdict reached from a partial
+/// view. Five pages is 5,000 records appended during one export, which a quiet
+/// tenant never approaches.
+const DELTA_PAGES: usize = 5;
+
+/// Whether one audit record's label is a MUTATION of the vault it sits in.
 ///
-/// `>=` rather than `==`, deliberately: a concurrent write to a live tenant
-/// legitimately makes the export LARGER than the count taken before it, and
-/// this must refuse a shortfall without refusing ordinary traffic.
+/// **Fail-closed, and the default matters more than the allowlist.** A drawer
+/// write's label is the bare drawer id — `Namespace::Drawer`'s prefix is the
+/// EMPTY string — so a classifier asking "does this start with a known
+/// mutating prefix" would read every ordinary save as unknown and wave it
+/// through. Exactly two namespaces leave a vault's content untouched:
+/// `read/`, appended under `UNDERCROFT_READ_AUDIT=chain`, and `egress/`, which
+/// is what the export this migration just drew appends. Everything else —
+/// including a label carrying no prefix at all — is a change to the source.
 ///
-/// `None` for `authoritative` means the source engine did not answer with a
-/// count — an older engine, or a failed stats call. The check degrades to
-/// the older comparison rather than refusing a migration it cannot judge.
-pub(crate) fn migration_shortfall(got: u64, authoritative: Option<u64>) -> Option<u64> {
-    match authoritative {
-        Some(a) if got < a => Some(a - got),
-        _ => None,
+/// Read records are tolerated rather than ignored for a reason that decides
+/// whether fleets can migrate at all: a read replica keeps serving a tenant's
+/// reads while the writer migrates it, and on a read-audited deployment each
+/// of those appends a record. A strict "the height must not move" rule would
+/// refuse migrations for exactly the deployments that declared the strictest
+/// auditing.
+///
+/// The two spellings are the engine's own and this crate deliberately links no
+/// engine crate, so they are counted against the store's source by
+/// `the_non_mutating_namespaces_are_the_engines_own` — the O21 precedent, and
+/// the reason a future non-mutating namespace fails loudly here rather than
+/// being silently admitted.
+pub(crate) fn is_mutating_record(record_id: &str) -> bool {
+    !(record_id.starts_with("read/") || record_id.starts_with("egress/"))
+}
+
+/// What a migrated copy turned out to be (ROADMAP O140).
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum MigrationVerdict {
+    /// The source was quiet across the export, the export carried what the
+    /// source held, and the destination holds it.
+    Faithful,
+    /// Something changed the source after the snapshot was taken, so the
+    /// export is a picture of a vault that has since moved. Retryable, and
+    /// nothing is lost either way.
+    SourceChanged {
+        /// The audit label that proves it — named, so an operator sees a
+        /// deletion rather than a guess about transit.
+        record: String,
+    },
+    /// The delta could not be read in full, so no conclusion is available.
+    DeltaUnreadable {
+        /// How many records the chain height says were appended.
+        expected: u64,
+        /// How many this hop managed to read.
+        read: usize,
+    },
+    /// The export declares fewer or more drawers than the source held at the
+    /// snapshot, with a quiet chain that cannot explain the difference.
+    ExportOmitsRows {
+        /// The manifest's own count.
+        declared: u64,
+        /// What the source engine said it held.
+        source: u64,
+    },
+    /// The destination HOLDS a different number of rows than the export
+    /// declared — the only detector of two exported records landing on one
+    /// row, which a count of records PROCESSED cannot see.
+    DestinationDiverged {
+        /// The destination's own `records`.
+        held: u64,
+        /// The manifest's own count.
+        declared: u64,
+    },
+}
+
+impl MigrationVerdict {
+    /// The refusal an operator reads, or `None` when the copy is faithful.
+    ///
+    /// Every one of these names what was measured on which side. None of them
+    /// says "transit": O140's single refusal blamed loss in transit for what
+    /// is, in every reachable case, an ordinary concurrent write or delete —
+    /// which sent an operator to a tamper runbook when the remedy was to run
+    /// it again.
+    pub(crate) fn refusal(&self) -> Option<String> {
+        match self {
+            MigrationVerdict::Faithful => None,
+            MigrationVerdict::SourceChanged { record } => Some(format!("the source vault changed while the export was drawn (audit record {record:?}), so the copy is a picture of a vault that has already moved. Nothing was lost and nothing was deleted: run the migration again when the tenant is quiet")),
+            MigrationVerdict::DeltaUnreadable { expected, read } => Some(format!("the source appended {expected} audit record(s) while the export was drawn and only {read} could be read back, so this hop cannot tell whether any of them changed the vault. Nothing was lost and nothing was deleted: retry when the tenant is quieter")),
+            MigrationVerdict::ExportOmitsRows { declared, source } => Some(format!("the export declares {declared} drawer(s) but the source engine held {source} at the same snapshot, with no audit record explaining the difference — so the export does not carry what the source has. The source is untouched and still authoritative")),
+            MigrationVerdict::DestinationDiverged { held, declared } => Some(format!("the destination holds {held} drawer(s) after importing an export of {declared} — the copy is not faithful even though every record was accepted, so the source is left authoritative and the partial copy was removed")),
+        }
     }
 }
 
+/// Judge a migrated copy against the source's OWN snapshot, in the order that
+/// makes each verdict mean something (ROADMAP O140).
+///
+/// The delta is judged first: with a mutation in it, a count difference is
+/// explained and says nothing. With a quiet chain, the two equalities are
+/// exact — there is no `>=` asymmetry left to reason about, because a
+/// concurrent write is now DETECTED rather than tolerated.
+///
+/// `destination_records` is what the destination HOLDS, never what its import
+/// loop counted. `imported` counts records processed and the write is an
+/// upsert, so two exported records can land on one row and still count two —
+/// which is how a quarantine row whose id re-derives to an existing drawer's
+/// silently replaces it while every count agrees.
+pub(crate) fn judge_migration(
+    snapshot_records: u64,
+    declared_drawers: u64,
+    destination_records: u64,
+    delta: &[(i64, String)],
+    delta_expected: u64,
+) -> MigrationVerdict {
+    if let Some((_, record)) = delta.iter().find(|(_, id)| is_mutating_record(id)) {
+        return MigrationVerdict::SourceChanged {
+            record: record.clone(),
+        };
+    }
+    if (delta.len() as u64) < delta_expected {
+        return MigrationVerdict::DeltaUnreadable {
+            expected: delta_expected,
+            read: delta.len(),
+        };
+    }
+    if declared_drawers != snapshot_records {
+        return MigrationVerdict::ExportOmitsRows {
+            declared: declared_drawers,
+            source: snapshot_records,
+        };
+    }
+    if destination_records != declared_drawers {
+        return MigrationVerdict::DestinationDiverged {
+            held: destination_records,
+            declared: declared_drawers,
+        };
+    }
+    MigrationVerdict::Faithful
+}
+
+/// Migration: snapshot the source → export (artifact-carrying, v0.18) →
+/// import on the target → judge the copy against the source's own snapshot →
+/// mapping flip (compare-and-set) → source delete (unless kept). Any failure
+/// before the flip leaves the tenant untouched on its source.
+/// Shared by the HTTP admin plane and the CLI `migrate` subcommand.
+///
+/// **This doc comment spent two releases attached to the wrong item.** O140
+/// inserted a function between it and `migrate_tenant`, so the function had no
+/// documentation of its own and this text — including the "count-verified"
+/// claim it used to make — described a neighbour. That is the anchor hazard
+/// `CLAUDE.md` names, committed by the entry this repair is about.
 pub(crate) fn migrate_tenant(
     orch: &Orch,
     id: &str,
@@ -1567,40 +1724,42 @@ pub(crate) fn migrate_tenant(
         other => MigrateError::State(other),
     })?;
 
-    // ROADMAP O140. The faithfulness check below verifies the payload against
-    // numbers carried BY THAT SAME PAYLOAD: `expected` is read from the
-    // export's manifest line, `got` from importing the export. Both sides
-    // come from one artifact, so the check is self-certifying — and passing
-    // it is what authorises `delete_vault(&src)` further down. A relayed body
-    // that arrives truncated, with its manifest counts lowered and its
-    // payload digest recomputed to match, satisfies every check on this path
-    // and the source is then dropped.
+    // ROADMAP O140. A migrated copy is judged against the SOURCE, and the
+    // numbers have to come from ONE INSTANT or they judge nothing: `COUNT(*)`
+    // is not a version, and a delete plus an insert leaves it unchanged.
     //
-    // So the expected size comes from an AUTHORITY instead: the source engine
-    // is asked for its own row count, over its own authenticated channel,
-    // before the export is drawn. That is A28's rule one hop out — ask the
-    // covered copy, not the artifact offering itself for verification.
+    // So the source is asked for its own stats — `records`, with the audit
+    // chain's height and head — BEFORE the export is drawn, and asked again
+    // afterwards. The chain is what binds the count to an instant: every
+    // content mutation appends exactly one record atomically with the write,
+    // so a chain that stayed quiet across the export is a source whose drawer
+    // population and content did not move. That is the property the shipped
+    // check lacked, and why it had to tolerate a concurrent write with `>=`
+    // while mis-attributing a concurrent DELETE to loss in transit.
     //
-    // BEFORE the export, and the ordering is the whole correctness argument:
-    // a concurrent write between the two makes the export LARGER than this
-    // number, which the `>=` below tolerates. Taking it afterwards would make
-    // the same ordinary write a refusal.
+    // Both populations are unfenced and therefore comparable: the /v1 export
+    // walks `drawers` with no WHERE clause, and `records` is a live COUNT(*)
+    // over the same table — quarantined rows included on both sides.
     //
-    // Both populations are unfenced and therefore comparable: `export_each`
-    // selects from `drawers` with no WHERE clause, and `records` is a live
-    // COUNT(*) over the same table — quarantined rows included on both sides.
-    let source_records: Option<u64> = engine::vault_request(
-        &src,
-        &tenant.vault,
-        "GET",
-        "stats",
-        "",
-        "application/json",
-        &[],
-    )
-    .ok()
-    .and_then(|r| serde_json::from_slice::<serde_json::Value>(&r.body).ok())
-    .and_then(|v| v["records"].as_u64());
+    // Unreadable means REFUSED, here, before anything exists on the
+    // destination. O140 shipped the opposite: `.ok()`, so an engine that did
+    // not answer degraded to no check at all and still authorised
+    // `delete_vault(&src)` further down.
+    let snapshot = engine::vault_snapshot(&src, &tenant.vault).map_err(|e| {
+        MigrateError::Unbound(format!("the source vault {:?} could not be bound to a snapshot ({e}), so this copy cannot be judged. Nothing was created and nothing was deleted", tenant.vault))
+    })?;
+    // The newest chain row BEFORE the export, so the delta window is anchored
+    // on a seq rather than on "the newest N records". A positional window
+    // races its own stats read: one record appended between the two shifts it,
+    // and the oldest delta row — the mutation being hunted — falls off the
+    // bottom while a harmless newer one takes its place.
+    let seq0 = engine::vault_history(&src, &tenant.vault, 1, 0)
+        .map_err(|e| {
+            MigrateError::Unbound(format!("the source vault {:?} would not report its audit history ({e}), so a change made while the export was drawn could not be detected. Nothing was created and nothing was deleted", tenant.vault))
+        })?
+        .first()
+        .map(|(seq, _)| *seq)
+        .unwrap_or(0);
 
     // O136: a size refusal is this hop's own ceiling and gets its own verdict,
     // with the vault named and the remedy stated. Everything else keeps the
@@ -1622,23 +1781,22 @@ pub(crate) fn migrate_tenant(
         .next()
         .and_then(|l| serde_json::from_str::<serde_json::Value>(l).ok())
         .and_then(|v| v.get("undercroft_manifest").cloned());
-    let expected: (u64, u64, u64, u64) = match &manifest {
-        Some(m) => {
-            let n = |k: &str| m["counts"][k].as_u64().unwrap_or(0);
-            (
-                n("drawers"),
-                n("kg_triples"),
-                n("kg_entities"),
-                n("tunnels"),
-            )
-        }
-        None => (
-            ndjson.lines().filter(|l| !l.trim().is_empty()).count() as u64,
-            0,
-            0,
-            0,
-        ),
+    // The manifest is REQUIRED now, and that is a deliberate narrowing. Its
+    // `counts.drawers` is one of the two sides of the snapshot comparison
+    // below, and a legacy export without it can be compared only with itself —
+    // which is the self-certifying shape this repair exists to remove. An
+    // engine old enough to export without a manifest line is therefore refused
+    // before anything is created, with the direct host-to-host route named.
+    let Some(m) = manifest.as_ref() else {
+        return Err(MigrateError::Unbound(format!("the export of tenant {id:?} carries no manifest line, so what it claims to hold cannot be compared with what the source engine says it holds. Nothing was created and nothing was deleted: move this tenant with `undercroft export` on the source and `undercroft import` on the destination")));
     };
+    let n = |k: &str| m["counts"][k].as_u64().unwrap_or(0);
+    let expected: (u64, u64, u64, u64) = (
+        n("drawers"),
+        n("kg_triples"),
+        n("kg_entities"),
+        n("tunnels"),
+    );
     // The tenant's OWN level, not a literal. This was the only hard-coded
     // one of the three `create_vault` call sites, and since no surface can
     // change a vault's level afterwards, migrating an `hmac-only` tenant
@@ -1702,23 +1860,15 @@ pub(crate) fn migrate_tenant(
             got.quarantined, got.drawers
         )));
     }
-    // ROADMAP O140: the authority check, ahead of the self-certifying one.
-    // The decision is `migration_shortfall` so it can be tested directly —
-    // the scenario it exists for is an in-flight rewrite, which no suite here
-    // can stage without a man-in-the-middle.
-    if let Some(missing) = migration_shortfall(got.drawers, source_records) {
-        let _ = engine::delete_vault(&dst, &tenant.vault);
-        return Err(MigrateError::Unfaithful(format!(
-            "the destination holds {} drawer(s) but the source engine reported {} before the export was drawn — the copy is short by {missing}, so the source is left authoritative and the partial copy was removed. The manifest's own counts are not consulted for this: a payload that lost records in transit can restate them, which is why the number is taken from the source engine",
-            got.drawers,
-            source_records.unwrap_or_default(),
-        )));
-    }
+    // The parse check that was already here: what the import ACCEPTED against
+    // what the payload DECLARED. It compares the artifact with itself, so it
+    // is a parse check and never a faithfulness one — kept because a mismatch
+    // still means the stream did not survive the trip, and the kg/tunnel arms
+    // are the only comparison those records get.
     let counts_match = got.drawers == expected.0
-        && (manifest.is_none()
-            || (got.kg_triples == expected.1
-                && got.kg_entities == expected.2
-                && got.tunnels == expected.3));
+        && got.kg_triples == expected.1
+        && got.kg_entities == expected.2
+        && got.tunnels == expected.3;
     if !counts_match {
         // Leave the source authoritative; remove the partial copy.
         let _ = engine::delete_vault(&dst, &tenant.vault);
@@ -1727,12 +1877,90 @@ pub(crate) fn migrate_tenant(
             got.drawers, expected.0, got.kg_triples, expected.1
         )));
     }
+    // What the destination HOLDS, from its own stats — never what its import
+    // loop counted. `imported` counts records PROCESSED and the write is an
+    // upsert, so two exported records can land on one row and still count two.
+    // That is not hypothetical: a flagged update on a screening source leaves
+    // the original row beside a quarantine row, and at a non-screening
+    // destination the quarantine row's id re-derives to the original's and
+    // replaces it. Every count on the old path agreed, and the source was
+    // deleted.
+    let destination = engine::vault_snapshot(&dst, &tenant.vault).map_err(|e| {
+        let _ = engine::delete_vault(&dst, &tenant.vault);
+        MigrateError::Unbound(format!("the destination vault {:?} would not report what it holds after the import ({e}), so the copy cannot be judged. The partial copy was removed and the source is untouched", tenant.vault))
+    })?;
+    // The source again, and the delta between the two snapshots. Reading it is
+    // bounded: a tenant being read continuously under
+    // `UNDERCROFT_READ_AUDIT=chain` can append faster than this pages, and a
+    // refusal naming the bound is the honest answer to that.
+    let after = engine::vault_snapshot(&src, &tenant.vault).map_err(|e| {
+        let _ = engine::delete_vault(&dst, &tenant.vault);
+        MigrateError::Unbound(format!("the source vault {:?} stopped answering before its copy could be judged ({e}). The partial copy was removed and the source is untouched", tenant.vault))
+    })?;
+    let delta_expected = after.writes.saturating_sub(snapshot.writes);
+    let mut delta: Vec<(i64, String)> = Vec::new();
+    if delta_expected > 0 {
+        let mut offset = 0usize;
+        for _ in 0..DELTA_PAGES {
+            let page = match engine::vault_history(&src, &tenant.vault, DELTA_PAGE, offset) {
+                Ok(p) => p,
+                Err(e) => {
+                    let _ = engine::delete_vault(&dst, &tenant.vault);
+                    return Err(MigrateError::Unbound(format!("the source vault {:?} would not report the audit records appended while the export was drawn ({e}). The partial copy was removed and the source is untouched", tenant.vault)));
+                }
+            };
+            let exhausted = page.len() < DELTA_PAGE;
+            // Newest first, so stop at the anchor rather than paging the whole
+            // chain of a long-lived vault.
+            let mut reached_anchor = false;
+            for (seq, id) in page {
+                if seq <= seq0 {
+                    reached_anchor = true;
+                    break;
+                }
+                delta.push((seq, id));
+            }
+            offset += DELTA_PAGE;
+            if reached_anchor || exhausted {
+                break;
+            }
+        }
+    }
+    let verdict = judge_migration(
+        snapshot.records,
+        expected.0,
+        destination.records,
+        &delta,
+        delta_expected,
+    );
+    if let Some(refusal) = verdict.refusal() {
+        let _ = engine::delete_vault(&dst, &tenant.vault);
+        return Err(MigrateError::Unfaithful(refusal));
+    }
     let imported = got.drawers;
-    orch.tenant_set_instance(id, to)?;
+    // Compare-and-set: flip only while the tenant still sits where this
+    // migration found it. The loser refuses rather than overwriting the
+    // winner, and removes its own copy.
+    if !orch.tenant_set_instance_if(id, &tenant.instance, to)? {
+        let _ = engine::delete_vault(&dst, &tenant.vault);
+        return Err(MigrateError::TenantMoved(format!("tenant {id:?} is no longer on {:?} — another migration moved it while this one ran, so this copy was removed rather than flipped over the one that is now routing", tenant.instance)));
+    }
+    // The last look before the irreversible step. A write acknowledged by the
+    // source after the export is destroyed by this delete, and a forget,
+    // retention sweep or admission deny in the same window is RESURRECTED at
+    // the destination while its receipt says erased. The window cannot be
+    // closed from this side — only an engine-side conditional delete can do
+    // that — so it is DETECTED and the source is kept, which is the difference
+    // between a refusal and silent loss.
     let source_deleted = if keep_source {
         false
     } else {
-        engine::delete_vault(&src, &tenant.vault).is_ok()
+        match engine::vault_snapshot(&src, &tenant.vault) {
+            Ok(last) if last.writes == after.writes => {
+                engine::delete_vault(&src, &tenant.vault).is_ok()
+            }
+            _ => false,
+        }
     };
     Ok(serde_json::json!({
         "tenant": id,
@@ -1750,6 +1978,19 @@ pub(crate) fn migrate_tenant(
         // for every deployment that does not.
         "quarantined": got.quarantined,
         "source_deleted": source_deleted,
+        // What was actually checked, rather than a claim that it was. An
+        // operator reading `source_deleted: false` on a successful migration
+        // needs to know the source stayed because it was still being written
+        // to, not because something failed.
+        "verified": {
+            "source_records": snapshot.records,
+            "declared_drawers": expected.0,
+            "destination_records": destination.records,
+            "chain_head_before": snapshot.chain_head,
+            "chain_head_after": after.chain_head,
+            "audit_records_during_export": delta_expected,
+            "source_quiet_at_delete": source_deleted || keep_source,
+        },
     }))
 }
 
@@ -1781,34 +2022,460 @@ mod tests {
     /// man-in-the-middle between two engines, which no suite in this tree
     /// has — so the DECISION is tested directly and the residual is stated
     /// rather than dressed up.
+    /// Every verdict, one row each, with the two rows that decide whether the
+    /// design is right at all.
+    ///
+    /// The first is the `read/` delta: a read replica keeps serving a tenant
+    /// while the writer migrates it, and under `UNDERCROFT_READ_AUDIT=chain`
+    /// each of those reads appends a record. A strict "the chain must not
+    /// move" rule passes every other row here and makes busy read-audited
+    /// fleets permanently un-migratable, which is the failure a count-shaped
+    /// test cannot see.
+    ///
+    /// The second is the bare 32-hex drawer id: `Namespace::Drawer`'s prefix is
+    /// the EMPTY string, so an ordinary save's label carries no namespace at
+    /// all. A classifier written as "refuse the known mutating prefixes" reads
+    /// it as unknown and admits it — the single most likely way to write this
+    /// wrongly, and the reason the rule is an allowlist.
+    ///
+    /// Counterfactual, on the code this replaces: `migration_shortfall(got,
+    /// Some(records))` answers `None` for the DestinationDiverged row (2 >= 2)
+    /// and for the SourceChanged rows, so it passes them all while deleting
+    /// the source.
     #[test]
-    fn a_short_copy_is_measured_against_the_source_engine_not_the_payload() {
-        // The attack: the source held 1,000 rows, the destination got 400
-        // because the relay was truncated, and the payload's own manifest
-        // was restated to agree with the 400. Judged against the source,
-        // the shortfall is visible.
-        assert_eq!(migration_shortfall(400, Some(1_000)), Some(600));
+    fn every_migration_verdict_names_what_it_measured() {
+        let clean = [(9_i64, "egress/export".to_string())];
+        // The export's own record is the only thing a quiet source appends.
+        assert_eq!(
+            judge_migration(3, 3, 3, &clean, 1),
+            MigrationVerdict::Faithful
+        );
 
-        // The ordinary case, and the reason the comparison is `>=` and not
-        // `==`: the count is taken BEFORE the export is drawn, so a
-        // concurrent write to a live tenant makes the copy legitimately
-        // LARGER. That must not be a refusal.
-        assert_eq!(migration_shortfall(1_000, Some(1_000)), None);
-        assert_eq!(migration_shortfall(1_007, Some(1_000)), None);
+        // Reads move the chain and change nothing.
+        let reads = [
+            (11_i64, "read/search".to_string()),
+            (10, "read/get".to_string()),
+            (9, "egress/export".to_string()),
+        ];
+        assert_eq!(
+            judge_migration(3, 3, 3, &reads, 3),
+            MigrationVerdict::Faithful
+        );
 
-        // An engine that did not answer with a count degrades to the older
-        // comparison rather than refusing a migration it cannot judge — a
-        // check that cannot run must not become a verdict.
-        assert_eq!(migration_shortfall(400, None), None);
-        assert_eq!(migration_shortfall(0, None), None);
+        // A deletion during the export: named, and never blamed on transit.
+        let deleted = [
+            (10_i64, "del/abc".to_string()),
+            (9, "egress/export".to_string()),
+        ];
+        let v = judge_migration(3, 2, 2, &deleted, 2);
+        assert_eq!(
+            v,
+            MigrationVerdict::SourceChanged {
+                record: "del/abc".into()
+            }
+        );
+        let msg = v.refusal().expect("a refusal");
+        assert!(
+            msg.contains("del/abc"),
+            "the refusal must name the record it saw: {msg}"
+        );
+        assert!(
+            !msg.contains("transit"),
+            "a concurrent delete is ordinary traffic, not loss in transit: {msg}"
+        );
 
-        // An empty source is not a shortfall, and an empty destination
-        // against a non-empty source is the whole of it.
-        assert_eq!(migration_shortfall(0, Some(0)), None);
-        assert_eq!(migration_shortfall(0, Some(1)), Some(1));
+        // A bare drawer id has no prefix at all.
+        let saved = [(10_i64, "a".repeat(32)), (9, "egress/export".to_string())];
+        assert!(
+            matches!(
+                judge_migration(4, 4, 4, &saved, 2),
+                MigrationVerdict::SourceChanged { .. }
+            ),
+            "a bare drawer id is a write, and it is the label a prefix scan cannot see"
+        );
+
+        // Every other namespace the engine mints is a mutation too.
+        for label in [
+            "kg/x",
+            "kg-entity/x",
+            "tunnel/x",
+            "trust/w",
+            "retention/w",
+            "retention-clear/w",
+            "rotate/1",
+            "admission/x/allow",
+            "migrate/1",
+        ] {
+            let d = [
+                (10_i64, label.to_string()),
+                (9, "egress/export".to_string()),
+            ];
+            assert!(
+                matches!(
+                    judge_migration(3, 3, 3, &d, 2),
+                    MigrationVerdict::SourceChanged { .. }
+                ),
+                "{label} changes the source"
+            );
+        }
+
+        // A quiet chain, and the export still declares the wrong number.
+        assert_eq!(
+            judge_migration(3, 2, 2, &clean, 1),
+            MigrationVerdict::ExportOmitsRows {
+                declared: 2,
+                source: 3
+            }
+        );
+
+        // A quiet chain, an export that declares what the source held, and a
+        // destination that HOLDS less than it accepted — two records landing
+        // on one row. The old check compared `imported` and saw nothing.
+        assert_eq!(
+            judge_migration(2, 2, 1, &clean, 1),
+            MigrationVerdict::DestinationDiverged {
+                held: 1,
+                declared: 2
+            }
+        );
+
+        // More appended than could be read back: no conclusion is available.
+        assert_eq!(
+            judge_migration(3, 3, 3, &clean, 9),
+            MigrationVerdict::DeltaUnreadable {
+                expected: 9,
+                read: 1
+            }
+        );
+
+        // Faithful is the only verdict with nothing to say.
+        assert!(MigrationVerdict::Faithful.refusal().is_none());
     }
 
-    /// Both directions: the size refusal must map to this verdict, and every
+    /// The two non-mutating spellings are the ENGINE's, counted against the one
+    /// place the engine states them (ROADMAP O80: an inventory that compares
+    /// two of its own lists is a closed system, so this reads the source).
+    ///
+    /// Both directions: every namespace the store mints is classified here, and
+    /// exactly two of them are non-mutating. A future non-mutating namespace
+    /// therefore fails this test rather than being silently treated as a
+    /// mutation — which would refuse migrations — and a namespace renamed on
+    /// the engine side fails it rather than being silently admitted.
+    #[test]
+    fn the_non_mutating_namespaces_are_the_engines_own() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../undercroft-store/src/manage.rs");
+        let src = std::fs::read_to_string(&path)
+            .expect("the store's manage.rs is readable from the orchestrator's tests");
+        let start = src.find("pub const fn prefix(self)").expect(
+            "premise: manage.rs still states every namespace spelling in one `prefix` function",
+        );
+        let body = &src[start..];
+        let end = body
+            .find("\n    }")
+            .expect("premise: the `prefix` body is delimited");
+        let mut spellings: Vec<String> = Vec::new();
+        for line in body[..end].lines() {
+            let Some((lhs, rhs)) = line.split_once("=> \"") else {
+                continue;
+            };
+            if !lhs.trim_start().starts_with("Namespace::") {
+                continue;
+            }
+            if let Some(sp) = rhs.split('"').next() {
+                spellings.push(sp.to_string());
+            }
+        }
+        assert!(
+            spellings.len() >= 13,
+            "premise: expected every namespace spelling from the engine, read {}: {spellings:?}",
+            spellings.len()
+        );
+        assert!(spellings.iter().any(|s| s.is_empty()), "premise: the bare-drawer namespace (the empty prefix) must be among them, or this test is not reading `prefix`");
+        let non_mutating: Vec<&str> = spellings
+            .iter()
+            .filter(|s| !is_mutating_record(&format!("{s}sample")))
+            .map(|s| s.as_str())
+            .collect();
+        assert_eq!(non_mutating, vec!["egress/", "read/"], "exactly two of the engine's namespaces leave a vault's content untouched; everything else must refuse a migration");
+    }
+
+    /// What one scripted engine will answer. Each `stats` call pops the next
+    /// reply and the last one repeats, because `migrate_tenant` reads the
+    /// source's stats three times (before the export, after the import, and
+    /// once more immediately before the irreversible delete) and those three
+    /// answers are the whole point of the test.
+    #[derive(Clone)]
+    struct Script {
+        stats: Vec<String>,
+        /// The reply to the ANCHOR call (`limit=1`), which is the newest row
+        /// before the export — what `seq0` is taken from.
+        anchor: String,
+        /// The reply to the delta pages (`limit=1000`), which is what the
+        /// chain looks like afterwards. These are two different questions and
+        /// a stub answering both with one body cannot tell them apart, which
+        /// makes even a faithful migration look like an unreadable delta.
+        delta: String,
+        export: String,
+        import: String,
+    }
+
+    /// A scripted engine on loopback, with the request log that makes the
+    /// assertions possible: what this test needs to know is not only what
+    /// `migrate_tenant` RETURNED but which calls it made — above all whether a
+    /// `DELETE` ever reached the source.
+    struct Stub {
+        url: String,
+        log: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    fn stub_engine(script: Script) -> Stub {
+        let server = std::sync::Arc::new(tiny_http::Server::http("127.0.0.1:0").unwrap());
+        let port = server.server_addr().to_ip().unwrap().port();
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (s2, l2) = (server.clone(), log.clone());
+        std::thread::spawn(move || {
+            let mut stats = script.stats.clone();
+            while let Ok(mut req) = s2.recv() {
+                let method = req.method().to_string();
+                let url = req.url().to_string();
+                l2.lock().unwrap().push(format!("{method} {url}"));
+                // Read the body before answering: the vendored tiny_http ends
+                // the connection behind an UNREAD body (ROADMAP O114), which
+                // would make these replies arrive over a closing socket.
+                let mut body = Vec::new();
+                let _ = req.as_reader().read_to_end(&mut body);
+                let create = method == "POST" && url == "/v1/vaults";
+                let (code, payload) = if create || method == "DELETE" {
+                    (200, "{}".to_string())
+                } else if url.contains("/stats") {
+                    let next = if stats.len() > 1 {
+                        stats.remove(0)
+                    } else {
+                        stats.first().cloned().unwrap_or_else(|| "{}".into())
+                    };
+                    // A scripted refusal is spelled as an empty body, which is
+                    // what an engine too old to answer looks like here.
+                    if next.is_empty() {
+                        (500, "{}".to_string())
+                    } else {
+                        (200, next)
+                    }
+                } else if url.contains("/history") {
+                    // `limit=1&` is the anchor call; `limit=1000&` is a delta
+                    // page and does NOT contain that substring.
+                    if url.contains("limit=1&") {
+                        (200, script.anchor.clone())
+                    } else {
+                        (200, script.delta.clone())
+                    }
+                } else if url.contains("/export") {
+                    (200, script.export.clone())
+                } else if url.contains("/import") {
+                    (200, script.import.clone())
+                } else {
+                    (404, "{}".to_string())
+                };
+                let resp = tiny_http::Response::from_string(payload)
+                    .with_status_code(code)
+                    .with_header(
+                        tiny_http::Header::from_bytes(
+                            &b"Content-Type"[..],
+                            &b"application/json"[..],
+                        )
+                        .unwrap(),
+                    );
+                let _ = req.respond(resp);
+            }
+        });
+        Stub {
+            url: format!("http://127.0.0.1:{port}"),
+            log,
+        }
+    }
+
+    fn manifest_export(drawers: u64) -> String {
+        format!("{{\"undercroft_manifest\":{{\"counts\":{{\"drawers\":{drawers},\"kg_triples\":0,\"kg_entities\":0,\"tunnels\":0}},\"level\":\"sealed\"}}}}\n{{\"id\":\"d1\"}}\n")
+    }
+
+    fn import_reply(imported: u64) -> String {
+        format!("{{\"imported\":{imported},\"kg_triples\":0,\"kg_entities\":0,\"tunnels\":0,\"quarantined\":0}}")
+    }
+
+    fn stats_body(records: u64, writes: u64, head: &str) -> String {
+        format!("{{\"records\":{records},\"writes\":{writes},\"chain_head\":\"{head}\"}}")
+    }
+
+    /// Drive one whole migration against two scripted engines and hand back
+    /// the outcome with both request logs.
+    fn run_migration(
+        src: Script,
+        dst: Script,
+        keep_source: bool,
+    ) -> (
+        Result<serde_json::Value, MigrateError>,
+        Vec<String>,
+        Vec<String>,
+    ) {
+        let (_dir, orch) = orch_for_tests();
+        let a = stub_engine(src);
+        let b = stub_engine(dst);
+        orch.instance_add("src", &a.url, "bearer-a", "secret-a")
+            .unwrap();
+        orch.instance_add("dst", &b.url, "bearer-b", "secret-b")
+            .unwrap();
+        let (tenant, _token) = orch.tenant_create("acme", "src", "sealed").unwrap();
+        let out = migrate_tenant(&orch, &tenant.id, "dst", keep_source);
+        let al = a.log.lock().unwrap().clone();
+        let bl = b.log.lock().unwrap().clone();
+        (out, al, bl)
+    }
+
+    /// The properties a unit test on `judge_migration` structurally cannot
+    /// reach, because they live in the WIRING rather than in the decision.
+    ///
+    /// Above all: the destination is measured by what it HOLDS (its own
+    /// `stats`) and never by what its import loop counted. Those two numbers
+    /// differ exactly when two exported records land on one row — a flagged
+    /// update leaves the original beside a quarantine row, and at a
+    /// non-screening destination the quarantine row's id re-derives to the
+    /// original's and replaces it. On the shipped code every count agreed and
+    /// the source was deleted.
+    #[test]
+    fn a_migration_is_judged_against_the_source_and_what_the_destination_holds() {
+        let row = |seq: i64, id: &str| {
+            format!("{{\"seq\":{seq},\"record_id\":\"{id}\",\"tag\":\"aa\",\"at\":\"now\"}}")
+        };
+        let records = |rows: &[String]| format!("{{\"records\":[{}]}}", rows.join(","));
+        // Before the export the newest row is 100; the export itself appends
+        // 101, which is the only thing a quiet source adds.
+        let anchor_100 = records(&[row(100, "read/search")]);
+        let quiet_delta = records(&[row(101, "egress/export"), row(100, "read/search")]);
+        let src = |stats: Vec<String>, anchor: String, delta: String| Script {
+            stats,
+            anchor,
+            delta,
+            export: manifest_export(2),
+            import: import_reply(0),
+        };
+        let dst = |held: u64| Script {
+            stats: vec![stats_body(held, 0, "dsthead")],
+            anchor: records(&[]),
+            delta: records(&[]),
+            export: String::new(),
+            import: import_reply(2),
+        };
+
+        // ARM 1 — the quiet migration still works, and the source is dropped.
+        // Without this arm every refusal below could pass for the wrong reason.
+        let (out, alog, blog) = run_migration(
+            src(
+                vec![
+                    stats_body(2, 10, "head0"),
+                    stats_body(2, 11, "head1"),
+                    stats_body(2, 11, "head1"),
+                ],
+                anchor_100.clone(),
+                quiet_delta.clone(),
+            ),
+            dst(2),
+            false,
+        );
+        let v = out.expect("a quiet migration is faithful");
+        assert_eq!(v["records"], serde_json::json!(2), "{v}");
+        assert_eq!(v["source_deleted"], serde_json::json!(true), "{v}");
+        assert_eq!(
+            v["verified"]["destination_records"],
+            serde_json::json!(2),
+            "the response must report what the destination HOLDS: {v}"
+        );
+        assert!(
+            alog.iter().any(|l| l.starts_with("DELETE ")),
+            "the source is deleted on a faithful migration: {alog:?}"
+        );
+        assert!(
+            blog.iter().any(|l| l.contains("/stats")),
+            "the destination must be asked what it holds: {blog:?}"
+        );
+
+        // ARM 2 — the collision: the import accepted 2 and the destination
+        // holds 1. Every count on the shipped path agreed here.
+        let (out, alog, blog) = run_migration(
+            src(
+                vec![stats_body(2, 10, "head0"), stats_body(2, 11, "head1")],
+                anchor_100.clone(),
+                quiet_delta.clone(),
+            ),
+            dst(1),
+            false,
+        );
+        let e =
+            out.expect_err("a destination holding less than it accepted is not a faithful copy");
+        assert_eq!(e.status(), 409);
+        let msg = e.to_string();
+        assert!(
+            msg.contains('1') && msg.contains('2'),
+            "the refusal names both numbers: {msg}"
+        );
+        assert!(
+            !alog.iter().any(|l| l.starts_with("DELETE ")),
+            "THE SOURCE MUST SURVIVE a refusal: {alog:?}"
+        );
+        assert!(
+            blog.iter().any(|l| l.starts_with("DELETE ")),
+            "the partial copy is removed: {blog:?}"
+        );
+
+        // ARM 3 — a drawer deleted while the export was drawn.
+        // Two rows arrive while the export is drawn: the export's own egress
+        // record and a deletion. Both sit above the anchor, so both are in the
+        // window and the deletion is what decides the verdict.
+        let busy_delta = records(&[
+            row(102, "del/abc"),
+            row(101, "egress/export"),
+            row(100, "read/search"),
+        ]);
+        let (out, alog, _blog) = run_migration(
+            src(
+                vec![stats_body(2, 10, "head0"), stats_body(1, 12, "head2")],
+                anchor_100.clone(),
+                busy_delta,
+            ),
+            dst(2),
+            false,
+        );
+        let msg = out
+            .expect_err("a source that changed mid-export is not migratable")
+            .to_string();
+        assert!(
+            msg.contains("del/abc"),
+            "the refusal names the record: {msg}"
+        );
+        assert!(
+            !msg.contains("transit"),
+            "an ordinary delete is not loss in transit: {msg}"
+        );
+        assert!(
+            !alog.iter().any(|l| l.starts_with("DELETE ")),
+            "THE SOURCE MUST SURVIVE: {alog:?}"
+        );
+
+        // ARM 4 — an unbound source: nothing may be created on the
+        // destination, so its log is EMPTY. This is the arm that fails on the
+        // shipped code, where an unreadable source degraded to no check and
+        // still authorised the delete.
+        let (out, _alog, blog) = run_migration(
+            src(vec![String::new()], anchor_100, quiet_delta),
+            dst(2),
+            false,
+        );
+        let e = out.expect_err("an unjudgeable source refuses");
+        assert_eq!(e.status(), 409);
+        assert!(
+            blog.is_empty(),
+            "nothing may be created on the destination before the source is bound: {blog:?}"
+        );
+    }
     /// OTHER engine failure must keep its old classification — a variant that
     /// swallowed the general case would hide real faults behind a capacity
     /// message.

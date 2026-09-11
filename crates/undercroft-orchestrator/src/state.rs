@@ -642,16 +642,43 @@ impl Orch {
         Ok(token)
     }
 
-    pub fn tenant_set_instance(&self, id: &str, instance: &str) -> Result<(), StateError> {
+    /// Re-point a tenant ONLY while it still sits on `expected` (ROADMAP
+    /// O140).
+    ///
+    /// `Ok(false)` means the row is there and has MOVED: another migration
+    /// re-pointed this tenant while this one ran. A caller must treat that as
+    /// a refusal and never as success. An absent tenant stays a typed
+    /// `NotFound` — the unconditional setter this replaced owned that
+    /// distinction, and collapsing the two would turn a 404 into a lost race.
+    ///
+    /// **Two doors run a migration** — the admin route and the CLI's own
+    /// `migrate`, each in its own process against one state database — and the
+    /// unconditional UPDATE let both flip the same tenant. The later flip
+    /// wins, so the earlier migration's destination keeps a full copy of the
+    /// corpus that nothing routes to, and every write acknowledged against it
+    /// is stranded. A source-side faithfulness check is structurally blind to
+    /// this: once a rival has flipped, the tenant's writes never reach the
+    /// source again, so the source stays quiet and every count taken there
+    /// agrees.
+    pub fn tenant_set_instance_if(
+        &self,
+        id: &str,
+        expected: &str,
+        instance: &str,
+    ) -> Result<bool, StateError> {
         self.require_writable()?;
         let n = self.conn.execute(
-            "UPDATE tenants SET instance = ?1 WHERE id = ?2",
-            params![instance, id],
+            "UPDATE tenants SET instance = ?1 WHERE id = ?2 AND instance = ?3",
+            params![instance, id, expected],
         )?;
         if n == 0 {
-            return Err(StateError::NotFound(format!("unknown tenant {id:?}")));
+            if self.tenant_get(id)?.is_none() {
+                return Err(StateError::NotFound(format!("unknown tenant {id:?}")));
+            }
+            return Ok(false);
         }
-        self.touch_last_write()
+        self.touch_last_write()?;
+        Ok(true)
     }
 
     pub fn tenant_delete(&self, id: &str) -> Result<bool, StateError> {
@@ -947,7 +974,10 @@ mod tests {
             replica.tenant_rotate_token(&t.id).map(|_| ()).unwrap_err(),
             replica.tenant_delete(&t.id).map(|_| ()).unwrap_err(),
             replica.instance_remove("alpha").map(|_| ()).unwrap_err(),
-            replica.tenant_set_instance(&t.id, "alpha").unwrap_err(),
+            replica
+                .tenant_set_instance_if(&t.id, "alpha", "alpha")
+                .map(|_| ())
+                .unwrap_err(),
         ] {
             assert!(err.to_string().contains("read-only"), "got: {err}");
         }
@@ -990,7 +1020,10 @@ mod tests {
         assert_eq!(o.instance_remove("alpha").unwrap_err().status(), 409);
         assert_eq!(o.tenant_rotate_token("nope").unwrap_err().status(), 404);
         assert_eq!(
-            o.tenant_set_instance("nope", "alpha").unwrap_err().status(),
+            o.tenant_set_instance_if("nope", "alpha", "beta")
+                .map(|_| ())
+                .unwrap_err()
+                .status(),
             404
         );
         // Premise: the same calls succeed when they are legitimate, so this
@@ -1022,7 +1055,42 @@ mod tests {
         assert_eq!(o.instance_least_loaded().unwrap().as_deref(), Some("beta"));
         // An instance hosting tenants refuses removal.
         assert!(o.instance_remove("alpha").is_err());
-        o.tenant_set_instance(&t1.id, "beta").unwrap();
+        assert!(
+            o.tenant_set_instance_if(&t1.id, "alpha", "beta").unwrap(),
+            "the tenant is still on alpha, so the flip takes"
+        );
         assert!(o.instance_remove("alpha").unwrap());
+    }
+
+    /// ROADMAP O140: the mapping flip is a compare-and-set, so two migrations
+    /// cannot both move one tenant.
+    ///
+    /// Without it the later flip won, and the earlier migration's destination
+    /// kept a full copy of the corpus that nothing routed to, with every write
+    /// acknowledged against it stranded. A source-side faithfulness check is
+    /// structurally blind to that: once a rival has flipped, the tenant's
+    /// writes never reach the source again, so the source stays quiet and
+    /// every count taken there agrees.
+    #[test]
+    fn re_pointing_a_tenant_that_moved_refuses_without_overwriting() {
+        let (_d, o) = orch();
+        o.instance_add("alpha", "https://a", "b", "s").unwrap();
+        o.instance_add("beta", "https://b", "b", "s").unwrap();
+        let (t, _) = o.tenant_create("acme", "alpha", "sealed").unwrap();
+        // A rival migration moves it first.
+        assert!(o.tenant_set_instance_if(&t.id, "alpha", "beta").unwrap());
+        // The loser's expectation no longer holds: it must refuse rather than
+        // overwrite, and the winner's mapping must survive.
+        assert!(!o.tenant_set_instance_if(&t.id, "alpha", "gamma").unwrap());
+        assert_eq!(o.tenant_get(&t.id).unwrap().unwrap().instance, "beta");
+        // "It moved" and "there is no such tenant" are different answers: the
+        // first is a lost race, the second a 404.
+        assert_eq!(
+            o.tenant_set_instance_if("nope", "alpha", "beta")
+                .map(|_| ())
+                .unwrap_err()
+                .status(),
+            404
+        );
     }
 }

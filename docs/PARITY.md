@@ -211,7 +211,8 @@ this project, which is why the two codebases share concepts but not code
 - `undercroft-orchestrator`: a separate control plane (instance registry
   with sealed credentials, HMAC-only tenant tokens shown once, routing
   proxy with subpath allowlist, token rotation, per-tenant rate limits,
-  count-verified live migration) — the engine never links it.
+  live migration judged against the source snapshot) — the engine never
+  links it.
 
 **Operations:**
 

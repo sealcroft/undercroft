@@ -380,6 +380,124 @@ pub fn import_vault(
     })
 }
 
+/// A vault's own account of itself at one instant — the numbers a migration
+/// is judged against (ROADMAP O140).
+///
+/// **Read from the engine over its authenticated channel, never from the
+/// payload.** The faithfulness check this feeds used to compare the export's
+/// manifest counts with the counts the import reported, and both sides come
+/// from ONE artifact: a body that lost records in transit can restate them,
+/// and passing that check is what authorises deleting the source.
+///
+/// `writes` and `chain_head` are what make `records` a SNAPSHOT rather than a
+/// number from an unknown instant. Every content mutation appends exactly one
+/// audit record atomically with the write, so a height that has not moved is a
+/// vault whose drawer population and content have not moved either. That is
+/// the property a count alone cannot have: `COUNT(*)` is not a version, and a
+/// delete plus an insert leaves it unchanged.
+pub struct VaultSnapshot {
+    /// `COUNT(*)` over `drawers` — every row, unfenced, quarantined rows
+    /// included, which is the same population the export walks.
+    pub records: u64,
+    /// The audit chain's height at the moment of the read.
+    pub writes: u64,
+    /// The audit chain's head at the moment of the read.
+    pub chain_head: String,
+}
+
+/// `GET /v1/vaults/{v}/stats`, typed, with every field this hop needs
+/// REQUIRED.
+///
+/// An absent field is an error and never a zero. `records` defaulting to 0
+/// would make a short copy look faithful; an absent `chain_head` would retire
+/// the snapshot binding silently. An engine that cannot answer with all three
+/// cannot be judged, and a check that cannot run must not become a verdict —
+/// so the caller refuses the migration rather than proceeding on a default.
+/// That is the opposite of what O140 shipped, where an unreadable source
+/// degraded to no check at all and still authorised `delete_vault`.
+pub fn vault_snapshot(creds: &InstanceCreds, vault: &str) -> Result<VaultSnapshot, EngineError> {
+    let r = vault_request(creds, vault, "GET", "stats", "", "application/json", &[])?;
+    if r.status != 200 {
+        return Err(EngineError::Status(format!(
+            "engine stats failed ({}): {}",
+            r.status,
+            String::from_utf8_lossy(&r.body)
+        )));
+    }
+    let v: serde_json::Value = serde_json::from_slice(&r.body)
+        .map_err(|_| EngineError::Body("engine stats response did not parse".into()))?;
+    let num = |k: &str| v.get(k).and_then(serde_json::Value::as_u64);
+    let (Some(records), Some(writes)) = (num("records"), num("writes")) else {
+        return Err(EngineError::Body("engine stats carried no `records`/`writes`, so this vault cannot be bound to a snapshot".into()));
+    };
+    let Some(head) = v.get("chain_head").and_then(serde_json::Value::as_str) else {
+        return Err(EngineError::Body(
+            "engine stats carried no `chain_head`, so this vault cannot be bound to a snapshot"
+                .into(),
+        ));
+    };
+    Ok(VaultSnapshot {
+        records,
+        writes,
+        chain_head: head.to_string(),
+    })
+}
+
+/// One page of `GET /v1/vaults/{v}/history`, as `(seq, record_id)` pairs,
+/// newest first (the route orders by `seq DESC`).
+///
+/// Only the two fields this hop can reason about. The `tag` is deliberately
+/// not read: it is a KEYED HMAC and the orchestrator holds no vault key, so it
+/// could neither verify a tag nor fold a slice onto a head to prove the slice
+/// is complete. What history gives this hop is the EXISTENCE and the LABEL of
+/// each record, which is all the question needs — *did anything mutate the
+/// source while the export was drawn* — and it is a weaker claim than the one
+/// O140's entry made for the audit trail.
+pub fn vault_history(
+    creds: &InstanceCreds,
+    vault: &str,
+    limit: usize,
+    offset: usize,
+) -> Result<Vec<(i64, String)>, EngineError> {
+    let query = format!("limit={limit}&offset={offset}");
+    let r = vault_request(
+        creds,
+        vault,
+        "GET",
+        "history",
+        &query,
+        "application/json",
+        &[],
+    )?;
+    if r.status != 200 {
+        return Err(EngineError::Status(format!(
+            "engine history failed ({}): {}",
+            r.status,
+            String::from_utf8_lossy(&r.body)
+        )));
+    }
+    let v: serde_json::Value = serde_json::from_slice(&r.body)
+        .map_err(|_| EngineError::Body("engine history response did not parse".into()))?;
+    let Some(rows) = v.get("records").and_then(serde_json::Value::as_array) else {
+        return Err(EngineError::Body(
+            "engine history response carried no `records` array".into(),
+        ));
+    };
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        let (Some(seq), Some(id)) = (
+            row.get("seq").and_then(serde_json::Value::as_i64),
+            row.get("record_id").and_then(serde_json::Value::as_str),
+        ) else {
+            return Err(EngineError::Body(
+                "an engine history row carried no `seq`/`record_id`".into(),
+            ));
+        };
+        out.push((seq, id.to_string()));
+    }
+    Ok(out)
+}
+
 /// What an instance probe found.
 ///
 /// **Three states, because two of them were being reported as the third.**
