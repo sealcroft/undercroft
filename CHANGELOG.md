@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — 1.5.2
+## 1.5.2 — 2026-09-11
 
 PATCH: a fix whose only observable change is that a defect is gone. No
 documented contract moves.

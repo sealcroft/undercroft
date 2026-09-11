@@ -4160,7 +4160,7 @@ touching anyone's existing corpus.
 integrity verdict, and two different model files must produce two different
 identities.
 
-## 1.5.2 — unreleased
+## 1.5.2 — released 2026-09-11
 
 A gate for the class O111 found by hand, O113 measured, seven fixes from the
 doc read, and every model role's silent failures counted (O122, O131).
