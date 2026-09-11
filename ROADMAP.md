@@ -4169,6 +4169,60 @@ the duplicate check stops scanning the table.
 shipped at `f490fd6` without these, and adding work to a released section
 would make the CHANGELOG describe a tag that does not contain it.
 
+### O140 — CLOSED 2026-09-11: a migrated copy is measured against the source engine, not against the payload's own account of itself
+
+**Closed narrower and sharper than filed, and half of what this entry
+claimed was wrong.** It said the manifest's `level` and `counts` are both
+attacker-mutable inputs to a migration decision. Reading the code settles
+`level`: `proxy.rs` already documents it as a CROSS-CHECK that refuses on
+disagreement and never as the source — `create_vault` uses the control
+plane's own `tenant.level` — so a rewritten level can cause a refusal and
+never a wrong posture. It fails safe, and it is not a defect.
+
+**`counts` is a defect, and a worse one than the filing described.** The
+faithfulness check reads `expected` from the export's manifest line and
+`got` from importing that same export. **Both sides come from one artifact**,
+which makes the check self-certifying — and passing it is what authorises
+`delete_vault(&src)`. A relayed body that arrives truncated, with its
+manifest counts lowered and its payload digest recomputed to match,
+satisfies every check on this path, and the source vault is then dropped.
+That is DATA LOSS, not the "integrity gap in a cross-check" this entry
+called it.
+
+**The filing also mis-located the weakness.** It said the digest covers the
+records but not the manifest line. True, and on an unsigned payload it does
+not matter: nothing is bound, including the records, because an attacker who
+can rewrite the body can recompute the digest. The asymmetry is a red
+herring; the real property is that the verifier and the verified are the
+same bytes.
+
+**The fix is A28's rule one hop out — ask the authority, never the artifact
+offering itself for verification.** The source engine is asked for its own
+row count, over its own authenticated channel, and `migration_shortfall`
+refuses when the destination holds fewer. Three details are load-bearing:
+
+- **Taken BEFORE the export is drawn.** A concurrent write to a live tenant
+  then makes the export larger, which the comparison tolerates; taking it
+  afterwards would turn that ordinary write into a refusal.
+- **`>=`, not `==`**, for the same reason.
+- **Both populations are unfenced and therefore comparable**: `export_each`
+  selects from `drawers` with no `WHERE`, and `records` is a live `COUNT(*)`
+  over the same table, quarantined rows included on both sides. Had one
+  fenced and the other not, this check would refuse every migration of a
+  vault holding a diverted drawer.
+
+A source engine that does not answer with a count degrades to the old
+comparison rather than refusing a migration it cannot judge — a check that
+cannot run must not become a verdict.
+
+**Gate**: `a_short_copy_is_measured_against_the_source_engine_not_the_payload`,
+counterfactualed (ignore the authority and it fails by assertion).
+**Residual, stated rather than dressed up**: the in-flight rewrite itself is
+not staged. It needs a man-in-the-middle between two engines, which no suite
+in this tree has, so the DECISION is tested directly and the end-to-end
+scenario is not. What is verified is that a short copy refuses and that
+ordinary traffic does not.
+
 ### O139 — CLOSED 2026-09-11: import holds one batch instead of the corpus, and the promise it had to keep was gated by nothing
 
 **The ruling this entry asked for was not needed — the tree already answered
@@ -12123,44 +12177,6 @@ scanner (O33, O47). The mechanism here is a heading, not a gate.
 
 
 
-
-### O140 — an unsigned manifest's own fields are bound by nothing, and the orchestrator reads two of them to decide a migration
-
-**Filed 2026-09-10, found by the O137 fanout (two agents, independently) and
-re-verified here by reading `split_payload`.** Not a defect in the digest: the
-digest does exactly what it says. `payload_digest(rest)` covers the bytes
-AFTER the manifest line and is checked unconditionally (`bundle.rs`), so the
-RECORDS cannot be swapped. What it does not cover is the manifest line itself.
-
-The manifest's other declared fields — `counts`, `level`, `trust`, `vault`,
-`embedder`, `chain_head` — are protected only by the Ed25519 signature, via
-`canonical()`. So **on an unsigned manifest they are freely rewritable and the
-digest still verifies**, because rewriting them does not touch `rest`.
-
-**Why that is not merely cosmetic.** `/v1` exports are unconditionally
-unsigned (`tenant.rs` sets `sender: None, sig: None` — the signing key is an
-operator file, not a server secret), and the orchestrator's migration reads
-`level` and `counts` out of that same first line to decide whether a
-migration is faithful, refusing with `MigrateError::Unfaithful`. So the input
-to that decision is attacker-mutable by anyone who can rewrite the body in
-flight, on a hop where nothing signs.
-
-**What it is NOT.** The transport is TLS-or-loopback with no override, so this
-needs an attacker who is already inside that boundary, and the drawer content
-itself stays covered. This is an integrity gap in a cross-check, not a route
-to forged content.
-
-**Shapes, not yet ruled.** Fold a digest of the manifest line into the
-`egress/export` audit record so a rewritten line is detectable after the fact;
-or have the orchestrator take `level` and `counts` from the engine's own
-`/v1/…/stats` rather than from the payload it is relaying; or sign `/v1`
-exports, which needs a server-held key and is the largest change of the three.
-The middle one is closest to the tree's own doctrine — *ask the authority, not
-the artifact*, which is A28 one hop out.
-
-**Gate**: a migration whose relayed export has had `level` or `counts`
-rewritten in flight is refused or recorded, and the test rewrites the line
-without touching the records so the digest still passes.
 
 ### O134 — the four real degrade sites are compile-checked and never executed, because the battery carries no model weights
 
