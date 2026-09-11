@@ -1882,7 +1882,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (499 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (501 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (133 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (82 checks; weaviate

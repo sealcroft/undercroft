@@ -67,6 +67,28 @@ so rather than implying it checked them.
 
 ---
 
+## 1.5.3 (unreleased)
+
+### the first writable open of an existing vault builds one index (O145)
+
+**Who is affected:** every vault that already holds drawers. The larger it is,
+the longer the first open takes.
+
+**What happens:** `check_duplicate` looks up a content fingerprint on every
+save and every imported record, and the `fp` column it reads has never had an
+index — so that lookup has always been a full table scan. `1.5.3` creates
+`idx_drawers_fp` at the next WRITABLE open. A read-only open does not create
+it and does not need it, since the lookup is on the write path.
+
+**Symptom to expect:** one longer-than-usual open, once, while SQLite builds
+the index — seconds on a small vault, longer on a large one. After that,
+saves and imports get faster, and an import into an already-populated vault
+stops being quadratic.
+
+**Nothing is refused and nothing is lost.** If the process is interrupted
+during the build, the index is simply absent and the next writable open tries
+again; `CREATE INDEX IF NOT EXISTS` is idempotent.
+
 ## 1.5.2 (released 2026-09-11)
 
 ### a tenant whose export exceeds 256 MiB cannot be migrated over `/v1` (O136)
