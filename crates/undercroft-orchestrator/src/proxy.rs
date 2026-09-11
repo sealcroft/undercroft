@@ -1522,6 +1522,33 @@ fn engine_err(msg: String) -> MigrateError {
 /// **count-verified** → mapping flip → source delete (unless kept). Any
 /// failure before the flip leaves the tenant untouched on its source.
 /// Shared by the HTTP admin plane and the CLI `migrate` subcommand.
+/// How many drawers a migrated copy is SHORT of what the source engine
+/// reported, or `None` when it is not short.
+///
+/// ROADMAP O140. The faithfulness check this sits in front of verifies the
+/// payload against numbers carried by that same payload — `expected` from
+/// the export's manifest line, `got` from importing that export — and
+/// passing it is what authorises deleting the source. A relayed body that
+/// arrives truncated, with its manifest counts lowered and its payload
+/// digest recomputed to match, satisfies every check on that path. So the
+/// expected size is taken from the source ENGINE instead, which is A28's
+/// rule one hop out: ask the covered copy, never the artifact offering
+/// itself for verification.
+///
+/// `>=` rather than `==`, deliberately: a concurrent write to a live tenant
+/// legitimately makes the export LARGER than the count taken before it, and
+/// this must refuse a shortfall without refusing ordinary traffic.
+///
+/// `None` for `authoritative` means the source engine did not answer with a
+/// count — an older engine, or a failed stats call. The check degrades to
+/// the older comparison rather than refusing a migration it cannot judge.
+pub(crate) fn migration_shortfall(got: u64, authoritative: Option<u64>) -> Option<u64> {
+    match authoritative {
+        Some(a) if got < a => Some(a - got),
+        _ => None,
+    }
+}
+
 pub(crate) fn migrate_tenant(
     orch: &Orch,
     id: &str,
@@ -1539,6 +1566,41 @@ pub(crate) fn migrate_tenant(
         StateError::NotFound(_) => MigrateError::UnknownDestination(to.to_string()),
         other => MigrateError::State(other),
     })?;
+
+    // ROADMAP O140. The faithfulness check below verifies the payload against
+    // numbers carried BY THAT SAME PAYLOAD: `expected` is read from the
+    // export's manifest line, `got` from importing the export. Both sides
+    // come from one artifact, so the check is self-certifying — and passing
+    // it is what authorises `delete_vault(&src)` further down. A relayed body
+    // that arrives truncated, with its manifest counts lowered and its
+    // payload digest recomputed to match, satisfies every check on this path
+    // and the source is then dropped.
+    //
+    // So the expected size comes from an AUTHORITY instead: the source engine
+    // is asked for its own row count, over its own authenticated channel,
+    // before the export is drawn. That is A28's rule one hop out — ask the
+    // covered copy, not the artifact offering itself for verification.
+    //
+    // BEFORE the export, and the ordering is the whole correctness argument:
+    // a concurrent write between the two makes the export LARGER than this
+    // number, which the `>=` below tolerates. Taking it afterwards would make
+    // the same ordinary write a refusal.
+    //
+    // Both populations are unfenced and therefore comparable: `export_each`
+    // selects from `drawers` with no WHERE clause, and `records` is a live
+    // COUNT(*) over the same table — quarantined rows included on both sides.
+    let source_records: Option<u64> = engine::vault_request(
+        &src,
+        &tenant.vault,
+        "GET",
+        "stats",
+        "",
+        "application/json",
+        &[],
+    )
+    .ok()
+    .and_then(|r| serde_json::from_slice::<serde_json::Value>(&r.body).ok())
+    .and_then(|v| v["records"].as_u64());
 
     // O136: a size refusal is this hop's own ceiling and gets its own verdict,
     // with the vault named and the remedy stated. Everything else keeps the
@@ -1640,6 +1702,18 @@ pub(crate) fn migrate_tenant(
             got.quarantined, got.drawers
         )));
     }
+    // ROADMAP O140: the authority check, ahead of the self-certifying one.
+    // The decision is `migration_shortfall` so it can be tested directly —
+    // the scenario it exists for is an in-flight rewrite, which no suite here
+    // can stage without a man-in-the-middle.
+    if let Some(missing) = migration_shortfall(got.drawers, source_records) {
+        let _ = engine::delete_vault(&dst, &tenant.vault);
+        return Err(MigrateError::Unfaithful(format!(
+            "the destination holds {} drawer(s) but the source engine reported {} before the export was drawn — the copy is short by {missing}, so the source is left authoritative and the partial copy was removed. The manifest's own counts are not consulted for this: a payload that lost records in transit can restate them, which is why the number is taken from the source engine",
+            got.drawers,
+            source_records.unwrap_or_default(),
+        )));
+    }
     let counts_match = got.drawers == expected.0
         && (manifest.is_none()
             || (got.kg_triples == expected.1
@@ -1693,6 +1767,47 @@ mod tests {
     /// limit exists, nor what to do instead, and it reads like an engine
     /// fault when both engines behaved correctly.
     ///
+    /// **A migrated copy is judged against the SOURCE, not against the
+    /// payload's own account of itself (ROADMAP O140).**
+    ///
+    /// The check this guards decides whether `delete_vault(&src)` runs, and
+    /// it compared `expected` — read from the export's manifest line — with
+    /// `got`, from importing that same export. Both sides from one artifact.
+    /// A relayed body arriving truncated, with its manifest counts lowered
+    /// and its payload digest recomputed to match, satisfies every other
+    /// check on that path and the source is then dropped.
+    ///
+    /// The in-flight rewrite itself cannot be staged here — it needs a
+    /// man-in-the-middle between two engines, which no suite in this tree
+    /// has — so the DECISION is tested directly and the residual is stated
+    /// rather than dressed up.
+    #[test]
+    fn a_short_copy_is_measured_against_the_source_engine_not_the_payload() {
+        // The attack: the source held 1,000 rows, the destination got 400
+        // because the relay was truncated, and the payload's own manifest
+        // was restated to agree with the 400. Judged against the source,
+        // the shortfall is visible.
+        assert_eq!(migration_shortfall(400, Some(1_000)), Some(600));
+
+        // The ordinary case, and the reason the comparison is `>=` and not
+        // `==`: the count is taken BEFORE the export is drawn, so a
+        // concurrent write to a live tenant makes the copy legitimately
+        // LARGER. That must not be a refusal.
+        assert_eq!(migration_shortfall(1_000, Some(1_000)), None);
+        assert_eq!(migration_shortfall(1_007, Some(1_000)), None);
+
+        // An engine that did not answer with a count degrades to the older
+        // comparison rather than refusing a migration it cannot judge — a
+        // check that cannot run must not become a verdict.
+        assert_eq!(migration_shortfall(400, None), None);
+        assert_eq!(migration_shortfall(0, None), None);
+
+        // An empty source is not a shortfall, and an empty destination
+        // against a non-empty source is the whole of it.
+        assert_eq!(migration_shortfall(0, Some(0)), None);
+        assert_eq!(migration_shortfall(0, Some(1)), Some(1));
+    }
+
     /// Both directions: the size refusal must map to this verdict, and every
     /// OTHER engine failure must keep its old classification — a variant that
     /// swallowed the general case would hide real faults behind a capacity

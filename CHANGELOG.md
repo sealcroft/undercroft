@@ -4,6 +4,28 @@
 
 PATCH: a fix whose only observable change is that a defect is gone.
 
+### a migrated copy is measured against the source engine (O140)
+
+The orchestrator's faithfulness check read `expected` from the export's
+manifest line and `got` from importing that same export — **both sides from
+one artifact** — and passing it is what authorises deleting the source
+vault. A relayed body arriving truncated, with its manifest counts lowered
+and its payload digest recomputed to match, satisfied every check on that
+path and the source was then dropped.
+
+The expected size now comes from the source ENGINE, asked for its own row
+count over its own authenticated channel before the export is drawn — A28's
+rule one hop out: ask the authority, never the artifact offering itself for
+verification. Taken before, and compared with `>=`, so a concurrent write to
+a live tenant stays ordinary traffic rather than becoming a refusal. An
+engine that does not answer degrades to the old comparison rather than
+refusing a migration it cannot judge.
+
+Half of what O140 was filed as turned out not to be a defect: the manifest's
+`level` is already documented and implemented as a cross-check that fails
+safe, since the destination is created at the control plane's own recorded
+level and never at the payload's.
+
 ### import holds one batch instead of the corpus (O139), and the duplicate check stops scanning the table (O145)
 
 `undercroft import` accumulated every parsed drawer before writing the first
