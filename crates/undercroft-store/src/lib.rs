@@ -3513,6 +3513,30 @@ impl VaultStore {
         // is what adds. `init_chain` is strictly after both.
         store.blind_existing_kg_rows()?;
         store.rekey_content_fingerprints()?;
+        // `check_duplicate` looks a content fingerprint up on EVERY save and
+        // every imported record, and `fp` is an ADD COLUMN that never got an
+        // index — so that lookup was a full table scan (ROADMAP O139).
+        //
+        // It stayed invisible because of WHERE the scan happened: the CLI
+        // import accumulated every drawer and wrote at the end, so the table
+        // was empty for the whole loop and each scan cost nothing. Flushing
+        // in bounded batches — which is what O139 does to stop holding the
+        // corpus — makes the table grow underneath the loop, and 262,048
+        // scans of a growing table is O(N^2). Measured: an import that took
+        // 64s did not finish in 20 minutes.
+        //
+        // The regression is what found it; the DEFECT is older and wider.
+        // Importing into a vault that already holds rows, or any ordinary
+        // save on a large vault, has always paid a full scan here.
+        //
+        // Created after the ADD COLUMN migrations above, never in the schema
+        // batch: an index on a column a pre-migration vault does not have
+        // yet fails the whole batch, which is how a `CREATE INDEX` above its
+        // own table once broke `init` outright.
+        store.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_drawers_fp ON drawers(fp)",
+            [],
+        )?;
         // The rate screen counts recent rows by `filed_at`; only a vault
         // that declared a rate pays for the index (created here so the
         // per-save COUNT walks an index range, never the table).

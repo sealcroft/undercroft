@@ -1061,6 +1061,121 @@ fn build_export_payload(
     Ok((records, manifest))
 }
 
+/// One parsed line of an import payload.
+///
+/// ROADMAP O139. Extracted so the import can read the payload TWICE through
+/// the same code: once to prove every line parses, once to write. The
+/// contract `ui.html` publishes has two halves — *"every line is parsed
+/// before anything is written, so a malformed file imports nothing"*, while
+/// a record the STORE refuses fails mid-import with the records before it
+/// already written — and only the second half was pinned by a test. Keeping
+/// the first half is what forbids the obvious fix of flushing as the parse
+/// proceeds; reading twice keeps it while bounding what is held to one
+/// batch instead of the whole corpus.
+///
+/// One function rather than a validating copy beside a writing one: a second
+/// implementation of "what parses" is a second answer to it, and the two
+/// would drift into a file that passes pass 1 and fails pass 2 — which is
+/// the partial import the promise exists to prevent.
+enum ImportRecord {
+    /// A drawer, native or in the MemPalace export shape.
+    Drawer(Box<Drawer>),
+    /// A knowledge-graph fact, re-sealed and re-keyed at import.
+    Triple(Box<undercroft_store::TripleExport>),
+    /// An entity: name and type.
+    Entity(String, String),
+    /// A tunnel: from wing, to wing, label.
+    Tunnel(String, String, String),
+    /// A line that carries nothing to import — blank, or a typed record
+    /// missing the fields it needs. Dropped silently, as it always was.
+    Nothing,
+}
+
+/// Parse one import line, or say which line failed and why.
+fn parse_import_line(line: &str, lineno: usize, wing: &str) -> Result<ImportRecord> {
+    let line = line.trim();
+    if line.is_empty() {
+        return Ok(ImportRecord::Nothing);
+    }
+    let v: serde_json::Value = serde_json::from_str(line)
+        .with_context(|| format!("line {} is not valid JSON", lineno + 1))?;
+    // Typed records (the manifest-era format). KG and tunnel rows import
+    // through their own re-seal/re-key paths.
+    if let Some(t) = v.get("triple") {
+        return Ok(ImportRecord::Triple(Box::new(
+            serde_json::from_value(t.clone())
+                .with_context(|| format!("line {}: bad triple record", lineno + 1))?,
+        )));
+    }
+    if let Some(e) = v.get("entity") {
+        let name = e.get("name").and_then(serde_json::Value::as_str);
+        let etype = e
+            .get("etype")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown");
+        return Ok(match name {
+            Some(name) => ImportRecord::Entity(name.to_string(), etype.to_string()),
+            None => ImportRecord::Nothing,
+        });
+    }
+    if let Some(t) = v.get("tunnel") {
+        let g = |k: &str| {
+            t.get(k)
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        };
+        return Ok(match (g("from_wing"), g("to_wing"), g("label")) {
+            (Some(f), Some(to_w), Some(l)) => ImportRecord::Tunnel(f, to_w, l),
+            _ => ImportRecord::Nothing,
+        });
+    }
+    let v = match v.get("drawer") {
+        Some(d) => d.clone(),
+        None => v,
+    };
+    let drawer = if v.get("meta").is_some() {
+        // Native undercroft export: full Drawer JSON — including a
+        // `meta.added_by` this payload wrote itself. Re-stamped with the
+        // importing surface, because that field is the key the admission
+        // screen's trusted-source auto-admit rides and it is only sound
+        // while a caller cannot set it (see `VaultStore::import_stamp`); a
+        // bundle claiming `added_by: "cli"` otherwise walks past the screen
+        // on any vault that declares `cli` trusted.
+        let d = serde_json::from_value::<Drawer>(v)
+            .with_context(|| format!("line {}: not a undercroft drawer", lineno + 1))?;
+        undercroft_store::VaultStore::import_stamp(&d, undercroft_store::IMPORT_SURFACE)
+    } else if let Some(doc) = v.get("document").and_then(serde_json::Value::as_str) {
+        // MemPalace export shape: { id?, document, metadata:{wing,room,...} }.
+        let meta = v.get("metadata").cloned().unwrap_or_default();
+        let g = |k: &str| {
+            meta.get(k)
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        };
+        Drawer::new(
+            &g("wing").unwrap_or_else(|| wing.to_string()),
+            &g("room").unwrap_or_else(|| "imported".into()),
+            normalize_content(doc),
+            g("source_file"),
+            meta.get("chunk_index")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0) as u32,
+            undercroft_store::IMPORT_SURFACE,
+        )
+        // Carried across an import rather than reset to the import's own
+        // date: a mempalace export records when the content happened, and
+        // losing it here would strand every relative date in the text.
+        .with_content_date(g("content_date"))
+    } else {
+        bail!(
+            "line {}: unrecognized record (expected undercroft export with 'meta' \
+             or mempalace export with 'document'/'metadata')",
+            lineno + 1
+        );
+    };
+    Ok(ImportRecord::Drawer(Box::new(drawer)))
+}
+
 /// Bulk-ingest batch size: bounds RAM (embeddings in flight) and how long
 /// one transaction holds the write lock.
 const INGEST_BATCH: usize = 256;
@@ -3129,107 +3244,61 @@ fn run(cli: Cli) -> Result<()> {
             let mut kg_batch: Vec<undercroft_store::TripleExport> = Vec::new();
             let mut entity_batch: Vec<(String, String)> = Vec::new();
             let mut tunnel_batch: Vec<(String, String, String)> = Vec::new();
+            // PASS 1 — parse everything, write nothing (ROADMAP O139).
+            // `ui.html` promises a malformed file imports NOTHING, and that
+            // promise is what forbids flushing as the parse proceeds. This
+            // keeps it while bounding what is held: pass 2 re-reads the same
+            // payload, already in memory, through the same function, so a
+            // line cannot pass here and fail there.
             for (lineno, line) in records.lines().enumerate() {
-                let line = line.trim();
-                if line.is_empty() {
-                    continue;
-                }
-                let v: serde_json::Value = serde_json::from_str(line)
-                    .with_context(|| format!("line {} is not valid JSON", lineno + 1))?;
-                // Typed records (the manifest-era format). KG and tunnel
-                // rows import through their own re-seal/re-key paths.
-                if let Some(t) = v.get("triple") {
-                    kg_batch.push(
-                        serde_json::from_value(t.clone())
-                            .with_context(|| format!("line {}: bad triple record", lineno + 1))?,
-                    );
-                    continue;
-                }
-                if let Some(e) = v.get("entity") {
-                    let name = e.get("name").and_then(serde_json::Value::as_str);
-                    let etype = e
-                        .get("etype")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or("unknown");
-                    if let Some(name) = name {
-                        entity_batch.push((name.to_string(), etype.to_string()));
-                    }
-                    continue;
-                }
-                if let Some(t) = v.get("tunnel") {
-                    let g = |k: &str| {
-                        t.get(k)
-                            .and_then(serde_json::Value::as_str)
-                            .map(str::to_string)
-                    };
-                    if let (Some(f), Some(to_w), Some(l)) =
-                        (g("from_wing"), g("to_wing"), g("label"))
-                    {
-                        tunnel_batch.push((f, to_w, l));
-                    }
-                    continue;
-                }
-                let v = match v.get("drawer") {
-                    Some(d) => d.clone(),
-                    None => v,
-                };
-                let drawer = if v.get("meta").is_some() {
-                    // Native undercroft export: full Drawer JSON — including
-                    // a `meta.added_by` this payload wrote itself. Re-stamped
-                    // with the importing surface, because that field is the
-                    // key the admission screen's trusted-source auto-admit
-                    // rides and it is only sound while a caller cannot set
-                    // it (see `VaultStore::import_stamp`); a bundle
-                    // claiming `added_by: "cli"` otherwise walks past the
-                    // screen on any vault that declares `cli` trusted.
-                    let d = serde_json::from_value::<Drawer>(v)
-                        .with_context(|| format!("line {}: not a undercroft drawer", lineno + 1))?;
-                    undercroft_store::VaultStore::import_stamp(&d, undercroft_store::IMPORT_SURFACE)
-                } else if let Some(doc) = v.get("document").and_then(serde_json::Value::as_str) {
-                    // MemPalace export shape: { id?, document, metadata:{wing,room,...} }.
-                    let meta = v.get("metadata").cloned().unwrap_or_default();
-                    let g = |k: &str| {
-                        meta.get(k)
-                            .and_then(serde_json::Value::as_str)
-                            .map(str::to_string)
-                    };
-                    Drawer::new(
-                        &g("wing").unwrap_or_else(|| wing.clone()),
-                        &g("room").unwrap_or_else(|| "imported".into()),
-                        normalize_content(doc),
-                        g("source_file"),
-                        meta.get("chunk_index")
-                            .and_then(serde_json::Value::as_u64)
-                            .unwrap_or(0) as u32,
-                        undercroft_store::IMPORT_SURFACE,
-                    )
-                    // Carried across an import rather than reset to the
-                    // import's own date: a mempalace export records when the
-                    // content happened, and losing it here would strand every
-                    // relative date in the text.
-                    .with_content_date(g("content_date"))
-                } else {
-                    bail!(
-                        "line {}: unrecognized record (expected undercroft export with 'meta' \
-                         or mempalace export with 'document'/'metadata')",
-                        lineno + 1
-                    );
-                };
-                // ROADMAP O138: the in-payload dedup set holds the store's
-                // own keyed fingerprint, not a clone of every drawer's
-                // content. Same question, same recipe as the
-                // `check_duplicate` on the next line — 32 bytes a drawer
-                // instead of the drawer.
-                let fp = store.content_fingerprint(&drawer.content);
-                if seen.contains(&fp) || store.check_duplicate(&drawer.content)?.is_some() {
-                    skipped += 1;
-                    continue;
-                }
-                seen.insert(fp);
-                batch.push(drawer);
+                parse_import_line(line, lineno, wing)?;
             }
-            let imported = batch.len();
-            let bulk = upsert_batched(&mut store, &batch)?;
+            // PASS 2 — write, flushing drawers in bounded batches. The whole
+            // corpus used to sit in `batch` before the first write; it held
+            // 2,002 MB importing a 467.7 MB bundle (O138 measured it, and
+            // took the OTHER buffers out).
+            let mut imported = 0usize;
+            let mut bulk = undercroft_store::BulkOutcome::default();
+            let flush = |store: &mut undercroft_store::VaultStore,
+                         batch: &mut Vec<Drawer>,
+                         imported: &mut usize,
+                         bulk: &mut undercroft_store::BulkOutcome|
+             -> Result<()> {
+                if batch.is_empty() {
+                    return Ok(());
+                }
+                *imported += batch.len();
+                let out = upsert_batched(store, batch)?;
+                bulk.created += out.created;
+                bulk.quarantined += out.quarantined;
+                batch.clear();
+                Ok(())
+            };
+            for (lineno, line) in records.lines().enumerate() {
+                match parse_import_line(line, lineno, wing)? {
+                    ImportRecord::Nothing => {}
+                    ImportRecord::Triple(t) => kg_batch.push(*t),
+                    ImportRecord::Entity(name, etype) => entity_batch.push((name, etype)),
+                    ImportRecord::Tunnel(f, to_w, l) => tunnel_batch.push((f, to_w, l)),
+                    ImportRecord::Drawer(drawer) => {
+                        // ROADMAP O138: the in-payload dedup set holds the
+                        // store's own keyed fingerprint, not a clone of every
+                        // drawer's content. Same question, same recipe as the
+                        // `check_duplicate` on the next line.
+                        let fp = store.content_fingerprint(&drawer.content);
+                        if seen.contains(&fp) || store.check_duplicate(&drawer.content)?.is_some() {
+                            skipped += 1;
+                            continue;
+                        }
+                        seen.insert(fp);
+                        batch.push(*drawer);
+                        if batch.len() >= INGEST_BATCH {
+                            flush(&mut store, &mut batch, &mut imported, &mut bulk)?;
+                        }
+                    }
+                }
+            }
+            flush(&mut store, &mut batch, &mut imported, &mut bulk)?;
             // KG and tunnel records go after drawers so receipts can bind
             // against drawers arriving in the same payload.
             for (name, etype) in &entity_batch {

@@ -1493,6 +1493,45 @@ UNDERCROFT_HOME="$LEGACY_HOME" "$BIN" init >/dev/null
 check "legacy identity imports"   0 "Imported"                       -- \
   env UNDERCROFT_HOME="$LEGACY_HOME" "$BIN" import "$LEGACY_FILE" --identity "$LEGACY_KEY"
 
+# ROADMAP O139. The import contract has TWO halves and `ui.html` states both:
+# every line is PARSED before anything is written, so a malformed file
+# imports nothing — while a record the STORE refuses fails mid-import with
+# the records before it already written. The second half is pinned at the
+# console (`/ui no longer claims import is all-or-nothing`); the first half
+# was documented and gated by NOTHING, which is what made it unsafe to
+# refactor around. The malformed line goes LAST, after valid drawers, so a
+# streaming importer would already have written them.
+PARSE_HOME="$(mktemp -d)"
+UNDERCROFT_HOME="$PARSE_HOME" "$BIN" init >/dev/null
+BAD_NDJSON="$(mktemp -u)"
+# The payload must hold MORE than one ingest batch (256) of valid drawers
+# before the malformed line, or the gate cannot tell the two behaviours
+# apart: with a smaller file a streaming importer also writes nothing,
+# because it never reaches a flush. Measured — with pass 1 removed and a
+# small fixture this check PASSED, which is a gate that proves nothing.
+# Synthesized rather than exported, so the count is ours to choose and each
+# line is unique (a duplicate is SKIPPED, not written, and would mask this).
+{
+  i=0
+  while [ "$i" -lt 300 ]; do
+    printf '{"document":"o139 unique line %d","metadata":{"wing":"imported","room":"r","chunk_index":%d}}\n' "$i" "$i"
+    i=$((i + 1))
+  done
+  printf '{ this is not json\n'
+} > "$BAD_NDJSON"
+check "a malformed line refuses the import"  1 "not valid JSON"  -- env UNDERCROFT_HOME="$PARSE_HOME" "$BIN" import "$BAD_NDJSON" --wing imported
+# The promise itself: nothing landed, though valid drawers preceded the bad
+# line. `drawers: 0` is the whole assertion — a streaming importer fails
+# this, which is the point.
+parse_count="$(UNDERCROFT_HOME="$PARSE_HOME" "$BIN" vault status default | sed -n 's/^records: *//p')"
+if [ "${parse_count:-x}" = "0" ]; then
+  echo "ok    a malformed file imports nothing"; PASS=$((PASS+1))
+else
+  echo "FAIL  a malformed file wrote $parse_count record(s) — ui.html promises none"
+  FAIL=$((FAIL+1))
+fi
+rm -f "$BAD_NDJSON"
+
 echo "== Read-path + egress auditing =="
 # Every export appends one egress record to the audit chain; reads append
 # only under the declared UNDERCROFT_READ_AUDIT=chain, and a garbage

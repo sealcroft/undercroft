@@ -3988,7 +3988,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**173** of the **188** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**174** of the **189** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4159,6 +4159,97 @@ touching anyone's existing corpus.
 **Gate:** a vault written under the old constant must still open without an
 integrity verdict, and two different model files must produce two different
 identities.
+
+## 1.5.3 — unreleased
+
+PATCH. No documented contract moves. Import stops holding the corpus, and
+the duplicate check stops scanning the table.
+
+**Filed here rather than under `1.5.2`, which is TAGGED**: that release
+shipped at `f490fd6` without these, and adding work to a released section
+would make the CHANGELOG describe a tag that does not contain it.
+
+### O139 — CLOSED 2026-09-11: import holds one batch instead of the corpus, and the promise it had to keep was gated by nothing
+
+**The ruling this entry asked for was not needed — the tree already answered
+it, and the filing had not read far enough.** O139 was filed saying the fix
+needed a decision on whether parse-then-write is a promise. It is, and
+`ui.html` states it on a user-facing surface: *"Every line is parsed before
+anything is written, so a malformed file imports nothing — but a record the
+store itself refuses … fails mid-import, and the records before it are
+already written."* Two halves, distinguished precisely. So the documents were
+right, no correction was owed, and the fix had to PRESERVE the promise rather
+than trade it.
+
+**Only the second half was pinned.** `tests/e2e.sh` asserts the console's
+mid-import wording; nothing asserted that a malformed file imports nothing.
+That is what made the buffer unsafe to refactor around — the behaviour a
+change had to preserve was documented and ungated — so the gate came first.
+
+**Measured, same corpus and instrument as O138** (361,779 drawers, 467.7 MB
+export, `VmHWM`), with the unsealed export as the premise probe:
+
+| | filed | O138 | now |
+|---|---|---|---|
+| sealed import peak | **2,002 MB** | 914 MB | **484 MB** |
+| ratio vs bundle | **4.49x** | 2.05x | **1.09x** |
+| wall | 1:11.9 | 1:04.4 | 1:08.0 |
+
+Identical outcome both ways — 262,048 imported, 99,731 skipped.
+
+**The shape: two passes over a payload already in memory.** Pass 1 parses
+every line and writes nothing; pass 2 re-reads the same bytes and flushes
+drawers in `INGEST_BATCH` chunks. `parse_import_line` is ONE function called
+by both, because a validating copy beside a writing one is a second answer to
+"what parses", and the two would drift into a file that passes pass 1 and
+fails pass 2 — which is the partial import the promise exists to prevent.
+The second parse costs **~4 seconds on a 467.7 MB payload (+6%)**, stated
+rather than hidden: that is the price of the promise, and it is small because
+the payload is already resident.
+
+**The gate PASSED ITS OWN COUNTERFACTUAL, which is a gate that proves
+nothing.** With pass 1 removed it still reported green, because the fixture
+held fewer drawers than one ingest batch — so a streaming importer also wrote
+nothing, never reaching a flush. Widened to 300 records it fails with *"wrote
+256 record(s)"*, exactly one batch, which is the real symptom. Recorded
+because the first version is the one that would have shipped.
+
+**Residual, stated**: 1.09x is `text`, the payload itself, which the importer
+reads whole from a file. Going below that needs a streaming reader, and on a
+SEALED bundle it needs O144's per-chunk framing first — the plaintext does
+not exist until the envelope is opened.
+
+### O145 — CLOSED 2026-09-11: the content fingerprint had no index, so every duplicate check was a full table scan
+
+**Found by O139's refactor, and older and wider than it.**
+`VaultStore::check_duplicate` runs `SELECT id FROM drawers WHERE fp = ?1` on
+every save and every imported record. `fp` is an ADD COLUMN that never got an
+index, and no comment anywhere records the omission as a decision — it simply
+was not exercised where it would show.
+
+**Why it stayed invisible, which is the interesting part.** The CLI import
+accumulated every drawer and wrote at the END, so the table was EMPTY for the
+whole loop and each scan cost nothing. The defect was masked by the very
+buffer O139 removed. Flushing in bounded batches makes the table grow
+underneath the loop: 262,048 scans of a growing table is O(N^2), and an
+import that took 64 seconds did not finish in twenty minutes.
+
+**The regression is what found it; the defect predates it.** Importing into a
+vault that already holds rows, and any ordinary save on a large vault, have
+always paid a full scan here. Nothing measured it because the one path that
+hammers it in a loop was the one whose table happened to be empty.
+
+`CREATE INDEX IF NOT EXISTS idx_drawers_fp ON drawers(fp)`, created after the
+ADD COLUMN migrations rather than in the schema batch: an index on a column a
+pre-migration vault does not have yet fails the whole batch, which is how a
+`CREATE INDEX` placed above its own `CREATE TABLE` once broke `init` outright.
+Existing vaults get it at the next writable open; a read-only open does not
+create it and does not need it, since `check_duplicate` is on the write path.
+
+**Gate**: O139's own measurement is the gate that would catch its return —
+the import completes in ~68 s rather than not at all. That is a scale
+property, so it is a bench-shaped check rather than a unit test, and it is
+stated here as such rather than dressed up as one.
 
 ## 1.5.2 — released 2026-09-11
 
@@ -12070,36 +12161,6 @@ the artifact*, which is A28 one hop out.
 **Gate**: a migration whose relayed export has had `level` or `counts`
 rewritten in flight is refused or recorded, and the test rewrites the line
 without touching the records so the digest still passes.
-
-### O139 — import still holds the whole payload as parsed drawers, and emptying that buffer changes what a malformed record does
-
-**Filed 2026-09-10 by O138, which measured it and deliberately did not take
-it.** O138 took `undercroft import` of a sealed bundle from **2,002 MB peak
-RSS (4.49x the bundle) to 914 MB (2.05x)**. The remaining 2.05x is one
-buffer: `batch: Vec<Drawer>` in the CLI's import arm accumulates EVERY
-drawer, parsed, before `upsert_batched` writes the first one.
-
-**It was left because emptying it is not a memory change, it is a contract
-change.** Today a malformed record at line N aborts with nothing written,
-because the whole payload is parsed before any write. Flushing as the parse
-proceeds means the records before the bad line are already in the vault.
-That is a real difference to an operator restoring a backup, and it is worth
-noting that the tree documents the OPPOSITE case already: `ui.html` and
-`docs/AGENTS.md` say an import "fails mid-import, and the records before it
-are already written" — for a record the STORE refuses, not for one that
-fails to parse. So the two halves of import's failure behaviour differ
-today, and only one of them is written down.
-
-**What it needs before it can be built**: a ruling on whether parse-then-write
-is a promise. If it is, the buffer stays and 2.05x is the floor for this
-surface. If it is not, the fix is a chunked flush (the 256-drawer shape
-`upsert_batched` already uses) plus a doc correction on both surfaces that
-describe the failure, and an e2e check pinning whichever behaviour is
-chosen — `tests/e2e.sh:2650` already pins the store-refusal half by literal.
-
-**Gate**: an import whose payload carries a malformed line at a known offset
-leaves the vault in the ruled state — empty, or holding exactly the records
-before it — asserted through the CLI, not through the store.
 
 ### O134 — the four real degrade sites are compile-checked and never executed, because the battery carries no model weights
 

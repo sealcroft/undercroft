@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased — 1.5.3
+
+PATCH: a fix whose only observable change is that a defect is gone.
+
+### import holds one batch instead of the corpus (O139), and the duplicate check stops scanning the table (O145)
+
+`undercroft import` accumulated every parsed drawer before writing the first
+one. O138 took the other four buffers out and left this one, measuring the
+import at **914 MB (2.05x)** for a 467.7 MB bundle; it is **484 MB (1.09x)**
+now, on the same corpus and instrument, with the outcome identical (262,048
+imported, 99,731 skipped).
+
+**The promise it had to keep was gated by nothing.** `ui.html` publishes two
+halves — every line is parsed before anything is written, so a malformed file
+imports nothing, while a record the STORE refuses fails mid-import with the
+records before it already written — and only the second was pinned by a test.
+So the fix is two passes over a payload already in memory, through ONE parse
+function, rather than the obvious flush-as-you-go, which would have traded
+the promise for the memory. The second parse costs ~4 seconds on 467.7 MB.
+
+**O145 is older and wider, and the refactor is what found it.** `fp`, the
+content fingerprint `check_duplicate` looks up on every save and every
+imported record, is an ADD COLUMN that never got an index — so that lookup
+was a full table scan. It stayed invisible because the old import wrote at
+the END, leaving the table empty for the whole loop; flushing in batches made
+it grow underneath, and 262,048 scans of a growing table did not finish in
+twenty minutes. Indexed now, created after the column migrations rather than
+in the schema batch.
+
 ## 1.5.2 — 2026-09-11
 
 PATCH: a fix whose only observable change is that a defect is gone. No
