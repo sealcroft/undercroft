@@ -223,6 +223,16 @@ mod rerank;
 pub use late::{colbert_from_env, OnnxColbert};
 pub use rerank::OnnxReranker;
 
+// The GENERATED model fixture (ROADMAP O134a). `any(test, feature = …)` is
+// a disjunction and both arms are load-bearing: the `test` arm makes it
+// reachable from this crate's own tests with no command-line flag, and the
+// feature arm is a NORMAL compilation of this crate, which is how
+// `undercroft-embed-ort` reaches the same generator through a
+// dev-dependency. Neither arm is on in a shipped build.
+#[cfg(any(test, feature = "test-fixture"))]
+pub mod fixture;
+
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -7,6 +7,22 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+# Exposes `fixture` — the ONNX graph and tokenizer this crate GENERATES so
+# the counted degrade arms run through the real runtimes with no committed
+# model bytes (ROADMAP O134a). `undercroft-embed-ort` takes this crate as a
+# dev-dependency with this feature on, which is the only way one generator
+# serves both backends; `#[path]` across crates would hide the edge from
+# Cargo and from every gate that reads edges.
+#
+# A DEP-FREE MARKER. `prost` is a normal dependency below rather than an
+# optional one behind this feature, so the feature cannot change what any
+# build links — it only decides whether one `pub mod` is compiled. That also
+# removes the failure mode an `optional = true` would create, where the
+# `cfg(test)` arm fires with `prost` absent and the crate stops compiling for
+# a bare `cargo test`.
+test-fixture = []
+
 [dependencies]
 undercroft-core = { path = "../undercroft-core" }
 undercroft-obs = { path = "../undercroft-obs" }
@@ -14,3 +30,7 @@ thiserror = { workspace = true }
 tract-onnx = "0.22"
 tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
 rayon = { workspace = true }
+prost = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
