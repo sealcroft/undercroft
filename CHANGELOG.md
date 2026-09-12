@@ -1,8 +1,33 @@
 # Changelog
 
-## Unreleased — 1.5.3
+## Unreleased — 1.6.0
 
-PATCH: a fix whose only observable change is that a defect is gone.
+MINOR: new capability, backward compatible. `PATCH /admin/tenants/{id}` and
+its CLI mirror `tenant-repoint` are additive — nothing that worked before
+behaves differently because they exist. Everything else in this section is a
+fix whose only observable change is that a defect is gone.
+
+### the re-point route three surfaces named and none implemented (O149)
+
+O136's size refusal tells an operator to move a too-large tenant with
+`undercroft export` / `undercroft import` between the hosts and then
+**"re-point the tenant with `PATCH /admin/tenants/{tenant}`"**. Its own test
+pins that sentence and `UPGRADING.md` publishes it — and there was no `PATCH`
+arm on the admin plane and no CLI equivalent, so the documented escape hatch
+could not be performed on any surface. O140 has since added five more refusals
+that name the same way out. **A pinned string is not a capability.**
+
+`PATCH /admin/tenants/{id}` with `{"instance": "..."}`, and
+`undercroft-orchestrator tenant-repoint <id> --instance <name>`, both driving
+one implementation. It moves a **mapping and never data**, which is what makes
+it worth guarding: a tenant pointed at an engine that does not hold its vault
+loses every drawer it owns at the next request, with nothing broken anywhere to
+explain it. So the destination is asked — over its own authenticated channel —
+whether it holds the vault, and a destination that cannot answer is refused
+with the copy step named. The flip is the same compare-and-set a migration
+uses, so a re-point and a migration racing over one tenant cannot both win, and
+the reply reports what was checked, including whether the old host still holds
+a copy to clean up.
 
 ### a migrated copy is judged against the source vault's own snapshot (O140)
 

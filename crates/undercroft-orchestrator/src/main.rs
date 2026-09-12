@@ -137,6 +137,19 @@ enum Command {
         #[arg(long)]
         body: Option<String>,
     },
+    /// Re-point a tenant at an instance that ALREADY holds its vault, without
+    /// moving any data
+    ///
+    /// The completion of a by-hand move: `undercroft export` on the old host,
+    /// `undercroft import` on the new one, then this. The destination is asked
+    /// whether it actually holds the vault and the re-point is refused if it
+    /// does not, because the mapping is what every tenant request follows.
+    TenantRepoint {
+        id: String,
+        /// The instance to point it at (must already hold the tenant's vault)
+        #[arg(long)]
+        instance: String,
+    },
     /// Migrate a tenant's vault to another instance (snapshot the source →
     /// export → import → judge the copy against that snapshot → mapping flip
     /// → source delete)
@@ -564,6 +577,32 @@ fn run() -> Result<()> {
                 bail!("engine answered {}", r.status);
             }
             Ok(())
+        }
+        Command::TenantRepoint { id, instance } => {
+            let orch = Orch::open(&cli.db, &orch_key()?)?;
+            match proxy::repoint_tenant(&orch, &id, &instance) {
+                Ok(summary) => {
+                    println!("{}", serde_json::to_string_pretty(&summary)?);
+                    Ok(())
+                }
+                Err(e) => {
+                    // The same exit-code doctrine as `migrate`, and it is
+                    // reachable here for a reason worth stating: this door
+                    // asks the destination for its stats, and a vault that
+                    // fails its own integrity check answers 409 with
+                    // `"class": "integrity"`. Re-pointing a fleet at a
+                    // tampered vault because the failure looked like an
+                    // ordinary config error is the outcome this prevents.
+                    if migrate_is_integrity(&e) {
+                        eprintln!(
+                            "INTEGRITY VERDICT from instance '{instance}' while checking that it holds tenant '{id}' — the mapping was NOT changed. This is not a failed run to retry. Follow the tamper runbook."
+                        );
+                        eprintln!("{e}");
+                        std::process::exit(EXIT_INTEGRITY.into());
+                    }
+                    Err(anyhow::anyhow!(e))
+                }
+            }
         }
         Command::Migrate {
             id,

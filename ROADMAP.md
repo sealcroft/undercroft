@@ -3988,7 +3988,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**177** of the **192** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**178** of the **193** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4160,10 +4160,53 @@ touching anyone's existing corpus.
 integrity verdict, and two different model files must produce two different
 identities.
 
-## 1.5.3 — unreleased
+## 1.6.0 — unreleased
 
-PATCH. No documented contract moves. Import stops holding the corpus, and
-the duplicate check stops scanning the table.
+MINOR since O149: `PATCH /admin/tenants/{id}` and its CLI mirror are new
+capability, backward compatible. The rest of the section is PATCH work — no
+documented contract moves; import stops holding the corpus, the duplicate
+check stops scanning the table, and a migration is judged against the source's
+own snapshot.
+
+### O149 — CLOSED 2026-09-12: the re-point route three surfaces named and none implemented
+
+**Filed and closed in one unit**, because the gap was not a design question:
+O136's size refusal, its own pinned test and `UPGRADING.md` all tell an
+operator to finish a by-hand move by re-pointing the tenant with `PATCH
+/admin/tenants/{tenant}`, and that route existed on no surface. The admin plane
+had no `PATCH` arm and the CLI no equivalent. O140 then added five further
+refusals naming the same way out, which is what turned a stale sentence into a
+blocked procedure.
+
+**The guard is the whole design.** Re-pointing moves a mapping and never data,
+so its failure mode is silence rather than corruption: a tenant pointed at an
+engine that does not hold its vault loses every drawer it owns at the next
+request, with nothing broken anywhere to explain it. The destination is
+therefore ASKED whether it holds the vault, over its own authenticated channel,
+and a destination that cannot answer is refused with the copy step named —
+O140's posture, for O140's reason: a check that cannot run must not authorise
+the step it guards. The source is probed too, best-effort and never as a
+refusal, because the ordinary reason to re-point by hand is that the old
+instance is already gone; its answer is reported so an operator knows whether a
+stale copy needs cleaning up. The flip is the same compare-and-set, so a
+re-point and a migration racing over one tenant cannot both win.
+
+**One implementation, two surfaces** (`migrate_tenant`'s precedent), reusing
+`MigrateError` because its classes already fit exactly: unknown tenant 404,
+unknown destination 400, already-there 409, unverifiable destination 409,
+moved-underneath 409. The CLI inherits the integrity exit code, which is
+reachable here because a vault failing its own integrity check answers 409
+`class: "integrity"` to the very stats call this guard makes.
+
+**Gate**: `re_pointing_requires_the_destination_to_actually_hold_the_vault`,
+counterfactualed — drop the guard and the refusal arm fails, reporting a
+successful re-point onto an engine holding zero records. On real engines the
+e2e drives the refusal against an instance whose copy the migration above
+deleted, plus the 400/404/409 classes and the CLI mirror's exit code.
+**Residual, stated**: the POSITIVE path is pinned by the unit test against
+scripted engines, not end to end — reaching it there would mean copying a vault
+between two live engines by hand, which is the manual procedure this route
+completes rather than anything it performs.
 
 **Filed here rather than under `1.5.2`, which is TAGGED**: that release
 shipped at `f490fd6` without these, and adding work to a released section

@@ -258,6 +258,44 @@ code_is "source engine lost the vault" 404 -- -X POST \
   -H "Authorization: Bearer $BEARER_A" -H "X-Vault-Assertion: $SIGN_A" \
   -d '{"query":"flux"}' "http://127.0.0.1:$PORT_A/v1/vaults/tenant-$ACME_ID/search"
 
+echo "== Re-point: PATCH /admin/tenants/{id} =="
+# ROADMAP O149 — the remedy O136's refusal, its own pinned test and
+# UPGRADING.md have all named since 1.5.2, on a route that existed nowhere.
+#
+# The migration above left acme on engine-b and DELETED engine-a's copy, which
+# makes this the real shape of the guard rather than a staged one: re-pointing
+# moves a mapping and never data, so pointing a tenant at an engine that does
+# not hold its vault loses every drawer it owns at the next request.
+#
+# The POSITIVE path (a destination that does hold the vault) is covered by the
+# unit test against scripted engines; reaching it here would mean copying a
+# vault between the two live engines by hand, which is the manual procedure
+# this route completes rather than anything it does itself.
+REPOINT_CODE="$(curl -s -o /tmp/repoint.json -w '%{http_code}' -X PATCH "${ADMIN[@]}" \
+  -d '{"instance":"engine-a"}' "$O/admin/tenants/$ACME_ID")"
+[ "$REPOINT_CODE" = "409" ] && ok "re-pointing at an engine without the vault is refused" \
+  || fail "re-pointing at an engine without the vault is refused" "code=$REPOINT_CODE $(cat /tmp/repoint.json 2>/dev/null)"
+grep -qF 'unreachable' /tmp/repoint.json \
+  && ok "the refusal names what it prevents" \
+  || fail "the refusal names what it prevents" "$(cat /tmp/repoint.json 2>/dev/null)"
+body_has "a refused re-point leaves the mapping alone" '"instance":"engine-b"' -- \
+  "${ADMIN[@]}" "$O/admin/tenants"
+code_is "re-point without an instance is 400"        400 -- -X PATCH "${ADMIN[@]}" \
+  -d '{}' "$O/admin/tenants/$ACME_ID"
+code_is "re-point of an unknown tenant is 404"       404 -- -X PATCH "${ADMIN[@]}" \
+  -d '{"instance":"engine-b"}' "$O/admin/tenants/ffffffffffffffff"
+code_is "re-point to an unregistered instance is 400" 400 -- -X PATCH "${ADMIN[@]}" \
+  -d '{"instance":"never-registered"}' "$O/admin/tenants/$ACME_ID"
+code_is "re-point to where it already is is 409"     409 -- -X PATCH "${ADMIN[@]}" \
+  -d '{"instance":"engine-b"}' "$O/admin/tenants/$ACME_ID"
+# The CLI mirrors the admin plane for scripted use, so it must refuse alike —
+# and exit 1, not the integrity code, for an ordinary refusal.
+"$ORCH" --db "$UNDERCROFT_ORCH_DB" tenant-repoint "$ACME_ID" --instance engine-a >/dev/null 2>&1
+RP_CODE=$?
+[ "$RP_CODE" -eq 1 ] && ok "the CLI mirror refuses it too, exit 1" \
+  || fail "the CLI mirror refuses it too, exit 1" "exit was $RP_CODE"
+rm -f /tmp/repoint.json
+
 echo "== Instance removal guard =="
 body_has "empty instance removes"    '"removed":true' -- -X DELETE "${ADMIN[@]}" "$O/admin/instances/engine-a"
 code_is  "hosting instance refuses"  409              -- -X DELETE "${ADMIN[@]}" "$O/admin/instances/engine-b"
