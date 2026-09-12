@@ -7,7 +7,7 @@ its CLI mirror `tenant-repoint` are additive — nothing that worked before
 behaves differently because they exist. Everything else in this section is a
 fix whose only observable change is that a defect is gone.
 
-### the configuration class is checked against what the resolver actually does (O155)
+### the configuration class is checked against what the resolver actually does, and seven declarations the pre-flight blessed are now refused (O155)
 
 Every `UNDERCROFT_*` declaration carries a class saying what a bad value must
 do: a protection REFUSES, a knob warns and keeps the conservative default.
@@ -20,7 +20,7 @@ refusal was never added to it, and the opposite case was never asked at all.
 Now every `Checked` declaration is driven through its real resolver with
 values it cannot accept, and the outcome must match its class in both
 directions. The universe comes from the inventory rather than from a list
-somebody remembered. All 49 are clean.
+somebody remembered. All 56 are clean.
 
 The gate taught its own shape on the first run: driven with one garbage
 string it reported five secrets as defects, and all five were correct — a
@@ -28,8 +28,34 @@ passphrase or a bearer has no vocabulary, so an arbitrary string is a
 perfectly good value for it and the only thing it cannot be is empty. It
 drives both shapes now.
 
-No behaviour changes for an operator. This is about whether the configuration
-doctrine this project publishes is true of its own code.
+**A mandatory operand now inherits its selector's class**, which removes a
+one-line contradiction: `UNDERCROFT_EMBEDDER` and `UNDERCROFT_RERANKER` were
+protections, the model file and the endpoint they cannot run without were
+knobs, and a bad value in either refused identically. Fourteen declarations
+move — seven model paths, five backend URLs, a pgvector DSN and two
+served-runtime URLs. Three that look identical stay knobs because each has a
+real default in code: `UNDERCROFT_EMBED_MODEL`, `UNDERCROFT_LLM_MODEL` and
+`UNDERCROFT_ORCH_DB`.
+
+**That is where the operator-visible part comes from.** Making those fourteen
+protections forced the question *why can this not be pre-flighted?* to be
+answered for each, and for seven of them the answer was that it can be and was
+not. `undercroft config check` exited **0** for
+`UNDERCROFT_QDRANT_URL=http://qdrant.internal:6333` — cleartext to a
+non-loopback host, which that backend's own client refuses at construction,
+before a byte moves — and likewise for Chroma, Milvus, Weaviate, the pgvector
+DSN, the embeddings endpoint and the LLM runtime. The pre-flight now runs the
+same transport policy those clients run, with the same message, so it reports
+what start-up would do. **Nothing about the running engine changed**: every
+configuration it now names was already being refused at the point of use. See
+`UPGRADING.md` — a pipeline that gates on this command can go red for a
+deployment that declares a backend URL it never actually uses.
+
+The engine's own class figures were stale while this was written, which is the
+other half of the entry: a decision-tree diagram had published the wrong
+protect/tune split since the previous release moved one variable, and nothing
+could say so. Both counts are now read from the inventory by the same gate
+that reads the rest.
 
 ### a leg that stopped testing, and a log that inflated its own count, are both named now (O134b, O156)
 

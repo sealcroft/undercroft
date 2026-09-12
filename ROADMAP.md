@@ -3988,7 +3988,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**187** of the **202** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**188** of the **203** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4167,6 +4167,223 @@ capability, backward compatible. The rest of the section is PATCH work — no
 documented contract moves; import stops holding the corpus, the duplicate
 check stops scanning the table, and a migration is judged against the source's
 own snapshot.
+
+### O155 — CLOSED 2026-09-12: a mandatory operand inherits its selector's class, and asking why fourteen could not be pre-flighted found seven that could
+
+**Filed 2026-09-12 as a taxonomy ruling; the gate half shipped the same day
+and the ruling half is sharper and LARGER than the filing said.** The entry
+claimed "four model-path declarations"; there are **seven**
+(`UNDERCROFT_ONNX_MODEL`, `_ONNX_TOKENIZER`, `_RERANK_MODEL`,
+`_RERANK_TOKENIZER`, `_COLBERT_MODEL`, `_COLBERT_QUERY_MODEL`,
+`_COLBERT_TOKENIZER`). Fourth consecutive filing in this tree to undercount
+its own class.
+
+## What shipped FIRST: the class is checked against CONSEQUENCE
+
+The class is a claim about what a bad value DOES — refuse, or warn and keep
+the conservative default — and **nothing checked it against one**. What
+existed was a hand-written list of NINE names asserted to be `Protects`,
+under a comment promising that *"every name the validator can refuse must be
+classified"*. The list of names that can refuse was maintained by hand, so a
+variable that GAINED a refusal was never added, and the converse — a `Tunes`
+variable that actually refuses — was never asked. Two lists agreeing with
+each other: **O80's rule one axis over**, neither side derived from the code.
+
+`every_checked_declaration_answers_garbage_the_way_its_class_says` replaces
+it and strictly contains it. Universe from `ENGINE_ENV_VARS`, verdict from
+the real resolver, both directions over all `Checked` declarations — **49**
+when this half shipped, **56** once the ruling half moved seven rows onto the
+axis:
+`Protects` must be `Fatal`, `Tunes` must be `Warn`, an `Ok` means the parse
+validates nothing and an `Accepted` means the `Checked` axis is lying.
+
+**It taught its own shape on the first run, which is the part worth keeping.**
+Driven with one garbage string it reported five defects —
+`UNDERCROFT_PASSPHRASE`, `_ASSERTION_SECRET`, `_MCP_HTTP_TOKEN`,
+`_ORCH_ADMIN_TOKEN`, `_ORCH_METRICS_TOKEN` — and all five were CORRECT
+behaviour. A secret is an OPAQUE PAYLOAD: it has no vocabulary, so an
+arbitrary string is a perfectly good value and the only thing it cannot be is
+EMPTY. That is the tree's own vocabulary-versus-payload rule, and the gate
+now drives BOTH shapes, passing when some unacceptable value produces the
+promised verdict and failing when any produces the opposite one.
+
+**Result: the `Checked` axis is clean.** All 49 rows' class claims match what
+their resolver does.
+
+## The ruling that remains, with numbers instead of impressions
+
+**The drift is confined to `Opaque` rows, and there the class decides
+NOTHING** — `check_one` returns `Accepted` before the class is consulted. For
+those 32 rows the class is documentation, and an unfalsifiable claim is what
+lets one rot.
+
+Applied backwards, as this file requires of any rule, "reclassify a mandatory
+operand that refuses" does not stop at seven. Of the **30** `Tunes`+`Opaque`
+rows, roughly **17** have no default to keep: the 7 model-path operands, the 8
+URL/DSN/DB operands (`_QDRANT_URL`, `_CHROMA_URL`, `_MILVUS_URL`,
+`_WEAVIATE_URL`, `_PGVECTOR_DSN`, `_EMBED_URL`, `_LLM_URL`, `_ORCH_DB`), plus
+`_EMBED_MODEL` and `_LLM_MODEL`. Reclassifying only the seven would leave ten
+identically-shaped rows as `Tunes` — a NEW inconsistency rather than a removed
+one.
+
+The internal contradiction is real and one line long: **the selectors
+`UNDERCROFT_EMBEDDER` and `UNDERCROFT_RERANKER` are `Protects`, their
+mandatory operands are `Tunes`, and a bad value in either refuses
+identically** (`main.rs:1375-1377`, `:1562-1563` — `?` on the load error).
+
+Three options, and the tree does not settle the boundary:
+
+1. **Reclassify all ~17 as `Protects`.** Consistent and honest about the
+   doc. Changes no behaviour and no gate, because the class is inert for
+   `Opaque` rows — it only stops `Tunes`'s own text ("garbage warns and keeps
+   that default") being false of them.
+2. **A third class** ("a mandatory operand of another declaration"). More
+   accurate, and it ALSO decides nothing for `Opaque` rows —
+   `CLAUDE.md`'s own test says a rule that changes nothing should say so
+   rather than be written. Rejected unless the maintainer wants the
+   distinction recorded for its own sake.
+3. **Stop making an unfalsifiable claim**: `Opaque` rows carry no
+   `ConfigClass`, or carry one explicitly marked as documentation. The
+   honest shape, and the largest doctrine change — the both-directions
+   inventory gate assumes every row has a class.
+
+**RULED 2026-09-12: option (1)**, plus one sentence on `ConfigClass` saying
+that for `Parse::Opaque` the class is documentation and not a gate. Option (2)
+is rejected and option (3) is not being taken. It removes the contradiction,
+is consistent under the backwards test, and claims nothing a reader could
+mistake for a check.
+
+## The ruling applied: fourteen rows, and seven that needed an ARM instead
+
+**It is FOURTEEN rows, not ~17, and the three that fall out are the whole
+point of the backwards test.** The criterion is *a mandatory operand with no
+default to keep*, and `UNDERCROFT_EMBED_MODEL` (`nomic-embed-text`,
+`llm/embed.rs:101`), `UNDERCROFT_LLM_MODEL` (`llama3.2`, `llm/lib.rs:175`) and
+`UNDERCROFT_ORCH_DB` (clap `default_value = "orchestrator.db"`,
+`orchestrator/main.rs:36`) each have one. Measured, not argued. `_EMBED_MODEL`
+is the one worth a sentence, because a model name genuinely does name the
+vector space: the identity is `format!("http:{model}")` (`embed.rs:180`), so a
+forgotten declaration moves the RECORDED identity and the existing
+swap-refusal fires — the silent-wrong-space failure is already closed one
+level down, which is what makes its default safe rather than merely present.
+`_ORCH_DB` also sits beside `UNDERCROFT_HOME`, a path with a default classed
+`Tunes`, so moving it would have created the inconsistency this unit exists to
+remove. **Fifth instance of the class and the first to miscount UPWARD — and
+the SECOND inside this one entry**, which is the part worth keeping: the
+paragraph above already catches O155 undercounting its model paths four-to-
+seven, and the same entry then overcounted the reclassification seventeen-to-
+fourteen. A filing that has been caught miscounting once is not thereby
+calibrated, and the correction is not evidence that the rest was counted.
+
+The fourteen, each confirmed by the `?` that propagates its load error:
+seven model paths (`_ONNX_MODEL`, `_ONNX_TOKENIZER`, `_RERANK_MODEL`,
+`_RERANK_TOKENIZER`, `_COLBERT_MODEL`, `_COLBERT_QUERY_MODEL`,
+`_COLBERT_TOKENIZER`), five backend URLs plus a DSN (`_QDRANT_URL`,
+`_CHROMA_URL`, `_MILVUS_URL`, `_WEAVIATE_URL`, `_PGVECTOR_DSN`), and two
+served-runtime URLs (`_EMBED_URL`, `_LLM_URL`). The cross-tab goes 25/56
+`Protects`/`Tunes` to 39/42.
+
+**SEVEN OF THE FOURTEEN DID NOT NEED AN EXEMPTION — THEY NEEDED AN ARM, AND
+NOBODY HAD ASKED.** The ruling required each reclassified row to answer *why
+can this not be pre-flighted?*, and for the seven outward paths the honest
+answer was that it CAN be. `undercroft config check` printed *"declared
+Opaque: no parse exists"* and exited **0** for
+`UNDERCROFT_QDRANT_URL=http://qdrant.internal:6333`, which `QdrantIndex::new`
+refuses at construction through `agent_from_env` into
+`require_secure_transport`, before a byte moves — and the same for the other
+three backends, for the pgvector DSN, for the embedder and for the LLM
+runtime. That is round-four #9's defect verbatim, *exit 0 for an environment
+that does not start*, surviving on seven rows for as long as the class that
+decides which rows the gate LOOKS at said `Tunes`. Each now calls the same
+policy its own client calls, with the same `what` string, so the pre-flight's
+refusal is word for word the start-up refusal; `pgvector::check_dsn_transport`
+was lifted out of `PgVectorIndex::new` so there is one implementation and two
+callers rather than a second copy — O90's lesson, since a hand-read of that
+string is exactly what let `hostaddr=` through. Nothing opens a socket,
+resolves a name or reads a file. `Parse` goes 49/32 `Checked`/`Opaque` to
+**56/25**.
+
+**A taxonomy change that could not alter behaviour found a live hole, and the
+mechanism is the transferable part**: a class is not only a label, it is the
+SELECTOR for which rows a gate iterates. Reclassifying is therefore never
+inert even when the reclassified VALUE is — it changes the population of every
+inventory keyed on it. That is the opposite of what the three options above
+predicted, and it is why option (1) was worth doing rather than merely tidy.
+
+**The seven model paths stay `Opaque` with an argued exemption each**, and the
+reasons are per row because the rows differ: an ONNX graph must COMPILE
+(tract runs BERT-family, not DeBERTa); a tokenizer's vocabulary must match the
+model's embedding table, which is O150's measured failure and invisible
+per-file; a reranker export that loads may still be an EMBEDDER, which only
+the output shape of a forward pass shows; a reranker tokenizer works on PAIRS;
+the ColBERT doc export is correct only RELATIVE to the query export; the query
+export is the only one the loader probes, so an always-failing doc model still
+loads; and the ColBERT tokenizer is bypassed by that probe's hard-coded ids,
+so not even the real loader learns whether the file is usable. Two reasons are
+shared and stated once: the value's meaning is whether it LOADS, and
+`Path::exists` would be a WORSE answer than none — a green tick the runtime
+then refuses, measured on the CI machine rather than on the host that will
+open the file.
+
+## Two defects found on the way, both of the class this entry is about
+
+**`PREFLIGHT_EXEMPT` was counted in two directions and needed three.** Its own
+doc said BOTH, and the gate's loop skips every row that is not `Protects` — so
+the exempt list's own universe was never examined. An entry naming a `Tunes`
+row, a row reclassified after the entry was written, or a variable deleted
+from the engine would sit there reading like an argued decision and be visited
+by nothing. This unit was about to take that list from two entries to nine.
+The third direction fails on either shape, and both arms were
+counterfactualed.
+
+**The `platform-views` decision tree published `Protects · 24` for five days.**
+O121 moved `UNDERCROFT_RERANKER` from `Tunes` to `Protects` on 2026-09-07 —
+`git diff 74d4b9e..HEAD` over `parity.rs` shows it is the ONLY class change
+since the diagram was written — and the figure gate covered five figures, of
+which this was not one. `CLAUDE.md`'s own `Checked`/`Opaque` split was ungated
+too. Both are gated now, off ONE reader of `ENGINE_ENV_VARS` shared by the two
+blocks, with a premise requiring each axis to PARTITION the rows: nine
+platform-views figures and four prose figures where there were four and zero.
+Only ONE cell of the cross-tab is published — `Protects` and `Opaque`, the
+exemption population — because the four totals plus 81 leave the table short
+by exactly one number, and the two parenthetical splits it replaces were
+spelled identically in both boxes (`(N protect, M tune)`), so no pattern could
+tell them apart. **A figure a gate cannot address is a figure that rots**, and
+one of those two was already wrong.
+
+## Gates
+
+- `every_protects_variable_is_pre_flighted_or_exempt` — now three directions,
+  the third over the exempt list's own universe. Counterfactualed twice: an
+  exemption for a `Tunes` row, and one naming no variable at all. Its premise
+  counts what the LOOP visited, because `PREFLIGHT_EXEMPT.is_empty()` is
+  const-folded — clippy caught a premise probe that could never fire, which is
+  this tree's own trap one gate over.
+- `every_checked_declaration_agrees_with_the_resolver_that_runs` — the seven
+  outward paths as good AND bad values, including the two O90 DSN spellings
+  and the empty case.
+- `prose figures` and `platform-views` — the cross-tab on both axes, in both
+  files, off one reader. Counterfactualed by restoring the stale `Protects ·
+  24` (fails, naming both numbers) and by breaking the reader's awk range
+  (fails saying the READER examined nothing, not that the tree measures zero).
+- Removing the seven arms fails FOUR gates, naming all seven rows.
+
+## Residual, stated
+
+An `Opaque` row's class remains unverifiable from this crate by construction —
+now seven rows smaller, and it is the seven model paths that remain. Their
+consequence lives at the consumer, which `config check` reaches deliberately
+never, because opening nothing is what makes it safe in a pipeline and
+runnable on a machine that lacks the weights.
+
+**And one candidate that is NOT this unit's**: `UNDERCROFT_ORCH_DB=""` — a
+failed interpolation — reaches `Connection::open("")` at
+`orchestrator/state.rs:207`, which in SQLite is a private TEMPORARY database.
+A control plane whose registry evaporates on exit is the `!is_empty()` family
+`CLAUDE.md` documents, one variable further on. Not verified end to end and
+not fixed here, because it is a behaviour change rather than a taxonomy one.
+Filed as O158.
+
 
 ### O134b — CLOSED 2026-09-12: the model legs' counts are read, published and compared
 
@@ -12694,93 +12911,45 @@ in a pipeline and fast enough to run on a machine that lacks the weights — so
 the symptom string goes in `UPGRADING.md` instead and the entry says plainly
 that this class is not pre-flightable.
 
-### O155 — the `ConfigClass` claim, now MEASURED: the `Checked` axis is clean and gated, the `Opaque` axis is documentation
+### O158 — an empty `UNDERCROFT_ORCH_DB` may give the control plane a database that evaporates
 
-**Filed 2026-09-12 as a taxonomy ruling; the gate half shipped the same day
-and the ruling half is sharper and LARGER than the filing said.** The entry
-claimed "four model-path declarations"; there are **seven**
-(`UNDERCROFT_ONNX_MODEL`, `_ONNX_TOKENIZER`, `_RERANK_MODEL`,
-`_RERANK_TOKENIZER`, `_COLBERT_MODEL`, `_COLBERT_QUERY_MODEL`,
-`_COLBERT_TOKENIZER`). Fourth consecutive filing in this tree to undercount
-its own class.
+**Filed 2026-09-12 out of O155, unverified and stated as unverified.** The
+declaration is a clap argument with `default_value = "orchestrator.db"`
+(`orchestrator/main.rs:36`), so an UNSET variable is fine and an EMPTY one is
+not the same thing: clap takes a present-but-empty environment value, and
+`Orch::open` hands it to `Connection::open(path)`
+(`orchestrator/state.rs:207`). SQLite documents an empty filename as a
+**private temporary on-disk database, deleted when the connection closes.**
 
-## What shipped: the class is checked against CONSEQUENCE
+**Why that is the bad shape rather than a bad value.** `UNDERCROFT_ORCH_DB=""`
+is the failed-interpolation spelling `CLAUDE.md` already has a rule for — a
+shell variable that did not expand inside a compose file or a systemd unit —
+and the symptom would be a control plane that starts cleanly, accepts
+`/admin` writes, registers instances and tenants, and has forgotten all of it
+at the next restart. Nothing refuses, nothing warns. That is the
+`!is_empty()` family with the sign flipped: the other four instances read
+empty as *absent* and silently dropped a protection; this one reads empty as
+*a filename* and silently drops the state.
 
-The class is a claim about what a bad value DOES — refuse, or warn and keep
-the conservative default — and **nothing checked it against one**. What
-existed was a hand-written list of NINE names asserted to be `Protects`,
-under a comment promising that *"every name the validator can refuse must be
-classified"*. The list of names that can refuse was maintained by hand, so a
-variable that GAINED a refusal was never added, and the converse — a `Tunes`
-variable that actually refuses — was never asked. Two lists agreeing with
-each other: **O80's rule one axis over**, neither side derived from the code.
+**What is NOT established.** Whether clap actually passes an empty env value
+through rather than treating it as unset, and what `Connection::open("")`
+does on the pinned rusqlite. Both are one probe each against the real binary,
+and neither was run — O155 was a taxonomy unit and this is a behaviour
+change, so it is filed rather than folded in. **If the probe shows clap treats
+empty as unset, this entry closes as NOT A DEFECT and says so.**
 
-`every_checked_declaration_answers_garbage_the_way_its_class_says` replaces
-it and strictly contains it. Universe from `ENGINE_ENV_VARS`, verdict from
-the real resolver, both directions over all **49** `Checked` declarations:
-`Protects` must be `Fatal`, `Tunes` must be `Warn`, an `Ok` means the parse
-validates nothing and an `Accepted` means the `Checked` axis is lying.
+**Shape of the fix, if it is one.** The tree's own rule decides it: `_ORCH_DB`
+is an OPAQUE PAYLOAD, not a closed vocabulary, so empty cannot express intent
+and must REFUSE — never be trimmed into the default, which would start a
+control plane whose state lives somewhere the operator did not name. The
+engine's `resolve_orch_key`/`resolve_admin_token` precedent puts that parse in
+`undercroft-config`, where both binaries and both `config check` commands
+reach it; the row would move `Opaque` to `Checked` on both inventories, which
+the cross-crate join counts in both directions.
 
-**It taught its own shape on the first run, which is the part worth keeping.**
-Driven with one garbage string it reported five defects —
-`UNDERCROFT_PASSPHRASE`, `_ASSERTION_SECRET`, `_MCP_HTTP_TOKEN`,
-`_ORCH_ADMIN_TOKEN`, `_ORCH_METRICS_TOKEN` — and all five were CORRECT
-behaviour. A secret is an OPAQUE PAYLOAD: it has no vocabulary, so an
-arbitrary string is a perfectly good value and the only thing it cannot be is
-EMPTY. That is the tree's own vocabulary-versus-payload rule, and the gate
-now drives BOTH shapes, passing when some unacceptable value produces the
-promised verdict and failing when any produces the opposite one.
-
-**Result: the `Checked` axis is clean.** All 49 rows' class claims match what
-their resolver does.
-
-## The ruling that remains, with numbers instead of impressions
-
-**The drift is confined to `Opaque` rows, and there the class decides
-NOTHING** — `check_one` returns `Accepted` before the class is consulted. For
-those 32 rows the class is documentation, and an unfalsifiable claim is what
-lets one rot.
-
-Applied backwards, as this file requires of any rule, "reclassify a mandatory
-operand that refuses" does not stop at seven. Of the **30** `Tunes`+`Opaque`
-rows, roughly **17** have no default to keep: the 7 model-path operands, the 8
-URL/DSN/DB operands (`_QDRANT_URL`, `_CHROMA_URL`, `_MILVUS_URL`,
-`_WEAVIATE_URL`, `_PGVECTOR_DSN`, `_EMBED_URL`, `_LLM_URL`, `_ORCH_DB`), plus
-`_EMBED_MODEL` and `_LLM_MODEL`. Reclassifying only the seven would leave ten
-identically-shaped rows as `Tunes` — a NEW inconsistency rather than a removed
-one.
-
-The internal contradiction is real and one line long: **the selectors
-`UNDERCROFT_EMBEDDER` and `UNDERCROFT_RERANKER` are `Protects`, their
-mandatory operands are `Tunes`, and a bad value in either refuses
-identically** (`main.rs:1375-1377`, `:1562-1563` — `?` on the load error).
-
-Three options, and the tree does not settle the boundary:
-
-1. **Reclassify all ~17 as `Protects`.** Consistent and honest about the
-   doc. Changes no behaviour and no gate, because the class is inert for
-   `Opaque` rows — it only stops `Tunes`'s own text ("garbage warns and keeps
-   that default") being false of them.
-2. **A third class** ("a mandatory operand of another declaration"). More
-   accurate, and it ALSO decides nothing for `Opaque` rows —
-   `CLAUDE.md`'s own test says a rule that changes nothing should say so
-   rather than be written. Rejected unless the maintainer wants the
-   distinction recorded for its own sake.
-3. **Stop making an unfalsifiable claim**: `Opaque` rows carry no
-   `ConfigClass`, or carry one explicitly marked as documentation. The
-   honest shape, and the largest doctrine change — the both-directions
-   inventory gate assumes every row has a class.
-
-Recommendation: **(1), extended to all ~17**, plus one sentence on
-`ConfigClass` saying that for `Parse::Opaque` the class is documentation and
-not a gate. It removes the contradiction, is consistent under the backwards
-test, and claims nothing a reader could mistake for a check.
-
-**Residual, stated**: whichever is chosen, an `Opaque` row's class remains
-unverifiable here by construction. Its consequence lives at the consumer —
-a model that loads, an endpoint that answers — which `config check` reaches
-deliberately never, because opening nothing is what makes it safe in a
-pipeline and runnable on a machine that lacks the weights.
+**Gate**: an empty declaration refuses to start and is refused by both
+pre-flights, with a test that would pass on neither the current tree nor a
+trim-to-default fix.
 
 ### O135 — three reads the audit has never run, carried in a gitignored file
 
