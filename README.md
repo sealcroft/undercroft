@@ -395,8 +395,8 @@ WebCrypto), and destructive operations require typing the target's name.
 Fleets of engines get the **optional orchestrator**
 (`undercroft-orchestrator`): instance registry, tenant creation with
 one-time token minting, a routing proxy that maps each tenant token to
-exactly its own vault, and count-verified live migration between
-instances — a separate control plane speaking only the public `/v1`
+exactly its own vault, and live migration judged against the source
+vault's own snapshot between instances — a separate control plane speaking only the public `/v1`
 surface, with engine credentials sealed at rest and tenant tokens stored
 only as HMACs. It carries its own **fleet console at `GET /ui`** —
 instances, tenants, token rotation, migration — in the same

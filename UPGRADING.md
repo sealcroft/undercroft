@@ -89,6 +89,51 @@ stops being quadratic.
 during the build, the index is simply absent and the next writable open tries
 again; `CREATE INDEX IF NOT EXISTS` is idempotent.
 
+### a tenant migration can now refuse in five named ways (O140)
+
+**Who is affected:** fleets running `undercroft-orchestrator` that migrate
+tenants between engines, by `POST /admin/tenants/{id}/migrate` or
+`undercroft-orchestrator migrate`. Single-engine deployments are untouched.
+
+**What changed:** a migration is now judged against the source vault's own
+audit-chain snapshot rather than against numbers the payload carries about
+itself. Every refusal below leaves the source authoritative and removes the
+partial copy, so **nothing is lost in any of them** — but a script that
+treated migration as "always succeeds" will now see a 409.
+
+1. **The source changed while its export was drawn.** Any write, delete,
+   retention sweep or admission ruling on the source during the export. The
+   message names the audit record it saw. *Fix: retry when the tenant is
+   quiet.* Reads do NOT trigger this, including a read replica's traffic under
+   `UNDERCROFT_READ_AUDIT=chain`.
+2. **The export declares a different number of drawers than the source held**
+   at that snapshot, with a quiet chain. *Fix: this one is worth
+   investigating — the export did not carry what the source has.*
+3. **The destination holds fewer rows than the export declared.** Previously
+   invisible: the check counted records the import PROCESSED, and the write is
+   an upsert, so two records landing on one row counted two. *Fix: investigate
+   before retrying; the source was not deleted.*
+4. **The source cannot be bound to a snapshot** — an engine that does not
+   answer with `records`, `writes` and `chain_head`, or an export with no
+   manifest line (engines older than 0.43.0). Nothing is created on the
+   destination. *Fix: move that tenant with `undercroft export` on the source
+   and `undercroft import` on the destination.*
+5. **Another migration moved the tenant** while this one ran. The mapping flip
+   is now a compare-and-set. *Fix: nothing — the other migration won; remove
+   the copy this one left if `keep_source` was set.*
+
+**`undercroft config check` cannot detect any of these**, and the entry says so
+rather than implying otherwise: they are conditions of peer engines and live
+data at the moment of a migration, not declarations in this process's
+environment. The same limit O136's size refusal carries.
+
+**A successful migration now reports what was checked.** The reply gains a
+`verified` object (source records, declared drawers, destination records, chain
+head before and after, records appended during the export, and whether the
+source was still quiet when it was deleted). `source_deleted: false` on an
+otherwise successful migration now means the source was still being written to
+at the end and was deliberately kept — it is not a failure.
+
 ## 1.5.2 (released 2026-09-11)
 
 ### a tenant whose export exceeds 256 MiB cannot be migrated over `/v1` (O136)

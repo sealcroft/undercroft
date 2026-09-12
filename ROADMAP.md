@@ -3988,7 +3988,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**174** of the **189** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**177** of the **192** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4169,7 +4169,7 @@ the duplicate check stops scanning the table.
 shipped at `f490fd6` without these, and adding work to a released section
 would make the CHANGELOG describe a tag that does not contain it.
 
-### O140 — CLOSED 2026-09-11: a migrated copy is measured against the source engine, not against the payload's own account of itself
+### O140 — CLOSED 2026-09-11, completed and corrected 2026-09-12: a migrated copy is judged against the source vault's own snapshot, not against the payload's own account of itself
 
 **Closed narrower and sharper than filed, and half of what this entry
 claimed was wrong.** It said the manifest's `level` and `counts` are both
@@ -4196,32 +4196,73 @@ can rewrite the body can recompute the digest. The asymmetry is a red
 herring; the real property is that the verifier and the verified are the
 same bytes.
 
-**The fix is A28's rule one hop out — ask the authority, never the artifact
-offering itself for verification.** The source engine is asked for its own
-row count, over its own authenticated channel, and `migration_shortfall`
-refuses when the destination holds fewer. Three details are load-bearing:
+**The first fix replaced one number and still judged nothing, and this entry
+records that because the reasoning error is the lesson.** It asked the source
+engine for its row count before the export and refused a shortfall — A28's
+rule one hop out, correctly applied to the wrong observable. `COUNT(*)` is
+not a version. A count taken at one instant cannot judge a copy taken at
+another, and a delete plus an insert leaves it unchanged. Three consequences
+followed, and all three shipped:
 
-- **Taken BEFORE the export is drawn.** A concurrent write to a live tenant
-  then makes the export larger, which the comparison tolerates; taking it
-  afterwards would turn that ordinary write into a refusal.
-- **`>=`, not `==`**, for the same reason.
-- **Both populations are unfenced and therefore comparable**: `export_each`
-  selects from `drawers` with no `WHERE`, and `records` is a live `COUNT(*)`
-  over the same table, quarantined rows included on both sides. Had one
-  fenced and the other not, this check would refuse every migration of a
-  vault holding a diverted drawer.
+- it had to tolerate a concurrent WRITE with `>=`, so a write during the
+  export was invisible rather than detected;
+- it read a concurrent DELETE as a short copy and blamed **loss in transit**,
+  which is a REGRESSION: that same interleaving completed correctly before
+  O140, and the refusal sends an operator to a tamper runbook when the remedy
+  is to run it again;
+- it measured the destination with `imported`, which counts records
+  PROCESSED. The write is an upsert, so two exported records landing on one
+  row still count two — the shape a flagged update produces, where the
+  quarantine row's id re-derives to the original's at a non-screening
+  destination and replaces it. Measured end to end: the migration succeeded,
+  reported `source_deleted: true`, and the destination held one row against
+  two declared.
 
-A source engine that does not answer with a count degrades to the old
-comparison rather than refusing a migration it cannot judge — a check that
-cannot run must not become a verdict.
+**What ships instead: the count is bound to a SNAPSHOT.** The source's
+`records` is read with the audit chain's height and head before the export and
+again afterwards, and every record appended in between is classified. Exactly
+two namespaces leave content untouched — `read/` and `egress/` — and
+everything else refuses, **including a bare drawer id, which carries no
+prefix at all**, so the rule is an allowlist rather than a list of known
+mutations. `read/` is tolerated deliberately: a read replica serving a tenant
+under `UNDERCROFT_READ_AUDIT=chain` advances the chain, and a strict
+height-equality rule would make busy read-audited fleets permanently
+un-migratable. With a quiet chain the comparisons are exact — the `>=`
+asymmetry is gone — the destination is measured by what it HOLDS, the mapping
+flip is a compare-and-set, and the source is re-read once more immediately
+before the delete. An unjudgeable source refuses BEFORE anything is created.
 
-**Gate**: `a_short_copy_is_measured_against_the_source_engine_not_the_payload`,
-counterfactualed (ignore the authority and it fails by assertion).
-**Residual, stated rather than dressed up**: the in-flight rewrite itself is
-not staged. It needs a man-in-the-middle between two engines, which no suite
-in this tree has, so the DECISION is tested directly and the end-to-end
-scenario is not. What is verified is that a short copy refuses and that
-ordinary traffic does not.
+**Gates**, each counterfactualed in isolation rather than together:
+`every_migration_verdict_names_what_it_measured` (one row per verdict; remove
+the delta scan and only it fails), `the_non_mutating_namespaces_are_the_engines_own`
+(the two spellings counted against the store's own `Namespace::prefix`, both
+directions), and
+`a_migration_is_judged_against_the_source_and_what_the_destination_holds`,
+which drives whole migrations against two scripted loopback engines and pins
+what a unit test structurally cannot: that the destination is measured by its
+own `stats`, that a refusal sends NO `DELETE` to the source, and that an
+unbound source leaves the destination untouched. Swapping `destination.records`
+back to `got.drawers` fails exactly that arm. End to end on real engines,
+`tests/e2e-orchestrator.sh` stages the concurrent delete deterministically by
+stopping the destination engine, which parks the migration after its export.
+
+**Residuals, stated.** The two populations being compared — the source's
+`COUNT(*)` and the export's declared drawers — are argued to cover the same
+rows by READING `export_each_with_vectors` (no `WHERE`) and `count()`, not by
+measuring them against a vault that holds a diverted drawer: the e2e's tenant
+has none, so the quarantined-row case is reasoned rather than observed. It is
+the one claim here that is population-dependent, and a `WHERE` added to that
+one function later would be invisible to every gate in this entry. The window
+between the final source re-read and `delete_vault` is two local steps wide
+and only an engine-side conditional delete closes it for every writer (filed
+below). A migration of a tenant being
+written through the CLI `ops` door, the CLI `migrate` door or engine-direct
+refuses and must be retried when quiet — liveness, not safety. And none of
+this authenticates an engine: the orchestrator holds no vault key and the
+chain is keyed, so this is a consistency and benign-fault check, with TLS and
+`UNDERCROFT_ORCH_ENGINE_CA` doing the security. The entry's original framing
+sold a count as an authority; repeating that with more numbers would be the
+same error at greater length.
 
 ### O139 — CLOSED 2026-09-11: import holds one batch instead of the corpus, and the promise it had to keep was gated by nothing
 
@@ -12310,6 +12351,70 @@ so `pq1` carries no signal for it. Unconditional breaks every shipped reader;
 a new recipient prefix is an identity-format change; a CLI flag makes it
 opt-in, and therefore MINOR. **That choice sets the version, not the
 framing.**
+
+### O146 — a migration of a tenant that is being written refuses, and only a lease fixes that
+
+**Filed 2026-09-12, out of O140's completion.** The snapshot bracket makes an
+unfenced migration fail SAFE: a write, delete or sweep during the export is
+detected and the migration refuses with both vaults intact. What it does not
+do is let the migration SUCCEED, and a fleet migrating a busy tenant will
+retry until it finds a quiet moment.
+
+Nothing fences a tenant today. `undercroft-orchestrator ops <id>
+forget|retention-sweep|admission-rule` and `undercroft-orchestrator migrate`
+each run in their OWN process against the state database and talk to engines
+directly, and a palace-bearer holder or the engine host's own CLI can write at
+any time. The HTTP admin door avoids the race only by stalling the entire
+fleet: the orchestrator serves `/t/*`, `/admin/*` and `/healthz` from one
+`incoming_requests` loop, so an in-flight migration blocks every tenant for its
+whole duration — itself a defect worth its own entry.
+
+**Shape**: a lease on the tenant row, acquired by compare-and-set, under which
+mutating `/t/*` and ops requests answer 503 + `Retry-After` while reads
+continue; expiry, plus an abort route. **Costs that make it a ruling rather
+than a fix**: a new data-plane status during migrations (PATCH with an
+`UPGRADING` entry, or MINOR?), whether ops-plane mutations are fenced too, and
+what happens to a lease whose holder died. Out-of-band writers — engine-direct
+clients, the engine's own console — are detected by the bracket and fenced by
+nothing, which is a boundary and must be stated as one.
+
+**Gate**: during a held lease a `/t/` write answers 503 naming the migration;
+counterfactual — remove the check and it answers 200.
+
+### O147 — the window between the last source check and the delete closes only at the engine
+
+**Filed 2026-09-12.** `migrate_tenant` re-reads the source immediately before
+`delete_vault` and keeps the source if the chain moved, which narrows the
+window to two local steps. It cannot close it: a write acknowledged between
+that read and the delete is destroyed with the source, and a forget or sweep in
+the same window is resurrected at the destination while its receipt says
+erased.
+
+**Shape**: a conditional delete on the engine — `DELETE /v1/vaults/{v}`
+refusing 412 when the vault's chain head has moved since a stated value. That
+closes it for EVERY writer, including the ones no orchestrator-side fence can
+see. New capability on a documented route, so **MINOR**.
+
+**Gate**: an e2e where a write lands between the check and the delete; the
+delete refuses and the source survives.
+
+### O148 — migrating a vault with a non-empty quarantine queue releases it at a non-screening destination
+
+**Filed 2026-09-12, needs a ruling rather than code.** The tenant data plane
+refuses an export that carries reserved-wing rows (`export_carries_reserved_wing`
+→ 409), and `migrate_tenant` has no such check — so the operator path does what
+the tenant path forbids. At a destination that does not declare
+`UNDERCROFT_ADMISSION=quarantine` (the default), the screen does not re-divert,
+`import_unwrap_screened` restores each row to its intended wing, and content a
+reviewer never ruled on becomes retrievable.
+
+Three defensible answers and the tree does not settle which: refuse the
+migration while the queue is non-empty; force `keep_source` and say why; or
+leave it and document the asymmetry as deliberate, on the grounds that the
+destination's own detector is the authority (`lib.rs`'s own comment says the
+DESTINATION decides). **Note the interaction with O140's new destination
+holdings check**: the collision case is now caught, but a clean release of a
+reviewed-but-unruled queue is not, because the counts agree.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 

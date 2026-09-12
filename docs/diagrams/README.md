@@ -25,7 +25,7 @@ docker run --rm -v "$PWD/docs/diagrams:/data" --entrypoint sh minlag/mermaid-cli
 | [security-auth-layers](security-auth-layers.svg) — bearer + per-vault assertion decision flow | [security.md](../security.md) |
 | [multitenancy-topology](multitenancy-topology.svg) — tenants → orchestrator → engines → vaults | [MULTI_TENANCY.md](../MULTI_TENANCY.md) |
 | [multitenancy-data-plane](multitenancy-data-plane.svg) — routed request, auth swapped at the boundary | [MULTI_TENANCY.md](../MULTI_TENANCY.md) |
-| [multitenancy-migration](multitenancy-migration.svg) — count-verified migration incl. failure branch | [MULTI_TENANCY.md](../MULTI_TENANCY.md) |
+| [multitenancy-migration](multitenancy-migration.svg) — migration judged against the source snapshot, incl. failure branch | [MULTI_TENANCY.md](../MULTI_TENANCY.md) |
 | [integrations-surfaces](integrations-surfaces.svg) — clients, surfaces, ingestion, accelerators | [integrations.md](../integrations.md) |
 | [observability-pipeline](observability-pipeline.svg) — opt-in telemetry pipeline, gate per edge | [observability page](../../website/src/observability.md) |
 | [runbook-tamper-response](runbook-tamper-response.svg) — tamper triage process | [runbook page](../../website/src/runbook.md) |

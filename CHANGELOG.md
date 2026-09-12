@@ -4,22 +4,45 @@
 
 PATCH: a fix whose only observable change is that a defect is gone.
 
-### a migrated copy is measured against the source engine (O140)
+### a migrated copy is judged against the source vault's own snapshot (O140)
 
 The orchestrator's faithfulness check read `expected` from the export's
 manifest line and `got` from importing that same export — **both sides from
-one artifact** — and passing it is what authorises deleting the source
-vault. A relayed body arriving truncated, with its manifest counts lowered
-and its payload digest recomputed to match, satisfied every check on that
-path and the source was then dropped.
+one artifact** — and passing it is what authorises deleting the source vault.
 
-The expected size now comes from the source ENGINE, asked for its own row
-count over its own authenticated channel before the export is drawn — A28's
-rule one hop out: ask the authority, never the artifact offering itself for
-verification. Taken before, and compared with `>=`, so a concurrent write to
-a live tenant stays ordinary traffic rather than becoming a refusal. An
-engine that does not answer degrades to the old comparison rather than
-refusing a migration it cannot judge.
+**The first repair replaced one number and still did not judge anything.** It
+asked the source engine for its row count before the export and refused a
+shortfall. But `COUNT(*)` is not a version: a count taken at one instant says
+nothing about a copy taken at another, and a delete plus an insert leaves it
+unchanged. So it had to tolerate a concurrent WRITE with `>=`, it read a
+concurrent DELETE as loss in transit — refusing a migration that would have
+completed correctly before, and sending the operator to a tamper runbook when
+the remedy was to run it again — and it measured the destination with
+`imported`, which counts records PROCESSED. The write is an upsert, so two
+exported records can land on one row and still count two.
+
+**Now the count is bound to a snapshot.** The source's `records` is read with
+the audit chain's height and head before the export and again afterwards, and
+every record appended in between is classified. Exactly two namespaces leave a
+vault's content untouched: `read/` and `egress/`. `read/` is tolerated
+deliberately — a read replica serving a tenant under
+`UNDERCROFT_READ_AUDIT=chain` advances the chain, and a strict "the height must
+not move" rule would make busy read-audited fleets permanently un-migratable.
+Anything else means the source moved and the migration refuses NAMING the
+record it saw, including a bare drawer id, which carries no prefix at all.
+
+With a quiet chain the comparisons are exact, the destination is measured by
+what it HOLDS rather than by what it accepted, the mapping flip is a
+compare-and-set so two migrations cannot both move one tenant, and the source
+is checked once more immediately before it is deleted. The reply carries a
+`verified` object stating what was measured on which side.
+
+**An unjudgeable source now refuses before anything is created.** An engine
+that does not answer with `records`, `writes` and `chain_head`, or an export
+carrying no manifest line, leaves both vaults untouched. The shipped code
+degraded to no check at all and still deleted the source — *a check that cannot
+run must not become a verdict* is right, and for a step that destroys the only
+other copy its conservative reading is to refuse.
 
 Half of what O140 was filed as turned out not to be a defect: the manifest's
 `level` is already documented and implemented as a cross-check that fails

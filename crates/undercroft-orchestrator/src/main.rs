@@ -137,8 +137,9 @@ enum Command {
         #[arg(long)]
         body: Option<String>,
     },
-    /// Migrate a tenant's vault to another instance (export → import →
-    /// count-verified → mapping flip → source delete)
+    /// Migrate a tenant's vault to another instance (snapshot the source →
+    /// export → import → judge the copy against that snapshot → mapping flip
+    /// → source delete)
     Migrate {
         id: String,
         /// Destination instance

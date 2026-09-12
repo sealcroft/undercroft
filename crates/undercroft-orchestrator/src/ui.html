@@ -187,9 +187,9 @@
   <div class="foot">
     Fleet administration over the orchestrator's <code>/admin/*</code> plane. The admin token
     (<code>UNDERCROFT_ORCH_ADMIN_TOKEN</code>) stays in this tab. Tenant tokens are shown exactly once at
-    create/rotate — the orchestrator stores only HMACs. Migration is count-verified: any failure before
-    the mapping flip leaves the source authoritative. Destructive operations require typing the
-    target's name.
+    create/rotate — the orchestrator stores only HMACs. A migration is judged against the source vault's
+    own snapshot, and against what the destination holds: any failure before the mapping flip leaves
+    the source authoritative. Destructive operations require typing the target's name.
   </div>
 </div>
 
@@ -440,7 +440,7 @@ async function migrate() {
   const t = state.tenants.find(x => x.id === id);
   const keep = $("mKeep").checked;
   const ok = await guard("MIGRATE TENANT",
-    "Moves '" + (t ? t.name : id) + "' to '" + to + "': export → import → count-verified → mapping flip" +
+    "Moves '" + (t ? t.name : id) + "' to '" + to + "': snapshot → export → import → judged against that snapshot → mapping flip" +
     (keep ? " (source kept)." : " → SOURCE VAULT DELETED."), t ? t.name : id);
   if (!ok) return;
   toast("migrating…");
@@ -448,9 +448,21 @@ async function migrate() {
     const r = await api("POST", "/admin/tenants/" + encodeURIComponent(id) + "/migrate", { to, keep_source: keep });
     $("migrateReport").style.display = "block";
     $("migrateReport").textContent = JSON.stringify(r, null, 2);
-    toast("migrated — " + r.records + " record(s), count-verified");
+    const v = r.verified || {};
+    const held = v.destination_records === undefined ? "?" : v.destination_records;
+    toast("migrated — " + r.records + " record(s); destination holds " + held +
+      (r.source_deleted ? "" : " (source KEPT)"));
     refresh();
-  } catch (e) { toast("migrate failed — " + e.message, true); }
+  } catch (e) {
+    // A refusal is the thing an operator most needs to re-read: it names what
+    // was measured, on which side, and whether the source is still
+    // authoritative. It used to appear ONLY in a toast that clears itself
+    // after 4.2 seconds, while this pane opened on success alone — so the one
+    // outcome with a decision attached was the one that vanished.
+    $("migrateReport").style.display = "block";
+    $("migrateReport").textContent = "MIGRATION REFUSED — the source is still authoritative\n\n" + e.message;
+    toast("migrate refused — see the report below", true);
+  }
 }
 
 // ---- wiring -----------------------------------------------------------

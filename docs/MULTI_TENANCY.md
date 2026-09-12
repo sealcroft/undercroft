@@ -404,15 +404,18 @@ sequenceDiagram
     participant S as source engine
     participant D as target engine
     A->>O: POST /admin/tenants/{id}/migrate {to}
+    O->>S: GET /v1/vaults/{v}/stats (records + chain head, BEFORE the export)
     O->>S: GET /v1/vaults/{v}/export (NDJSON + manifest with counts)
     O->>D: POST /v1/vaults (create — same security level, or refuse)
     O->>D: POST /v1/vaults/{v}/import
     D-->>O: {imported: n, quarantined: q}
-    alt drawers, triples, entities, tunnels all equal the manifest, and q == 0
-        O->>O: flip tenant→instance mapping
-        O->>S: DELETE /v1/vaults/{v} (unless keep_source)
-        O-->>A: {records, source_deleted}
-    else any count differs, an import error, or q > 0 without keep_source
+    O->>D: GET /v1/vaults/{v}/stats (what the destination HOLDS)
+    O->>S: GET /v1/vaults/{v}/stats + history (what changed during the export)
+    alt source quiet, export matches the snapshot, destination holds it, q == 0
+        O->>O: flip tenant→instance mapping (compare-and-set)
+        O->>S: DELETE /v1/vaults/{v} (unless keep_source, and only if still quiet)
+        O-->>A: {records, source_deleted, verified}
+    else source changed, a count differs, an import error, or q > 0 without keep_source
         O->>D: DELETE partial copy
         O-->>A: error — source left authoritative
     end
@@ -524,13 +527,25 @@ hardened the way the engine hardens its own secrets:
 
 **Migration** (`POST /admin/tenants/{id}/migrate {"to": …}`): export from
 the source (the v0.18 artifact-carrying NDJSON, so token matrices restore
-by copy, not re-encode) → import on the target → **count-verified** →
-mapping flip → source vault delete (`keep_source` opts out). Any failure
-before the flip leaves the source authoritative and removes the partial
-copy. The import half is admission-screened like any other write — a
+by copy, not re-encode) → import on the target → **judged against the source
+vault's own snapshot** → mapping flip → source vault delete (`keep_source`
+opts out). Any failure before the flip leaves the source authoritative and
+removes the partial copy.
+
+**What "judged" means, since a count on its own judges nothing** (ROADMAP
+O140): the source's `records` is read with its audit-chain height BEFORE the
+export is drawn and again afterwards, and every record appended in between is
+classified. Only `read/` and `egress/` leave a vault's content untouched, so
+anything else — a save, a deletion, a retention sweep — means the export is a
+picture of a vault that has already moved, and the migration refuses and says
+which record it saw. With a quiet chain the comparisons are exact, and the
+destination is measured by what it HOLDS (its own `stats`) rather than by what
+its import loop counted: those two numbers differ precisely when two exported
+records land on one row. The mapping flip is a compare-and-set, so two
+concurrent migrations cannot both move one tenant. The import half is admission-screened like any other write — a
 migration used to be a re-admission of the whole corpus past the screen,
 because every export line carries a `vector` and a caller-supplied vector
-reached the raw writer (§4). The e2e suite (`tests/e2e-orchestrator.sh`, 133 checks,
+reached the raw writer (§4). The e2e suite (`tests/e2e-orchestrator.sh`, 142 checks,
 `docker compose run --rm orchestrator-e2e`) exercises the whole story
 against two live engine instances, including the source engine provably
 losing the vault after migration and a read replica converging on the
