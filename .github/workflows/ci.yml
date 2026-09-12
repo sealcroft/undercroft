@@ -116,7 +116,7 @@ jobs:
         # battery does not; the battery has `lint` and `site`, which CI runs as
         # their own jobs. `ort-build` WAS a compose service run by neither
         # while `release.yml` shipped an `ort` binary for all five targets;
-        # O141 added it to this matrix, so what remains is that the two
+        # O142 added it to this matrix, so what remains is that the two
         # model-crate legs run in CI and not in a local battery — deliberate
         # (both are heavy and one needs a C++ toolchain), and stated rather
         # than left looking like a gap.
@@ -136,7 +136,7 @@ jobs:
         #   backends-e2e     five live vector DBs over TLS
         #   onnx-build       ONNX embedder + reranker compile check
         #   ort-build        the ONNX Runtime backend, which `release.yml`
-        #                    SHIPS for five targets. Added by O141: it was a
+        #                    SHIPS for five targets. Added by O142: it was a
         #                    compose service run by neither CI nor the
         #                    battery, so a published artifact compiled on no
         #                    pull request — the `windows-check` shape (O102)

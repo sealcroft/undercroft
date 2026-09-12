@@ -141,7 +141,10 @@ a declaration to be unusable.
 
 Honest boundaries: tract runs **BERT-family** models (DeBERTa rerankers
 are out; ColBERT exports need fixed-shape plans); the compose
-`onnx-build` / `ort-build` services compile-check both features in CI.
+`onnx-build` / `ort-build` services build both features in CI **and run each
+crate's own tests** — which, since ROADMAP O134a, execute every counted
+degrade arm against a model fixture the tests generate, so no weights are
+committed and none are downloaded.
 
 ## Exporting a model (out of repo, on purpose)
 
