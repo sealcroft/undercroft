@@ -69,6 +69,35 @@ so rather than implying it checked them.
 
 ## 1.6.0 (unreleased)
 
+### `undercroft config check` now refuses seven declarations it used to accept (O155)
+
+**Who is affected:** anyone who gates a pipeline on `undercroft config check`
+AND declares one of `UNDERCROFT_QDRANT_URL`, `_CHROMA_URL`, `_MILVUS_URL`,
+`_WEAVIATE_URL`, `_EMBED_URL`, `_LLM_URL` or `_PGVECTOR_DSN` as cleartext
+`http://` to a non-loopback host — or as an empty string.
+
+**What happens:** those seven were classed as having no parse to run, so the
+pre-flight printed *"declared Opaque: no parse exists"* and exited 0. Every
+one of them is refused by its own client at construction, before a byte
+moves, by the transport policy every outbound client in this engine runs:
+TLS or loopback, nothing else, no override. The pre-flight now runs that same policy, with the
+same message, so it reports what start-up would do.
+
+**Symptom to expect:** `config check` exits 1 where it exited 0, naming the
+variable and the URL. **Nothing about the running engine changed** — the
+configuration it now names was already being refused at the point of use.
+
+**What to do:** the message is the fix — put the endpoint behind TLS, or
+point it at loopback. A DSN needs `sslmode=require` unless every host and
+hostaddr is loopback. If the declaration was empty, it is a failed
+interpolation: set it, or unset it.
+
+**The one case worth calling out:** a deployment that declares a backend URL
+it never uses — `UNDERCROFT_QDRANT_URL` set, `index push` never run — was
+working and will now fail the pre-flight. That is the command doing its job
+(the declaration cannot be honoured as written), but it can turn a green
+pipeline red without anything at run time having changed.
+
 ### the first writable open of an existing vault builds one index (O145)
 
 **Who is affected:** every vault that already holds drawers. The larger it is,

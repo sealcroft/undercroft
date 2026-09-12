@@ -728,21 +728,39 @@ pub mod pgvector {
         .any(|m| lower.contains(m))
     }
 
+    /// **The transport policy for a pgvector DSN, on its own, opening
+    /// nothing — one implementation, two callers (ROADMAP O155).**
+    ///
+    /// The same rule as every other client, spelled for libpq: cleartext
+    /// beyond loopback is refused at construction, before a byte moves
+    /// (ROADMAP C8). This backend was wired `NoTls` with no check at all, so
+    /// for pgvector **no TLS-compliant configuration existed** — the refusal
+    /// below would have been unsatisfiable, which is why the connector had to
+    /// come with it.
+    ///
+    /// [`PgVectorIndex::new`] calls this, and so does `undercroft config
+    /// check`. It is lifted out of the constructor rather than copied into
+    /// the pre-flight for the reason that command states about every arm it
+    /// has: a validator that agreed with its own reimplementation rather than
+    /// with the code would be the defect class this tree spends its time
+    /// closing. It runs no I/O and builds no connection — `dsn_is_loopback`
+    /// parses, `dsn_demands_tls` scans a string — which is what makes it
+    /// reachable from a command whose whole safety property is that it opens
+    /// nothing.
+    pub fn check_dsn_transport(dsn: &str) -> Result<(), IndexError> {
+        if !dsn_is_loopback(dsn) && !dsn_demands_tls(dsn) {
+            return Err(IndexError::Transport(format!(
+                "the pgvector DSN points at a non-loopback host without TLS. Embeddings are plaintext-derived and would cross the network in the clear. Add `sslmode=require` to {} — the connector is rustls, so it verifies the chain and the hostname, which libpq's `require` does not — and declare the server's root with {} if it is self-signed. There is no override.",
+                "UNDERCROFT_PGVECTOR_DSN", CA_VAR
+            )));
+        }
+        Ok(())
+    }
+
     impl PgVectorIndex {
         /// Connect to a pgvector DSN; every host and hostaddr must be loopback unless the DSN demands TLS.
         pub fn new(dsn: &str) -> Result<Self, IndexError> {
-            // The same rule as every other client, spelled for libpq:
-            // cleartext beyond loopback is refused at construction, before
-            // a byte moves (ROADMAP C8). This backend was wired `NoTls`
-            // with no check at all, so for pgvector **no TLS-compliant
-            // configuration existed** — the refusal below would have been
-            // unsatisfiable, which is why the connector had to come with it.
-            if !dsn_is_loopback(dsn) && !dsn_demands_tls(dsn) {
-                return Err(IndexError::Transport(format!(
-                    "the pgvector DSN points at a non-loopback host without TLS. Embeddings are plaintext-derived and would cross the network in the clear. Add `sslmode=require` to {} — the connector is rustls, so it verifies the chain and the hostname, which libpq's `require` does not — and declare the server's root with {} if it is self-signed. There is no override.",
-                    "UNDERCROFT_PGVECTOR_DSN", CA_VAR
-                )));
-            }
+            check_dsn_transport(dsn)?;
             // **Resolved UNCONDITIONALLY, above the branch, which is the
             // whole of ROADMAP O96.** O82c moved this read into the policy
             // crate and left it inside `if dsn_demands_tls(dsn)`, so one

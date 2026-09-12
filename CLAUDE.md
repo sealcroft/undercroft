@@ -1565,8 +1565,17 @@ Consequences that are binding, not advisory:
   the same system. **Its published COUNTS are gated** since 2026-08-31 (ROADMAP
   O74, ruled *depend on the diagrams, they represent the facts we have now*):
   a `platform-views` block in the `prose figures` preflight joins MCP tools,
-  MCP writes, `/v1` routes, CLI operations and the crate count to the tree,
-  both arms probed. It lives in `tests/battery.sh` and NOT in `check.py`
+  MCP writes, `/v1` routes, CLI operations, the crate count and — since O155 —
+  the `ENGINE_ENV_VARS` cross-tab on both axes to the tree, both arms probed.
+  **O155 is what that last row cost to learn**: the decision tree published
+  `Protects · 24` for five days after O121 moved `UNDERCROFT_RERANKER`, because
+  a figure outside this table is bound by attention exactly like the prose two
+  sentences down. Only ONE cell of the cross-tab is published — `Protects` ∩
+  `Opaque`, the population of `PREFLIGHT_EXEMPT` — because the four totals plus
+  81 leave the table short by exactly one number, and the two parenthetical
+  splits it replaces were spelled identically (`(N protect, M tune)`) in both
+  boxes, so no pattern could tell them apart. A figure a gate cannot address is
+  a figure that rots. It lives in `tests/battery.sh` and NOT in `check.py`
   because `arch-check` mounts `./architecture` alone, read-only — that checker
   physically cannot see `crates/` and so cannot know what the truth is.
   **What is still bound by attention alone is PROSE**: a relational claim moves
@@ -1914,7 +1923,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (501 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (508 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (150 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (82 checks; weaviate
@@ -3400,7 +3409,29 @@ unwritten because a half-correct verdict is worse than a known-wrong one.
   vault is in, the default is *off* and a silent fallback removes what was
   asked for — so garbage REFUSES to open. That is "integrity is not a tier"
   extended by one step: a protection an operator declared must not become a
-  tier by typo. `parity.rs::ENGINE_ENV_VARS` carries
+  tier by typo.
+  **And a MANDATORY OPERAND inherits its selector's class (O155, 2026-09-12).**
+  The three clauses above describe a declaration that acts; they had no answer
+  for the one it acts THROUGH — the model file `UNDERCROFT_EMBEDDER=onnx` will
+  load, the endpoint `=http` will reach, the URL `index push --backend qdrant`
+  needs. Those were `Tunes` while their selectors were `Protects`, and a bad
+  value in either refuses at the same `?`, so the class contradicted itself in
+  one line. Fourteen rows move: five backend URLs, a DSN, two served-runtime
+  URLs and seven model paths. The discriminator is **a default to keep**, and
+  it is what stops the rule running away — `UNDERCROFT_EMBED_MODEL`
+  (`nomic-embed-text`), `_LLM_MODEL` (`llama3.2`) and `_ORCH_DB`
+  (`orchestrator.db`) look identical and stay `Tunes` because each has one.
+  Applied backwards it reclassifies nothing else and CONFIRMS the rest: every
+  `_NAME` row, `_EMBED_DIM`, `_EMBED_API`, `_LLM_API` and both `_KEY`s are
+  optional operands with real defaults, and every `_CA` was already `Protects`.
+  **One application, and that is stated rather than implied.**
+  **What the rule COST is the part worth keeping**: making fourteen rows
+  `Protects` forced `PREFLIGHT_EXEMPT` to answer *why can this not be
+  pre-flighted?* for each, and for seven the answer was that it CAN be and was
+  not — `config check` exited 0 on a cleartext backend URL that its own client
+  refuses at construction. A taxonomy change that could not alter behaviour
+  found a live hole because the class is what decides which rows a gate LOOKS
+  at. `parity.rs::ENGINE_ENV_VARS` carries
   `(name, ConfigClass, Parse)` and is counted against the code in both
   directions on BOTH axes, so a new variable does not compile until someone
   classifies it; `undercroft config check` runs every declaration through the
@@ -3422,7 +3453,23 @@ unwritten because a half-correct verdict is worse than a known-wrong one.
   report different values. A knob whose unset depends on ANOTHER variable has
   no row and says why (`UNDERCROFT_LATE_TOP_N` falls through to
   `UNDERCROFT_RERANK_TOP_N`, valid or not, which is a compatibility promise).
-  49 of the 81 are `Checked`, 32 `Opaque` — counted, not remembered.
+  56 of the 81 are `Checked`, 25 `Opaque`, and 39 `Protects` against 42
+  `Tunes` — counted by the `prose figures` preflight, not remembered. The
+  class figures had rotted before it existed: O121 moved
+  `UNDERCROFT_RERANKER` to `Protects` and the platform-views decision tree
+  went on publishing the old split for five days, which is what O155 gated.
+  **The two axes are declared independently, but the second decides whether
+  the first can be OBSERVED: for an `Opaque` row the class is DOCUMENTATION
+  rather than a gate (O155).** `check_one` answers `Accepted`
+  before the class is read, so nothing an operator observes moves when an
+  `Opaque` row is reclassified and no test in that crate can falsify the
+  claim; its consequence lives at the consumer — a model that loads, an
+  endpoint that answers — which this command reaches deliberately never. Say
+  that plainly rather than leaving an unfalsifiable claim to rot. The class
+  still earns its place on those rows: it is what tells a READER the failure
+  mode, and it is what decides which rows `PREFLIGHT_EXEMPT` must account
+  for — which is how a taxonomy change that could not alter behaviour turned
+  up seven rows that were pre-flightable and unchecked.
   **The class is not the whole rule: a declaration is either a CLOSED
   VOCABULARY or OPAQUE PAYLOAD, and that decides what EMPTY means and whether
   the value may be TRIMMED.** A vocabulary variable (`UNDERCROFT_ADMISSION`)
