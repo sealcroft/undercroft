@@ -12694,28 +12694,93 @@ in a pipeline and fast enough to run on a machine that lacks the weights — so
 the symptom string goes in `UPGRADING.md` instead and the entry says plainly
 that this class is not pre-flightable.
 
-### O155 — four model-path declarations are classed `Tunes` while the code REFUSES on a bad value
+### O155 — the `ConfigClass` claim, now MEASURED: the `Checked` axis is clean and gated, the `Opaque` axis is documentation
 
-**Filed 2026-09-12; a taxonomy ruling, deliberately not buried inside O134a.**
-`UNDERCROFT_ONNX_MODEL`, `_TOKENIZER`, `UNDERCROFT_RERANK_MODEL` and
-`UNDERCROFT_COLBERT_MODEL` carry `(Tunes, Opaque)` in `parity.rs`, while
-`ConfigClass::Tunes`'s own doc says garbage *"warns and keeps that default"*
-and the code refuses to open.
+**Filed 2026-09-12 as a taxonomy ruling; the gate half shipped the same day
+and the ruling half is sharper and LARGER than the filing said.** The entry
+claimed "four model-path declarations"; there are **seven**
+(`UNDERCROFT_ONNX_MODEL`, `_ONNX_TOKENIZER`, `_RERANK_MODEL`,
+`_RERANK_TOKENIZER`, `_COLBERT_MODEL`, `_COLBERT_QUERY_MODEL`,
+`_COLBERT_TOKENIZER`). Fourth consecutive filing in this tree to undercount
+its own class.
 
-Neither existing class fits. They are not knobs over a conservative default —
-there IS no default, they are mandatory operands of `UNDERCROFT_EMBEDDER` —
-and they are not protections an operator turns on.
+## What shipped: the class is checked against CONSEQUENCE
 
-**The both-directions gate cannot see this**, which is the transferable part:
-it counts MEMBERSHIP on two axes (name and parse) and never CONSEQUENCE, so a
-row can be present, well-formed, agreed-upon by both directions, and describe
-behaviour the code does not have. *Two lists are a closed system*, one axis
-over.
+The class is a claim about what a bad value DOES — refuse, or warn and keep
+the conservative default — and **nothing checked it against one**. What
+existed was a hand-written list of NINE names asserted to be `Protects`,
+under a comment promising that *"every name the validator can refuse must be
+classified"*. The list of names that can refuse was maintained by hand, so a
+variable that GAINED a refusal was never added, and the converse — a `Tunes`
+variable that actually refuses — was never asked. Two lists agreeing with
+each other: **O80's rule one axis over**, neither side derived from the code.
 
-Options: reclassify as `Protects`, which makes the class match the behaviour;
-or add a third class ("a mandatory operand of another declaration"), which is
-more accurate and is a doctrine change that must be APPLIED BACKWARDS over
-every existing row before it lands.
+`every_checked_declaration_answers_garbage_the_way_its_class_says` replaces
+it and strictly contains it. Universe from `ENGINE_ENV_VARS`, verdict from
+the real resolver, both directions over all **49** `Checked` declarations:
+`Protects` must be `Fatal`, `Tunes` must be `Warn`, an `Ok` means the parse
+validates nothing and an `Accepted` means the `Checked` axis is lying.
+
+**It taught its own shape on the first run, which is the part worth keeping.**
+Driven with one garbage string it reported five defects —
+`UNDERCROFT_PASSPHRASE`, `_ASSERTION_SECRET`, `_MCP_HTTP_TOKEN`,
+`_ORCH_ADMIN_TOKEN`, `_ORCH_METRICS_TOKEN` — and all five were CORRECT
+behaviour. A secret is an OPAQUE PAYLOAD: it has no vocabulary, so an
+arbitrary string is a perfectly good value and the only thing it cannot be is
+EMPTY. That is the tree's own vocabulary-versus-payload rule, and the gate
+now drives BOTH shapes, passing when some unacceptable value produces the
+promised verdict and failing when any produces the opposite one.
+
+**Result: the `Checked` axis is clean.** All 49 rows' class claims match what
+their resolver does.
+
+## The ruling that remains, with numbers instead of impressions
+
+**The drift is confined to `Opaque` rows, and there the class decides
+NOTHING** — `check_one` returns `Accepted` before the class is consulted. For
+those 32 rows the class is documentation, and an unfalsifiable claim is what
+lets one rot.
+
+Applied backwards, as this file requires of any rule, "reclassify a mandatory
+operand that refuses" does not stop at seven. Of the **30** `Tunes`+`Opaque`
+rows, roughly **17** have no default to keep: the 7 model-path operands, the 8
+URL/DSN/DB operands (`_QDRANT_URL`, `_CHROMA_URL`, `_MILVUS_URL`,
+`_WEAVIATE_URL`, `_PGVECTOR_DSN`, `_EMBED_URL`, `_LLM_URL`, `_ORCH_DB`), plus
+`_EMBED_MODEL` and `_LLM_MODEL`. Reclassifying only the seven would leave ten
+identically-shaped rows as `Tunes` — a NEW inconsistency rather than a removed
+one.
+
+The internal contradiction is real and one line long: **the selectors
+`UNDERCROFT_EMBEDDER` and `UNDERCROFT_RERANKER` are `Protects`, their
+mandatory operands are `Tunes`, and a bad value in either refuses
+identically** (`main.rs:1375-1377`, `:1562-1563` — `?` on the load error).
+
+Three options, and the tree does not settle the boundary:
+
+1. **Reclassify all ~17 as `Protects`.** Consistent and honest about the
+   doc. Changes no behaviour and no gate, because the class is inert for
+   `Opaque` rows — it only stops `Tunes`'s own text ("garbage warns and keeps
+   that default") being false of them.
+2. **A third class** ("a mandatory operand of another declaration"). More
+   accurate, and it ALSO decides nothing for `Opaque` rows —
+   `CLAUDE.md`'s own test says a rule that changes nothing should say so
+   rather than be written. Rejected unless the maintainer wants the
+   distinction recorded for its own sake.
+3. **Stop making an unfalsifiable claim**: `Opaque` rows carry no
+   `ConfigClass`, or carry one explicitly marked as documentation. The
+   honest shape, and the largest doctrine change — the both-directions
+   inventory gate assumes every row has a class.
+
+Recommendation: **(1), extended to all ~17**, plus one sentence on
+`ConfigClass` saying that for `Parse::Opaque` the class is documentation and
+not a gate. It removes the contradiction, is consistent under the backwards
+test, and claims nothing a reader could mistake for a check.
+
+**Residual, stated**: whichever is chosen, an `Opaque` row's class remains
+unverifiable here by construction. Its consequence lives at the consumer —
+a model that loads, an endpoint that answers — which `config check` reaches
+deliberately never, because opening nothing is what makes it safe in a
+pipeline and runnable on a machine that lacks the weights.
 
 ### O135 — three reads the audit has never run, carried in a gitignored file
 

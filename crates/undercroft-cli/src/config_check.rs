@@ -481,25 +481,127 @@ mod tests {
             protects > 5 && tunes > 5,
             "premise: both classes are populated ({protects} protects, {tunes} tunes)"
         );
-        // Every name the validator can refuse must be classified, or the
-        // fatal/warn decision falls back to a default nobody chose.
-        for name in [
-            "UNDERCROFT_ADMISSION",
-            "UNDERCROFT_TRUST_FLOOR",
-            "UNDERCROFT_READ_AUDIT",
-            "UNDERCROFT_SEMANTIC_GATE",
-            "UNDERCROFT_ADMISSION_RATE",
-            "UNDERCROFT_EMBED_CA",
-            "UNDERCROFT_LLM_CA",
-            "UNDERCROFT_INDEX_CA",
-            "UNDERCROFT_ORCH_ENGINE_CA",
-        ] {
-            let class = ENGINE_ENV_VARS.iter().find(|(n, _, _)| *n == name);
-            assert_eq!(
-                class.map(|(_, c, _)| *c),
-                Some(ConfigClass::Protects),
-                "{name} can refuse, so it must be classified Protects"
-            );
+        // **The hand-written list of nine names that used to live here is
+        // GONE** (ROADMAP O155). Its comment promised that "every name the
+        // validator can refuse must be classified", but the list of names
+        // that CAN refuse was maintained by hand — so a variable that gained
+        // a refusal was never added to it, and the converse (a `Tunes`
+        // variable that actually refuses) was not asked at all. Two lists
+        // agreeing with each other, which is O80's rule one axis over:
+        // neither side came from the code.
+        //
+        // `every_checked_declaration_answers_garbage_the_way_its_class_says`
+        // replaces it and strictly contains it: the universe is
+        // `ENGINE_ENV_VARS`, the verdict comes from the real resolver, and
+        // it runs in BOTH directions over all 49 `Checked` declarations.
+        // Keeping the list as well would be a second implementation of one
+        // decision — and the weaker one.
+    }
+
+    /// **The class is a claim about CONSEQUENCE, and until O155 nothing
+    /// checked it against one.**
+    ///
+    /// The test above asserts that NINE names somebody remembered are
+    /// `Protects`. Its own comment says *"every name the validator can
+    /// refuse must be classified"* — but the list of names that can refuse
+    /// is hand-maintained, so a variable that GAINS a refusal is never added
+    /// to it, and the converse (a `Tunes` variable that actually refuses) is
+    /// not asked at all. Two lists agreeing with each other, which is O80's
+    /// rule one axis over: neither side was derived from the code.
+    ///
+    /// This derives its universe from `ENGINE_ENV_VARS` and its verdict from
+    /// the REAL resolver, by feeding every `Checked` declaration a value no
+    /// parse can accept and requiring the Finding to match the class:
+    /// `Protects` must be `Fatal`, `Tunes` must be `Warn`.
+    ///
+    /// Two other outcomes are failures with their own meaning. `Ok` means a
+    /// resolver accepted deliberate garbage, so its "parse" validates
+    /// nothing. `Accepted` means no parse ran at all, which is the `Checked`
+    /// axis lying — the defect O52 closed for `Protects` and O48 widened to
+    /// `Tunes`, now checked for both from one place.
+    ///
+    /// Not a duplicate of
+    /// `every_checked_declaration_agrees_with_the_resolver_that_runs`, and
+    /// the division of labour is worth stating so a later reader does not
+    /// delete the wrong one: that test drives HAND-CHOSEN values — including
+    /// VALID ones, which this cannot — over a named sample, and is the only
+    /// thing asserting that a good value is still accepted. This one drives
+    /// only unacceptable values, but over EVERY `Checked` row, with the
+    /// universe taken from the inventory rather than from a list.
+    ///
+    /// Blind spot, stated because it is where this class actually drifted:
+    /// an `Opaque` declaration has no parse, so it CANNOT be driven here and
+    /// its `ConfigClass` decides nothing — `check_one` returns `Accepted`
+    /// before the class is ever consulted. For those rows the class is
+    /// documentation rather than a gate, and that is exactly why the
+    /// model-path operands sat misclassified (ROADMAP O155).
+    #[test]
+    fn every_checked_declaration_answers_garbage_the_way_its_class_says() {
+        use crate::parity::{ConfigClass, Parse, ENGINE_ENV_VARS};
+        // Rejected by a number parser, a closed vocabulary, a path that must
+        // open, an address, a duration and a rate alike.
+        const GARBAGE: &str = "!!undercroft-not-a-valid-value!!";
+
+        // **TWO unacceptable values, because "invalid" has two shapes** and
+        // driving only one misreads five variables. A closed vocabulary, a
+        // number, a path or an address rejects an arbitrary string; an
+        // OPAQUE PAYLOAD — a passphrase, a bearer — has no vocabulary, so an
+        // arbitrary string is a perfectly good value for it and the only
+        // thing it cannot be is EMPTY. That is the tree's own
+        // vocabulary-versus-payload rule, and the first version of this gate
+        // reported all five secrets as defects for want of it.
+        //
+        // So a declaration passes if SOME unacceptable value produces the
+        // outcome its class promises, and fails if ANY produces the opposite
+        // one — a `Protects` variable must never merely warn, and a `Tunes`
+        // knob must never refuse.
+        let unacceptable = [GARBAGE, ""];
+        let mut wrong: Vec<String> = Vec::new();
+        let mut driven = 0usize;
+        for (name, class, parse) in ENGINE_ENV_VARS {
+            if *parse != Parse::Checked {
+                continue;
+            }
+            driven += 1;
+            let found: Vec<Finding> = unacceptable.iter().map(|v| check_one(name, v)).collect();
+            let promised = found.iter().any(|f| {
+                matches!(
+                    (f, class),
+                    (Finding::Fatal(_), ConfigClass::Protects)
+                        | (Finding::Warn(_), ConfigClass::Tunes)
+                )
+            });
+            let contradicted = found.iter().any(|f| {
+                matches!(
+                    (f, class),
+                    (Finding::Warn(_), ConfigClass::Protects)
+                        | (Finding::Fatal(_), ConfigClass::Tunes)
+                )
+            });
+            if contradicted {
+                wrong.push(format!(
+                    "  {name}: declared {class:?}, but an unacceptable value produced the OPPOSITE verdict"
+                ));
+            } else if !promised {
+                let got = if found.iter().any(|f| matches!(f, Finding::Accepted)) {
+                    "Accepted — no parse ran, so `Checked` is not true of it"
+                } else {
+                    "Ok for every unacceptable value — its parse validates nothing"
+                };
+                wrong.push(format!("  {name}: declared {class:?}, but {got}"));
+            }
         }
+
+        // PREMISE PROBE. A loop that drove nothing reports exactly what a
+        // clean inventory reports.
+        assert!(
+            driven > 40,
+            "premise: only {driven} Checked declaration(s) were driven"
+        );
+        assert!(
+            wrong.is_empty(),
+            "the ConfigClass claim disagrees with what the resolver actually does:\n{}",
+            wrong.join("\n")
+        );
     }
 }
