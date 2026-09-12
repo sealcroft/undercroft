@@ -1984,15 +1984,18 @@ docker compose run --rm obs-config    # the observability CONFIG suite (13 check
                                       # warning fleet-wide. The only symptom of
                                       # that class is an alert that never
                                       # arrives, which is why it needs a suite
-docker compose run --rm onnx-build    # build the tract backend through the CLI, then
-                                      # RUN that crate's tests. `cargo build` does not
-                                      # compile #[cfg(test)] code, so until O134a these
-                                      # tests were compiled by NOTHING. Publishes NO
-                                      # figure, deliberately: routing the legs through
-                                      # the cargo reader is O134b, and a count written
-                                      # here before a gate reads it is exactly the
-                                      # un-gated number this file keeps finding stale
-docker compose run --rm ort-build    # the same for the ORT backend, built
+docker compose run --rm onnx-build    # build the tract backend + RUN its tests (10 run, 3 ignored)
+                                      # `cargo build` does not compile #[cfg(test)] code,
+                                      # so until O134a these tests were compiled by
+                                      # NOTHING — three of the four that existed returned
+                                      # early and reported PASSED. The figure is READ and
+                                      # COMPARED since O134b; O134a deliberately published
+                                      # none, because a count nothing gates is the part
+                                      # that rots. `(N run, M ignored)` carries BOTH
+                                      # numbers: three tests here are #[ignore]d, and a
+                                      # single `run` figure cannot tell a deleted test
+                                      # from a newly ignored one
+docker compose run --rm ort-build     # the same for the ORT backend (7 run, 1 ignored), built
                                       # --features onnx,ort. Each leg tests ONLY its own
                                       # crate, or the tract figures are counted twice.
                                       # NOT a clippy run: this line claimed it lint-checked

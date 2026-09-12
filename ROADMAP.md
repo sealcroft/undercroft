@@ -3988,7 +3988,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**186** of the **201** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**187** of the **202** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4167,6 +4167,89 @@ capability, backward compatible. The rest of the section is PATCH work — no
 documented contract moves; import stops holding the corpus, the duplicate
 check stops scanning the table, and a migration is judged against the source's
 own snapshot.
+
+### O134b — CLOSED 2026-09-12: the model legs' counts are read, published and compared
+
+**Filed 2026-09-12 and closed the same day, with one half re-filed as O157
+rather than carried silently.** O134a made both legs run `cargo test` and
+deliberately left them in `NO_SUMMARY_SUITES`, so nothing read the
+`test result:` lines they printed — and `cargo test` exits 0 with zero tests,
+so a leg whose tests silently stopped compiling was indistinguishable from a
+leg that passed everything.
+
+**What shipped.** `CARGO_SUITES` replaces the hard-coded `test` in both the
+detail routing and the post-run comparison; the two legs left
+`NO_SUMMARY_SUITES`. A SEPARATE reader, `declare_cargo_counts`, reads
+`(N run, M ignored)` off each leg's `docker compose run` line — a different
+grammar from `(N checks)` on purpose, because conflating them would be a lie
+about what is compared: a shell suite publishes one number over a population
+of assertions, a cargo leg publishes two, and BOTH are needed because O134a
+made three tests `#[ignore]`d and a single `run` figure cannot tell a deleted
+test from a newly ignored one. `test` keeps its own three whole-tree surfaces,
+per the maintainer's ruling that the landing tile KEEPS its label with its
+scope declared in the gate rather than absorbing the legs.
+
+**"This reader examined nothing" is now a FAILURE on BOTH arms whenever a
+figure is published.** It was a silent `continue`. A suite that publishes a
+number and then produces none does not have "nothing to compare" — it has a
+missing measurement, which is the loudest case and was the quietest.
+
+**`cargo_measured` is a named function rather than two inline `sed`s**, and
+that is gate design rather than tidiness: the comparison it feeds only fires
+when a CI-only leg actually runs, a 25-minute round trip, so an inline parse
+would have been checked that way or not at all — the un-gated half of a gated
+claim, which is the shape this file keeps finding stale. It is driven by the
+reader self-test on synthetic input, including the case that must yield
+nothing.
+
+**Counterfactual, run end to end**: publish `onnx-build` as `99 run` and the
+battery reports *"onnx-build: CLAUDE.md publishes 99/3 (run/ignored), this run
+measured 10/3"* and FAILS, while `ort-build` at `7/1` produces no line at all
+— so the comparison is per-leg rather than all-or-nothing, single-variable and
+conclusive.
+
+**Residual, stated**: the legs remain CI-only (O142), so this comparison fires
+on a pull request, and on a local battery only when they are named explicitly.
+
+### O156 — CLOSED 2026-09-12: a scrambled cargo log is named, and each figure is guarded on its own count
+
+**Filed and closed the same day. Both halves were needed to publish a wrong
+number, and each is fixed.**
+
+**1. `test_summary` now tracks target IDENTITY.** It detected a replay by
+pairing target HEADERS with `test result:` lines and reporting an orphan
+result or an unreported header; a scrambled log that adds both IN BALANCE
+produces neither. A real `.battery/test.log` reported "882 passed over 23
+targets" with no premise failure where a clean run measures 854 over 20 — the
+tell being a line reading `Running unittests srctest admission::tests::…`, a
+cargo **stderr** header written into the middle of a **stdout** test line, the
+same interleaving O107 records for CI's runner. `cargo test` runs each target
+once, so the same identity reporting twice is definitive rather than
+heuristic — exactly the reasoning `suite_summary` already applies to a second
+summary line one suite over. A FIFO queue of pending identities, and the
+identity is cut at the result when a header precedes one on the same line, or
+the result text would be folded into the name and no duplicate could match.
+
+**2. The cargo comparison is guarded on its OWN count.** It read
+`${FIGURE_UNVERIFIABLE:-}`, which every suite appends to, so an untrustworthy
+count in `obs-config` — no cargo target, no relation to the figure — skipped
+the comparison of `integration tests (N run`, `= N compiled` and the landing
+tile. On the run that found this, the intermittent tail-replay hit FIVE
+unrelated suites and suppressed the message *"do NOT edit a published figure
+to match it"*, which is precisely the advice the moment called for.
+`count_untrustworthy` was already per-suite; only the consumer was global.
+
+**Counterfactuals**: remove the duplicate detector and the new self-test
+fixture reports *"17 passed, 0 failed, 2 ignored over 4 targets"* — inflated,
+balanced, and wearing a clean bill of health, which is the defect exactly.
+The per-figure guard is exercised by O134b's per-leg counterfactual above.
+
+**The human half, recorded because the mechanism alone does not explain it.**
+I published 882 having ALREADY measured the delta at +2 (861 `#[test]`
+attributes against 859 at `a30b18b`), and 852 + 2 is 854. Two measurements of
+one quantity disagreed and I kept the one printed by a tool over the one I had
+derived. The rule that follows: **keep the measurement whose PROVENANCE you
+can state**, not the more precise, more recent, or more official-looking one.
 
 ### O134a — CLOSED 2026-09-12: the nine counted degrade arms are executed, against a fixture the tests generate
 
@@ -12438,42 +12521,48 @@ scanner (O33, O47). The mechanism here is a heading, not a gate.
 
 
 
-### O134b — the model legs run tests and publish no figure, so a leg that stopped testing is green
+### O157 — the real-backend-to-surface join, and what it needs before it can exist
 
-**Filed 2026-09-12, the half of O134 the maintainer split off.** O134a made
-both legs run `cargo test`; it deliberately left them in
-`NO_SUMMARY_SUITES`, so nothing reads the `test result:` lines they now print.
-`cargo test` exits 0 with zero tests, so a leg whose tests silently stopped
-compiling is indistinguishable from a leg that passed everything.
+**Filed 2026-09-12, split out of O134b rather than carried inside it.** The
+model backends are exercised through their own crates' tests; nothing drives
+one through the CLI and `/v1` to a SURFACE — a `remember` that lands a
+poisoned write, `stats` reporting `embed_failures`, a search reporting
+`rerank_failures`. That join is the last thing the O134 family leaves
+uncovered, and it is the one a deployment actually sees.
 
-**Why it was not done in O134a.** The post-run cargo comparison is hard-coded
-to the suite named `test` and reads THREE surfaces — `CLAUDE.md`'s
-`integration tests (N run`, its `= N compiled`, and the landing tile
-`cargo tests`. All three are whole-tree claims about the `test` suite, so
-generalising the reader "from the literal `test` to a SET" would compare two
-of them against the wrong measurement. The shape has to be decided before the
-reader is touched.
+**Why it is not plumbing, which is why it is filed rather than done.** The
+fixture exists only inside `cargo test`: it is a `pub mod` behind
+`#[cfg(any(test, feature = "test-fixture"))]`, and a shell suite cannot call
+it. Materialising it on disk needs a way to RUN the generator outside a test —
+realistically a small feature-gated binary or example target on
+`undercroft-embed-onnx`, which is new public surface on a shipped crate. That
+is a design decision with a cost (a target that exists only to write a test
+artifact, on a crate that is publishable by default and simply never
+published), not a mechanical extension of O134b.
 
-What it needs:
-1. A cargo-shaped SUITE SET in the detail routing and the post-run comparison,
-   with per-leg figures keyed by suite name and `(N run, M ignored)` as the
-   published form — both numbers, because this unit ignores three tests and a
-   single `run` figure cannot tell a deleted test from a newly ignored one.
-2. "This reader examined nothing" made a FAILURE for any suite that HAS a
-   published figure, on BOTH the cargo arm and the shell arm.
-3. The synthetic-log self-test extended to exercise the new routing, or the
-   reader is unprobed.
-4. `tests/e2e-models.sh` — the real-backend-to-surface join (CLI `remember` +
-   `stats`, `/v1/…/stats`, a search showing `rerank_failures`) — and the
-   corpus arm. Both were CUT from O134a: the script is not in the Docker build
-   context and would reach a container by bind mount, and the corpus the panel
-   named (`.handover/locomo_feed.txt`) is gitignored, so that drive can only
-   ever be manual.
+Three shapes, with their costs:
 
-**Ruled already, so do not re-litigate**: the legs stay CI-only, and the
-landing tile keeps its label with its scope declared in the gate rather than
-folding the model legs' counts into a whole-tree figure (maintainer,
-2026-09-12).
+1. **A feature-gated `--example write-fixture`.** Smallest code, but examples
+   are built by `cargo test --all-targets`, so the feature has to be on
+   wherever that runs.
+2. **A `[[bin]]` behind `test-fixture`.** Explicit and greppable; adds a
+   binary target to a crate whose only job is a library.
+3. **Drive the join from a Rust integration test instead of a shell suite**,
+   so the fixture never leaves the process — no new target at all, at the cost
+   that it exercises the store and `/v1` in-process rather than through the
+   real binary, which is the thing an e2e suite exists to do.
+
+(3) is the cheapest and the weakest; (2) is the most honest about what it is.
+The tree does not settle it, so it is a ruling rather than a preference.
+
+**The corpus arm rides with it.** `.handover/locomo_feed.txt` and
+`crates/undercroft-store/testdata/*_50k.txt` are BOTH gitignored, so any drive
+over them is local-only and can never be a gate;
+`benchmarks/model_eval/datasets/` is 47 tracked files across 10 languages,
+allowlisted in `.dockerignore` and COPYd by nothing. Whichever shape wins, the
+entry must say plainly whether the corpus drive is a GATE or a MANUAL drive
+recorded in prose — and a manual drive is a legitimate answer, not a gap,
+provided it is stated as one.
 
 ### O150 — an out-of-table id PANICS on tract and degrades on ORT, and one of those is a crash
 
@@ -12627,77 +12716,6 @@ Options: reclassify as `Protects`, which makes the class match the behaviour;
 or add a third class ("a mandatory operand of another declaration"), which is
 more accurate and is a doctrine change that must be APPLIED BACKWARDS over
 every existing row before it lands.
-
-### O156 — a scrambled cargo log inflated the count by 28, no reader said so, and the comparison that would have caught it was globally suppressed
-
-**Filed 2026-09-12. Found the expensive way: I edited a published figure to
-match a wrong number, and the next clean run caught me.** Both halves below
-are needed to produce that outcome, and each is a real defect.
-
-**1. `test_summary` cannot see a SCRAMBLED log.** On the run that found this,
-`.battery/test.log` carried 23 result lines summing **882**; a clean run of
-the same tree carries 20 summing **854**. The tell was one line reading
-
-```
-     Running unittests srctest admission::tests::injections_trip_their_class…
-```
-
-— a cargo **stderr** target header written into the middle of a **stdout**
-test line, the same interleaving O107 records for CI's runner, here from
-`docker compose run`. The same target binary then appears against two
-different counts (`undercroft_core` with both 232 and 24, `undercroft_net`
-with both 7 and 49).
-
-The reader's two premise detectors are *a result line with no outstanding
-header* and *a header that never reported*. A scramble that adds headers AND
-results in balance produces neither, so it reported "882 passed over 23
-targets" with no premise failure — a number that was simply wrong, wearing a
-clean bill of health. O107 fixed pairing-by-adjacency by COUNTING outstanding
-headers; counting is blind to a different failure, which is this file's own
-*ask what a gate can SEE* one reader over.
-
-**2. The guard that exists to stop what I did is scoped globally.** The
-post-run cargo comparison is wrapped in
-
-```sh
-if [ -n "${FIGURE_UNVERIFIABLE:-}" ]; then :; else <compare the cargo figures> fi
-```
-
-and `FIGURE_UNVERIFIABLE` accumulates across **every** suite. On that run the
-intermittent tail-replay hit five unrelated suites, so the cargo comparison
-was skipped entirely — and with it the message
-*"do NOT edit a published figure to match it"*, which is precisely the advice
-I needed and precisely what I then did. `count_untrustworthy` is already
-per-suite; only its CONSUMER is global, so figure A is left uncompared
-because figure B is unreadable.
-
-**What it did NOT cost, stated so nobody re-derives a scare from this entry.**
-Nothing was stale on `main`: the published 852 was correct, and O134a's own
-count is 852 + 2 = **854**, confirmed two independent ways — a clean battery,
-and `#[test]` attributes in default members at 861 now against 859 at
-`a30b18b`. I had that second measurement in hand and let the inflated sum
-overrule it, which is the human half of this entry and the reason it is filed
-with the mechanism rather than as a near miss.
-
-**The fix, in two parts.**
-
-1. Make the unverifiable guard PER FIGURE: the cargo arm skips only when
-   `test`'s own count is untrustworthy, each shell suite only on its own.
-2. Give `test_summary` a duplicate-IDENTITY detector — the same target binary
-   reporting twice in one log is not a single run, exactly as
-   `suite_summary`'s "more than one summary line" already reasons one suite
-   over. Count distinct target identities, not just header/result balance.
-
-**Gate**: the existing synthetic-log self-test already drives `test_summary`
-on a replayed log. Extend it with (a) a scrambled log whose extra headers and
-results BALANCE and whose sum is therefore inflated — it must be reported, not
-summed; and (b) a run where one suite is unverifiable and another is clean,
-where the clean one must still be compared. Both must FAIL before the fix.
-
-**Scope note**: O134b already has to touch this reader and this comparison to
-publish per-leg figures, so the two probably belong in one pass. Filed
-separately so the DEFECT is not buried inside a feature entry — the drift
-`## Open`'s own preamble describes.
 
 ### O135 — three reads the audit has never run, carried in a gitignored file
 
