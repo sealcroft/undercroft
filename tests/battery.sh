@@ -78,21 +78,30 @@ OVERALL=0
 #     publish no check count, which is consistent: nothing to compare, so
 #     nothing is skipped silently.
 #
-#   onnx-build, ort-build — a summary line exists and is NOT YET READ. Since
-#     ROADMAP O134a both legs run `cargo test`, so both print cargo's own
-#     `test result:` lines; routing them through `test_summary` and publishing
-#     a per-leg figure is O134b, because the post-run cargo comparison reads
-#     three surfaces that are all whole-tree claims about the `test` suite and
-#     generalising it "to a SET" would compare two of them against the wrong
-#     measurement. Until then they stay here, and the `model leg parity`
-#     preflight is what keeps `cargo test` on the legs at all.
+# The model legs were here between O134a and O134b and have LEFT: they run
+# `cargo test`, so they print cargo's own `test result:` lines and are read by
+# `test_summary` like any other cargo-shaped suite. See `CARGO_SUITES`.
+NO_SUMMARY_SUITES=(lint arch-check)
+
+# Suites whose log is CARGO-shaped — target headers plus `test result:` lines
+# — rather than a single `<suite> results:` summary. Read by `test_summary`,
+# compared as `(N run, M ignored)`.
 #
-#     Residual, stated: `cargo test` exits 0 with zero tests, so between O134a
-#     and O134b a leg whose tests silently stopped compiling would be green.
-#     The arm inventory in `parity.rs` bounds that — it runs in the `test`
-#     suite and fails if an arm loses its named test — but it reads SOURCE, so
-#     it cannot see a leg that stopped executing what it names.
-NO_SUMMARY_SUITES=(lint arch-check onnx-build ort-build)
+# **A SET because the alternative was a literal** (ROADMAP O134b). This was
+# `elif [ "$n" = "test" ]`, and the post-run comparison was hard-coded the
+# same way, so when the two model legs started running tests they printed a
+# count nothing read — `cargo test` exits 0 with zero tests, so a leg whose
+# tests silently stopped compiling was indistinguishable from a leg that
+# passed everything.
+#
+# The generalisation is NOT "compare every cargo suite against the three
+# surfaces `test` uses". Those three — CLAUDE.md's `integration tests (N run`,
+# its `= N compiled`, and the landing tile — are whole-tree claims about the
+# `test` suite alone, and the maintainer ruled (2026-09-12) that the tile
+# KEEPS its label with its scope declared here rather than absorbing the model
+# legs. So `test` keeps its own three-surface comparison and each leg gets a
+# per-leg figure keyed by its own name.
+CARGO_SUITES=(test onnx-build ort-build)
 
 if [ "$PREFLIGHT_ONLY" -eq 1 ] && [ "$NO_PREFLIGHT" -eq 1 ]; then
   echo "--preflight-only and --no-preflight are contradictory" >&2
@@ -256,7 +265,19 @@ test_summary() { # test_summary <log>
     function header_at(s) {
       return match(s, /(^|[[:space:]])(Running|Doc-tests)[[:space:]]/) ? RSTART : 0
     }
-    function take_result(s,    n, i, w) {
+    # **The target IDENTITY, not just the fact of a header** (ROADMAP O156).
+    # `cargo test` runs each target exactly once, so the same identity
+    # reporting twice in one log is definitive rather than heuristic — the
+    # same reasoning `suite_summary` already applies to a second summary
+    # line one suite over. Trimmed, because a glued line puts the header
+    # anywhere.
+    function ident(s,    v) {
+      v = s
+      sub(/^[[:space:]]+/, "", v); sub(/[[:space:]]+$/, "", v)
+      return v
+    }
+    function push(id) { pq[pin++] = id }
+    function take_result(s,    n, i, w, id) {
       if (pending > 0) {
         n = split(s, w, /[[:space:]]+/)
         for (i = 1; i <= n; i++) {
@@ -264,15 +285,22 @@ test_summary() { # test_summary <log>
           if (w[i+1] ~ /^failed/)  f += w[i]
           if (w[i+1] ~ /^ignored/) g += w[i]
         }
+        # FIFO: the oldest outstanding header is the one that just reported.
+        id = pq[pout]; delete pq[pout]; pout++
+        seen[id]++
+        if (seen[id] == 2) { dup++; dupname = id }
         t++; pending--
       } else { orphan++ }
     }
     {
       h = header_at($0); r = index($0, "test result:")
       if (h && r) {
-        if (h < r) { pending++; take_result(substr($0, r)) }
-        else       { take_result(substr($0, r, h - r)); pending++ }
-      } else if (h) { pending++ }
+        # Header first: its identity ends where the result begins, or the
+        # result text would be folded into the name and no duplicate could
+        # ever match.
+        if (h < r) { pending++; push(ident(substr($0, h, r - h))); take_result(substr($0, r)) }
+        else       { take_result(substr($0, r, h - r)); pending++; push(ident(substr($0, h))) }
+      } else if (h) { pending++; push(ident(substr($0, h))) }
       else if (r)   { take_result(substr($0, r)) }
     }
     END {
@@ -285,6 +313,8 @@ test_summary() { # test_summary <log>
         printf "  ** PREMISE FAILURE: %d orphan result line(s) — the log tail was replayed; this count is not trustworthy (ROADMAP O15) **", orphan
       if (pending > 0)
         printf "  ** PREMISE FAILURE: %d target header(s) with no result — a target started and never reported; this count is not trustworthy (ROADMAP O107) **", pending
+      if (dup > 0)
+        printf "  ** PREMISE FAILURE: %d target(s) reported twice (e.g. %s) — cargo runs each target once, so this log is not one run and the SUM is inflated; this count is not trustworthy (ROADMAP O156) **", dup, dupname
     }' "$1" 2>/dev/null
 }
 
@@ -338,6 +368,39 @@ declare_suite_counts() {
     | sed -E 's#bash tests/([a-z0-9-]+)[.]sh.*[(]([0-9]+) checks#\1=\2#'
 }
 SUITE_COUNTS=$(declare_suite_counts)
+
+# What a CARGO-shaped leg's count is PUBLISHED as (ROADMAP O134b).
+#
+# A separate reader from `declare_suite_counts` because the GRAMMAR differs and
+# conflating them would be a lie about what is being compared: a shell suite
+# publishes `(N checks)`, one number over a population of assertions, while a
+# cargo leg publishes `(N run, M ignored)` — TWO numbers, and both are needed,
+# because this unit's own predecessor made three tests `#[ignore]`d and a
+# single `run` figure cannot tell a deleted test from a newly ignored one.
+#
+# `test` is deliberately NOT published this way: its figures are the
+# whole-tree ones in CLAUDE.md and on the landing tile, compared separately.
+declare_cargo_counts() {
+  grep -oE 'docker compose run --rm [a-z0-9-]+.*\([0-9]+ run, [0-9]+ ignored' CLAUDE.md 2>/dev/null \
+    | sed -E 's#docker compose run --rm ([a-z0-9-]+).*\(([0-9]+) run, ([0-9]+) ignored#\1=\2/\3#'
+}
+CARGO_COUNTS=$(declare_cargo_counts)
+
+# What a cargo-shaped suite MEASURED, as `run/ignored`, from a `test_summary`
+# line. A function rather than two inline `sed`s so the reader self-test can
+# drive it on synthetic input: the comparison it feeds only fires when a
+# CI-only leg actually runs, which is a 25-minute round trip, and a parse that
+# can only be checked that way is a parse nobody checks.
+cargo_measured() { # cargo_measured <test_summary line>
+  local run ign
+  run=$(sed -E 's/^([0-9]+) passed.*/\1/' <<< "$1")
+  ign=$(sed -E 's/.*, ([0-9]+) ignored.*/\1/' <<< "$1")
+  case "$run$ign" in
+    ''|*[!0-9]*) printf '' ;;
+    *) printf '%s/%s' "$run" "$ign" ;;
+  esac
+}
+cargo_count() { grep -oE "^$1=[0-9]+/[0-9]+" <<< "$CARGO_COUNTS" | head -1 | cut -d= -f2; }
 
 # **Why a suite's measured count cannot be trusted — empty when it can.**
 #
@@ -442,7 +505,20 @@ cat >"$SUM_TMP/unreported.log" <<'SUMEOF'
      Running tests/cli.rs (target/release/deps/b-2)
 test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 SUMEOF
+# **A replay that duplicates a COMPLETE header-and-result block** (ROADMAP
+# O156). Balanced, so there is no orphan result and no unreported header —
+# the two conditions every detector above looks for — and the SUM is silently
+# inflated. This is the shape that actually shipped a wrong figure: a real
+# `.battery/test.log` reported "882 passed over 23 targets" with no premise
+# failure where a clean run measured 854 over 20, and the number was then
+# published. Only target IDENTITY can see it.
+cp "$SUM_TMP/clean.log" "$SUM_TMP/duplicated.log"
+cat >>"$SUM_TMP/duplicated.log" <<'SUMEOF'
+   Doc-tests undercroft_core
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+SUMEOF
 SUM_CLEAN=$(test_summary "$SUM_TMP/clean.log")
+SUM_DUP=$(test_summary "$SUM_TMP/duplicated.log")
 SUM_REPLAY=$(test_summary "$SUM_TMP/replayed.log")
 SUM_GLUED=$(test_summary "$SUM_TMP/glued.log")
 SUM_GLUED_R=$(test_summary "$SUM_TMP/glued-result.log")
@@ -460,6 +536,23 @@ esac
 case "$SUM_UNREP" in
   "5 passed, 0 failed, 0 ignored over 1 targets  ** PREMISE FAILURE: 1 target header(s) with no result"*) ;;
   *) echo "FAIL  a target that never reported was absorbed silently (O107): $SUM_UNREP"; SUM_FAIL=1 ;;
+esac
+case "$SUM_DUP" in
+  *"PREMISE FAILURE"*"reported twice"*) ;;
+  *) echo "FAIL  a duplicated COMPLETE header+result block was summed as a real target (O156): $SUM_DUP"; SUM_FAIL=1 ;;
+esac
+# **The per-leg `(run/ignored)` parse** (ROADMAP O134b). The comparison it
+# feeds only fires when a CI-only model leg actually runs, so without this it
+# would be checked by a 25-minute round trip or not at all — and a parse
+# nobody checks is the un-gated half of a gated claim. Driven on the REAL
+# reader's output shape, including the case that must yield nothing.
+case "$(cargo_measured "$SUM_CLEAN")" in
+  "16/2") ;;
+  *) echo "FAIL  cargo_measured misparses a clean summary (O134b): $(cargo_measured "$SUM_CLEAN")"; SUM_FAIL=1 ;;
+esac
+case "$(cargo_measured "no result lines found — this reader examined nothing")" in
+  "") ;;
+  *) echo "FAIL  cargo_measured invented a figure from a reader that examined nothing (O134b)"; SUM_FAIL=1 ;;
 esac
 case "$SUM_CLEAN" in
   "16 passed, 0 failed, 2 ignored over 3 targets") ;;
@@ -2757,7 +2850,8 @@ for i in "${!NAMES[@]}"; do
     # battery (ROADMAP M14) made this a class of two, and a class of two
     # written as two special cases becomes a class of three written as three.
     detail=""
-  elif [ "$n" = "test" ]; then
+  elif printf '%s
+' "${CARGO_SUITES[@]}" | grep -qx "$n"; then
     detail=$(test_summary ".battery/$n.log")
   else
     # Widened past `…e2e results:` when `obs-config` and `site` joined the
@@ -2840,6 +2934,15 @@ for i in "${!NAMES[@]}"; do
     # spaces, so it used to reach the arithmetic as $(( no + nothing )) and
     # abort the script under `set -u`, MASKING the suite failure that
     # produced it. A reader that crashes on the failure path cannot report.
+    # **Examined nothing, with a figure published, is a FAILURE** (O134b).
+    # Reaching here means `suite_count` already found a published figure for
+    # this suite, so "no results line found" is not "nothing to compare" —
+    # it is a suite that publishes a number and produced none, which is the
+    # loudest case and used to be the quietest. Other non-matching shapes
+    # keep the silent `continue`: the reader names its own failure in them.
+    *"examined nothing"*)
+      FIGURE_DRIFT="$FIGURE_DRIFT  $n: CLAUDE.md publishes $published checks, and this run produced NO results line at all\n"
+      continue ;;
     *[!0-9[:blank:]]*) continue ;;
     *" "*) measured=$(( ${measured%% *} + ${measured##* } )) ;;
     *)     continue ;;
@@ -2895,7 +2998,19 @@ if printf '%s\n' "${NAMES[@]}" | grep -qx test; then
   fi
   case "$tpass" in
     ''|*[!0-9]*) : ;;   # the reader said something else; it names its own failure
-    *) if [ -n "${FIGURE_UNVERIFIABLE:-}" ]; then :; else
+    # **Guarded on the CARGO count alone, not on the global accumulator**
+    # (ROADMAP O156). This read `${FIGURE_UNVERIFIABLE:-}`, which every suite
+    # appends to — so an untrustworthy count in `obs-config`, a suite with no
+    # cargo target and no relation to this figure, silently skipped the
+    # comparison of `integration tests (N run`, `= N compiled` and the
+    # landing tile. On the run that found this, the intermittent tail-replay
+    # hit FIVE unrelated suites at once and suppressed the message
+    # "do NOT edit a published figure to match it" — which is exactly the
+    # advice the moment called for, and its absence is why a wrong figure was
+    # published. `count_untrustworthy` was already per-suite; only this
+    # consumer was global. A guard must refuse to compare figure A because A
+    # is unreadable, never because B is.
+    *) if [ -n "$cargo_unverifiable" ]; then :; else
       cm_run=$(grep -oE 'integration tests \([0-9]+ run' CLAUDE.md | grep -oE '[0-9]+' | head -1)
       cm_comp=$(grep -oE '= [0-9]+ compiled' CLAUDE.md | grep -oE '[0-9]+' | head -1)
       tile=$(grep -oE 'data-count="[0-9]+">0</div><div class="l">cargo tests' "$LANDING" \
@@ -2914,6 +3029,49 @@ if printf '%s\n' "${NAMES[@]}" | grep -qx test; then
       ;;
   esac
 fi
+
+# **The per-leg cargo figures** (ROADMAP O134b). `test` is handled above
+# against its three whole-tree surfaces; every OTHER cargo-shaped suite is
+# compared against its own `(N run, M ignored)` on its `docker compose run`
+# line in CLAUDE.md.
+#
+# Each leg is guarded on ITS OWN count, never on the global accumulator —
+# O156's rule, applied here from the start rather than inherited.
+for n in "${CARGO_SUITES[@]}"; do
+  [ "$n" = "test" ] && continue
+  printf '%s\n' "${NAMES[@]}" | grep -qx "$n" || continue
+  published=$(cargo_count "$n")
+  line=$(test_summary ".battery/$n.log")
+  unver=$(count_untrustworthy "$n" "$line")
+  if [ -n "$unver" ]; then
+    FIGURE_UNVERIFIABLE="$FIGURE_UNVERIFIABLE  $n: $unver
+"
+    continue
+  fi
+  # **"This reader examined nothing" is a FAILURE when a figure is published**
+  # (ROADMAP O134b). It used to be a silent `continue` on both arms, so a leg
+  # that stopped executing tests entirely — `cargo test` exits 0 with zero
+  # tests — read exactly like a leg that passed everything. A suite that
+  # publishes a number and then produces none has not "nothing to compare";
+  # it has a missing measurement, which is the loudest case and was the
+  # quietest.
+  case "$line" in
+    *"examined nothing"*)
+      if [ -n "$published" ]; then
+        FIGURE_DRIFT="$FIGURE_DRIFT  $n: CLAUDE.md publishes $published (run/ignored), and this run produced NO cargo result line at all — the leg compiled no tests\n"
+      fi
+      continue ;;
+  esac
+  if [ -z "$published" ]; then
+    FIGURE_DRIFT="$FIGURE_DRIFT  $n: ran as a cargo suite and publishes no (N run, M ignored) figure in CLAUDE.md — a measured suite with nothing to compare it to\n"
+    continue
+  fi
+  measured_leg=$(cargo_measured "$line")
+  [ -z "$measured_leg" ] && continue
+  if [ "$published" != "$measured_leg" ]; then
+    FIGURE_DRIFT="$FIGURE_DRIFT  $n: CLAUDE.md publishes $published (run/ignored), this run measured $measured_leg\n"
+  fi
+done
 
 # **The wording must not name a cause the run did not have** (O97/O103).
 #

@@ -7,6 +7,33 @@ its CLI mirror `tenant-repoint` are additive — nothing that worked before
 behaves differently because they exist. Everything else in this section is a
 fix whose only observable change is that a defect is gone.
 
+### a leg that stopped testing, and a log that inflated its own count, are both named now (O134b, O156)
+
+Two defects in how this project measures itself, found by O134a's own battery
+run rather than by a gate.
+
+**A model leg that compiled no tests was green.** O134a made `onnx-build` and
+`ort-build` run `cargo test`, but nothing read the counts they printed — and
+`cargo test` exits 0 with zero tests, so a leg whose tests silently stopped
+compiling was indistinguishable from one that passed everything. Both legs now
+publish `(N run, M ignored)` and the battery compares it; *"this reader
+examined nothing"* is a FAILURE for any suite that publishes a figure, where
+it used to be a silent skip.
+
+**A scrambled log reported 882 tests where a clean run measures 854, and no
+reader said so.** The count reader detected a replayed log by pairing target
+headers with result lines and reporting an orphan or an unreported header; a
+scramble that adds both in balance produces neither. It tracks target IDENTITY
+now — `cargo test` runs each target once, so the same target reporting twice
+is definitive. And the guard that refuses to compare an untrustworthy figure
+was scoped across ALL suites, so an unreadable count in one suite suppressed
+the comparison of every other figure, including the message telling you not to
+edit one to match. Each figure is guarded on its own count now.
+
+No engine behaviour changes. Both are about whether this project's published
+numbers can be trusted, which is the premise every other figure in this file
+rests on.
+
 ### the nine counted degrade arms are executed, against a model fixture the tests generate (O134a)
 
 O122 and O131 made every model role count the failures it used to swallow — a
