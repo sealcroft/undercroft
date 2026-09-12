@@ -1195,6 +1195,20 @@ fn admin_plane(
         },
         ("GET", ["admin", "tenants", id, "stats"]) => tenant_stats(orch, id),
         ("DELETE", ["admin", "tenants", id]) => delete_tenant(orch, id),
+        // ROADMAP O149. The route O136's refusal, its pinned test and
+        // `UPGRADING.md` have all named since 1.5.2, and which existed on no
+        // surface until now.
+        ("PATCH", ["admin", "tenants", id]) => {
+            let v = body_json();
+            let Some(to) = s(&v, "instance") else {
+                return err_response(400, "need instance");
+            };
+            match repoint_tenant(orch, id, &to) {
+                Ok(summary) => json_response(200, &summary),
+                Err(MigrateError::Engine(_, msg)) => engine_response(&msg),
+                Err(e) => err_response(e.status(), &e.to_string()),
+            }
+        }
         ("POST", ["admin", "tenants", id, "rotate"]) => match orch.tenant_rotate_token(id) {
             // The fresh token appears in this response and nowhere else;
             // the old one is already dead.
@@ -1372,6 +1386,76 @@ fn delete_tenant(orch: &Orch, id: &str) -> Response<std::io::Cursor<Vec<u8>>> {
         Ok(false) => err_response(404, "unknown tenant"),
         Err(e) => state_error_response(&e),
     }
+}
+
+/// Re-point a tenant at an instance that ALREADY holds its vault, without
+/// moving any data (ROADMAP O149). Shared by `PATCH /admin/tenants/{id}` and
+/// the CLI `tenant-repoint`, on `migrate_tenant`'s precedent: one
+/// implementation, two surfaces.
+///
+/// **This is the remedy three surfaces already named and none implemented.**
+/// O136's size refusal tells an operator to move a too-large tenant with
+/// `undercroft export` / `undercroft import` between the hosts and then
+/// *"re-point the tenant with `PATCH /admin/tenants/{tenant}`"*; its own test
+/// pins that sentence and `UPGRADING.md` publishes it. There was no `PATCH`
+/// arm on the admin plane and no CLI equivalent, so the documented escape
+/// hatch could not be performed on any surface — and O140 has since added
+/// five more refusals that name the same way out. A pinned string is not a
+/// capability.
+///
+/// It moves a MAPPING and never data, which is exactly what makes it worth
+/// offering and worth guarding: pointing a tenant at an engine that does not
+/// hold its vault makes every drawer that tenant owns unreachable at the next
+/// request. So the destination is ASKED whether it holds the vault, over its
+/// own authenticated channel, and a destination that cannot answer is a
+/// refusal rather than a shrug — O140's posture, for O140's reason: a check
+/// that cannot run must not authorise the step it guards.
+///
+/// The flip is the same compare-and-set the migration uses, so a re-point and
+/// a migration racing over one tenant cannot both win.
+pub(crate) fn repoint_tenant(
+    orch: &Orch,
+    id: &str,
+    to: &str,
+) -> Result<serde_json::Value, MigrateError> {
+    let tenant = orch
+        .tenant_get(id)?
+        .ok_or_else(|| MigrateError::UnknownTenant(id.to_string()))?;
+    if tenant.instance == to {
+        return Err(MigrateError::AlreadyThere);
+    }
+    let dst = orch.instance_creds(to).map_err(|e| match e {
+        StateError::NotFound(_) => MigrateError::UnknownDestination(to.to_string()),
+        other => MigrateError::State(other),
+    })?;
+    // The guard that makes this safe to offer at all.
+    let held = engine::vault_snapshot(&dst, &tenant.vault).map_err(|e| {
+        MigrateError::Unbound(format!("instance {to:?} does not report holding vault {:?} ({e}), and re-pointing there would make every drawer of tenant {id:?} unreachable. Copy the vault across first — `undercroft export` on its current host and `undercroft import` on {to:?} — then re-point. Nothing was changed", tenant.vault))
+    })?;
+    // Best effort and never a refusal: the ordinary reason to re-point by hand
+    // is that the current instance is unreachable or already gone, so failing
+    // here would refuse exactly the case this exists for. Reported so an
+    // operator knows whether a stale copy is still out there to clean up.
+    let source_still_holds = orch
+        .instance_creds(&tenant.instance)
+        .ok()
+        .map(|src| engine::vault_snapshot(&src, &tenant.vault).is_ok());
+    if !orch.tenant_set_instance_if(id, &tenant.instance, to)? {
+        return Err(MigrateError::TenantMoved(format!("tenant {id:?} is no longer on {:?} — a migration or another re-point moved it while this call ran, so nothing was changed", tenant.instance)));
+    }
+    Ok(serde_json::json!({
+        "tenant": id,
+        "from": tenant.instance,
+        "to": to,
+        "repointed": true,
+        // What was actually checked before the mapping moved, rather than a
+        // claim that it was checked.
+        "verified": {
+            "destination_records": held.records,
+            "destination_chain_head": held.chain_head,
+            "source_still_holds_the_vault": source_still_holds,
+        },
+    }))
 }
 
 /// How a migration failed, **as a class**.
@@ -2476,6 +2560,97 @@ mod tests {
             "nothing may be created on the destination before the source is bound: {blog:?}"
         );
     }
+
+    /// ROADMAP O149: the re-point route that O136's refusal, its own pinned
+    /// test and `UPGRADING.md` have all named since 1.5.2 while it existed on
+    /// no surface — and the guard that makes it safe to offer.
+    ///
+    /// Re-pointing moves a MAPPING and never data, so the failure it must
+    /// prevent is not corruption but silence: a tenant pointed at an engine
+    /// that does not hold its vault loses every drawer it owns at the next
+    /// request, with nothing broken anywhere to explain it.
+    #[test]
+    fn re_pointing_requires_the_destination_to_actually_hold_the_vault() {
+        let holding = |records: u64| Script {
+            stats: vec![stats_body(records, 7, "dsthead")],
+            anchor: "{\"records\":[]}".to_string(),
+            delta: "{\"records\":[]}".to_string(),
+            export: String::new(),
+            import: String::new(),
+        };
+        // An empty stats reply is how this harness spells "this engine will
+        // not answer for that vault": a 500, which is what an engine that
+        // never received the vault looks like from here.
+        let holding_nothing = || Script {
+            stats: vec![String::new()],
+            anchor: "{\"records\":[]}".to_string(),
+            delta: "{\"records\":[]}".to_string(),
+            export: String::new(),
+            import: String::new(),
+        };
+
+        let (_dir, orch) = orch_for_tests();
+        let a = stub_engine(holding(5));
+        let b = stub_engine(holding(5));
+        let c = stub_engine(holding_nothing());
+        orch.instance_add("src", &a.url, "b", "s").unwrap();
+        orch.instance_add("dst", &b.url, "b", "s").unwrap();
+        orch.instance_add("empty", &c.url, "b", "s").unwrap();
+        let (t, _) = orch.tenant_create("acme", "src", "sealed").unwrap();
+
+        // The ordinary refusals, each with the class a script keys on.
+        assert_eq!(
+            repoint_tenant(&orch, "nope", "dst").unwrap_err().status(),
+            404,
+            "an unknown tenant is not a bad request"
+        );
+        assert_eq!(
+            repoint_tenant(&orch, &t.id, "never-registered")
+                .unwrap_err()
+                .status(),
+            400,
+            "the destination is caller-supplied, so an unregistered one is malformed input"
+        );
+        assert_eq!(
+            repoint_tenant(&orch, &t.id, "src").unwrap_err().status(),
+            409
+        );
+
+        // THE GUARD. A destination that cannot answer for the vault is
+        // refused, the refusal says what re-pointing there would cost and how
+        // to fix it, and the mapping does NOT move.
+        let e = repoint_tenant(&orch, &t.id, "empty").unwrap_err();
+        assert_eq!(e.status(), 409);
+        let msg = e.to_string();
+        assert!(
+            msg.contains("unreachable"),
+            "the refusal must name what it prevents: {msg}"
+        );
+        assert!(
+            msg.contains("undercroft import"),
+            "and the way forward: {msg}"
+        );
+        assert_eq!(
+            orch.tenant_get(&t.id).unwrap().unwrap().instance,
+            "src",
+            "a refused re-point must leave the mapping exactly where it was"
+        );
+
+        // The happy path, and it reports what it checked rather than claiming
+        // it checked something.
+        let v = repoint_tenant(&orch, &t.id, "dst").expect("a destination that holds the vault");
+        assert_eq!(v["from"], serde_json::json!("src"));
+        assert_eq!(v["to"], serde_json::json!("dst"));
+        assert_eq!(v["verified"]["destination_records"], serde_json::json!(5));
+        assert_eq!(
+            v["verified"]["source_still_holds_the_vault"],
+            serde_json::json!(true),
+            "the old host still has a copy, and an operator needs that to clean it up"
+        );
+        assert_eq!(orch.tenant_get(&t.id).unwrap().unwrap().instance, "dst");
+    }
+
+    /// Both directions: the size refusal must map to this verdict, and every
     /// OTHER engine failure must keep its old classification — a variant that
     /// swallowed the general case would hide real faults behind a capacity
     /// message.

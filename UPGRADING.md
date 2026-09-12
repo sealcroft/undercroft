@@ -67,7 +67,7 @@ so rather than implying it checked them.
 
 ---
 
-## 1.5.3 (unreleased)
+## 1.6.0 (unreleased)
 
 ### the first writable open of an existing vault builds one index (O145)
 

@@ -1345,7 +1345,11 @@ Consequences that are binding, not advisory:
   tokens stored as HMACs), `/t/*` routing proxy, `/admin/*` plane,
   migration judged against the source vault's own audit-chain snapshot and
   against what the destination HOLDS (O140 — a count is not a version, and
-  `imported` counts records processed, not rows kept), fleet console
+  `imported` counts records processed, not rows kept), **`PATCH
+  /admin/tenants/{id}` + `tenant-repoint`** — the re-point O136's refusal and
+  `UPGRADING.md` had named since 1.5.2 while it existed on no surface (O149);
+  it moves a MAPPING and never data, so the destination is asked whether it
+  holds the vault and refused if it cannot answer, fleet console
   (ui.html at `GET /ui`),
   read replicas (`serve --read-replica`: RO state db, data plane only,
   `/healthz` mode+last_write lag surface), and **its own
@@ -1767,8 +1771,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (851 run,
-                                      # 4 #[ignore]d = 855 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (852 run,
+                                      # 4 #[ignore]d = 856 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1886,7 +1890,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
 docker compose run --rm e2e           # e2e UI/UX suite against the release binary (501 checks)
-docker compose run --rm orchestrator-e2e  # two engines + orchestrator (142 checks)
+docker compose run --rm orchestrator-e2e  # two engines + orchestrator (150 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (82 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
