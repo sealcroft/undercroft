@@ -198,8 +198,125 @@ impl Reranker for OnnxReranker {
 }
 
 #[cfg(test)]
+// The anchor lesson, cheaply: a scripted edit that eats a `#[test]`
+// attribute turns a live gate into dead code and no test can report it —
+// the test IS the thing that stopped running. `dead_code` says so
+// (ROADMAP O134a).
+#[deny(dead_code, unused)]
 mod tests {
     use super::*;
+    use crate::fixture;
+
+    /// The healthy score this fixture produces, derived from the fixture's
+    /// own constant rather than written down: both rerankers read a PADDING
+    /// position, so the raw logit is [`fixture::PAD_LAST`]. It is neither
+    /// `0.0` (the degrade) nor `0.5` (the value the separately-filed ORT
+    /// empty-logit defect produces), which is what makes a healthy score
+    /// distinguishable from both.
+    fn healthy_score() -> f32 {
+        1.0 / (1.0 + (-fixture::PAD_LAST).exp())
+    }
+
+    fn load_fixture_reranker(dir: &std::path::Path) -> OnnxReranker {
+        let (model, tok) = fixture::write_into(dir).expect("write fixture");
+        OnnxReranker::load(&model, &tok, "fixture").expect("fixture loads")
+    }
+
+    /// **The score arm: a degraded score is COUNTED** (ROADMAP O131,
+    /// executed for the first time by O134a).
+    ///
+    /// The count is asserted separately from the degraded value. Restore
+    /// `.unwrap_or(0.0)` at the call site and this fails on the COUNT while
+    /// the value assertion still passes.
+    #[test]
+    fn onnx_rerank_counts_each_degraded_score() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let rr = load_fixture_reranker(dir.path());
+
+        // PREMISE.
+        assert_eq!(
+            rr.score_failures(),
+            0,
+            "load must not have counted a failure"
+        );
+        let healthy = rr.score("query", fixture::HEALTHY);
+        assert!(healthy.is_finite(), "a healthy score must be finite");
+        assert!(
+            (healthy - healthy_score()).abs() < 1e-5,
+            "a healthy score must be sigmoid(PAD_LAST), got {healthy}"
+        );
+        assert_ne!(
+            healthy, 0.0,
+            "a healthy score must be distinguishable from the degrade"
+        );
+        assert_eq!(
+            rr.score_failures(),
+            0,
+            "a healthy score must not move the count"
+        );
+
+        // DEGRADE.
+        let degraded = rr.score("query", fixture::REFUSED_WORD);
+        assert_eq!(degraded, 0.0, "a failed score must degrade to 0.0");
+        assert_eq!(
+            rr.score_failures(),
+            1,
+            "a failed score must be counted exactly once"
+        );
+
+        // RECOVERY.
+        assert!((rr.score("query", fixture::HEALTHY) - healthy).abs() < 1e-6);
+        assert_eq!(
+            rr.score_failures(),
+            1,
+            "a healthy score must not move the count"
+        );
+    }
+
+    /// **`score_batch` on tract degrades PER PASSAGE, and that is the
+    /// contrast the ORT pin exists against** (ROADMAP O134a).
+    ///
+    /// tract fans `score` across rayon, so three poisoned passages of eight
+    /// cost exactly three candidates and exactly three counts — the other
+    /// five keep their real scores. ORT collapses the whole window instead;
+    /// its arm test pins that as a named cost and ROADMAP O151 is where the
+    /// two are reconciled. Written here so the divergence is a FACT in the
+    /// suite rather than a claim in an entry.
+    #[test]
+    fn onnx_rerank_score_batch_counts_each_poisoned_passage() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let rr = load_fixture_reranker(dir.path());
+
+        let poisoned = [1usize, 4, 6];
+        let owned: Vec<String> = (0..8)
+            .map(|i| {
+                if poisoned.contains(&i) {
+                    format!("{} {}", fixture::HEALTHY, fixture::REFUSED_WORD)
+                } else {
+                    fixture::HEALTHY.to_string()
+                }
+            })
+            .collect();
+        let passages: Vec<&str> = owned.iter().map(|s| s.as_str()).collect();
+
+        let scores = rr.score_batch("query", &passages);
+        assert_eq!(scores.len(), 8);
+        for (i, s) in scores.iter().enumerate() {
+            if poisoned.contains(&i) {
+                assert_eq!(*s, 0.0, "poisoned passage {i} must degrade to 0.0");
+            } else {
+                assert!(
+                    (s - healthy_score()).abs() < 1e-5,
+                    "healthy passage {i} must keep its real score, got {s}"
+                );
+            }
+        }
+        assert_eq!(
+            rr.score_failures(),
+            3,
+            "three poisoned passages must cost exactly three counts, not one and not eight"
+        );
+    }
 
     /// Loads a real cross-encoder from `UNDERCROFT_RERANK_MODEL`/`_TOKENIZER`
     /// and asserts it (a) runs in tract at all — the load probe — and (b)
@@ -210,6 +327,8 @@ mod tests {
     #[test]
     #[ignore = "requires a user-supplied cross-encoder ONNX model via env"]
     fn ranks_relevant_above_irrelevant() {
+        std::env::var("UNDERCROFT_RERANK_MODEL")
+            .expect("UNDERCROFT_RERANK_MODEL must be set to run this test");
         let rr = OnnxReranker::from_env().expect("load reranker from env");
         let query = "When did Caroline join the LGBTQ support group?";
         let relevant = "Caroline mentioned she went to an LGBTQ support group meeting last week.";
