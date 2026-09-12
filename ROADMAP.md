@@ -4306,6 +4306,22 @@ Determinism: 20 runs per crate, 0 failures. Nothing here touches a vault, a
 keyed sample or a codebook, and the graph carries no reduction and no
 transcendental, so a given backend's output is bit-exact.
 
+## What the legs cost, measured
+
+Both are CI matrix legs, so wall clock is the slowest leg rather than a sum.
+On the same runner class, before this unit against the run that merged it:
+
+```
+onnx-build   10m19s -> 12m32s   (+2m13s: the tract crate's tests, from zero)
+ort-build    12m32s -> 12m45s   (+13s: the ORT crate's tests, from zero)
+```
+
+`ort-build` barely moves because it already compiled both crates for
+`--features onnx,ort`; almost all of its time is that build. `ort-build` was
+already the slowest leg and still is, so the matrix's wall clock is unchanged.
+Recorded because the entry claims a cost and an unrecorded measurement is a
+claim nobody can check.
+
 ## Residuals, stated
 
 - **Linux containers only.** `release.yml` ships an `ort` binary for five
