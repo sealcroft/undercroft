@@ -381,12 +381,37 @@ impl Reranker for OrtReranker {
     fn model_name(&self) -> &str {
         &self.name
     }
+    /// One pair, one forward — straight onto [`OrtReranker::score_one`].
+    ///
+    /// **This used to route through `score_batch_inner`, and that gave it a
+    /// counted arm nothing could ever reach** (ROADMAP O134a). With exactly
+    /// one passage that function returns either `Err` or a one-element `Vec`
+    /// — the empty early return needs `passages.is_empty()` — so the
+    /// `Ok(v) => v.first() … unwrap_or_else(|| note_failures(1, …))` arm was
+    /// dead code wearing the shape of a degrade. Dead is not harmless here:
+    /// it sat in the inventory of arms a test is required to exercise, so it
+    /// could only ever be covered by a test asserting a thing that cannot
+    /// happen.
+    ///
+    /// Removed by RESTRUCTURING rather than by deletion. `v[0]` would turn
+    /// dead-but-safe code into a panic, and `unwrap_or(0.0)` would put back
+    /// the uncounted degrade O131 closed.
+    ///
+    /// The slot expression is preserved VERBATIM from `score_batch_inner`.
+    /// This is result-preserving, not scheduling-preserving: that function
+    /// evaluates the expression inside a `par_iter`, so a direct call from a
+    /// non-rayon caller now pins slot 0 where it used to pin whichever
+    /// worker rayon happened to fold the one-element producer onto. No value
+    /// moves — every session in the pool is an identical copy of one file.
+    ///
+    /// Residual, stated rather than fixed here: `score_one` ends in
+    /// `data.get(labels - 1).copied().unwrap_or(0.0)`, which is a SECOND and
+    /// still-uncounted degrade one line below the arm this edit touches. It
+    /// is deliberately left alone and filed separately — see ROADMAP O152.
     fn score(&self, query: &str, passage: &str) -> f32 {
-        match self.score_batch_inner(query, &[passage]) {
-            Ok(v) => v.first().copied().unwrap_or_else(|| {
-                self.note_failures(1, "the model returned no score for the pair");
-                0.0
-            }),
+        let slot = rayon::current_thread_index().unwrap_or(0) % self.sessions.len();
+        match self.score_one(slot, query, passage) {
+            Ok(s) => s,
             Err(e) => {
                 self.note_failures(1, &e.to_string());
                 0.0
