@@ -44,15 +44,38 @@
 ///   falling back **removes what the operator asked for** — silently, on a
 ///   deployment that believes it is protected. Refuse.
 ///
+/// * If the declaration is the **mandatory operand** of one that does —
+///   the model file `UNDERCROFT_EMBEDDER=onnx` will load, the endpoint
+///   `=http` will reach, the URL `index push --backend qdrant` needs — then
+///   it inherits the selector's class, because it has no default to keep and
+///   its absence refuses at the same `?`. This is O155, and the
+///   contradiction it removes was one line long: the selectors were
+///   `Protects`, their operands were `Tunes`, and a bad value in either
+///   refused identically (`main.rs`'s `?` on the load error).
+///
 /// The second is "integrity is not a tier" extended by one step: a protection
 /// an operator declared must not become a tier by typo. Every variable is
 /// classified, and `every_engine_env_var_is_inventoried_and_every_entry_is_read`
 /// counts the list against the code in both directions — so a new variable
 /// does not compile until someone decides which it is.
+///
+/// **For a [`Parse::Opaque`] declaration the class is DOCUMENTATION, not a
+/// gate, and saying so is the honest half of O155.** `config_check::check_one`
+/// returns `Finding::Accepted` for those rows *before* the class is consulted,
+/// so nothing an operator can observe moves when one is reclassified and no
+/// test can falsify the claim from inside this crate. Its consequence lives at
+/// the consumer — a model that loads, an endpoint that answers — which
+/// `undercroft config check` reaches deliberately never, because opening
+/// nothing is what makes it safe in a pipeline and runnable on a machine that
+/// has no weights. The class still earns its place there: it is what a reader
+/// of this table is told about the failure mode, and `PREFLIGHT_EXEMPT`
+/// requires each `Protects` row this command cannot pre-flight to say why in
+/// its own words.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfigClass {
-    /// The declaration turns a protection on, pins an outward path, or names
-    /// the vector space. Garbage REFUSES to open.
+    /// The declaration turns a protection on, pins an outward path, names
+    /// the vector space, or is the MANDATORY OPERAND of a declaration that
+    /// does one of those. Garbage REFUSES to open.
     Protects,
     /// A knob over a default that is already the conservative choice.
     /// Garbage warns and keeps that default.
@@ -110,18 +133,42 @@ pub const ENGINE_ENV_VARS: &[(&str, ConfigClass, Parse)] = &[
     ("UNDERCROFT_ADMISSION_RATE", Protects, Checked),
     ("UNDERCROFT_ADMIT_TRUSTED_SOURCES", Protects, Opaque),
     ("UNDERCROFT_ASSERTION_SECRET", Protects, Checked),
-    ("UNDERCROFT_CHROMA_URL", Tunes, Opaque),
-    ("UNDERCROFT_COLBERT_MODEL", Tunes, Opaque),
+    // **The fourteen MANDATORY OPERANDS (ROADMAP O155).** Scattered through
+    // this alphabetical table are fourteen rows that were `Tunes` and are
+    // `Protects`: the five backend URLs/DSN, the two served-runtime URLs, and
+    // the seven model paths. Each is the operand of a `Protects` selector —
+    // `UNDERCROFT_EMBEDDER`, `UNDERCROFT_RERANKER`, `index push --backend` —
+    // each has no default to keep, and each refuses at the same `?` the
+    // selector does. `Tunes` promises "garbage warns and keeps that default",
+    // and for these there is no default to keep.
+    //
+    // **The reclassification paid for itself on the `Parse` axis.** Asking
+    // *why can this not be pre-flighted?* per row — which is what the class
+    // forces, through `config_check::PREFLIGHT_EXEMPT` — found that seven of
+    // the fourteen CAN be and were not: the seven outward paths are now
+    // `Checked` against the transport policy their own constructors run. The
+    // seven model paths stay `Opaque` and carry an argued exemption each.
+    //
+    // The three rows that LOOK like these and stay `Tunes` are the backwards
+    // test, not an oversight: `_EMBED_MODEL` (`nomic-embed-text`),
+    // `_LLM_MODEL` (`llama3.2`) and `_ORCH_DB` (`orchestrator.db`) each have a
+    // real default in code. `_EMBED_MODEL` is the one worth a sentence: a
+    // model name does name the vector space, but the identity is
+    // `http:<model>`, so a forgotten declaration moves the recorded identity
+    // and the existing swap-refusal fires — the silent-wrong-space failure is
+    // already closed one level down, which is what makes its default safe.
+    ("UNDERCROFT_CHROMA_URL", Protects, Checked),
+    ("UNDERCROFT_COLBERT_MODEL", Protects, Opaque),
     ("UNDERCROFT_COLBERT_NAME", Tunes, Opaque),
-    ("UNDERCROFT_COLBERT_QUERY_MODEL", Tunes, Opaque),
-    ("UNDERCROFT_COLBERT_TOKENIZER", Tunes, Opaque),
+    ("UNDERCROFT_COLBERT_QUERY_MODEL", Protects, Opaque),
+    ("UNDERCROFT_COLBERT_TOKENIZER", Protects, Opaque),
     ("UNDERCROFT_EMBEDDER", Protects, Checked),
     ("UNDERCROFT_EMBED_API", Tunes, Checked),
     ("UNDERCROFT_EMBED_CA", Protects, Checked),
     ("UNDERCROFT_EMBED_DIM", Tunes, Checked),
     ("UNDERCROFT_EMBED_KEY", Tunes, Opaque),
     ("UNDERCROFT_EMBED_MODEL", Tunes, Opaque),
-    ("UNDERCROFT_EMBED_URL", Tunes, Opaque),
+    ("UNDERCROFT_EMBED_URL", Protects, Checked),
     ("UNDERCROFT_FDE_DPROJ", Tunes, Checked),
     ("UNDERCROFT_FDE_IVF_MIN", Tunes, Checked),
     ("UNDERCROFT_FDE_KSIM", Tunes, Checked),
@@ -143,15 +190,15 @@ pub const ENGINE_ENV_VARS: &[(&str, ConfigClass, Parse)] = &[
     ("UNDERCROFT_LLM_CA", Protects, Checked),
     ("UNDERCROFT_LLM_KEY", Tunes, Opaque),
     ("UNDERCROFT_LLM_MODEL", Tunes, Opaque),
-    ("UNDERCROFT_LLM_URL", Tunes, Opaque),
+    ("UNDERCROFT_LLM_URL", Protects, Checked),
     ("UNDERCROFT_LOG", Tunes, Opaque),
     ("UNDERCROFT_LOG_FORMAT", Tunes, Opaque),
     ("UNDERCROFT_MCP_HTTP_TOKEN", Protects, Checked),
     ("UNDERCROFT_METRICS", Tunes, Checked),
-    ("UNDERCROFT_MILVUS_URL", Tunes, Opaque),
-    ("UNDERCROFT_ONNX_MODEL", Tunes, Opaque),
+    ("UNDERCROFT_MILVUS_URL", Protects, Checked),
+    ("UNDERCROFT_ONNX_MODEL", Protects, Opaque),
     ("UNDERCROFT_ONNX_NAME", Tunes, Opaque),
-    ("UNDERCROFT_ONNX_TOKENIZER", Tunes, Opaque),
+    ("UNDERCROFT_ONNX_TOKENIZER", Protects, Opaque),
     ("UNDERCROFT_ORCH_ADDR", Tunes, Opaque),
     ("UNDERCROFT_ORCH_ADMIN_TOKEN", Protects, Checked),
     ("UNDERCROFT_ORCH_DB", Tunes, Opaque),
@@ -172,10 +219,10 @@ pub const ENGINE_ENV_VARS: &[(&str, ConfigClass, Parse)] = &[
     ("UNDERCROFT_OTLP_CA", Protects, Checked),
     ("UNDERCROFT_OTLP_HEADERS", Tunes, Opaque),
     ("UNDERCROFT_PASSPHRASE", Protects, Checked),
-    ("UNDERCROFT_PGVECTOR_DSN", Tunes, Opaque),
+    ("UNDERCROFT_PGVECTOR_DSN", Protects, Checked),
     ("UNDERCROFT_POOL_DIV", Tunes, Checked),
     ("UNDERCROFT_PQ_PAGE_MIN", Tunes, Checked),
-    ("UNDERCROFT_QDRANT_URL", Tunes, Opaque),
+    ("UNDERCROFT_QDRANT_URL", Protects, Checked),
     ("UNDERCROFT_READ_AUDIT", Protects, Checked),
     // `Protects`, not `Tunes`: an unknown spelling, or a backend this build
     // lacks, makes `attach_reranker` REFUSE at start-up (`check_reranker`'s
@@ -186,9 +233,9 @@ pub const ENGINE_ENV_VARS: &[(&str, ConfigClass, Parse)] = &[
     // over (ROADMAP O121). The declaration turns a second stage ON; a
     // silent fallback would run without the accuracy the operator asked for.
     ("UNDERCROFT_RERANKER", Protects, Checked),
-    ("UNDERCROFT_RERANK_MODEL", Tunes, Opaque),
+    ("UNDERCROFT_RERANK_MODEL", Protects, Opaque),
     ("UNDERCROFT_RERANK_NAME", Tunes, Opaque),
-    ("UNDERCROFT_RERANK_TOKENIZER", Tunes, Opaque),
+    ("UNDERCROFT_RERANK_TOKENIZER", Protects, Opaque),
     ("UNDERCROFT_RERANK_TOP_N", Tunes, Checked),
     ("UNDERCROFT_RETRIEVAL", Protects, Checked),
     ("UNDERCROFT_SAMPLE_INTERVAL_MS", Tunes, Checked),
@@ -199,7 +246,7 @@ pub const ENGINE_ENV_VARS: &[(&str, ConfigClass, Parse)] = &[
     ("UNDERCROFT_TOK_PQ_MIN", Tunes, Checked),
     ("UNDERCROFT_TRAIN_SOURCE_CAP", Tunes, Checked),
     ("UNDERCROFT_TRUST_FLOOR", Protects, Checked),
-    ("UNDERCROFT_WEAVIATE_URL", Tunes, Opaque),
+    ("UNDERCROFT_WEAVIATE_URL", Protects, Checked),
     ("UNDERCROFT_WING_PQ_MIN", Tunes, Checked),
 ];
 

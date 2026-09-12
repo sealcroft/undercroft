@@ -189,6 +189,58 @@ fn check_one(name: &str, raw: &str) -> Finding {
                 })
                 .map_err(|f| f.why),
         ),
+        // **The seven outward paths, ROADMAP O155.** Reclassifying these
+        // `Protects` asked the question the class forces — *why can this not
+        // be pre-flighted?* — and for these seven the honest answer was that
+        // it CAN be, and was not. `config check` printed *"declared Opaque:
+        // no parse exists"* and exited 0 for
+        // `UNDERCROFT_QDRANT_URL=http://qdrant.internal:6333`, which
+        // `index push` refuses at construction; same for the other three
+        // backends, for the embedder and for the LLM runtime. That is
+        // round-four #9's defect verbatim — exit 0 for an environment that
+        // does not start — surviving on seven rows because the class that
+        // makes the gate look at them said `Tunes`.
+        //
+        // Every arm calls the SAME policy the client calls, with the SAME
+        // `what` string, so the refusal an operator reads here is word for
+        // word the one they would have met at start-up. `declared_endpoint`
+        // is the pre-flight entry point to `require_secure_transport`, which
+        // is what `agent_from_env` runs inside each of these constructors;
+        // it adds the empty case, and empty refuses at the consumer too (an
+        // unparseable URL is cleartext and not loopback, the safe direction).
+        // Nothing here opens a socket, resolves a name or reads a file.
+        //
+        // What it still does NOT check is whether anything ANSWERS at that
+        // URL. That is the consumer's, deliberately.
+        "UNDERCROFT_QDRANT_URL"
+        | "UNDERCROFT_CHROMA_URL"
+        | "UNDERCROFT_MILVUS_URL"
+        | "UNDERCROFT_WEAVIATE_URL" => Some(
+            undercroft_net::declared_endpoint("the remote index", Some(raw))
+                .map(|_| "the remote index is reached over a permitted transport".into())
+                .map_err(|e| e.to_string()),
+        ),
+        "UNDERCROFT_EMBED_URL" => Some(
+            undercroft_net::declared_endpoint("the embedder", Some(raw))
+                .map(|_| "the embeddings endpoint is reached over a permitted transport".into())
+                .map_err(|e| e.to_string()),
+        ),
+        "UNDERCROFT_LLM_URL" => Some(
+            undercroft_net::declared_endpoint("the LLM endpoint", Some(raw))
+                .map(|_| "the LLM runtime is reached over a permitted transport".into())
+                .map_err(|e| e.to_string()),
+        ),
+        // The DSN is not a URL, so it gets libpq's parser rather than the
+        // URL one — `check_dsn_transport` is the function `PgVectorIndex::new`
+        // itself calls, lifted out of that constructor for this arm (O155)
+        // rather than restated here. O90 is why asking the connector's own
+        // parser is the only acceptable shape: a hand-read of the string let
+        // `hostaddr=` and `host = ` pass as loopback.
+        "UNDERCROFT_PGVECTOR_DSN" => Some(
+            undercroft_index::pgvector::check_dsn_transport(raw)
+                .map(|()| "the pgvector database is reached over a permitted transport".into())
+                .map_err(|e| e.to_string()),
+        ),
         _ => None,
     };
     if let Some(result) = owned {
@@ -221,8 +273,20 @@ fn check_one(name: &str, raw: &str) -> Finding {
 /// told to trust `config check`'s exit code — `UPGRADING.md` says in as many
 /// words that if it exits 0, none of its entries affect you. Anything on this
 /// list is a place where that promise is narrower than it sounds, so the list
-/// is short, argued, and counted against the code in BOTH directions by
-/// [`tests::every_protects_variable_is_pre_flighted_or_exempt`].
+/// is short, argued, and counted against the code in THREE directions by
+/// [`tests::every_protects_variable_is_pre_flighted_or_exempt`]: a `Protects`
+/// row with neither an arm nor an entry fails, an entry for a row that IS
+/// pre-flighted fails, and — since O155 — an entry naming anything that is
+/// not a `Protects` row of `ENGINE_ENV_VARS` fails.
+///
+/// **That third direction was missing while the doc said "both", and O155 was
+/// about to multiply what it could not see from two entries to nine.** The
+/// gate's loop `continue`s on every row that is not `Protects`, so the exempt
+/// list's own universe was never examined: an entry for a `Tunes` variable,
+/// for a name reclassified after it was written, or for a variable deleted
+/// from the engine entirely would sit here reading like an argued decision
+/// and be visited by nothing. That is the shape this command exists to close,
+/// one list over — an inventory whose staleness nothing can report.
 ///
 /// `#[cfg(test)]` because it is inventory, not behaviour — the same shape as
 /// `mcp::WRITE_TOOLS`, which survives as the other half of a count and is
@@ -266,6 +330,73 @@ const PREFLIGHT_EXEMPT: &[(&str, &str)] = &[
     (
         "UNDERCROFT_ADMIT_TRUSTED_SOURCES",
         "a flag; no value can fail to parse",
+    ),
+    // **The seven model paths (ROADMAP O155).** These became `Protects` with
+    // the other mandatory operands, and unlike the seven outward paths that
+    // moved with them — which turned out to be pre-flightable and now are —
+    // these seven genuinely are not. Two reasons they share, stated once so
+    // per-row lines can say what is true of each one alone:
+    //
+    // **The value's meaning is whether it LOADS, and loading is what this
+    // command does not do.** Every other arm in `check_one` is a string-to-
+    // value parse; a model path's only real question is answered by compiling
+    // a graph or building a tokenizer, which costs seconds, allocates, and
+    // needs the weights to be present on the machine running the check.
+    //
+    // **Existence is the wrong question and would be a worse answer than
+    // none.** `Path::exists` runs no I/O worth the name and could be added in
+    // a line, and it would make this command report a green path that the
+    // runtime then refuses — the `Accepted`-is-a-lie defect wearing a tick
+    // instead of a shrug. It is also measured on the wrong machine: a CI job
+    // pre-flights the deployment's ENVIRONMENT, not its filesystem, and the
+    // host that will open the file is usually not the one running the check.
+    //
+    // Worth knowing, though not the reason on its own: both loaders live
+    // behind `--features onnx` / `ort`, so an arm calling them would be
+    // unreachable from the default binary an operator actually pre-flights
+    // with. That is the same argument O52 made for `UNDERCROFT_ORT_POOL`,
+    // which is why that row's parse sits in `undercroft-core` instead — a
+    // move no model FILE can make.
+    (
+        "UNDERCROFT_ONNX_MODEL",
+        "an ONNX graph tract must compile into a fixed-shape plan; a readable \
+         file can still carry ops the runtime rejects, which only loading shows",
+    ),
+    (
+        "UNDERCROFT_ONNX_TOKENIZER",
+        "a tokenizers JSON whose vocabulary must match the model's embedding \
+         table; mismatch is invisible per-file and is what O150 measured — an \
+         id past the table panics tract and degrades ORT",
+    ),
+    (
+        "UNDERCROFT_RERANK_MODEL",
+        "a cross-encoder export, and the file that loads may still be an \
+         EMBEDDER: what makes it a reranker is the output shape of a forward \
+         pass, which this command does not run",
+    ),
+    (
+        "UNDERCROFT_RERANK_TOKENIZER",
+        "tokenizes query/passage PAIRS, so the same file that is correct for \
+         the embedder can be wrong here — a distinction no property of the \
+         path carries",
+    ),
+    (
+        "UNDERCROFT_COLBERT_MODEL",
+        "the doc-length export, correct only RELATIVE to the query export it \
+         is paired with (their dimensions must agree), so no per-row check of \
+         this value can be the check that matters",
+    ),
+    (
+        "UNDERCROFT_COLBERT_QUERY_MODEL",
+        "the query-length export; the loader probes only this one, so an \
+         always-failing doc model still loads — a pre-flight cannot honestly \
+         be stricter about the pair than the loader is",
+    ),
+    (
+        "UNDERCROFT_COLBERT_TOKENIZER",
+        "shared by both plans, and exercised by neither at load: the ColBERT \
+         probes bypass it with hard-coded ids, so even the real loader does \
+         not learn whether this file is usable",
     ),
 ];
 
@@ -313,11 +444,45 @@ mod tests {
                 _ => {}
             }
         }
+        // **The third direction (ROADMAP O155): the exempt list's own
+        // universe.** The loop above `continue`s on every non-`Protects` row,
+        // so it can never visit an entry naming one — or naming nothing at
+        // all. Without this, an exemption left behind by a reclassification
+        // reads like an argued decision and is checked by no one, which is
+        // precisely the staleness this command exists to report one list over.
+        let known: std::collections::BTreeMap<&str, ConfigClass> =
+            ENGINE_ENV_VARS.iter().map(|(n, c, _)| (*n, *c)).collect();
+        let mut exemptions_seen = 0usize;
+        for (name, _) in PREFLIGHT_EXEMPT {
+            exemptions_seen += 1;
+            match known.get(name) {
+                None => unchecked.push(format!(
+                    "  {name} — exempt from a pre-flight, but no such variable is in \
+                     ENGINE_ENV_VARS. Either the engine stopped honouring it (delete the \
+                     exemption) or the name is misspelt, which exempts nothing."
+                )),
+                Some(ConfigClass::Tunes) => unchecked.push(format!(
+                    "  {name} — exempt from a pre-flight, but it is classed Tunes, and \
+                     only a Protects row needs an exemption. Its reason is now unread: \
+                     delete it, or restore the class it was written for."
+                )),
+                Some(ConfigClass::Protects) => {}
+            }
+        }
         // PREMISE. A filter that matched nothing would report a clean tree.
         assert!(
             protects >= 20,
             "premise failed: only {protects} Protects variables found — the \
              inventory is not being read"
+        );
+        // PREMISE for the direction above. It counts what the LOOP visited,
+        // not what the const holds: `PREFLIGHT_EXEMPT.is_empty()` is folded at
+        // compile time (clippy says so), so an assertion on it is dead code
+        // wearing a premise probe's clothes — this file's own trap, one gate
+        // over.
+        assert!(
+            exemptions_seen > 0,
+            "premise failed: the exempt-list direction visited no entry"
         );
         assert!(
             unchecked.is_empty(),
@@ -428,6 +593,16 @@ mod tests {
             ("UNDERCROFT_SEMANTIC_GATE", "0.7"),
             ("UNDERCROFT_SEMANTIC_GATE", "off"),
             ("UNDERCROFT_ADMISSION_RATE", "120/60"),
+            // The seven outward paths (ROADMAP O155). TLS to a named host,
+            // and — for the DSN — libpq's own default of the local socket.
+            ("UNDERCROFT_QDRANT_URL", "https://q.example"),
+            ("UNDERCROFT_CHROMA_URL", "https://c.example"),
+            ("UNDERCROFT_MILVUS_URL", "https://m.example"),
+            ("UNDERCROFT_WEAVIATE_URL", "https://w.example"),
+            ("UNDERCROFT_EMBED_URL", "https://e.example"),
+            ("UNDERCROFT_LLM_URL", "http://127.0.0.1:11434"),
+            ("UNDERCROFT_PGVECTOR_DSN", "dbname=x"),
+            ("UNDERCROFT_PGVECTOR_DSN", "host=db.example sslmode=require"),
         ] {
             assert!(
                 matches!(check_one(name, good), Finding::Ok(_)),
@@ -444,6 +619,28 @@ mod tests {
             ("UNDERCROFT_ADMISSION_RATE", "120"),
             ("UNDERCROFT_EMBED_CA", ""),
             ("UNDERCROFT_ORCH_ENGINE_CA", "   "),
+            // **The defect O155's reclassification exposed.** Every row here
+            // used to answer `Accepted` — `config check` exited 0 and said
+            // *"declared Opaque: no parse exists"* — while the client refuses
+            // each of them at construction, before a byte moves. That is
+            // round-four #9's "exit 0 for an environment that does not start",
+            // surviving on seven rows because the class that makes the gate
+            // look at them said `Tunes`.
+            ("UNDERCROFT_QDRANT_URL", "http://qdrant.internal:6333"),
+            ("UNDERCROFT_CHROMA_URL", "http://chroma.internal:8000"),
+            ("UNDERCROFT_MILVUS_URL", "http://milvus.internal:19530"),
+            ("UNDERCROFT_WEAVIATE_URL", "http://weaviate.internal:8080"),
+            ("UNDERCROFT_EMBED_URL", "http://embeddings.internal"),
+            ("UNDERCROFT_LLM_URL", "http://ollama.internal:11434"),
+            // Cleartext to a non-loopback database, and O90's two spellings
+            // that a hand-read of the string let through as loopback.
+            ("UNDERCROFT_PGVECTOR_DSN", "host=10.0.0.5 dbname=x"),
+            ("UNDERCROFT_PGVECTOR_DSN", "hostaddr=10.0.0.5 dbname=x"),
+            // Empty is a failed interpolation, never a declaration, and it
+            // refuses at the consumer too: an unparseable URL is cleartext
+            // and is not loopback, which is the safe direction.
+            ("UNDERCROFT_QDRANT_URL", ""),
+            ("UNDERCROFT_EMBED_URL", "   "),
         ] {
             assert!(
                 matches!(check_one(name, bad), Finding::Fatal(_)),
@@ -451,13 +648,12 @@ mod tests {
             );
         }
         // A variable with no parse is reported as unchecked, never as
-        // checked-and-fine.
+        // checked-and-fine. `UNDERCROFT_HOME` is `Tunes, Opaque` — a path
+        // with a real default — and stays the example here; the row that
+        // used to sit beside it was `UNDERCROFT_QDRANT_URL`, which had no
+        // parse and now has one, so it moved up into both lists above.
         assert!(matches!(
             check_one("UNDERCROFT_HOME", "/anything"),
-            Finding::Accepted
-        ));
-        assert!(matches!(
-            check_one("UNDERCROFT_QDRANT_URL", "https://q.example"),
             Finding::Accepted
         ));
     }

@@ -1113,10 +1113,41 @@ check "and it names the knob"     0 "UNDERCROFT_POOL_DIV"             -- \
 # guards it with `.max(1)`, so it silently meant "the pool is the whole corpus".
 check "a degenerate divisor warns" 0 "minimum"                        -- \
   env UNDERCROFT_POOL_DIV=0 "$BIN" config-check
-# ...and a knob that is genuinely unparseable-by-nature says WHICH kind of
-# unchecked it is, rather than one message covering both cases.
+# ...and a declaration that is genuinely unparseable-by-nature says WHICH kind
+# of unchecked it is, rather than one message covering both cases.
+#
+# **This row used to drive `UNDERCROFT_QDRANT_URL`, and O155 is why it does
+# not.** That variable was `Opaque` because nobody had asked whether it could
+# be checked; it can, and now is. A model PATH is the honest example of the
+# class, because its meaning is whether it LOADS — and it is `Protects` too,
+# which is the point: the `Parse` axis is what decides this message, never the
+# class.
 check "an opaque declaration says so" 0 "declared Opaque"             -- \
-  env UNDERCROFT_QDRANT_URL=https://q.example "$BIN" config-check --verbose
+  env UNDERCROFT_ONNX_MODEL=/models/e5.onnx "$BIN" config-check --verbose
+# **ROADMAP O155 — the seven outward paths, driven through the surface an
+# operator gates a pipeline on.** Each of these was reported `Accepted` and
+# exited 0 while the client that consumes it refuses at construction, before a
+# byte moves. `tests/e2e-backends.sh` proves the run-side refusal against five
+# live databases; this proves the PRE-FLIGHT now answers the same way, which
+# is the property the whole command exists to provide.
+check "a cleartext backend URL refuses" 1 "UNDERCROFT_QDRANT_URL"     -- \
+  env UNDERCROFT_QDRANT_URL=http://qdrant.internal:6333 "$BIN" config-check
+check "and it names the policy"   1 "There is no override"            -- \
+  env UNDERCROFT_QDRANT_URL=http://qdrant.internal:6333 "$BIN" config-check
+check "the embeddings endpoint too" 1 "UNDERCROFT_EMBED_URL"          -- \
+  env UNDERCROFT_EMBED_URL=http://embeddings.internal "$BIN" config-check
+check "the LLM runtime too"       1 "UNDERCROFT_LLM_URL"              -- \
+  env UNDERCROFT_LLM_URL=http://ollama.internal:11434 "$BIN" config-check
+# The pgvector DSN is not a URL, so it gets libpq's own parser — and this is
+# the spelling O90 found a hand-read of the string letting through as loopback.
+check "a pgvector DSN via hostaddr" 1 "UNDERCROFT_PGVECTOR_DSN"       -- \
+  env UNDERCROFT_PGVECTOR_DSN="hostaddr=10.0.0.5 dbname=x" "$BIN" config-check
+# The other side, so this block cannot pass by refusing everything: TLS to a
+# named host, and libpq's default of the local socket, both start.
+check "a TLS backend URL starts"  0 "This environment starts"         -- \
+  env UNDERCROFT_QDRANT_URL=https://qdrant.internal:6333 "$BIN" config-check
+check "a loopback DSN starts"     0 "This environment starts"         -- \
+  env UNDERCROFT_PGVECTOR_DSN="dbname=x" "$BIN" config-check
 # A declaration that turns a protection on and does not parse: exit 1, named.
 check "a bad protection refuses"  1 "REFUSES"                         -- \
   env UNDERCROFT_TRUST_FLOOR=trusetd "$BIN" config-check

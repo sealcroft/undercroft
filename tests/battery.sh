@@ -2360,6 +2360,32 @@ PF_RESOLVERS=$(grep -cE '^pub fn resolve_' crates/undercroft-config/src/lib.rs |
 PF_ABS_ROWS=$(awk '/^pub const SURFACE_ABSENCES/,/^\];/' "$PF_PARITY" | grep -cE '^[[:space:]]+\("' || true)
 PF_ABS_ANCHORS=$(awk '/^pub const SURFACE_ABSENCES/,/^\];/' "$PF_PARITY" | grep -E '^[[:space:]]+\("' | sed -E 's/^[[:space:]]+\("([^"]+)".*/\1/' | sort -u | grep -c . || true)
 PF_COMPLETE=$(awk '/^pub const SURFACE_COMPLETE/,/^\];/' "$PF_PARITY" | grep -cE '^[[:space:]]+"' || true)
+# **The `ENGINE_ENV_VARS` cross-tab (ROADMAP O155), read ONCE for both
+# blocks below.** `CLAUDE.md` publishes the `Parse` split and
+# `platform-views` publishes both axes; neither was gated, and the class
+# figures had been stale since O121 moved `UNDERCROFT_RERANKER` on
+# 2026-09-07. Two readers of one inventory is how the two published splits
+# would drift apart from each other as well as from the tree, so there is one.
+PF_ENVROWS=$(awk '/^pub const ENGINE_ENV_VARS/,/^\];/' "$PF_PARITY" | grep '^    ("UNDERCROFT_' || true)
+PF_ENVROWS_N=$(printf '%s\n' "$PF_ENVROWS" | grep -c . || true)
+PF_PROTECTS=$(printf '%s\n' "$PF_ENVROWS" | grep -c ', Protects,' || true)
+PF_TUNES=$(printf '%s\n' "$PF_ENVROWS" | grep -c ', Tunes,' || true)
+PF_CHECKED=$(printf '%s\n' "$PF_ENVROWS" | grep -c ' Checked),' || true)
+PF_OPAQUE=$(printf '%s\n' "$PF_ENVROWS" | grep -c ' Opaque),' || true)
+PF_PROT_OPAQUE=$(printf '%s\n' "$PF_ENVROWS" | grep -c ', Protects, Opaque),' || true)
+# Each axis must PARTITION the rows. A count that is merely small is caught
+# by the premise below; a row whose class this reader cannot parse is not —
+# it would quietly leave both halves short and agree with nothing.
+if [ $((PF_PROTECTS + PF_TUNES)) -ne "${PF_ENVROWS_N:-0}" ] \
+   || [ $((PF_CHECKED + PF_OPAQUE)) -ne "${PF_ENVROWS_N:-0}" ]; then
+  echo "FAIL  the ENGINE_ENV_VARS reader examined ${PF_ENVROWS_N:-0} row(s):"
+  echo "      $PF_PROTECTS protects + $PF_TUNES tunes, $PF_CHECKED checked + $PF_OPAQUE opaque."
+  echo "      Neither axis partitions the rows, so this is the reader that"
+  echo "      rotted — not the figures it was about to check."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
 
 # PREMISE. Every truth below is a count, and a broken extractor returns a
 # number too — zero. A zero here would silently agree with nothing.
@@ -2369,12 +2395,13 @@ if [ "${PF_ENV_TOTAL:-0}" -lt 50 ] || [ "${PF_PREFLIGHTS:-0}" -lt 5 ] ||
    [ "${PF_RO_ARMS:-0}" -lt 2 ] || [ "${PF_CA:-0}" -lt 3 ] ||
    [ "${PF_ORCH:-0}" -lt 5 ] || [ "${PF_RESOLVERS:-0}" -lt 3 ] ||
    [ "${PF_ABS_ROWS:-0}" -lt 20 ] || [ "${PF_ABS_ANCHORS:-0}" -lt 20 ] ||
-   [ "${PF_COMPLETE:-0}" -lt 10 ]; then
+   [ "${PF_COMPLETE:-0}" -lt 10 ] || [ "${PF_ENVROWS_N:-0}" -lt 40 ]; then
   echo "FAIL  a truth-side reader came back implausibly small:"
   echo "      env=$PF_ENV_TOTAL preflights=$PF_PREFLIGHTS crates=$PF_CRATES"
   echo "      mcp=$PF_MCP diagrams=$PF_DIAGRAMS irregular=$PF_IRREGULAR"
   echo "      ro-arms=$PF_RO_ARMS ca=$PF_CA orch=$PF_ORCH resolvers=$PF_RESOLVERS"
   echo "      absence rows=$PF_ABS_ROWS anchors=$PF_ABS_ANCHORS complete=$PF_COMPLETE"
+  echo "      env rows=$PF_ENVROWS_N"
   echo "      A reader that examined nothing reports what an accurate tree reports."
   echo ""
   echo "BATTERY FAILED — preflight"
@@ -2408,6 +2435,13 @@ PROSE_FIGURES=(
   "CLI absence rows|CLAUDE.md|s/.*PARTITION it \\(([0-9]+) rows over.*/\\1/p|$PF_ABS_ROWS"
   "CLI absence anchors|CLAUDE.md|s/.*rows over ([0-9]+) anchors.*/\\1/p|$PF_ABS_ANCHORS"
   "CLI operations reachable everywhere|CLAUDE.md|s/.*plus ([0-9]+) reachable everywhere.*/\\1/p|$PF_COMPLETE"
+  # ROADMAP O155 — the `ENGINE_ENV_VARS` cross-tab, on both axes. The `Parse`
+  # split was published here and gated nowhere; the `ConfigClass` split is
+  # published by `platform-views` and was stale for five days.
+  "Checked declarations|CLAUDE.md|s/^ *([0-9]+) of the [0-9]+ are \`Checked\`.*/\\1/p|$PF_CHECKED"
+  "Opaque declarations|CLAUDE.md|s/.*are \`Checked\`, ([0-9]+) \`Opaque\`.*/\\1/p|$PF_OPAQUE"
+  "Protects variables|CLAUDE.md|s/.*\`Opaque\`, and ([0-9]+) \`Protects\`.*/\\1/p|$PF_PROTECTS"
+  "Tunes variables|CLAUDE.md|s/.*\`Protects\` against ([0-9]+)\$/\\1/p|$PF_TUNES"
 )
 
 PROSE_FAIL=0
@@ -2689,12 +2723,37 @@ PV_CLIOPS=$(( $(awk '/pub const SURFACE_ABSENCES/,/^\];/' crates/undercroft-cli/
              + $(awk '/pub const SURFACE_COMPLETE/,/^\];/' crates/undercroft-cli/src/parity.rs \
                  | grep -cE '^    "' || true) ))
 
+# **The declared-configuration classes (ROADMAP O155).** The set's decision
+# tree publishes the `ENGINE_ENV_VARS` cross-tab, and it was NOT gated: O121
+# moved `UNDERCROFT_RERANKER` from `Tunes` to `Protects` on 2026-09-07 and the
+# diagram said `Protects · 24` for five days, with nothing able to notice.
+# That is the un-gated-figure class this whole block exists for, found one
+# diagram over from the ones it already covered.
+#
+# Only ONE cell of the cross-tab is published, deliberately: the four totals
+# plus 81 leave the table underdetermined by exactly one number, and the cell
+# worth naming is `Protects` ∩ `Opaque` — the population of
+# `config_check::PREFLIGHT_EXEMPT`, i.e. how many fatal declarations the
+# pre-flight cannot check. The two parenthetical splits that used to sit in
+# the Checked and Opaque boxes said the same thing in words no pattern can
+# tell apart (both spelled `(N protect, M tune)`), so a reader could not be
+# given them and a gate could not keep them.
+# The cross-tab itself is read ONCE, up in the `prose figures` block
+# (`PF_PROTECTS` … `PF_PROT_OPAQUE`), with the premise that each axis must
+# partition the rows. `CLAUDE.md` and this set publish the same inventory, so
+# two readers of it could drift from each other as well as from the tree.
+
 # name|regex capturing the number as \1|truth
 PV_FIGURES=(
   "MCP tools|([0-9]+) (MCP agent tools|tools ·)|$PF_MCP"
   "MCP write tools|· ([0-9]+) writes?|$PV_WRITES"
   "/v1 routes|([0-9]+)[ -]routes? ?(·|HTTP)|$V1_N"
   "CLI operations|([0-9]+) operations|$PV_CLIOPS"
+  "Protects variables|Protects · ([0-9]+)|$PF_PROTECTS"
+  "Tunes variables|Tunes · ([0-9]+)|$PF_TUNES"
+  "Checked declarations|Checked · ([0-9]+)|$PF_CHECKED"
+  "Opaque declarations|Opaque · ([0-9]+)|$PF_OPAQUE"
+  "un-pre-flightable Protects|([0-9]+) of them protect|$PF_PROT_OPAQUE"
 )
 PV_FAIL=0
 PV_SEEN=0
