@@ -14,3 +14,17 @@ thiserror = { workspace = true }
 ort = "=2.0.0-rc.10"
 tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
 rayon = { workspace = true }
+
+[dev-dependencies]
+# ONE generator for both backends (ROADMAP O134a). The fixture graph has to
+# be byte-identical across tract and ORT or "the same file runs in both" is
+# an assertion rather than a fact, and a second copy here would be a second
+# answer to one question — the thing this tree's own doctrine forbids.
+#
+# A DEV-dependency, so nothing this crate ships links it, and a real Cargo
+# EDGE rather than `#[path]`, so the dependency gates that read edges can see
+# it. It costs no build time in the leg that runs these tests: `ort-build`
+# already compiles `undercroft-cli --features onnx,ort`, and the CLI's `onnx`
+# feature is `dep:undercroft-embed-onnx`, so tract is in that leg today.
+undercroft-embed-onnx = { path = "../undercroft-embed-onnx", features = ["test-fixture"] }
+tempfile = { workspace = true }

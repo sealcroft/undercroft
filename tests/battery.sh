@@ -64,13 +64,34 @@ if [ -z "${SUITES[0]:-}" ]; then SUITES=("${ALL[@]}"); fi
 declare -a NAMES=() CODES=()
 OVERALL=0
 
-# Suites that legitimately print no `<suite> results: N passed, M failed` line,
-# so the O27 reader's "this reader examined nothing" is the WRONG message for
-# them rather than a finding. `lint` is silent on success by construction;
-# `arch-check` has three verification stages rather than a countable
-# population, and inventing a metric so it could satisfy a reader is how a
-# figure stops meaning anything. Both also publish no check count, which is
-# consistent: nothing to compare, so nothing skipped silently.
+# Suites the O27 reader must not complain about, because "this reader examined
+# nothing" is the WRONG message for them rather than a finding.
+#
+# The four names are here for TWO different reasons, and saying so matters —
+# this comment justified only the first two while guarding all four, which is
+# the shape of a claim that has stopped matching its own scope.
+#
+#   lint, arch-check  — no summary line EXISTS. `cargo fmt --check` and
+#     `clippy` are silent on success, and `arch-check` has three verification
+#     stages rather than a countable population; inventing a metric so it
+#     could satisfy a reader is how a figure stops meaning anything. Both
+#     publish no check count, which is consistent: nothing to compare, so
+#     nothing is skipped silently.
+#
+#   onnx-build, ort-build — a summary line exists and is NOT YET READ. Since
+#     ROADMAP O134a both legs run `cargo test`, so both print cargo's own
+#     `test result:` lines; routing them through `test_summary` and publishing
+#     a per-leg figure is O134b, because the post-run cargo comparison reads
+#     three surfaces that are all whole-tree claims about the `test` suite and
+#     generalising it "to a SET" would compare two of them against the wrong
+#     measurement. Until then they stay here, and the `model leg parity`
+#     preflight is what keeps `cargo test` on the legs at all.
+#
+#     Residual, stated: `cargo test` exits 0 with zero tests, so between O134a
+#     and O134b a leg whose tests silently stopped compiling would be green.
+#     The arm inventory in `parity.rs` bounds that — it runs in the `test`
+#     suite and fails if an arm loses its named test — but it reads SOURCE, so
+#     it cannot see a leg that stopped executing what it names.
 NO_SUMMARY_SUITES=(lint arch-check onnx-build ort-build)
 
 if [ "$PREFLIGHT_ONLY" -eq 1 ] && [ "$NO_PREFLIGHT" -eq 1 ]; then
@@ -1763,6 +1784,85 @@ else
   echo "BATTERY FAILED — preflight"
   exit 1
 fi
+
+echo "═══ preflight: model leg parity ═══"
+# ROADMAP O134a. The two model-crate legs must RUN their crate's tests, not
+# merely build the CLI that links them.
+#
+# **The defect this exists to stop coming back is the one it was written
+# after**: `cargo build` does not compile `#[cfg(test)]` code, so for two
+# releases both legs compiled the CLI and executed none of the tests in
+# `undercroft-embed-onnx` / `-ort` — three of the four that existed returned
+# early and reported PASSED. Nothing in the tree could say so, because a leg
+# that tests nothing and a leg that passes everything exit 0 alike.
+#
+# It is a SOURCE check rather than a run check on purpose: these legs are
+# CI-only (ROADMAP O142 — weight, and ort's `apt-get` would make a local
+# battery need the internet), so a local battery can only ask whether the
+# command still says what it must. It CANNOT see a leg whose tests compiled
+# to zero; that needs the per-leg published figure, which is O134b.
+#
+# Each leg must name its OWN crate and must NOT name the other's: `ort-build`
+# builds `--features onnx,ort` and so already compiles the tract crate, and
+# testing both there would count one crate's figures twice.
+MLP_FAIL=0
+MLP_SEEN=0
+# Assembled, so this gate does not match itself when the preflight source is
+# ever scanned — the tree's most-repeated gate defect.
+MLP_VERB="ca""rgo test --release -p "
+for leg_crate in "onnx-build:undercroft-embed-onnx:undercroft-embed-ort" \
+                 "ort-build:undercroft-embed-ort:undercroft-embed-onnx"; do
+  leg="${leg_crate%%:*}"
+  rest="${leg_crate#*:}"
+  own="${rest%%:*}"
+  other="${rest##*:}"
+  # The service's own command block: from its key to the next top-level
+  # service key, so a neighbour's command can never be read as this one's.
+  cmd=$(awk -v svc="  $leg:" '
+      $0 == svc { inb = 1; next }
+      inb && /^  [a-z0-9-]+:$/ { exit }
+      inb { print }
+    ' docker-compose.yml)
+  if [ -z "$cmd" ]; then
+    echo "FAIL  docker-compose.yml declares no service block for '$leg'."
+    MLP_FAIL=1
+    continue
+  fi
+  MLP_SEEN=$((MLP_SEEN + 1))
+  if ! printf '%s' "$cmd" | grep -qF "${MLP_VERB}${own}"; then
+    echo "FAIL  the '$leg' leg does not run '${MLP_VERB}${own}'."
+    echo "      A leg that only BUILDS compiles no #[cfg(test)] code, so the"
+    echo "      counted degrade arms in $own go back to being"
+    echo "      executed by nothing — which is the defect O134a closed."
+    MLP_FAIL=1
+  fi
+  if printf '%s' "$cmd" | grep -qF "${MLP_VERB}${other}"; then
+    echo "FAIL  the '$leg' leg also tests $other, whose figures belong to the other leg."
+    MLP_FAIL=1
+  fi
+done
+# PREMISE. A scanner that matched no service reports exactly what a clean tree
+# reports. Both legs have existed since ROADMAP O142, so zero here is a broken
+# extractor rather than a clean tree.
+if [ "$MLP_SEEN" -ne 2 ]; then
+  echo "FAIL  the model-leg extractor found $MLP_SEEN of 2 service blocks."
+  echo "      Both have existed since ROADMAP O142, so this is a broken"
+  echo "      extractor, and a broken extractor reports what a clean tree does."
+  MLP_FAIL=1
+fi
+# PREMISE, the other direction: the needle must MATCH something that is really
+# there, or a typo in it would pass every leg silently.
+if ! printf '%s' "$(awk -v svc="  onnx-build:" '$0 == svc {inb=1; next} inb && /^  [a-z0-9-]+:$/ {exit} inb {print}' docker-compose.yml)" \
+     | grep -qF "cargo build --release -p undercroft-cli"; then
+  echo "FAIL  the model-leg extractor cannot see the build command it is reading beside."
+  MLP_FAIL=1
+fi
+if [ "$MLP_FAIL" -ne 0 ]; then
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    both model legs run their own crate's tests, and only their own"
 
 echo "═══ preflight: vendored crates are pinned ═══"
 # ROADMAP O114. `vendor/` holds a patched copy of a third-party crate taken

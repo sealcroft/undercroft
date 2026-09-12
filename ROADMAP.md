@@ -3988,7 +3988,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**178** of the **193** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**186** of the **201** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4167,6 +4167,182 @@ capability, backward compatible. The rest of the section is PATCH work — no
 documented contract moves; import stops holding the corpus, the duplicate
 check stops scanning the table, and a migration is judged against the source's
 own snapshot.
+
+### O134a — CLOSED 2026-09-12: the nine counted degrade arms are executed, against a fixture the tests generate
+
+**Filed 2026-09-09 as O134, lifted out of the body of O131** — an entry whose
+heading declares it done, where this was recorded as a residual. Split into
+O134a and O134b on 2026-09-12 by maintainer ruling; this is the half that
+stops the arms being executed by nothing, and it needed no product decision.
+
+**The entry's own figures were wrong and its heading was the worst of them.**
+It said "the four real degrade sites". There are **nine reachable counted
+arms across six backends** — embed / score / ColBERT-doc / ColBERT-query on
+each of two backends, plus ORT's own `score_batch` — and a **tenth that was
+unreachable**. The gate sentence named only `embed`/`score`/`encode_doc`,
+omitting `encode_query` and both `score_batch` arms. Six `fetch_add` sites
+serve those nine, which is why an inventory keyed on counter mutations cannot
+reach the right number.
+
+**Nothing compiled their test code, either.** Both legs ran `cargo build`,
+which does not compile `#[cfg(test)]`; `test`/`lint` cover default members and
+`windows-check` excludes both crates by name. Of the four tests that existed,
+three returned early and reported PASSED.
+
+## What shipped
+
+**A GENERATED fixture, no committed bytes.** `undercroft_embed_onnx::fixture`
+emits a ~2 KB ONNX graph and a WordLevel `tokenizer.json` from reviewed Rust,
+behind `#[cfg(any(test, feature = "test-fixture"))]`; `undercroft-embed-ort`
+takes it as a dev-dependency with that feature, so ONE generator serves both
+backends as a real Cargo edge rather than a `#[path]` that hides it from every
+gate reading edges.
+
+Executing the real runtime was necessary rather than preferred, and the
+argument is structural: `OnnxEmbedder` holds a compiled tract `SimplePlan` and
+`OrtEmbedder` an ORT `Session`, so the real receiver **cannot exist without a
+real `load()`**. A `#[cfg(test)]` seam — the cheap option the entry priced —
+would need a test-only constructor and would test a type state production
+never creates.
+
+Generated beat committed on three counts: the premise of every counterfactual
+(which word is refused, which id is out of range, that a healthy output
+differs from the degrade value) stays readable in a diff; a blob would need a
+regenerate-and-compare gate to avoid the `docs/diagrams` drift class; and it
+would touch the binary-artifact governance — a `NOTICE` row, the
+`vendor/SHA256SUMS` inventory whose premise is `tiny_http`-specific, a
+`.gitattributes` attribute, and the no-trace scanner's `SKIP_BIN`, which has
+no `onnx`.
+
+**The graph is two `Gather`s into an `Add`, and both choices are load-bearing.**
+Gathering the attention MASK through a two-row table rather than casting it
+removes every op the fixture would otherwise bet on — no `Cast`, and no
+`Unsqueeze`, whose ONNX signature MOVED at opset 13 and would have put a
+version bet in the one file both runtimes must agree on. `Add` rather than
+`Mul` because under `Mul` every padding row is exactly zero, making a healthy
+reranker score `sigmoid(0.0) = 0.5` — precisely the value the filed
+empty-logit defect produces, so healthy and defective would be
+indistinguishable. Both rerankers read a PADDING position, so the padding
+row's last component decides the healthy score, and **every fixture reranker
+pair must encode to fewer than 64 tokens** — a constraint neither the entry
+nor the panel had stated, now pinned by its own test.
+
+**Two triggers, failing in two different LAYERS.** A word absent from the
+vocabulary while `unk_token` names a token the vocabulary lacks is
+`Err(MissingUnkToken)` in the tokenizer's model layer, which `encode(text,
+true)`, `encode((q, p), true)` and `encode(text, false)` all pass through —
+one trigger, every call shape. A word that IS in the vocabulary but maps past
+the embedding table tokenizes fine and fails in the RUNTIME.
+
+**Seventeen tests, each premise / degrade / recovery**, with the COUNT
+asserted separately from the DEGRADED VALUE so a counterfactual names which
+half failed. The premise phase is not ceremony: a fixture that cannot exceed
+the threshold is a gate that cannot fail, and this tree has shipped two of
+those.
+
+**Route R is a CLASSIFIER, not a pin — and it found something.** The panel
+reasoned from tract's source that `Gather` panics on an out-of-table id and
+refused to assert it; a test written from a prediction is not verification. So
+each backend's arm resolves to one of three named outcomes and prints what it
+saw. Run, it measured a divergence between two SHIPPED backends that nobody
+had executed: tract **panics** (`range end index 16388 out of range for slice
+of length 512`), ORT **counts a degrade** (`indices element out of data
+bounds, idx=4096`). The tract arm is now narrowed to the observed payload
+class, written FROM THE RUN. Filed as O150.
+
+**`OrtReranker::score` restructured onto `score_one`**, deleting the
+unreachable tenth arm. Not by `v[0]`, which makes dead-but-safe code a panic,
+and not by `unwrap_or(0.0)`, which puts back the uncounted degrade O131
+closed. The pool-slot expression is preserved verbatim: result-preserving,
+NOT scheduling-preserving.
+
+**The three vacuous tests are `#[ignore]`d** and `expect()` their env var, so
+`--ignored` without a model fails loudly instead of passing quietly.
+`#[deny(dead_code, unused)]` on every test module is the cheap catch for a
+`#[test]` attribute eaten by a scripted edit — the one defect class where the
+test IS the thing that stopped running, so nothing else can report it.
+
+**Both legs run `cargo test` now**, each testing ONLY its own crate: the ort
+leg builds `--features onnx,ort` and so already compiles the tract crate, and
+testing both there would count one crate's figures twice.
+
+## Gates
+
+Two SOURCE-shaped gates in `crates/undercroft-cli/src/parity.rs` — a DEFAULT
+MEMBER, so they run in the `test` suite on every local battery while the
+crates they describe are built only by the CI-only legs.
+
+**The arm inventory counts `fetch_add` sites − helper DEFINITIONS + helper
+CALL sites**, which is the whole design. Six mutations serve nine arms,
+because the two ColBERT sides share one `note_failure` per crate and ORT's two
+reranker arms share `note_failures`; an inventory keyed on mutations
+under-counts by two arms per crate **while reporting both directions clean**.
+That is O51's rule one funnel over — *the record goes on the DOOR, never on
+the shared helper*. Stated blind spot, in the gate itself: it can only see an
+arm that calls a counter, and an uncounted degrade calls none.
+
+**The emit-literal gate** covers what no count assertion can: exactly three
+emit sites per crate, each carrying its own backend literal, and the
+`doc`/`query` side literals scoped to the function each belongs to.
+
+**A `model leg parity` preflight** requires each leg to run
+`cargo test --release -p <its own crate>` and not the other's, with a premise
+probe on the extractor. Source-shaped on purpose — these legs are CI-only, so
+a local battery can only ask whether the command still says what it must.
+
+## Counterfactuals — three, each single-variable, each RUN
+
+1. Restore the old `score` body → the inventory reports **10 arms against 9
+   named**, by name, naming the arithmetic.
+2. `"query"` → `"doc"` in `encode_query` → the emit gate fails by name while
+   BOTH ColBERT count tests still pass, which is the proof it measures
+   something no count assertion can see.
+3. **The discriminator a source assertion cannot see**: map the tokenizer
+   `Err` to `Ok(zeros)` INSIDE `embed_inner` → the arm test fails on the COUNT
+   (`left: 0, right: 1`) with the zero-vector assertion already passed, while
+   any "embed calls the degrade path" regex stays green.
+
+Determinism: 20 runs per crate, 0 failures. Nothing here touches a vault, a
+keyed sample or a codebook, and the graph carries no reduction and no
+transcendental, so a given backend's output is bit-exact.
+
+## What the legs cost, measured
+
+Both are CI matrix legs, so wall clock is the slowest leg rather than a sum.
+On the same runner class, before this unit against the run that merged it:
+
+```
+onnx-build   10m19s -> 12m32s   (+2m13s: the tract crate's tests, from zero)
+ort-build    12m32s -> 12m45s   (+13s: the ORT crate's tests, from zero)
+```
+
+`ort-build` barely moves because it already compiled both crates for
+`--features onnx,ort`; almost all of its time is that build. `ort-build` was
+already the slowest leg and still is, so the matrix's wall clock is unchanged.
+Recorded because the entry claims a cost and an unrecorded measurement is a
+claim nobody can check.
+
+## Residuals, stated
+
+- **Linux containers only.** `release.yml` ships an `ort` binary for five
+  targets and its smoke stops at a model-config refusal, so ONNX Runtime has
+  still never run an inference on any shipped target. A per-target inference
+  smoke is now POSSIBLE with the fixture and is its own decision.
+- **The legs publish no figure yet**, so between O134a and O134b a leg whose
+  tests silently stopped compiling would be green — `cargo test` exits 0 with
+  zero tests. The arm inventory bounds it (it fails if an arm loses its named
+  test) but reads SOURCE, so it cannot see a leg that stopped executing.
+- Failure classes the fixture cannot induce: OOM, execution-provider and int8
+  kernel faults, a poisoned mutex. They are argued to reach the arm because
+  both APIs return `Result`; that is asserted, not proven.
+- The `Shared*` forwarding is NOT covered here and is filed separately.
+- **A defect of mine during this unit, recorded because the lesson is
+  transferable**: I restored each counterfactual with `git checkout --` on an
+  UNCOMMITTED tree, which restores from `HEAD` and therefore reverted the very
+  change being tested — three files of work destroyed and rebuilt. It surfaced
+  only because a counterfactual fired where I had predicted it would not, and
+  I measured the cause instead of assuming it. Copy the file aside and copy it
+  back; never `git checkout --` what is not committed.
 
 ### O149 — CLOSED 2026-09-12: the re-point route three surfaces named and none implemented
 
@@ -12262,40 +12438,266 @@ scanner (O33, O47). The mechanism here is a heading, not a gate.
 
 
 
-### O134 — the four real degrade sites are compile-checked and never executed, because the battery carries no model weights
+### O134b — the model legs run tests and publish no figure, so a leg that stopped testing is green
 
-**Filed 2026-09-09, lifted out of the body of O131** — an entry whose heading
-declares it done, where this was recorded
-as a residual, which is exactly the drift `## Open`'s own preamble describes
-and which the heading gate cannot catch (its evidence arm is satisfied by the
-word "gate", and that paragraph contains it). Filed as my own defect: O131 was
-finished in the same session that read the warning.
+**Filed 2026-09-12, the half of O134 the maintainer split off.** O134a made
+both legs run `cargo test`; it deliberately left them in
+`NO_SUMMARY_SUITES`, so nothing reads the `test result:` lines they now print.
+`cargo test` exits 0 with zero tests, so a leg whose tests silently stopped
+compiling is indistinguishable from a leg that passed everything.
 
-O122 and O131 made every model role count the failures it used to swallow, and
-the gates cover the trait-to-surface plumbing — trait method, `VaultStats`
-field, four renderers, counter, alert — through TEST DOUBLES. The four sites
-that actually degrade live in `undercroft-embed-onnx` and `undercroft-embed-ort`
-and need model weights the battery does not carry, so they are compile-checked
-by `onnx-build`/`ort-build` and executed by nothing. A hostile reading is that
-the counting code itself is unexercised in CI, and the honest answer is that it
-is.
+**Why it was not done in O134a.** The post-run cargo comparison is hard-coded
+to the suite named `test` and reads THREE surfaces — `CLAUDE.md`'s
+`integration tests (N run`, its `= N compiled`, and the landing tile
+`cargo tests`. All three are whole-tree claims about the `test` suite, so
+generalising the reader "from the literal `test` to a SET" would compare two
+of them against the wrong measurement. The shape has to be decided before the
+reader is touched.
 
-**The decision, not yet taken: does a tiny fixture model belong in the tree?**
-A few-hundred-KB ONNX export that produces deterministic garbage would let a
-test drive a real `OnnxEmbedder`/`OnnxReranker`/`OnnxColbert` and fail its
-inference on purpose. Against it: repo weight, a binary blob in a
-source-available tree, and a second thing to keep current with tract's
-supported op set. For it: it is the only way these four sites are ever run, and
-this project's own rule is that a gap is a gap rather than a principled
-refusal. Alternatives worth pricing first — a hand-built ONNX graph emitted by
-the test itself (no blob, but it must stay within tract's ops), or a
-`#[cfg(test)]` seam that injects a failing inference into the real `embed`
-path without a model at all (cheapest, and it tests the counting rather than
-the runtime, which is what the residual is actually about).
+What it needs:
+1. A cargo-shaped SUITE SET in the detail routing and the post-run comparison,
+   with per-leg figures keyed by suite name and `(N run, M ignored)` as the
+   published form — both numbers, because this unit ignores three tests and a
+   single `run` figure cannot tell a deleted test from a newly ignored one.
+2. "This reader examined nothing" made a FAILURE for any suite that HAS a
+   published figure, on BOTH the cargo arm and the shell arm.
+3. The synthetic-log self-test extended to exercise the new routing, or the
+   reader is unprobed.
+4. `tests/e2e-models.sh` — the real-backend-to-surface join (CLI `remember` +
+   `stats`, `/v1/…/stats`, a search showing `rerank_failures`) — and the
+   corpus arm. Both were CUT from O134a: the script is not in the Docker build
+   context and would reach a container by bind mount, and the corpus the panel
+   named (`.handover/locomo_feed.txt`) is gitignored, so that drive can only
+   ever be manual.
 
-Gate, whichever is chosen: the real backend's `embed`/`score`/`encode_doc`
-degrades, the count moves, and the counterfactual removes the counting and
-fails by name — the thing the test doubles cannot do.
+**Ruled already, so do not re-litigate**: the legs stay CI-only, and the
+landing tile keeps its label with its scope declared in the gate rather than
+folding the model legs' counts into a whole-tree figure (maintainer,
+2026-09-12).
+
+### O150 — an out-of-table id PANICS on tract and degrades on ORT, and one of those is a crash
+
+**Filed 2026-09-12, OBSERVED rather than predicted** — the route-R classifier
+O134a shipped is what ran it, and the panel that designed that classifier
+explicitly refused to assert the panic from reading tract's source.
+
+Measured, same input, same generated model, both shipped backends:
+
+```
+tract  PANIC  range end index 16388 out of range for slice of length 512
+ORT    degrade  indices element out of data bounds, idx=4096 must be within [-128,127]
+```
+
+So an embedding id past the table — which is what a mismatched
+tokenizer/model pair produces on real weights — **crashes the process** under
+`UNDERCROFT_EMBEDDER=onnx` and is absorbed as a counted zero vector under
+`UNDERCROFT_EMBEDDER=ort`. The `Embedder` trait's own contract is that a write
+must not fail because a model blinked; a panic is a long way past failing.
+
+The fix is a catch_unwind boundary in ONE shared tract helper, routing into
+the existing counted degrade — not a per-call-site guard, which is how a
+screen comes to have three ways past it. Sequence it with O154: if the load
+probe is widened to drive the tokenizer's ceiling id, the hot-path panic
+becomes much harder to reach and the boundary may be cheaper as insurance
+than as the primary fix.
+
+**Gate**: `onnx_route_r_classifies_an_out_of_table_id` already classifies all
+three outcomes and prints what it saw. When this lands, that arm takes the
+`Ok` branch with a count of 1, and the test says so LOUDLY rather than
+silently changing meaning. That arm is listed in a `PANIC_PINS` table disjoint
+from the arm inventory, because it exercises no counter by construction.
+
+### O151 — ORT's `score_batch` zeroes the whole reranked window when one pair fails
+
+**Filed 2026-09-12; the direction is decided and the SCHEDULING is what is
+open.** `score_batch_inner` collects a `Result` over rayon, so the first `Err`
+discards every healthy score in the window: `note_failures(passages.len())`,
+and all `N` candidates come back `0.0`. tract degrades PER PASSAGE for the
+identical input — three poisoned of eight costs exactly three. One decision,
+two implementations.
+
+CLAUDE.md's own invariant settles the direction: *anything that couples
+drawers may PROPOSE candidates, never DECIDE score*, and *coupling in scoring
+risks integrity*. The coupling here is an artifact of the `collect`, not a
+decision anyone wrote down — O131's comment explains the COUNT (why `n` and
+not 1) and never the semantics.
+
+**Why it has looked harmless.** All-zero scores make every `partial_cmp`
+return `Equal` and the sort is STABLE, so the window collapses to fusion
+order — which reads as the *safer* degrade, since fusion order is the shipped
+default. It is not: it is an attacker-influenced off switch for the second
+stage, and it leaves the pool-shaped-IDF lever this file documents as the
+decider. Per-passage gives that nothing — the poisoned drawer sinks itself and
+touches no one. Exploitability today is genuinely LOW and the entry says so:
+ids are truncated to `MAX_LEN` before every forward and a well-formed
+tokenizer with `[UNK]` does not error on content, so the realistic trigger is
+resource-shaped. Low exploitability is the argument for filing rather than for
+closing.
+
+**Gate**: `ort_rerank_score_batch_degrades_the_whole_window_pinned_cost` pins
+the current behaviour as a named cost and asserts the COUPLING, not the count
+— phase 1 scores the seven healthy passages ALONE, phase 2 shows the same
+seven come back `0.0`. When this lands per-passage, that test goes RED by
+name. That is the intended signal and the entry names the test.
+
+### O152 — a second, uncounted reranker degrade one line below the one O134a edited
+
+**Filed 2026-09-12.** `OrtReranker::score_one` ends in
+
+```rust
+Ok(sigmoid(data.get(labels - 1).copied().unwrap_or(0.0)))
+```
+
+An empty or short logit tensor is therefore `sigmoid(0.0) = 0.5` — inside the
+`Ok` arm, counted by nothing, and indistinguishable from a model that scored
+the pair as moderately relevant. It is the same class O131 closed one level
+up, and it survived because it is not a degrade *arm*: it calls no counter, so
+O134a's arm inventory is structurally blind to it. It was found by reading,
+and reading is what finds the next one.
+
+Related and separate: tract's reranker returns
+`Err(OnnxError::Inference("empty reranker output"))` for the same shape, so
+the two backends disagree here too — one counts, the other invents 0.5.
+
+### O153 — neither model crate is linted by anything
+
+**Filed 2026-09-12.** `cargo clippy --all-targets` covers DEFAULT members;
+both model crates are excluded from `default-members`, and the two legs run
+`cargo build` and now `cargo test`, never clippy. CLAUDE.md claimed the ort
+leg *"clippy ort-gated code here explicitly"* — false since the line was
+written, corrected in O134a.
+
+Deliberately NOT wired in O134a: these crates have never been linted, so
+`-D warnings` is likely red on shipped inference loops, and O142's rule is
+that a leg failing on arrival teaches everyone to ignore it. Fix the findings
+first, then add the invocation to BOTH the compose `lint` service and the CI
+`lint` job — the `lint parity` preflight compares them as sets, and O84
+records that adding it to only one covers every local battery and no pull
+request.
+
+### O154 — the model loaders' fail-fast probes do not probe what can fail
+
+**Filed 2026-09-12. This is NOT the refuse-vs-degrade question it was first
+put as** — the tree already chose validate-at-load, and four of the six
+loaders run a real tokenizer-and-model probe (`"dimension probe"` for both
+embedders, `("query", "passage")` for both rerankers). The defect is that the
+probes are too NARROW.
+
+Three sub-cases:
+
+1. **Out-of-range ids.** A probe over fixed text exercises the ids that text
+   happens to produce. Widening each probe to drive the TOKENIZER'S OWN
+   CEILING id through the graph closes the class, needs no initializer
+   accessor, and is therefore symmetric across both backends.
+2. **The two ColBERT loaders probe with hard-coded `[CLS, Q_MARKER, SEP]`**,
+   so they never run the tokenizer at all and never run the DOC model at all.
+   Worse than the entry that spawned this one assumed, in the opposite
+   direction from the other four.
+3. **A same-vocab-size, different-checkpoint pair** that no probe of any width
+   can see. Recorded as an OPEN residual, never claimed closed.
+
+**`UPGRADING.md` is owed**, because a widened probe stops a deployment that
+loads today. The maintainer ruled option (b) on 2026-09-12: record an
+explicit, argued EXEMPTION from the "`config check` must detect it before a
+restart" obligation rather than giving that command a model-opening arm.
+`undercroft config check` opens nothing by design — that is what makes it safe
+in a pipeline and fast enough to run on a machine that lacks the weights — so
+the symptom string goes in `UPGRADING.md` instead and the entry says plainly
+that this class is not pre-flightable.
+
+### O155 — four model-path declarations are classed `Tunes` while the code REFUSES on a bad value
+
+**Filed 2026-09-12; a taxonomy ruling, deliberately not buried inside O134a.**
+`UNDERCROFT_ONNX_MODEL`, `_TOKENIZER`, `UNDERCROFT_RERANK_MODEL` and
+`UNDERCROFT_COLBERT_MODEL` carry `(Tunes, Opaque)` in `parity.rs`, while
+`ConfigClass::Tunes`'s own doc says garbage *"warns and keeps that default"*
+and the code refuses to open.
+
+Neither existing class fits. They are not knobs over a conservative default —
+there IS no default, they are mandatory operands of `UNDERCROFT_EMBEDDER` —
+and they are not protections an operator turns on.
+
+**The both-directions gate cannot see this**, which is the transferable part:
+it counts MEMBERSHIP on two axes (name and parse) and never CONSEQUENCE, so a
+row can be present, well-formed, agreed-upon by both directions, and describe
+behaviour the code does not have. *Two lists are a closed system*, one axis
+over.
+
+Options: reclassify as `Protects`, which makes the class match the behaviour;
+or add a third class ("a mandatory operand of another declaration"), which is
+more accurate and is a doctrine change that must be APPLIED BACKWARDS over
+every existing row before it lands.
+
+### O156 — a scrambled cargo log inflated the count by 28, no reader said so, and the comparison that would have caught it was globally suppressed
+
+**Filed 2026-09-12. Found the expensive way: I edited a published figure to
+match a wrong number, and the next clean run caught me.** Both halves below
+are needed to produce that outcome, and each is a real defect.
+
+**1. `test_summary` cannot see a SCRAMBLED log.** On the run that found this,
+`.battery/test.log` carried 23 result lines summing **882**; a clean run of
+the same tree carries 20 summing **854**. The tell was one line reading
+
+```
+     Running unittests srctest admission::tests::injections_trip_their_class…
+```
+
+— a cargo **stderr** target header written into the middle of a **stdout**
+test line, the same interleaving O107 records for CI's runner, here from
+`docker compose run`. The same target binary then appears against two
+different counts (`undercroft_core` with both 232 and 24, `undercroft_net`
+with both 7 and 49).
+
+The reader's two premise detectors are *a result line with no outstanding
+header* and *a header that never reported*. A scramble that adds headers AND
+results in balance produces neither, so it reported "882 passed over 23
+targets" with no premise failure — a number that was simply wrong, wearing a
+clean bill of health. O107 fixed pairing-by-adjacency by COUNTING outstanding
+headers; counting is blind to a different failure, which is this file's own
+*ask what a gate can SEE* one reader over.
+
+**2. The guard that exists to stop what I did is scoped globally.** The
+post-run cargo comparison is wrapped in
+
+```sh
+if [ -n "${FIGURE_UNVERIFIABLE:-}" ]; then :; else <compare the cargo figures> fi
+```
+
+and `FIGURE_UNVERIFIABLE` accumulates across **every** suite. On that run the
+intermittent tail-replay hit five unrelated suites, so the cargo comparison
+was skipped entirely — and with it the message
+*"do NOT edit a published figure to match it"*, which is precisely the advice
+I needed and precisely what I then did. `count_untrustworthy` is already
+per-suite; only its CONSUMER is global, so figure A is left uncompared
+because figure B is unreadable.
+
+**What it did NOT cost, stated so nobody re-derives a scare from this entry.**
+Nothing was stale on `main`: the published 852 was correct, and O134a's own
+count is 852 + 2 = **854**, confirmed two independent ways — a clean battery,
+and `#[test]` attributes in default members at 861 now against 859 at
+`a30b18b`. I had that second measurement in hand and let the inflated sum
+overrule it, which is the human half of this entry and the reason it is filed
+with the mechanism rather than as a near miss.
+
+**The fix, in two parts.**
+
+1. Make the unverifiable guard PER FIGURE: the cargo arm skips only when
+   `test`'s own count is untrustworthy, each shell suite only on its own.
+2. Give `test_summary` a duplicate-IDENTITY detector — the same target binary
+   reporting twice in one log is not a single run, exactly as
+   `suite_summary`'s "more than one summary line" already reasons one suite
+   over. Count distinct target identities, not just header/result balance.
+
+**Gate**: the existing synthetic-log self-test already drives `test_summary`
+on a replayed log. Extend it with (a) a scrambled log whose extra headers and
+results BALANCE and whose sum is therefore inflated — it must be reported, not
+summed; and (b) a run where one suite is unverifiable and another is clean,
+where the clean one must still be compared. Both must FAIL before the fix.
+
+**Scope note**: O134b already has to touch this reader and this comparison to
+publish per-leg figures, so the two probably belong in one pass. Filed
+separately so the DEFECT is not buried inside a feature entry — the drift
+`## Open`'s own preamble describes.
 
 ### O135 — three reads the audit has never run, carried in a gitignored file
 

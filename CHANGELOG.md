@@ -7,6 +7,41 @@ its CLI mirror `tenant-repoint` are additive — nothing that worked before
 behaves differently because they exist. Everything else in this section is a
 fix whose only observable change is that a defect is gone.
 
+### the nine counted degrade arms are executed, against a model fixture the tests generate (O134a)
+
+O122 and O131 made every model role count the failures it used to swallow — a
+failed embed degrading to a zero vector, a failed rerank to `0.0`, a failed
+ColBERT encode to an empty matrix. The gates covered the trait-to-surface
+plumbing through test doubles. **The sites that actually degrade were executed
+by nothing**: they live in `undercroft-embed-onnx` and `undercroft-embed-ort`,
+need weights the battery does not carry, and both legs ran `cargo build`,
+which does not compile `#[cfg(test)]` code. Of the four tests that existed,
+three returned early and reported PASSED.
+
+They run now, on the real shipped types through their real `load()`, against a
+**fixture the tests GENERATE** — a ~2 KB ONNX graph and a WordLevel tokenizer
+emitted from reviewed Rust. **No model bytes are committed and none are
+downloaded**, which keeps the local-first promise intact and keeps the premise
+of every counterfactual readable in a diff.
+
+The filing's own figures were wrong: there are **nine** reachable counted arms
+across six backends, not the four its heading claimed, plus a tenth that was
+unreachable and is now gone.
+
+**Two shipped backends were found to disagree about a crash.** Given an
+embedding id past the table — what a mismatched tokenizer/model pair produces
+— tract **panics** and ORT **counts a degrade**. Nobody had run it; the test
+was written as a three-way classifier precisely because the behaviour was
+predicted rather than observed, and it printed what it saw. Filed as O150.
+
+`OrtReranker::score` no longer routes a single pair through the batch path,
+which had given it a counted arm nothing could reach. Behaviour-preserving on
+every reachable input.
+
+Also visible to operators: the two model-crate compose legs now run their
+crate's tests, and `docs/EMBEDDERS.md` and `README.md` stop describing them as
+compile checks.
+
 ### the re-point route three surfaces named and none implemented (O149)
 
 O136's size refusal tells an operator to move a too-large tenant with

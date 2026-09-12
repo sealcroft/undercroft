@@ -5,9 +5,12 @@
 #   docker compose run --rm backends-e2e  # remote index suite (starts qdrant/chroma/pgvector)
 #   docker compose run --rm obs-config    # alert rules + alertmanager route (promtool/amtool)
 #   docker compose run --rm site          # build, assemble and check the website
-#   docker compose run --rm onnx-build    # compile check for the ONNX embedder feature
+#   docker compose run --rm onnx-build    # build the tract backend + RUN its tests
+#   docker compose run --rm ort-build     # build the ORT backend + RUN its tests
 #
-#   bash tests/battery.sh                 # all eight suites, one tree, raw exit codes
+#   bash tests/battery.sh                 # all ten suites, one tree, raw exit codes
+#                                         # (the two model legs are CI-only — name
+#                                         #  them explicitly to run them locally)
 #   docker compose run --rm cli --help    # any CLI command
 #   docker compose run --rm -i mcp        # MCP stdio server
 
@@ -180,23 +183,37 @@ services:
     volumes:
       - undercroft-pgvector-tls:/certs
 
+  # Build the tract backend through the CLI, then RUN that crate's own tests.
+  #
+  # The `cargo test` half arrived with ROADMAP O134a, and it is the whole
+  # reason the nine counted degrade arms are executed by anything: `cargo
+  # build` does not compile `#[cfg(test)]` code, so for two releases these
+  # crates' tests were written, committed, and compiled by NOTHING — three of
+  # the four returned early and reported PASSED.
+  #
+  # Each leg tests ONLY its own crate. `-p undercroft-embed-onnx` here and
+  # `-p undercroft-embed-ort` below: the ort leg builds `--features onnx,ort`
+  # and so already compiles the tract crate, and testing both there would
+  # count the same figures twice.
   onnx-build:
     build:
       context: .
       target: builder
-    command: ["cargo", "build", "--release", "-p", "undercroft-cli", "--features", "onnx"]
+    entrypoint: ["bash", "-c"]
+    command:
+      - "cargo build --release -p undercroft-cli --features onnx && cargo test --release -p undercroft-embed-onnx"
 
-  # Compile-check the optional ONNX Runtime (ort) backend, wired through the
-  # CLI alongside tract (both features together — the strongest coexistence
-  # check). Unlike the pure-Rust tract backend it links ORT's C++ library, so
-  # it needs pkg-config/openssl/g++.
+  # Build the optional ONNX Runtime (ort) backend, wired through the CLI
+  # alongside tract (both features together — the strongest coexistence
+  # check), then run that crate's own tests. Unlike the pure-Rust tract
+  # backend it links ORT's C++ library, so it needs pkg-config/openssl/g++.
   ort-build:
     build:
       context: .
       target: builder
     entrypoint: ["bash", "-c"]
     command:
-      - "apt-get update -qq && apt-get install -y -qq pkg-config libssl-dev g++ >/dev/null 2>&1 && cargo build --release -p undercroft-cli --features onnx,ort"
+      - "apt-get update -qq && apt-get install -y -qq pkg-config libssl-dev g++ >/dev/null 2>&1 && cargo build --release -p undercroft-cli --features onnx,ort && cargo test --release -p undercroft-embed-ort"
 
   # Observability end-to-end suite. Builds the CLI with --features telemetry
   # (like onnx-build), then exercises the opt-in /metrics gating and that

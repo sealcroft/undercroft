@@ -381,12 +381,37 @@ impl Reranker for OrtReranker {
     fn model_name(&self) -> &str {
         &self.name
     }
+    /// One pair, one forward — straight onto [`OrtReranker::score_one`].
+    ///
+    /// **This used to route through `score_batch_inner`, and that gave it a
+    /// counted arm nothing could ever reach** (ROADMAP O134a). With exactly
+    /// one passage that function returns either `Err` or a one-element `Vec`
+    /// — the empty early return needs `passages.is_empty()` — so the
+    /// `Ok(v) => v.first() … unwrap_or_else(|| note_failures(1, …))` arm was
+    /// dead code wearing the shape of a degrade. Dead is not harmless here:
+    /// it sat in the inventory of arms a test is required to exercise, so it
+    /// could only ever be covered by a test asserting a thing that cannot
+    /// happen.
+    ///
+    /// Removed by RESTRUCTURING rather than by deletion. `v[0]` would turn
+    /// dead-but-safe code into a panic, and `unwrap_or(0.0)` would put back
+    /// the uncounted degrade O131 closed.
+    ///
+    /// The slot expression is preserved VERBATIM from `score_batch_inner`.
+    /// This is result-preserving, not scheduling-preserving: that function
+    /// evaluates the expression inside a `par_iter`, so a direct call from a
+    /// non-rayon caller now pins slot 0 where it used to pin whichever
+    /// worker rayon happened to fold the one-element producer onto. No value
+    /// moves — every session in the pool is an identical copy of one file.
+    ///
+    /// Residual, stated rather than fixed here: `score_one` ends in
+    /// `data.get(labels - 1).copied().unwrap_or(0.0)`, which is a SECOND and
+    /// still-uncounted degrade one line below the arm this edit touches. It
+    /// is deliberately left alone and filed separately — see ROADMAP O152.
     fn score(&self, query: &str, passage: &str) -> f32 {
-        match self.score_batch_inner(query, &[passage]) {
-            Ok(v) => v.first().copied().unwrap_or_else(|| {
-                self.note_failures(1, "the model returned no score for the pair");
-                0.0
-            }),
+        let slot = rayon::current_thread_index().unwrap_or(0) % self.sessions.len();
+        match self.score_one(slot, query, passage) {
+            Ok(s) => s,
             Err(e) => {
                 self.note_failures(1, &e.to_string());
                 0.0
@@ -433,4 +458,284 @@ pub fn reranker_from_env() -> Result<OrtReranker, OrtError> {
         std::path::Path::new(&tokenizer),
         &name,
     )
+}
+
+#[cfg(test)]
+// The anchor lesson, cheaply: a scripted edit that eats a `#[test]`
+// attribute turns a live gate into dead code and no test can report it —
+// the test IS the thing that stopped running. `dead_code` says so
+// (ROADMAP O134a).
+#[deny(dead_code, unused)]
+mod tests {
+    use super::*;
+    use undercroft_embed_onnx::fixture;
+
+    /// The healthy score this fixture produces. Both rerankers read a
+    /// PADDING position, so the raw logit is [`fixture::PAD_LAST`] — neither
+    /// `0.0` (the degrade) nor `0.5` (the filed empty-logit value).
+    fn healthy_score() -> f32 {
+        1.0 / (1.0 + (-fixture::PAD_LAST).exp())
+    }
+
+    fn load_fixture_reranker(dir: &std::path::Path) -> OrtReranker {
+        let (model, tok) = fixture::write_into(dir).expect("write fixture");
+        OrtReranker::load(&model, &tok, "fixture").expect("fixture loads")
+    }
+
+    /// **The generator's premise on THIS backend: one generated file runs in
+    /// both runtimes.**
+    ///
+    /// The whole of ROADMAP O134a rests on it. tract binds graph inputs by
+    /// POSITION and ORT binds them by NAME, and the two disagree about
+    /// almost nothing else — so if one file ever stopped serving both, every
+    /// arm test in this crate would fail for a reason unrelated to the arm
+    /// it names. This is what tells those apart.
+    #[test]
+    fn the_fixture_loads_in_ort_and_runs_a_healthy_forward() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (model, tok) = fixture::write_into(dir.path()).expect("write fixture");
+        let e = OrtEmbedder::load(&model, &tok, "fixture").expect("the fixture must load in ORT");
+        assert_eq!(
+            e.dimension(),
+            fixture::DIM,
+            "the probe forward must report the fixture's hidden size"
+        );
+
+        let v = e.embed(fixture::HEALTHY);
+        assert_eq!(v.len(), fixture::DIM);
+        assert!(
+            v.iter().all(|x| x.is_finite()),
+            "a healthy embed must be finite"
+        );
+        assert!(
+            v.iter().any(|x| *x != 0.0),
+            "a healthy embed must be distinguishable from the zero-vector degrade"
+        );
+        assert_eq!(
+            e.embed_failures(),
+            0,
+            "a healthy embed must not count a failure"
+        );
+    }
+
+    /// **The embed arm: a degraded embed is COUNTED** (ROADMAP O122,
+    /// executed for the first time by O134a).
+    #[test]
+    fn ort_embed_counts_each_degraded_embed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (model, tok) = fixture::write_into(dir.path()).expect("write fixture");
+        let e = OrtEmbedder::load(&model, &tok, "fixture").expect("fixture loads");
+
+        // PREMISE.
+        assert_eq!(
+            e.embed_failures(),
+            0,
+            "load must not have counted a failure"
+        );
+        let healthy = e.embed(fixture::HEALTHY);
+        assert!(
+            healthy.iter().any(|x| *x != 0.0),
+            "a healthy embed must not be the zero vector"
+        );
+        assert_eq!(
+            e.embed_failures(),
+            0,
+            "a healthy embed must not move the count"
+        );
+
+        // DEGRADE.
+        let degraded = e.embed(fixture::REFUSED_WORD);
+        assert_eq!(
+            degraded,
+            vec![0.0; fixture::DIM],
+            "a failed embed must degrade to a zero vector"
+        );
+        assert_eq!(
+            e.embed_failures(),
+            1,
+            "a failed embed must be counted exactly once"
+        );
+
+        // RECOVERY.
+        assert_eq!(
+            e.embed(fixture::HEALTHY),
+            healthy,
+            "a healthy embed after a failure must be unchanged"
+        );
+        assert_eq!(
+            e.embed_failures(),
+            1,
+            "a healthy embed must not move the count"
+        );
+    }
+
+    /// **The score arm: a degraded single score is COUNTED once** (ROADMAP
+    /// O131, executed for the first time by O134a).
+    ///
+    /// This is also the behaviour gate on O134a's own shipped-code change:
+    /// `score` was restructured off `score_batch_inner` onto `score_one` to
+    /// delete an unreachable counted arm. Value and count must be exactly
+    /// what they were.
+    #[test]
+    fn ort_rerank_counts_each_degraded_score() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let rr = load_fixture_reranker(dir.path());
+
+        // PREMISE.
+        assert_eq!(
+            rr.score_failures(),
+            0,
+            "load must not have counted a failure"
+        );
+        let healthy = rr.score("query", fixture::HEALTHY);
+        assert!(
+            (healthy - healthy_score()).abs() < 1e-5,
+            "a healthy score must be sigmoid(PAD_LAST), got {healthy}"
+        );
+        assert_eq!(
+            rr.score_failures(),
+            0,
+            "a healthy score must not move the count"
+        );
+
+        // DEGRADE.
+        assert_eq!(
+            rr.score("query", fixture::REFUSED_WORD),
+            0.0,
+            "a failed score must degrade to 0.0"
+        );
+        assert_eq!(
+            rr.score_failures(),
+            1,
+            "a failed score must be counted exactly once"
+        );
+
+        // RECOVERY.
+        assert!((rr.score("query", fixture::HEALTHY) - healthy).abs() < 1e-6);
+        assert_eq!(
+            rr.score_failures(),
+            1,
+            "a healthy score must not move the count"
+        );
+    }
+
+    /// **PINNED BEHAVIOUR, UNDER REVIEW — see ROADMAP O151.**
+    ///
+    /// ORT's `score_batch` collapses the WHOLE reranked window when ONE pair
+    /// fails: `score_batch_inner` collects a `Result` over rayon, so the
+    /// first `Err` discards seven healthy scores and `note_failures` counts
+    /// eight. The tract backend degrades per passage for the same input
+    /// (`onnx_rerank_score_batch_counts_each_poisoned_passage`), so one
+    /// decision has two implementations.
+    ///
+    /// This pins the COUPLING and not merely the count. Phase 1 scores the
+    /// seven healthy passages ALONE and shows they score; phase 2 shows the
+    /// same seven come back `0.0` inside a batch with one poisoned peer.
+    /// Without phase 1 the pin could not exceed its own threshold — all-zero
+    /// would be indistinguishable from a fixture that never scored anything.
+    ///
+    /// O151 decides the semantics. When it lands per-passage, THIS TEST goes
+    /// red, by name, and that is the intended signal.
+    #[test]
+    fn ort_rerank_score_batch_degrades_the_whole_window_pinned_cost() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let rr = load_fixture_reranker(dir.path());
+
+        let poisoned_at = 3usize;
+        let owned: Vec<String> = (0..8)
+            .map(|i| {
+                if i == poisoned_at {
+                    format!("{} {}", fixture::HEALTHY, fixture::REFUSED_WORD)
+                } else {
+                    fixture::HEALTHY.to_string()
+                }
+            })
+            .collect();
+        let passages: Vec<&str> = owned.iter().map(|s| s.as_str()).collect();
+
+        // PHASE 1: every passage except the poisoned one scores on its own.
+        for (i, p) in passages.iter().enumerate() {
+            if i == poisoned_at {
+                continue;
+            }
+            let s = rr.score("query", p);
+            assert!(
+                (s - healthy_score()).abs() < 1e-5,
+                "passage {i} must score healthily ALONE, got {s}"
+            );
+        }
+        assert_eq!(
+            rr.score_failures(),
+            0,
+            "seven healthy single scores must count nothing"
+        );
+
+        // PHASE 2: the same seven, batched with one poisoned peer.
+        let scores = rr.score_batch("query", &passages);
+        assert_eq!(scores.len(), 8);
+        assert!(
+            scores.iter().all(|s| *s == 0.0),
+            "PINNED COST (ROADMAP O151): one failing pair zeroes the WHOLE window, including the seven that just scored healthily — got {scores:?}"
+        );
+        assert_eq!(
+            rr.score_failures(),
+            8,
+            "PINNED COST (ROADMAP O151): the whole window is counted, not the one pair that failed"
+        );
+    }
+
+    /// **Route R: what ONNX Runtime does with an id past the embedding
+    /// table — CLASSIFIED, not predicted** (ROADMAP O134a, O150).
+    ///
+    /// The tract backend PANICS here (observed, pinned in that crate's own
+    /// route-R arm). Whether ORT agrees is the thing this measures rather
+    /// than assumes — and it does not: ORT reports a typed error that
+    /// reaches the counted degrade, so the same misconfiguration crashes one
+    /// backend and is absorbed by the other.
+    #[test]
+    fn ort_route_r_classifies_an_out_of_table_id() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (model, tok) = fixture::write_into(dir.path()).expect("write fixture");
+        let e = OrtEmbedder::load(&model, &tok, "fixture").expect("fixture loads");
+
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            e.embed(fixture::OUT_OF_TABLE_WORD)
+        }));
+        std::panic::set_hook(prev);
+
+        match outcome {
+            Err(payload) => {
+                let what = payload
+                    .downcast_ref::<String>()
+                    .map(|s| s.as_str())
+                    .or_else(|| payload.downcast_ref::<&str>().copied())
+                    .unwrap_or("<non-string panic payload>");
+                println!(
+                    "ROUTE-R ort: ONNX Runtime PANICKED on an out-of-table id. Payload: {what}"
+                );
+                assert_eq!(
+                    e.embed_failures(),
+                    0,
+                    "a panic is not a degrade: nothing may have been counted"
+                );
+            }
+            Ok(v) => {
+                let counted = e.embed_failures();
+                println!(
+                    "ROUTE-R ort: ONNX Runtime returned a value, {counted} counted failure(s)"
+                );
+                assert_eq!(
+                    counted, 1,
+                    "ORT did not panic, so the out-of-table id MUST have reached the counted degrade — it returned {v:?} with {counted} counted. An Ok here is a silently wrong uncounted vector landing in the corpus."
+                );
+                assert_eq!(
+                    v,
+                    vec![0.0; fixture::DIM],
+                    "a counted degrade must be the documented zero vector"
+                );
+            }
+        }
+    }
 }

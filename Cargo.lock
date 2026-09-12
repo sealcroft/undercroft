@@ -3541,7 +3541,9 @@ dependencies = [
 name = "undercroft-embed-onnx"
 version = "1.5.2"
 dependencies = [
+ "prost 0.11.9",
  "rayon",
+ "tempfile",
  "thiserror 2.0.18",
  "tokenizers",
  "tract-onnx",
@@ -3555,9 +3557,11 @@ version = "1.5.2"
 dependencies = [
  "ort",
  "rayon",
+ "tempfile",
  "thiserror 2.0.18",
  "tokenizers",
  "undercroft-core",
+ "undercroft-embed-onnx",
  "undercroft-obs",
 ]
 

@@ -223,18 +223,177 @@ mod rerank;
 pub use late::{colbert_from_env, OnnxColbert};
 pub use rerank::OnnxReranker;
 
+// The GENERATED model fixture (ROADMAP O134a). `any(test, feature = …)` is
+// a disjunction and both arms are load-bearing: the `test` arm makes it
+// reachable from this crate's own tests with no command-line flag, and the
+// feature arm is a NORMAL compilation of this crate, which is how
+// `undercroft-embed-ort` reaches the same generator through a
+// dev-dependency. Neither arm is on in a shipped build.
+#[cfg(any(test, feature = "test-fixture"))]
+pub mod fixture;
+
 #[cfg(test)]
+// The anchor lesson, cheaply: a scripted edit that eats a `#[test]`
+// attribute turns a live gate into dead code and no test can report it —
+// the test IS the thing that stopped running. `dead_code` says so
+// (ROADMAP O134a).
+#[deny(dead_code, unused)]
 mod tests {
     use super::*;
 
-    /// Full inference test, gated on a user-provided model
-    /// (set UNDERCROFT_ONNX_MODEL + UNDERCROFT_ONNX_TOKENIZER to run).
+    /// **The embed arm: a degraded embed is COUNTED, and a healthy one is
+    /// not** (ROADMAP O122, executed for the first time by O134a).
+    ///
+    /// Three phases, and the count is asserted SEPARATELY from the degraded
+    /// value so a counterfactual names which half failed. Restore
+    /// `embed_inner(text).unwrap_or_else(|_| vec![0.0; dim])` at the call
+    /// site and this fails on its COUNT assertion with the value assertion
+    /// still passing; map the tokenizer `Err` to `Ok(zeros)` INSIDE
+    /// `embed_inner` and it fails the same way — which is the discriminator
+    /// a source assertion cannot see, because the text "embed calls the
+    /// degrade path" stays true. Both were run; the second reports
+    /// `left: 0, right: 1` on the count with the zero-vector assertion
+    /// already passed.
     #[test]
-    fn embeds_when_model_available() {
-        if std::env::var("UNDERCROFT_ONNX_MODEL").is_err() {
-            eprintln!("skipping: UNDERCROFT_ONNX_MODEL not set");
-            return;
+    fn onnx_embed_counts_each_degraded_embed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (model, tok) = fixture::write_into(dir.path()).expect("write fixture");
+        let e = OnnxEmbedder::load(&model, &tok, "fixture").expect("fixture loads");
+
+        // PREMISE: a healthy call is finite, correctly shaped and NOT the
+        // degrade value — a fixture that cannot exceed the threshold is a
+        // gate that cannot fail.
+        assert_eq!(
+            e.embed_failures(),
+            0,
+            "load must not have counted a failure"
+        );
+        let healthy = e.embed(fixture::HEALTHY);
+        assert_eq!(healthy.len(), fixture::DIM);
+        assert!(
+            healthy.iter().all(|x| x.is_finite()),
+            "a healthy embed must be finite"
+        );
+        assert!(
+            healthy.iter().any(|x| *x != 0.0),
+            "a healthy embed must not be the zero vector"
+        );
+        assert_eq!(
+            e.embed_failures(),
+            0,
+            "a healthy embed must not move the count"
+        );
+
+        // DEGRADE: the documented value, and exactly one count.
+        let degraded = e.embed(fixture::REFUSED_WORD);
+        assert_eq!(
+            degraded,
+            vec![0.0; fixture::DIM],
+            "a failed embed must degrade to a zero vector"
+        );
+        assert_eq!(
+            e.embed_failures(),
+            1,
+            "a failed embed must be counted exactly once"
+        );
+
+        // RECOVERY: the count is a count, not a latch.
+        let again = e.embed(fixture::HEALTHY);
+        assert_eq!(
+            again, healthy,
+            "a healthy embed after a failure must be unchanged"
+        );
+        assert_eq!(
+            e.embed_failures(),
+            1,
+            "a healthy embed must not move the count"
+        );
+    }
+
+    /// **Route R: what the tract runtime does with an id past the embedding
+    /// table — CLASSIFIED, not predicted** (ROADMAP O134a, O150).
+    ///
+    /// The panel that designed this unit reasoned from tract's source that
+    /// `Gather` panics here, and explicitly refused to assert it. A test
+    /// written from a prediction is not verification, so this resolves to
+    /// one of three NAMED outcomes and prints what it saw:
+    ///
+    /// * a panic — the predicted behaviour, PASS, and ROADMAP O150 stands;
+    /// * a typed `Err` routed to the counted degrade — PASS, and O150 must
+    ///   be RETIRED, which is why this prints loudly;
+    /// * `Ok` — FAIL, because a silently wrong uncounted vector lands in the
+    ///   corpus and joins the codebook training draw, which is strictly the
+    ///   worst of the three.
+    ///
+    /// Depends on `[profile.release]` carrying no `panic = "abort"`.
+    #[test]
+    fn onnx_route_r_classifies_an_out_of_table_id() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (model, tok) = fixture::write_into(dir.path()).expect("write fixture");
+        let e = OnnxEmbedder::load(&model, &tok, "fixture").expect("fixture loads");
+
+        // Silence the default hook for the duration: a green run must not
+        // print a panic and a backtrace on every invocation.
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            e.embed(fixture::OUT_OF_TABLE_WORD)
+        }));
+        std::panic::set_hook(prev);
+
+        match outcome {
+            Err(payload) => {
+                let what = payload
+                    .downcast_ref::<String>()
+                    .map(|s| s.as_str())
+                    .or_else(|| payload.downcast_ref::<&str>().copied())
+                    .unwrap_or("<non-string panic payload>");
+                println!("ROUTE-R onnx: tract PANICKED on an out-of-table id — ROADMAP O150 stands. Payload: {what}");
+                // NARROWED FROM A RUN, not from a prediction. Observed on
+                // tract 0.22.3: "range end index 16388 out of range for
+                // slice of length 512" — a bounds panic in the Gather
+                // kernel, where 16388 = (OUT_OF_TABLE_ID + 1) * DIM and 512
+                // = EMB_ROWS * DIM. The substring is the CLASS rather than
+                // the sentence, so a reworded tract message fails loudly
+                // with the new wording printed above and the pin is
+                // re-derived from that run — which is the only way this pin
+                // is ever allowed to move.
+                assert!(
+                    what.contains("out of range"),
+                    "tract panicked, but not with the bounds panic this arm pins — a different panic here is a different defect. Payload: {what}"
+                );
+                assert_eq!(
+                    e.embed_failures(),
+                    0,
+                    "a panic is not a degrade: nothing may have been counted, or the count would describe a call that never returned"
+                );
+            }
+            Ok(v) => {
+                let counted = e.embed_failures();
+                println!("ROUTE-R onnx: tract returned a value, {counted} counted failure(s)");
+                assert_eq!(
+                    counted, 1,
+                    "tract did not panic, so the out-of-table id MUST have reached the counted degrade — it returned {v:?} with {counted} counted. If this is a typed Err routed to the degrade, ROADMAP O150 is wrong and must be RETIRED; if it is Ok, a silently wrong uncounted vector just landed."
+                );
+                assert_eq!(
+                    v,
+                    vec![0.0; fixture::DIM],
+                    "a counted degrade must be the documented zero vector"
+                );
+            }
         }
+    }
+
+    /// Full inference test against a REAL user-supplied model. Ignored by
+    /// default rather than returning early: this used to print "skipping"
+    /// and report PASSED, so a green suite said nothing about whether it had
+    /// ever run (ROADMAP O134a). `expect` on the variable, so `--ignored`
+    /// without a model fails loudly instead of passing quietly.
+    #[test]
+    #[ignore = "requires a user-supplied model via UNDERCROFT_ONNX_MODEL + UNDERCROFT_ONNX_TOKENIZER"]
+    fn embeds_when_model_available() {
+        std::env::var("UNDERCROFT_ONNX_MODEL")
+            .expect("UNDERCROFT_ONNX_MODEL must be set to run this test");
         let e = from_env().expect("model loads");
         let a = e.embed("the build failed because of a stale lockfile");
         let b = e.embed("ci broke due to an outdated lock file");

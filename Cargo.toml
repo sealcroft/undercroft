@@ -73,6 +73,12 @@ unicode-normalization = "0.1"
 # documents; this carries Umm al-Qura, the Saudi civil calendar.
 calendrical_calculations = "0.2"
 subtle = "2.6"
+# ONNX protobuf encoding for the GENERATED model fixture (ROADMAP O134a).
+# Pinned to the major `tract-onnx` already resolves, so this adds a dependency
+# EDGE and not a crate: it is in Cargo.lock either way. Used by exactly one
+# module, `undercroft-embed-onnx::fixture`, which is compiled only under
+# `cfg(test)` or the `test-fixture` feature.
+prost = "0.11"
 tempfile = "3"
 instant-distance = "0.6"
 rayon = "1"

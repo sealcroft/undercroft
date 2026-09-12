@@ -2336,4 +2336,226 @@ mod tests {
             guards[0], magics, common
         );
     }
+
+    /// The two model crates, which no default member links and which this
+    /// file nonetheless reads — the `../undercroft-store/src` precedent one
+    /// directory over. Placing these gates HERE rather than in those crates
+    /// is deliberate: `undercroft-cli` is a default member, so they run in
+    /// the `test` suite on every local battery, while the crates they
+    /// describe are built only by the CI-only `onnx-build` / `ort-build`
+    /// legs (ROADMAP O134a, O142).
+    fn model_crate_sources() -> Vec<(&'static str, &'static str, String)> {
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("crates/ is this crate's parent")
+            .to_path_buf();
+        let mut out = Vec::new();
+        for (krate, files) in [
+            (
+                "undercroft-embed-onnx",
+                ["lib.rs", "rerank.rs", "late.rs"].as_slice(),
+            ),
+            ("undercroft-embed-ort", ["lib.rs", "late.rs"].as_slice()),
+        ] {
+            for f in files {
+                let path = crates.join(krate).join("src").join(f);
+                let body = std::fs::read_to_string(&path)
+                    .unwrap_or_else(|e| panic!("{} must be readable: {e}", path.display()));
+                out.push((krate, *f, body));
+            }
+        }
+        out
+    }
+
+    /// Every reachable counted degrade arm in the two model crates, and the
+    /// test that EXECUTES it.
+    ///
+    /// The nine are what O122 and O131 built and what nothing ran until
+    /// O134a: an embed degrading to a zero vector, a rerank score degrading
+    /// to `0.0`, and a ColBERT encode degrading to an empty matrix, on each
+    /// of two backends, plus ORT's own `score_batch` arm.
+    const DEGRADE_ARMS: [(&str, &str, &str); 9] = [
+        (
+            "undercroft-embed-onnx",
+            "lib.rs",
+            "onnx_embed_counts_each_degraded_embed",
+        ),
+        (
+            "undercroft-embed-onnx",
+            "rerank.rs",
+            "onnx_rerank_counts_each_degraded_score",
+        ),
+        (
+            "undercroft-embed-onnx",
+            "late.rs",
+            "onnx_colbert_counts_a_degraded_doc_encode",
+        ),
+        (
+            "undercroft-embed-onnx",
+            "late.rs",
+            "onnx_colbert_counts_a_degraded_query_encode",
+        ),
+        (
+            "undercroft-embed-ort",
+            "lib.rs",
+            "ort_embed_counts_each_degraded_embed",
+        ),
+        (
+            "undercroft-embed-ort",
+            "lib.rs",
+            "ort_rerank_counts_each_degraded_score",
+        ),
+        (
+            "undercroft-embed-ort",
+            "lib.rs",
+            "ort_rerank_score_batch_degrades_the_whole_window_pinned_cost",
+        ),
+        (
+            "undercroft-embed-ort",
+            "late.rs",
+            "ort_colbert_counts_a_degraded_doc_encode",
+        ),
+        (
+            "undercroft-embed-ort",
+            "late.rs",
+            "ort_colbert_counts_a_degraded_query_encode",
+        ),
+    ];
+
+    /// **Every counted degrade arm is named by a test, and every named test
+    /// exists — counted against the CODE, in both directions** (ROADMAP
+    /// O134a).
+    ///
+    /// **The arithmetic is the whole design, because a count of counter
+    /// MUTATIONS cannot see these arms.** There are six `fetch_add` sites
+    /// for nine arms: the two ColBERT sides share one `note_failure` helper
+    /// per crate and ORT's two reranker arms share `note_failures`, so an
+    /// inventory keyed on `fetch_add` under-counts by two arms per crate
+    /// while reporting both directions clean. That is O51's rule one funnel
+    /// over — *the record goes on the DOOR, never on the shared helper* —
+    /// and it is why this counts
+    ///
+    ///   `fetch_add` sites − helper DEFINITIONS + helper CALL sites
+    ///
+    /// which replaces each helper's single mutation with the arms that
+    /// actually reach it. A `self.` prefix is what separates a call from a
+    /// definition.
+    ///
+    /// Blind spot, stated in the gate rather than left to be discovered: it
+    /// can only see an arm that calls a COUNTER. A degrade that counts
+    /// nothing calls none — ORT's empty-logit `sigmoid(0.0) = 0.5` is
+    /// exactly that, and it was found by reading (ROADMAP O152).
+    #[test]
+    fn every_counted_degrade_arm_is_named_by_a_test_and_every_named_test_exists() {
+        let sources = model_crate_sources();
+
+        let mut mutations = 0usize;
+        let mut definitions = 0usize;
+        let mut call_sites = 0usize;
+        for (_, _, body) in &sources {
+            mutations += body.matches(".fetch_add(").count();
+            definitions += body.matches("fn note_failure").count();
+            call_sites += body.matches("self.note_failure").count();
+        }
+
+        // PREMISE PROBE. A scanner that found nothing reports exactly what a
+        // clean tree reports, and this project has shipped one that did.
+        assert!(
+            mutations > 0,
+            "premise: the scan found no counter mutation at all in the model crates"
+        );
+        assert!(definitions > 0, "premise: the scan found no note_failure helper — the arithmetic below would silently degrade to a fetch_add count");
+        assert!(
+            call_sites > 0,
+            "premise: the scan found no note_failure call site"
+        );
+
+        let arms = mutations - definitions + call_sites;
+        assert_eq!(
+            arms,
+            DEGRADE_ARMS.len(),
+            "the model crates carry {arms} reachable counted degrade arm(s) ({mutations} counter mutation(s) − {definitions} shared helper(s) + {call_sites} helper call site(s)), but DEGRADE_ARMS names {}. A new arm needs a row here AND a test that executes it; a removed arm needs its row deleted.",
+            DEGRADE_ARMS.len()
+        );
+
+        // Both directions: every named test must EXIST, in the file whose
+        // arm it claims to cover. A row naming a deleted test would
+        // otherwise keep the count right while covering nothing.
+        for (krate, file, test) in DEGRADE_ARMS {
+            let body = &sources
+                .iter()
+                .find(|(k, f, _)| *k == krate && *f == file)
+                .unwrap_or_else(|| {
+                    panic!("DEGRADE_ARMS names {krate}/src/{file}, which is not scanned")
+                })
+                .2;
+            assert!(
+                body.contains(&format!("fn {test}(")),
+                "DEGRADE_ARMS says {krate}/src/{file} is covered by `{test}`, and no such test exists in it"
+            );
+        }
+    }
+
+    /// **The telemetry emit literals, which no count assertion can see**
+    /// (ROADMAP O134a).
+    ///
+    /// Every counted degrade also emits a series
+    /// (`undercroft_embed_failures_total{backend}` and its two siblings),
+    /// and those carry literals no arm test reads: the BACKEND on all three,
+    /// and `side` on the ColBERT pair, where a `doc` failure is a durable
+    /// hole in the token space and a `query` failure retires the late stage
+    /// for one search. Swap `"query"` for `"doc"` in `encode_query` and
+    /// every count test still passes — only this fails, by name.
+    ///
+    /// Self-matching is structurally impossible rather than avoided by
+    /// spelling: the scan is scoped to two named crate directories and this
+    /// file is in neither.
+    #[test]
+    fn every_model_backend_emits_its_own_series_with_its_own_labels() {
+        let sources = model_crate_sources();
+        for (krate, backend) in [
+            ("undercroft-embed-onnx", "onnx"),
+            ("undercroft-embed-ort", "ort"),
+        ] {
+            let joined: String = sources
+                .iter()
+                .filter(|(k, _, _)| *k == krate)
+                .map(|(_, _, b)| b.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            for emitter in ["embed_failed", "rerank_failed", "late_failed"] {
+                let calls = joined.matches(&format!("{emitter}(")).count();
+                assert_eq!(
+                    calls, 1,
+                    "{krate} must emit {emitter} exactly once, found {calls}"
+                );
+                assert!(
+                    joined.contains(&format!("{emitter}(\"{backend}\"")),
+                    "{krate}'s {emitter} must carry its own backend literal \"{backend}\" — a mislabelled series is worse than a missing one, because it is attributed to the other backend"
+                );
+            }
+
+            // The `side` literals, scoped to the function each belongs to.
+            let late = &sources
+                .iter()
+                .find(|(k, f, _)| *k == krate && *f == "late.rs")
+                .expect("each model crate has a late.rs")
+                .2;
+            let doc_at = late
+                .find("fn encode_doc")
+                .expect("late.rs defines encode_doc");
+            let query_at = late
+                .find("fn encode_query")
+                .expect("late.rs defines encode_query");
+            assert!(doc_at < query_at, "this gate assumes encode_doc is defined before encode_query in {krate}/src/late.rs");
+            assert!(
+                late[doc_at..query_at].contains("note_failure(\"doc\""),
+                "{krate}'s encode_doc must report the \"doc\" side"
+            );
+            assert!(
+                late[query_at..].contains("note_failure(\"query\""),
+                "{krate}'s encode_query must report the \"query\" side"
+            );
+        }
+    }
 }

@@ -1170,11 +1170,17 @@ Consequences that are binding, not advisory:
   one `stage` label, ruled by the maintainer 2026-09-08 while the embed
   series was still unreleased and free to rename. `side` is load-bearing:
   a `doc` failure is a durable hole in the token space, a `query` failure
-  retires the late stage for one search. **Residual, stated: the gates
-  cover the trait-to-surface plumbing and NOT the four real degrade sites**,
-  which live in the two model crates and need weights the battery has not
-  got — compile-checked by `onnx-build`/`ort-build`, counterfactualed only
-  through test doubles.
+  retires the late stage for one search. **The residual this entry carried
+  — that the gates covered the trait-to-surface plumbing and NOT the real
+  degrade sites — is CLOSED by O134a**, and it had undercounted itself: the
+  sites are NINE reachable counted arms across six backends, not four, plus a
+  TENTH that was unreachable and is now gone. They live in the two model
+  crates and need weights the battery has not got, so a fixture GENERATED
+  in-test (a ~2 KB ONNX graph + a WordLevel tokenizer, no committed bytes)
+  drives all nine through the real trait methods on the real types. Route R
+  measured a divergence between two SHIPPED backends nobody had run: an id
+  past the embedding table makes tract PANIC and ORT report a counted
+  degrade (O150).
   The same transport policy covers `LlmClient` itself (2026-08-04):
   refine and the admission advisor refuse cleartext beyond loopback,
   `UNDERCROFT_LLM_CA` pins a self-signed root, construction is fallible.
@@ -1182,15 +1188,34 @@ Consequences that are binding, not advisory:
 - `crates/undercroft-embed-onnx` — feature-gated ONNX embedder, cross-encoder
   reranker, **and** ColBERT late-interaction encoder (tract, pure Rust; two
   fixed-shape plans per ColBERT export — dynamic-axis exports carry ops tract
-  rejects); built via the `onnx-build` compose service. Models are
-  user-supplied; tract 0.22 runs BERT-family models, **not** DeBERTa rerankers
+  rejects); built AND TESTED via the `onnx-build` compose service. Models are
+  user-supplied; tract 0.22 runs BERT-family models, **not** DeBERTa rerankers.
+  **`fixture.rs` is where the tests get a model** (O134a): a ~2 KB ONNX graph
+  plus a WordLevel tokenizer GENERATED in-test, behind
+  `#[cfg(any(test, feature = "test-fixture"))]`, so nothing binary is
+  committed and the premise of every counterfactual stays readable in a diff.
+  `undercroft-embed-ort` takes it as a dev-dependency with that feature — ONE
+  generator for both backends, as a real Cargo EDGE rather than `#[path]`,
+  which would hide it from every gate that reads edges. The graph is two
+  `Gather`s into an `Add`: gathering the MASK through a two-row table removes
+  the `Cast` and the `Unsqueeze` whose ONNX signature moved at opset 13, so
+  one file compiles at seq 256 and at 32 in BOTH runtimes
 - `crates/undercroft-embed-ort` — opt-in ONNX Runtime backend (C++ dep;
   `ort-build` compose service): session-pool embedder + reranker + ColBERT
   encoder (late.rs — same exports/env as the tract one), ~2.5× tract per
   forward, int8 model support; pinned `ort = 2.0.0-rc.10`. Wired into the
   CLI via `--features ort` (`UNDERCROFT_EMBEDDER=ort`,
   `UNDERCROFT_RERANKER=ort|colbert-ort`; multi-tenant server shares one
-  session pool across vaults)
+  session pool across vaults). **`OrtReranker::score` goes straight to
+  `score_one` since O134a**: routing one passage through `score_batch_inner`
+  gave it a counted arm nothing could reach, because that function returns
+  `Err` or a one-element `Vec` for a single passage. Restructured rather than
+  deleted — `v[0]` makes it a panic and `unwrap_or(0.0)` puts back the
+  uncounted degrade O131 closed — with the pool-slot expression preserved
+  verbatim, which is result-preserving and NOT scheduling-preserving.
+  `score_batch` still collapses the WHOLE window on one failing pair where
+  tract degrades per passage; that divergence is PINNED as a named cost and
+  ruled in O151
 - `crates/undercroft-cli` — `undercroft` binary (main.rs: CLI, plus `Posture`
   — `open_store_as` makes read-vs-write something a caller must STATE, so
   `serve-http --read-only` opens BOTH its stores read-only; the two opens
@@ -1771,8 +1796,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (852 run,
-                                      # 4 #[ignore]d = 856 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (854 run,
+                                      # 4 #[ignore]d = 858 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1959,10 +1984,21 @@ docker compose run --rm obs-config    # the observability CONFIG suite (13 check
                                       # warning fleet-wide. The only symptom of
                                       # that class is an alert that never
                                       # arrives, which is why it needs a suite
-docker compose run --rm onnx-build    # compile-check the ONNX embedder+reranker feature
-docker compose run --rm ort-build    # compile-check CLI with --features onnx,ort
-                                      # (CI clippy never sees non-default features —
-                                      # clippy ort-gated code here explicitly)
+docker compose run --rm onnx-build    # build the tract backend through the CLI, then
+                                      # RUN that crate's tests. `cargo build` does not
+                                      # compile #[cfg(test)] code, so until O134a these
+                                      # tests were compiled by NOTHING. Publishes NO
+                                      # figure, deliberately: routing the legs through
+                                      # the cargo reader is O134b, and a count written
+                                      # here before a gate reads it is exactly the
+                                      # un-gated number this file keeps finding stale
+docker compose run --rm ort-build    # the same for the ORT backend, built
+                                      # --features onnx,ort. Each leg tests ONLY its own
+                                      # crate, or the tract figures are counted twice.
+                                      # NOT a clippy run: this line claimed it lint-checked
+                                      # ort-gated code and the leg has only ever run
+                                      # `cargo build` (corrected 2026-09-12). Neither model
+                                      # crate is linted by anything — filed, O153
 docker compose run --rm site          # build AND ASSEMBLE the site (7 checks) via
                                       # website/build-site.sh — the same script
                                       # pages.yml deploys with, because the
@@ -2080,7 +2116,7 @@ own teardown was the place it had not been applied. Gated by the
 `destructive compose scope` preflight, which requires every compose teardown
 in `tests/` to name the project it destroys; `tests/tls-pins.sh`'s two scoped
 teardowns are the accepted shape. Logs land in `.battery/` (gitignored).
-**`bash tests/battery.sh --preflight-only` runs the eighteen host-side preflights
+**`bash tests/battery.sh --preflight-only` runs the nineteen host-side preflights
 and no suite**, which is what CI invokes. **A count the battery cannot trust is never compared to a published figure, and there are TWO ways to earn that (O97/O103): the suite EXITED NON-ZERO — `cargo test` aborts at the first failing target, so a numeric, replay-free count arrives over a fraction of them — or the reader disowned it with a `PREMISE FAILURE` marker. `count_untrustworthy` is the one place that question is answered, because it used to be answered twice and differently: the cargo arm guarded on the marker, the shell arm stripped it with a trailing `.*`, and neither looked at the exit code. It fails either way — a gate that cannot measure must not report clean — and the verdict names WHICH cause, because the message was written for a replay and told the reader to re-run a failure that was deterministic. (This sentence said "seven" while
 the tree ran eight, and nothing could say so — and then "ten" while the tree
 ran eleven, which the gate caught inside the very unit that caused it.
@@ -2105,7 +2141,7 @@ code — including the post-run comparison of each suite's MEASURED check count
 against the figure `CLAUDE.md` publishes for it. That comparison needs a RUN
 and therefore cannot be a preflight, so until M13 it ran nowhere on a pull
 request and a leg dropping from 370 checks to 3 was green. The flag skips the
-sixteen preflights because the dedicated `preflight` job already runs them
+nineteen preflights because the dedicated `preflight` job already runs them
 once. **The shared readers — `test_summary`, `suite_summary`,
 `declare_suite_counts`, `suite_count` — are deliberately defined OUTSIDE the
 skipped block**, and that is not tidiness: with them inside, `--no-preflight`
@@ -2269,8 +2305,8 @@ would have covered every local battery and NO pull request, i.e. exactly what
 that entry's own gate requirement forbids. The `lint parity` preflight now
 compares the two as SETS of clippy invocations, both directions, with a
 premise arm on each extractor.
-**Eight compose suites run as a `fail-fast: false` MATRIX** — eight since
-`arch-check` joined (M14), and `tls-pins` is host-side and gets its own job
+**Nine compose suites run as a `fail-fast: false` MATRIX** — eight since
+`arch-check` joined (M14) and nine since `ort-build` joined (O142), and `tls-pins` is host-side and gets its own job
 rather than a matrix leg, so CI runs ELEVEN jobs of which the matrix is one.
 **The eleventh is `windows-check` (ROADMAP O102), and it exists because
 NOTHING here compiled for Windows on a pull request.** `release.yml` builds
@@ -2328,7 +2364,7 @@ battery carries `lint` and `site` which CI runs as their own jobs. **`ort-build`
 was a compose service run by NEITHER** while `release.yml` shipped an `ort`
 binary for five targets — a published artifact compiled on no pull request,
 which is O102's *"a target you SHIP is a target that must be compiled on a
-pull request"* on the FEATURE axis rather than the platform one. O141 added it
+pull request"* on the FEATURE axis rather than the platform one. O142 added it
 to the matrix (verified green locally first, because a leg that fails on
 arrival teaches everyone to ignore it). What remains of the difference is a
 DECISION and is stated as one: the two model-crate legs run in CI and not in a

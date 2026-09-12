@@ -281,18 +281,134 @@ pub fn colbert_from_env() -> Result<OrtColbert, OrtError> {
 }
 
 #[cfg(test)]
+// See the sibling module in lib.rs: `dead_code` is the cheap catch for a
+// `#[test]` attribute eaten by a scripted edit (ROADMAP O134a).
+#[deny(dead_code, unused)]
 mod tests {
     use super::*;
     use undercroft_core::late::maxsim;
+    use undercroft_embed_onnx::fixture;
 
-    /// Full inference test, gated on a user-provided export
-    /// (set the UNDERCROFT_COLBERT_* variables to run).
+    fn load_fixture_colbert(dir: &std::path::Path) -> OrtColbert {
+        let (model, tok) = fixture::write_into(dir).expect("write fixture");
+        OrtColbert::load(&model, &model, &tok, "fixture").expect("fixture loads")
+    }
+
+    /// **The doc-encode arm: a degraded doc encode is COUNTED** (ROADMAP
+    /// O131, executed for the first time by O134a).
     #[test]
+    fn ort_colbert_counts_a_degraded_doc_encode() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let c = load_fixture_colbert(dir.path());
+
+        // PREMISE.
+        assert_eq!(
+            c.encode_failures(),
+            0,
+            "load must not have counted a failure"
+        );
+        assert_eq!(c.dim(), fixture::DIM);
+        let healthy = c.encode_doc(fixture::HEALTHY);
+        assert!(
+            !healthy.is_empty(),
+            "a healthy doc encode must not be the empty-matrix degrade"
+        );
+        assert_eq!(
+            healthy.len() % c.dim(),
+            0,
+            "a token matrix must be a whole number of rows"
+        );
+        assert_eq!(
+            c.encode_failures(),
+            0,
+            "a healthy doc encode must not move the count"
+        );
+
+        // DEGRADE.
+        assert!(
+            c.encode_doc(fixture::REFUSED_WORD).is_empty(),
+            "a failed doc encode must degrade to an empty matrix"
+        );
+        assert_eq!(
+            c.encode_failures(),
+            1,
+            "a failed doc encode must be counted exactly once"
+        );
+
+        // RECOVERY.
+        assert_eq!(
+            c.encode_doc(fixture::HEALTHY),
+            healthy,
+            "a healthy doc encode after a failure must be unchanged"
+        );
+        assert_eq!(
+            c.encode_failures(),
+            1,
+            "a healthy doc encode must not move the count"
+        );
+    }
+
+    /// **The query-encode arm: a degraded query encode is COUNTED**
+    /// (ROADMAP O131, executed for the first time by O134a).
+    ///
+    /// A separate receiver from the doc test: both arms route through one
+    /// `note_failure`, so one test driving both could not tell which side
+    /// counted. The side LITERAL they differ by is gated in `parity.rs`.
+    #[test]
+    fn ort_colbert_counts_a_degraded_query_encode() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let c = load_fixture_colbert(dir.path());
+
+        // PREMISE.
+        assert_eq!(
+            c.encode_failures(),
+            0,
+            "load must not have counted a failure"
+        );
+        let healthy = c.encode_query(fixture::HEALTHY);
+        assert_eq!(
+            healthy.len(),
+            QUERY_LEN * fixture::DIM,
+            "mask augmentation must make every query position attend"
+        );
+        assert_eq!(
+            c.encode_failures(),
+            0,
+            "a healthy query encode must not move the count"
+        );
+
+        // DEGRADE.
+        assert!(
+            c.encode_query(fixture::REFUSED_WORD).is_empty(),
+            "a failed query encode must degrade to an empty matrix"
+        );
+        assert_eq!(
+            c.encode_failures(),
+            1,
+            "a failed query encode must be counted exactly once"
+        );
+
+        // RECOVERY.
+        assert_eq!(
+            c.encode_query(fixture::HEALTHY),
+            healthy,
+            "a healthy query encode after a failure must be unchanged"
+        );
+        assert_eq!(
+            c.encode_failures(),
+            1,
+            "a healthy query encode must not move the count"
+        );
+    }
+
+    /// Full inference test against a REAL user-supplied export. Ignored by
+    /// default rather than returning early — it used to print "skipping" and
+    /// report PASSED (ROADMAP O134a).
+    #[test]
+    #[ignore = "requires a user-supplied ColBERT export via UNDERCROFT_COLBERT_MODEL + _QUERY_MODEL + _TOKENIZER"]
     fn late_interaction_ranks_related_passages_higher() {
-        if std::env::var("UNDERCROFT_COLBERT_MODEL").is_err() {
-            eprintln!("skipping: UNDERCROFT_COLBERT_MODEL not set");
-            return;
-        }
+        std::env::var("UNDERCROFT_COLBERT_MODEL")
+            .expect("UNDERCROFT_COLBERT_MODEL must be set to run this test");
         let c = colbert_from_env().expect("model loads");
         let q = c.encode_query("why did the build break");
         let rel = c.encode_doc("the build failed because of a stale lockfile in ci");
