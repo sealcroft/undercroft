@@ -7,6 +7,30 @@ its CLI mirror `tenant-repoint` are additive — nothing that worked before
 behaves differently because they exist. Everything else in this section is a
 fix whose only observable change is that a defect is gone.
 
+### the configuration class is checked against what the resolver actually does (O155)
+
+Every `UNDERCROFT_*` declaration carries a class saying what a bad value must
+do: a protection REFUSES, a knob warns and keeps the conservative default.
+That is a claim about consequence, and **nothing checked it against one**.
+What existed was a hand-written list of nine names asserted to be protections,
+under a comment promising that every name the validator can refuse would be
+classified — but the list was maintained by hand, so a variable that gained a
+refusal was never added to it, and the opposite case was never asked at all.
+
+Now every `Checked` declaration is driven through its real resolver with
+values it cannot accept, and the outcome must match its class in both
+directions. The universe comes from the inventory rather than from a list
+somebody remembered. All 49 are clean.
+
+The gate taught its own shape on the first run: driven with one garbage
+string it reported five secrets as defects, and all five were correct — a
+passphrase or a bearer has no vocabulary, so an arbitrary string is a
+perfectly good value for it and the only thing it cannot be is empty. It
+drives both shapes now.
+
+No behaviour changes for an operator. This is about whether the configuration
+doctrine this project publishes is true of its own code.
+
 ### a leg that stopped testing, and a log that inflated its own count, are both named now (O134b, O156)
 
 Two defects in how this project measures itself, found by O134a's own battery
