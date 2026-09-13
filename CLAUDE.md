@@ -1805,8 +1805,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (855 run,
-                                      # 4 #[ignore]d = 859 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (859 run,
+                                      # 4 #[ignore]d = 863 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -1924,7 +1924,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
 docker compose run --rm e2e           # e2e UI/UX suite against the release binary (508 checks)
-docker compose run --rm orchestrator-e2e  # two engines + orchestrator (150 checks)
+docker compose run --rm orchestrator-e2e  # two engines + orchestrator (156 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (82 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
@@ -3478,7 +3478,7 @@ unwritten because a half-correct verdict is worse than a known-wrong one.
   report different values. A knob whose unset depends on ANOTHER variable has
   no row and says why (`UNDERCROFT_LATE_TOP_N` falls through to
   `UNDERCROFT_RERANK_TOP_N`, valid or not, which is a compatibility promise).
-  56 of the 81 are `Checked`, 25 `Opaque`, and 39 `Protects` against 42
+  57 of the 81 are `Checked`, 24 `Opaque`, and 40 `Protects` against 41
   `Tunes` — counted by the `prose figures` preflight, not remembered. The
   class figures had rotted before it existed: O121 moved
   `UNDERCROFT_RERANKER` to `Protects` and the platform-views decision tree

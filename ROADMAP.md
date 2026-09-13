@@ -4168,6 +4168,96 @@ documented contract moves; import stops holding the corpus, the duplicate
 check stops scanning the table, and a migration is judged against the source's
 own snapshot.
 
+### O160 — CLOSED 2026-09-13: both listeners share one address rule, and the sibling that was the good example had the same defect
+
+**Filed 2026-09-13 out of O158's probe, ruled by a three-lens review that
+converged and then refuted the filing's own central caveat.**
+
+`UNDERCROFT_ORCH_ADDR` was `(Tunes, Opaque)`: an empty value — a failed
+interpolation — passed BOTH pre-flights with exit 0 and then killed `serve`
+with `bind : invalid socket address`. Round-four #9's defect, *exit 0 for an
+environment that does not start*, on the control plane's own listen address.
+
+#### The filing's caveat was false, and a comment is why the row was exempt
+
+The entry said a pre-flight arm "would be a SECOND statement of a rule clap
+and `bind` already make". It would not. `resolve_metrics_addr` has validated a
+listen address while binding nothing since O20 — and two comments in the same
+file assert that a listen address *"ha[s] no parse this command can run
+without binding"*, one of them 78 lines above the arm that disproves it. Those
+sentences are why nobody asked. **A comment is not a gate, and a wrong comment
+is what kept this row exempt for two releases.** Both are corrected here.
+
+#### The sibling held up as the good example had the same defect, narrower
+
+`resolve_metrics_addr`'s only structural check was `contains(':')`. So
+`UNDERCROFT_ORCH_METRICS_ADDR=127.0.0.1:99999`, `=127.0.0.1:` and `=:9900`
+were reported with an affirmative **`ok`** line by both pre-flights and died at
+`Server::http`. That is worse than the row this entry was filed about, which
+at least stayed silent. **It is the argument for one shared resolver rather
+than a bespoke arm**: a second copy fixes one listener and leaves the other.
+
+#### What shipped
+
+`parse_listen_addr` in `undercroft-config` — trim, refuse empty naming the
+failed interpolation, require a non-empty host and a `u16` port — with
+`resolve_orch_addr` and `resolve_metrics_addr` as the two wrappers that differ
+only in what UNSET means. `serve` resolves the address **before** `Orch::open`,
+so a doomed start no longer creates a state database on its way to dying. The
+default is a `pub const` read by clap's `default_value`, so `--help`, `serve`
+and both pre-flights cannot disagree. Class `(Protects, Checked)` on both
+inventories, which the cross-crate join forces to move together.
+
+**`Protects` is gate-forced, not chosen.** Once the row is `Checked`,
+`every_checked_declaration_answers_garbage_the_way_its_class_says` requires
+`Tunes ⇒ Warn`, and nothing here warns. Making `Tunes` honest would mean
+binding loopback when the declaration is unreadable — an operator whose
+`0.0.0.0:8900` failed to interpolate would get a control plane that starts,
+answers its own health check, and is unreachable by every tenant. That is
+O21/O22 moved from the credential to the endpoint.
+
+#### Why NOT a `SocketAddr` parse, which was the tempting one-line fix
+
+`Server::http` takes `ToSocketAddrs`, so `localhost:8900` and
+`orch.internal:8900` bind today, and `addr_is_loopback` accepts `localhost`
+explicitly. `SocketAddr::from_str` refuses both — a documented value ceasing
+to be accepted, which this project's own test calls MAJOR, on a fix. The rule
+that governs the implementation: **the pre-flight's refusals must be a strict
+SUBSET of the bind's.** A pre-flight stricter than the runtime breaks working
+deployments; one looser is the defect being closed. Name resolution and
+interface availability stay outside deliberately — they are I/O, and this
+crate opens nothing.
+
+#### Gates
+
+- Four unit tests in `undercroft-config`, driving BOTH wrappers over the same
+  rows: the seven shapes that used to be accepted, the six that bind today and
+  must keep resolving, unset on each wrapper, and a padded value resolving to
+  the trimmed one — because the resolved value is what `serve` binds, or the
+  two disagree again one whitespace character over.
+- Six checks in `tests/e2e-orchestrator.sh` proving the pre-flight and `serve`
+  now agree, **with the trap the review found**: `orch_pre` passes `--addr` on
+  the command line and clap ranks a flag above an env var, so driving the
+  variable through it would have exercised the flag, bound successfully, and
+  reported a `timeout` — a check that cannot fail for the reason it was
+  written. The new helper passes no `--addr`. Premise arm: a valid address
+  must still bind, or the block would pass by refusing everything.
+- Counterfactual, run: weaken the parse back to `contains(':')` and the
+  accepted-shapes test fails, naming `127.0.0.1:99999`.
+
+#### Residual, stated
+
+The resolver checks shape, not reachability: `orch.invalid:8900` passes and
+fails at bind. That is the same limit `resolve_metrics_addr` already had, so
+it adds no asymmetry, and the message does not overclaim.
+
+**`addr_is_loopback` is `pub` now and a byte-identical inline copy still lives
+in the engine's `http.rs`**, guarding its refuse-to-bind rule. Unifying them is
+filed rather than done: it changes a different listener's security gate and
+wants its own counterfactual. Two implementations of one predicate is the
+class O90 and O92 both record, and it is written down rather than left.
+
+
 ### O161 — CLOSED 2026-09-13: the file states its own structure, and a level-2 heading inside an entry is refused
 
 **Filed 2026-09-13 after tripping it, closed the same day after a
@@ -13178,63 +13268,6 @@ widened and rejected, and M15 says the ruling stands.
 `closed-under-open`, which has none — asserting the EXACT row set the scanner
 produces rather than that the expected rows are present, since a glob ignores
 a spurious row. Plus the reorder, which is its own one-line counterfactual.
-
-### O160 — two listeners on one binary, classified differently, and the empty one passes both pre-flights
-
-**Filed 2026-09-13, measured, out of O158's probe.** The control plane opens
-two network listeners and its inventories classify them as opposites:
-
-| declaration | class | pre-flight | opens |
-|---|---|---|---|
-| `UNDERCROFT_ORCH_METRICS_ADDR` | `Protects, Checked` | a real arm | the metrics listener |
-| `UNDERCROFT_ORCH_ADDR` | `Tunes, Opaque` | none | the routing proxy + admin plane |
-
-`parity.rs`'s own comment on the first says it is `Protects` **"because
-declaring it OPENS a network surface"**, and that reasoning covers the second
-word for word. One of the two is also the door every tenant reaches.
-
-**Measured, not argued.** A failed interpolation is accepted by both
-pre-flights and then kills the process:
-
-```
-$ UNDERCROFT_ORCH_ADDR= undercroft-orchestrator config-check
-checked 0 declaration(s): 0 refusing, 0 warning, 1 seen but not validated   (exit 0)
-$ UNDERCROFT_ORCH_ADDR= undercroft config check
-… 0 would REFUSE to start.                                                  (exit 0)
-$ UNDERCROFT_ORCH_ADDR= undercroft-orchestrator serve
-Error: bind : invalid socket address                                        (exit 1)
-```
-
-Control: unset, the same command binds `127.0.0.1:8900` and serves. So this is
-round-four #9's defect — *exit 0 for an environment that does not start* —
-alive on the control plane's own listen address, and it is the identical shape
-O155 has just closed for seven engine declarations.
-
-**Why it survived**: `UNDERCROFT_ORCH_DB` next to it is protected by accident,
-because a `PathBuf` argument rejects an empty `OsStr` where a `String` one
-does not (O158). A type-derived refusal on one row makes the family look
-covered.
-
-**The fix is a class decision, which is why this is filed rather than done.**
-Making the row `Checked` needs a class that matches what the runtime does, and
-`Tunes` promises *"garbage warns and keeps that default"* while an empty
-address refuses — so the honest pairing is `Protects, Checked`, matching its
-sibling. Both inventories must move together, since the cross-crate join
-counts name AND class in both directions.
-
-**The awkward part, stated rather than skipped**: the refusal an operator
-meets today comes from clap and from `bind`, neither of which this tree owns,
-so a pre-flight arm parsing the address would be a SECOND statement of the
-same rule — the thing `check_one`'s own doc forbids. Either the arm parses
-`SocketAddr` (a restatement, but of a std parse rather than of our policy), or
-the address is resolved once in a function both `serve` and the pre-flight
-call. The second is the tree's pattern (`resolve_orch_key`,
-`resolve_admin_token`, `check_dsn_transport`) and costs one small resolver.
-
-**Gate**: an empty or unparseable `UNDERCROFT_ORCH_ADDR` is refused by both
-pre-flights with the same verdict `serve` gives, and the class gate
-`every_checked_declaration_answers_garbage_the_way_its_class_says` covers the
-row once it is `Checked`.
 
 ### O135 — three reads the audit has never run, carried in a gitignored file
 

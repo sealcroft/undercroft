@@ -206,6 +206,21 @@ pub fn check_declaration(name: &str, raw: &str) -> Result<Option<String>, String
         // declarations that are SET, so a non-loopback address with no token
         // declared would otherwise be invisible and the pre-flight would exit
         // 0 for an environment that refuses to start.
+        // **ROADMAP O160.** The engine pre-flights the control plane's
+        // declarations (O24), and this one was `Opaque`: `undercroft config
+        // check` exited 0 for a value that kills `undercroft-orchestrator
+        // serve` at bind. Same resolver the control plane's own `serve` calls.
+        "UNDERCROFT_ORCH_ADDR" => undercroft_config::resolve_orch_addr(Some(raw))
+            .map_err(|e| e.to_string())
+            .and_then(|a| {
+                described(if undercroft_config::addr_is_loopback(&a) {
+                    format!("the control plane serves on {a} (loopback)")
+                } else {
+                    format!(
+                        "the control plane serves on {a} — beyond loopback, where /healthz and /ui are unauthenticated"
+                    )
+                })
+            }),
         "UNDERCROFT_ORCH_METRICS_ADDR" => undercroft_config::resolve_metrics_addr(Some(raw))
             .and_then(|a| match a {
                 Some(a) => undercroft_config::resolve_metrics_token(

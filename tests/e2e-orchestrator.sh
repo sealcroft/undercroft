@@ -829,6 +829,29 @@ grep -q "ends in whitespace" /tmp/orch-cc.log \
   && ok "the diagnosis is the trailing whitespace, not the length floor" \
   || fail "wrong diagnosis for a trailing-newline admin token" "$(tail -3 /tmp/orch-cc.log)"
 
+# **ROADMAP O160 — the listen address, and the ONE trap in driving it.**
+# `orch_pre` passes `--addr` on the command line, and clap ranks a flag above
+# an env var: `orch_pre UNDERCROFT_ORCH_ADDR ""` would exercise the FLAG, bind
+# successfully, and report 124 from `timeout` — a check that cannot fail for
+# the reason it was written. So this drives the variable with no `--addr` at
+# all, which is also how a deployment declares it.
+orch_addr_pre() { # orch_addr_pre <value> -> "<preflight-exit> <serve-exit>"
+  local val="$1" pc sc
+  env UNDERCROFT_ORCH_ADDR="$val" "$ORCH" config check >/tmp/orch-cc.log 2>&1; pc=$?
+  timeout 5 env UNDERCROFT_ORCH_ADDR="$val" "$ORCH" serve >/tmp/orch-serve.log 2>&1; sc=$?
+  echo "$pc $sc"
+}
+# Each of these was accepted by BOTH pre-flights and then died at bind.
+for BAD in "" "127.0.0.1:99999" ":8900" "127.0.0.1:"; do
+  read -r PC SC <<<"$(orch_addr_pre "$BAD")"
+  [ "$PC" = "1" ] && [ "$SC" = "1" ]     && ok "[$BAD] the pre-flight and serve agree: both refuse"     || fail "[$BAD] pre-flight=$PC serve=$SC — expected 1 and 1"             "$(tail -2 /tmp/orch-cc.log; tail -2 /tmp/orch-serve.log)"
+done
+grep -q "UNDERCROFT_ORCH_ADDR" /tmp/orch-cc.log   && ok "and the refusal names the variable"   || fail "the refusal did not name UNDERCROFT_ORCH_ADDR" "$(tail -3 /tmp/orch-cc.log)"
+# The premise: a VALID address must still bind, or the block above would pass
+# by refusing everything. 124 is `timeout` killing a healthy server.
+read -r PC SC <<<"$(orch_addr_pre "127.0.0.1:18997")"
+[ "$PC" = "0" ] && [ "$SC" = "124" ]   && ok "premise: a valid address pre-flights clean and binds"   || fail "premise failed: a valid address gave pre-flight=$PC serve=$SC"           "$(tail -3 /tmp/orch-serve.log)"
+
 read -r PC SC <<<"$(orch_pre UNDERCROFT_ORCH_ADMIN_TOKEN "")"
 if [ "$PC" = "1" ] && [ "$SC" = "1" ]; then
   ok "an empty admin token is refused by both"

@@ -69,7 +69,10 @@ enum Command {
     },
     /// Serve the routing proxy + admin plane
     Serve {
-        #[arg(long, env = "UNDERCROFT_ORCH_ADDR", default_value = "127.0.0.1:8900")]
+        // The default is stated ONCE, in the crate both binaries and both
+        // pre-flights link, so clap's `--help`, `serve` and the two
+        // `config check`s cannot disagree about it (ROADMAP O160).
+        #[arg(long, env = "UNDERCROFT_ORCH_ADDR", default_value = undercroft_config::DEFAULT_ORCH_ADDR)]
         addr: String,
         /// Serve as a read replica: open the state database read-only and
         /// expose only the `/t/*` data plane (admin plane and console
@@ -370,6 +373,14 @@ fn run() -> Result<()> {
             Ok(())
         }
         Command::Serve { addr, read_replica } => {
+            // **Resolved BEFORE anything is opened (ROADMAP O160).** The
+            // syntactic half of this is what `config check` runs, so the
+            // pre-flight and the run agree; the address was previously handed
+            // straight to `Server::http`, which meant a failed interpolation
+            // created a state database on its way to dying at bind. The
+            // engine's own rule one crate over: a refusal about configuration
+            // must not arrive after a resource is open.
+            let addr = undercroft_config::resolve_orch_addr(Some(&addr))?;
             if read_replica {
                 // No admin token: the replica has no admin plane to gate.
                 let orch = Orch::open_read_only(&cli.db, &orch_key()?)?;
