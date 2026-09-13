@@ -7,6 +7,25 @@ its CLI mirror `tenant-repoint` are additive — nothing that worked before
 behaves differently because they exist. Everything else in this section is a
 fix whose only observable change is that a defect is gone.
 
+### the ROADMAP placement gate stopped being disabled by a heading (O161)
+
+Internal tooling, no user-visible change.
+
+The preflight that checks where a closed roadmap entry lives takes its notion
+of "which section am I in" from any level-2 heading — including one written
+inside an entry. From that line on, every later entry in the section was
+attributed to the wrong place, and the two placement checks stopped firing for
+all of them without saying anything. It also truncated an entry's body at its
+own subsection heading, which blinded a third check and let one entry satisfy
+a fourth by accident, on a word in an unrelated sentence.
+
+The fix is the file rather than the parser: entry subsections are `####`,
+which is what nine of them already were, and a new arm refuses any level-2
+heading that is not a section — releases by shape, the seven prose sections by
+a roster counted both ways. It fails loudly on an unrecognised heading, which
+is the opposite direction from teaching the parser a list of section names to
+tolerate.
+
 ### the runtime image now installs its distribution's security updates (O159)
 
 The published image is built `FROM debian:bookworm-slim` and ran no `apt`

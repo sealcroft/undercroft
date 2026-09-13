@@ -3988,7 +3988,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**191** of the **206** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**192** of the **207** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4168,6 +4168,132 @@ documented contract moves; import stops holding the corpus, the duplicate
 check stops scanning the table, and a migration is judged against the source's
 own snapshot.
 
+### O161 — CLOSED 2026-09-13: the file states its own structure, and a level-2 heading inside an entry is refused
+
+**Filed 2026-09-13 after tripping it, closed the same day after a
+three-lens review refuted its central figure.** `roadmap_scan` takes its
+enclosing section from any `^## ` line, and an entry's own subsection heading
+is a `^## ` line — so from that point every LATER entry in the section was
+attributed to `## Gates` rather than to `## Open`, and both placement arms
+stopped firing for all of them.
+
+**Measured, both directions, before the fix**: an entry carrying an internal
+`##` is judged correctly — its own heading flushes while the section is still
+right — while a closed entry placed AFTER it produced **no output at all**,
+which is what a clean tree produces.
+
+#### The filing's own count was wrong, and how it was wrong is the lesson
+
+It said *"15 entries carry 28 internal `##` headings"*. Measured: **14
+headings in 3 entries** (O159, O155, O134a), all written in the previous two
+days, all inside `## 1.6.0 — unreleased`. The 33 `^## ` lines are 19 genuine
+sections and 14 internal ones.
+
+The 28 came from classifying a `^## ` as internal whenever an entry was still
+open — **which is option (3)'s own discriminator.** The filing measured the
+bug with the tool it was proposing as the fix, and swept in the 14 legitimate
+section headings that merely follow a section's last entry. Two independent
+reviewers reached 14 and diagnosed the error identically. Sixth consecutive
+filing in this tree to miscount its own class; the first to do it with the
+instrument under evaluation.
+
+#### Why the fix is the FILE, not the parser
+
+`####` is not a new convention — **it is this file's existing one, in 9
+places, the oldest from 2026-08-13**, including one inside `## Unversioned`.
+The 14 breaches are a two-day-old drift from the file's own practice.
+
+And the structural argument outranks the parser one. In CommonMark a heading
+level IS a containment statement, so `## Gates` at `4436` declared itself a
+SIBLING of `## 1.5.2 — released` and a PARENT of every entry after it. An
+agent grepping `^## ` — the cheapest index into a 14,696-line memory artifact
+— got `## Gates` back as a peer of the release sections. **The outline lied
+about the shape of the file**, and options (1) and (3) would have left that
+intact while teaching a parser to cope. Measured: `## 1.6.0` holds 9 entries
+and the scanner attributed **1** of them to it; it now reads 9.
+
+#### Two more arms were broken, and this fixes them as a side effect
+
+The filing named two. There were four. After `/^## /` fires, `sec = ""`, so
+the accumulator drops every line until the next `###` — the entry's BODY is
+truncated at its own subsection heading:
+
+- `body-closed-heading-open` went blind: a closed marker written below an
+  internal heading was unreachable. **Silent.**
+- `closure-without-evidence` read only the text above it. **O155 was passing
+  that arm by accident**, on the word "gate" in *"the gate half shipped the
+  same day"* — a sentence about something else — while its real `## Gates`
+  section was invisible. That is M15's lesson mirrored: M15 fixed an entry
+  satisfying the evidence arm with words from a section it merely PRECEDED;
+  this one satisfied it with the only fragment the scanner could still see.
+
+A third, latent: an entry subsection named `## Open questions` — a wholly
+natural name — would set the section to something matching `/^## Open /` and
+report **every later closed entry in the release as misplaced**. O47 rejected
+a 7% false-positive proxy on the grounds that a noisy gate gets switched off;
+this one could reach an entire release section. Both are closed by refusing
+the internal heading at all.
+
+#### What shipped
+
+The 14 headings are `####`, addressed **one line at a time with a per-line
+assertion** — never a sweep, which would have destroyed all 19 section
+headers — and every changed line was read in the diff. `^### ` is unchanged at
+206, so no published figure moves.
+
+A new arm holds the line: every `^## ` in `ROADMAP.md` must be a section
+heading, recognised by semver SHAPE for releases and by a 7-row roster for the
+prose sections, counted **both ways**. It lives **outside the awk** for a
+stated reason — that program sits in a single-quoted shell string where one
+apostrophe in a comment ends the string and kills the script, which has
+happened once — and it is not a second implementation of anything, because it
+models no entry boundaries at all: it asks only whether a line is a section
+heading. It sits inside the existing preflight block, so the published count
+of nineteen preflights does not move.
+
+**Fail-closed is the whole difference from option (1).** That shape used a
+pattern to decide what SETS the section, so an unmatched heading silently
+stops sectioning — this defect with a new trigger. This uses a pattern to
+decide what is PERMITTED to be a `^## `, so an unmatched one is a loud
+failure. Same regex, opposite failure direction.
+
+#### Gates and counterfactuals — three, each run
+
+- An internal `##` restored → named with its `file:line`.
+- A roster row naming no heading → named (the direction that stops the roster
+  outliving what it admits).
+- The section reader's pattern broken → fails saying **the READER rotted, not
+  the file**, which a count alone could not distinguish.
+
+#### Rejected
+
+**(1) pattern-match the sections**: fail-open, and it repairs neither the body
+truncation nor the malformed document. Its discriminator is a table, which
+O92 rules against where a property is available.
+
+**(3) track whether an entry is open**: refuted by measurement, not by taste.
+The only single-pass predicate is "the last heading was an id entry", and that
+is TRUE at legitimate section headers too — `## 1.5.2` at `4951` follows
+`### O145`. Applied to the real file it demotes 28 of 33 headings including
+`## Open` and `## Unversioned`, i.e. the gate goes blind almost everywhere.
+The two-pass "contains a `###`" rule is refuted in both directions. Markdown
+has no end-of-section token, so any such rule is a heuristic.
+
+**The fixture the filing proposed** — *a closed entry under `## Open`,
+following a sibling with an internal `##`, must be named* — is rejected as
+wrong under this shape: it would pin the TOLERANCE the convention exists to
+make unnecessary.
+
+#### Residual, stated
+
+A `#### Gates` heading now enters the body, so an entry could satisfy
+`closure-without-evidence` on an empty evidence heading. That is already true
+of the 9 pre-existing `####` entries, so it is not new — but it is a genuine
+loosening relative to the accidental truncation it replaces, and it is written
+down rather than discovered. What remains unprobed in this scanner is filed as
+**O162**.
+
+
 ### O159 — CLOSED 2026-09-13: the runtime image never refreshed its base, so a fixed CVE shipped until Debian happened to rebuild
 
 **Found by the `trivy-image` CI job on 2026-09-12, on a pull request that
@@ -4192,7 +4318,7 @@ was anything that kept the thing it scans current, and a gate cannot supply
 that. Asking *what does this gate DO when it fires?* is a different question
 from *what can this gate SEE?*, and this tree had only been asking the second.
 
-## The fix, and the trade it makes
+#### The fix, and the trade it makes
 
 `apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*` as the
 first step of the runtime stage.
@@ -4216,7 +4342,7 @@ image. A vulnerable build toolchain is a supply-chain question with a
 different shape and a different answer, and folding it in here would have
 made this change about two things.
 
-## Measured, with the counterfactual run first
+#### Measured, with the counterfactual run first
 
 - **Before**: the stock `debian:bookworm-slim` under CI's exact flags
   (`--severity CRITICAL,HIGH --ignore-unfixed`) reports **Total: 2 (HIGH: 2)**
@@ -4226,7 +4352,7 @@ made this change about two things.
 - **After**: the real runtime image built from this Dockerfile, scanned with
   CI's exact flags, reports **0 vulnerabilities, exit 0**.
 
-## Gate — and why no new one
+#### Gate — and why no new one
 
 **The gate is `trivy-image`, which already exists, already fails closed
 through `CI verdict`, and is what found this.** No source-level check was
@@ -4260,7 +4386,7 @@ claimed "four model-path declarations"; there are **seven**
 `_COLBERT_TOKENIZER`). Fourth consecutive filing in this tree to undercount
 its own class.
 
-## What shipped FIRST: the class is checked against CONSEQUENCE
+#### What shipped FIRST: the class is checked against CONSEQUENCE
 
 The class is a claim about what a bad value DOES — refuse, or warn and keep
 the conservative default — and **nothing checked it against one**. What
@@ -4292,7 +4418,7 @@ promised verdict and failing when any produces the opposite one.
 **Result: the `Checked` axis is clean.** All 49 rows' class claims match what
 their resolver does.
 
-## The ruling that remains, with numbers instead of impressions
+#### The ruling that remains, with numbers instead of impressions
 
 **The drift is confined to `Opaque` rows, and there the class decides
 NOTHING** — `check_one` returns `Accepted` before the class is consulted. For
@@ -4335,7 +4461,7 @@ is rejected and option (3) is not being taken. It removes the contradiction,
 is consistent under the backwards test, and claims nothing a reader could
 mistake for a check.
 
-## The ruling applied: fourteen rows, and seven that needed an ARM instead
+#### The ruling applied: fourteen rows, and seven that needed an ARM instead
 
 **It is FOURTEEN rows, not ~17, and the three that fall out are the whole
 point of the backwards test.** The criterion is *a mandatory operand with no
@@ -4407,7 +4533,7 @@ shared and stated once: the value's meaning is whether it LOADS, and
 then refuses, measured on the CI machine rather than on the host that will
 open the file.
 
-## Two defects found on the way, both of the class this entry is about
+#### Two defects found on the way, both of the class this entry is about
 
 **`PREFLIGHT_EXEMPT` was counted in two directions and needed three.** Its own
 doc said BOTH, and the gate's loop skips every row that is not `Protects` — so
@@ -4433,7 +4559,7 @@ spelled identically in both boxes (`(N protect, M tune)`), so no pattern could
 tell them apart. **A figure a gate cannot address is a figure that rots**, and
 one of those two was already wrong.
 
-## Gates
+#### Gates
 
 - `every_protects_variable_is_pre_flighted_or_exempt` — now three directions,
   the third over the exempt list's own universe. Counterfactualed twice: an
@@ -4450,7 +4576,7 @@ one of those two was already wrong.
   (fails saying the READER examined nothing, not that the tree measures zero).
 - Removing the seven arms fails FOUR gates, naming all seven rows.
 
-## Residual, stated
+#### Residual, stated
 
 An `Opaque` row's class remains unverifiable from this crate by construction —
 now seven rows smaller, and it is the seven model paths that remain. Their
@@ -4572,7 +4698,7 @@ which does not compile `#[cfg(test)]`; `test`/`lint` cover default members and
 `windows-check` excludes both crates by name. Of the four tests that existed,
 three returned early and reported PASSED.
 
-## What shipped
+#### What shipped
 
 **A GENERATED fixture, no committed bytes.** `undercroft_embed_onnx::fixture`
 emits a ~2 KB ONNX graph and a WordLevel `tokenizer.json` from reviewed Rust,
@@ -4649,7 +4775,7 @@ test IS the thing that stopped running, so nothing else can report it.
 leg builds `--features onnx,ort` and so already compiles the tract crate, and
 testing both there would count one crate's figures twice.
 
-## Gates
+#### Gates
 
 Two SOURCE-shaped gates in `crates/undercroft-cli/src/parity.rs` — a DEFAULT
 MEMBER, so they run in the `test` suite on every local battery while the
@@ -4673,7 +4799,7 @@ emit sites per crate, each carrying its own backend literal, and the
 probe on the extractor. Source-shaped on purpose — these legs are CI-only, so
 a local battery can only ask whether the command still says what it must.
 
-## Counterfactuals — three, each single-variable, each RUN
+#### Counterfactuals — three, each single-variable, each RUN
 
 1. Restore the old `score` body → the inventory reports **10 arms against 9
    named**, by name, naming the arithmetic.
@@ -4689,7 +4815,7 @@ Determinism: 20 runs per crate, 0 failures. Nothing here touches a vault, a
 keyed sample or a codebook, and the graph carries no reduction and no
 transcendental, so a given backend's output is bit-exact.
 
-## What the legs cost, measured
+#### What the legs cost, measured
 
 Both are CI matrix legs, so wall clock is the slowest leg rather than a sum.
 On the same runner class, before this unit against the run that merged it:
@@ -4705,7 +4831,7 @@ already the slowest leg and still is, so the matrix's wall clock is unchanged.
 Recorded because the entry claims a cost and an unrecorded measurement is a
 claim nobody can check.
 
-## Residuals, stated
+#### Residuals, stated
 
 - **Linux containers only.** `release.yml` ships an `ort` binary for five
   targets and its smoke stops at a model-config refusal, so ONNX Runtime has
@@ -12994,67 +13120,64 @@ in a pipeline and fast enough to run on a machine that lacks the weights — so
 the symptom string goes in `UPGRADING.md` instead and the entry says plainly
 that this class is not pre-flightable.
 
-### O161 — the ROADMAP placement gate is silently disabled by a `##` inside the entry above
+### O162 — three arms of the ROADMAP scanner that are unprobed, misdirected, or blind
 
-**Filed 2026-09-13, measured with a counterfactual, found by tripping it
-myself.** `roadmap_scan` tracks the enclosing section with
-`/^## / { top = $0 }`, and an entry's own internal subsection heading is a
-`## ` line — so from that point on, every FOLLOWING entry in the section is
-attributed to a heading like `## Gates` instead of to `## Open`. The two arms
-that read `top` (`closed-under-open`, `closed-under-unversioned`) then cannot
-fire for any of them.
+**Filed 2026-09-13 out of O161's review, measured by sourcing `roadmap_scan`
+out of `tests/battery.sh` and running it on fixtures.** O161 closed the
+defect that re-sectioned the file. These are what the same reading found in
+the arms around it, none of which O161's fix touches.
 
-**Measured, both directions, on the real scanner:**
+**1. `closed-under-open` has never been proven to fire, by anything.** The
+premise fixture at `tests/battery.sh:833` contains a release section and
+`## Unversioned`, and **no `## Open` section at all**, so that arm has no
+positive probe in either direction. Its sibling has accidental live coverage —
+the Unversioned exemption roster requires six named hits per run, so the Unversioned arm
+must fire six times — and `closed-under-open` has no such backstop. It is also
+the arm the O161 defect reached first, because O161 itself lived under
+`## Open`. An arm whose only evidence is that it has never complained is the
+shape this tree keeps finding.
 
-- An entry marked closed, placed directly under `## Open`, **is named** — the entry
-  carrying the internal heading is itself judged correctly, because its own
-  heading is flushed while `top` is still right. That is the half I assumed
-  was broken and it is not.
-- The same entry placed AFTER a sibling that carries an internal `##` is
-  **not named at all.** Nothing fires. The only failures on that run were the
-  self-count noticing two extra entries.
+**2. The `PREMISE-FAILED` handler is unreachable on the real file, and what
+runs instead names the wrong cause.** `roadmap_scan` is called, then the
+exemption-roster loop, and only then the premise check. On a premise
+failure the loop fires first with six failures reading *"… the roster
+lists O1 … the list has outlived what it exempts; remove the row"* — telling
+the editor to delete six correct exemptions. It fails closed, so this is
+misdirection rather than silence, and the fix is a two-line reorder. Worth
+knowing why it matters: the same underlying fault produces six misdirected
+failures under `## Unversioned` and produced **silence** under `## Open`.
+Same bug, opposite symptoms, both wrong.
 
-So the gate is not merely weaker than it reads — for the second and later
-entries of an affected section it is **absent**, and its absence looks exactly
-like a clean tree.
+**3. The scanner is fence-blind.** `/^## /` and `/^### /` are line rules with
+no code-fence state, so a `## ` inside a fenced block would be read as a
+heading. Measured on the live file: 26 fences, balanced, **zero headings
+inside any of them** — so this is latent, not live. It becomes reachable the
+day someone pastes a shell transcript into an entry, and O161's new arm would
+refuse that line. Two honest answers: teach both the scanner and the arm the
+same fence state (they must share it, or the arm diverges from the thing it
+protects), or state plainly that a line beginning `## ` inside a fence is
+forbidden in this file. **The second is defensible and cheaper**, because the
+scanner would mis-read such a line anyway; it needs writing down rather than
+leaving as a trap.
 
-**It is not hypothetical.** 15 entries in this file carry 28 internal `##`
-headings between them (O45, O115, O134a, O145, O155, O159 among them), and
-this session added two of them. `## Open` currently holds no closed entry, so
-nothing is being hidden right now — but that is the tree's state, not the
-gate's doing, and O101 exists because the placement had already gone wrong
-once.
+**4. The arm that just refused this entry cannot tell an identifier from a
+status marker.** `body-closed-heading-open` greps the body for the bare status
+token in capitals, so an open entry may not NAME the exemption-roster constant
+— whose identifier ends in that word — while describing it. This entry was
+refused for exactly that, which is why the constant is referred to by
+description above rather than by name. Same blunt-proxy trade as the item
+below, cheap to live with, and written down because the next editor will hit
+it and assume they mis-typed something.
 
-**How it survived**: `roadmap_scan`'s own comment records M15 fixing the
-sibling case — `/^### /` absorbing non-id headings into the entry above — and
-says *"the arm was weaker than it read, in a way no count of it could show."*
-The `/^## /` line one row below was not asked the same question. **A gate
-repaired on one heading level is not thereby repaired on the other.**
+**Not a finding, recorded so it is not re-filed.** `closure-without-evidence`
+greps for `[Gg]ate|[Cc]ounterfactual|test`, which `investigate` and `latest`
+satisfy. That is O47's deliberate proxy, measured at 7% false positives when
+widened and rejected, and M15 says the ruling stands.
 
-**Three shapes, and the cost is why this is filed rather than done:**
-
-1. **Recognise section headings by pattern** — `^## [0-9]+\.[0-9]+\.[0-9]+`,
-   `^## Open `, `^## Unversioned`. Cheapest, and the tree distrusts exactly
-   this: a list of shapes reads exhaustive until someone adds a section that
-   is not in it, and then the gate silently stops sectioning.
-2. **Forbid `##` inside an entry** and require `####`, enforced by a new arm.
-   Honest and checkable, but it is a tree-wide edit: 28 headings across 15
-   entries, all of which render fine today.
-3. **Track depth**: treat a `## ` as a section only while no entry is open.
-   Needs a rule for where an entry ENDS that does not already depend on the
-   thing being fixed, so it is the one to think hardest about.
-
-**A note the next editor needs, learned by tripping it:** the body of an open
-entry must not contain the bare token in capitals, because the
-`body-closed-heading-open` arm greps for it and cannot tell a status marker
-from a discussion of one. This entry was refused twice for saying it while
-describing the very arm that refuses it. That is the heuristic working, and it
-is also a constraint on writing about it.
-
-**Gate**: the counterfactual above — a closed entry under `## Open`,
-following a sibling with an internal `##`, must be named. It is a fixture the
-preflight can carry, on the premise-probe pattern already used for the
-geometry checks.
+**Gate**: a fixture that exercises every arm in both directions — including
+`closed-under-open`, which has none — asserting the EXACT row set the scanner
+produces rather than that the expected rows are present, since a glob ignores
+a spurious row. Plus the reorder, which is its own one-line counterfactual.
 
 ### O160 — two listeners on one binary, classified differently, and the empty one passes both pre-flights
 
