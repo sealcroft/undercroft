@@ -13037,7 +13037,7 @@ scanner (O33, O47). The mechanism here is a heading, not a gate.
 
 
 
-### O157 — the real-backend-to-surface join, and what it needs before it can exist
+### O157 — RULED 2026-09-13 and not yet built: the shape is settled, the blocking probe is run, and the filing's own menu was refuted
 
 **Filed 2026-09-12, split out of O134b rather than carried inside it.** The
 model backends are exercised through their own crates' tests; nothing drives
@@ -13079,6 +13079,107 @@ allowlisted in `.dockerignore` and COPYd by nothing. Whichever shape wins, the
 entry must say plainly whether the corpus drive is a GATE or a MANUAL drive
 recorded in prose — and a manual drive is a legitimate answer, not a gap,
 provided it is stated as one.
+
+#### RULED 2026-09-13 by a three-lens review plus an adversarial refuter
+
+**The menu above is refuted, and the correction is the important part.** Option
+(3) is described as exercising the store and `/v1` *"in-process rather than
+through the real binary"*. That is **false of this tree**:
+`crates/undercroft-cli/tests/cli.rs:1140` already spawns
+`assert_cmd::cargo::cargo_bin("undercroft") serve-http` as a CHILD PROCESS and
+talks raw HTTP to it over a `TcpStream`. A Rust integration test here drives
+the real binary out of process, on `/v1`, today. So the three-option menu was
+written against a constraint that does not exist, and the option labelled
+"cheapest and weakest" is neither.
+
+**The ruled shape is a fourth**: a `[[test]]` target on `undercroft-cli` with
+`required-features = ["onnx"]`, reaching the generator through
+`undercroft-embed-onnx` as a **dev-dependency** with `test-fixture` — not a
+new feature on a shipped crate, and not a new binary or example — driven from
+the `ort-build` leg by
+
+```
+cargo test --release -p undercroft-cli --features onnx,ort --test model_e2e
+```
+
+so ONE target exercises both `UNDERCROFT_EMBEDDER=onnx` and `=ort` from one
+binary, which is the coexistence that leg exists for. `model leg parity` greps
+each leg for its own crate and `-p undercroft-cli` names neither, so it does
+not trip.
+
+#### The blocking probe is RUN, and it settles the disagreement
+
+Two reviewers drew opposite conclusions from the same cargo behaviour. Neither
+stated the discriminator, and there is **zero `required-features` precedent
+tree-wide**, so it was measured:
+
+| invocation | result |
+|---|---|
+| `cargo test -p undercroft-cli --test probe_rf`, feature NOT enabled | **`error: target 'probe_rf' in package 'undercroft-cli' requires the features: 'onnx'`**, exit 101 |
+| the unnamed invocation the default `test` leg runs | exit 0, the target mentioned **0 times** — silently skipped |
+
+**So `required-features` is safe iff the leg NAMES the target.** A lost
+`--features` is then a hard error rather than a silent skip, and the default
+`test` suite skips it correctly, adding no empty target to its log. That is
+what makes the ruled shape safe and what would have made a `[[bin]]` or
+`[[example]]` unsafe — those are reached by unnamed invocations.
+
+#### What the join must assert, because the entry's sketch cannot work
+
+`embed_failures` belongs to the PROCESS (`undercroft-store/src/manage.rs:163`),
+so on the CLI `remember` then `stats` are two processes and the second reports
+its own open, not the first's write. And the fixture's 14-word vocabulary
+excludes probe pair 1's words (`"the quarterly revenue report"`,
+`undercroft-core/src/embed.rs:139`), so calibration makes the count **non-zero
+at every open anyway**. A suite written to the sketch would go green while
+asserting a causal relation the CLI cannot produce.
+
+- **CLI**: assert provenance per process — with `UNDERCROFT_SEMANTIC_GATE=off`
+  and `UNDERCROFT_SEMANTIC_FLOOR=0.0` declared, `stats` prints no
+  `embed failures:` line at all (it prints only when non-zero); with them
+  removed, one process reports a non-zero count and `gate_source: refused`.
+  The two differ by exactly two environment variables, which is the
+  counterfactual built in.
+- **`/v1`**: assert a DELTA across one long-lived process — baseline, one
+  write carrying the refused word, then `embed_failures` strictly greater.
+  Never an absolute, which is a function of those two declarations.
+
+**The fixture must NOT widen to fix this.** Making all 14 probe pairs tokenize
+needs ~100 vocabulary entries, which pushes the embedding table past 128 rows
+and re-prices `OUT_OF_TABLE_ID` — in the one file both backends must agree on,
+invalidating the hand-written assertions in all nine arm tests across two
+crates. And it would buy nothing: in 4 dimensions the calibration returns its
+clamps regardless, so the join would be asserting a measurement that measured
+nothing.
+
+#### Sequencing against O150
+
+**O157 does not wait for O150, and the dependency runs the other way.** The
+join must drive `REFUSED_WORD` (a tokenizer-model-layer failure that degrades
+identically on tract and ORT), never `OUT_OF_TABLE_WORD` — under
+`UNDERCROFT_EMBEDDER=onnx` that PANICS, and on `/v1` the request loop is
+single-threaded, so the panic unwinds out of it and **kills the server**,
+reading as a connection reset rather than as O150. Once O150's `catch_unwind`
+boundary lands, the follow-on arm is that the server SURVIVES such a write and
+reports it on `stats`.
+
+#### The corpus arm, ruled
+
+**MANUAL, recorded in prose.** `.handover/locomo_feed.txt` and
+`crates/undercroft-store/testdata/*_50k.txt` are gitignored, so a drive over
+them can never be a gate; `benchmarks/model_eval/datasets/` is tracked but
+COPYd by no image, and a DIM-4 fixture cannot make a recall claim anyway. A
+stated manual drive is a legitimate answer; a silent one is a gap.
+
+#### Still to do
+
+Build it. The shape, the leg, the probe and the assertions are settled above;
+what remains is the code, the published `(N run, M ignored)` figure for the
+leg — **set from the run, never from a prediction** — and a premise arm
+proving which embedder was in hand, since "no embed-failures line" is
+otherwise produced identically by a healthy run, a binary without the feature,
+and a driver whose trigger stopped triggering.
+
 
 ### O150 — an out-of-table id PANICS on tract and degrades on ORT, and one of those is a crash
 
