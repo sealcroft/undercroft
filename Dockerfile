@@ -64,6 +64,31 @@ FROM builder AS test
 CMD ["cargo", "test", "--release"]
 
 FROM debian:bookworm-slim AS runtime
+# **Security updates, because the base tag is not one (ROADMAP O159).**
+# `debian:bookworm-slim` carries whatever was current when Debian last
+# rebuilt that tag, and nothing here refreshed it — so a CVE fixed in the
+# archive after that rebuild sat in the published image until Debian happened
+# to rebuild again. Found by the `trivy-image` CI job on two HIGH pcre2
+# advisories (CVE-2026-86145, CVE-2026-89161) whose fix, 10.42-1+deb12u1, was
+# already in the archive: the exposure was ours, not Debian's.
+#
+# `upgrade`, never `dist-upgrade`: within a stable release the security
+# archive lands through `upgrade`, and `dist-upgrade` may add or remove
+# packages, which is a bigger change than this is asking for.
+#
+# **The reproducibility cost is real and is NOT new.** The image stops being
+# a pure function of (Dockerfile, base tag) and becomes a function of the
+# archive on the build date — but `debian:bookworm-slim` is a moving tag, so
+# that was already true; this changes the degree, not the kind. Pinning the
+# base by digest is the way to buy reproducibility back, and it would trade
+# away exactly the property this line exists to provide.
+#
+# Note a warm Docker layer cache serves this RUN without contacting the
+# archive, so a local rebuild can be stale. CI builds without a cache, which
+# is why `trivy-image` is the authority on what the published image holds.
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && rm -rf /var/lib/apt/lists/*
 LABEL org.opencontainers.image.title="Undercroft" \
       org.opencontainers.image.description="Hardened local-first AI memory: encrypted, integrity-verified vaults with verbatim recall, hybrid retrieval, MCP + multi-tenant REST" \
       org.opencontainers.image.source="https://github.com/sealcroft/undercroft" \

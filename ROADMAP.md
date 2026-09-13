@@ -3988,7 +3988,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**187** of the **202** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**188** of the **203** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4167,6 +4167,87 @@ capability, backward compatible. The rest of the section is PATCH work — no
 documented contract moves; import stops holding the corpus, the duplicate
 check stops scanning the table, and a migration is judged against the source's
 own snapshot.
+
+### O159 — CLOSED 2026-09-13: the runtime image never refreshed its base, so a fixed CVE shipped until Debian happened to rebuild
+
+**Found by the `trivy-image` CI job on 2026-09-12, on a pull request that
+touched no dependency and no Dockerfile.** Two HIGH advisories in
+`libpcre2-8-0` (CVE-2026-86145, CVE-2026-89161), installed version `10.42-1`,
+**fixed version `10.42-1+deb12u1` already in the Debian archive**. The
+previous run on `main`, ninety minutes earlier, was green — the advisories
+entered Trivy's database in between.
+
+**The exposure was ours, not Debian's.** The runtime stage is
+`FROM debian:bookworm-slim` and ran **no `apt` step at all** — not update, not
+upgrade. The builder stage installs packages; the runtime stage shipped
+whatever that base tag happened to contain when Debian last rebuilt it. So
+every CVE fixed in the archive after that rebuild sat in the published GHCR
+image, with a fix available, until Debian rebuilt the tag again for its own
+reasons. That is not a window anyone chose; it is one nobody had looked at.
+
+**The distinction worth keeping: a scanner REPORTS, it does not MAINTAIN.**
+`trivy-image` was correct, wired into `CI verdict`, and failing closed — it
+did exactly its job the first day it had something to say. What was missing
+was anything that kept the thing it scans current, and a gate cannot supply
+that. Asking *what does this gate DO when it fires?* is a different question
+from *what can this gate SEE?*, and this tree had only been asking the second.
+
+## The fix, and the trade it makes
+
+`apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*` as the
+first step of the runtime stage.
+
+`upgrade`, never `dist-upgrade`: within a stable release the security archive
+lands through `upgrade`, while `dist-upgrade` may add or remove packages —
+a larger change than the problem asks for.
+
+**The reproducibility cost is real, is stated, and is NOT new in kind.** The
+image becomes a function of the archive on its build date rather than of
+(Dockerfile, base tag) alone. But `debian:bookworm-slim` is a MOVING tag, so
+that was already true; this changes the degree, not the kind. The way to buy
+reproducibility back is to pin the base by digest — which would trade away
+precisely the property this line exists to provide, and would put the same
+staleness back under a different name.
+
+**Scope, stated rather than discovered:** the BUILDER stage
+(`rust:1.90-slim-bookworm`) is deliberately untouched. It ships nothing —
+only two binaries are copied out of it — and `trivy-image` scans the runtime
+image. A vulnerable build toolchain is a supply-chain question with a
+different shape and a different answer, and folding it in here would have
+made this change about two things.
+
+## Measured, with the counterfactual run first
+
+- **Before**: the stock `debian:bookworm-slim` under CI's exact flags
+  (`--severity CRITICAL,HIGH --ignore-unfixed`) reports **Total: 2 (HIGH: 2)**
+  — the same two CVEs, by name, that turned CI red.
+- **The mechanism**: `libpcre2-8-0` goes `10.42-1` to `10.42-1+deb12u1`,
+  which is the fixed version Trivy named.
+- **After**: the real runtime image built from this Dockerfile, scanned with
+  CI's exact flags, reports **0 vulnerabilities, exit 0**.
+
+## Gate — and why no new one
+
+**The gate is `trivy-image`, which already exists, already fails closed
+through `CI verdict`, and is what found this.** No source-level check was
+added, and that is a decision with an argument rather than an omission: a
+preflight could assert the `apt-get upgrade` line is still present, but it
+would see the LINE and never the image, and the property only has
+consequences when an advisory exists — which is exactly when `trivy-image`
+fires. Adding one would move a published figure (nineteen preflights) to buy
+earlier warning of a deletion that the real gate catches at the moment it
+starts to matter.
+
+**The residual, stated**: a rebuild with a warm Docker layer cache serves this
+RUN without contacting the archive, so a local image can be stale while the
+Dockerfile is right. CI builds without a cache, which is why `trivy-image` is
+the authority on what the published image holds — a local `docker build` is
+not.
+
+**No `UPGRADING.md` entry**: nothing that worked stops working. The image
+gains its distribution's own security updates and grows by the size of the
+upgraded packages. That is not a deployment stopper, and saying so here is
+the point — the file is only honest while a short one.
 
 ### O134b — CLOSED 2026-09-12: the model legs' counts are read, published and compared
 
