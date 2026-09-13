@@ -130,13 +130,19 @@ pub fn resolve_admin_token(declared: Option<&str>) -> Result<String, ConfigError
 
 /// Whether a listen address is loopback.
 ///
+/// `pub` since O160, because the `UNDERCROFT_ORCH_ADDR` pre-flight names the
+/// exposure in its success line. **A byte-identical inline copy lives at
+/// `undercroft-cli`'s `http.rs`**, guarding the ENGINE's refuse-to-bind rule;
+/// unifying them is filed rather than done here, because that is a change to a
+/// different listener's security gate and wants its own counterfactual.
+///
 /// Deliberately conservative and deliberately NOT a hand-rolled host parse:
 /// anything this cannot positively identify as loopback counts as exposed, so
 /// the refusal errs toward telling the operator their endpoint is reachable.
 /// `undercroft-net::is_loopback` answers the same question for outbound URLs
 /// by delegating to a URL parser; this is a bare `host:port` listen address,
 /// which has no scheme to parse, so the two cannot share an implementation.
-fn addr_is_loopback(addr: &str) -> bool {
+pub fn addr_is_loopback(addr: &str) -> bool {
     let host = match addr.rsplit_once(':') {
         // `[::1]:9900`
         Some((h, _)) if h.starts_with('[') && h.ends_with(']') => &h[1..h.len() - 1],
@@ -168,20 +174,108 @@ fn addr_is_loopback(addr: &str) -> bool {
 /// listener cannot be, because tenants must reach it.
 pub fn resolve_metrics_addr(declared: Option<&str>) -> Result<Option<String>, ConfigError> {
     let Some(raw) = declared else { return Ok(None) };
+    let v = parse_listen_addr(
+        "UNDERCROFT_ORCH_METRICS_ADDR",
+        raw,
+        "Unset it to leave the metrics listener off",
+        "127.0.0.1:9900",
+    )?;
+    Ok(Some(v))
+}
+
+/// `UNDERCROFT_ORCH_ADDR` — the control plane's serving address: the routing
+/// proxy, the admin plane, `/healthz` and `/ui`.
+///
+/// **`Protects`, not `Tunes`, and the class is decided by what the RUN does
+/// with a bad value (ROADMAP O160).** `Tunes` promises *garbage warns and
+/// keeps that default*, and nothing here keeps anything: an unusable address
+/// kills `serve` at bind. Making the promise true would mean silently binding
+/// loopback when the declaration is unreadable, so an operator whose
+/// `0.0.0.0:8900` failed to interpolate would get a control plane that starts,
+/// answers its own health check, and is unreachable by every tenant — the
+/// O21/O22 failure moved from the credential to the endpoint. The refusal is
+/// right; what was missing is that neither pre-flight predicted it.
+///
+/// Unset is the documented default rather than "off", which is the only way
+/// this differs from [`resolve_metrics_addr`].
+pub fn resolve_orch_addr(declared: Option<&str>) -> Result<String, ConfigError> {
+    match declared {
+        None => Ok(DEFAULT_ORCH_ADDR.to_string()),
+        Some(raw) => parse_listen_addr(
+            "UNDERCROFT_ORCH_ADDR",
+            raw,
+            "Unset it to take the default",
+            DEFAULT_ORCH_ADDR,
+        ),
+    }
+}
+
+/// The control plane's default serving address, stated ONCE so clap's
+/// `default_value`, `--help`, `serve` and both pre-flights cannot disagree.
+pub const DEFAULT_ORCH_ADDR: &str = "127.0.0.1:8900";
+
+/// **The syntactic rule BOTH listeners share, opening nothing (ROADMAP O160).**
+///
+/// This exists because the sibling it was factored out of was not enough.
+/// `resolve_metrics_addr` checked `contains(':')` and nothing else, so
+/// `127.0.0.1:99999`, `127.0.0.1:` and `:9900` were reported **`ok`** — an
+/// affirmative tick, not merely silence — by both pre-flights, and then died
+/// at `Server::http`. That is *exit 0 for an environment that does not start*
+/// on the row O160 was going to cite as the good example. One shared function
+/// rather than a second arm, because a second copy fixes one listener and
+/// leaves the other.
+///
+/// **The governing constraint: these refusals must be a strict SUBSET of what
+/// the bind refuses.** `Server::http` takes `ToSocketAddrs`, whose contract is
+/// `host:port` with a `u16` port — it performs no service-name lookup — so a
+/// non-empty host and a `u16` port are inside what it already rejects. A
+/// pre-flight stricter than the runtime breaks working deployments; one looser
+/// is the defect being closed here.
+///
+/// **Hostnames stay legal, deliberately.** `ToSocketAddrs` resolves them and
+/// `addr_is_loopback` explicitly accepts `localhost`, so `SocketAddr::from_str`
+/// — the tempting one-line parse — would refuse values that bind today. That
+/// is a documented value ceasing to be accepted, which this project's own test
+/// calls MAJOR, on what is otherwise a fix.
+///
+/// What stays outside: name resolution and interface availability. Those are
+/// environmental, they are I/O, and this crate opens nothing.
+fn parse_listen_addr(
+    var: &str,
+    raw: &str,
+    unset_advice: &str,
+    example: &str,
+) -> Result<String, ConfigError> {
+    // Trimmed, unlike a bearer: whitespace is never part of a host or a port,
+    // so trimming cannot change WHICH address was named. `resolve_admin_token`
+    // refuses a trailing newline instead, because there trimming would change
+    // the key itself.
     let v = raw.trim();
     if v.is_empty() {
-        return refuse(
-            "UNDERCROFT_ORCH_METRICS_ADDR is set but names no address (it is empty or only \
-             whitespace). It is most often an unset shell variable interpolated into a compose \
-             file or a systemd unit. Unset it to leave the metrics listener off",
-        );
-    }
-    if !v.contains(':') {
         return refuse(format!(
-            "UNDERCROFT_ORCH_METRICS_ADDR={v:?} — expected host:port (e.g. 127.0.0.1:9900)"
+            "{var} is set but names no address (it is empty or only whitespace). It is most \
+             often an unset shell variable interpolated into a compose file or a systemd unit. \
+             {unset_advice}"
         ));
     }
-    Ok(Some(v.to_string()))
+    let (host, port) = match v.rsplit_once(':') {
+        // `[::1]:9900` — the brackets belong to the host.
+        Some((h, p)) => (h, p),
+        None => return refuse(format!("{var}={v:?} — expected host:port (e.g. {example})")),
+    };
+    if host.is_empty() {
+        return refuse(format!(
+            "{var}={v:?} names a port with no host — expected host:port (e.g. {example}). Bind \
+             the loopback interface explicitly rather than leaving the host empty"
+        ));
+    }
+    if port.parse::<u16>().is_err() {
+        return refuse(format!(
+            "{var}={v:?} — {port:?} is not a port. A port is a number from 0 to 65535 \
+             (e.g. {example}); this value cannot be bound"
+        ));
+    }
+    Ok(v.to_string())
 }
 
 /// The bearer for the metrics listener, **required when that listener is not
@@ -263,6 +357,89 @@ pub fn resolve_rate_limit(declared: Option<&str>) -> Result<u64, ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **ROADMAP O160 — the shapes that USED to be accepted.**
+    ///
+    /// Every row here was reported by BOTH pre-flights before this landed: the
+    /// three `_METRICS_ADDR` ones with an affirmative `ok` line, because the
+    /// only structural check was `contains(':')`, and the `_ORCH_ADDR` ones as
+    /// `Accepted` because the row had no parse at all. All of them die at
+    /// `Server::http`. This is *exit 0 for an environment that does not start*
+    /// — round-four #9's defect — on the two listeners of one binary.
+    #[test]
+    fn a_listen_address_that_cannot_bind_is_refused_on_both_listeners() {
+        // In order: a port no u16 can hold; a host and no port; a port and no
+        // host; a service name, which `ToSocketAddrs` does not accept; no
+        // colon at all; a failed interpolation; the same wearing whitespace.
+        for bad in [
+            "127.0.0.1:99999",
+            "127.0.0.1:",
+            ":9900",
+            "127.0.0.1:http",
+            "8900",
+            "",
+            "   ",
+        ] {
+            assert!(
+                resolve_orch_addr(Some(bad)).is_err(),
+                "UNDERCROFT_ORCH_ADDR={bad:?} must be refused, not bound"
+            );
+            assert!(
+                resolve_metrics_addr(Some(bad)).is_err(),
+                "UNDERCROFT_ORCH_METRICS_ADDR={bad:?} must be refused — one shared rule, so \
+                 a second copy cannot fix one listener and leave the other"
+            );
+        }
+    }
+
+    /// The other direction, and the one that decides the IMPLEMENTATION.
+    ///
+    /// `SocketAddr::from_str` is the tempting one-line parse and it would
+    /// refuse every hostname here. `Server::http` takes `ToSocketAddrs`, which
+    /// resolves them, and `addr_is_loopback` accepts `localhost` explicitly —
+    /// so refusing these would stop accepting a documented value, which this
+    /// project's own versioning test calls MAJOR. **The pre-flight's refusals
+    /// must be a strict SUBSET of the bind's.**
+    #[test]
+    fn a_listen_address_that_binds_today_still_resolves() {
+        for good in [
+            "127.0.0.1:8900",
+            "0.0.0.0:8900",
+            "localhost:8900",
+            "orch.internal:8900",
+            "[::1]:9900",
+            // Port 0 is "any free port", and it binds.
+            "127.0.0.1:0",
+        ] {
+            assert!(
+                resolve_orch_addr(Some(good)).is_ok(),
+                "UNDERCROFT_ORCH_ADDR={good:?} binds today and must keep resolving"
+            );
+            assert!(
+                resolve_metrics_addr(Some(good)).is_ok(),
+                "UNDERCROFT_ORCH_METRICS_ADDR={good:?} binds today and must keep resolving"
+            );
+        }
+    }
+
+    /// Unset is the one place the two listeners legitimately differ, and it is
+    /// the whole reason they are separate wrappers over one rule.
+    #[test]
+    fn unset_means_the_default_for_one_listener_and_off_for_the_other() {
+        assert_eq!(resolve_orch_addr(None).unwrap(), DEFAULT_ORCH_ADDR);
+        assert_eq!(resolve_metrics_addr(None).unwrap(), None);
+    }
+
+    /// Trimmed, and the RESOLVED value is what must be bound — otherwise the
+    /// pre-flight and the run disagree about `" 127.0.0.1:8900 "`, which is
+    /// the failure this whole unit is about, one whitespace character over.
+    #[test]
+    fn a_padded_address_resolves_to_the_trimmed_one() {
+        assert_eq!(
+            resolve_orch_addr(Some("  127.0.0.1:8900  ")).unwrap(),
+            "127.0.0.1:8900"
+        );
+    }
 
     /// The key resolves without opening anything — the property that makes a
     /// pre-flight possible at all, and the reason this left `Orch::open`'s

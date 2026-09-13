@@ -43,7 +43,7 @@ directions, by a test rather than by anyone remembering.
 **Run it to pre-flight the control plane standalone** — on a host that runs
 the orchestrator and no engine, it is the command there is. It is not a
 substitute for the engine's, and the engine's is not a substitute for it: the
-two cover different binaries, and the five declarations they share go through
+two cover different binaries, and the six declarations they share go through
 one implementation (`undercroft-config`'s five resolvers), so they cannot
 disagree.
 
@@ -68,6 +68,35 @@ so rather than implying it checked them.
 ---
 
 ## 1.6.0 (unreleased)
+
+### both `config check` commands now refuse a listen address that cannot bind (O160)
+
+**Who is affected:** anyone who gates a pipeline on either `config check` AND
+declares `UNDERCROFT_ORCH_ADDR` or `UNDERCROFT_ORCH_METRICS_ADDR` as a value
+that could never have been bound — an empty string, no port, no host, or a
+port outside 0–65535.
+
+**What happens:** `UNDERCROFT_ORCH_ADDR` had no parse at all, so both
+pre-flights exited 0 and `serve` died at bind with `invalid socket address`.
+Its sibling had a parse that checked only for a colon, so
+`UNDERCROFT_ORCH_METRICS_ADDR=127.0.0.1:99999` was reported with an
+affirmative **`ok`** line and then died the same way. One shared resolver now
+covers both, and `serve` resolves the address **before** it opens the state
+database.
+
+**Symptom to expect:** `config check` exits 1 where it exited 0 (or where it
+printed `ok`), naming the variable, the value and what is wrong with it.
+**Nothing that binds today stops binding** — hostnames included, which is why
+this is not a `SocketAddr` parse: `localhost:8900` and `orch.internal:8900`
+resolve through `ToSocketAddrs` and must keep working.
+
+**What to do:** the message is the fix. If the declaration was empty, it is a
+failed interpolation — set it, or unset it to take the default.
+
+**One behaviour change beyond the pre-flight:** `undercroft-orchestrator serve`
+now refuses an unusable address before creating its state database, rather
+than after. A run that previously left an `orchestrator.db` behind on its way
+to failing no longer does.
 
 ### `undercroft config check` now refuses seven declarations it used to accept (O155)
 

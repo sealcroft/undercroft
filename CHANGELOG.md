@@ -7,6 +7,23 @@ its CLI mirror `tenant-repoint` are additive — nothing that worked before
 behaves differently because they exist. Everything else in this section is a
 fix whose only observable change is that a defect is gone.
 
+### both `config check` commands now refuse a listen address that cannot bind (O160)
+
+`UNDERCROFT_ORCH_ADDR` had no parse at all, so an empty value — a failed shell
+interpolation — passed both pre-flights and then killed `serve` at bind. Its
+sibling `UNDERCROFT_ORCH_METRICS_ADDR` had a parse that checked only for a
+colon, so `127.0.0.1:99999` was reported with an affirmative `ok` and died the
+same way. The row held up as the good example had the same defect as the one
+being fixed.
+
+One shared resolver now serves both listeners — a non-empty host and a real
+port — and `serve` resolves the address before it opens the state database,
+so a doomed start no longer leaves a database behind. Hostnames keep working:
+this is deliberately not a strict socket-address parse, because `localhost:8900`
+binds today and refusing it would stop accepting a documented value.
+
+Nothing that binds today stops binding. See `UPGRADING.md`.
+
 ### the ROADMAP placement gate stopped being disabled by a heading (O161)
 
 Internal tooling, no user-visible change.

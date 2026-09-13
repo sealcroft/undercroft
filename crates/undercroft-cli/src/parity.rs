@@ -199,7 +199,7 @@ pub const ENGINE_ENV_VARS: &[(&str, ConfigClass, Parse)] = &[
     ("UNDERCROFT_ONNX_MODEL", Protects, Opaque),
     ("UNDERCROFT_ONNX_NAME", Tunes, Opaque),
     ("UNDERCROFT_ONNX_TOKENIZER", Protects, Opaque),
-    ("UNDERCROFT_ORCH_ADDR", Tunes, Opaque),
+    ("UNDERCROFT_ORCH_ADDR", Protects, Checked),
     ("UNDERCROFT_ORCH_ADMIN_TOKEN", Protects, Checked),
     ("UNDERCROFT_ORCH_DB", Tunes, Opaque),
     ("UNDERCROFT_ORCH_ENGINE_CA", Protects, Checked),

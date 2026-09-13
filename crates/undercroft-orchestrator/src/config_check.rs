@@ -20,8 +20,8 @@
 //! opening a database or binding a port.
 
 use undercroft_config::{
-    resolve_admin_token, resolve_metrics_addr, resolve_metrics_token, resolve_orch_key,
-    resolve_rate_limit,
+    addr_is_loopback, resolve_admin_token, resolve_metrics_addr, resolve_metrics_token,
+    resolve_orch_addr, resolve_orch_key, resolve_rate_limit,
 };
 
 /// What a bad value does, per `CLAUDE.md`'s configuration doctrine.
@@ -62,8 +62,9 @@ use ConfigClass::{Protects, Tunes};
 pub(crate) enum Parse {
     /// This command runs the real resolver for the declaration.
     Checked,
-    /// There is no parse to run: a listen address this command must not bind,
-    /// a database path it must not open. Saying so is honest; saying
+    /// There is no parse to run: a database path this command must not open,
+    /// a bearer whose correctness only a peer can judge. Saying so is honest;
+    /// saying
     /// "checked" would not be.
     Opaque,
 }
@@ -75,7 +76,7 @@ use Parse::{Checked, Opaque};
 /// Counted against the engine's `ENGINE_ENV_VARS` in both directions, so a
 /// variable added to one and not the other fails the build.
 pub(crate) const ORCH_ENV_VARS: &[(&str, ConfigClass, Parse)] = &[
-    ("UNDERCROFT_ORCH_ADDR", Tunes, Opaque),
+    ("UNDERCROFT_ORCH_ADDR", Protects, Checked),
     ("UNDERCROFT_ORCH_ADMIN_TOKEN", Protects, Checked),
     ("UNDERCROFT_ORCH_DB", Tunes, Opaque),
     ("UNDERCROFT_ORCH_ENGINE_CA", Protects, Checked),
@@ -131,6 +132,30 @@ fn check_one(name: &str, raw: &str) -> Finding {
         "UNDERCROFT_ORCH_ADMIN_TOKEN" => Some(
             resolve_admin_token(Some(raw))
                 .map(|_| "bearer required on the /admin plane".into())
+                .map_err(|e| e.to_string()),
+        ),
+        // **ROADMAP O160.** This row was `(Tunes, Opaque)`, so both
+        // pre-flights exited 0 for a value that kills `serve` at bind — and
+        // the exemption two comments below claimed a listen address has no
+        // parse this command can run without binding, which the metrics arm
+        // directly beneath has disproved since O20. The class is decided by
+        // what the run does: nothing falls back, so `Protects`.
+        "UNDERCROFT_ORCH_ADDR" => Some(
+            resolve_orch_addr(Some(raw))
+                .map(|a| {
+                    if addr_is_loopback(&a) {
+                        format!("the control plane serves on {a} (loopback)")
+                    } else {
+                        // Not a refusal: tenants must reach this listener, so
+                        // warning on every real fleet would be noise. It is
+                        // named because `/healthz` and `/ui` answer without a
+                        // bearer, and this declaration is what decides who can
+                        // reach them.
+                        format!(
+                            "the control plane serves on {a} — beyond loopback, where /healthz and /ui are unauthenticated"
+                        )
+                    }
+                })
                 .map_err(|e| e.to_string()),
         ),
         "UNDERCROFT_ORCH_METRICS_ADDR" => Some(
@@ -211,8 +236,13 @@ fn check_one(name: &str, raw: &str) -> Finding {
                 })
                 .map_err(|e| e.to_string()),
         ),
-        // A listen address and a database path have no parse this command can
-        // run without binding or opening. Reported as seen, never as checked.
+        // A database path has no parse this command can run without opening it.
+        // Reported as seen, never as checked. **A listen ADDRESS was listed
+        // here too until O160, and that was false the whole time**: the
+        // metrics arm above validates one while binding nothing, and has since
+        // O20. The sentence survived because nothing counted it against the
+        // inventory it annotates — a comment is not a gate, and a wrong
+        // comment is what kept `UNDERCROFT_ORCH_ADDR` exempt.
         // So are the log knobs and the service name: a level string and a
         // label, both consumed by `tracing` itself.
         _ => None,
