@@ -916,6 +916,101 @@ fi
 echo "ok    every closed ROADMAP entry says so in its heading, with a date and"
 echo "      its evidence (both directions; 'is the work done' stays semantic)"
 
+# **Every `^## ` in ROADMAP.md is a SECTION heading (ROADMAP O161).**
+#
+# `roadmap_scan` takes its enclosing section from any `^## ` line, so a
+# heading written at that level INSIDE an entry silently re-sections the file:
+# every later entry is attributed to `## Gates` rather than to `## Open`, and
+# the two placement arms stop firing for all of them. Measured before the fix:
+# a closed entry placed after such a sibling produced NO output at all, which
+# is what a clean tree produces. Three more arms were affected — the body is
+# truncated at the heading, so `body-closed-heading-open` goes blind and
+# `closure-without-evidence` reads only the text above it.
+#
+# The fix is the file, not the parser: entries are `###`, their subsections
+# are `####`, which is what 9 of the file's subsections already did. This arm
+# holds that line. It deliberately lives OUTSIDE the awk — that program sits
+# in a single-quoted shell string where one apostrophe in a comment ends the
+# string and kills the script, which has happened once already — and it is
+# not a second implementation of anything, because it models no entry
+# boundaries: it asks only whether a `^## ` line is a section heading.
+#
+# Fail-closed on the unrecognised case, which is the whole difference from
+# "pattern-match the sections and set `top` when one matches". That shape
+# fails OPEN: an unmatched section silently stops sectioning, which is this
+# defect with a new trigger. Here an unmatched `^## ` is a loud failure.
+RM_PROSE_SECTIONS=(
+  "How this file is organised"
+  "Open — releasable work"
+  "What \`A12\`, \`C8\`, \`R4\`, \`U12\` mean"
+  "The round-three audit"
+  "Unversioned — decisions and external actions"
+  "Beyond 2.0.0"
+  "Shipped — the operability track"
+)
+# A release section is a SHAPE, not a roster row: the release flow adds one
+# every time, and `version surfaces` already gates the version itself.
+rm_is_section() {
+  case "$1" in
+    '## '[0-9]*.[0-9]*.[0-9]*' — '*) return 0 ;;
+  esac
+  for rm_p in "${RM_PROSE_SECTIONS[@]}"; do
+    case "$1" in "## $rm_p"*) return 0 ;; esac
+  done
+  return 1
+}
+RM_H2=$(grep -nE '^## ' ROADMAP.md || true)
+RM_H2_N=$(printf '%s\n' "$RM_H2" | grep -c . || true)
+# PREMISE. A reader that finds no level-2 headings reports what a correct file
+# reports. The file has had a dozen release sections for its whole life.
+if [ "${RM_H2_N:-0}" -lt 10 ]; then
+  echo "FAIL  the ROADMAP section reader found $RM_H2_N level-2 heading(s) —"
+  echo "      the reader rotted, not the file"
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+RM_H2_BAD=0
+RM_SEEN_PROSE=""
+while IFS= read -r rm_line; do
+  [ -z "$rm_line" ] && continue
+  rm_no=${rm_line%%:*}
+  rm_txt=${rm_line#*:}
+  if rm_is_section "$rm_txt"; then
+    RM_SEEN_PROSE="$RM_SEEN_PROSE
+$rm_txt"
+    continue
+  fi
+  if [ "$RM_H2_BAD" -eq 0 ]; then
+    echo "FAIL  a level-2 heading inside a ROADMAP entry. It re-sections the"
+    echo "      file from that line on: every later entry is attributed to it"
+    echo "      rather than to its real section, and the closed-under-Open and"
+    echo "      closed-under-Unversioned arms stop firing for all of them —"
+    echo "      silently (ROADMAP O161). An entry's subsections are '####'."
+  fi
+  RM_H2_BAD=1
+  printf '        ROADMAP.md:%s  %s\n' "$rm_no" "$rm_txt"
+done <<EOF
+$RM_H2
+EOF
+# The other direction: a roster row that names no heading has outlived the
+# section it describes, and would quietly widen what this arm accepts.
+for rm_p in "${RM_PROSE_SECTIONS[@]}"; do
+  if ! printf '%s\n' "$RM_SEEN_PROSE" | grep -qF "## $rm_p"; then
+    echo "FAIL  RM_PROSE_SECTIONS names \"$rm_p\", which is no longer a section"
+    echo "      heading in ROADMAP.md — the roster has outlived what it admits;"
+    echo "      remove the row, or restore the heading"
+    RM_H2_BAD=1
+  fi
+done
+if [ "$RM_H2_BAD" -ne 0 ]; then
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    all $RM_H2_N ROADMAP level-2 headings are sections (${#RM_PROSE_SECTIONS[@]} prose"
+echo "      + release shape, both directions); entry subsections stay '####'"
+
 # ── preflight: every compose file DECLARES its project name ────────────────
 # Undeclared, Compose derives the project from the DIRECTORY, so every
 # container, image, volume and network inherits whatever the clone is called.

@@ -3343,6 +3343,31 @@ unwritten because a half-correct verdict is worse than a known-wrong one.
   weeks. The five closed decisions and external actions that BELONG under
   `Unversioned` are `UNVERSIONED_CLOSED`, an inventory with reasons counted
   both ways, because the scanner cannot judge releasability.
+  **An entry's SUBSECTIONS are `####`, never `##` (O161, 2026-09-13).** The
+  scanner takes its enclosing section from any `^## ` line, so a level-2
+  heading written inside an entry re-sections the file from there on: every
+  LATER entry is attributed to `## Gates` instead of `## Open`, and both
+  placement arms stop firing for all of them — silently, which is what a clean
+  tree looks like. It also truncates the entry's own body at that line, which
+  blinded `body-closed-heading-open` and let one entry satisfy
+  `closure-without-evidence` on the word "gate" in an unrelated sentence.
+  `####` was already the file's convention in nine places; fourteen headings in
+  three entries had drifted. A preflight arm now refuses any `^## ` that is not
+  a section heading — release sections by semver SHAPE, the seven prose
+  sections by a roster counted both ways — and it lives OUTSIDE the awk
+  deliberately, because that program sits in a single-quoted shell string where
+  one apostrophe ends the string and kills the script. **The structural
+  argument outranks the parser one**: a heading level is a containment claim,
+  so `## Gates` declared itself a sibling of `## 1.5.2 — released`, and an
+  agent grepping `^## ` as an index into a 14,696-line memory artifact got it
+  back as a peer of the release sections.
+  Two writing constraints follow, both learned by tripping them: an OPEN
+  entry's body may not contain the bare status token in capitals (the
+  `body-closed-heading-open` arm greps for it and cannot tell a marker from a
+  discussion of one, nor from an identifier that ends in it), and a line
+  beginning `## ` inside a fenced block is forbidden — the scanner is
+  fence-blind and would read it as a heading (filed as O162 with the
+  alternative).
 
 ## Conventions
 
