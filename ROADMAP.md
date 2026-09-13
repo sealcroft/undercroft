@@ -3988,7 +3988,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**189** of the **204** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**191** of the **206** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -12994,45 +12994,124 @@ in a pipeline and fast enough to run on a machine that lacks the weights — so
 the symptom string goes in `UPGRADING.md` instead and the entry says plainly
 that this class is not pre-flightable.
 
-### O158 — an empty `UNDERCROFT_ORCH_DB` may give the control plane a database that evaporates
+### O161 — the ROADMAP placement gate is silently disabled by a `##` inside the entry above
 
-**Filed 2026-09-12 out of O155, unverified and stated as unverified.** The
-declaration is a clap argument with `default_value = "orchestrator.db"`
-(`orchestrator/main.rs:36`), so an UNSET variable is fine and an EMPTY one is
-not the same thing: clap takes a present-but-empty environment value, and
-`Orch::open` hands it to `Connection::open(path)`
-(`orchestrator/state.rs:207`). SQLite documents an empty filename as a
-**private temporary on-disk database, deleted when the connection closes.**
+**Filed 2026-09-13, measured with a counterfactual, found by tripping it
+myself.** `roadmap_scan` tracks the enclosing section with
+`/^## / { top = $0 }`, and an entry's own internal subsection heading is a
+`## ` line — so from that point on, every FOLLOWING entry in the section is
+attributed to a heading like `## Gates` instead of to `## Open`. The two arms
+that read `top` (`closed-under-open`, `closed-under-unversioned`) then cannot
+fire for any of them.
 
-**Why that is the bad shape rather than a bad value.** `UNDERCROFT_ORCH_DB=""`
-is the failed-interpolation spelling `CLAUDE.md` already has a rule for — a
-shell variable that did not expand inside a compose file or a systemd unit —
-and the symptom would be a control plane that starts cleanly, accepts
-`/admin` writes, registers instances and tenants, and has forgotten all of it
-at the next restart. Nothing refuses, nothing warns. That is the
-`!is_empty()` family with the sign flipped: the other four instances read
-empty as *absent* and silently dropped a protection; this one reads empty as
-*a filename* and silently drops the state.
+**Measured, both directions, on the real scanner:**
 
-**What is NOT established.** Whether clap actually passes an empty env value
-through rather than treating it as unset, and what `Connection::open("")`
-does on the pinned rusqlite. Both are one probe each against the real binary,
-and neither was run — O155 was a taxonomy unit and this is a behaviour
-change, so it is filed rather than folded in. **If the probe shows clap treats
-empty as unset, this entry closes as NOT A DEFECT and says so.**
+- An entry marked closed, placed directly under `## Open`, **is named** — the entry
+  carrying the internal heading is itself judged correctly, because its own
+  heading is flushed while `top` is still right. That is the half I assumed
+  was broken and it is not.
+- The same entry placed AFTER a sibling that carries an internal `##` is
+  **not named at all.** Nothing fires. The only failures on that run were the
+  self-count noticing two extra entries.
 
-**Shape of the fix, if it is one.** The tree's own rule decides it: `_ORCH_DB`
-is an OPAQUE PAYLOAD, not a closed vocabulary, so empty cannot express intent
-and must REFUSE — never be trimmed into the default, which would start a
-control plane whose state lives somewhere the operator did not name. The
-engine's `resolve_orch_key`/`resolve_admin_token` precedent puts that parse in
-`undercroft-config`, where both binaries and both `config check` commands
-reach it; the row would move `Opaque` to `Checked` on both inventories, which
-the cross-crate join counts in both directions.
+So the gate is not merely weaker than it reads — for the second and later
+entries of an affected section it is **absent**, and its absence looks exactly
+like a clean tree.
 
-**Gate**: an empty declaration refuses to start and is refused by both
-pre-flights, with a test that would pass on neither the current tree nor a
-trim-to-default fix.
+**It is not hypothetical.** 15 entries in this file carry 28 internal `##`
+headings between them (O45, O115, O134a, O145, O155, O159 among them), and
+this session added two of them. `## Open` currently holds no closed entry, so
+nothing is being hidden right now — but that is the tree's state, not the
+gate's doing, and O101 exists because the placement had already gone wrong
+once.
+
+**How it survived**: `roadmap_scan`'s own comment records M15 fixing the
+sibling case — `/^### /` absorbing non-id headings into the entry above — and
+says *"the arm was weaker than it read, in a way no count of it could show."*
+The `/^## /` line one row below was not asked the same question. **A gate
+repaired on one heading level is not thereby repaired on the other.**
+
+**Three shapes, and the cost is why this is filed rather than done:**
+
+1. **Recognise section headings by pattern** — `^## [0-9]+\.[0-9]+\.[0-9]+`,
+   `^## Open `, `^## Unversioned`. Cheapest, and the tree distrusts exactly
+   this: a list of shapes reads exhaustive until someone adds a section that
+   is not in it, and then the gate silently stops sectioning.
+2. **Forbid `##` inside an entry** and require `####`, enforced by a new arm.
+   Honest and checkable, but it is a tree-wide edit: 28 headings across 15
+   entries, all of which render fine today.
+3. **Track depth**: treat a `## ` as a section only while no entry is open.
+   Needs a rule for where an entry ENDS that does not already depend on the
+   thing being fixed, so it is the one to think hardest about.
+
+**A note the next editor needs, learned by tripping it:** the body of an open
+entry must not contain the bare token in capitals, because the
+`body-closed-heading-open` arm greps for it and cannot tell a status marker
+from a discussion of one. This entry was refused twice for saying it while
+describing the very arm that refuses it. That is the heuristic working, and it
+is also a constraint on writing about it.
+
+**Gate**: the counterfactual above — a closed entry under `## Open`,
+following a sibling with an internal `##`, must be named. It is a fixture the
+preflight can carry, on the premise-probe pattern already used for the
+geometry checks.
+
+### O160 — two listeners on one binary, classified differently, and the empty one passes both pre-flights
+
+**Filed 2026-09-13, measured, out of O158's probe.** The control plane opens
+two network listeners and its inventories classify them as opposites:
+
+| declaration | class | pre-flight | opens |
+|---|---|---|---|
+| `UNDERCROFT_ORCH_METRICS_ADDR` | `Protects, Checked` | a real arm | the metrics listener |
+| `UNDERCROFT_ORCH_ADDR` | `Tunes, Opaque` | none | the routing proxy + admin plane |
+
+`parity.rs`'s own comment on the first says it is `Protects` **"because
+declaring it OPENS a network surface"**, and that reasoning covers the second
+word for word. One of the two is also the door every tenant reaches.
+
+**Measured, not argued.** A failed interpolation is accepted by both
+pre-flights and then kills the process:
+
+```
+$ UNDERCROFT_ORCH_ADDR= undercroft-orchestrator config-check
+checked 0 declaration(s): 0 refusing, 0 warning, 1 seen but not validated   (exit 0)
+$ UNDERCROFT_ORCH_ADDR= undercroft config check
+… 0 would REFUSE to start.                                                  (exit 0)
+$ UNDERCROFT_ORCH_ADDR= undercroft-orchestrator serve
+Error: bind : invalid socket address                                        (exit 1)
+```
+
+Control: unset, the same command binds `127.0.0.1:8900` and serves. So this is
+round-four #9's defect — *exit 0 for an environment that does not start* —
+alive on the control plane's own listen address, and it is the identical shape
+O155 has just closed for seven engine declarations.
+
+**Why it survived**: `UNDERCROFT_ORCH_DB` next to it is protected by accident,
+because a `PathBuf` argument rejects an empty `OsStr` where a `String` one
+does not (O158). A type-derived refusal on one row makes the family look
+covered.
+
+**The fix is a class decision, which is why this is filed rather than done.**
+Making the row `Checked` needs a class that matches what the runtime does, and
+`Tunes` promises *"garbage warns and keeps that default"* while an empty
+address refuses — so the honest pairing is `Protects, Checked`, matching its
+sibling. Both inventories must move together, since the cross-crate join
+counts name AND class in both directions.
+
+**The awkward part, stated rather than skipped**: the refusal an operator
+meets today comes from clap and from `bind`, neither of which this tree owns,
+so a pre-flight arm parsing the address would be a SECOND statement of the
+same rule — the thing `check_one`'s own doc forbids. Either the arm parses
+`SocketAddr` (a restatement, but of a std parse rather than of our policy), or
+the address is resolved once in a function both `serve` and the pre-flight
+call. The second is the tree's pattern (`resolve_orch_key`,
+`resolve_admin_token`, `check_dsn_transport`) and costs one small resolver.
+
+**Gate**: an empty or unparseable `UNDERCROFT_ORCH_ADDR` is refused by both
+pre-flights with the same verdict `serve` gives, and the class gate
+`every_checked_declaration_answers_garbage_the_way_its_class_says` covers the
+row once it is `Checked`.
 
 ### O135 — three reads the audit has never run, carried in a gitignored file
 
@@ -13279,6 +13358,82 @@ falls in and confirmed against the CHANGELOG; the still-open, releasable O23
 went to the `Open` section above. The rule this leaves, stated once: **a
 closed entry lives under the release that carried it; an open releasable
 entry lives in `Open`; only what a release cannot contain lives here.**
+
+### O158 — CLOSED 2026-09-13 as NOT A DEFECT: clap refuses the empty path, and the real gap was one variable over
+
+**Filed 2026-09-12 out of O155, unverified and stated as unverified.** The
+declaration is a clap argument with `default_value = "orchestrator.db"`
+(`orchestrator/main.rs:36`), so an UNSET variable is fine and an EMPTY one is
+not the same thing: clap takes a present-but-empty environment value, and
+`Orch::open` hands it to `Connection::open(path)`
+(`orchestrator/state.rs:207`). SQLite documents an empty filename as a
+**private temporary on-disk database, deleted when the connection closes.**
+
+**Why that is the bad shape rather than a bad value.** `UNDERCROFT_ORCH_DB=""`
+is the failed-interpolation spelling `CLAUDE.md` already has a rule for — a
+shell variable that did not expand inside a compose file or a systemd unit —
+and the symptom would be a control plane that starts cleanly, accepts
+`/admin` writes, registers instances and tenants, and has forgotten all of it
+at the next restart. Nothing refuses, nothing warns. That is the
+`!is_empty()` family with the sign flipped: the other four instances read
+empty as *absent* and silently dropped a protection; this one reads empty as
+*a filename* and silently drops the state.
+
+**What is NOT established.** Whether clap actually passes an empty env value
+through rather than treating it as unset, and what `Connection::open("")`
+does on the pinned rusqlite. Both are one probe each against the real binary,
+and neither was run — O155 was a taxonomy unit and this is a behaviour
+change, so it is filed rather than folded in. **If the probe shows clap treats
+empty as unset, this entry closes as NOT A DEFECT and says so.**
+
+**Shape of the fix, if it is one.** The tree's own rule decides it: `_ORCH_DB`
+is an OPAQUE PAYLOAD, not a closed vocabulary, so empty cannot express intent
+and must REFUSE — never be trimmed into the default, which would start a
+control plane whose state lives somewhere the operator did not name. The
+engine's `resolve_orch_key`/`resolve_admin_token` precedent puts that parse in
+`undercroft-config`, where both binaries and both `config check` commands
+reach it; the row would move `Opaque` to `Checked` on both inventories, which
+the cross-crate join counts in both directions.
+
+**Gate**: an empty declaration refuses to start and is refused by both
+pre-flights, with a test that would pass on neither the current tree nor a
+trim-to-default fix.
+
+#### PROBED 2026-09-13. The hypothesis was wrong, and the mechanism is worth keeping
+
+`Connection::open("")` is **unreachable**. Clap refuses an empty value for
+`--db` before any of this crate's code runs:
+
+```
+$ UNDERCROFT_ORCH_DB= undercroft-orchestrator instance-list
+error: a value is required for '--db <DB>' but none was supplied     (exit 1)
+```
+
+Nothing is written, and the refusal covers every subcommand **including the
+orchestrator's own `config-check`** — so here the pre-flight and the run agree,
+which is the one property both config-check modules exist to provide.
+
+**The control is what makes that a measurement rather than an absence.** With
+the variable UNSET the same command exits 0, creates `orchestrator.db`, and a
+second invocation reads the instance back. So the probe was exercising the
+path it claimed to; a silent "nothing happened" would have looked identical to
+a refusal and proved nothing.
+
+**The mechanism is the TYPE, not a policy**, and that is the transferable
+part: `--db` is a `PathBuf`, and clap's value parser rejects an empty `OsStr`.
+Nobody decided that an empty state-database path should refuse; it falls out
+of the argument's type. Which means the protection does not generalise to a
+sibling that happens to be a `String` — and exactly that is what the probe
+found next door.
+
+**Filed in its place: O160.** `UNDERCROFT_ORCH_ADDR` is the same shape — a
+clap argument with `default_value`, classed `Tunes, Opaque` — and being a
+string it accepts the empty value, passes BOTH pre-flights with exit 0, and
+kills `serve` at bind. The entry I filed guessed the wrong variable of the
+pair; the discipline that caught it is the sibling sweep this tree already
+records (O29, O32), which is why the probe drove both rather than the one the
+filing named.
+
 
 ### The dependency map — read this BEFORE picking an item
 
