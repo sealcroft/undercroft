@@ -7,6 +7,24 @@ its CLI mirror `tenant-repoint` are additive — nothing that worked before
 behaves differently because they exist. Everything else in this section is a
 fix whose only observable change is that a defect is gone.
 
+### the runtime image now installs its distribution's security updates (O159)
+
+The published image is built `FROM debian:bookworm-slim` and ran no `apt`
+step at all, so it shipped whatever that base tag held when Debian last
+rebuilt it. A CVE fixed in the Debian archive afterwards stayed in the image —
+with the fix sitting in the archive, unused — until Debian happened to rebuild
+the tag for its own reasons.
+
+Found the first day it had a consequence: the image scan flagged two HIGH
+advisories in `libpcre2-8-0` whose fixed version was already available. The
+runtime stage now runs `apt-get upgrade` before anything else, and the image
+scans clean.
+
+The trade is stated rather than hidden: the image's contents now depend on the
+date it was built. That was already true, because the base is a moving tag —
+this changes the degree, not the kind, and the alternative (pinning the base
+by digest) would put the same staleness back under a different name.
+
 ### the configuration class is checked against what the resolver actually does (O155)
 
 Every `UNDERCROFT_*` declaration carries a class saying what a bad value must
