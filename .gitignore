@@ -73,3 +73,12 @@ crates/undercroft-store/testdata/
 # ad-hoc probe did, while closing O26. Ignored because a committed `.pyc`
 # sitting beside a GATE is a second, stale copy of the thing that decides.
 __pycache__/
+
+# The control plane's default state database. `--db` defaults to
+# `orchestrator.db` in the CURRENT directory, so running the orchestrator from
+# a clone writes one here — and a probe during O158 did exactly that, where
+# `git add -A` would have committed a registry holding sealed engine
+# credentials and tenant token HMACs.
+orchestrator.db
+orchestrator.db-wal
+orchestrator.db-shm

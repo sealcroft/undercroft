@@ -859,6 +859,7 @@ UNVERSIONED_CLOSED=(
   "O9|a GitHub branch-protection setting, observed to block"
   "O12|closed by doctrine: a citation is derived, never declared"
   "O37|the house Pages site enforces HTTPS — a setting on another repository"
+  "O158|closed by MEASUREMENT: the filed defect does not exist, so nothing ships"
 )
 ROADMAP_DRIFT=$(roadmap_scan ROADMAP.md)
 RM_UNV_HITS=$(printf '%s\n' "$ROADMAP_DRIFT" | grep '^closed-under-unversioned|' || true)
