@@ -11,10 +11,11 @@
 //! `UNDERCROFT_COLBERT_TOKENIZER`, optional `UNDERCROFT_COLBERT_NAME` —
 //! the same variables the tract backend reads.
 
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 
 use ort::session::Session;
 use tokenizers::Tokenizer;
+use undercroft_core::contain::contain;
 use undercroft_core::late::LateInteraction;
 
 use crate::{build_session, cores, run_batch, OrtError};
@@ -91,22 +92,30 @@ impl OrtColbert {
     /// Tokenize `text` without special tokens, returning raw ids plus a
     /// per-token "punctuation-only" flag (the token string, minus any
     /// wordpiece `##` prefix, contains no alphanumeric character).
+    ///
+    /// CONTAINED (ROADMAP O150): the tokenizer runs before the session lock is
+    /// taken, so a tokenizer panic would sit outside the boundary `run` holds.
     fn word_ids(&self, text: &str) -> Result<(Vec<i64>, Vec<bool>), OrtError> {
-        let enc = self
-            .tokenizer
-            .encode(text, false)
-            .map_err(|e| OrtError::Inference(e.to_string()))?;
-        let ids = enc.get_ids().iter().map(|&v| v as i64).collect();
-        let punct = enc
-            .get_tokens()
-            .iter()
-            .map(|t| {
-                !t.trim_start_matches("##")
-                    .chars()
-                    .any(|c| c.is_alphanumeric())
-            })
-            .collect();
-        Ok((ids, punct))
+        contain(
+            || {
+                let enc = self
+                    .tokenizer
+                    .encode(text, false)
+                    .map_err(|e| OrtError::Inference(e.to_string()))?;
+                let ids = enc.get_ids().iter().map(|&v| v as i64).collect();
+                let punct = enc
+                    .get_tokens()
+                    .iter()
+                    .map(|t| {
+                        !t.trim_start_matches("##")
+                            .chars()
+                            .any(|c| c.is_alphanumeric())
+                    })
+                    .collect();
+                Ok((ids, punct))
+            },
+            OrtError::Panicked,
+        )
     }
 
     /// Run one forward over `ids` padded/framed to `len`. `augment` = pad
@@ -114,6 +123,10 @@ impl OrtColbert {
     /// (doc side). `skip` marks positions that attend normally but are
     /// **excluded from the output matrix** — ColBERT's doc-side punctuation
     /// filter. Returns `(row-major matrix of kept rows, dim)`.
+    ///
+    /// CONTAINED (ROADMAP O150): the session run and the row slicing after it
+    /// sit inside `contain`, and a panic reaches the counted empty matrix in
+    /// `encode_doc` / `encode_query`.
     fn run(
         &self,
         session: &Mutex<Session>,
@@ -123,39 +136,45 @@ impl OrtColbert {
         augment: bool,
         skip: &[bool],
     ) -> Result<(Vec<f32>, usize), OrtError> {
-        let mut input: Vec<i64> = ids.to_vec();
-        input.truncate(len);
-        let mut mask: Vec<i64> = vec![1; input.len()];
-        while input.len() < len {
-            input.push(if augment { MASK } else { 0 });
-            mask.push(if augment { 1 } else { 0 });
-        }
-        let (dims, data) = {
-            let mut guard = session.lock().expect("ort session mutex");
-            run_batch(
-                &mut guard,
-                n_inputs,
-                1,
-                len,
-                input,
-                mask.clone(),
-                vec![0; len],
-            )?
-        };
-        // dims: (1, seq, dim) — the export bakes in projection + L2 norm.
-        if dims.len() < 3 {
-            return Err(OrtError::Inference("unexpected colbert output rank".into()));
-        }
-        let (seq, dim) = (dims[1], dims[2]);
-        let mut matrix = Vec::with_capacity(seq * dim);
-        for t in 0..seq.min(len) {
-            if mask[t] == 0 || skip.get(t).copied().unwrap_or(false) {
-                continue; // pad rows never participate; skipped rows attend
-                          // but aren't stored
-            }
-            matrix.extend_from_slice(&data[t * dim..(t + 1) * dim]);
-        }
-        Ok((matrix, dim))
+        contain(
+            || {
+                let mut input: Vec<i64> = ids.to_vec();
+                input.truncate(len);
+                let mut mask: Vec<i64> = vec![1; input.len()];
+                while input.len() < len {
+                    input.push(if augment { MASK } else { 0 });
+                    mask.push(if augment { 1 } else { 0 });
+                }
+                let (dims, data) = {
+                    // Recovered, not `expect`ed — see `OrtEmbedder::embed_inner`.
+                    let mut guard = session.lock().unwrap_or_else(PoisonError::into_inner);
+                    run_batch(
+                        &mut guard,
+                        n_inputs,
+                        1,
+                        len,
+                        input,
+                        mask.clone(),
+                        vec![0; len],
+                    )?
+                };
+                // dims: (1, seq, dim) — the export bakes in projection + L2 norm.
+                if dims.len() < 3 {
+                    return Err(OrtError::Inference("unexpected colbert output rank".into()));
+                }
+                let (seq, dim) = (dims[1], dims[2]);
+                let mut matrix = Vec::with_capacity(seq * dim);
+                for t in 0..seq.min(len) {
+                    if mask[t] == 0 || skip.get(t).copied().unwrap_or(false) {
+                        continue; // pad rows never participate; skipped rows attend
+                                  // but aren't stored
+                    }
+                    matrix.extend_from_slice(&data[t * dim..(t + 1) * dim]);
+                }
+                Ok((matrix, dim))
+            },
+            OrtError::Panicked,
+        )
     }
 
     /// Frame `text` as `[CLS] marker tokens… [SEP]`, returning the ids and
@@ -393,6 +412,89 @@ mod tests {
             c.encode_query(fixture::HEALTHY),
             healthy,
             "a healthy query encode after a failure must be unchanged"
+        );
+        assert_eq!(
+            c.encode_failures(),
+            1,
+            "a healthy query encode must not move the count"
+        );
+    }
+
+    /// **Route R on ORT, doc encode: an out-of-table id is REFUSED, typed, and
+    /// degrades** (ROADMAP O150). The tokenizer accepts the word, so the
+    /// refusal comes from the session inside `run`, which this arm drives.
+    #[test]
+    fn ort_route_r_doc_encode_refuses_an_out_of_table_id() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let c = load_fixture_colbert(dir.path());
+        let before = crate::tests::bits(&c.encode_doc(fixture::HEALTHY));
+        let (ids, skip) = c
+            .frame(D_MARKER, fixture::OUT_OF_TABLE_WORD, DOC_LEN, true)
+            .expect("premise: the out-of-table word tokenizes — its failure is in the session, not the tokenizer");
+
+        crate::tests::assert_typed_refusal(
+            c.run(&c.doc_session, c.doc_inputs, &ids, DOC_LEN, false, &skip),
+            "run (doc)",
+        );
+        assert!(
+            c.encode_doc(fixture::OUT_OF_TABLE_WORD).is_empty(),
+            "a refused doc encode must degrade to an empty matrix"
+        );
+        assert_eq!(
+            c.encode_failures(),
+            1,
+            "a refused doc encode must be counted exactly once"
+        );
+        crate::tests::assert_typed_refusal(
+            c.run(&c.doc_session, c.doc_inputs, &ids, DOC_LEN, false, &skip),
+            "run (doc)",
+        );
+
+        assert_eq!(
+            crate::tests::bits(&c.encode_doc(fixture::HEALTHY)),
+            before,
+            "a doc encode after three refusals must be bit-identical to one before them"
+        );
+        assert_eq!(
+            c.encode_failures(),
+            1,
+            "a healthy doc encode must not move the count"
+        );
+    }
+
+    /// **Route R on ORT, query encode: an out-of-table id is REFUSED, typed,
+    /// and degrades** (ROADMAP O150).
+    #[test]
+    fn ort_route_r_query_encode_refuses_an_out_of_table_id() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let c = load_fixture_colbert(dir.path());
+        let before = crate::tests::bits(&c.encode_query(fixture::HEALTHY));
+        let (ids, _) = c
+            .frame(Q_MARKER, fixture::OUT_OF_TABLE_WORD, QUERY_LEN, false)
+            .expect("premise: the out-of-table word tokenizes — its failure is in the session, not the tokenizer");
+
+        crate::tests::assert_typed_refusal(
+            c.run(&c.query_session, c.query_inputs, &ids, QUERY_LEN, true, &[]),
+            "run (query)",
+        );
+        assert!(
+            c.encode_query(fixture::OUT_OF_TABLE_WORD).is_empty(),
+            "a refused query encode must degrade to an empty matrix"
+        );
+        assert_eq!(
+            c.encode_failures(),
+            1,
+            "a refused query encode must be counted exactly once"
+        );
+        crate::tests::assert_typed_refusal(
+            c.run(&c.query_session, c.query_inputs, &ids, QUERY_LEN, true, &[]),
+            "run (query)",
+        );
+
+        assert_eq!(
+            crate::tests::bits(&c.encode_query(fixture::HEALTHY)),
+            before,
+            "a query encode after three refusals must be bit-identical to one before them"
         );
         assert_eq!(
             c.encode_failures(),

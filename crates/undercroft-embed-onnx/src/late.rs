@@ -19,6 +19,7 @@
 
 use tokenizers::Tokenizer;
 use tract_onnx::prelude::*;
+use undercroft_core::contain::contain;
 use undercroft_core::late::LateInteraction;
 
 use crate::{OnnxError, RunnableOnnx};
@@ -105,22 +106,30 @@ impl OnnxColbert {
     /// Tokenize `text` without special tokens, returning raw ids plus a
     /// per-token "punctuation-only" flag (the token string, minus any
     /// wordpiece `##` prefix, contains no alphanumeric character).
+    ///
+    /// CONTAINED (ROADMAP O150): the tokenizer runs before either plan, so a
+    /// tokenizer panic would sit outside the boundary `run` holds.
     fn word_ids(&self, text: &str) -> Result<(Vec<i64>, Vec<bool>), OnnxError> {
-        let enc = self
-            .tokenizer
-            .encode(text, false)
-            .map_err(|e| OnnxError::Inference(e.to_string()))?;
-        let ids = enc.get_ids().iter().map(|&v| v as i64).collect();
-        let punct = enc
-            .get_tokens()
-            .iter()
-            .map(|t| {
-                !t.trim_start_matches("##")
-                    .chars()
-                    .any(|c| c.is_alphanumeric())
-            })
-            .collect();
-        Ok((ids, punct))
+        contain(
+            || {
+                let enc = self
+                    .tokenizer
+                    .encode(text, false)
+                    .map_err(|e| OnnxError::Inference(e.to_string()))?;
+                let ids = enc.get_ids().iter().map(|&v| v as i64).collect();
+                let punct = enc
+                    .get_tokens()
+                    .iter()
+                    .map(|t| {
+                        !t.trim_start_matches("##")
+                            .chars()
+                            .any(|c| c.is_alphanumeric())
+                    })
+                    .collect();
+                Ok((ids, punct))
+            },
+            OnnxError::Panicked,
+        )
     }
 
     /// Run one forward over `ids` padded/framed to `len`. `augment` = pad
@@ -129,6 +138,13 @@ impl OnnxColbert {
     /// **excluded from the output matrix** — ColBERT's doc-side punctuation
     /// filter (fewer stored rows, and the noise tokens can't win a MaxSim).
     /// Returns `(row-major matrix of kept rows, dim)`.
+    ///
+    /// CONTAINED (ROADMAP O150). The doc plan is never probed at load (ROADMAP
+    /// O154), so a wrong-rank doc export panicked HERE — inside `post_write`,
+    /// after the drawer had committed, with no reply and a duplicate drawer on
+    /// every retry. The plan run, `outputs[0]`, `shape[1]`/`shape[2]` and
+    /// `hidden[[0, t, d]]` all sit inside `contain`, and a panic reaches the
+    /// counted empty matrix in `encode_doc` / `encode_query`.
     fn run(
         &self,
         model: &RunnableOnnx,
@@ -137,37 +153,42 @@ impl OnnxColbert {
         augment: bool,
         skip: &[bool],
     ) -> Result<(Vec<f32>, usize), OnnxError> {
-        let mut input: Vec<i64> = ids.to_vec();
-        input.truncate(len);
-        let mut mask: Vec<i64> = vec![1; input.len()];
-        while input.len() < len {
-            input.push(if augment { MASK } else { 0 });
-            mask.push(if augment { 1 } else { 0 });
-        }
-        let to_tensor = |v: &[i64]| -> Result<Tensor, OnnxError> {
-            tract_ndarray::Array2::from_shape_vec((1, len), v.to_vec())
-                .map(Tensor::from)
-                .map_err(|e| OnnxError::Inference(e.to_string()))
-        };
-        let outputs = model
-            .run(tvec!(to_tensor(&input)?.into(), to_tensor(&mask)?.into()))
-            .map_err(|e| OnnxError::Inference(e.to_string()))?;
-        let hidden = outputs[0]
-            .to_array_view::<f32>()
-            .map_err(|e| OnnxError::Inference(e.to_string()))?;
-        let shape = hidden.shape();
-        let (seq, dim) = (shape[1], shape[2]);
-        let mut matrix = Vec::with_capacity(seq * dim);
-        for t in 0..seq.min(len) {
-            if mask[t] == 0 || skip.get(t).copied().unwrap_or(false) {
-                continue; // pad rows never participate; skipped rows attend
-                          // but aren't stored
-            }
-            for d in 0..dim {
-                matrix.push(hidden[[0, t, d]]);
-            }
-        }
-        Ok((matrix, dim))
+        contain(
+            || {
+                let mut input: Vec<i64> = ids.to_vec();
+                input.truncate(len);
+                let mut mask: Vec<i64> = vec![1; input.len()];
+                while input.len() < len {
+                    input.push(if augment { MASK } else { 0 });
+                    mask.push(if augment { 1 } else { 0 });
+                }
+                let to_tensor = |v: &[i64]| -> Result<Tensor, OnnxError> {
+                    tract_ndarray::Array2::from_shape_vec((1, len), v.to_vec())
+                        .map(Tensor::from)
+                        .map_err(|e| OnnxError::Inference(e.to_string()))
+                };
+                let outputs = model
+                    .run(tvec!(to_tensor(&input)?.into(), to_tensor(&mask)?.into()))
+                    .map_err(|e| OnnxError::Inference(e.to_string()))?;
+                let hidden = outputs[0]
+                    .to_array_view::<f32>()
+                    .map_err(|e| OnnxError::Inference(e.to_string()))?;
+                let shape = hidden.shape();
+                let (seq, dim) = (shape[1], shape[2]);
+                let mut matrix = Vec::with_capacity(seq * dim);
+                for t in 0..seq.min(len) {
+                    if mask[t] == 0 || skip.get(t).copied().unwrap_or(false) {
+                        continue; // pad rows never participate; skipped rows attend
+                                  // but aren't stored
+                    }
+                    for d in 0..dim {
+                        matrix.push(hidden[[0, t, d]]);
+                    }
+                }
+                Ok((matrix, dim))
+            },
+            OnnxError::Panicked,
+        )
     }
 
     /// Frame `text` as `[CLS] marker tokens… [SEP]`, returning the ids and
@@ -422,6 +443,96 @@ mod tests {
             c.encode_query(fixture::HEALTHY),
             healthy,
             "a healthy query encode after a failure must be unchanged"
+        );
+        assert_eq!(
+            c.encode_failures(),
+            1,
+            "a healthy query encode must not move the count"
+        );
+    }
+
+    /// **Route R, doc encode: an id past the embedding table is CONTAINED**
+    /// (ROADMAP O150).
+    ///
+    /// The worst of the five before O150: `encode_doc` runs inside
+    /// `post_write`, AFTER the drawer has committed, so the panic ended the
+    /// process with no reply and a client's retry filed a DUPLICATE drawer.
+    /// The tokenizer accepts the word — its id is merely past the table — so
+    /// the panic is inside `run`, which is the inner body this arm drives.
+    #[test]
+    fn onnx_route_r_doc_encode_contains_an_out_of_table_panic() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let c = load_fixture_colbert(dir.path());
+        let before = crate::tests::bits(&c.encode_doc(fixture::HEALTHY));
+        let (ids, skip) = c
+            .frame(D_MARKER, fixture::OUT_OF_TABLE_WORD, DOC_LEN, true)
+            .expect("premise: the out-of-table word tokenizes — its failure is in the plan, not the tokenizer");
+
+        crate::tests::assert_contained_bounds_panic(
+            c.run(&c.doc_model, &ids, DOC_LEN, false, &skip),
+            "run (doc)",
+        );
+        assert!(
+            c.encode_doc(fixture::OUT_OF_TABLE_WORD).is_empty(),
+            "a contained panic must degrade to an empty matrix"
+        );
+        assert_eq!(
+            c.encode_failures(),
+            1,
+            "a contained panic must be counted exactly once"
+        );
+        crate::tests::assert_contained_bounds_panic(
+            c.run(&c.doc_model, &ids, DOC_LEN, false, &skip),
+            "run (doc)",
+        );
+
+        assert_eq!(
+            crate::tests::bits(&c.encode_doc(fixture::HEALTHY)),
+            before,
+            "a doc encode after three caught panics must be bit-identical to one before them"
+        );
+        assert_eq!(
+            c.encode_failures(),
+            1,
+            "a healthy doc encode must not move the count"
+        );
+    }
+
+    /// **Route R, query encode: an id past the embedding table is CONTAINED**
+    /// (ROADMAP O150). A query panic ended the server in the middle of a
+    /// search; contained, it retires the late stage for that one search and
+    /// counts it.
+    #[test]
+    fn onnx_route_r_query_encode_contains_an_out_of_table_panic() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let c = load_fixture_colbert(dir.path());
+        let before = crate::tests::bits(&c.encode_query(fixture::HEALTHY));
+        let (ids, _) = c
+            .frame(Q_MARKER, fixture::OUT_OF_TABLE_WORD, QUERY_LEN, false)
+            .expect("premise: the out-of-table word tokenizes — its failure is in the plan, not the tokenizer");
+
+        crate::tests::assert_contained_bounds_panic(
+            c.run(&c.query_model, &ids, QUERY_LEN, true, &[]),
+            "run (query)",
+        );
+        assert!(
+            c.encode_query(fixture::OUT_OF_TABLE_WORD).is_empty(),
+            "a contained panic must degrade to an empty matrix"
+        );
+        assert_eq!(
+            c.encode_failures(),
+            1,
+            "a contained panic must be counted exactly once"
+        );
+        crate::tests::assert_contained_bounds_panic(
+            c.run(&c.query_model, &ids, QUERY_LEN, true, &[]),
+            "run (query)",
+        );
+
+        assert_eq!(
+            crate::tests::bits(&c.encode_query(fixture::HEALTHY)),
+            before,
+            "a query encode after three caught panics must be bit-identical to one before them"
         );
         assert_eq!(
             c.encode_failures(),

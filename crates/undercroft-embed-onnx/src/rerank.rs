@@ -16,6 +16,7 @@
 use crate::{OnnxError, RunnableOnnx, MAX_LEN};
 use tokenizers::Tokenizer;
 use tract_onnx::prelude::*;
+use undercroft_core::contain::contain;
 use undercroft_core::rerank::Reranker;
 
 /// Cross-encoder reranker over a tract-run ONNX model.
@@ -99,51 +100,64 @@ impl OnnxReranker {
         )
     }
 
+    /// One pair score, CONTAINED (ROADMAP O150): the pair encode, the plan
+    /// run and `outputs[0]` all sit inside `contain`, so a panic in any of
+    /// them — an id past the embedding table panics in tract's `Gather`
+    /// kernel — comes back as [`OnnxError::Panicked`] and reaches the counted
+    /// `0.0` in `score`. `score_batch` fans `score` across rayon, so every
+    /// passage in a batch, and the load probe, go through this one boundary.
     fn score_inner(&self, query: &str, passage: &str) -> Result<f32, OnnxError> {
-        // Pair encode → [CLS] query [SEP] passage [SEP] with token_type_ids
-        // marking the two segments (the cross-encoder input contract).
-        let enc = self
-            .tokenizer
-            .encode((query, passage), true)
-            .map_err(|e| OnnxError::Inference(e.to_string()))?;
-        let mut ids: Vec<i64> = enc.get_ids().iter().map(|&v| v as i64).collect();
-        let mut mask: Vec<i64> = enc.get_attention_mask().iter().map(|&v| v as i64).collect();
-        let mut types: Vec<i64> = enc.get_type_ids().iter().map(|&v| v as i64).collect();
-        ids.truncate(MAX_LEN);
-        mask.truncate(MAX_LEN);
-        types.truncate(MAX_LEN);
-        while ids.len() < MAX_LEN {
-            ids.push(0);
-            mask.push(0);
-            types.push(0);
-        }
+        contain(
+            || {
+                // Pair encode → [CLS] query [SEP] passage [SEP] with token_type_ids
+                // marking the two segments (the cross-encoder input contract).
+                let enc = self
+                    .tokenizer
+                    .encode((query, passage), true)
+                    .map_err(|e| OnnxError::Inference(e.to_string()))?;
+                let mut ids: Vec<i64> = enc.get_ids().iter().map(|&v| v as i64).collect();
+                let mut mask: Vec<i64> =
+                    enc.get_attention_mask().iter().map(|&v| v as i64).collect();
+                let mut types: Vec<i64> = enc.get_type_ids().iter().map(|&v| v as i64).collect();
+                ids.truncate(MAX_LEN);
+                mask.truncate(MAX_LEN);
+                types.truncate(MAX_LEN);
+                while ids.len() < MAX_LEN {
+                    ids.push(0);
+                    mask.push(0);
+                    types.push(0);
+                }
 
-        let to_tensor = |v: &[i64]| -> Result<Tensor, OnnxError> {
-            tract_ndarray::Array2::from_shape_vec((1, MAX_LEN), v.to_vec())
-                .map(Tensor::from)
-                .map_err(|e| OnnxError::Inference(e.to_string()))
-        };
-        let mut inputs: TVec<TValue> = tvec!(to_tensor(&ids)?.into(), to_tensor(&mask)?.into());
-        if self.n_inputs >= 3 {
-            inputs.push(to_tensor(&types)?.into());
-        }
-        let outputs = self
-            .model
-            .run(inputs)
-            .map_err(|e| OnnxError::Inference(e.to_string()))?;
-        let logits = outputs[0]
-            .to_array_view::<f32>()
-            .map_err(|e| OnnxError::Inference(e.to_string()))?;
-        // Sequence-classification head: shape (1, num_labels). A single-label
-        // reranker gives (1,1); a 2-label head gives (1,2) — take the last
-        // (positive/relevant) logit. Squash to [0,1] for a bounded, monotonic
-        // ranking score.
-        let flat: Vec<f32> = logits.iter().copied().collect();
-        let raw = match flat.last() {
-            Some(&v) => v,
-            None => return Err(OnnxError::Inference("empty reranker output".into())),
-        };
-        Ok(sigmoid(raw))
+                let to_tensor = |v: &[i64]| -> Result<Tensor, OnnxError> {
+                    tract_ndarray::Array2::from_shape_vec((1, MAX_LEN), v.to_vec())
+                        .map(Tensor::from)
+                        .map_err(|e| OnnxError::Inference(e.to_string()))
+                };
+                let mut inputs: TVec<TValue> =
+                    tvec!(to_tensor(&ids)?.into(), to_tensor(&mask)?.into());
+                if self.n_inputs >= 3 {
+                    inputs.push(to_tensor(&types)?.into());
+                }
+                let outputs = self
+                    .model
+                    .run(inputs)
+                    .map_err(|e| OnnxError::Inference(e.to_string()))?;
+                let logits = outputs[0]
+                    .to_array_view::<f32>()
+                    .map_err(|e| OnnxError::Inference(e.to_string()))?;
+                // Sequence-classification head: shape (1, num_labels). A single-label
+                // reranker gives (1,1); a 2-label head gives (1,2) — take the last
+                // (positive/relevant) logit. Squash to [0,1] for a bounded, monotonic
+                // ranking score.
+                let flat: Vec<f32> = logits.iter().copied().collect();
+                let raw = match flat.last() {
+                    Some(&v) => v,
+                    None => return Err(OnnxError::Inference("empty reranker output".into())),
+                };
+                Ok(sigmoid(raw))
+            },
+            OnnxError::Panicked,
+        )
     }
 }
 
@@ -316,6 +330,128 @@ mod tests {
             3,
             "three poisoned passages must cost exactly three counts, not one and not eight"
         );
+    }
+
+    /// **Route R, score: an id past the embedding table is CONTAINED**
+    /// (ROADMAP O150) — the embed arm's three halves on the reranker. The
+    /// inner body returns the contained bounds panic, the door counts one
+    /// `0.0`, and a healthy score before and after three out-of-table calls
+    /// is bit-identical. No `catch_unwind`.
+    #[test]
+    fn onnx_route_r_score_contains_an_out_of_table_panic() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let rr = load_fixture_reranker(dir.path());
+        let before = rr.score("query", fixture::HEALTHY).to_bits();
+
+        crate::tests::assert_contained_bounds_panic(
+            rr.score_inner("query", fixture::OUT_OF_TABLE_WORD),
+            "score_inner",
+        );
+        assert_eq!(
+            rr.score("query", fixture::OUT_OF_TABLE_WORD),
+            0.0,
+            "a contained panic must degrade to 0.0"
+        );
+        assert_eq!(
+            rr.score_failures(),
+            1,
+            "a contained panic must be counted exactly once"
+        );
+        crate::tests::assert_contained_bounds_panic(
+            rr.score_inner("query", fixture::OUT_OF_TABLE_WORD),
+            "score_inner",
+        );
+
+        assert_eq!(
+            rr.score("query", fixture::HEALTHY).to_bits(),
+            before,
+            "a score after three caught panics must be bit-identical to one before them"
+        );
+        assert_eq!(
+            rr.score_failures(),
+            1,
+            "a healthy score must not move the count"
+        );
+    }
+
+    /// **Route R, score_batch: the worker that caught the panics is the one
+    /// reused** (ROADMAP O150, Q4).
+    ///
+    /// `score_batch` fans `score` across rayon; before O150 the panic unwound
+    /// through the pool and rayon re-threw it on the caller. A ONE-thread pool
+    /// is what gives the reuse check its meaning: every call below runs on
+    /// the same worker, so the healthy batch after the panics is scored by the
+    /// thread that caught them. Across a wide pool it could land on a thread
+    /// that never panicked and pass regardless — and per-thread state is
+    /// exactly what a fresh instance, or a fresh thread, cannot see.
+    #[test]
+    fn onnx_route_r_score_batch_contains_an_out_of_table_panic_on_the_reused_worker() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let rr = load_fixture_reranker(dir.path());
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .expect("a one-thread pool");
+        pool.install(|| {
+            assert_eq!(
+                rayon::current_num_threads(),
+                1,
+                "premise: the batch must run on a one-thread pool"
+            );
+            let healthy = [fixture::HEALTHY, fixture::HEALTHY_OTHER];
+            let before: Vec<u32> = rr
+                .score_batch("query", &healthy)
+                .iter()
+                .map(|s| s.to_bits())
+                .collect();
+
+            crate::tests::assert_contained_bounds_panic(
+                rr.score_inner("query", fixture::OUT_OF_TABLE_WORD),
+                "score_inner",
+            );
+            let scores = rr.score_batch(
+                "query",
+                &[
+                    fixture::HEALTHY,
+                    fixture::OUT_OF_TABLE_WORD,
+                    fixture::HEALTHY_OTHER,
+                ],
+            );
+            assert_eq!(scores.len(), 3, "one score per passage");
+            assert_eq!(
+                scores[1], 0.0,
+                "the out-of-table passage must degrade to 0.0"
+            );
+            assert_eq!(
+                [scores[0].to_bits(), scores[2].to_bits()],
+                [before[0], before[1]],
+                "its healthy neighbours keep their exact scores — tract degrades per passage"
+            );
+            assert_eq!(
+                rr.score_failures(),
+                1,
+                "one out-of-table passage must cost exactly one count"
+            );
+            crate::tests::assert_contained_bounds_panic(
+                rr.score_inner("query", fixture::OUT_OF_TABLE_WORD),
+                "score_inner",
+            );
+
+            let after: Vec<u32> = rr
+                .score_batch("query", &healthy)
+                .iter()
+                .map(|s| s.to_bits())
+                .collect();
+            assert_eq!(
+                after, before,
+                "a batch scored by the worker that caught three panics must be bit-identical to one before them"
+            );
+            assert_eq!(
+                rr.score_failures(),
+                1,
+                "a healthy batch must not move the count"
+            );
+        });
     }
 
     /// Loads a real cross-encoder from `UNDERCROFT_RERANK_MODEL`/`_TOKENIZER`

@@ -98,7 +98,10 @@ Exposed series (all `undercroft_*`):
   drawer is stored verbatim and lexically findable but semantically
   invisible until re-embedded. The live count is `embed_failures` on every
   stats surface; this is its durable half, so a server nobody polls still
-  has a series to alert on. A kind, never a model name),
+  has a series to alert on. A kind, never a model name. Since ROADMAP O150 a
+  PANIC inside the in-process model counts here too — on all three model
+  roles — where it used to end the process; its log line reads
+  `inference panicked: …`),
   `rerank_failures_total{backend}` and `late_failures_total{backend,side}`
   (the other two model roles, ROADMAP O131 — a cross-encoder score degraded
   to `0.0`, which SINKS that candidate in the reranked window rather than

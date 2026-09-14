@@ -16,7 +16,20 @@
 
 use tokenizers::Tokenizer;
 use tract_onnx::prelude::*;
+use undercroft_core::contain::contain;
 use undercroft_core::embed::Embedder;
+
+// ROADMAP O150. Every role's inner body is wrapped in
+// `undercroft_core::contain::contain`, which catches an UNWINDING panic. Under
+// `panic = "abort"` there is no unwind to catch, so the boundary would be gone
+// with nothing to say so and an out-of-table id would end the process again.
+// Refused here because nothing else can see it: Cargo ignores `panic` for test
+// targets, and a check of `Cargo.toml` cannot see `CARGO_PROFILE_RELEASE_PANIC`,
+// `RUSTFLAGS` or `.cargo/config`.
+#[cfg(panic = "abort")]
+compile_error!(
+    "undercroft-embed-onnx requires panic = \"unwind\": its model panics are contained with catch_unwind (ROADMAP O150), and an abort build turns them back into a process crash"
+);
 
 const MAX_LEN: usize = 256;
 
@@ -28,6 +41,12 @@ pub enum OnnxError {
     Model(String),
     #[error("inference failed: {0}")]
     Inference(String),
+    /// A panic inside a model body, caught by `contain` and carrying the
+    /// panic's own message (ROADMAP O150). It reaches the same counted
+    /// degrade as [`OnnxError::Inference`]; the separate variant is what lets
+    /// a degrade line, and a test, tell a contained crash from a typed error.
+    #[error("inference panicked: {0}")]
+    Panicked(String),
 }
 
 type RunnableOnnx = SimplePlan<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>;
@@ -91,65 +110,80 @@ impl OnnxEmbedder {
         Ok(me)
     }
 
+    /// One embed, CONTAINED (ROADMAP O150). The tokenizer, the plan run and
+    /// the shape handling after it all sit inside `contain`, because each can
+    /// panic on a real model pair: an id past the embedding table panics in
+    /// tract's `Gather` kernel, and `outputs[0]`, `shape[1]`/`shape[2]` and
+    /// `hidden[[0, t, d]]` index with no rank check. A panic comes back as
+    /// [`OnnxError::Panicked`] and reaches the counted degrade in `embed`
+    /// instead of ending the process; the load probe calls this too, so a
+    /// model that panics on the probe refuses to load.
     fn embed_inner(&self, text: &str) -> Result<Vec<f32>, OnnxError> {
-        let enc = self
-            .tokenizer
-            .encode(text, true)
-            .map_err(|e| OnnxError::Inference(e.to_string()))?;
-        let mut ids: Vec<i64> = enc.get_ids().iter().map(|&v| v as i64).collect();
-        let mut mask: Vec<i64> = enc.get_attention_mask().iter().map(|&v| v as i64).collect();
-        let mut types: Vec<i64> = enc.get_type_ids().iter().map(|&v| v as i64).collect();
-        ids.truncate(MAX_LEN);
-        mask.truncate(MAX_LEN);
-        types.truncate(MAX_LEN);
-        while ids.len() < MAX_LEN {
-            ids.push(0);
-            mask.push(0);
-            types.push(0);
-        }
+        contain(
+            || {
+                let enc = self
+                    .tokenizer
+                    .encode(text, true)
+                    .map_err(|e| OnnxError::Inference(e.to_string()))?;
+                let mut ids: Vec<i64> = enc.get_ids().iter().map(|&v| v as i64).collect();
+                let mut mask: Vec<i64> =
+                    enc.get_attention_mask().iter().map(|&v| v as i64).collect();
+                let mut types: Vec<i64> = enc.get_type_ids().iter().map(|&v| v as i64).collect();
+                ids.truncate(MAX_LEN);
+                mask.truncate(MAX_LEN);
+                types.truncate(MAX_LEN);
+                while ids.len() < MAX_LEN {
+                    ids.push(0);
+                    mask.push(0);
+                    types.push(0);
+                }
 
-        let to_tensor = |v: &[i64]| -> Result<Tensor, OnnxError> {
-            tract_ndarray::Array2::from_shape_vec((1, MAX_LEN), v.to_vec())
-                .map(Tensor::from)
-                .map_err(|e| OnnxError::Inference(e.to_string()))
-        };
-        let mut inputs: TVec<TValue> = tvec!(to_tensor(&ids)?.into(), to_tensor(&mask)?.into());
-        if self.n_inputs >= 3 {
-            inputs.push(to_tensor(&types)?.into());
-        }
-        let outputs = self
-            .model
-            .run(inputs)
-            .map_err(|e| OnnxError::Inference(e.to_string()))?;
-        let hidden = outputs[0]
-            .to_array_view::<f32>()
-            .map_err(|e| OnnxError::Inference(e.to_string()))?;
-        // hidden: (1, MAX_LEN, dim) — masked mean pool + L2 normalize.
-        let shape = hidden.shape();
-        let (seq, dim) = (shape[1], shape[2]);
-        let mut pooled = vec![0f32; dim];
-        let mut denom = 0f32;
-        for t in 0..seq.min(MAX_LEN) {
-            if mask[t] == 0 {
-                continue;
-            }
-            denom += 1.0;
-            for d in 0..dim {
-                pooled[d] += hidden[[0, t, d]];
-            }
-        }
-        if denom > 0.0 {
-            for v in &mut pooled {
-                *v /= denom;
-            }
-        }
-        let norm = pooled.iter().map(|x| x * x).sum::<f32>().sqrt();
-        if norm > 0.0 {
-            for v in &mut pooled {
-                *v /= norm;
-            }
-        }
-        Ok(pooled)
+                let to_tensor = |v: &[i64]| -> Result<Tensor, OnnxError> {
+                    tract_ndarray::Array2::from_shape_vec((1, MAX_LEN), v.to_vec())
+                        .map(Tensor::from)
+                        .map_err(|e| OnnxError::Inference(e.to_string()))
+                };
+                let mut inputs: TVec<TValue> =
+                    tvec!(to_tensor(&ids)?.into(), to_tensor(&mask)?.into());
+                if self.n_inputs >= 3 {
+                    inputs.push(to_tensor(&types)?.into());
+                }
+                let outputs = self
+                    .model
+                    .run(inputs)
+                    .map_err(|e| OnnxError::Inference(e.to_string()))?;
+                let hidden = outputs[0]
+                    .to_array_view::<f32>()
+                    .map_err(|e| OnnxError::Inference(e.to_string()))?;
+                // hidden: (1, MAX_LEN, dim) — masked mean pool + L2 normalize.
+                let shape = hidden.shape();
+                let (seq, dim) = (shape[1], shape[2]);
+                let mut pooled = vec![0f32; dim];
+                let mut denom = 0f32;
+                for t in 0..seq.min(MAX_LEN) {
+                    if mask[t] == 0 {
+                        continue;
+                    }
+                    denom += 1.0;
+                    for d in 0..dim {
+                        pooled[d] += hidden[[0, t, d]];
+                    }
+                }
+                if denom > 0.0 {
+                    for v in &mut pooled {
+                        *v /= denom;
+                    }
+                }
+                let norm = pooled.iter().map(|x| x * x).sum::<f32>().sqrt();
+                if norm > 0.0 {
+                    for v in &mut pooled {
+                        *v /= norm;
+                    }
+                }
+                Ok(pooled)
+            },
+            OnnxError::Panicked,
+        )
     }
 }
 
@@ -310,88 +344,85 @@ mod tests {
         );
     }
 
-    /// **Route R: what the tract runtime does with an id past the embedding
-    /// table — CLASSIFIED, not predicted** (ROADMAP O134a, O150).
+    /// Bit patterns, so "unchanged" means the same floats rather than floats
+    /// that merely compare equal.
+    pub(crate) fn bits(v: &[f32]) -> Vec<u32> {
+        v.iter().map(|x| x.to_bits()).collect()
+    }
+
+    /// The contained panic an out-of-table id must come back as, on tract.
     ///
-    /// The panel that designed this unit reasoned from tract's source that
-    /// `Gather` panics here, and explicitly refused to assert it. A test
-    /// written from a prediction is not verification, so this resolves to
-    /// one of three NAMED outcomes and prints what it saw:
+    /// The VARIANT, not "some error": a typed `Inference` reaching the degrade
+    /// counts 1 as well, which is exactly how the classifier this replaces
+    /// passed on either outcome (ROADMAP O150, defect 1). The substring is the
+    /// panic's CLASS, narrowed from the payload observed on tract 0.22.3 —
+    /// "range end index 16388 out of range for slice of length 512", a bounds
+    /// panic in the `Gather` kernel where 16388 = (OUT_OF_TABLE_ID + 1) × DIM
+    /// — so a reworded tract message fails loudly with its new wording, and
+    /// the pin is re-derived from that run.
+    pub(crate) fn assert_contained_bounds_panic<T: std::fmt::Debug>(
+        got: Result<T, OnnxError>,
+        door: &str,
+    ) {
+        match got {
+            Err(OnnxError::Panicked(m)) => assert!(
+                m.contains("out of range"),
+                "{door}: contained, but not the bounds panic this arm pins — a different panic is a different defect: {m}"
+            ),
+            other => panic!(
+                "{door}: an out-of-table id must come back as the CONTAINED panic (ROADMAP O150), got {other:?}"
+            ),
+        }
+    }
+
+    /// **Route R, embed: an id past the embedding table is CONTAINED**
+    /// (ROADMAP O150).
     ///
-    /// * a panic carrying the pinned bounds message, with nothing counted —
-    ///   PASS. Observed on tract 0.22.3, and ROADMAP O150 stands;
-    /// * a return with exactly one counted failure and the zero vector — an
-    ///   inference error routed to the counted degrade — PASS as well, and
-    ///   that is the outcome O150's fix produces;
-    /// * a return with any other count or any other vector — FAIL: it breaks
-    ///   the degrade's contract, and with nothing counted it is a silently
-    ///   wrong vector landing in the corpus and joining the codebook training
-    ///   draw, which is strictly the worst of the three.
+    /// tract 0.22.3 PANICS on this input, and the panic used to unwind out of
+    /// the `/v1` and MCP loops and end the process. The classifier this
+    /// replaces accepted either outcome, so the fix would have changed what it
+    /// meant with nothing visible: it was made to FAIL on the contained
+    /// outcome, the red run was recorded, and this is the re-pin. Three
+    /// halves, asserted apart so a counterfactual names which one failed:
     ///
-    /// **The second outcome is not an alarm.** Its `println!` is captured for
-    /// a passing test — cargo shows a passing test's stdout only under
-    /// `--nocapture` or `--show-output`, and the `onnx-build` leg passes
-    /// neither — so landing O150's boundary would change what this test means
-    /// with nothing visible. O150's unit must make that arm FAIL first,
-    /// observe the failure, and only then re-pin it (ROADMAP O150, Gate).
+    /// * the inner body returns the contained bounds panic;
+    /// * the door returns its documented zero vector and counts exactly once;
+    /// * the instance is still sound — a healthy embed before and after three
+    ///   out-of-table calls is bit-identical.
     ///
-    /// Depends on `[profile.release]` carrying no `panic = "abort"`.
+    /// No `catch_unwind` and no hook swap: an escaped panic fails this test by
+    /// itself, and a swapped hook is a process global under libtest's
+    /// parallel runner.
     #[test]
-    fn onnx_route_r_classifies_an_out_of_table_id() {
+    fn onnx_route_r_embed_contains_an_out_of_table_panic() {
         let dir = tempfile::tempdir().expect("tempdir");
         let (model, tok) = fixture::write_into(dir.path()).expect("write fixture");
         let e = OnnxEmbedder::load(&model, &tok, "fixture").expect("fixture loads");
+        let before = bits(&e.embed(fixture::HEALTHY));
 
-        // Silence the default hook for the duration: a green run must not
-        // print a panic and a backtrace on every invocation.
-        let prev = std::panic::take_hook();
-        std::panic::set_hook(Box::new(|_| {}));
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            e.embed(fixture::OUT_OF_TABLE_WORD)
-        }));
-        std::panic::set_hook(prev);
+        assert_contained_bounds_panic(e.embed_inner(fixture::OUT_OF_TABLE_WORD), "embed_inner");
+        assert_eq!(
+            e.embed(fixture::OUT_OF_TABLE_WORD),
+            vec![0.0; fixture::DIM],
+            "a contained panic must degrade to the documented zero vector"
+        );
+        assert_eq!(
+            e.embed_failures(),
+            1,
+            "a contained panic must be counted exactly once"
+        );
+        assert_contained_bounds_panic(e.embed_inner(fixture::OUT_OF_TABLE_WORD), "embed_inner");
 
-        match outcome {
-            Err(payload) => {
-                let what = payload
-                    .downcast_ref::<String>()
-                    .map(|s| s.as_str())
-                    .or_else(|| payload.downcast_ref::<&str>().copied())
-                    .unwrap_or("<non-string panic payload>");
-                println!("ROUTE-R onnx: tract PANICKED on an out-of-table id — ROADMAP O150 stands. Payload: {what}");
-                // NARROWED FROM A RUN, not from a prediction. Observed on
-                // tract 0.22.3: "range end index 16388 out of range for
-                // slice of length 512" — a bounds panic in the Gather
-                // kernel, where 16388 = (OUT_OF_TABLE_ID + 1) * DIM and 512
-                // = EMB_ROWS * DIM. The substring is the CLASS rather than
-                // the sentence, so a reworded tract message fails loudly
-                // with the new wording printed above and the pin is
-                // re-derived from that run — which is the only way this pin
-                // is ever allowed to move.
-                assert!(
-                    what.contains("out of range"),
-                    "tract panicked, but not with the bounds panic this arm pins — a different panic here is a different defect. Payload: {what}"
-                );
-                assert_eq!(
-                    e.embed_failures(),
-                    0,
-                    "a panic is not a degrade: nothing may have been counted, or the count would describe a call that never returned"
-                );
-            }
-            Ok(v) => {
-                let counted = e.embed_failures();
-                println!("ROUTE-R onnx: tract returned a value, {counted} counted failure(s)");
-                assert_eq!(
-                    counted, 1,
-                    "tract did not panic, and the out-of-table id was not counted exactly once — it returned {v:?} with {counted} counted. 0 means inference returned Ok and a silently wrong uncounted vector just landed; 2 or more means one call was counted more than once. This fires only when the count is not 1: a typed Err routed to the degrade counts 1 and PASSES here, so O150's retirement is not signalled by this assert (ROADMAP O150)."
-                );
-                assert_eq!(
-                    v,
-                    vec![0.0; fixture::DIM],
-                    "a counted degrade must be the documented zero vector"
-                );
-            }
-        }
+        assert_eq!(
+            bits(&e.embed(fixture::HEALTHY)),
+            before,
+            "an embed after three caught panics must be bit-identical to one before them"
+        );
+        assert_eq!(
+            e.embed_failures(),
+            1,
+            "a healthy embed must not move the count"
+        );
     }
 
     /// Full inference test against a REAL user-supplied model. Ignored by
