@@ -7,6 +7,28 @@ its CLI mirror `tenant-repoint` are additive — nothing that worked before
 behaves differently because they exist. Everything else in this section is a
 fix whose only observable change is that a defect is gone.
 
+### the model backends are joined to the surfaces an operator reads (O157)
+
+Internal tooling, no user-visible change.
+
+A new test target drives the real `undercroft` binary with each model backend —
+`onnx` and `ort` for the embedder and the reranker, `colbert` and `colbert-ort`
+for the late-interaction stage — against the model fixture the tests generate,
+and asserts that each role's failures are counted where an operator reads them.
+`stats` moves by exactly one per failing embed on `/v1` and over MCP, by exactly
+one per failing ColBERT encode over MCP, and by at least one per failing rerank
+on both, with a healthy call beside each that moves nothing. On the CLI, where
+every command is its own process, the embed count `stats` prints equals that
+process's own degrade lines, and each role's failing call prints its degrade
+line where a healthy one prints none. It also pins that the multi-tenant server
+refuses the ColBERT stage at start-up, which is why `/v1` has no late-stage
+arm. It runs by name from the
+`ort-build` leg and nowhere else, and reaches the fixture through the CLI's
+optional dependency rather than a dev-dependency: measured, a dev-dependency
+would have added 265 s to every default test build and pulled four ML crates
+into the Windows check. The model-leg preflight now also checks that exactly one
+leg runs the join, with every feature it requires.
+
 ### the handover gate reads the text a session acts on, not a token that moves on its own (O165)
 
 Internal tooling, no user-visible change.

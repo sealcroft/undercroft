@@ -145,7 +145,9 @@ are out; ColBERT exports need fixed-shape plans); the compose
 `onnx-build` / `ort-build` services build both features in CI **and run each
 crate's own tests** — which, since ROADMAP O134a, execute every counted
 degrade arm against a model fixture the tests generate, so no weights are
-committed and none are downloaded.
+committed and none are downloaded. Since ROADMAP O157 `ort-build` also drives
+the real `undercroft` binary with each backend over that fixture, and asserts
+that each model role's failures reach `stats` on the CLI, `/v1` and MCP.
 
 ## Exporting a model (out of repo, on purpose)
 

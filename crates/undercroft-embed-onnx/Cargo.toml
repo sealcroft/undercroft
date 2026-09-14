@@ -13,7 +13,11 @@ authors.workspace = true
 # model bytes (ROADMAP O134a). `undercroft-embed-ort` takes this crate as a
 # dev-dependency with this feature on, which is the only way one generator
 # serves both backends; `#[path]` across crates would hide the edge from
-# Cargo and from every gate that reads edges.
+# Cargo and from every gate that reads edges. The CLI's `model_e2e` target
+# reaches it the other way (ROADMAP O157): `undercroft-embed-onnx/test-fixture`
+# in that target's `required-features`, over the CLI's existing OPTIONAL
+# dependency, because the CLI is a default member and a dev-dependency there
+# would be compiled by every default build.
 #
 # A DEP-FREE MARKER. `prost` is a normal dependency below rather than an
 # optional one behind this feature, so the feature cannot change what any

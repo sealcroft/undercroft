@@ -2082,7 +2082,11 @@ echo "═══ preflight: model leg parity ═══"
 #
 # Each leg must name its OWN crate and must NOT name the other's: `ort-build`
 # builds `--features onnx,ort` and so already compiles the tract crate, and
-# testing both there would count one crate's figures twice.
+# testing both there would count one crate's figures twice. That rule is a
+# proxy for a wider invariant: no cargo test target runs in two legs, and a
+# required-features target runs in exactly one. `ort-build` runs ONE target
+# from outside its crate, the CLI's `model_e2e` (ROADMAP O157), which arms B–F
+# below can see and these two cannot.
 MLP_FAIL=0
 MLP_SEEN=0
 # Assembled, so this gate does not match itself when the preflight source is
@@ -2135,12 +2139,225 @@ if ! printf '%s' "$(awk -v svc="  onnx-build:" '$0 == svc {inb=1; next} inb && /
   echo "FAIL  the model-leg extractor cannot see the build command it is reading beside."
   MLP_FAIL=1
 fi
+# ── arms B–F: the O157 join (ROADMAP O157, revised 2026-09-14) ───────────────
+# Inside this preflight rather than beside it, so the published preflight count
+# does not move. They read docker-compose.yml, Dockerfile, the root Cargo.toml
+# and crates/*/Cargo.toml; no Python, no cargo.
+#
+# The two arms above are BLIND to the join: they name only
+# `cargo test --release -p <model crate>`, so a leg that dropped
+# `--test model_e2e` would run every CLI target — which `test` already counts —
+# and the only signal would be a figure drift that invites editing the figure.
+
+# Every compose service's command block, by name.
+mlp_block() {
+  awk -v svc="  $1:" '
+      $0 == svc { inb = 1; next }
+      inb && /^  [a-z0-9-]+:$/ { exit }
+      inb { print }
+    ' docker-compose.yml
+}
+MLP_SERVICES=$(grep -E '^  [a-z0-9-]+:$' docker-compose.yml | tr -d ' :')
+
+# ── (F) a default member reaches a non-default member only OPTIONALLY ─────────
+# A dev-dependency cannot be optional, so on a default member it is compiled by
+# every `cargo test` and `--all-targets` over it: the test leg, both lint
+# definitions, windows-check and the Dockerfile builder stage. Measured for the
+# O157 fixture: +265 s on the default test compile and four ML crates in the
+# windows-check shape despite `--exclude`. The rule is the intent Cargo.toml's
+# default-members comment already states in prose.
+mlp_array() { # mlp_array KEY -> the path entries of a top-level TOML array in Cargo.toml
+  awk -v key="$1" '
+      $0 ~ "^" key " = \\[" { f = 1; next }
+      f && /^\]/ { f = 0 }
+      f { gsub(/[" ,\t]/, ""); if ($0 != "") print }
+    ' Cargo.toml
+}
+MLP_MEMBERS=$(mlp_array members)
+MLP_DEFAULTS=$(mlp_array default-members)
+MLP_NONDEFAULT=""
+for m in $MLP_MEMBERS; do
+  printf '%s\n' "$MLP_DEFAULTS" | grep -qxF "$m" || MLP_NONDEFAULT="$MLP_NONDEFAULT ${m##*/}"
+done
+for want in undercroft-embed-onnx undercroft-embed-ort; do
+  case " $MLP_NONDEFAULT " in
+    *" $want "*) ;;
+    *) echo "FAIL  PREMISE: the members/default-members reader does not see $want as non-default"
+       echo "      (read:$MLP_NONDEFAULT) — a broken reader, not a clean tree."
+       MLP_FAIL=1 ;;
+  esac
+done
+# One manifest's edges onto the non-default members, with the section each sits in.
+mlp_edges() { # mlp_edges MANIFEST "names…"
+  awk -v nd="$2" -v file="$1" '
+      BEGIN { n = split(nd, names, " ") }
+      /^\[/ {
+        section = $0
+        for (i = 1; i <= n; i++)
+          if (index($0, "dependencies." names[i] "]") > 0) printf "UNSUPPORTED|%s|%s|%s\n", file, $0, names[i]
+        next
+      }
+      {
+        for (i = 1; i <= n; i++) {
+          if ($0 ~ ("^" names[i] "[ \t]*=")) {
+            dep = (section == "[dependencies]" || section ~ /^\[target\..*\.dependencies\]$/)
+            opt = ($0 ~ /optional[ \t]*=[ \t]*true/)
+            printf "%s|%s|%s|%s\n", ((dep && opt) ? "OK" : "BAD"), file, section, names[i]
+          }
+        }
+      }
+    ' "$1"
+}
+MLP_EDGES=""
+for m in $MLP_DEFAULTS; do
+  [ -f "$m/Cargo.toml" ] || { echo "FAIL  PREMISE: default member $m has no Cargo.toml"; MLP_FAIL=1; continue; }
+  MLP_EDGES="$MLP_EDGES$(mlp_edges "$m/Cargo.toml" "$MLP_NONDEFAULT")
+"
+done
+while IFS='|' read -r verdict file section name; do
+  [ -n "$verdict" ] || continue
+  case "$verdict" in
+    BAD) echo "FAIL  $file reaches the non-default member $name from $section without optional = true."
+         echo "      A default member may reach $name ONLY through an optional [dependencies] entry:"
+         echo "      anything else is compiled by every default build (ROADMAP O157)."
+         MLP_FAIL=1 ;;
+    UNSUPPORTED) echo "FAIL  $file uses the table form $section for $name — extend this reader."
+         MLP_FAIL=1 ;;
+  esac
+done <<< "$MLP_EDGES"
+# PREMISE: the scan must SEE the four optional edges that exist today…
+for known in "crates/undercroft-cli/Cargo.toml|[dependencies]|undercroft-embed-onnx" \
+             "crates/undercroft-cli/Cargo.toml|[dependencies]|undercroft-embed-ort" \
+             "crates/undercroft-bench/Cargo.toml|[dependencies]|undercroft-embed-onnx" \
+             "crates/undercroft-bench/Cargo.toml|[dependencies]|undercroft-embed-ort"; do
+  printf '%s\n' "$MLP_EDGES" | grep -qxF "OK|$known" || {
+    echo "FAIL  PREMISE: the edge reader does not see $known — a broken reader, not a clean tree."
+    MLP_FAIL=1
+  }
+done
+# …and its section tracker must read a dev-dependency section at all, proved on
+# the one real dev-dependency edge (a non-default member, so out of scope above).
+mlp_edges crates/undercroft-embed-ort/Cargo.toml "undercroft-embed-onnx" \
+  | grep -qxF "BAD|crates/undercroft-embed-ort/Cargo.toml|[dev-dependencies]|undercroft-embed-onnx" || {
+  echo "FAIL  PREMISE: the section tracker cannot see a [dev-dependencies] edge — a broken reader."
+  MLP_FAIL=1
+}
+
+# ── (D) a required-features target is run by exactly one leg, with its features ─
+mlp_targets() { # crate target blocks: FILE|KIND|NAME|PATH|REQUIRED-FEATURES
+  for man in crates/*/Cargo.toml; do
+    awk -v file="$man" '
+        function flush() { if (kind != "") printf "%s|%s|%s|%s|%s\n", file, kind, name, path, rf; kind = "" }
+        /^\[/ {
+          flush()
+          if ($0 ~ /^\[\[(test|bin|example|bench)\]\]$/) { kind = $0; gsub(/\[|\]/, "", kind); name = ""; path = ""; rf = "" }
+          next
+        }
+        kind != "" && /^name[ \t]*=/ { v = $0; sub(/^[^"]*"/, "", v); sub(/".*$/, "", v); name = v }
+        kind != "" && /^path[ \t]*=/ { v = $0; sub(/^[^"]*"/, "", v); sub(/".*$/, "", v); path = v }
+        kind != "" && /^required-features[ \t]*=/ { v = $0; sub(/^[^[]*\[/, "", v); sub(/\].*$/, "", v); gsub(/[" \t]/, "", v); rf = v }
+        END { flush() }
+      ' "$man"
+  done
+}
+MLP_TARGETS=$(mlp_targets)
+printf '%s\n' "$MLP_TARGETS" | grep -q '^crates/undercroft-cli/Cargo.toml|bin|undercroft|' || {
+  echo "FAIL  PREMISE: the target reader does not see [[bin]] undercroft in undercroft-cli — a broken reader."
+  MLP_FAIL=1
+}
+MLP_RF_TESTS=""
+while IFS='|' read -r file kind name path rf; do
+  [ -n "$rf" ] || continue
+  if [ "$kind" != "test" ]; then
+    echo "FAIL  $file declares required-features on a [[$kind]] ($name) — unsupported; extend this arm."
+    MLP_FAIL=1
+    continue
+  fi
+  MLP_RF_TESTS="$MLP_RF_TESTS $name"
+  seen=0
+  for svc in $MLP_SERVICES; do
+    seg=$(mlp_block "$svc" | sed 's/&&/\n/g' | grep -E -- "--test[ =]$name([^A-Za-z0-9_]|$)" || true)
+    [ -n "$seg" ] || continue
+    seen=$((seen + 1))
+    feats=$(printf '%s\n' "$seg" | head -1 | sed -nE 's/.*--features[ =]([^ ]+).*/\1/p' | tr ',' ' ')
+    for need in $(printf '%s' "$rf" | tr ',' ' '); do
+      case " $feats " in
+        *" $need "*) ;;
+        *) echo "FAIL  $svc runs --test $name without the required feature $need (it passes: ${feats:-none})."
+           echo "      Cargo refuses that invocation with exit 101, but only ~25 minutes into a CI leg."
+           MLP_FAIL=1 ;;
+      esac
+    done
+  done
+  if [ "$seen" -ne 1 ]; then
+    echo "FAIL  the required-features target $name is named by $seen compose service(s); exactly one must run it."
+    echo "      Zero means nothing executes it — the unnamed test suite skips it by design;"
+    echo "      two means its tests are counted in two published figures."
+    MLP_FAIL=1
+  fi
+  # ── (E) the target's source carries no feature cfg ──
+  src="${file%/Cargo.toml}/$path"
+  if [ ! -s "$src" ]; then
+    echo "FAIL  $name's path $src is missing or empty."
+    MLP_FAIL=1
+  elif grep -nE 'cfg!?[[:space:]]*\([[:space:]]*feature' "$src" > /dev/null; then
+    echo "FAIL  $src carries a feature cfg: required-features decides presence, and a cfg"
+    echo "      would compile an arm out silently instead of refusing the invocation."
+    grep -nE 'cfg!?[[:space:]]*\([[:space:]]*feature' "$src" | sed 's/^/      /'
+    MLP_FAIL=1
+  fi
+done <<< "$MLP_TARGETS"
+# PREMISE for E: the pattern must match both spellings before its silence is believed.
+for probe in '#[cfg(feature = "x")]' 'if cfg!(feature = "x") {}'; do
+  printf '%s\n' "$probe" | grep -qE 'cfg!?[[:space:]]*\([[:space:]]*feature' || {
+    echo "FAIL  PREMISE: the feature-cfg pattern does not match $probe — a broken pattern."
+    MLP_FAIL=1
+  }
+done
+# PREMISE for D: a service naming a --test target while no required-features block was read is a broken reader.
+if [ -z "$MLP_RF_TESTS" ] && grep -qE -- '--test[ =][a-z_]+' docker-compose.yml; then
+  echo "FAIL  PREMISE: a compose service names a --test target but no required-features [[test]] was read."
+  MLP_FAIL=1
+fi
+
+# ── (B) the O157 join is present, exactly as the leg must spell it ────────────
+MLP_JOIN="ca""rgo test --release -p undercroft-cli --features onnx,ort,undercroft-embed-onnx/test-fixture --test model_e2e"
+mlp_block ort-build | sed 's/&&/\n/g' | grep -qF -- "$MLP_JOIN" || {
+  echo "FAIL  the ort-build leg does not run the O157 join: '$MLP_JOIN'."
+  MLP_FAIL=1
+}
+
+# ── (C) no default-member test target is run whole by a model leg ─────────────
+for leg in onnx-build ort-build; do
+  while IFS= read -r seg; do
+    case "$seg" in *"cargo test"*) ;; *) continue ;; esac
+    for m in $MLP_DEFAULTS; do
+      crate="${m##*/}"
+      printf '%s\n' "$seg" | grep -qE -- "-p[ =]$crate([^A-Za-z0-9_-]|$)" || continue
+      named=0
+      for t in $MLP_RF_TESTS; do
+        printf '%s\n' "$seg" | grep -qE -- "--test[ =]$t([^A-Za-z0-9_]|$)" && named=1
+      done
+      if [ "$named" -ne 1 ]; then
+        echo "FAIL  $leg runs cargo test over the default member $crate without naming a required-features"
+        echo "      target: every one of its targets is already counted by the test suite."
+        MLP_FAIL=1
+      fi
+    done
+  done <<< "$(mlp_block "$leg" | sed 's/&&/\n/g')"
+done
+if grep -q 'model_e2e' Dockerfile; then
+  echo "FAIL  Dockerfile names model_e2e: the join runs in the ort-build leg only."
+  MLP_FAIL=1
+fi
+
 if [ "$MLP_FAIL" -ne 0 ]; then
   echo ""
   echo "BATTERY FAILED — preflight"
   exit 1
 fi
-echo "ok    both model legs run their own crate's tests, and only their own"
+echo "ok    both model legs run their own crate's tests, and only their own;"
+echo "      the O157 join runs in ort-build alone, named, with its required features"
 
 echo "═══ preflight: vendored crates are pinned ═══"
 # ROADMAP O114. `vendor/` holds a patched copy of a third-party crate taken
