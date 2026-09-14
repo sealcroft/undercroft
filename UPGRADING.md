@@ -33,8 +33,8 @@ plane has its own:
 undercroft-orchestrator config check
 ```
 
-It runs the six checked `UNDERCROFT_ORCH_*` declarations that binary reads
-(`_ADDR` and `_DB` are opaque payload, validated by their consumers) through
+It runs the seven checked `UNDERCROFT_ORCH_*` declarations that binary reads
+(`_DB` is opaque payload, validated by its consumer) through
 the same resolvers its `serve` path runs, opens no state database and binds no
 port, and uses the same exit codes. What must not drift is the CLASSIFICATION
 of each variable, and that is counted across the two inventories, in both
@@ -44,7 +44,7 @@ directions, by a test rather than by anyone remembering.
 the orchestrator and no engine, it is the command there is. It is not a
 substitute for the engine's, and the engine's is not a substitute for it: the
 two cover different binaries, and the six declarations they share go through
-one implementation (`undercroft-config`'s five resolvers), so they cannot
+one implementation (`undercroft-config`'s six resolvers), so they cannot
 disagree.
 
 Everything that can refuse is pre-flighted. Until 1.1.0 the orchestrator's
@@ -61,9 +61,13 @@ bearer, so is whether it could ever be presented at all. Both are checked now,
 and no variable is exempt from this command for being a credential.
 
 It reports **validated** and **accepted** separately, and the distinction
-matters: only some variables have a parse to run. A path, a URL, a token or a
-model name is validated by the thing that consumes it, and this command says
-so rather than implying it checked them.
+matters: only some variables have a parse to run. A path (a model, a tokenizer,
+the palace directory), a model name, an API key or a free-form setting such as
+a log level is validated by the thing that consumes it, and this command says
+so rather than implying it checked them. URLs and DSNs are not in that set —
+they run through the same transport policy their clients run — and neither are
+CA pins, which are read, or bearers and secrets, which are refused when empty
+or when they could never be presented.
 
 ---
 
@@ -134,7 +138,7 @@ the longer the first open takes.
 
 **What happens:** `check_duplicate` looks up a content fingerprint on every
 save and every imported record, and the `fp` column it reads has never had an
-index — so that lookup has always been a full table scan. `1.5.3` creates
+index — so that lookup has always been a full table scan. This release creates
 `idx_drawers_fp` at the next WRITABLE open. A read-only open does not create
 it and does not need it, since the lookup is on the write path.
 
@@ -225,6 +229,14 @@ changed is that the limit tells you it is the limit.
 destination — then re-point the tenant with
 `PATCH /admin/tenants/{id}` `{"instance": "<destination>"}`. The CLI path has
 no such ceiling.
+
+**The re-point step is not available on `1.5.2`.** No `1.5.2` control plane
+has the route named above: the admin plane had no `PATCH` arm and the
+orchestrator's CLI no equivalent (ROADMAP O149). The export and import halves
+work on `1.5.2`; the re-point arrives in `1.6.0`, as
+`PATCH /admin/tenants/{id}` and
+`undercroft-orchestrator tenant-repoint <id> --instance <destination>`, and it
+refuses unless the destination answers that it holds the vault.
 
 **Detection before a restart:** none is possible from `config check` — this is
 a property of a tenant's data size, not of a declaration. Compare a tenant's

@@ -114,9 +114,10 @@ enum Command {
     /// Rotate a tenant's token (the old one dies immediately; the new one
     /// prints once)
     TenantRotate { id: String },
-    /// Reach one tenant's engine OPERATOR plane: verify, admission review
-    /// and rulings, wing trust, retention, attested forgetting, anchor
-    /// tightening, supersession receipts.
+    /// Reach one tenant's engine OPERATOR plane: verify, repair, admission
+    /// review and rulings, wing trust, retention, attested forgetting, anchor
+    /// tightening, supersession receipts, the authority declaration, and
+    /// backups (create, list, restore).
     ///
     /// These routes (eleven when C9 filed them; `OPS_ROUTES` is the count today) landed on the admin plane on the argument that they
     /// "were reachable from nowhere in a fleet", and then WERE reachable
@@ -132,11 +133,13 @@ enum Command {
         id: String,
         /// One of: verify, repair, anchor, supersessions, admission,
         /// admission-rule, trust, trust-set, retention, retention-set,
-        /// retention-sweep, forget, verify-forgetting, authority
+        /// retention-sweep, forget, verify-forgetting, authority,
+        /// backup-create, backups, backup-restore
         op: String,
         /// JSON body for the operations that take one (rulings, trust and
-        /// retention assignment, forget, the authority declaration, and the
-        /// attestation document verify-forgetting checks)
+        /// retention assignment, forget, the authority declaration, the
+        /// attestation document verify-forgetting checks, and the backup
+        /// `name` backup-restore restores)
         #[arg(long)]
         body: Option<String>,
     },

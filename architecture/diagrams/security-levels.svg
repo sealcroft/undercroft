@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 826" width="900" height="826" role="img" aria-labelledby="t d">
 <title id="t">The two security levels and what each protects</title>
-<desc id="d">A vault is created Sealed or HmacOnly. Sealed encrypts content, embeddings, token matrices and index artifacts and has no full-text index; HmacOnly keeps content in plaintext and indexes it. Both carry a per-row HMAC and join the audit chain. Drawer metadata is unsealed at both levels, and the exposed fields are listed.</desc>
+<desc id="d">A vault is created Sealed or HmacOnly. Sealed encrypts content, embeddings, token matrices and index artifacts, blinds the knowledge graph's word columns behind sealed words, and has no full-text index; HmacOnly keeps content and graph words in plaintext and indexes the content. Both carry a per-row HMAC and join the audit chain. Drawer metadata is unsealed at both levels, and the exposed fields are listed.</desc>
 <style>
   .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
   .h { font-size: 17px; font-weight: 600; }
@@ -52,22 +52,26 @@
 <text x="568" y="264" class="f s" fill="var(--d-teal-ink,#0d6b62)" text-anchor="middle">encrypted</text>
 <text x="768" y="264" class="f s" fill="var(--d-amber-ink,#8d5a1d)" text-anchor="middle">in clear</text>
 
-<text x="42" y="290" class="f b ink">full-text (fts5) index</text>
-<text x="568" y="290" class="f s" fill="var(--d-red-ink,#993a30)" text-anchor="middle">never exists</text>
-<text x="768" y="290" class="f s" fill="var(--d-amber-ink,#8d5a1d)" text-anchor="middle">built, and used as a prefilter</text>
+<text x="42" y="290" class="f b ink">knowledge-graph words</text>
+<text x="568" y="290" class="f s" fill="var(--d-teal-ink,#0d6b62)" text-anchor="middle">blinded columns, sealed words</text>
+<text x="768" y="290" class="f s" fill="var(--d-amber-ink,#8d5a1d)" text-anchor="middle">in clear</text>
 
-<text x="42" y="316" class="f b" fill="var(--d-red-ink,#993a30)">drawer metadata (meta_json)</text>
-<text x="568" y="316" class="f s" fill="var(--d-red-ink,#993a30)" text-anchor="middle">UNSEALED</text>
-<text x="768" y="316" class="f s" fill="var(--d-red-ink,#993a30)" text-anchor="middle">UNSEALED</text>
+<text x="42" y="316" class="f b ink">full-text (fts5) index</text>
+<text x="568" y="316" class="f s" fill="var(--d-red-ink,#993a30)" text-anchor="middle">never exists</text>
+<text x="768" y="316" class="f s" fill="var(--d-amber-ink,#8d5a1d)" text-anchor="middle">built, and used as a prefilter</text>
 
-<line x1="42" y1="330" x2="858" y2="330" stroke="var(--d-line,#c9d4dd)" stroke-width="1"/>
-<text x="42" y="352" class="f b ink">per-row HMAC tag</text>
-<text x="568" y="352" class="f s" fill="var(--d-green-ink,#22603c)" text-anchor="middle">always — verified on every read</text>
-<text x="768" y="352" class="f s" fill="var(--d-green-ink,#22603c)" text-anchor="middle">always</text>
+<text x="42" y="342" class="f b" fill="var(--d-red-ink,#993a30)">drawer metadata (meta_json)</text>
+<text x="568" y="342" class="f s" fill="var(--d-red-ink,#993a30)" text-anchor="middle">UNSEALED</text>
+<text x="768" y="342" class="f s" fill="var(--d-red-ink,#993a30)" text-anchor="middle">UNSEALED</text>
 
-<text x="42" y="378" class="f b ink">audit chain entry</text>
-<text x="568" y="378" class="f s" fill="var(--d-green-ink,#22603c)" text-anchor="middle">always — same transaction</text>
-<text x="768" y="378" class="f s" fill="var(--d-green-ink,#22603c)" text-anchor="middle">always</text>
+<line x1="42" y1="354" x2="858" y2="354" stroke="var(--d-line,#c9d4dd)" stroke-width="1"/>
+<text x="42" y="374" class="f b ink">per-row HMAC tag</text>
+<text x="568" y="374" class="f s" fill="var(--d-green-ink,#22603c)" text-anchor="middle">always — verified on every read</text>
+<text x="768" y="374" class="f s" fill="var(--d-green-ink,#22603c)" text-anchor="middle">always</text>
+
+<text x="42" y="396" class="f b ink">audit chain entry</text>
+<text x="568" y="396" class="f s" fill="var(--d-green-ink,#22603c)" text-anchor="middle">always — same transaction</text>
+<text x="768" y="396" class="f s" fill="var(--d-green-ink,#22603c)" text-anchor="middle">always</text>
 
 <rect x="24" y="422" width="418" height="88" rx="9" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="1.5"/>
 <text x="42" y="446" class="f l" fill="var(--d-teal-ink,#0d6b62)">The standing rule for a sealed vault</text>

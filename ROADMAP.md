@@ -3988,7 +3988,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**192** of the **207** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**209** of the **223** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4124,10 +4124,13 @@ once (it cited `tenant.rs:1930` for what is now `:2041`).
 
 ## 2.0.0 — one item is filed
 
-### Derive a model embedder's identity from the model, not from a constant
+### O163 — derive a model embedder's identity from the model, not from a constant
 
 Filed by **O49** (round-four #27), which fixed that defect's *silence* and
-deliberately left its *cause*, because the cause cannot move in a patch.
+deliberately left its *cause*, because the cause cannot move in a patch. It
+carried no id until 2026-09-14, so the heading gate skipped it and a queue
+enumerated by id dropped it — the only open MAJOR item, and nothing citable led
+to it.
 
 Today `UNDERCROFT_ONNX_NAME` and its siblings default to a shared literal, so
 two different models record one vector-space identity and the store's
@@ -4164,9 +4167,130 @@ identities.
 
 MINOR since O149: `PATCH /admin/tenants/{id}` and its CLI mirror are new
 capability, backward compatible. The rest of the section is PATCH work — no
-documented contract moves; import stops holding the corpus, the duplicate
-check stops scanning the table, and a migration is judged against the source's
-own snapshot.
+documented contract moves.
+
+### O165 — CLOSED 2026-09-14: the handover gate read a token that moves on its own, so it now reads the text a session acts on first
+
+**Filed and closed 2026-09-14, ruled by a three-lens panel plus an adversarial
+refuter, after a drift sweep found the handover three merges stale behind a
+green preflight.** At `baa83d2` the handover-freshness preflight printed `ok`.
+`SESSION_START.md` carried `handover-head: baa83d2`, which matched HEAD, while
+the block under it still called O161 uncommitted, called O160 "ruled but not
+built" (it had merged as PR #182), and quoted 855/150 where the tree publishes
+859/156. `NEXT_SESSION.md`'s first dated row a reader meets named `9d28f9d`,
+twelve days stale.
+
+#### The defect is SCOPE, and the marker was never inside it
+
+The gate read one thing: the first `handover-head:` token, an HTML comment
+sitting ABOVE every dated block. The block a session is told is "current state"
+was never in the gate's population. Worse, the handover's own instructions said
+to re-point that marker after every commit and every merge, so the token moved
+WITHOUT the text it vouched for — *measure an observable the defect does not
+move*, this file's most expensive gate shape, applied to the governance
+surface.
+
+#### This was the THIRD occurrence, and the first was filed and closed on a misreading
+
+Round four filed it on 2026-08-10 as D11.1 ([HIGH] [SILENT], "the
+handover-freshness preflight gates ONE of the three governance files it
+names"). `AUDIT_CONTINUATION.md` closed it on 2026-08-12 as "the preflight names
+all three handover files" — but the file NAMES were already checked for
+existence; the finding was that FRESHNESS is measured from one file. It recurred
+for `NEXT_SESSION.md` on 2026-09-10 (recorded, not filed, on 2026-09-12) and for
+`SESSION_START.md` on 2026-09-13/14.
+
+**D11.1's defect description is confirmed and its remedy is REFUTED**, which is
+Definition of done item 2's *counterfactual the FIX*: it prescribed a
+`handover-head:` marker in each file plus a loop, and a re-pointed marker is the
+defeat in every file, so the remedy passes this incident and triples the ritual.
+
+#### What the gate sees now
+
+The FIRST text a top-down reader meets must contain HEAD's commit — a token git
+makes unknowable before the state it describes:
+
+- `SESSION_START.md`: the first dated paragraph (from the first `**YYYY-MM-DD`
+  line to the next blank line);
+- `NEXT_SESSION.md`: the first `| **YYYY-MM-DD` row;
+- `NEXT_PROMPT.md`, when it exists: anywhere in the file (absent is a `note`
+  line, never a silent `ok`);
+- `AUDIT_CONTINUATION.md`: existence only — 0 of its 14 newest dated blocks
+  names a commit, because its blocks track audit rounds rather than units.
+
+**First block, not newest block.** A block appended below an older one leaves a
+first block that does not name HEAD, so the gate fails closed on position with
+no date arithmetic — M15's argument moved from the marker onto the text. A dirty
+tree prints `skip` rather than the `ok` it used to print having examined nothing.
+The READER is proved on eight fixture cases before the directory test, so it
+runs in CI (where `.handover/` does not exist) and a rotted reader fails every
+pull request. The marker and the heading date (a copy of a value the block
+already carries, which drifted twice) are removed from the handover.
+
+**Rejected, with reasons in the panel output:** (a) document the old scope — it
+narrows a broad promise to fit the implementation; (b) the marker inside the
+newest block — still a one-token edit; (c) compare quoted figures — moves only
+when a unit changes a figure, and a correctly dated historical figure is not
+wrong; (d) cross-file date agreement — this incident happened inside one
+calendar day; (e) a marker in `NEXT_PROMPT.md` — a fourth re-point target;
+(f) a PR number — it exists BEFORE the merge, so "PR #183 open, awaiting CI"
+passes after the merge, which is the stale shape itself.
+
+#### Gates and counterfactuals
+
+The widened preflight itself, inside the existing banner (the preflight count
+does not move). Counterfactuals, all RUN in throwaway git repos against the
+block, every edit checked to have landed:
+
+- CF1 the incident: stale first paragraph and stale first row — FAIL on both,
+  naming the tokens each names instead;
+- CF2 the defect mechanism: a marker re-pointed to HEAD above a stale block —
+  still FAILS;
+- CF3 the fix's own ordering: a correct block BELOW the stale one, and a correct
+  row below a stale row — FAIL;
+- CF4 reader rot: the lede's year pattern widened to five digits — FAILS as the
+  READER, before any verdict;
+- CF5 positive control: all three name HEAD — `ok … NEXT_PROMPT checked`; with
+  `NEXT_PROMPT.md` moved aside — `note … absent`;
+- CF6 a commit on a branch — FAILS until the text names the tip, then passes;
+- plus the dirty-tree `skip` and the no-`.handover/` `warn` with the reader still
+  proved.
+
+**Re-run on the artifact, 2026-09-14**: the block was extracted from `tests/battery.sh` after insertion (162 lines, identical to the verified draft but for its id), and all ten harness cases above pass against it. Run against the real handover at that moment, the shipped reader FAILED both arms — `SESSION_START.md`'s first dated paragraph named only `a2b3f18` and `NEXT_SESSION.md`'s first dated row `9d28f9d` — while `NEXT_PROMPT.md` passed: the incident, reproduced by the gate as it ships, before the handover was rewritten.
+
+#### Backwards test
+
+The rule — *a freshness gate on a governance document binds to the text the
+reader acts on first, through an identity git makes unknowable before the state
+it describes, never through a token that can move without that text* —
+RECLASSIFIES the marker lineage (the original gate, O61 item 1's re-point
+remedy, the handover's re-point instructions), round-four D11.1's per-file-marker
+remedy, and `AUDIT_CONTINUATION.md`'s "#13 CLOSED". It CONFIRMS O13 and A10 (a
+check's lifetime must match what it checks), the version-surfaces as-of rule, and
+*ask what a gate can SEE*. Content backtest, read-only: each of the newest 45
+`SESSION_START.md` ledes and each of `NEXT_SESSION.md`'s 30 newest dated rows
+names a commit on main's first-parent chain, so the convention the gate enforces
+is the one the files already follow. Three occurrences and one prior remedy is
+the whole history; this is the rule's first real application.
+
+#### Residuals, stated
+
+- R1: a sha pasted into a stale sentence passes — no scanner reads semantic
+  truth, and the FAIL text names this defeat so it cannot be mistaken for the fix.
+- R2: text below the first block or row, and `NEXT_SESSION.md`'s static rows, are
+  ungated; the stale Branch and Release rows were corrected by hand in this unit.
+- R3: `AUDIT_CONTINUATION.md` content freshness has no observable with its
+  lifetime; existence only, and this is a gap with that argument, not a refusal.
+- R4: the gate compares LOCAL HEAD; a local main behind origin passes stale text
+  (the preflight has no network by design).
+- R5: a block written on a branch as "off main <sha>" passes if the session
+  returns to main at that sha with a clean tree — narrow, stated.
+- R6: a missing `NEXT_PROMPT.md` is accepted with a note; making it mandatory is
+  a doctrine change nobody has argued for.
+- R7: `.handover/` has no version history, so the backtest proves content, not
+  timing.
+- R8: a detached-HEAD bisect with a clean tree and `.handover/` present fails
+  spuriously; rare, and the message says why.
 
 ### O160 — CLOSED 2026-09-13: both listeners share one address rule, and the sibling that was the good example had the same defect
 
@@ -4256,6 +4380,13 @@ in the engine's `http.rs`**, guarding its refuse-to-bind rule. Unifying them is
 filed rather than done: it changes a different listener's security gate and
 wants its own counterfactual. Two implementations of one predicate is the
 class O90 and O92 both record, and it is written down rather than left.
+
+**Corrected 2026-09-14 (O171, O177): the copy is not byte-identical.** The
+engine's check at `http.rs:229` compares the bare `--host` with three literals;
+`addr_is_loopback` first splits a `host:port` address at its last colon, so for
+`::1` it answers false where the engine answers true, and a drop-in replacement
+would refuse `serve-http --host ::1` without a token. "Filed rather than done"
+named no entry either; the unification is O177.
 
 
 ### O161 — CLOSED 2026-09-13: the file states its own structure, and a level-2 heading inside an entry is refused
@@ -4576,10 +4707,13 @@ calibrated, and the correction is not evidence that the rest was counted.
 The fourteen, each confirmed by the `?` that propagates its load error:
 seven model paths (`_ONNX_MODEL`, `_ONNX_TOKENIZER`, `_RERANK_MODEL`,
 `_RERANK_TOKENIZER`, `_COLBERT_MODEL`, `_COLBERT_QUERY_MODEL`,
-`_COLBERT_TOKENIZER`), five backend URLs plus a DSN (`_QDRANT_URL`,
+`_COLBERT_TOKENIZER`), four backend URLs plus a DSN (`_QDRANT_URL`,
 `_CHROMA_URL`, `_MILVUS_URL`, `_WEAVIATE_URL`, `_PGVECTOR_DSN`), and two
 served-runtime URLs (`_EMBED_URL`, `_LLM_URL`). The cross-tab goes 25/56
-`Protects`/`Tunes` to 39/42.
+`Protects`/`Tunes` to 39/42. (This sentence said *five* backend URLs until
+2026-09-14 while naming four and the DSN — a third miscount in this entry,
+upward again; seven plus four plus one plus two is the fourteen, and
+`parity.rs` carries exactly those four `_URL` rows beside `_PGVECTOR_DSN`.)
 
 **SEVEN OF THE FOURTEEN DID NOT NEED AN EXEMPTION — THEY NEEDED AN ARM, AND
 NOBODY HAD ASKED.** The ruling required each reclassified row to answer *why
@@ -5546,7 +5680,8 @@ drawers alive inside the visitor's closure, which is 1 whether or not the store
 collected everything first, so the counterfactual PASSED. No test that drives
 the export can see the store's own `Vec`; the property is on the other side of
 the call. Recorded in the test because it is *ask what a gate can SEE* firing
-on the fix's own gate. Plus `export_each_visits_every_row_once_in_order` and
+on the fix's own gate. Plus `export_streams_one_drawer_at_a_time` (cited here
+until 2026-09-14 under a name no test has ever carried) and
 `a_tampered_row_stops_the_export_walk` — an export is evidence, so "N-1 rows
 and no error" is the one outcome it must never produce.
 
@@ -8009,6 +8144,11 @@ published surface and the correction is a line:
   `+3 → +2.3` from the table directly above them, carries the caveat that the
   reranked arm was not re-run, and gains the provenance line the other four
   surfaces already had.
+  **That recomputation missed one instance, recorded 2026-09-14**: the
+  reranker section's own *"lifts LoCoMo R@10 to ~98% (+3 pts)"*, the same
+  `97.68−94.6` delta, in the file since 2026-07-16 and in no row of the table
+  above — so the fix corrected the summary and left the section it
+  summarises. Corrected 2026-09-14 to state the delta against both bases.
 * `website/landing/index.html:770` goes back to **94.6**, restoring the
   pairing with `docs/BENCHMARKS_VS.md:107` that O89's own banner demands. The
   distinction, now written down: the MemPalace rows on the other chart are
@@ -9003,6 +9143,13 @@ costs. That is grounding first, options second, action third.
 Filed as a `CLOSED by doctrine` entry rather than code: it changes how the
 next session works, not what the tree does. The rule is in `CLAUDE.md` under
 the binding consequences, applied backwards there as this file requires.
+
+**Superseded in part on 2026-09-14 by O173.** The ask step — where the reading
+runs out, write the options out with their trade-offs and ask — is replaced by
+the maintainer's own instruction: a ruling panel decides, and the ruling is
+written into the entry that owns the question. The grounding order and its
+corollary stand word for word; commits, pushes, releases and product choices
+stay asked for.
 
 ### M9 — CLOSED 2026-08-19: M7's twin, latent in a published recipe
 
@@ -13025,10 +13172,12 @@ O109 its measurement found). When an entry below closes, it moves to the
 release that ships it.
 
 **The heading gate could not have caught this**, and that is worth stating
-rather than assuming someone will notice. Its three arms —
-`body-closed-heading-open`, `closure-without-evidence`,
-`closure-without-a-date` — all judge the entry's OWN status. None asks whether
-a `CLOSED` body files separate still-open work, and the evidence arm is
+rather than assuming someone will notice. Its arms judge an entry's OWN
+status (`body-closed-heading-open`, `closure-without-evidence`,
+`closure-without-a-date`), the section it sits in (`closed-under-unversioned`
+and `closed-under-open`, since O101), and — in O161's separate arm — whether a
+level-2 heading is a section. None asks whether a `CLOSED` body files separate
+still-open work, and the evidence arm is
 actually *satisfied* by the word "gate", which every one of these gap
 paragraphs contains. Detecting "this closed entry contains an open item" needs
 a semantic reading, which this file has repeatedly refused to fake with a
@@ -13208,10 +13357,51 @@ becomes much harder to reach and the boundary may be cheaper as insurance
 than as the primary fix.
 
 **Gate**: `onnx_route_r_classifies_an_out_of_table_id` already classifies all
-three outcomes and prints what it saw. When this lands, that arm takes the
-`Ok` branch with a count of 1, and the test says so LOUDLY rather than
-silently changing meaning. That arm is listed in a `PANIC_PINS` table disjoint
-from the arm inventory, because it exercises no counter by construction.
+three outcomes and prints what it saw — and a print is not an alarm, because
+cargo captures a PASSING test's stdout and the `onnx-build` leg runs
+`cargo test` without `--nocapture`. When this lands, that arm takes the `Ok`
+branch with a count of 1 and the zero vector, which it PASSES: as the tree
+stands, the test changes meaning with nothing visible. There is no
+`PANIC_PINS` table either — the route-R tests are simply absent from
+`DEGRADE_ARMS` in `parity.rs` — and the `Ok` arm does assert a count. So the
+flip is owed on purpose, in this entry's unit: make the `Ok` arm FAIL with a
+message naming this entry's retirement, land the boundary and observe that
+failure, and only then re-pin the arm — as a `DEGRADE_ARMS` row if the
+boundary adds a counted site; if it reuses an existing one, that arm already
+has its row (the table's length is asserted equal to the arm count, so a second
+row for one arm fails the build) and the test is re-pinned in place. A
+table of panic pins would be a classification, not the alarm: a source-level
+gate cannot see which branch a test took. The ORT twin,
+`ort_route_r_classifies_an_out_of_table_id`, takes the `Ok` branch today and
+passes the same way, which is correct for ORT and no evidence about tract.
+
+#### Two defects in the route-R tests themselves, recorded 2026-09-14
+
+Found by the 2026-09-14 drift sweep, verified by reading both tests.
+
+1. **The tract `Ok` arm's message named the one outcome its assert cannot
+   report.** `onnx_route_r_classifies_an_out_of_table_id`
+   (`crates/undercroft-embed-onnx/src/lib.rs`) asserts `counted == 1`, and its
+   message said that if this is a typed `Err` routed to the degrade, this entry
+   is wrong and must be retired. But a typed `Err` reaching the counted degrade
+   counts exactly 1, so the assert PASSES on that outcome — the message fired
+   only when the count was 0 or 2+, i.e. never for the reason it named. The
+   sweep corrected the message string and the test's doc comment, never the
+   assertion: the message now says it fires when the count is not 1 and that
+   retirement is not signalled by it, so the flip the Gate above owes is still
+   owed.
+2. **The ORT panic arm pins no payload, so a regression to a panic stays
+   green.** `ort_route_r_classifies_an_out_of_table_id`
+   (`crates/undercroft-embed-ort/src/lib.rs`) asserts only that nothing was
+   counted when `catch_unwind` returns `Err`; its own doc comment says so. ORT's
+   observed outcome is the counted degrade, so ORT turning into a panic — this
+   entry's crash class, arriving on the backend that does not have it — passes
+   with a captured `println!` nobody reads. **Shape**: that arm FAILS, naming
+   the regression, because a panic is not an outcome ORT has ever produced; a
+   pinned payload class, tract's shape, is the weaker alternative, since it
+   would still pass a pinned panic. **Gate**: counterfactual — make the ORT
+   embed path panic on the out-of-table id in a scratch copy, and the test goes
+   red where it is green today.
 
 ### O151 — ORT's `score_batch` zeroes the whole reranked window when one pair fails
 
@@ -13311,7 +13501,7 @@ in a pipeline and fast enough to run on a machine that lacks the weights — so
 the symptom string goes in `UPGRADING.md` instead and the entry says plainly
 that this class is not pre-flightable.
 
-### O162 — three arms of the ROADMAP scanner that are unprobed, misdirected, or blind
+### O162 — four blind spots in and around the ROADMAP scanner: an unprobed arm, a misdirecting premise order, fence-blindness, and an arm that cannot tell an identifier from a status
 
 **Filed 2026-09-13 out of O161's review, measured by sourcing `roadmap_scan`
 out of `tests/battery.sh` and running it on fixtures.** O161 closed the
@@ -13319,11 +13509,12 @@ defect that re-sectioned the file. These are what the same reading found in
 the arms around it, none of which O161's fix touches.
 
 **1. `closed-under-open` has never been proven to fire, by anything.** The
-premise fixture at `tests/battery.sh:833` contains a release section and
-`## Unversioned`, and **no `## Open` section at all**, so that arm has no
-positive probe in either direction. Its sibling has accidental live coverage —
-the Unversioned exemption roster requires six named hits per run, so the Unversioned arm
-must fire six times — and `closed-under-open` has no such backstop. It is also
+premise fixture — `RM_FIX` in `tests/battery.sh` — contains a release section
+and `## Unversioned`, and **no `## Open` section at all**, so that arm has no
+POSITIVE probe: its only probe is the negative one, which asserts it does not
+fire on a closed entry under a release section. Its sibling has accidental
+live coverage — the Unversioned exemption roster requires six named hits per
+run, so the Unversioned arm must fire six times — and `closed-under-open` has no such backstop. It is also
 the arm the O161 defect reached first, because O161 itself lived under
 `## Open`. An arm whose only evidence is that it has never complained is the
 shape this tree keeps finding.
@@ -13331,13 +13522,14 @@ shape this tree keeps finding.
 **2. The `PREMISE-FAILED` handler is unreachable on the real file, and what
 runs instead names the wrong cause.** `roadmap_scan` is called, then the
 exemption-roster loop, and only then the premise check. On a premise
-failure the loop fires first with six failures reading *"… the roster
-lists O1 … the list has outlived what it exempts; remove the row"* — telling
-the editor to delete six correct exemptions. It fails closed, so this is
-misdirection rather than silence, and the fix is a two-line reorder. Worth
-knowing why it matters: the same underlying fault produces six misdirected
-failures under `## Unversioned` and produced **silence** under `## Open`.
-Same bug, opposite symptoms, both wrong.
+failure the loop fires first, prints one failure reading *"… the roster
+lists O1 … the list has outlived what it exempts; remove the row"* and exits —
+so an editor who follows it deletes correct exemptions one run at a time. It
+fails closed, so this is misdirection rather than silence, and the fix is a
+two-line reorder. Worth knowing why it matters: the same underlying fault
+produces a misdirected failure under `## Unversioned` — naming one correct
+exemption per run — and produced **silence** under `## Open`. Same bug, opposite
+symptoms, both wrong.
 
 **3. The scanner is fence-blind.** `/^## /` and `/^### /` are line rules with
 no code-fence state, so a `## ` inside a fenced block would be read as a
@@ -13366,9 +13558,10 @@ satisfy. That is O47's deliberate proxy, measured at 7% false positives when
 widened and rejected, and M15 says the ruling stands.
 
 **Gate**: a fixture that exercises every arm in both directions — including
-`closed-under-open`, which has none — asserting the EXACT row set the scanner
-produces rather than that the expected rows are present, since a glob ignores
-a spurious row. Plus the reorder, which is its own one-line counterfactual.
+`closed-under-open`, which has no positive probe — asserting the EXACT row set
+the scanner produces rather than that the expected rows are present, since a
+glob ignores a spurious row. Plus the reorder, which is its own one-line
+counterfactual.
 
 ### O135 — three reads the audit has never run, carried in a gitignored file
 
@@ -13438,9 +13631,9 @@ names — with the egress trail showing what actually left.
 **Filed 2026-09-10 as what genuinely survives O137, with its motivation
 corrected.** `encrypt_for_into` seals in place and `decrypt_with_owned` opens
 in place (O138), so the sealed paths now hold the payload ONCE — measured
-1.02x on export. What they cannot do is hold only a chunk: `seal()` runs a
-single XChaCha20-Poly1305 over the whole payload, and the same holds in
-reverse.
+1.02x on export. What they cannot do is hold only a chunk:
+`encrypt_for_into` runs one XChaCha20-Poly1305 `encrypt_in_place` over the
+whole payload, and `decrypt_with_owned` one `decrypt_in_place`.
 
 **Scope, stated honestly, because O137's was not.** This is worth **457 MB →
 a few MB** on a 361,779-drawer vault's sealed export — real for a large vault
@@ -13483,7 +13676,7 @@ directly, and a palace-bearer holder or the engine host's own CLI can write at
 any time. The HTTP admin door avoids the race only by stalling the entire
 fleet: the orchestrator serves `/t/*`, `/admin/*` and `/healthz` from one
 `incoming_requests` loop, so an in-flight migration blocks every tenant for its
-whole duration — itself a defect worth its own entry.
+whole duration — filed as its own entry, O164.
 
 **Shape**: a lease on the tenant row, acquired by compare-and-set, under which
 mutating `/t/*` and ops requests answer 503 + `Retry-After` while reads
@@ -13496,6 +13689,48 @@ nothing, which is a boundary and must be stated as one.
 
 **Gate**: during a held lease a `/t/` write answers 503 naming the migration;
 counterfactual — remove the check and it answers 200.
+
+### O164 — the control plane serves every request from one loop, so an admin migration stalls the fleet
+
+**Filed 2026-09-14, lifted out of O146's body**, where it sat as a subordinate
+clause — the arrangement this section's preamble records as the most expensive
+place a live item can be, because it leaves with its host entry. Established by
+reading the code, not by a run.
+
+`proxy.rs`'s listener is one `for mut request in server.incoming_requests()`
+loop that handles each request inline; the only other serving thread is the
+metrics listener. `route` hands `/admin/*` to `admin_plane`, and
+`POST /admin/tenants/{id}/migrate` calls `migrate_tenant` inside that arm —
+export, import, the snapshot bracket and, unless `keep_source`, the source
+delete, synchronously. So
+for the whole of a migration every `/t/*` request, every other `/admin/*`
+request and `/healthz` waits behind it. `/healthz` is what turns a slow
+migration into an outage: a load balancer whose health check does not answer
+takes the control plane for down.
+
+**Scope, stated.** `undercroft-orchestrator migrate` calls the same function in
+its OWN process and stalls no listener — it meets O146's race instead — and a
+read replica serves from its own process. The stall belongs to the HTTP admin
+door. `docs/MULTI_TENANCY.md`'s migration section described the steps and not
+the wait when this was filed; since 2026-09-14 it states the wait, and cites
+this entry.
+
+**Shape — two, neither chosen, and their costs are why it is a ruling:**
+
+- *The migration on its own thread*, the route answering at once with a job to
+  poll, under O146's lease so the tenant is fenced while it runs. The smallest
+  change to the loop; it changes the route's reply from a synchronous `200`
+  summary to an accepted job, which existing callers read, so the version
+  question is real — and a migration whose process dies mid-way needs a
+  recorded state to resume or refuse from.
+- *A worker pool behind the loop*, every request concurrent. Fixes the class
+  rather than one route, and costs a concurrency review of everything the loop
+  shares today: `Orch` holds ONE `rusqlite::Connection`, which is not `Sync`.
+
+**Gate**: during an in-flight `POST /admin/tenants/{id}/migrate`, a
+`GET /healthz` and a `/t/` read each answer within a stated bound;
+counterfactual — the inline call the tree carries today, under which both wait
+for the migration to finish.
 
 ### O147 — the window between the last source check and the delete closes only at the engine
 
@@ -13532,24 +13767,1334 @@ DESTINATION decides). **Note the interaction with O140's new destination
 holdings check**: the collision case is now caught, but a clean release of a
 reviewed-but-unruled queue is not, because the counts agree.
 
+### O166 — a vault holding Hebrew keeps cosine vectors from before Hebrew's reclassification, until a forced repair
+
+**Filed 2026-09-14, out of a code comment.** `crates/undercroft-store/src/lib.rs`
+records this beside `KNOWN_EMBEDDER_UPGRADES` as a *"KNOWN GAP, deliberately
+accepted — no v4"*, with its argument, and nowhere else: no heading, so no
+queue enumerated by id could find it. An accepted gap is a decision with an
+argument, and it gets a heading here like any other open item.
+
+**Mechanism, read from the code.** Moving Hebrew out of the delimiting script
+class changed `HashEmbedder`'s token space for Hebrew text — `segment` emits
+character bigrams where it emitted one word, and the fold strips the points —
+while the identity stayed `undercroft-hash-v3`. The open-time walk re-embeds
+only when the RECORDED identity is a known predecessor, and
+`KNOWN_EMBEDDER_UPGRADES` holds v1→v3 and v2→v3 alone, so a vault written
+before the reclassification matches on name and keeps its old vectors. Every
+drawer holding Hebrew text therefore scores its cosine leg from the previous
+token space against a query embedded under the current one, until
+`UNDERCROFT_FORCE_EMBEDDER=1` + `repair`. Every other script's tokens are
+byte-identical, which is the comment's reason the blast radius is Hebrew
+alone. The lexical channels are recomputed at read and are correct at once;
+the comment credits them with Hebrew's rise from 0% to 87.5%, a figure not
+re-measured here.
+
+**The shape is settled; whether to spend it is the ruling.** The comment names
+it: `HASH_EMBEDDER` becomes `undercroft-hash-v4`, `KNOWN_EMBEDDER_UPGRADES`
+gains v1→v4, v2→v4 and v3→v4, and every hash vault re-embeds once at its next
+writable open, batched and idempotent — a crash repeats the whole walk at the
+next open — its PQ/IVF tables dropped. The comment
+declined it on one figure, and the costs are wider than that figure:
+
+- **every** hash vault pays, Hebrew or not — 45.9 µs/drawer by the comment's
+  measurement, about 46 s per million drawers inside `open` (arithmetic on
+  that figure, not a run), and a prefilter-enabled vault retrains its
+  codebooks afterwards;
+- every remote mirror pushed under v3 is refused by `search_with_index` as
+  `IndexStale` until `index push` runs again, because the recorded identity is
+  what that check compares — operator-visible, so it owes an `UPGRADING.md`
+  entry;
+- a read-only open warns instead of walking, so a `serve --read-only` replica
+  keeps the stale leg until a writer opens the vault.
+
+**The narrower shape, rejected with its reason:** re-embed only the drawers
+holding Hebrew, under a completion marker, identity unchanged. It spares the
+fleet, but the identity would stop naming one token space — a mirror pushed
+under v3 before the walk would still pass `IndexStale` after it, carrying the
+old Hebrew vectors silently, which is the silent-wrong-space shape O163 exists
+to remove — and on a sealed vault finding those drawers still decrypts every
+one.
+
+**Gate**: a vault recording `undercroft-hash-v3` whose Hebrew drawer carries a
+vector unequal to today's embed of the same content, opened writable by the new
+binary: afterwards the stored vector equals a fresh embed, and a Hebrew query's
+`semantic` for that drawer equals the same content's freshly ingested. Premise
+arm: before the open the vector must DIFFER from a fresh embed, or the test
+passes on both trees. Counterfactual: without the new rows the open leaves the
+vector untouched and the equality fails.
+
+### O167 — a served embedder receives stored drawer plaintext on three paths that record no egress
+
+**Filed 2026-09-14, established by reading the code, not by a run.** Under
+`UNDERCROFT_EMBEDDER=http` every `Embedder::embed` call POSTs its text to
+`UNDERCROFT_EMBED_URL`. Three paths hand that endpoint text the vault already
+HOLDS — decrypted out of a stored drawer — and none appends an `egress/`
+record:
+
+- **`repair`.** `repair_stmts` (`manage.rs`) re-embeds every drawer through
+  `embedder_embed`: the whole corpus, in one operator command. Its only chain
+  record is `migrate/repair`, through `audit_migration`, whose canonical binds
+  the model name, the time and the fingerprint-backfill count — not how many
+  drawers were re-embedded, and not the host they went to.
+- **`admission allow`.** `admission_allow` (`admission.rs`) embeds the
+  restored drawer's content before writing it back, one drawer per ruling —
+  exactly the content the screen diverted. The ruling is recorded; the egress
+  is not.
+- **Remote-index search.** `search_with_index` (`remote.rs`) passes each
+  candidate that survives verification and the retrieval policy to
+  `score_drawer` (`lib.rs`), which re-embeds the decrypted content locally
+  rather than trust the mirror's vector — up to `max(20, depth·4)` drawers per
+  search. Its `read/search` record is opt-in under
+  `UNDERCROFT_READ_AUDIT=chain` and describes a read returned to a caller,
+  never a destination.
+
+The open-time embedder walk is not a fourth: `KNOWN_EMBEDDER_UPGRADES` moves
+hash identities only, and a hash embedder sends nothing anywhere.
+
+**Scope, stated.** A write's own content and a search's query text reach the
+endpoint too, and they are not this entry: that text is the caller's, on its
+way in, where these three send what the vault already holds — the side of the
+line `refine` and `index_push` both sit on. Whether arriving text owes a record
+is not argued here, and the advisor below is that same question.
+
+**Why each owes a record — O79's own argument.** `index_push` records
+`egress/index-push` unconditionally for embeddings, which are merely
+plaintext-derived, and O79 made `refine` record for plaintext POSTed to a model
+endpoint. These three POST the plaintext itself. Each owes an `egress/` record
+binding the destination host, the model and the drawer count — when, and only
+when, the embedder is a served endpoint; the in-process backends (`hash`,
+`onnx`, `ort`) move nothing.
+
+**Shape, and what it costs:**
+
+- The host must come from the transport's own parser (O92), credential-stripped
+  as `LlmClient::destination` is for `refine`. `HttpEmbedder` has no such
+  accessor today and the store sees only the `Embedder` trait, so the trait, or
+  the store's construction, has to learn to name a destination, with the
+  in-process backends answering none.
+- `repair` runs inside one transaction, and a rollback erases a record written
+  inside it while the corpus prefix is already at the endpoint — O95's
+  error-path lesson. The record must survive the abort: written outside the
+  bracket, counting drawers actually POSTed, on both exits.
+- An unconditional record per remote search makes every such search a chain
+  write — the volume that made the `read/` trail opt-in — and a read-only
+  handle cannot append, so it would warn and serve on the replica precedent.
+  Recording only under `UNDERCROFT_READ_AUDIT=chain` is cheaper and breaks the
+  rule that `egress/` is unconditional; that trade is part of the ruling.
+- `admission allow` already appends its ruling on an operator surface, so its
+  record is the cheap one.
+
+#### The tier-2 admission advisor is unclassified
+
+With `UNDERCROFT_ADMISSION_LLM=advisory`, `LlmAdmissionAdvisor::assess`
+(`undercroft-llm/src/advisor.rs`) sends each tier-1-clean write candidate's
+content to `UNDERCROFT_LLM_URL` through `LlmClient::complete`, and nothing
+records it. Unlike the three paths above, that content is the candidate on its
+way IN — a save, an update, an imported record — never text read back out of
+storage. The tree does not settle whether that is an egress, so:
+
+- **An `egress/` record per consultation.** O79 read literally. It adds a chain
+  record beside each screened write on an advisory vault, and `upsert_many`
+  consults the advisor before its transaction opens, so a record written
+  inside a batch that rolls back is erased after the content has left — O95's
+  lesson again.
+- **The destination folded into the write's own record.** No second record, but
+  it changes a write canonical that is byte-identical today, which is an
+  audit-format change owing its own argument.
+- **Ruled not an egress, and said so.** The candidate is text the writer
+  already holds, sent to an endpoint the operator declared. Cheapest — and the
+  ruling must then cover a served embedder's embed of the same write too, or
+  the tree carries two answers to one question.
+
+**Gate**: a `repair` under a served embedder pointed at an unreachable loopback
+URL, with `UNDERCROFT_EMBED_DIM` declared so construction does not probe,
+appends exactly one `egress/` record binding host, model and count; every
+embed degrading to a counted zero vector is what makes it drivable without a
+model, as O79's gates were. Counterfactual: today's tree appends none. Negative
+arm: the same `repair` under the hash embedder appends none either.
+
+### O168 — seven of the ten release binaries are compiled on no pull request: Windows `-ort`, and both macOS targets and Linux arm64 in both builds
+
+**Filed 2026-09-14, from a gap the drift sweep stated in a `ci.yml` comment.**
+`release.yml`'s `binaries-ort` matrix runs `cargo build --release --target
+x86_64-pc-windows-msvc -p undercroft-cli --features onnx,ort` and ships the
+result as a `-ort` asset. Nothing compiles that on a pull request:
+
+- `windows-check` runs `cargo check --workspace --all-targets --exclude
+  undercroft-embed-onnx --exclude undercroft-embed-ort` on default features —
+  neither model crate, and none of the CLI's code behind `onnx` or `ort`;
+- `ort-build` compiles exactly that feature set, inside a Linux container.
+
+So a Windows-only compile error in either model crate, or in the CLI's
+feature-gated arms, first appears at the tag, and O102 records what that costs:
+`1.2.1` shipped 16 assets where `1.2.0` had 20. It is O102's rule — *a target
+you SHIP is a target that must be compiled on a pull request* — on the
+feature × platform axis: O102 applied it to the platform on default features,
+O142 to the feature on Linux, and their product was left out.
+
+**Scope widened 2026-09-14, verified in `release.yml` and `ci.yml`.** Both
+`binaries` and `binaries-ort` build `aarch64-unknown-linux-gnu` on
+`ubuntu-24.04-arm`, and `x86_64-apple-darwin` plus `aarch64-apple-darwin` on
+`macos-latest`. Every `ci.yml` job runs on `ubuntu-latest` except
+`windows-check`, and none passes `--target` for those three. So six more
+assets — three targets, default and `-ort` — first compile at the tag. Of the
+ten binary assets, a pull request compiles three: Linux x86_64 in both builds
+(the container legs) and Windows default (`windows-check`, a `check`, not a
+build). The arm64 GHCR images (`docker` and `docker-ort` on
+`ubuntu-24.04-arm`) are likewise built only at the tag.
+
+**What narrows the risk, measured.** `git grep` over `crates/*.rs` finds no
+`target_arch` and no `target_os = "macos"` cfg, so this tree's own code shares
+`cfg(unix)` with the Linux legs, the axis O102's defect moved on. What stays
+target-specific is dependency build scripts and prebuilt native libraries —
+`ort-sys`'s among them, which is exactly what a `-ort` asset adds. Whether that
+residual justifies three more runners on every pull request is unruled, and it
+is this entry's to rule.
+
+**Shape**: a step in `windows-check`,
+`cargo check -p undercroft-cli --features onnx,ort --target x86_64-pc-windows-msvc`,
+the release build's package and features. A step rather than a new job leaves
+`verdict`'s `needs:` and the CI-inventory preflight untouched; a new job moves
+both. It gates only after it has run green on a Windows runner — O142's order,
+because a leg that fails on arrival teaches everyone to ignore it. The widened
+scope needs runners `windows-check` does not have: `cargo check` for
+`aarch64-unknown-linux-gnu` on `ubuntu-24.04-arm` and for both Apple targets on
+`macos-latest`, each on default features and `--features onnx,ort`. That is
+either matrix legs under one job id, which moves neither `verdict`'s `needs:`
+nor the CI-inventory preflight, or new jobs, which move both.
+
+**Cost, stated.** Build scripts run under `cargo check`, and `ort-sys`'s
+carries its download machinery — `Cargo.lock` lists `ureq`, `tar`, `flate2`
+and `sha2` among its dependencies — so the step can fetch a prebuilt ONNX
+Runtime, a network dependency in a pull-request job and a new way for CI to go
+red on a change that touched nothing. Whether it fetches on `windows-latest`
+under `check` is not measured here.
+
+**Gate**: the checks themselves. Counterfactual, one per target: a scratch
+branch adding `#[cfg(windows)] compile_error!("probe");` inside
+`undercroft-embed-ort` fails the new Windows step, where today's
+`windows-check` passes on the same branch; `#[cfg(target_os = "macos")]` fails
+both Apple legs and `#[cfg(all(target_os = "linux", target_arch = "aarch64"))]`
+the arm64 leg, each while every job CI runs today stays green.
+
+### O169 — RULED 2026-09-14 and not yet built: the two picking maps describe a queue that no longer exists, so they retire as dated records and relations move into the entries
+
+**Filed and ruled 2026-09-14, recorded rather than built.** Under
+`## Unversioned`, `The dependency map — read this BEFORE picking an item` and
+`The diff-level pass — 2026-08-13` present themselves as a guide to picking.
+The map was built 2026-08-12 and last re-verified 2026-08-17, names no id above
+O45, and still says **Nothing engine-side is open.** with O7, O6 and O23 as
+what remains — while O23 closed on 2026-09-06 and O7 on 2026-09-07. Under the
+diff-level pass heading sits a third, untitled block, the 2026-08-09 to 08-11
+status log beginning "Nothing here is broken.", which a grep lands on with no
+heading to date it. The `Unversioned` header still calls them "the two prose
+maps that guide picking".
+
+#### RULED 2026-09-14 by a three-lens panel plus an adversarial refuter
+
+**Prior ruling found and judged.** O101 (closed 2026-09-06) kept the maps under
+`Unversioned` and wrote that header clause. Its PLACEMENT is upheld: a dated
+record is not releasable. Its classification of them as a picking GUIDE is
+refuted — they were stale on O101's own date (O23), nothing filed after O45
+appears in them, and the relations they carry are one-sided in the entries
+today: O154's body names neither O150 nor O157, and O150's names O154 but not
+O157. A rebuilt map would rot the same way, because a relation is prose and
+moves no count, and it would be a second copy of relations the entries already
+state.
+
+**Ruling: retire both maps, and the absorbed status log, as dated records; do
+not rebuild them.** Two open entries that block each other, must be sequenced,
+or share a diff surface each carry a declared `**Relations:**` line naming the
+other by id — open ids only; a relation to a closed item stays in prose —
+written in the unit that files, edits or closes either, and checked for
+reciprocity by an arm in the existing `ROADMAP headings` preflight. A declared
+line rather than any mention, because open entries mention each other for
+non-relations: O144 names O143 only to say it does **not** touch the `/v1`
+migration ceiling. The pick
+order for a session is state, and stays in the handover.
+
+**Rejected:**
+
+- *Rebuild the map and maintain it on every filing* — a second implementation
+  of relations the entries own, edited hundreds of lines from the entry
+  concerned, and no count or set gate can see a wrong relation cell.
+- *Rebuild it with a membership gate* (every open id appears) — membership is
+  an observable a wrong or missing relation does not move, and a false
+  "independent" row still passes.
+- *Delete the map* — loses the O38 specimen and the entry-versus-diff lesson;
+  refuted reasoning is kept, on the O24a precedent.
+- *Reciprocity over any id mention* — demands a back-reference for O144's
+  disclaimer; a semantic proxy over prose is what O47 measured and refused.
+- *Rewrite O101's enumeration* ("and the two prose maps.") — a true dated
+  sentence inside a closed entry; the maps still stay under `Unversioned`.
+- *A history-only relation kind that may name a closed id* — a gate exemption
+  for a relation that cannot block or sequence open work.
+
+#### Implementation spec, condensed
+
+1. Retitle the map heading to `The dependency map of 2026-08-12 — a dated
+   record of that queue, not a guide to this one`, with a banner as its first
+   paragraph: retired by this entry, built 2026-08-12, last updated
+   2026-08-17, O7 and O23 closed since, nothing after O45 in it, the live queue
+   is `## Open`, kept for its method and for the O38 specimen. The body stays
+   byte-identical except two dated prefixes, because a grep lands mid-section
+   and never sees the banner: `(As of 2026-08-17.) ` before **Nothing
+   engine-side is open.** and `(As of round five, 2026-08-14.) ` before
+   `Beside these:`.
+2. Retitle the diff-level pass to `The diff-level pass of 2026-08-13 — a dated
+   record`.
+3. Insert a non-id level-3 heading immediately above "Nothing here is broken.":
+   `The Unversioned section's introduction and status log, 2026-08-09 to
+   2026-08-11 — a dated record`. It ends the previous section for
+   `roadmap_scan`, examines nothing, and moves O47's heading total by one.
+4. In the `Unversioned` header, replace "and the two prose maps that guide
+   picking" with "and two dated records of how the August 2026 queue was
+   picked, kept for their method". O101's enumeration is left unchanged.
+5. A paragraph in the `Open` header, before its first entry: relations between
+   open entries live in the entries, each line carrying the kind and a one-line
+   reason written without other ids; there is no separate map; the pick order
+   is state and lives in the handover.
+6. Seed relations lines only for edges verified by reading: O150 and O154,
+   sequenced (O150's "Sequence it with O154"); O150 and O157 (O157's
+   follow-on survival arm waits for O150's `catch_unwind` boundary); O151 and
+   O152, shared diff surface (`OrtReranker::score` and `score_batch` are
+   adjacent in `crates/undercroft-embed-ort/src/lib.rs`); O147 and O148,
+   shared diff surface (both name `migrate_tenant`,
+   `crates/undercroft-orchestrator/src/proxy.rs`). **Measured at the
+   integrated tree, 2026-09-14**: O164 names `migrate_tenant` too, and O143 and
+   O146 do not, so the edges among O143, O146, O147, O148 and O164 wait on a
+   read of that function against each fix shape. O144's link to O139's
+   residual stays prose. Reasons name files and functions, never another id.
+7. The handover's two live pointers to the map (in `NEXT_SESSION.md` and
+   `AUDIT_CONTINUATION.md`) get a dated retirement note; the historical
+   `<details>` block in `SESSION_START.md` is left alone.
+8. Sequence this unit with O171's, because both add an arm to the same
+   preflight.
+
+#### Gate and counterfactuals the unit owes
+
+A new arm inside the existing `ROADMAP headings` preflight in
+`tests/battery.sh` — no new preflight, so the preflight figure does not move —
+written as its own awk outside `roadmap_scan`'s single-quoted program. For each
+`### <id> ` entry whose level-2 section is `## Open `, collect the ids matching
+`[ACMORTU][0-9]+[a-z]?` on lines beginning with the relations marker, within
+that entry's body. It fails `relation-names-no-open-entry|<from>|<to>` when
+`<to>` is not an entry in that section, and `relation-not-reciprocal|<from>|<to>`
+when `<to>`'s relations lines do not name `<from>`, with a message naming both
+ids and telling the author to edit both entries. Relations lines outside that
+section are ignored, so a closed entry keeps its history.
+
+**Premise probes**, on a fixture that CONTAINS an `Open` section (O162 item 1
+records that today's fixture has none): a one-sided pair fires; a line naming
+an id whose heading sits under a release section fires; a reciprocal pair is
+silent; a relations line inside a closed entry under a release section is
+silent; and on the real file, zero open entries examined — or zero relations
+lines once the seeds exist — is a premise failure.
+
+**Counterfactuals**, each run only after confirming the edit landed: delete
+O154's relations line, and the arm fails `relation-not-reciprocal|O150|O154`;
+in a scratch copy move O150 under a release section with a closed heading, and
+the arm fails for both O154 and O157 while the existing arms pass — which
+proves a closure forces its partners to be edited; break the reader's section
+match, and the real-file premise fails as the READER rather than reporting a
+clean tree. Leave O47's heading total unmoved after step 3, and the `prose
+figures` preflight fails naming both numbers. Read the three dated-record
+bodies for any line beginning with two hashes and a space (O162 item 3).
+
+#### Residuals
+
+- A relation NEITHER entry declares — the original O25/O20 case — is invisible
+  to any gate; the arm checks declared edges for consistency, never for
+  completeness. Only reading at filing finds it.
+- The kind of a relation is not checked for symmetry, only the ids, so a wrong
+  reason on a reciprocal pair passes.
+- The `migrate_tenant` edges above wait on a read of that function.
+- The handover pointers are gitignored and corrected by hand, not by the gate.
+
+### O170 — RULED 2026-09-14 and not yet built: a flagged write is quarantined on a declaration the store refuses when the same write is clean
+
+**Filed and ruled 2026-09-14, recorded rather than built.** The diagrams say the
+declaration is validated before the screen rewrites it:
+`architecture/diagrams/write-path.svg` ("at the write choke point: validate the
+declaration, then screen"), `architecture/platform-views/04-write-path.html`
+("checked before any rewrite") and `07-admission-control.html` ("checked before
+the screen"). The code validates only the wing and room there:
+`admission::validate_declaration(meta)` runs in `screen_and_divert`'s `Apply`
+arm, in front of `admission_divert`. Every other declaration check — the
+non-finite and dimension-mod-4 vector refusals, `is_drawer_id`, the `filed_at`
+parse and `FILED_AT_MAX_SKEW`, `validate_content_len`, `validate_kind`, and the
+self-supersession guard — runs in `write_drawer_stmts`, after `admission_divert`
+has rewritten `drawer.id` to `ids::quarantine_drawer_id(...)` and, on a hash
+vault, after `write_drawer`'s diverted branch has replaced the caller's vector
+with a re-embed.
+
+**Traced by reading, and wider than filed.**
+
+- **A malformed id is quarantined when the content trips the screen**, and
+  refused when it does not. `fde/<hex>`, uppercase or 31 characters, through
+  `import_record` or through `parse_import_line` → `upsert_batched` →
+  `upsert_many`, on either vault kind: `is_drawer_id` sees the 32-hex
+  quarantine id and passes.
+- **A non-finite or `1e39` caller vector is quarantined on a hash vault**,
+  through `import_record`'s matching-dimension arm, because the diverted branch
+  re-embeds; on an external vault the caller's vector is kept and still
+  refused.
+- **`admission_allow` re-derives `drawer_id` and re-embeds**, so the malformed
+  declaration is silently corrected on the way out.
+- **A screen-verdict oracle in refusal text.** The `filed_at`, non-finite and
+  dimension-mod-4 refusals format `drawer.id`, which on the flagged path is the
+  quarantine id — an unkeyed public recipe. A 400 therefore tells the caller
+  whether the content tripped the screen, the tier-2 advisor's verdict
+  included, and leaves no row, chain record or rate count either way.
+- **Self-supersession has three verdict-dependent forms**, because the guard
+  compares `supersedes` with `drawer.id`, the rewritten id on the diverted
+  path: (a) equal to the declared id — quarantined, then un-allowable; (b)
+  equal to the record's own quarantine id — clean content lands and flagged
+  content is refused naming the quarantine id, the oracle again; (c) equal to
+  the recipe id under a different declared id — un-allowable, and its only
+  producer is a dedup refresh, which keeps the matched id and takes the
+  incoming meta, i.e. a declaration the plain save already refuses. Form (a)
+  is reachable on `/v1` save and MCP `undercroft_save`, which build
+  `Drawer::new(..)` from `next_append_index` with a caller `supersedes`, and
+  `next_append_index` reads `sqlite_sequence`.
+- **`import_unwrap_screened` re-derives the id** of a record claiming the
+  reserved wing before any id guard, even with admission off.
+- **The tier-2 advisor sees writes that will be refused**:
+  `admission_divert` calls `assess(&drawer.content)` on tier-1-clean
+  candidates after only the wing and room checks.
+
+#### RULED 2026-09-14 by a three-lens panel plus an adversarial refuter
+
+**Prior rulings found.** O30's RULE — validate the caller's declaration before
+the screen, because the screen rewrites the fields validation reads — is
+UPHELD as best practice (validate before transforming; mediate completely
+before any side effect, an advisor egress included), and so are the A25 and
+C15/M13 placements that keep the guards at `write_drawer_stmts` so
+`upsert_many` inherits them: the boundary stays, a door is added. **O30's
+closure scope, and `CLAUDE.md`'s backwards application of it, are REFUTED.**
+`git log -S` dates the id-shape guard to `4a4ef2c` and the non-finite guard to
+`3444da6`, both 2026-08-05, while `validate_declaration` arrived in `bea1520` on
+2026-08-13 — so both already sat behind the same rewrite when O30 closed.
+`import_unwrap_screened` confirms the rule for the wing and violates it for the
+id, and the self-supersession guard reproduces O30's deny-only trap through a
+different field. The backwards test was run over the field the filing named,
+not over every field the rewriting step touches.
+
+**Direction, by doctrine.** Breadth plus doctrine means the documents lead:
+`CLAUDE.md`'s invariant that a guard runs before any step that rewrites the
+field it guards, O30's fix shape, `UPGRADING.md` 1.1.0's refused-not-quarantined
+precedent, `write_drawer`'s own comment, and `write_drawer_stmts`' own
+classification of the id as a declaration. `74d4b9e` (2026-09-04) widened a
+previously true ordering line to more fields; it did not invent the promise.
+
+**Ruling: B, completed.** Every check that is a pure function of the candidate
+moves into ONE function, `admission::validate_declaration(drawer, vector)`,
+called at the door (`screen_and_divert`'s `Apply` arm) and at the boundary
+(`write_drawer_stmts`), and the two sibling rewrites —
+`import_unwrap_screened`'s id re-derivation and `admission_allow`'s restore —
+are closed in the same unit. PATCH-class, shipping in `1.6.0`, with an
+`UPGRADING.md` entry saying `config check` cannot detect it. No product choice
+remains, so nothing escalates.
+
+**Rejected:**
+
+- *(A) Narrow the documents and file the asymmetry* — narrows a broad, older
+  promise to fit an implementation that breaks it, and knowingly keeps the
+  oracle, queue rows that could never be drawers, and tier-2 egress of writes
+  that will be refused.
+- *(B) as briefed* — id shape, kind and finiteness in the `Apply` arm with the
+  embedding passed. Incomplete: `upsert_many` embeds after its screening loop
+  and `dedup`'s dry run screens a stored drawer, so neither has a vector; it
+  misses `filed_at`, content length, dimension mod 4, all three supersession
+  forms and the unwrap id rewrite.
+- *A separate `validate_vector` in `write_drawer` only* — the class this tree
+  keeps losing is a second path calling `screen_and_divert` directly, which is
+  `upsert_many` (O30's closure finding #2). A vector parameter on
+  `screen_and_divert` makes every caller state it, `None` staying a greppable
+  decision: `Screen::Bypass(reason)`'s precedent applied to the vector.
+- *Supersession equality against the declared id only, plus an allow check* —
+  leaves form (b), the trace-free oracle, and form (c).
+- *(C) The checks at each caller* — three copies of one security decision, the
+  shape R5 and O30 removed.
+- *(D) Keep the order and refuse at allow* — recreates O30's deny-only trap;
+  after a diversion `PendingAdmission` holds no declared id and no vector.
+- *Boundary checks that name the declared id* — treats the symptom: the advisor
+  is still consulted and the verdicts still split.
+- *Preserve the declared id and vector through the diversion* — impossible for
+  the id, which must be domain-separated or a diverted row overwrites the
+  drawer it screened.
+- *Skip the boundary supersession check for diverted rows* — leaves a queue row
+  naming itself as superseded, and breaks one function at door and boundary.
+
+#### Implementation spec, condensed
+
+One unit on its own branch, in `crates/undercroft-store` — a security-verdict
+change on the write path, never half-landed.
+
+1. `admission.rs`: `pub(crate) struct FilingIds { recipe, quarantine }` and
+   `filing_ids(drawer)`, taking the origin wing and room from
+   `intended_wing`/`intended_room` when the drawer sits in the reserved wing,
+   the source from `source_file` or `(direct)`, and `chunk_index`; route the
+   three existing derivations (`admission_divert`, `admission_allow`,
+   `import_unwrap_screened`) through it byte-identically.
+2. `validate_declaration(drawer: &Drawer, vector: Option<&[f32]>)`, with blocks
+   MOVED verbatim from `write_drawer_stmts`: the names; if a vector, the
+   non-finite then the dimension-mod-4 refusal; `is_drawer_id`; the `filed_at`
+   refusals (`FILED_AT_MAX_SKEW` becomes `pub(crate)`); `validate_content_len`;
+   `validate_kind`; and a NEW supersession-slot check refusing `supersedes`
+   equal to `drawer.id`, the recipe id or the quarantine id. Checks that read
+   database state or the path — the reserved-wing guard, the receipt lookup —
+   stay in `write_drawer_stmts`.
+3. `screen_and_divert(&self, drawer, vector, screen)`: `Apply` validates before
+   `admission_divert`; `Bypass` is unchanged.
+4. `write_drawer` passes `Some(&embedding)`; its diverted re-embed is not
+   changed here.
+5. `write_drawer_stmts` calls `validate_declaration(drawer, Some(embedding))`
+   in place of the moved blocks and drops the now-unreachable
+   `Some(old_id) if old_id == drawer.id` arm.
+6. `upsert_many`: under `admission_quarantine`, a validation pre-pass over the
+   whole batch before the screening loop, then
+   `screen_and_divert(d, None, Screen::Apply)`.
+7. `manage.rs` `dedup`: `screen_and_divert(keep, None, Screen::Apply)`.
+8. `import_unwrap_screened`'s reserved-wing arm refuses a non-derived id before
+   re-deriving.
+9. `admission_allow` keeps its intended wing/room loop verbatim, then runs
+   `validate_declaration(&restored, None)` with a refusal naming the row and
+   telling the operator to read it back, save it somewhere valid and deny it.
+
+No surface code changes. Effects: CLI `undercroft import` and every sealed
+bundle restore exit 1 on such a batch; `/v1` import answers 400 rather than
+200-quarantined; the orchestrator's `migrate_tenant` removes the partial copy on
+that 400; `/v1` save and MCP `undercroft_save` refuse a flagged
+self-supersession rather than quarantining it; `admission allow` names the
+refusal for a legacy row. Governance in the same unit: `CHANGELOG`,
+`UPGRADING.md`, `CLAUDE.md`'s guard-ordering invariant corrected with the
+backwards application above, and the diagrams left exactly as they are —
+they become true when this lands, so narrowing them first is refused.
+
+#### Gates and counterfactuals the unit owes
+
+Store tests beside `an_invalid_declaration_is_refused_before_the_screen_can_divert_it`,
+each with a premise arm (a valid POISON declaration diverts; each invalid one
+is refused with admission off): **T1** a flagged import with a malformed id is
+refused, not quarantined; **T2** the same for a non-finite vector, the external
+arm's message naming the declared id and never the quarantine id; **T3** no
+invalid write reaches a counting advisor stub, with a batch arm pinning the
+pre-pass; **T4** the refusal string is byte-identical across admission off, on
+with POISON and on with a suspicious stub, and never contains the quarantine
+id; **T5** a supersession naming any filing slot is refused; **T6** a legacy
+queue row that would supersede its allowed id says why; **T7** a reserved-wing
+claim with a malformed id is refused on import; **T8** `filing_ids` matches the
+derivations it replaces. The M13 structural arm is rewritten to find the guard
+literal once, inside `validate_declaration`; a new
+`screen_and_divert_states_the_vector_at_every_call_site` pins three calls
+(`Some(` in `write_drawer`, `None` in `upsert_many` and `dedup`); a new
+`write_drawer_stmts_holds_only_state_dependent_refusals` pins the measured
+count of `StoreError::Invalid(` left there. A `tenant.rs` test beside
+`an_import_declaring_an_invalid_wing_is_refused_even_when_the_screen_would_divert_it`,
+an MCP save test, and an e2e import check with a fresh-binary premise. Must
+stay green unchanged: `a_queue_row_whose_destination_never_validated_says_why_it_cannot_be_allowed`,
+`a_declared_drawer_id_is_refused_on_every_import_surface`,
+`every_caller_supplied_vector_door_refuses_a_non_finite_component`,
+`admission_divert_has_exactly_one_caller` and the O31 round trip.
+
+**Counterfactuals**, each by a saved reverse patch chained with `&&` and
+confirmed landed: restore the names-only validator, and T1–T5 and both source
+gates fail; remove only the quarantine-slot comparison, and T4's supersession
+row and T5's quarantine arm fail — the counterfactual that proves the oracle
+closure, and the one every lens's own design would have passed. Real corpus:
+the LoCoMo feed mined into 16 wings with admission on, three hand-built
+poisoned records imported through the CLI and through `/v1`, queue depth and
+refusal texts measured. No PQ, FDE or keyed draw is involved, so one green run
+is a measurement.
+
+#### Residuals
+
+Each owes an entry of its own, and none is filed here:
+
+- `admission_allow` on an EXTERNAL vault files a ZERO vector: it calls
+  `self.embedder.embed`, and `ExternalEmbedder::embed` returns zeros.
+- `write_drawer`'s diverted non-external branch re-embeds content the diversion
+  did not change — a second forward pass, and a second plaintext POST under a
+  served embedder — and silently replaces a caller vector.
+- A diversion discards a well-formed declared id that does not re-derive from
+  its meta, so same-bundle supersession links and agent-held ids stop resolving
+  after allow — an identity-and-lifetime ruling.
+- The save arms embed before the door (`upsert_screened`), and `/v1` save and
+  MCP never call `validate_content_len`, so oversized content is still embedded
+  before it is refused.
+
+Stated, not owed: the tier-2 advisor's plaintext POST with no egress record is
+carried by O167's tier-2 advisor subsection; once a batch passes the pre-pass
+its rows can still reach the advisor before a state-dependent refusal rolls it
+back; and every trace above was established by reading, not execution.
+
+### O171 — RULED 2026-09-14 and not yet built: a residual a closed entry calls "filed" is not a filing, and seven such items are owed an entry
+
+**Filed and ruled 2026-09-14, recorded rather than built.** Code comments and
+closed bodies call items "filed" or "an open question" that no heading
+carries. Nothing under `## Open` mentions the `del/` namespace split, the
+loopback-predicate unification, an out-of-scope retention flip, a served
+embedder's non-finite output, the FDE tier's recall at scale, the durable
+zero-vector count, or the hand-written `Shared*` model wrappers — and every
+comment claiming one of those filings cites a closed entry.
+
+#### RULED 2026-09-14 by a three-lens panel plus an adversarial refuter
+
+**Prior ruling found and FOLLOWED.** The tree had already ruled this: the
+identifier scheme ("A newly OPENED item gets a heading here, so an open item is
+always resolvable"), M15's conversion of exactly this class into O62–O65, the
+`## Open` header, and O142, which lifted O9's residual "out of a closed body".
+It is best practice by the identity-and-lifetime test — a filing is a reference
+that must outlive its session, and only an id heading with a status can be
+cited, closed or picked. **One correction**: its secondary premise, "when it
+closes, the entry leaves", is obsolete since O101 moved closed entries under
+their releases; the conclusion stands on addressability alone.
+
+**Ruling: no, a sentence inside a closed entry is not a filing.** Anything a
+surface calls filed, or an open question, gets an id heading — under `Open`
+for work, under its target release once that is fixed, under `Unversioned` for
+a pure decision — and the citing comment names that id. A residual stated WITH
+its argument for remaining is a decision and needs no heading, so the 37
+"Residual, stated" and "Residue, stated" paragraphs (counted 2026-09-14) are
+untouched unless they also claim a filing.
+
+**The evidence against the alternative.** An in-body filing cannot be closed:
+O9's body still reads "Still not reconciled, and filed rather than fixed" after
+O142 did that work. It cannot be cited: the comments in `manage.rs`
+(`Namespace::Del`), `retention.rs`, `undercroft-config/src/lib.rs`
+(`addr_is_loopback`) and `undercroft-store/src/lib.rs` (`pool_div`) cite O57,
+O120, O160 and O56, all closed. It is not reachable from the queue. And the
+tree says so itself: "A citation is not a filing"
+(`crates/undercroft-store/src/lib.rs`).
+
+**Rejected:**
+
+- *In-body residuals are filings* — refuted above.
+- *A scanner over ROADMAP closed-entry bodies* — the M15/O47 refusal stands:
+  most narrow-phrase lines there describe an entry's own filing or point at a
+  heading that already exists, and O47 measured a body scanner of open-work
+  vocabulary at 3 false positives in 42.
+- *Reclassify every stated residual as a filing* — turns 37 argued decisions
+  into open work; a rule that changes that much is probably wrong.
+- *Include `CLAUDE.md`, `tests/` and `deploy/` in the arm* — `CLAUDE.md`'s
+  "the fleet operator it was filed for" is history and false-positives, its
+  Layout paragraphs span hundreds of lines so any id satisfies the arm by
+  accident, and `tests/` and `deploy/` have no trigger hits.
+- *Reword the zero-vector citations from "filed" to "stated" instead of filing
+  it* — `CLAUDE.md` and the code comment outrank one closed body under the
+  drift-direction doctrine, and O122 gives a cost, not an argued decision.
+- *A version-section special case for "filed for 2.0.0"* — give the item an id
+  instead, since `roadmap_scan` cannot see an id-less heading.
+- *Scope the `Shared*` entry to the bench* — the production `SharedReranker` in
+  `crates/undercroft-cli/src/main.rs` is on the multi-tenant `serve-http` path.
+- *Fix the `del/` split as "plain deletes move to a new namespace", unconstrained*
+  — verify's orphan-label leg treats `del/{id}` as the only legitimate
+  explanation of an absent drawer, and `forget.rs` replays attestations by
+  `strip_prefix("del/")`; a prefix the leg does not admit turns every
+  post-split delete into a false integrity alarm.
+
+#### The seven entries owed
+
+- **(a) the `del/` namespace split** (round-four #49, second half).
+  `delete_drawer` appends `Namespace::Del` through `delete_drawer_ruled(id,
+  PendingEvidence::Protect)`, `delete_by_source` loops `delete_drawer`,
+  `delete_tunnel` appends `del/tunnel/{id}`, `forget_with_proof` goes through
+  `delete_drawer_ruled` too, and `Namespace::Del` is fenced from
+  `HistoryScope::Agent` — so an agent's history cannot show a deletion it
+  performed. Constraints: existing `del/` record ids are never relabelled
+  (A10); the orphan-label leg admits the new prefix; the discriminator is the
+  delete PATH, not the surface; `prefix()` stays pinned and
+  `fenced_from_agent` exhaustive (O80); and whether `HistoryScope::Agent` is
+  per-principal is answered first. A behaviour change to an agent surface,
+  ruled by a panel. Also correct the store's orphan-label doc comment, which
+  says `delete_by_source` rides `forget_with_proof`.
+- **(b) the engine's refuse-to-bind rule has its own loopback predicate.**
+  `crates/undercroft-cli/src/http.rs` compares the bare `--host` with three
+  literals, while `undercroft_config::addr_is_loopback` splits at the last
+  colon, so `"::1"` yields host `":"` and answers false — a drop-in would
+  refuse `--host ::1` without a token. Shape: `host_is_loopback(host)` in
+  `undercroft-config` holding the literals once, `addr_is_loopback` splitting
+  then calling it, and `serve_http` calling it through a new dependency edge
+  (`undercroft-cli` has none today). `addr_is_loopback`'s doc, which called the
+  engine's check "a byte-identical inline copy", and O160's residual were both
+  corrected on 2026-09-14, and the divergence itself is filed as O177.
+- **(c) a wing or room mirror flipped OUT of a retention scope escapes the
+  sweep.** `retention.rs` draws candidates from the clear mirror; the cost is
+  the erasure promise, not availability, so "availability cost" is corrected
+  there and in O120. Shapes for a panel: one covered-scope walk per sweep, the
+  sweep refusing while mirror drift exists, or narrowing the promise with an
+  argument.
+- **(d) a served embedder answering a non-finite component fails a write the
+  degrade contract says must not fail.** `parse_embedding` casts `as_f64()` to
+  `f32` (`crates/undercroft-llm/src/embed.rs`), so `1e39` becomes infinity;
+  `HttpEmbedder::embed` returns any right-length vector unchecked;
+  `upsert_screened` hands it to `write_drawer`; `write_drawer_stmts` refuses
+  it. Shape: one finiteness-or-degrade helper at the EMBEDDER boundary,
+  counted on the existing failure counters, while a caller-supplied non-finite
+  vector stays refused. Replace the wrong-subject `(ROADMAP O151)` citation in
+  `crates/undercroft-embed-onnx/src/fixture.rs`.
+- **(e) the FDE tier's unscoped recall at 131k–1M is unmeasured and has no
+  instrument, so `pool_div` stays unwired** (O56; the `pool_div` doc in
+  `undercroft-store/src/lib.rs`, "Filed rather than guessed"). Shape: an FDE
+  analogue of `pqscale`, run only on the maintainer's explicit go;
+  `the_fde_tier_does_not_consult_pool_div_and_the_docs_say_so` keeps pinning
+  the gap until its table lands in `docs/RETRIEVAL_SCALING.md`.
+- **(f) the durable zero-vector count** — filed in this unit as **O174**.
+- **(g) the `Shared*` model wrappers forward trait methods by hand.**
+  `SharedReranker` (`crates/undercroft-cli/src/main.rs`) and the bench's onnx
+  reranker `Shared` (`crates/undercroft-bench/src/main.rs`) omit
+  `score_batch`, so the tract reranker on the multi-tenant `serve-http` path
+  runs the trait's sequential default instead of `OnnxReranker::score_batch`'s
+  `par_iter` — identical results and counts, different latency, reported
+  nowhere. Shape: blanket `impl<T: Reranker + ?Sized> Reranker for Arc<T>`, the
+  same for `Embedder` and `LateInteraction`, in `undercroft-core`, deleting
+  every hand-written wrapper. Annotate O134a's "filed separately" bullet.
+
+The id-less `2.0.0` item the ruling also named already carries one at the
+integrated tree, O163, and `crates/undercroft-core/src/config.rs` cites it.
+
+**Owed under this rule as well, added 2026-09-14: O135's ruling.** The
+2026-09-12 panel over O134, O135 and O140 ruled O135's three reads, and that
+ruling lives only in the gitignored
+`.handover/panel-o134-o135-o140-2026-09-12/` (`O135-analyses.json`,
+`O135-refute.json`), so O135 still reads unruled to a fresh clone. A decision
+outside the tree is no more a record than a sentence in a closed body is a
+filing. Lifting it into O135 as a `#### RULED 2026-09-12` subsection, written
+from those files rather than from a summary, is owed; O173's fourth
+determination names the same gap.
+
+#### Implementation spec, condensed
+
+Each remaining item filed under `Open` with its constraints and gate; the
+comment citations rewritten to name the new ids; the closed bodies annotated —
+O57's #49 bullet, O160's residual ("not byte-identical"), O120, O56, O122 and
+O134a as now filed, O9 as lifted by O142, and O112's residue as a naming
+decision left to the maintainer rather than a filing. A doctrine sentence
+appended to `CLAUDE.md`'s "Open threads written down AS WORK" bullet, with its
+backwards test: it CONFIRMS M15's O62–O65, O142's lift of O9, O157 split out of
+O134b, O136→O143 and O111→O112, and reclassifies exactly the seven items and
+the id-less `2.0.0` item; no stated residual moves.
+
+#### Gate and counterfactuals the unit owes
+
+An arm inside the `ROADMAP headings` preflight, host-side awk outside
+`roadmap_scan`'s quoted program. Universe `git ls-files -- 'crates/*.rs'`. Unit:
+a maximal run of consecutive `//` comment lines, joined, because citations
+break across lines. Trigger, case-insensitive:
+`filed (rather than|separately|as an open question|with the residue|for )|open question`.
+Ids: `[ACMORTU][0-9]+[a-z]?` bounded by non-alphanumerics. An id is open iff a
+`### <id> ` heading exists and none of its headings carries a closed,
+superseded, moved or refuted status. Verdict: FAIL unless the block names at
+least one open id, printing file:line, the phrase and each id with its status.
+Premise probes on fixtures: a cross-line block citing a closed-heading id
+fails; the same block citing an open id passes; "filed separately" with no id
+fails; `filed under`, `filed_at` and ``filed as `fde/<hex>` `` stay silent; and
+zero trigger blocks or zero parsed headings on the real tree is a premise
+failure.
+
+**Measured at the integrated tree, 2026-09-14** — a line-level `git grep`, the
+blocks read by hand: eight trigger lines. Four sit in blocks citing only
+closed entries — `undercroft-config/src/lib.rs` (O160), the `pool_div` doc in
+`undercroft-store/src/lib.rs` (O56), `manage.rs`'s `Namespace::Del` arm (O57)
+and `retention.rs` (O120). Four cite an open one — `undercroft-core/src/config.rs`
+twice (O163), `undercroft-embed-onnx/src/fixture.rs` (O151, the wrong subject,
+which the arm cannot see) and `undercroft-embed-ort/src/lib.rs` (O152). The
+ruling's brief measured seven failures and two passes at `baa83d2`: since then
+O163 took its id, and the zero-vector doc on `embed_failures` in `manage.rs`
+was reworded, uncommitted in this sweep's working tree, from "is filed rather
+than faked here" to "is stated as a residual in ROADMAP O122 rather than faked
+here" — the rewording this ruling rejected, applied to one of its two surfaces,
+while the same sweep re-pointed `CLAUDE.md`'s "is filed, not faked" at O174.
+The `manage.rs` doc no longer matches the trigger, so the arm cannot see it,
+and it still owes a citation of O174. **The counterfactual "the arm fails before the fix" must be
+re-derived at the tree it runs on, never copied from this record.**
+
+Counterfactuals after the unit: revert `manage.rs`'s `Namespace::Del` citation
+to cite only O57, and the arm fails naming it; in a scratch copy give (b)'s
+heading a closed status while `undercroft-config` still says filed, and the
+arm fails. The `prose figures` O47 total moves by every heading the unit adds.
+
+#### Residuals
+
+- The arm cannot see a wrong-subject citation of an OPEN id; only reading
+  catches that class.
+- Synonyms defeat it ("deferred", "recorded", "tracked", "left for"); the
+  phrase set is tuned on the measured population.
+- ROADMAP bodies and `CLAUDE.md` prose stay unscanned by ruling, so an in-body
+  filing written there is caught only by reading.
+- (d)'s write failure is established by reading both ends, not executed, and
+  whether a NaN comparator panics the rerank or fusion sort is unverified.
+- Whether `HistoryScope::Agent` is per-principal is unverified, and it decides
+  whether (a) exposes one agent's deletions to another.
+
+### O172 — RULED 2026-09-14 and not yet built: the team-server recipe cannot start, and the Qdrant URL it declares is one the transport policy refuses
+
+**Filed and ruled 2026-09-14, recorded rather than built. HIGH.**
+`deploy/docker-compose.server.yml` declares `UNDERCROFT_QDRANT_URL:
+http://qdrant:6333`, which `undercroft_index::from_env` refuses at
+construction — cleartext beyond loopback, no override — and a shipped suite
+pins the refusal of that exact spelling (`tests/e2e-backends.sh`,
+`refuses cleartext`). The recipe fails before an operator could meet that:
+its command is `serve-http` with no `init`, `open_store_as` unlocks `default`,
+the unlock returns `VaultError::NotFound` when `vault.json` is absent, and
+`VaultManager::open` creates only the master key and `vaults/`. On a fresh
+volume the engine exits `vault "default" not found`, `restart: unless-stopped`
+loops, and no client ever connects. No file under `tests/` references the
+recipe. Its header also claims "the vector index never holds plaintext",
+while on a sealed vault the content arrives sealed and the embeddings are
+plaintext-derived vectors (`docs/THREAT_MODEL.md`, A5).
+
+#### RULED 2026-09-14 by a three-lens panel plus an adversarial refuter
+
+**Prior ruling found and UPHELD: the maintainer's 2026-09-12 option (b).**
+Qdrant stays in the team-server recipe, behind its own Caddy TLS terminator,
+with an exported public CA root pinned through `UNDERCROFT_INDEX_CA` and an
+explicit, documented operator `index push`. Until this entry the ruling lived
+only in gitignored files: `.handover/SESSION_START.md` ("the Qdrant
+team-server recipe MADE REAL (ruled: option b)"; "make the Qdrant recipe
+real") and the option text in
+`.handover/panel-o134-o135-o140-2026-09-12/O135-analyses.json`. It is best
+practice: the push stays an explicit operator act; the mirror stays an
+untrusted accelerator whose every candidate is HMAC-verified locally under the
+same retrieval policy; the TLS-plus-exported-pin shape is the tree's own gated
+precedent (M7, M9, M10, O63); and served consumers exist that refuse on every
+call today — MCP `undercroft_index_status` (through `open_index`),
+`GET /v1/vaults/{id}/index/status`, and `POST /v1/vaults/{id}/forget` with a
+`backend`, which calls `undercroft_index::from_env` directly, so a grep for
+`open_index` misses it. The 2026-09-12 refuter's case for removing Qdrant
+rested on provenance — the recipe predates the index transport policy — which
+shows where the sentence came from, not that (b) is wrong.
+
+**The two corrections, each refuted by evidence.**
+
+1. **"Following the `deploy/backends-tls` pattern" transfers only its Caddyfile
+   site block.** That precedent pins Caddy's root-only PKI path, readable only
+   because `backends-e2e` builds `target: builder` and runs as root. The
+   team-server engine is the runtime image, uid 10001, where that pin is
+   unreadable and refuses — M9 verbatim. The precedent that governs an ENGINE
+   in a shipped recipe is `deploy/observability`: an exporter, the exported
+   `/tls/root.crt`, and the engine gated on the exporter with
+   `service_completed_successfully`.
+2. **"A tls-pins-style check that the stack boots" is necessary and cannot
+   observe the defect.** The `ServeHttp` arm runs `open_store_as`,
+   `warm_embedding_cache`, `Tenancy::new`, the reranker and `serve_http`, and
+   builds no index; the URL is read only inside `undercroft_index::from_env`,
+   and `undercroft_net::pin_from_env` caches the resolved `Result`, a failure
+   included, for the life of the process. So `/healthz` answers 200 with the
+   cleartext URL or an unreadable pin in place. The gate must drive the index
+   path through the running server.
+
+**Rejected:**
+
+- *(a) Remove Qdrant from the recipe* — the maintainer ruled (b) with (a) in
+  front of them, and no evidence shows (b) breaks doctrine; as specified, (a)
+  carried no boot check and would have shipped the init crash-loop untouched.
+- *(c) Docs only* — leaves a recipe that crash-loops on first `up` and a URL
+  the policy refuses.
+- *(b) as literally worded* — the backends-tls pin is unreadable by uid 10001,
+  and a `/healthz` check is green over the defect.
+- *Mount `deploy/backends-tls/Caddyfile`* — four site blocks for upstreams the
+  recipe does not run, and a production recipe coupled to a test harness file.
+- *Qdrant's native TLS* — needs a certificate one-shot and Qdrant TLS config at
+  the pinned `v1.12.4`, neither verified; every HTTP hop here terminates at
+  Caddy `tls internal`. Stated as the alternative, not taken.
+- *Start the engine without waiting for the exporter* — `pin_from_env` caches a
+  refusal, so an early `index/status` or `forget` with a backend refuses until
+  restart while `/healthz` stays green; the doctrine is fail-at-start over
+  healthy-but-failing.
+- *An init guard testing for `vault.json`* — a second implementation of
+  `VaultManager::exists`, which `init` already consults
+  (`mgr.exists("default")`) before answering that the palace exists.
+- *A one-shot `undercroft-init` service* — a second engine-image service with an
+  unverified double build; the one shipped engine recipe that bootstraps does
+  it in the engine's own command.
+- *An entrypoint wrapper running `init` before every command* — silently
+  defeats `run --rm undercroft init --level hmac-only`: the wrapper's own init
+  creates a sealed default first.
+- *`serve-http` auto-creating the default vault* — new capability that picks a
+  security level on start and would create a database under `--read-only`.
+- *Converge `deploy/observability`'s `undercroft init 2>/dev/null || true` in
+  this unit* — no arm in this unit's gate can show that fix; owed separately.
+- *File the product-wide "sealed bytes only" wording separately* — a claim
+  lives on every surface that states it, and this unit rewrites that claim.
+- *Also rewrite README's "upload sealed records" and `docs/integrations.md`'s
+  "sealed content only"* — each is true as scoped, about content; editing them
+  is churn, and the second forces a Mermaid re-render. (Superseded 2026-09-14:
+  the drift sweep corrected that label and re-rendered the diagram anyway.)
+- *Widen the CA-pin preflight by listing `context:` depths* — select on the
+  PROPERTY instead, O92's lesson: a `deploy/` compose file whose `context:`
+  resolves to the repo root.
+- *Boot the server arm on the telemetry engine image* — a binary built with
+  different features than the recipe ships is a check of something else.
+
+#### Implementation spec, condensed
+
+One unit, PATCH-class, closing under the `1.6.0` section when built, with a
+`#### RULED` subsection carrying this record, the counterfactual transcripts
+and the measured CI cost.
+
+1. NEW `deploy/qdrant-tls/Caddyfile`: `auto_https disable_redirects` and one
+   site, `https://qdrant-tls` with `tls internal` and
+   `reverse_proxy qdrant:6333`, byte-identical to
+   `deploy/backends-tls/Caddyfile`'s qdrant block, its header giving the C8
+   reason and where the root lands.
+2. `deploy/docker-compose.server.yml`: a `qdrant-tls` service (`caddy:2.8`,
+   `qdrant-tls-data:/data`, no ports); a one-shot `qdrant-tls-export`
+   (`alpine:3.20`, `embed-tls-export`'s body verbatim — a bounded 60 s wait
+   for the PKI root, a copy to `/tls/root.crt`, `chmod 0644`, the private key
+   keeping 0600); and the `undercroft` service with
+   `entrypoint: ["/bin/sh", "-c"]`,
+   `command: ["undercroft init && exec undercroft serve-http --host 0.0.0.0 --port 8765"]`
+   (`&&`, never `2>/dev/null || true`, so a failed init says why),
+   `depends_on` `qdrant-tls-export: service_completed_successfully`,
+   `UNDERCROFT_QDRANT_URL: https://qdrant-tls`,
+   `UNDERCROFT_INDEX_CA: /tls/root.crt` and `qdrant-tls-data:/tls:ro`.
+3. The header rewritten, its SECURITY paragraph kept verbatim: the
+   `undercroft-data` volume is the system of record and MCP and `/v1` recall
+   never consult Qdrant; the first start creates a sealed `default` vault; an
+   OPTIONAL step runs `index push qdrant` and `index status qdrant` through
+   `exec`, each push chain-recorded as `egress/index-push`; `config check`
+   through `exec`; what Qdrant receives (sealed content, plaintext-derived
+   vectors, the wing label; an hmac-only push refused unless
+   `--allow-plaintext`); who reads it (only `undercroft search --backend
+   qdrant`); that it is a snapshot a delete reaches only through `forget` naming
+   a backend; and the transport with its residuals — the `qdrant-tls` →
+   `qdrant` hop is cleartext on the compose network, Qdrant is unauthenticated
+   to that network, the pin is read once per process.
+4. Surfaces in the same unit. `deploy/README.md`. `docs/remote-server.md`: the
+   first-start and optional-mirror steps, the orchestrated snippet's `command`
+   (still `serve-http` with no `init` at the integrated tree), and its false
+   claim that "the first `serve-http`" opens the default vault. The sealed-only
+   claim needs nothing more here: the 2026-09-14 drift sweep corrected it on
+   every surface that stated it, including `website/landing/index.html` and
+   `architecture/index.html`, whose inlined `security-keys` copy was
+   regenerated from the corrected source. An `UPGRADING.md` `1.6.0` entry for the new pulls,
+   the ordering dependency and its symptom, and what `config check` can and
+   cannot detect. `CHANGELOG`. `CLAUDE.md`'s `tls-pins` figure and prose, and
+   the `deploy/` layout. `.github/workflows/ci.yml`'s `tls-pins` comment, which
+   already names O63's telemetry engine build and must add the second,
+   default-features build with its measured time.
+5. `tests/battery.sh`, preflight `CA pins are readable by the engine`: replace
+   the `context: \.\./\.\.` selector with the property above, plus a premise
+   that the selected set holds both
+   `deploy/observability/docker-compose.observability.yml` and
+   `deploy/docker-compose.server.yml`.
+6. `crates/undercroft-cli/src/parity.rs`: a new test
+   `no_served_surface_searches_through_a_remote_mirror`, reading `mcp.rs`,
+   `tenant.rs` and `http.rs` and asserting none contains `search_with_index`,
+   with a needle premise probe — "MCP and `/v1` recall never consult the
+   mirror" as a gate rather than prose.
+
+#### Gates and counterfactuals the unit owes
+
+**Gate A, `tests/tls-pins.sh`.** A throwaway `UNDERCROFT_MCP_HTTP_TOKEN`
+exported at the TOP, before `trap cleanup EXIT` — the recipe's
+`${UNDERCROFT_MCP_HTTP_TOKEN:?…}` aborts Compose's config load for every
+subcommand, so a later export makes the trap's teardown fail silently and leak
+the throwaway volumes. A `STACKS` row for the server recipe (CA generated, uid
+10001 reads `/tls/root.crt`, the CA private key stays unreadable). O63's
+stack-generic boot steps extracted into one function called for both stacks,
+observability's six check labels byte-identical. Then, against a
+`tlspins-server` project, every wait bounded and nothing piped: B1 `/healthz`
+answers; B2 `exec -T undercroft undercroft config check` exits 0; B3
+`GET /v1/vaults/default/index/status?backend=qdrant` answers 200 with
+`remote_records` null; B4 a canary `POST …/drawers` lands, not quarantined; B5
+`index push qdrant` exits 0 printing its `Pushed {n} {kind} record(s)` line;
+B6 `index status qdrant` shows one record; B7 `/v1` index status shows remote
+and local at 1; B8 `search "mirror canary" --backend qdrant` returns the
+canary; B9 `verify` prints `VERIFY OK`; B10, a PREMISE arm, the same status
+with `UNDERCROFT_QDRANT_URL=http://qdrant:6333` exits 1 with `no override`.
+The measured count is published and compared. **Gate B**: the widened
+preflight with its file-set premise. **Gate C**: the parity test with its
+needle probe.
+
+**Counterfactuals**, each through an extra `-f` override confirmed applied with
+`docker compose … config` and chained with `&&`: CF1 cleartext restored — B2,
+B3 and B5–B8 fail while B1 `/healthz` STAYS 200, the recorded proof that a
+boot-only check is blind; CF2 the deep PKI pin — B2 and B3 fail, B1 stays 200;
+CF3 init removed on a fresh project — B1 fails and the log shows
+`vault "default" not found`; CF4 the server file's `UNDERCROFT_INDEX_CA` set to
+the PKI path — the old selector passes and the new one fails naming the
+recipe; CF5 the parity needle trips on its probe string; CF6 exporter ordering
+removed — not deterministically reproducible, argued from the cached pin
+failure and recorded as argued, not executed.
+
+#### Residuals
+
+Each of the first five owes an entry of its own, and none is filed here:
+
+- `deploy/observability`'s `undercroft init 2>/dev/null || true;` should
+  converge on `init && exec`; gate: an init-specific failure whose log names
+  init's error rather than `serve-http`'s.
+- `deploy/undercroft-server.service` has the same missing-init defect:
+  `ExecStart` is `serve-http` and `Restart=on-failure` loops. Shape:
+  `ExecStartPre=/usr/local/bin/undercroft init`.
+- `serve-http` resolves the index pin lazily, so an unreadable
+  `UNDERCROFT_INDEX_CA` starts healthy and refuses per call. Shape: warm
+  `pin_from_env` for every declared `*_CA` at start; it can stop a running
+  deployment, so it owes an `UPGRADING.md` entry.
+- Qdrant authentication: the index client sends no credential, and nothing
+  isolates `qdrant` so only `qdrant-tls` reaches it — new capability, MINOR.
+- Mirror freshness and lifecycle: no automatic push, and a delete that is not a
+  `forget` never reaches the mirror — a memory-lifecycle decision the code does
+  not settle.
+
+Stated, not owed: the exporter body becomes a third verbatim copy, because
+`extends: file:` would couple a production recipe to the root test-harness
+file; the `tls-pins` CI job gains a second cold engine build; the header's
+snapshot and freshness prose moves no count, and Gate C holds only the
+served-surface half. Not verified by execution, and Gate A settles all four:
+the crash-loop, Caddy's `tls internal` certificate for `qdrant-tls` validating
+under the exported root in rustls, `config check` exiting 0 on the full recipe
+environment, and a push beside a live server leaving the chain clean. M10's
+measurement, "of four shipped `deploy/` stacks", omits this recipe, and a dated
+correction line under M10 is owed with the unit.
+
+### O174 — how many rows at rest carry a degraded zero vector has no surface, so a restart hides every hole
+
+**Filed 2026-09-14, from a residual O122 stated and nothing filed; O171 rules
+it owed.** O122 made every degraded embed COUNTED —
+`Embedder::embed_failures`, `VaultStats.embed_failures`,
+`undercroft_embed_failures_total{backend}` — and that count is the embedder's,
+for the life of the process. A restart reads zero while every zero vector
+written before it stays at rest, lexically findable and semantically invisible.
+O122 says the durable question "has no cheap answer on a sealed vault and is
+stated as such, not faked"; `CLAUDE.md` said it "is filed, not faked" until the
+2026-09-14 sweep re-pointed it at this entry; the doc on `embed_failures` in
+`crates/undercroft-store/src/manage.rs` pointed at O122 until the same sweep
+re-pointed it here. No entry carried it until this one.
+
+**What the code supports, read 2026-09-14.**
+
+- **A degraded embed is recognisable at rest once read.** `quantize_embedding`
+  (`crates/undercroft-vault/src/lib.rs`) takes `scale = 1.0` when `max_abs` is
+  zero, so every byte is zero, and `dequantize_embedding` returns exact `0.0`s.
+- **Reading it is the whole cost.** `Vault::embedding_at_rest` seals the frame
+  under `{id}/emb` on a sealed vault and stores it raw on hmac-only, so a
+  sealed vault pays one AEAD open per row and hmac-only pays none.
+- **`verify` does not read the `embedding` column** (it selects id, meta,
+  content, tag and the mirror columns), so a count there adds one open per row
+  to a walk that is already O(corpus).
+- **`repair` cannot count them**: `repair_stmts` re-embeds EVERY drawer inside
+  one transaction and has no dry run. It is the remedy for the rows, never a
+  measurement of them.
+- **A warmed server already holds the answer in RAM.**
+  `warm_embedding_cache` opens every embedding into `emb_cache`, and the
+  `serve-http` arm calls it at start, so there a count costs no decryption; on
+  the CLI every command is its own cold open.
+- **A zero vector is not always a failure.** `HashEmbedder::embed` returns all
+  zeros when `tokens(text)` is empty — content whose `search_key` segments to
+  no token — and `ExternalEmbedder::embed` returns zeros whenever it is
+  reached. A count of zero rows is therefore not a count of degrades, and the
+  discriminator is part of the design rather than a detail.
+
+**Shape, for a ruling.** An operator-invoked, read-only count of all-zero
+embeddings — a `verify` leg or its own command — over `emb_cache` where it is
+warm and by one open per row where it is not. Separating a legitimate zero
+needs one of: a re-embed of each zero row under the current embedder (a row
+whose re-embed is non-zero was a hole — a forward pass per zero row, and under
+a still-failing endpoint the re-embed degrades too, which must read as
+"undetermined", never as "legitimate"); or a write-time marker, which in
+unsealed `meta_json` adds a field to the pinned exposure inventory
+(`a_sealed_vault_exposes_metadata_but_never_content`) and needs its own
+argument, and inside the sealed frame changes an on-disk format. A new report
+field is hand-projected on all four renderers (`parity.rs::HAND_PROJECTED`),
+and a count of holes is not an integrity failure, so it must not move
+`VerifyReport::ok()`.
+
+**Gate**: k forced degrades through O122's switchable embedder
+(`stats_reports_every_embed_the_embedder_degraded`) are reported as k by a
+NEW process after a restart, where that process's `embed_failures` reads 0 —
+the difference is the defect. Premise arm: a healthy vault reports 0.
+Discriminator arm: a hash-vault drawer whose content yields no token is not
+reported as a hole. Counterfactual: a count sourced from `embed_failures`
+passes the premise and fails the restart arm.
+
+### O175 — under `--read-only`, `index push` ships every batch to the backend and only then fails to record, so the corpus leaves with no egress record and no warning
+
+**Filed 2026-09-14 from the drift sweep. Established by reading, not
+executed.**
+
+**Where it fails, read 2026-09-14.** `Command::Index`
+(`crates/undercroft-cli/src/main.rs`) opens through `open_store`, so
+`undercroft --read-only index push` gets `VaultStore::open_read_only` — a
+`SQLITE_OPEN_READ_ONLY` connection under `PRAGMA query_only=ON`.
+`VaultStore::index_push` (`crates/undercroft-store/src/remote.rs`) never asks
+`is_read_only()`. In order, it refuses an hmac-only vault without
+`--allow-plaintext`, calls `index.ensure` (the CREATE on every real backend),
+selects every row, and ships them in batches of 64 through `index.upsert`.
+Only after the last acknowledged batch does it call `record_pushed_embedder`,
+an `INSERT INTO meta` the read-only connection refuses. That `?` returns, so
+`audit_index_push` never runs and no `diag_warn!` says what left. The command
+exits with SQLite's refusal over a push that fully succeeded.
+
+**The partial-failure arm drops the real error in one case.** When a batch
+fails after earlier ones landed and the staleness marker is absent or names
+the current embedder, `this.record_pushed_embedder()?` fails the same way and
+REPLACES the backend's error, two lines above a comment saying "The ORIGINAL
+failure is what the operator needs". Only a mirror whose marker names another
+embedder reaches `audit_index_push`, whose failure does warn.
+
+**Why it matters.** `index_push`'s own doc calls this "the largest content
+egress in the tree", and on an hmac-only vault the pushed blob is the
+plaintext. `--read-only` is the incident posture (M18), and a whole-corpus
+mirror taken from it leaves the trail silent and the operator told only that a
+write was refused. Both sibling egresses decide the posture FIRST:
+`refine.rs::record_egress` warns and serves on `is_read_only()`, and the `/v1`
+export does the same on the process flag. This path is the one that leaves the
+decision to SQLite, after the bytes have gone.
+
+**Shape, for a ruling.** Decide the posture at the top of `index_push`, before
+`ensure`, so no remote write precedes the decision. Two options:
+
+- *(a) refuse*, on the `tighten_anchor` precedent (`StoreError::Invalid`
+  naming the posture). A push also writes the `index_pushed_embedder` marker,
+  so it is a mutating command. The CLI's `--read-only` doc says such a
+  subcommand is refused by SQLite rather than by a hand-kept classifier; for
+  an egress that refusal arrives after the bytes, and a store-level posture
+  check is not a list of commands. Nothing leaves.
+- *(b) warn and serve*, on the egress precedent. The marker then cannot be
+  written, so the mirror keeps a marker that no longer describes its vectors
+  and the `IndexStale` decision in `search_with_index` reads a stale value — a
+  cost neither the export nor `refine` carries.
+
+Independently of the choice, the partial arm should warn and return the
+backend's error when the marker write fails, never `?` over it.
+
+**Gate.** A store test on `remote.rs`'s `EchoIndex`, which already counts
+`ensured` and keeps `pushed`: open a vault read-only and push. Under (a) the
+push refuses naming the posture with `ensured == 0` and `pushed` empty; under
+(b) every record arrives with a warning and the `audit` table gains no row.
+Premise arm: the same push on a writable handle lands every record and exactly
+one `egress/index-push`. Counterfactual: delete the posture check and the
+read-only arm fails — `pushed` holds every record, `audit` has no
+`egress/index-push` row, and the error is SQLite's. A `backends-e2e` check
+drives `undercroft --read-only index push` against a live backend too, because
+a posture is a property of the PATH (O91), not of the store call.
+
+### O176 — `undercroft --read-only export` fails inside SQLite at the audit record, while `/v1` export on a read-only server warns and serves
+
+**Filed 2026-09-14 from the drift sweep. Both paths read, neither executed.**
+
+**The CLI path.** `Command::Export` (`crates/undercroft-cli/src/main.rs`)
+opens through `open_store`, so `--read-only` yields `open_read_only`.
+`build_export_payload` reads under `InternalRead::ExportAudited` and writes
+nothing. Then, unconditionally, `VaultStore::audit_export("cli", …)`
+(`crates/undercroft-store/src/lib.rs`) opens a transaction and calls
+`chain_append`, whose first statement is `INSERT INTO audit` — refused by the
+read-only connection. Its `?` aborts before the bundle or the NDJSON is
+written, so the operator gets SQLite's refusal and no export.
+
+**The `/v1` path.** `Tenancy::export` (`crates/undercroft-cli/src/tenant.rs`)
+builds the payload, then branches on `self.read_only`: a read-only server logs `export served
+read-only; egress not chain-audited` and answers 200, and a writable one calls
+`audit_export("http", …)`.
+
+**Which side is wrong.** `CLAUDE.md` states that exports are chain-audited on
+every surface and that read-only replicas warn and serve; `refine`'s
+`record_egress` applies that precedent "in as many words as `/v1`'s export
+path uses it", on both surfaces because it lives in the one implementation. The
+doctrine and two paths agree, so by the drift-direction rule the CLI is the
+drift. It is also the surface an operator reaches first during an incident,
+where exporting the evidence is the obvious first move.
+
+**Fix shape.** One recording step both export surfaces call, on `refine`'s
+precedent, branching on `VaultStore::is_read_only()` — the handle's own
+posture — rather than on the process flag `/v1` reads today. On a read-only
+handle it warns, naming the counts and any recipient, and serves; otherwise it
+calls `audit_export`. `/v1`'s inline branch goes, so the decision exists once.
+
+**Gate.** An `e2e` check: `undercroft --read-only export <vault>` exits 0,
+emits the payload, prints the not-chain-audited warning, and leaves the
+`history` record count unchanged. Premise arm: the same export without
+`--read-only` appends exactly one `egress/export`. Counterfactual: remove the
+read-only branch and the check fails with a non-zero exit carrying SQLite's
+refusal, which is the tree as it stands. A second check drives
+`GET …/export` on `serve-http --read-only`, so the `/v1` arm is proved to pass
+through the shared step rather than a surviving copy.
+
+### O177 — the engine's refuse-to-bind check and `undercroft_config::addr_is_loopback` disagree on `::1`, and O160 recorded them as byte-identical
+
+**Filed 2026-09-14 as item (b) of O171's ruling, which rules it owed an
+entry.**
+
+**Mechanism, read 2026-09-14.** `serve_http`
+(`crates/undercroft-cli/src/http.rs:229`) compares the bare `--host` with
+three literals: `host == "127.0.0.1" || host == "localhost" || host == "::1"`.
+`addr_is_loopback` (`crates/undercroft-config/src/lib.rs`) takes a
+`host:port` listen address, splits it at the LAST colon (unwrapping
+`[::1]:<port>`) and compares the left side with the same three literals. For
+`"::1"` the split yields host `":"`, so it answers false where the engine
+answers true. One takes a host and the other an address; neither is a copy of
+the other. O160's residual calls the engine's check "a byte-identical inline
+copy", and `addr_is_loopback`'s doc comment said the same until the 2026-09-14
+drift sweep corrected it to name this entry.
+
+**Why it matters.** Two implementations of one security predicate is the
+class O90 and O92 record. The recorded claim invites the obvious unification —
+call `addr_is_loopback(host)` from `serve_http` — which would refuse
+`serve-http --host ::1` without a token: a working loopback deployment would
+stop, and nothing in the tree would say why the two had ever differed.
+
+**Fix shape** (O171 (b)). `host_is_loopback(host)` in `undercroft-config`
+holding the literals once; `addr_is_loopback` splits and then calls it;
+`serve_http` calls `host_is_loopback` through a new
+`undercroft-cli → undercroft-config` dependency edge, which does not exist
+today. `addr_is_loopback`'s doc comment, which already names this entry, is
+rewritten in the same unit to describe the shared predicate.
+
+**Gate.** A table test in `undercroft-config` drives each host row through
+`host_is_loopback` and the same host with a port through `addr_is_loopback`,
+requiring equal answers: `127.0.0.1`, `localhost`, `::1` (bracketed with a
+port), `0.0.0.0` and a look-alike such as `127.0.0.1.example`. A source gate
+requires the three literals to be compared in one function only, because a
+second copy is the observable this class moves. Counterfactual: make
+`serve_http` call `addr_is_loopback(host)` directly and the `::1` row fails —
+the drop-in the recorded claim invited. Premise arm: with the literal set
+duplicated back into `http.rs`, the source gate fails.
+
+### O178 — the platform-views figure gate reads no total of engine variables, so four published 81s are ungated, and `= 10 binaries` counts archives
+
+**Filed 2026-09-14 from the drift sweep, read against `tests/battery.sh` and
+`.github/workflows/release.yml`.**
+
+**Four figures, two reasons.** `architecture/platform-views/21-config-classes.html`
+publishes the label `ALL 81`, the line `81 engine variables, each with a row in
+ENGINE_ENV_VARS`, and, in its `<desc>`, `eighty-one engine variables`;
+`architecture/platform-views/index.html`'s card says `Eighty-one variables`.
+`PV_FIGURES` gates the cross-tab's cells (`Protects · N`, `Tunes · N`,
+`Checked · N`, `Opaque · N`, `N of them protect`), and no row there or in
+`PV_WORD_FIGURES` reads their TOTAL, so the two digit figures are ungated only
+because no row exists. The two word figures
+could not be given a row today: `pf_word` maps `one` to `twenty` and nothing
+above, and the word loop splits each match on non-letters (`tr -cs 'a-z'`), so
+`eighty-one` becomes `eighty` (not a number word, skipped) and `one` (read as
+1). A row added as the reader stands would fail a correct tree, reading 1
+against 81.
+
+**The binaries label.** `20-verification-pipeline.html` says, at `baa83d2`,
+`= 10 binaries + sha256 each`, gated by the row named "release binary
+archives" against `PV_REL_BINARIES`, the sum of `target:` rows over the release
+jobs — five per variant, two variants. Those are ARCHIVES: the default job
+copies `undercroft` and `undercroft-orchestrator` into each, the `-ort` job
+copies `undercroft` alone, and `sha256sum` runs once per archive, so fifteen
+executables ship in ten archives. The label should read
+`= 10 archives + sha256 each`.
+
+**Why it matters.** `ALL 81` is the total of the cross-tab whose four cells
+O155 gated, one label away, and it moves on every unit that adds a variable. A
+row that checks the number and not the noun kept a wrong noun green.
+
+**Fix shape.** Digit rows for `([0-9]+) engine variables` and for the label —
+either a pattern that cannot also match `NEEDS ALL 10` or `ALL N OK`, or the
+label reworded to carry its noun — against `PF_ENVROWS_N`, the
+`ENGINE_ENV_VARS` row count the `prose figures` block already reads. For the
+words, keep a hyphen in the splitter (`tr -cs 'a-z-'`), teach `pf_word` to
+compose tens and units (`twenty`–`ninety`, then `-one`–`-nine`), re-run every
+existing word row since a kept hyphen changes what they split, and add a word
+row. Relabel `= 10 binaries` and move its regex to `= ([0-9]+) archives` in
+the same unit; a row that matches nothing fails, so the two cannot drift apart.
+
+**Gate and counterfactual.** Premise probes on `pf_word`: `eighty-one` reads
+81, `twenty` reads 20, `one` reads 1, and a hyphenated non-number such as
+`read-only` yields no number. Counterfactual, in a scratch copy of the set:
+change `Eighty-one` to `Eighty-two` and `ALL 81` to `ALL 82` — the preflight
+passes today and must fail after the unit, naming each. For the label: with the
+regex moved and the label left alone, the row reports that it found no figure.
+
+### O179 — two diagram labels overrun their bounds by estimate, and no gate measures a label's width
+
+**Filed 2026-09-14 from the drift sweep. Widths are ESTIMATED from font
+metrics, not rendered.**
+
+**`architecture/diagrams/layers.svg`, the footer.** The second footer line
+(`<text x="42" y="568" class="f s dim">`, 11px sans) is the 157-character
+sentence beginning "Outward paths are opt-ins". With Arial advance widths it
+measures about 933px from x=42, ending near 975 in a 900-wide viewBox —
+roughly 75px past the edge, taking the sentence's closing claim (every outward
+path is TLS or loopback via `undercroft-net`) with it. `diagrams/` is the
+source, and `build.sh` derives the inlined copy and the PDF from it, so the
+overrun reaches all three.
+
+**`architecture/platform-views/18-egress-paths.html`, the destination boxes.**
+Lines 160 and 165–167 are 9px monospace sublabels centred in 224px boxes (`a
+remote vector backend` from x=548, `the LLM endpoint` from x=848), 47, 48, 48
+and 50 characters long. At a 0.6em advance they measure 254–270px, and at
+Consolas' narrower 0.55em 233–248px, so every estimate crosses its box's
+stroke on both sides.
+
+**No gate measures it.** `platform-views/check.py` checks rect geometry,
+connectors and label masks, never text extent, and `build.sh --check` compares
+derived bytes. Both pass these files.
+
+**Fix shape.** Shorten or wrap the five lines in their source files and re-run
+`build.sh` for `layers.svg`. Add an estimated-extent check: in `check.py`,
+monospace at a declared advance and sans from a metrics table, measured against
+the node rect the label sits in (the `rx` discriminator already separates a
+node from a zone); in `build.sh --check`, every `<text>` against its viewBox.
+
+**Gate and counterfactual.** Premise probe before any clean result: an
+overlong fixture label inside a node fails, and an exemplar label verified by
+eye passes — `check.py`'s own calibration rule. Counterfactual: the new check
+on the current tree fails naming exactly these lines, and passes once they are
+relabelled. Residual, stated: an estimate cannot see font fallback or kerning,
+so a label within a few pixels of its bound stays a judgement for a rendered
+page.
+
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 
 Code comments and documents across this tree cite ids of the form
 `ROADMAP <letter><number>`: **A** (audit findings), **C** (the completeness
-audit), **R** (read-only-posture residuals), **U** (at-rest units), **O**
-(open work after 1.0.0). Most of the ids cited across the tree resolve to no
-heading here, which reads as rot and is not: **an `A`/`C`/`R`/`U` entry
-lives in this file only while the item is OPEN.** (Count them yourself if
-you need to — `grep -rhoE 'ROADMAP [ACRUO][0-9]+' . | sort -u`. The first
-draft of this paragraph put the number in prose, which is the exact thing
-this file tells you not to trust, and it was wrong twice over.) When it closes, the entry leaves — the file is a list of work, not
-an archive — and the narrative moves to the CHANGELOG section of the release
-that closed it.
+audit), **R** (read-only-posture residuals), **U** (at-rest units), **M**
+(the `1.2.0` units — three round-four rows too large for a PATCH, and what
+closing them found), **O** (work filed after 1.0.0). Most of the ids
+cited across the tree resolve to no heading here, which reads as rot and is
+not: **an `A`/`C`/`R`/`U` entry lives in this file only while the item is
+OPEN.** (Count them yourself if you need to — `grep -rhoE 'ROADMAP [ACRUMO][0-9]+' . | sort -u`.
+The first draft of this paragraph put the number in prose, which is the exact
+thing this file tells you not to trust, and it was wrong twice over.) When it
+closes, the entry leaves — for those four letters the file is a list of work,
+not an archive — and the narrative moves to the CHANGELOG section of the
+release that closed it. **`M` and `O` are the exception**: a closed entry
+that has a heading keeps it — since O101 (2026-09-06), under the release that
+shipped it, or under `Unversioned` for a decision no release carries. Not every
+one was given a heading — most `M` ids past M25 have none and are narrated in
+CHANGELOG — so the CHANGELOG search below stays the fallback for any letter.
 
 So a citation is a **breadcrumb into the history, not a pointer to a
 heading**, and the authoritative description of any closed item is the
 comment at the citation site itself, which is written to stand alone. If you
 are following one and want more, search CHANGELOG.md for the id.
+
+**For the ids below that search finds nothing, and the citation site is the
+whole record.** Checked 2026-09-14 with `git grep -w` over the tracked tree:
+each appeared in code comments or test headings and, before this table, in no
+document — not this file, not CHANGELOG. They closed inside units whose commit messages name the
+unit rather than the id, so the site's own words are the description and the
+commit, found by `git log -S` on those words, is where the diff lives:
+
+| id | cited at | what the site says | first cited in |
+|---|---|---|---|
+| `A11` | `undercroft-store` `kg.rs` (tests) | the graph is a content path, and it is screened | `4a4ef2c`, 2026-08-05 |
+| `A14` | `undercroft-store` `lib.rs` (tests) | `meta.filed_at`, the retention and recency clock, was chosen by the import payload | `4a4ef2c`, 2026-08-05 |
+| `A15` | `undercroft-store` `lib.rs` (tests) | named only for its "native half", which the site describes together with `A25`; no tracked text describes the rest | `4a4ef2c`, 2026-08-05 |
+| `A18` | `undercroft-store` `kg.rs` (tests) | entity rows are writes: they append a chain record, and `verify` walks them | `4a4ef2c`, 2026-08-05 |
+| `A20` | `pqidx.rs`, `fdeidx.rs`, `latestage.rs` | a codebook and the rows it recodes commit in one transaction, not one fsync per row | `4a4ef2c`, 2026-08-05 |
+| `A22` | CLI `main.rs` and `tenant.rs` (tests), orchestrator `main.rs` | an integrity verdict found at open exits as one on every command, not only the checking ones; `rotate`'s `/v1` error classes | `4a4ef2c`, 2026-08-05 |
+| `A24` | CLI `tenant.rs` (tests) | the import attestation | `4a4ef2c`, 2026-08-05 |
+| `A25` | `undercroft-store` `lib.rs` (tests) | an import took the payload's drawer `id` verbatim, and that id is an AEAD associated-data component | `4a4ef2c`, 2026-08-05 |
+| `A27` | `latestage.rs` | the token codebook's training draw is capped per source | `4a4ef2c`, 2026-08-05 |
+| `U2` | `undercroft-store` `rotate.rs` (tests) | the no-moved-reference gate covers `canonical_key` and the two policy tables | `55af8d1`, 2026-08-06 |
+| `U3` | `undercroft-store` `kg.rs` (tests) | an offline relabel of an audit row fails `verify` | `55af8d1`, 2026-08-06 |
+| `U6` | `undercroft-store` `kg.rs` | the migration's completion marker is written after the `VACUUM` | `55af8d1`, 2026-08-06 |
+| `U7` | `undercroft-store` `kg.rs` | the marker is withheld while any row is pending, and the pending rows are reported | `55af8d1`, 2026-08-06 |
+
+"First cited in" is what `git log -S` answers, and it is not proof of closure:
+`4a4ef2c` is titled as closing every open audit item and `55af8d1` as the U12
+unit, which is the evidence the column rests on. An id cited later that no
+document describes gets a row here in the same unit.
 
 Two consequences, both binding:
 
@@ -13557,7 +15102,7 @@ Two consequences, both binding:
   whose whole content is "see ROADMAP C14" tells a future reader nothing
   once C14 closes.
 - **A newly OPENED item gets a heading here**, so an open item is always
-  resolvable. That is what the `O` entries below are.
+  resolvable. That is what the entries under `## Open` above are.
 
 ---
 
@@ -13615,6 +15160,155 @@ falls in and confirmed against the CHANGELOG; the still-open, releasable O23
 went to the `Open` section above. The rule this leaves, stated once: **a
 closed entry lives under the release that carried it; an open releasable
 entry lives in `Open`; only what a release cannot contain lives here.**
+
+### O173 — CLOSED by doctrine 2026-09-14: where the reading runs out, a ruling panel decides, and the ruling is written into the entry that owns it
+
+**The maintainer, 2026-09-14, verbatim:** *"fanout specialized agents in Agentic
+memory for the options that require ruling, and if there was an exiting ruling
+then follow it if it was best practice otherwise revise it and refute it first,
+no need to keep repeating the same questions at every new session"*.
+
+**What it replaces, and what it keeps.** M11 (closed by doctrine, 2026-08-20)
+set the order — read the architecture files and folders, read the doctrine,
+read the code, and follow them where they answer — and ended where they do
+not in "write the options out with their trade-offs and ask". The grounding
+half and its corollary (an option list assembled without the reading is a
+guess wearing a question mark) stand word for word. Only the terminal ask step
+is replaced, and the maintainer replaced it. The instruction lived in the
+session agent's auto-memory, outside the repository, which a fresh clone,
+another machine or a cloud session never carries; `CLAUDE.md` is the injected
+binding text every subagent inherits, so the doctrine lands in its role
+section's grounding bullet. Filed as a closed-by-doctrine entry: it changes how
+work is decided, not what the tree does.
+
+#### RULED 2026-09-14 by a three-lens panel plus an adversarial refuter
+
+**Prior ruling found and judged.** M11's grounding half is best practice and is
+FOLLOWED. Its ask step is superseded by the owner's own instruction, so no
+panel is deviating from a ruling on taste. A second, implicit prior ruling — the
+2026-09-13 practice, recorded in the handover, of running a refuter only on the
+cluster that did not converge — is REFUTED by two failures of convergence
+without one: O38 passed three lenses 3/3 on a false figure, and O160's record,
+from a review whose lenses converged with no refuter, calls `http.rs`'s inline
+three-literal host comparison "a byte-identical inline copy" of
+`undercroft_config::addr_is_loopback`, which splits at the last colon and so
+answers false for `::1`, where the engine's check answers true. The 2026-09-13
+fleet's own rulings (O157, O160, O161) were merged through pull requests
+#181–#183, so they were ratified at the permission step and stand.
+
+**The rule, in four determinations.**
+
+1. **The minimum panel is three lens agents plus an adversarial refuter on
+   EVERY ruling.** Each lens holds this project's role, one is always Agentic
+   Memory Architecture and the others are chosen by what the question moves;
+   one written brief, read-only, no sight of each other's answers. The refuter
+   verifies every load-bearing claim by reading code, finds and judges any
+   prior ruling, re-measures a figure the verdict contradicts, reports what is
+   wrong in the brief and says what would make the verdict fail silently. By
+   the panel's reading every recorded panel ran at least three non-refuter
+   perspectives (O112, O113, O137, the 2026-09-13 fleet), so a minimum of two
+   would permit a panel weaker than any that earned the rule. A split is
+   settled by evidence, never by vote; where only execution can settle it, the
+   panel names the probe and the integrator runs it (O157's
+   `required-features` probe). Builds, tests and the battery never belong to a
+   panel.
+2. **The lookup comes before convening**: a case-insensitive search for
+   `rul(ed|ing)` inside the owning entry and every entry it names, because the
+   tree writes rulings as `#### RULED` subsections, bold lines such as
+   `**RULED 2026-09-12: option (1)**` and `**RULED A by the maintainer**`,
+   `RULED AND FIXED`, and prose such as "The maintainer ruled option (b)" or
+   "The ruling (maintainer, 2026-09-08)".
+3. **Scope.** A panel rules design and engineering questions the tree and best
+   practice can settle, and grants no permission, because no agent's verdict is
+   the maintainer's consent: commits, pushes, opening or merging a pull request,
+   tags and releases, launching a long or benchmark run, and any outward-facing
+   or irreversible change stay asked for. Escalated to the maintainer with the
+   panel's analysis attached: a product, business, licence or naming choice,
+   including what a surface offers (O66's three readings were the
+   maintainer's); a question the refuter says neither the tree nor best
+   practice settles; and any verdict overturning a maintainer ruling on such a
+   choice. A maintainer's DESIGN ruling is a prior ruling like any other —
+   followed if best practice, otherwise refuted and revised in the pull request
+   the maintainer approves. A change to `CLAUDE.md` is ruled the same way and
+   lands only through that approval.
+4. **The record** is a `#### RULED <yyyy-mm-dd> by <authority>` subsection in
+   the ROADMAP entry that owns the question: the question; the prior ruling
+   found, or the search that found none, and its disposition; each option with
+   its cost and why it lost; the claims refuted, the brief's included; any
+   probe run; dissent; and what remains. A question with no entry gets one
+   first — under `Open` if it is work, here with its roster row if it is a pure
+   decision. A ruling that lives only in a handover, auto-memory, a commit
+   message or a transcript has not been recorded: O135's lives only in the
+   handover, and its entry reads unruled. O169, O170, O171 and O172 are the
+   rule's first records.
+
+**Lineage.** M11 (2026-08-20); the analyses behind O112, O113 and O137/O138
+(2026-09-09 to 2026-09-10); the 2026-09-12 panel over O134, O135 and O140; the
+2026-09-13 fleet over O157, O160 and O161; the 2026-09-14 panel whose rulings
+are O169–O173.
+
+**Rejected:**
+
+- *Leave `CLAUDE.md` unchanged and treat the auto-memory instruction as a
+  standing override* — two injected sources would contradict each other in
+  every session, the losing one being the text subagents receive.
+- *Codify it unscoped* ("a panel rules; only product choices escalate") —
+  silent on permission acts, while the release flow requires explicit
+  maintainer approval and no agent's verdict is consent.
+- *A minimum of two lenses* — below every recorded panel; a 2/2 agreement is
+  the smallest possible convergence.
+- *A refuter only when the lenses split* — refuted above by O38 and O160.
+- *A preflight arm requiring every `#### RULED` line to carry a date and an
+  authority* — that heading form is a small minority of the tree's ruling
+  records, and a format gate cannot see the failure that matters: a ruling
+  never written into the tracked file.
+- *Record rulings in the `.handover/` panel directories* — gitignored, so a
+  fresh clone has none of them.
+- *The lookup `^#### RULED|\*\*RULED [0-9]|[Rr]uled (by|on) `* — misses
+  `RULED A by`, `RULED AND FIXED`, "The ruling (maintainer" and "was RULED"; a
+  lookup that misses a ruling re-asks it.
+
+**No new gate, and that is a decision with its argument.** Re-asking a settled
+question moves no text a gate can read, and the one textual convention covers
+too few of the tree's ruling records to be a population. The existing gates this
+entry meets: `UNVERSIONED_CLOSED` names it, counted both ways, so omitting the
+row fails `closed-under-unversioned` and a row without this entry fails too;
+`closure-without-a-date` accepts `CLOSED by doctrine`; and the `prose figures`
+preflight gates O47's heading figures, which this unit's headings move.
+
+**Backwards test**, the panel's. It CONFIRMS the drift-direction doctrine, the
+impact-analysis rule and O24, where the reading answered and nothing needed
+ruling. It CONFIRMS the panels on O113 and O137/O138 and the 2026-09-12 panel
+over O134, O135 and O140, each determined rather than chosen and ratified by
+the maintainer; O112 as the escalation path, a naming question determined by
+agents and ruled by the maintainer; and the 2026-09-13 fleet, each ruling
+merged through a pull request the maintainer approved. It RECLASSIFIES the ask
+step of M6 and M11 as a panel's step without moving either decision; the
+maintainer's design rulings on O131, O138's re-scope, O154 and O155 as
+questions a panel could now answer, their verdicts standing as prior rulings;
+and the 2026-09-13 refuter-only-on-a-split practice as short of the minimum. It
+still RECLASSIFIES the M9/M10 scoping and the `tls-pins` repair as wrong,
+because acting and then reporting is not a panel. It does not touch O5, O6,
+O37, O66, the house-tile ruling or any commit or push. Its history is those
+panels, all between 2026-09-09 and 2026-09-14; the minimum of three is grounded
+in that practice, not in any measured comparison against two, and this is its
+first application as binding text.
+
+**Residuals, stated.**
+
+- Re-asking a ruled question stays undetectable by any gate; the mechanism is
+  the lookup step and the tracked record.
+- A panel's quality — whether the refuter really read the code — is
+  unverifiable by a gate; the recorded refuted claims are the only evidence,
+  which is why the record must carry them.
+- O155's ruling and M6 name no authority in the tracked file; the rule applies
+  forward, and neither question is open.
+- **Owed with this doctrine and not written in this entry**: the panel's spec
+  also lifts O135's 2026-09-12 ruling into O135 and appends a dated
+  supersession line to M11. The O135 lift must be written from the gitignored
+  `.handover/panel-o134-o135-o140-2026-09-12/` output (`O135-analyses.json`,
+  `O135-refute.json`), not from a summary; until it is, O135 reads unruled, and
+  if that directory is lost first the ruling is lost with it.
 
 ### O158 — CLOSED 2026-09-13 as NOT A DEFECT: clap refuses the empty path, and the real gap was one variable over
 
@@ -13840,11 +15534,11 @@ by reading the code each remaining fix would touch rather than the entries.
 | item | the files its diff touches |
 |---|---|
 | **O14** | **CLOSED.** Touched exactly what this row predicted, plus two the pass did not: `undercroft-store/src/forget.rs` (the signature defect it surfaced) and `docs/MULTI_TENANCY.md`. A diff-level map narrows the search; it does not replace reading the code you are about to change |
-| **O19** | `undercroft-store/src/lib.rs` — the scope match at `search_inner`, and nothing else |
+| **O19** | **CLOSED 2026-08-13.** `undercroft-store/src/lib.rs` — the scope match at `search_inner`, and nothing else |
 | **O26** | `tests/no-trace/verify.py` · `tests/battery.sh` — **CLOSED** |
-| **O7** | `undercroft-vault/src/lib.rs` + 5 more files under `crates/` (39 sites), `tests/` (11), `deploy/` (1), `docs/` (4), plus website/architecture/root prose. Re-measured; the entry's figures are exact |
+| **O7** | **CLOSED 2026-09-07**, in MINOR `1.5.0` with a compat path. `undercroft-vault/src/lib.rs` + 5 more files under `crates/` (39 sites), `tests/` (11), `deploy/` (1), `docs/` (4), plus website/architecture/root prose. Re-measured; the entry's figures are exact |
 | **O6** | none in the tree |
-| **O29** | `undercroft-store/src/manage.rs` (`create_tunnel`), the screened-field inventory, and a sweep for sibling free-text fields outside `drawers` and the graph |
+| **O29** | **CLOSED 2026-08-13.** `undercroft-store/src/manage.rs` (`create_tunnel`), the screened-field inventory, and a sweep for sibling free-text fields outside `drawers` and the graph |
 | **O27** | **CLOSED.** `tests/battery.sh` only — the summary reader and its host-side preflight, exactly as this row predicted |
 | **O28** | **CLOSED.** `tests/battery.sh` (inventory + preflight + post-run check) and the one stale figure it found, `docs/MULTI_TENANCY.md` |
 
@@ -13876,6 +15570,12 @@ The general shape, since it recurs: an entry-level map answers *which item do
 I take next*, and a diff-level map answers *what does taking it actually
 touch*. The second is where a filed gate turns out to be incomplete, and a
 gate that is incomplete is the failure this project pays for most.
+
+**The paragraphs from here down to `O1` are a status record from 2026-08-09
+to 2026-08-11, absorbed into this section and kept as written — except the
+closing pointer to the round-three audit, re-pointed on 2026-09-14 because it
+named a heading this file does not have. They are not a statement of what is
+open now; an item's current status is in its own heading.**
 
 Nothing here is broken. Each is a decision or a gap with a known shape, and
 "accepted" is not a resting state — so each has what would close it.
@@ -13978,7 +15678,7 @@ inside `isError: false`; `migrate` with no exit-code doctrine; `WRITE_TOOLS`
 failing OPEN; and the doc claims. Each is closed with a test that was run
 against the reverted code and observed to fail — see CHANGELOG, "the
 merge-blocker list is empty". What the round-three audit found in those fixes,
-and what it found fresh, is above under **OPEN after the round-three audit**.
+and what it found fresh, is above under **The round-three audit — T1–T15, ALL CLOSED 2026-08-09**.
 
 ### O1 — CLOSED 2026-08-10: binaries shipped and the image is public
 The `v1.0.0` release workflow completed successfully and **20 assets** are
@@ -14567,7 +16267,7 @@ release with the usual battery + measured gates.
 
 ### Phase C1 — prove it (weeks, mostly bench + writing)
 
-- **C1.1 Head-to-head benchmark publication.** Run mem0 (local/
+- **C1.1 Head-to-head benchmark publication (PARTIAL — docs/BENCHMARKS_VS.md, the landing link and `undercroft-bench vs` with mem0 + Supermemory adapters shipped, mem0 measured on the full LoCoMo corpus; Zep/Graphiti and Letta adapters not built).** Run mem0 (local/
   OpenMemory), Zep/Graphiti self-hosted, Letta, and Supermemory's
   local binary against undercroft on the harnesses `undercroft-bench`
   already carries (LongMemEval, LoCoMo, ConvoMem, MemBench) —
@@ -14834,8 +16534,7 @@ release with the usual battery + measured gates.
 
 Sequencing note: C1 needs no code beyond bench runners and can start
 immediately; C2 items are independent of each other; C3.1 depends on
-nothing but benefits from C1.1's baselines; scale items 4–6 above
-(FDE pages, reembed, backup/DR) interleave on their own triggers.
+nothing but benefits from C1.1's baselines.
 
 ---
 

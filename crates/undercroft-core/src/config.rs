@@ -272,9 +272,9 @@ pub fn one_of(
 /// stored per drawer.
 ///
 /// **Why this warns rather than deriving an identity from the model file.**
-/// Deriving one would be correct and is filed for `2.0.0`: every existing
-/// vault has `"onnx-sentence"` recorded, so a derived identity turns the next
-/// start-up into `EmbedderMismatch` and demands an explicit
+/// Deriving one would be correct and is filed for `2.0.0` as ROADMAP O163:
+/// every existing vault has `"onnx-sentence"` recorded, so a derived identity
+/// turns the next start-up into `EmbedderMismatch` and demands an explicit
 /// `UNDERCROFT_FORCE_EMBEDDER=1` plus `repair` from deployments that changed
 /// nothing. That is *"a default that changes what is retrievable"* — MAJOR by
 /// this project's own test — and shipping it in a patch would be exactly the
@@ -309,9 +309,9 @@ pub fn undeclared_model_identity(var: &str, shared_default: &str, model_path: &s
 /// vaults and gates `EmbedderMismatch`, so moving it is *"a documented value
 /// that stops being accepted"* — MAJOR by this file's own test. What `#27`
 /// actually asks for — an identity DERIVED from the model rather than from a
-/// constant — is filed for 2.0.0 with that argument, and `CLAUDE.md` forbids
-/// half-landing a change to an id recipe. This closes the duplication and
-/// says plainly that it does not close the cause.
+/// constant — is filed for 2.0.0 as ROADMAP O163 with that argument, and
+/// `CLAUDE.md` forbids half-landing a change to an id recipe. This closes the
+/// duplication and says plainly that it does not close the cause.
 pub const SHARED_MODEL_IDENTITY: &str = "onnx-sentence";
 
 /// Likewise for the reranker and the ColBERT encoder, which share the same

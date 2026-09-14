@@ -1,6 +1,6 @@
 # Undercroft auto-save daemon — sweeps agent transcripts into a vault.
 #
-#   sudo cp deploy/undercroft-daemon.service /etc/systemd/system/
+#   mkdir -p ~/.config/systemd/user && cp deploy/undercroft-daemon.service ~/.config/systemd/user/
 #   systemctl --user daemon-reload && systemctl --user enable --now undercroft-daemon
 #
 # Runs as a user service so it can read ~/.claude/projects.

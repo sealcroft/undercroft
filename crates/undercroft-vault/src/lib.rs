@@ -1125,10 +1125,13 @@ fn decompress_frame(framed: &[u8]) -> Result<Vec<u8>, VaultError> {
     }
 }
 
-/// Quantized-embedding frame: `[0x02, 'Q', scale f32 LE, i8 * dim]`.
-/// Standard embedder dims are multiples of 128, so the frame length
-/// (6 + dim) is never divisible by 4 — legacy f32 blobs (4 * dim) can't
-/// collide with it.
+/// Quantized-embedding frame: `[0x02, 'Q', scale f32 LE, i8 * dim]`, told
+/// from a legacy f32 blob (4 * dim bytes, always a multiple of four) by its
+/// magic and by its length NOT being a multiple of four. That holds for every
+/// dim except those ≡ 2 (mod 4), where 6 + dim IS a multiple of four and the
+/// frame misreads as (6 + dim) / 4 floats with no error — pinned by
+/// `a_dimension_two_mod_four_reads_back_as_the_wrong_vector` below, and
+/// refused at the store's write choke point (ROADMAP O123).
 const EMB_MAGIC0: u8 = 0x02;
 const EMB_MAGIC1: u8 = b'Q';
 

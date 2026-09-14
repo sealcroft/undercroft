@@ -16,7 +16,8 @@ capability: the defect was the silence. What it carries, in four groups.
 **Every model role now counts what it used to swallow (O122, O131)**: a
 failed embed degraded to a zero vector and a failed rerank to `0.0` — which
 SINKS a candidate, since `0.0` is also what a genuinely irrelevant passage
-scores — across six sites in three roles, none of them counted anywhere.
+scores — across nine reachable degrade arms in six backends and three roles
+(O134a's count), none of them counted anywhere.
 Three counters, four renderers, three alerts. **Two paths nobody had measured
 were the expensive ones (O138)**: `export --to` held the corpus THREE times
 and `import` FIVE, measuring **3.02x** and **4.49x** on a 467.7 MB export —
@@ -36,11 +37,14 @@ bound, an RFC 3339 `created_at`. **O137 is SUPERSEDED here rather than
 built**: it asked for a chunked bundle format and a four-agent fanout refuted
 three of its claims, so what survives is filed as O143 and O144 with honest
 scope, and the entry is kept because the reasoning error is the lesson.
-**The tree carries `1.5.2` only
-once the release PR merges; the TAG is a separate, explicit step** — a build
-reporting a version it was never tagged as is worse than one reporting the
-last release. `main` is branch
-protected on both repos: force pushes and deletions blocked, admins exempt.
+**The tree carried `1.5.2` only
+once the release PR merged (#170, tagged `v1.5.2` at `f490fd6`); the TAG stays
+a separate, explicit step for every release** — a build reporting a version it
+was never tagged as is worse than one reporting the last release. `main` is
+branch protected on both repos: force pushes and deletions blocked — GitHub
+applies both to administrators too — and `CI verdict` is a required check on
+this one; `enforce_admins` is off, which lets an administrator merge past that
+check, not force push.
 Forking cannot be disabled while the repos are public, and they must stay
 public — GitHub Free will not serve Pages from a private repo.
 
@@ -81,26 +85,95 @@ Consequences that are binding, not advisory:
   could fail *silently*, plan it, prove it, then present the diff.
 - **GROUND THE DECISION BEFORE ACTING — the doctrine is the first place to
   look, not the last.** The order is: read the architecture files and folders,
-  read this doctrine, read the code. If they answer the question, **follow
-  them** — that is not a decision to narrate, it is the standard, and asking
-  about it wastes the maintainer's attention. If they do NOT answer it, do not
-  fall back on your own judgement and report afterwards: **write the options
-  out with their trade-offs and ask.** The failure this forbids is acting from
-  taste and then informing — "I did X, here is why", which hands the
-  maintainer a fait accompli dressed as a status update, and which they have
-  had to correct.
-  The corollary is that "I asked first" is not automatically compliance
-  either: an option list assembled without reading the arch files and the code
-  is a guess wearing a question mark, and it pushes the grounding work onto
-  the person answering. Do the reading, THEN present options — and present
-  them only where the reading genuinely ran out.
+  read this doctrine, read the code, **and look for a ruling already made** —
+  search `ROADMAP.md` case-insensitively for `rul(ed|ing)` inside the entry
+  that owns the question and inside every entry it names, because rulings here
+  are written as `#### RULED` subsections, bold `**RULED …**` lines and plain
+  prose alike. If they answer the question, **follow them** — that is not a
+  decision to narrate, it is the standard. If they do NOT answer it, do not
+  fall back on your own judgement and report afterwards ("I did X, here is
+  why" hands the maintainer a fait accompli dressed as a status update), and
+  do not hand the maintainer an option list either: **a ruling panel decides
+  it** (ROADMAP O173). The maintainer, 2026-09-14, verbatim: *"fanout
+  specialized agents in Agentic memory for the options that require ruling,
+  and if there was an exiting ruling then follow it if it was best practice
+  otherwise revise it and refute it first, no need to keep repeating the same
+  questions at every new session"*.
+  **The minimum panel.** At least THREE lens agents, each holding this role,
+  one of them always Agentic Memory Architecture and the others chosen by
+  what the question moves; one written brief; read-only; no sight of each
+  other's answers. **Plus an adversarial refuter on EVERY ruling, not only
+  when the lenses split**: it verifies every load-bearing claim in the lenses
+  and the brief by reading code, finds and judges any prior ruling,
+  re-measures any figure the verdict contradicts, reports what is wrong in
+  the brief, and says what would make the verdict fail silently. Convergence
+  is not correctness: O38 passed three lenses 3/3 on a false figure, and
+  O160's record, from a review with three converging lenses and no refuter,
+  called an inline three-literal comparison a byte-identical copy of a
+  function that answers differently for `::1`. A split is settled by
+  evidence, never by vote; where only execution can settle it, the panel
+  names the probe and the integrator runs it (O157's `required-features`
+  probe). Builds, tests and the battery never belong to a panel (the fan-out
+  rule below).
+  **A prior ruling is FOLLOWED when it is best practice.** Otherwise the panel
+  REFUTES it with evidence first, recorded beside it, and only then revises
+  it — never deviated from on taste, never deleted in place of its revision
+  (O137, on the O24a precedent). A question with a recorded ruling is not
+  asked again, of the maintainer or of another panel, unless new evidence
+  contradicts the ruling.
+  **Record every ruling where the next session looks**: a
+  `#### RULED <yyyy-mm-dd> by <the maintainer | the lenses it ran, and the refuter>`
+  subsection in the ROADMAP entry that owns the question. It carries the
+  question; the prior ruling found, or the search that found none, and its
+  disposition; each option with its cost and why it lost; the claims refuted,
+  including the brief's; any probe run; dissent; and what remains. A question
+  with no entry gets one first — under `## Open` if it is work, under
+  `## Unversioned` with its `UNVERSIONED_CLOSED` row if it is a pure
+  decision. A panel's working directory is material, never the record, and a
+  ruling that lives only in a handover, auto-memory, a commit message or a
+  transcript has not been recorded — O135's was written only into the
+  handover, and its entry still read unruled when this rule was written.
+  **What a panel does not decide.** A panel rules design and engineering
+  questions the tree and best practice can settle. It grants no permission,
+  because no agent's verdict is the maintainer's consent: commits, pushes,
+  opening or merging a pull request, tags and releases, launching a benchmark
+  or long run, and any outward-facing or irreversible change (the house page,
+  a GitHub or Pages setting, a published image) are asked for exactly as
+  before. **Escalated to the maintainer with the panel's analysis attached**:
+  a product, business, licence or naming choice, including what a surface
+  offers (O66's three readings were the maintainer's); a question the refuter
+  states neither the tree nor best practice settles; and any verdict that
+  would overturn a ruling the maintainer made on such a choice. A
+  maintainer's DESIGN ruling is a prior ruling like any other — followed if
+  best practice, otherwise refuted and revised in the open, in the pull
+  request the maintainer approves. A change to THIS FILE is ruled the same
+  way and lands only through that approval, because this file's worst
+  doctrine errors were caught by the maintainer and not by a gate.
+  The corollary survives the change: a brief assembled without the reading is
+  a guess wearing a question mark and pushes the grounding onto the panel. Do
+  the reading, THEN convene, and only where the reading genuinely ran out.
+  No gate sees this rule broken — re-asking a settled question moves no text
+  a gate can read — so the lookup and the tracked record are the whole
+  mechanism.
   Applied backwards, as a rule here must be: it CONFIRMS the drift-direction
-  doctrine (provenance decides, and provenance lives in those files), the
-  impact-analysis rule above, and O24, whose whole lesson was that reading the
-  inventory the command already iterates was all it took. It RECLASSIFIES the
-  M9/M10 scoping and the `tls-pins` repair, both of which were chosen and then
-  reported rather than grounded and stated. It does not reclassify M6, which
-  was put as an explicit option and ruled on — that one is the shape to copy.
+  doctrine, the impact-analysis rule and O24, where the reading answered and
+  nothing needed ruling. It CONFIRMS the panels on O113 and O137/O138 and the
+  2026-09-12 panel over O134, O135 and O140, each determined rather than
+  chosen and ratified by the maintainer. It also CONFIRMS O112 as the
+  escalation path, a naming question determined by agents and ruled by the
+  maintainer, and the 2026-09-13 fleet over O157, O160 and O161, each merged
+  through a pull request the maintainer approved. It RECLASSIFIES the ask step
+  of M6 and M11 as a panel's step without moving either decision. It
+  RECLASSIFIES the maintainer's design rulings on O131, O138's re-scope, O154
+  and O155 as questions a panel could now answer, their verdicts standing as
+  prior rulings, and the 2026-09-13 practice of a refuter only on a split as
+  short of the minimum. It still RECLASSIFIES the M9/M10 scoping and the
+  `tls-pins` repair as wrong, because acting and then reporting is not a
+  panel. It does not touch O5, O6, O37, O66, the house-tile ruling or any
+  commit or push. Its history is those panels, all between 2026-09-09 and
+  2026-09-14, the minimum of three is grounded in that practice rather than
+  in any measured comparison against two, and this is its first application
+  as binding text.
 - **A gap is a gap** — never dressed up as a principled refusal.
 - **A RULE written into this file gets the same scrutiny as code, and the
   test is the same one: apply it backwards.** Before a doctrine lands here,
@@ -145,8 +218,11 @@ Consequences that are binding, not advisory:
   applied to stored bytes — the promise is verbatim and NORMALIZE_VERSION is
   inside the drawer id, so folding on the write path would move every future
   id; used by `fingerprint()` — i.e. **dedup**, which is why folding cannot go
-  here: `中國` and `中国` must not become one drawer. **No tokenizer uses it
-  any more**; they use `search_key`), the retrieval fold (`search_key` — NFC,
+  here: `中國` and `中国` must not become one drawer. **No retrieval tokenizer
+  folds with it any more** — they fold with `search_key`, whose first
+  non-ASCII step is `match_key`, and the date scanner compares its tokens
+  through it; neither moves it off NFC, because dedup keys on it), the
+  retrieval fold (`search_key` — NFC,
   scoped compatibility expansion, recompose, lowercase, mark strip, letter
   map, in that order: lowercase must precede the strip because `İ` is not a
   mark and lowercasing is what *manufactures* the U+0307 the strip removes,
@@ -200,7 +276,12 @@ Consequences that are binding, not advisory:
   `KNOWN_EMBEDDER_UPGRADES` (both v1→v3 and v2→v3 — v2 shipped in no tag but
   existed on the branch, and without its row such a vault matches on name,
   returns early, and keeps vectors from a different token space silently), since a user
-  who merely upgraded the binary did not choose a new vector space. Embeddings
+  who merely upgraded the binary did not choose a new vector space. One known
+  exception, stated in the code beside that table: the Hebrew reclassification
+  above moved Hebrew's tokens inside v3 with no v4 row, so a vault already
+  holding Hebrew keeps a stale cosine leg until `UNDERCROFT_FORCE_EMBEDDER=1` +
+  `repair` — its lexical channels are read live and correct, and the fix is a
+  v4 row at 45.9 µs/drawer, filed open as ROADMAP O166. Embeddings
   are not HMAC-covered, so a re-embed never touches a drawer tag or the audit
   chain — which is why this is not a rotation. The walk is batched, idempotent,
   and records the new identity **last**, so a crash mid-walk just repeats it;
@@ -210,7 +291,8 @@ Consequences that are binding, not advisory:
   too, which is worse than a stale vector on a row that already fails every
   read. `UNDERCROFT_FORCE_EMBEDDER=1` is checked **before** the migration
   branch or it would be dead code for the one transition that can fail, and
-  `open_read_only` (used by `serve --read-only`) warns instead of writing.
+  `open_read_only` (used by `serve-mcp --read-only` and
+  `serve-http --read-only`) warns instead of writing.
   A swap to or from a *model* embedder stays manual —
   `UNDERCROFT_FORCE_EMBEDDER=1` + `repair`), grounding (`support.rs`:
   `Support`/`Span`/`Grounding` —
@@ -345,7 +427,13 @@ Consequences that are binding, not advisory:
 - `crates/undercroft-store` — per-vault SQLite storage, hybrid search (cosine +
   BM25 fusion; `SearchHit` carries **three** lexical channels — `lexical_exact`
   (the drawer said the word) and `lexical_morph` (it holds a word built on it —
-  today only `contains_a_long_word`) both **admit** via `hits.retain`, kept
+  every pairwise relation `morph_relation` admits: whole-word containment
+  (`shares_a_stem`, then plain containment once the shorter word reaches a
+  per-script floor — 3 in the non-delimiting scripts, 8 in the delimiting
+  ones, 8 being the threshold `contains_a_long_word` measured; Han takes no
+  morph rule at all), the Arabic/Hebrew consonant skeleton,
+  `ar_root_family`, `IRREGULAR`, `suffix_family`, the per-language inflection
+  tables, and Greek's prefix family) both **admit** via `hits.retain`, kept
   apart so a caller can tell the two claims from each other; `lexical` ranks and
   discounts both morph and approximate evidence at half weight, capped at one
   per query slot. On `Fusion::Legacy` and the remote path `lexical_morph` is 0
@@ -398,7 +486,8 @@ Consequences that are binding, not advisory:
   `-er` is
   German-only via `MorphLang` on `SearchOptions` (`suffixes_for`), fed by the
   request's existing `language` — ONE declaration, two consumers: the date
-  scanner (en/ar) and morphology (en/de). For English `-er` admits
+  scanner (en/ar) and morphology (the thirteen `MorphLang::CODES`). For
+  English `-er` admits
   `flow`/`flower`, `corn`/`corner`, `butt`/`butter`; declared German it takes
   `Kind`/`Kinder`, `Haus`/`Häuser`, `Buch`/`Bücher` and German goes 50%→**100%**,
   all on the lexical channel. **Declared FIRST, then detected** — this line
@@ -477,8 +566,9 @@ Consequences that are binding, not advisory:
   `room` was a plain `WHERE` over globally generated
   candidates — the wing defect with no tier and no fallback — and the FTS
   prefilter shared the shape (both were recorded gaps, both closed
-  2026-08-02). A scope that fits the hydration budget (`max(256,
-  depth·32)`) drops the prefilter and is scanned exactly; a larger one
+  2026-08-02). A narrowing scope that fits the exact-scan ceiling
+  (`max(hydrate_k, SCOPE_HYDRATE_FLOOR)` = `max(256, depth·32, 1024)`) drops
+  the prefilter and is scanned exactly; a larger one
   gets membership-filtered candidates (PQ/wing-PQ/FDE filter during
   selection and widen when a probe under-delivers IN-SCOPE; FTS/HNSW
   filter their top-k and surrender to the bounded exact scan when the
@@ -609,9 +699,11 @@ Consequences that are binding, not advisory:
   **On a sealed vault the graph's WORDS are not on disk (A10, 2026-08-05)**:
   `kg_triples.subject`/`predicate` and `kg_entities.name` hold a truncated
   keyed HMAC — SQL equality, so every lookup stays indexed — and the words
-  live in sealed blobs (`terms`, `name_rest`) covered by the fact's tag
-  through a FOURTH canonical extension (0x1c), so nothing written earlier is
-  re-tagged. `triple_id`/`entity_id` are keyed too, and that is not optional:
+  live in sealed blobs — `terms`, covered by the fact's tag through a FOURTH
+  canonical extension (0x1c), and `name_rest`, covered by the entity's tag
+  through a FIFTH (0x1b, added once `name_rest` was found outside every
+  canonical) — so nothing written earlier is re-tagged.
+  `triple_id`/`entity_id` are keyed too, and that is not optional:
   they were unkeyed SHA-256 of the same words, so blinding the columns alone
   leaves a confirmation oracle for anyone with a candidate list — and a
   substring gate cannot see it, which is how this would have closed green.
@@ -661,8 +753,8 @@ Consequences that are binding, not advisory:
   entities/facts/tunnels; a receipt is RE-DERIVED at the destination from the
   drawer it just imported, never re-keyed from the traveling value — this line
   said "receipts re-key from the traveling fp" until 2026-09-09 and that
-  contradicted the U12 paragraph two bullets down, which states the mechanism
-  correctly and which the code agrees with (`kg_import` calls
+  contradicted the U12 paragraph above it in this bullet, which states the
+  mechanism correctly and which the code agrees with (`kg_import` calls
   `keyed_content_fp` over the imported source; a keyed fingerprint cannot be
   recomputed anywhere else, which is the whole reason U12 keys the DIGEST
   rather than the content). One claim, two places, and the wrong one was the
@@ -708,12 +800,12 @@ Consequences that are binding, not advisory:
   while three callers existed. The reachable door was IMPORT, never save:
   the three save surfaces validate before they reach the store.
   **`upsert_many` is the stated exception**: a batch owns its transaction,
-  so it cannot call `write_drawer` and screens through its own
-  `admission_divert` loop into `BulkOutcome{created, quarantined}` — the
-  same decision reached by a SECOND implementation, which is the shape the
-  `Screen` argument exists to prevent (ROADMAP R5: extract one
-  screen-and-divert function both paths call; the telemetry half is
-  already shared, both paths classifying through `admission::save_event`).
+  so it cannot call `write_drawer`; it screens each drawer through the same
+  `screen_and_divert(…, Screen::Apply)` into `BulkOutcome{created,
+  quarantined}` — one decision reached from both paths since R5 closed
+  2026-08-05, pinned by `admission_divert_has_exactly_one_caller`, and the
+  telemetry half is shared too, both paths classifying through
+  `admission::save_event`.
   `import_record` reports the `Landing` it receives — a diverted import
   answers `quarantined` with the id the row actually landed under, on
   every branch. **Every save arm does now (R5 closed 2026-08-05)**:
@@ -825,8 +917,9 @@ Consequences that are binding, not advisory:
   neither launder a deletion through a keyed sweep nor hide a drawer
   from its declared retention),
   management surface (manage.rs — incl. **deployment-assigned wing trust**:
-  `TRUST_VOCAB` closed vocabulary assigned by the operator only, never over
-  MCP; HMAC-tagged + audited, flip = integrity failure; consumed as a
+  `undercroft_core::TRUST_VOCAB` closed vocabulary assigned by the operator
+  only, never over MCP; HMAC-tagged + audited, flip = integrity failure;
+  consumed as a
   candidate-set floor (`min_trust`/`UNDERCROFT_TRUST_FLOOR`) through the
   scope machinery so a quarantined wing cannot crowd or starve a floored
   query; unassigned = `standard`, explicit wing scope bypasses the vault
@@ -949,7 +1042,9 @@ Consequences that are binding, not advisory:
   implementation both surfaces drive — not at each call site, which is
   why the read-only warn-and-serve reaches the CLI as well as `/v1`;
   **reads audited under `UNDERCROFT_READ_AUDIT=chain`** —
-  `audit_read` at the search_inner + remote tails covers every path, one
+  `record_read`, the one recording function every content-returning door
+  calls (the search and remote tails, get/recent/list and their siblings,
+  the KG readers), writing through `audit_read` — one
   record per READ (per search until O50/O51) with a KEYED subject
   fingerprint (never text, pinned
   by a db+WAL byte scan), scope and hit count; runs behind `&self` via
@@ -975,7 +1070,9 @@ Consequences that are binding, not advisory:
   advisory encode paths must never BEGIN or batching breaks)
 - `crates/undercroft-config` — the declaration resolvers the engine and the
   control plane SHARE (`resolve_orch_key`, `resolve_admin_token`,
-  `resolve_rate_limit`). Its own crate on `undercroft-net`'s precedent: a
+  `resolve_rate_limit`, `resolve_orch_addr`, `resolve_metrics_addr`,
+  `resolve_metrics_token`, and the `addr_is_loopback` predicate). Its own
+  crate on `undercroft-net`'s precedent: a
   policy several crates need has one implementation, and when the crates that
   need it cannot link each other it gets a home neither owns. Six surfaces
   including the doctrine promised `undercroft config check` validates every
@@ -986,7 +1083,8 @@ Consequences that are binding, not advisory:
   reading the inventory the command already iterates). **The dependency list
   is the design** — `thiserror` and `hex`, nothing else: both consumers pay
   for whatever lands here, which is why this is not in `undercroft-core`
-  (unicode normalization and a calendar library, for three string parses) and
+  (unicode normalization and a calendar library, for a handful of string
+  parses) and
   not in `undercroft-net`, whose domain is transport and which correctly
   keeps the two declaration resolvers that ARE transport (`declared_pin`,
   `declared_endpoint`)
@@ -1118,7 +1216,13 @@ Consequences that are binding, not advisory:
   export stays `inactive` forever and a panel merely looks empty, and
   nothing in the stack reports either
 - `crates/undercroft-index` — remote vector backends (Qdrant/Chroma/pgvector/
-  Milvus/Weaviate) as untrusted accelerators; sealed content only, re-verified
+  Milvus/Weaviate) as untrusted accelerators. `index push` (CLI only) uploads
+  each drawer's at-rest content blob with its embedding and wing/room labels:
+  ciphertext on a sealed vault, while on an hmac-only vault that blob IS the
+  plaintext, so the push is refused unless `index push --allow-plaintext`
+  declares it (C8). Remote results are candidate ids only, re-loaded and
+  HMAC-verified locally, and every push appends one `egress/index-push` chain
+  record — a failed push too, once any batch had already left
 - `crates/undercroft-llm` — local LLM runtimes (Ollama/OpenAI-compatible) for
   `refine` → KG extraction, **and `embed.rs`: `HttpEmbedder`**, an `Embedder`
   backed by a served model (`UNDERCROFT_EMBEDDER=http` + `UNDERCROFT_EMBED_URL`
@@ -1153,7 +1257,8 @@ Consequences that are binding, not advisory:
   server accumulating, and under `ort` process-wide across every vault
   because the multi-tenant server shares one session pool. The durable
   question — how many rows at rest carry a zero vector — has no cheap
-  answer on a sealed vault and is filed, not faked.
+  answer on a sealed vault and is not faked; O122 stated it as a residual
+  and it is filed open as ROADMAP O174.
   **The same shape held for the OTHER two model roles and cost more (O131,
   2026-09-08)**: both rerankers scored a failed pass `0.0` and both ColBERT
   encoders returned an empty matrix, each through a bare `unwrap_or`, none
@@ -1248,7 +1353,8 @@ Consequences that are binding, not advisory:
   what it happens to look at (that second half was written but never
   RUN: the check went `MCP_TOOLS → WRITE_TOOLS` only, so `WRITE_TOOLS` kept
   naming the removed authority tool and passed), and `OPERATOR_ONLY`
-  (admission/trust/retention/forget/rotate/**authority** — promotion closes
+  (admission/trust/retention/forget/rotate/**authority**/anchor/export/
+  import/refine — authority because promotion closes
   the previous canonical holder's window, so an agent that could write it
   could make its own fact the one answer `lookup_canonical` returns)
   asserts those never reach MCP,
@@ -1446,8 +1552,11 @@ Consequences that are binding, not advisory:
   "residual one percent" was eleven named questions, three of them gold no
   text matcher can reach, and a served bge-m3 reached four of the fifteen
 - `deploy/observability/` — Prometheus + Alertmanager + Loki + Tempo + Grafana
-  stack (see its README.md + RUNBOOK.md). **Every rule is aggregated `by
-  (instance)` and that is load-bearing, not cosmetic**: Alertmanager's
+  stack (see its README.md + RUNBOOK.md). **Every rule preserves `instance`
+  — aggregated `by (instance)` or by a set containing it (`(instance, le)`
+  under the latency quantile, `(instance, side)` for late-interaction
+  failures), or left unaggregated so the label survives —
+  and that is load-bearing, not cosmetic**: Alertmanager's
   inhibition scopes itself with `equal:`, and a label absent from BOTH the
   source and the target counts as EQUAL — so equalling on a label no rule
   emits does not narrow the inhibition, it makes it global. The shipped
@@ -1565,8 +1674,14 @@ Consequences that are binding, not advisory:
   the same system. **Its published COUNTS are gated** since 2026-08-31 (ROADMAP
   O74, ruled *depend on the diagrams, they represent the facts we have now*):
   a `platform-views` block in the `prose figures` preflight joins MCP tools,
-  MCP writes, `/v1` routes, CLI operations, the crate count and — since O155 —
-  the `ENGINE_ENV_VARS` cross-tab on both axes to the tree, both arms probed.
+  MCP writes, `/v1` routes, CLI operations, the crate count; since the
+  2026-09-14 drift sweep, the set's own diagram count and
+  `20-verification-pipeline.html`'s process figures (host-side preflights,
+  Docker suites, CI jobs, suites-matrix legs, the jobs the CI verdict needs,
+  release targets per variant, release variants, binary archives and
+  multi-arch images, each read wherever the set repeats it); and — since
+  O155 — the `ENGINE_ENV_VARS` cross-tab on both axes to the tree, both arms
+  probed.
   **O155 is what that last row cost to learn**: the decision tree published
   `Protects · 24` for five days after O121 moved `UNDERCROFT_RERANKER`, because
   a figure outside this table is bound by attention exactly like the prose two
@@ -1913,8 +2028,10 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # by nothing and two dead wrappers survived
                                       # from O20 and O25. Publishes no check count
                                       # deliberately. **`#![warn(missing_docs)]` is
-                                      # on in the eight library crates (O110,
-                                      # 2026-09-07)**, so this refuses a public
+                                      # on in the eight default-member library
+                                      # crates (O110, 2026-09-07)** (the two
+                                      # model crates carry none, and nothing
+                                      # lints them: O153), so this refuses a public
                                       # item with no doc — 372 of them when it
                                       # went on, three times the 113 O99's scanner
                                       # counted, because struct fields and enum
@@ -2007,9 +2124,11 @@ docker compose run --rm onnx-build    # build the tract backend + RUN its tests 
 docker compose run --rm ort-build     # the same for the ORT backend (7 run, 1 ignored), built
                                       # --features onnx,ort. Each leg tests ONLY its own
                                       # crate, or the tract figures are counted twice.
-                                      # NOT a clippy run: this line claimed it lint-checked
-                                      # ort-gated code and the leg has only ever run
-                                      # `cargo build` (corrected 2026-09-12). Neither model
+                                      # NOT a clippy run: this line once claimed it
+                                      # lint-checked ort-gated code (corrected
+                                      # 2026-09-12), and the leg has never run clippy —
+                                      # it runs `cargo build` and, since O134a,
+                                      # `cargo test`. Neither model
                                       # crate is linted by anything — filed, O153
 docker compose run --rm site          # build AND ASSEMBLE the site (7 checks) via
                                       # website/build-site.sh — the same script
@@ -2304,7 +2423,8 @@ images either; mount the repo instead:
 `docker run --rm -v "<repo>:/src" -w /src rust:1.90-slim-bookworm sh -c "rustup component add rustfmt; cargo fmt --all"`
 
 CI runs `cargo fmt --all --check` + `cargo clippy --all-targets -- -D warnings`
-(no `--workspace`, so the excluded onnx crate is fmt'd but not clippy'd in CI),
+(no `--workspace`, so the two excluded model crates are fmt'd but not clippy'd
+in CI — O153),
 **plus the same two telemetry-feature clippy runs the `lint` compose service
 does** (O84).
 **That job runs cargo DIRECTLY, not the compose service, and the two
@@ -3154,7 +3274,8 @@ had and was still bypassable on the surface most deployments use.
    catches an added or removed TOOL, and it cannot catch a capability that
    drifts in behaviour. That half is yours.
 4. **Every governance surface updated in the same unit**: CHANGELOG, CLAUDE.md,
-   ROADMAP, **the three `.handover/` files** (ignored by git, governance
+   ROADMAP, **the three `.handover/` files and, when present,
+   `NEXT_PROMPT.md`** (ignored by git, governance
    nonetheless — see session-end hygiene), **the HOUSE PAGE at
    `sealcroft.com` when a figure it publishes moves**, and whichever of
    docs/AGENTS.md, docs/THREAT_MODEL.md, README, architecture/index.html,
@@ -3273,8 +3394,9 @@ to the tree. The reader takes the live session transcript's `usage` records
 is declared, it is labelled as such in the output, and it fails loudly rather
 than printing 0% when it cannot read a transcript, because a broken reader
 and an empty context look identical downstream — CHANGELOG, ROADMAP, this file, whichever
-docs carry the claim you changed, and the three `.handover/` files with the
-marker re-pointed at `HEAD`.
+docs carry the claim you changed, and the three `.handover/` files (and
+`NEXT_PROMPT.md`) with their first block naming `HEAD` — except
+`AUDIT_CONTINUATION.md`, whose blocks track audit rounds rather than commits.
 
 That is not tidiness, it is arithmetic. A session that spends its last tokens
 half-landing one more fix leaves the next session a tree it cannot trust and a
@@ -3315,10 +3437,11 @@ unwritten because a half-correct verdict is worse than a known-wrong one.
   It is nonetheless a governance surface with the same standing as `ROADMAP`
   or `CHANGELOG`: **kept current in the same unit as the work, and
   drift-checked like everything else.** Three files carry that weight —
-  `SESSION_START.md` (the prompt a new session is handed),
+  `SESSION_START.md` (session state; its top block is current),
   `NEXT_SESSION.md` (project state) and `AUDIT_CONTINUATION.md` (audit
-  state). A handover describing a tree that no longer exists is worse than
-  none, because the next session acts on it.
+  state) — plus, when present, `NEXT_PROMPT.md`, the prompt a new session is
+  actually handed. A handover describing a tree that no longer exists is
+  worse than none, because the next session acts on it.
   **This paragraph replaces one that said the opposite.** It read "it ships in
   the same commit as the work it describes" — a rule the repo forbids, written
   without checking whether it was satisfiable. The commit that introduced it
@@ -3327,8 +3450,18 @@ unwritten because a half-correct verdict is worse than a known-wrong one.
   SILENTLY, the output said "3 files changed", and nobody read which three.
   A doctrine that cannot be obeyed is not a high standard, it is a false
   claim — and this one was asserted in the same commit that added the
-  verification doctrine. Gated now by the handover-freshness preflight in
-  `tests/battery.sh`, because prose is what failed.
+  verification doctrine.
+  **What the handover-freshness preflight in `tests/battery.sh` sees, and
+  what it does not (ROADMAP O165).** On a clean tree, the first dated
+  paragraph of `SESSION_START.md`, the first dated row of `NEXT_SESSION.md`
+  and, when it exists, `NEXT_PROMPT.md` (anywhere in it) must name HEAD's
+  commit;
+  `AUDIT_CONTINUATION.md` is checked for existence only. Whether those words
+  are TRUE is not examined — a sha pasted into a stale sentence passes — nor
+  is any text below the first block or row, and a dirty tree prints `skip`
+  rather than a verdict. The free-standing `handover-head:` marker it used to
+  compare is retired: the handover's own instructions re-pointed it without
+  the text it vouched for.
 - **Every ROADMAP entry states its own status in its HEADING**, matching its
   body. `O2`'s heading read "the site loads three font families from Google"
   while its own body said CLOSED, and a handover was nearly written around an
@@ -3340,8 +3473,9 @@ unwritten because a half-correct verdict is worse than a known-wrong one.
   2026-09-06): the same preflight refuses a `CLOSED` entry under
   `## Unversioned` or `## Open`, whose headers promise no releasable work and
   open work only — seventy closed engine entries sat under those headers for
-  weeks. The five closed decisions and external actions that BELONG under
-  `Unversioned` are `UNVERSIONED_CLOSED`, an inventory with reasons counted
+  weeks. The closed entries that BELONG under `Unversioned` — decisions,
+  external actions and closures by measurement — are `UNVERSIONED_CLOSED`,
+  an inventory with reasons counted
   both ways, because the scanner cannot judge releasability.
   **An entry's SUBSECTIONS are `####`, never `##` (O161, 2026-09-13).** The
   scanner takes its enclosing section from any `^## ` line, so a level-2
@@ -3441,7 +3575,7 @@ unwritten because a half-correct verdict is worse than a known-wrong one.
   load, the endpoint `=http` will reach, the URL `index push --backend qdrant`
   needs. Those were `Tunes` while their selectors were `Protects`, and a bad
   value in either refuses at the same `?`, so the class contradicted itself in
-  one line. Fourteen rows move: five backend URLs, a DSN, two served-runtime
+  one line. Fourteen rows move: four backend URLs, a DSN, two served-runtime
   URLs and seven model paths. The discriminator is **a default to keep**, and
   it is what stops the rule running away — `UNDERCROFT_EMBED_MODEL`
   (`nomic-embed-text`), `_LLM_MODEL` (`llama3.2`) and `_ORCH_DB`

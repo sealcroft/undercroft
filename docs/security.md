@@ -31,7 +31,8 @@ modification: every read verifies, `verify` audits everything.
   forge a record, since every returned row still verifies its HMAC.
 - **Integrity**: HMAC-SHA256 per record (independent key) over
   id + metadata + at-rest content; append-only audit table; chain head
-  `h_i = HMAC(mac, h_{i-1} || tag_i)` stored in a MAC'd manifest. Deletions
+  `h_i = HMAC(mac, h_{i-1} || tag_i)` committed in `chain_meta` in the same
+  transaction as the write, and anchored in a MAC'd manifest. Deletions
   log keyed tombstones. KG triples and tunnels carry tags too.
 - **Duplicate detection** uses keyed fingerprints (truncated HMAC), so
   stored fingerprints reveal nothing offline.

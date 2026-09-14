@@ -1,6 +1,6 @@
 [package]
 name = "undercroft-index"
-description = "Remote vector indexes (Qdrant, Chroma, pgvector) as untrusted search accelerators — content sealed client-side"
+description = "Remote vector indexes (Qdrant, Chroma, pgvector, Milvus, Weaviate) as untrusted search accelerators — content sealed client-side"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

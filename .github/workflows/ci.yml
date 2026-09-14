@@ -15,7 +15,7 @@ jobs:
   # pull request. Cheapest job here and the fastest to fail: no Docker, no
   # cargo, seconds.
   preflight:
-    name: Preflights (line endings, ROADMAP, compose, CI inventory)
+    name: Host-side preflights (battery.sh --preflight-only)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -59,8 +59,14 @@ jobs:
   # not COMPILE for the target, and checking catches every one of those in a
   # fraction of the time. Linking is `release.yml`'s job.
   #
-  # The whole workspace minus the two heavy ML crates, matching what
-  # `release.yml` actually builds for this target.
+  # The whole workspace minus the two heavy ML crates. That covers the
+  # DEFAULT Windows asset `release.yml` builds (`binaries`: `-p undercroft-cli
+  # -p undercroft-orchestrator`, default features) and NOT its `-ort` Windows
+  # asset (`binaries-ort`: `-p undercroft-cli --features onnx,ort`, which
+  # compiles both model crates for this target). Nothing compiles that asset
+  # on a pull request — `ort-build` below runs in a Linux container — so it is
+  # O102's rule unmet on the feature × platform axis: a gap, stated here
+  # rather than hidden behind "matching what release.yml builds".
   windows-check:
     name: Windows target compiles
     runs-on: windows-latest
@@ -119,32 +125,40 @@ jobs:
         # O142 added it to this matrix, so what remains is that the two
         # model-crate legs run in CI and not in a local battery — deliberate
         # (both are heavy and one needs a C++ toolchain), and stated rather
-        # than left looking like a gap.
-        # Nothing counted them, so the claim survived by assertion. The
-        # reconciliation is filed in ROADMAP O9 — what is fixed here is the
-        # verdict, not yet the sets.
+        # than left looking like a gap. Nothing counted the two sets, so the
+        # old claim survived by assertion.
         #
         #   obs-config       alert rules + route (promtool/amtool) — no cargo
         #   test             cargo unit + integration
         #   e2e              UI/UX suite against the release binary
         #   orchestrator-e2e two engines + the control plane
-        #   e2e-telemetry    the ONLY job compiling `--features telemetry`;
-        #                    without it `undercroft-obs/src/imp.rs` — the whole
-        #                    real telemetry implementation — is never built in
-        #                    CI at all and could stop compiling on `main` with
+        #   e2e-telemetry    the only job that exercises the telemetry
+        #                    SURFACE: it builds both telemetry binaries (the
+        #                    orchestrator's is built nowhere else) and drives
+        #                    the /metrics gating and the counters. `lint` has
+        #                    type-checked `--features telemetry` since O84,
+        #                    and `tls-pins` boots a telemetry engine image
+        #                    (O63) but asserts only /healthz and a healthy
+        #                    scrape target — so without this leg the gating
+        #                    or a counter could stop WORKING on `main` with
         #                    every check green
         #   backends-e2e     five live vector DBs over TLS
-        #   onnx-build       ONNX embedder + reranker compile check
+        #   onnx-build       the tract backend (embedder, reranker, ColBERT):
+        #                    builds the CLI with it and RUNS that crate's own
+        #                    tests. A compile check until O134a, and a compile
+        #                    check executes no `#[cfg(test)]` code at all
         #   ort-build        the ONNX Runtime backend, which `release.yml`
         #                    SHIPS for five targets. Added by O142: it was a
         #                    compose service run by neither CI nor the
         #                    battery, so a published artifact compiled on no
         #                    pull request — the `windows-check` shape (O102)
         #                    on the feature axis instead of the platform one
-        #   arch-check       the architecture reference is what diagrams/ and
-        #                    its own headings derive to — no build, a stock
-        #                    python image, and a read-only mount because the
-        #                    check must write nothing (ROADMAP M14)
+        #   arch-check       TWO verifications: the architecture reference is
+        #                    what diagrams/ and its own headings derive to
+        #                    (ROADMAP M14), and platform-views/check.py gates
+        #                    the illustrative parallel set — no build, a stock
+        #                    python image, and a read-only mount because
+        #                    neither check may write anything
         suite:
           - obs-config
           - arch-check
@@ -172,31 +186,18 @@ jobs:
       - name: ${{ matrix.suite }}
         run: bash tests/battery.sh --no-preflight ${{ matrix.suite }}
 
-  # THE VERDICT. This is the one context a required status check should be
-  # configured against, and everything about its old shape was wrong:
-  #
-  #   * its comment said it was "kept under the name `test` because that is
-  #     what any required status check on `main` is configured against". No
-  #     repo had `required_status_checks` at all — verified against the API on
-  #     both `undercroft` and `sealcroft.github.io` — so it gated nothing and
-  #     the sentence describing why it must not be renamed was protecting a
-  #     configuration that did not exist;
-  #   * the published context is a job's `name`, not its id, so the context was
-  #     `Suites (aggregate)` and never `test` in the first place, while the
-  #     matrix leg above published one literally called `test`;
-  #   * `needs: suites` left `lint`, `audit`, `trivy-fs`, `site` and
-  #     `trivy-image` outside the verdict entirely — five jobs free to go red
-  #     under a green aggregate.
-  #
-  # Named `CI verdict` now: a context no leg can collide with, and one that
-  # says what requiring it means.
   tls-pins:
     name: TLS pins are readable by the engine
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      # No cargo, no image build: three small public images and a permission
-      # question. `deploy/observability` shipped UNSTARTABLE for two releases
+      # Two halves. Pin readability needs no cargo and no image build: three
+      # small public images and a permission question. Since ROADMAP O63 the
+      # suite also brings the whole observability deployment up and proves it
+      # boots, which BUILDS the engine image (`UNDERCROFT_FEATURES=telemetry`)
+      # — that one build is this job's entire cost.
+      #
+      # `deploy/observability` shipped UNSTARTABLE for two releases
       # because the engine pinned a path inside Caddy's root-only PKI tree,
       # and nothing here ever brought a terminator up to notice — `obs-config`
       # validates config FILES and starts no container.
@@ -233,6 +234,25 @@ jobs:
       # the eleven days.
       - run: bash tests/house-figures.sh
 
+  # THE VERDICT. This is the one context the required status check on `main`
+  # is configured against (ROADMAP O9 — branch protection reads back
+  # `contexts: ["CI verdict"]`), and everything about its old shape was wrong:
+  #
+  #   * its comment said it was "kept under the name `test` because that is
+  #     what any required status check on `main` is configured against". No
+  #     repo had `required_status_checks` at all — verified against the API on
+  #     both `undercroft` and `sealcroft.github.io` — so it gated nothing and
+  #     the sentence describing why it must not be renamed was protecting a
+  #     configuration that did not exist;
+  #   * the published context is a job's `name`, not its id, so the context was
+  #     `Suites (aggregate)` and never `test` in the first place, while the
+  #     matrix leg above published one literally called `test`;
+  #   * `needs: suites` left `lint`, `audit`, `trivy-fs`, `site` and
+  #     `trivy-image` outside the verdict entirely — five jobs free to go red
+  #     under a green aggregate.
+  #
+  # Named `CI verdict` now: a context no leg can collide with, and one that
+  # says what requiring it means.
   verdict:
     name: CI verdict
     runs-on: ubuntu-latest

@@ -2391,9 +2391,11 @@ impl VaultStore {
             })?;
             n += 1;
         }
-        // Takes the witness so a new caller has to state one; every caller
-        // today is ExportAudited, which records nothing here because
-        // `audit_export` already records the egress unconditionally.
+        // Takes the witness so a new caller has to state one. Every production
+        // caller today is ExportAudited (one refine test reads with
+        // Verification); neither witness records anything here, because only
+        // a `Read::Returned` does, and for an export `audit_export` already
+        // records the egress unconditionally.
         self.record_read(read, "", crate::ReadScope::none(), n)?;
         Ok(())
     }
@@ -4093,7 +4095,7 @@ mod tests {
             }
             // The entity row, in its pre-A10 shape — rewritten in place
             // rather than deleted and re-inserted, so the audit record
-            // `ensure_entity` appended survives to be relabelled. Deleting
+            // `ensure_entity_in` appended survives to be relabelled. Deleting
             // it was how the fixture ended up with no legacy entity label
             // either; re-inserting one by hand is not an option, because a
             // bare `INSERT` into `audit` breaks the chain and `verify` would
@@ -4845,12 +4847,14 @@ mod tests {
             "a relabel onto a drawer that never existed must be an orphan"
         );
         assert!(!after.ok(), "and it must fail the verdict: {after:?}");
-        // Attribution: the relabel moves no tag, so every other leg is clean
-        // and `ok()` went false because of this one.
+        // Attribution: the relabel moves no tag, so the other six legs are
+        // clean and `ok()` went false because of this one.
         assert!(after.bad_records.is_empty(), "{after:?}");
         assert!(after.chain_ok, "{after:?}");
+        assert_eq!(after.tampered_supersessions(), 0, "{after:?}");
         assert!(after.mirror_drift.is_empty(), "{after:?}");
         assert_eq!(after.tampered_receipts(), 0, "{after:?}");
+        assert!(after.policy_drift.is_empty(), "{after:?}");
     }
 
     /// ROADMAP O67. **The cheap door must read NO DRAWERS**, proved
@@ -5020,7 +5024,7 @@ mod tests {
     /// Both arms are asserted so this cannot pass for the wrong reason: the
     /// same vault verifies clean before the forgery and fails after, and the
     /// failure is attributed to the receipts leg specifically rather than to
-    /// any of the other five.
+    /// any of the other six.
     #[test]
     fn a_forged_fact_receipt_fails_the_vault_verdict() {
         let (dir, mut s) = store(SecurityLevel::Sealed);
@@ -5072,13 +5076,14 @@ mod tests {
             !after.ok(),
             "a forged fact receipt must fail the vault verdict: {after:?}"
         );
-        // Attribution: the other five legs are undisturbed, so `ok()` went
+        // Attribution: the other six legs are undisturbed, so `ok()` went
         // false BECAUSE of the receipt and not for some incidental reason.
         assert!(after.bad_records.is_empty(), "{after:?}");
         assert!(after.chain_ok, "{after:?}");
         assert_eq!(after.tampered_supersessions(), 0, "{after:?}");
         assert!(after.orphan_labels.is_empty(), "{after:?}");
         assert!(after.mirror_drift.is_empty(), "{after:?}");
+        assert!(after.policy_drift.is_empty(), "{after:?}");
     }
 
     #[test]

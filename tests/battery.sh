@@ -777,9 +777,12 @@ echo "$NOTRACE_OUT" | grep -E '^  (files scanned|pdf streams):' | sed 's/^  /   
 # shipped at 7% wrong.
 #
 # Note #36's own filing said this gate "examines 7 of ~25 `###` sections".
-# Measured, it examines 47 of 60 — the 13 it skips are prose sections with no
-# `[A-Z][0-9]+` id, which are correctly out of scope. The coverage half of
-# that filing was stale; the one-directional half was right.
+# Measured, it examines every `###` entry carrying a `[A-Z][0-9]+` id and
+# skips the prose sections with none, which are correctly out of scope. The
+# coverage half of that filing was stale; the one-directional half was right.
+# HOW MANY of each is ROADMAP O47's figure and is deliberately not restated
+# here: this comment said `47 of 60` long after the tree moved on, and the
+# `prose figures` preflight gates O47's pair against the headings instead.
 echo "═══ preflight: ROADMAP headings ═══"
 # A FUNCTION over a file argument rather than an inline awk over ROADMAP.md,
 # so the fourth arm below can be PROBED on a fixture before the real scan is
@@ -860,6 +863,7 @@ UNVERSIONED_CLOSED=(
   "O12|closed by doctrine: a citation is derived, never declared"
   "O37|the house Pages site enforces HTTPS — a setting on another repository"
   "O158|closed by MEASUREMENT: the filed defect does not exist, so nothing ships"
+  "O173|closed by doctrine: how an unanswered design question is ruled and where the ruling is recorded"
 )
 ROADMAP_DRIFT=$(roadmap_scan ROADMAP.md)
 RM_UNV_HITS=$(printf '%s\n' "$ROADMAP_DRIFT" | grep '^closed-under-unversioned|' || true)
@@ -1405,30 +1409,102 @@ echo "      cross-surface suite counts agree"
 # `.handover/` is gitignored on purpose and MUST stay so — 1.6 GB of working
 # material including the 269 MB pre-rename bundle. It is still a governance
 # surface: `SESSION_START.md`, `NEXT_SESSION.md` and `AUDIT_CONTINUATION.md`
-# are what the next session acts on, and one describing a tree that no longer
-# exists is worse than none.
+# are what the next session acts on, and `NEXT_PROMPT.md`, when present, is
+# the prompt a session is actually handed. One describing a tree that no
+# longer exists is worse than none, because the next session acts on it.
 #
 # Being untracked is exactly why this needs a gate. CI clones fresh and never
 # sees these files, `git status` never mentions them, and no diff ever shows
-# them going stale — the last session wrote doctrine claiming the handover
-# shipped in its commit, and `git add -A` skipped it silently.
+# them going stale.
 #
-# It fires only when the working tree is CLEAN, i.e. at the moment you would
-# be finishing. During work the tree is dirty and a lagging handover is
-# normal, so this stays quiet instead of crying wolf until it is ignored.
+# **What it SEES (ROADMAP O165).** The text a top-down reader meets FIRST —
+# SESSION_START.md's first dated paragraph, NEXT_SESSION.md's first dated row,
+# and NEXT_PROMPT.md when it exists — must contain HEAD's commit, a token git
+# makes unknowable before the state it describes. Until O165 this compared a
+# free-standing `handover-head:` marker instead, and the handover's own
+# instructions said to re-point that marker after every commit and merge — so
+# the token moved WITHOUT the text it vouched for, and on 2026-09-14 a top
+# block three merges stale passed. That was the THIRD occurrence: round four
+# filed the defect on 2026-08-10 (D11.1) and it was closed on a misreading.
+# First block, not newest block: a block appended BELOW an older one leaves a
+# first block that does not name HEAD, so this fails closed on position with
+# no date arithmetic — M15's argument, moved from the marker onto the text.
 #
-# This comment sat fifty lines above its own code for the length of one
-# session: the compose block was inserted BETWEEN the comment and the `echo`
-# it describes, which is CLAUDE.md's "read what is ADJACENT to the anchor"
-# hazard landing on the very file that mechanises the other hazards.
+# **What it CANNOT see:** whether the words are true (a sha pasted into a
+# stale sentence passes, and the FAIL text says so), anything below the first
+# block or row, NEXT_SESSION.md's static rows, AUDIT_CONTINUATION.md's content
+# (existence only: its blocks track audit rounds and none names a commit), a
+# dirty tree, a local main behind origin, and — in CI — the real files, which
+# do not exist there. The READER is proved on fixtures first, before the
+# directory test, so it runs in CI and a rotted reader fails every PR.
+#
+# It judges only a CLEAN tree, i.e. the moment you would be finishing. During
+# work a lagging handover is normal, so a dirty tree prints `skip` — never an
+# `ok` it did not earn.
 echo "═══ preflight: handover freshness ═══"
 HANDOVER_DIR=".handover"
 HANDOVER_FILES="SESSION_START.md NEXT_SESSION.md AUDIT_CONTINUATION.md"
+# The ONE reader, used by the probe and by the real arms. `lede` is the first
+# dated paragraph (from the first `**YYYY-MM-DD` line to the next blank line),
+# `row` the first `| **YYYY-MM-DD` table row, `file` the whole file.
+# Repetition is spelled out inside awk because ubuntu-latest's awk is mawk.
+handover_para() {
+  case "$2" in
+    lede) awk 'f==0 && /^[*][*][0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ {f=1} f==1 { if ($0 ~ /^[ \t\r]*$/) exit; print }' "$1" ;;
+    row) awk '/^[|] [*][*][0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ {print; exit}' "$1" ;;
+    file) cat "$1" ;;
+  esac
+}
+handover_tokens() { printf '%s\n' "$1" | tr -c '0-9A-Za-z' '\n' | grep -xE '[0-9a-f]{7,40}'; }
+# 0 = the text names HEAD, 1 = it does not, 2 = the reader examined nothing.
+handover_names_head() {
+  HN_PARA=$(handover_para "$1" "$2")
+  [ -z "$HN_PARA" ] && return 2
+  for HN_T in $(handover_tokens "$HN_PARA"); do
+    case "$3" in "$HN_T"*) return 0 ;; esac
+  done
+  return 1
+}
+# PREMISE. A reader that matched nothing reports exactly what a clean handover
+# reports, so it must pass eight fixture cases before any real verdict is
+# believed: a wrapped lede, a marker and an older block that must NOT count, a
+# static row and a later row that must not count, and files with nothing dated.
+mkdir -p .battery
+HO_PA=abcdef0123456789abcdef0123456789abcdef01
+HO_PB=fedcba9876543210fedcba9876543210fedcba98
+HO_SS=.battery/handover-probe-ss.md
+HO_NS=.battery/handover-probe-ns.md
+HO_EM=.battery/handover-probe-empty.md
+printf '%s\n' '# preamble' '<!-- handover-head: fedcba9 -->' 'a line naming fedcba9' '' \
+  '**2026-01-02 (probe) first line of a wrapped lede' 'merged as abcdef0.**' '' \
+  'a body line naming fedcba9' '' '**2026-01-01 (older) names fedcba9 and abcdef0.**' > "$HO_SS"
+printf '%s\n' '| Repo | names abcdef0 |' '| **2026-01-02 (probe)** | main is fedcba9 |' \
+  '| **2026-01-03 (below)** | main is abcdef0 |' > "$HO_NS"
+printf '%s\n' '# nothing dated' 'names abcdef0' > "$HO_EM"
+HO_PROBE_BAD=""
+for HO_CASE in "$HO_SS lede $HO_PA 0 wrapped-lede" "$HO_SS lede $HO_PB 1 top-paragraph-scope" \
+               "$HO_NS row $HO_PA 1 first-row-scope" "$HO_NS row $HO_PB 0 first-row" \
+               "$HO_EM lede $HO_PA 2 empty-lede" "$HO_EM row $HO_PA 2 empty-row" \
+               "$HO_NS file $HO_PA 0 whole-file" "$HO_EM file $HO_PB 1 whole-file-miss"; do
+  read -r HO_F HO_M HO_S HO_E HO_N <<< "$HO_CASE"
+  if handover_names_head "$HO_F" "$HO_M" "$HO_S"; then HO_RC=0; else HO_RC=$?; fi
+  [ "$HO_RC" = "$HO_E" ] || HO_PROBE_BAD="$HO_PROBE_BAD $HO_N returned $HO_RC (expected $HO_E);"
+done
+rm -f "$HO_SS" "$HO_NS" "$HO_EM"
+if [ -n "$HO_PROBE_BAD" ]; then
+  echo "FAIL  the handover READER cannot be believed:$HO_PROBE_BAD"
+  echo "      This is the gate's reader failing on a fixture, not a stale handover."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    handover reader proved on fixtures (wrapped lede, top-paragraph scope, first-row scope, empty file)"
 if [ ! -d "$HANDOVER_DIR" ]; then
   echo "warn  no $HANDOVER_DIR/ on this machine — it is gitignored, so a fresh"
   echo "      clone has none. Ask whoever handed you this tree for it."
-elif [ -n "$(git status --porcelain 2>/dev/null)" ]; then
-  echo "ok    working tree is dirty — handover freshness is checked when clean"
+  echo "      Only the reader was proved here; the handover itself was not examined."
+elif [ -n "$(git status --porcelain)" ]; then
+  echo "skip  working tree is dirty — handover freshness is judged only on a clean tree"
 else
   MISSING=""
   for f in $HANDOVER_FILES; do
@@ -1441,41 +1517,54 @@ else
     echo "BATTERY FAILED — preflight"
     exit 1
   fi
-  # The prompt records the commit it describes. A clean tree whose handover
-  # names a different commit is a handover that has already gone stale.
-  # `head -1` and the convention it depends on, stated rather than assumed
-  # (ROADMAP M15). SESSION_START.md keeps a marker per session section and
-  # those sections run NEWEST FIRST, so the first marker is the current one.
-  # Nothing enforces that ordering — but nothing needs to, and this is worth
-  # writing down because it reads like a latent bug and is not: a section
-  # appended at the BOTTOM leaves a stale first marker, which fails the
-  # comparison below loudly. The gate fails closed on the ordering it assumes.
-  ALL_MARKERS=$(grep -cE 'handover-head: [0-9a-f]{7,40}' "$HANDOVER_DIR/SESSION_START.md" 2>/dev/null || true)
-  RECORDED=$(grep -oE 'handover-head: [0-9a-f]{7,40}' "$HANDOVER_DIR/SESSION_START.md" 2>/dev/null | awk '{print $2}' | head -1)
-  HEAD_SHA=$(git rev-parse --short HEAD 2>/dev/null)
-  if [ -z "$RECORDED" ]; then
-    echo "FAIL  $HANDOVER_DIR/SESSION_START.md records no commit."
-    echo "      Add a line containing: handover-head: $HEAD_SHA"
-    echo "      Without it nothing can tell whether the handover is current."
+  HO_HEAD=$(git rev-parse HEAD)
+  HO_SHORT=$(git rev-parse --short HEAD)
+  if [ -z "$HO_HEAD" ]; then
+    echo "FAIL  PREMISE: git rev-parse HEAD returned nothing"
     echo ""
     echo "BATTERY FAILED — preflight"
     exit 1
   fi
-  if [ "${HEAD_SHA#"$RECORDED"}" = "$HEAD_SHA" ] && [ "${RECORDED#"$HEAD_SHA"}" = "$RECORDED" ]; then
-    echo "FAIL  the handover describes $RECORDED; HEAD is $HEAD_SHA."
-    echo "      The tree is clean, so this is the moment it should be current."
-    echo "      Update the three files under $HANDOVER_DIR/ and re-run."
-    if [ "${ALL_MARKERS:-1}" -gt 1 ]; then
-      echo "      NOTE: SESSION_START.md holds $ALL_MARKERS handover-head markers and"
-      echo "      this reads the FIRST. Sections run newest-first — if you added"
-      echo "      yours at the BOTTOM, move it to the top rather than editing the"
-      echo "      historical marker, which is a record of what HEAD was then."
+  HO_BAD=0
+  HO_NP=absent
+  for HO_ARM in "SESSION_START.md lede" "NEXT_SESSION.md row" "NEXT_PROMPT.md file"; do
+    read -r HO_F HO_M <<< "$HO_ARM"
+    HO_PATH="$HANDOVER_DIR/$HO_F"
+    if [ "$HO_F" = "NEXT_PROMPT.md" ]; then
+      if [ ! -f "$HO_PATH" ]; then
+        echo "note  NEXT_PROMPT.md absent — not checked"
+        continue
+      fi
+      HO_NP=checked
     fi
+    if handover_names_head "$HO_PATH" "$HO_M" "$HO_HEAD"; then HO_RC=0; else HO_RC=$?; fi
+    if [ "$HO_RC" = 1 ]; then
+      case "$HO_M" in
+        lede) HO_WHAT="first dated block paragraph"
+              HO_LN=$(grep -nE '^[*][*][0-9]{4}-[0-9]{2}-[0-9]{2}' "$HO_PATH" | head -1 | cut -d: -f1 || true) ;;
+        row)  HO_WHAT="first dated row"
+              HO_LN=$(grep -nE '^[|] [*][*][0-9]{4}-' "$HO_PATH" | head -1 | cut -d: -f1 || true) ;;
+        *)    HO_WHAT="text"; HO_LN="" ;;
+      esac
+      echo "FAIL  $HO_PATH: the $HO_WHAT${HO_LN:+ (line $HO_LN)} does not name HEAD ($HO_SHORT)."
+      if [ "$HO_M" != "file" ]; then
+        echo "      It names: $(handover_tokens "$(handover_para "$HO_PATH" "$HO_M")" | tr '\n' ' ')— its status predates HEAD."
+      fi
+      echo "      Rewrite that text for the tree as it is (or prepend a new block/row naming $HO_SHORT);"
+      echo "      pasting the sha into an old sentence silences this gate and keeps the stale claim."
+      HO_BAD=1
+    elif [ "$HO_RC" = 2 ]; then
+      echo "FAIL  $HO_PATH: no dated block/row found — the reader examined nothing"
+      HO_BAD=1
+    fi
+  done
+  if [ "$HO_BAD" -ne 0 ]; then
     echo ""
     echo "BATTERY FAILED — preflight"
     exit 1
   fi
-  echo "ok    handover is current with HEAD ($HEAD_SHA), first of $ALL_MARKERS marker(s)"
+  echo "ok    handover names HEAD ($HO_SHORT): SESSION_START top paragraph, NEXT_SESSION first row, NEXT_PROMPT $HO_NP"
+  echo "      not examined: whether those words are true, text below the first block/row, AUDIT_CONTINUATION content (existence only)"
 fi
 
 # ── preflight: context-check derives THIS checkout's slug ───────────────────
@@ -2483,6 +2572,52 @@ if [ $((PF_PROTECTS + PF_TUNES)) -ne "${PF_ENVROWS_N:-0}" ] \
   exit 1
 fi
 
+# **The control plane's two figures in `UPGRADING.md`, read from the code.**
+# One sentence there carries TWO counts — "the six declarations they share go
+# through one implementation (`undercroft-config`'s six resolvers)" — and the
+# row once labelled resolvers read the DECLARATIONS word against the resolver
+# count, so the resolvers word was read by nothing and a seventh declaration
+# routed through an existing resolver would have left the declarations figure
+# stale under a green row. A declaration is SHARED when both pre-flights'
+# match arms call an `undercroft-config` resolver for it: the engine's
+# `check_declaration` and the control plane's `check_one`. An arm runs from
+# its quoted `UNDERCROFT_*` name to the next such name, a `_ =>` catch-all or
+# the function's closing brace.
+PF_CC="crates/undercroft-orchestrator/src/config_check.rs"
+PF_RESOLVER_RE=$(grep -oE '^pub fn resolve_[a-z_]+' crates/undercroft-config/src/lib.rs \
+                 | sed 's/^pub fn //' | tr '\n' '|' | sed 's/|$//')
+pf_resolved_arms() {  # FILE FN-START-REGEX -> the arm names calling a shared resolver
+  awk -v start="$2" -v rs="(^|[^a-z_])(${PF_RESOLVER_RE:-no_resolver_was_read})[(]" '
+    $0 ~ start { inf = 1; next }
+    inf && /^}/ { if (arm != "" && hit) print arm; exit }
+    inf && /^[ \t]+([|] )?"UNDERCROFT_[A-Z0-9_]+"/ {
+      if (arm != "" && hit) print arm
+      arm = $0; sub(/^[ \t]+([|] )?"/, "", arm); sub(/".*/, "", arm); hit = 0
+    }
+    inf && /^[ \t]+_ =>/ { if (arm != "" && hit) print arm; arm = ""; hit = 0 }
+    inf && arm != "" && $0 ~ rs { hit = 1 }
+  ' "$1" | sort -u
+}
+PF_DECL_ENGINE=$(pf_resolved_arms "$PF_STORE" '^pub fn check_declaration[(]')
+PF_DECL_ORCH=$(pf_resolved_arms "$PF_CC" '^fn check_one[(]')
+PF_DECL_SHARED=$(comm -12 <(printf '%s\n' "$PF_DECL_ENGINE") <(printf '%s\n' "$PF_DECL_ORCH") \
+                 | grep -c . || true)
+# "the seven checked `UNDERCROFT_ORCH_*` declarations" the control plane's own
+# `config check` runs: its inventory's `Checked` rows under that prefix, which
+# must partition against `Opaque` exactly as the engine's axis does above.
+PF_ORCHROWS=$(awk '/^pub[(]crate[)] const ORCH_ENV_VARS/,/^\];/' "$PF_CC" | grep '^    ("UNDERCROFT_ORCH_' || true)
+PF_ORCHROWS_N=$(printf '%s\n' "$PF_ORCHROWS" | grep -c . || true)
+PF_ORCH_CHECKED=$(printf '%s\n' "$PF_ORCHROWS" | grep -c ' Checked),' || true)
+PF_ORCH_OPAQUE=$(printf '%s\n' "$PF_ORCHROWS" | grep -c ' Opaque),' || true)
+if [ $((PF_ORCH_CHECKED + PF_ORCH_OPAQUE)) -ne "${PF_ORCHROWS_N:-0}" ]; then
+  echo "FAIL  the ORCH_ENV_VARS reader examined ${PF_ORCHROWS_N:-0} UNDERCROFT_ORCH_ row(s):"
+  echo "      $PF_ORCH_CHECKED checked + $PF_ORCH_OPAQUE opaque do not partition them, so"
+  echo "      this is the reader that rotted — not the figure it was about to check."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+
 # PREMISE. Every truth below is a count, and a broken extractor returns a
 # number too — zero. A zero here would silently agree with nothing.
 if [ "${PF_ENV_TOTAL:-0}" -lt 50 ] || [ "${PF_PREFLIGHTS:-0}" -lt 5 ] ||
@@ -2491,13 +2626,14 @@ if [ "${PF_ENV_TOTAL:-0}" -lt 50 ] || [ "${PF_PREFLIGHTS:-0}" -lt 5 ] ||
    [ "${PF_RO_ARMS:-0}" -lt 2 ] || [ "${PF_CA:-0}" -lt 3 ] ||
    [ "${PF_ORCH:-0}" -lt 5 ] || [ "${PF_RESOLVERS:-0}" -lt 3 ] ||
    [ "${PF_ABS_ROWS:-0}" -lt 20 ] || [ "${PF_ABS_ANCHORS:-0}" -lt 20 ] ||
-   [ "${PF_COMPLETE:-0}" -lt 10 ] || [ "${PF_ENVROWS_N:-0}" -lt 40 ]; then
+   [ "${PF_COMPLETE:-0}" -lt 10 ] || [ "${PF_ENVROWS_N:-0}" -lt 40 ] ||
+   [ "${PF_DECL_SHARED:-0}" -lt 3 ] || [ "${PF_ORCHROWS_N:-0}" -lt 5 ]; then
   echo "FAIL  a truth-side reader came back implausibly small:"
   echo "      env=$PF_ENV_TOTAL preflights=$PF_PREFLIGHTS crates=$PF_CRATES"
   echo "      mcp=$PF_MCP diagrams=$PF_DIAGRAMS irregular=$PF_IRREGULAR"
   echo "      ro-arms=$PF_RO_ARMS ca=$PF_CA orch=$PF_ORCH resolvers=$PF_RESOLVERS"
   echo "      absence rows=$PF_ABS_ROWS anchors=$PF_ABS_ANCHORS complete=$PF_COMPLETE"
-  echo "      env rows=$PF_ENVROWS_N"
+  echo "      env rows=$PF_ENVROWS_N shared declarations=$PF_DECL_SHARED orch rows=$PF_ORCHROWS_N"
   echo "      A reader that examined nothing reports what an accurate tree reports."
   echo ""
   echo "BATTERY FAILED — preflight"
@@ -2527,7 +2663,12 @@ PROSE_FIGURES=(
   "read-only allowlist entries|docs/THREAT_MODEL.md|s/.*on a ([a-z]+)-entry allowlist.*/\\1/p|$PF_RO_ARMS"
   "CA pins|docs/AGENTS.md|s/.*and the ([a-z]+) \`\\*_CA\` pins.*/\\1/p|$PF_CA"
   "orchestrator env variables|UPGRADING.md|s/.*including the ([a-z]+) \`UNDERCROFT_ORCH_\\*\`.*/\\1/p|$PF_ORCH"
-  "shared declaration resolvers|UPGRADING.md|s/.*the ([a-z]+) declarations they share.*/\\1/p|$PF_RESOLVERS"
+  # One sentence, two figures, two rows (see `pf_resolved_arms`). The
+  # resolvers row anchors on the crate name because an unanchored
+  # `([a-z]+) resolvers` meets "the same resolvers" earlier in that section.
+  "shared declarations|UPGRADING.md|s/.*the ([a-z]+) declarations they share.*/\\1/p|$PF_DECL_SHARED"
+  "shared resolvers|UPGRADING.md|s/.*\`undercroft-config\`'s ([a-z]+) resolvers.*/\\1/p|$PF_RESOLVERS"
+  "control-plane checked declarations|UPGRADING.md|s/.*the ([a-z]+) checked \`UNDERCROFT_ORCH_\\*\`.*/\\1/p|$PF_ORCH_CHECKED"
   "CLI absence rows|CLAUDE.md|s/.*PARTITION it \\(([0-9]+) rows over.*/\\1/p|$PF_ABS_ROWS"
   "CLI absence anchors|CLAUDE.md|s/.*rows over ([0-9]+) anchors.*/\\1/p|$PF_ABS_ANCHORS"
   "CLI operations reachable everywhere|CLAUDE.md|s/.*plus ([0-9]+) reachable everywhere.*/\\1/p|$PF_COMPLETE"
@@ -2819,6 +2960,66 @@ PV_CLIOPS=$(( $(awk '/pub const SURFACE_ABSENCES/,/^\];/' crates/undercroft-cli/
              + $(awk '/pub const SURFACE_COMPLETE/,/^\];/' crates/undercroft-cli/src/parity.rs \
                  | grep -cE '^    "' || true) ))
 
+# The CI suite matrix, for `20-verification-pipeline.html`'s leg count: the
+# one `suite:` list in `ci.yml`, read to the first line that is not a leg.
+PV_CI=".github/workflows/ci.yml"
+PV_SUITE_KEYS=$(grep -c '^        suite:$' "$PV_CI" || true)
+PV_MATRIX=$(awk '/^        suite:$/ { ins = 1; next }
+                 ins && /^          - [a-z0-9_-]+$/ { n++; next }
+                 ins { exit }
+                 END { print n + 0 }' "$PV_CI")
+if [ "${PV_SUITE_KEYS:-0}" -ne 1 ] || [ "${PV_MATRIX:-0}" -lt 2 ]; then
+  echo "FAIL  the ci.yml suite-matrix reader found $PV_MATRIX leg(s) under $PV_SUITE_KEYS"
+  echo "      \`suite:\` key(s); it expects exactly one key and at least two legs."
+  echo "      A reader that examined nothing reports what an accurate diagram reports."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+
+# The rest of that diagram's process figures (round three of the 2026-09-14
+# sweep), and ONE premise for every truth they are checked against. Two truths
+# are REUSED rather than re-read: `CI_N` and `CI_NEEDS_N` come from the CI
+# verdict preflight above, which probes its own reader and counts the jobs
+# against `needs:` both ways, and the Docker-suite count is `ALL`, the list
+# this script itself runs. A second reader of one inventory is a second place
+# for a figure to disagree with itself. The release figures come from
+# `release.yml`: every job with a `target:` matrix is one binary VARIANT whose
+# rows are its targets, and each `imagetools create` publishes one multi-arch
+# image.
+#
+# NOT gated, because no count in the tree answers them: the job and suite
+# NAMES the diagram lists (a set, not a count), "the one required check" (a
+# repository setting, not a file) and "the one job that needs the internet".
+PV_SUITES_N=${#ALL[@]}
+PV_REL=".github/workflows/release.yml"
+PV_REL_ROWS=$(awk '
+  /^jobs:/                                    { inj = 1; next }
+  inj && /^[^ #]/                             { inj = 0 }
+  inj && /^  [a-z0-9_-]+:$/                   { job = $1; next }
+  inj && /^            target: [a-z0-9_-]+$/ { n[job]++ }
+  END { for (j in n) print j, n[j] }' "$PV_REL")
+PV_REL_VARIANTS=$(printf '%s\n' "$PV_REL_ROWS" | grep -c . || true)
+PV_REL_SIZES=$(printf '%s\n' "$PV_REL_ROWS" | awk 'NF == 2 { print $2 }' | sort -u)
+PV_REL_SIZES_N=$(printf '%s\n' "$PV_REL_SIZES" | grep -c . || true)
+PV_REL_TARGETS=$(printf '%s\n' "$PV_REL_SIZES" | head -1)
+PV_REL_BINARIES=$(printf '%s\n' "$PV_REL_ROWS" | awk 'NF == 2 { s += $2 } END { print s + 0 }')
+PV_REL_IMAGES=$(grep -c '^ *docker buildx imagetools create' "$PV_REL" || true)
+PV_SET_N=$(find "$PV_DIR" -maxdepth 1 -name '[0-9][0-9]-*.html' | grep -c . || true)
+if [ "${CI_N:-0}" -lt 5 ] || [ "${CI_NEEDS_N:-0}" -lt 4 ] || [ "${PV_SUITES_N:-0}" -lt 5 ] \
+   || [ "${PV_REL_VARIANTS:-0}" -lt 1 ] || [ "${PV_REL_SIZES_N:-0}" -ne 1 ] \
+   || [ "${PV_REL_TARGETS:-0}" -lt 2 ] || [ "${PV_REL_IMAGES:-0}" -lt 1 ] \
+   || [ "${PV_SET_N:-0}" -lt 2 ]; then
+  echo "FAIL  a verification-pipeline truth came back unusable: ci jobs=${CI_N:-unset}"
+  echo "      verdict needs=${CI_NEEDS_N:-unset} battery suites=$PV_SUITES_N diagrams=$PV_SET_N"
+  echo "      release variants=$PV_REL_VARIANTS, targets per variant: $(printf '%s ' $PV_REL_SIZES)images=$PV_REL_IMAGES"
+  echo "      Variants whose target counts differ leave the diagram's one figure"
+  echo "      unstateable; any other shortfall is a reader that examined nothing."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+
 # **The declared-configuration classes (ROADMAP O155).** The set's decision
 # tree publishes the `ENGINE_ENV_VARS` cross-tab, and it was NOT gated: O121
 # moved `UNDERCROFT_RERANKER` from `Tunes` to `Protects` on 2026-09-07 and the
@@ -2850,6 +3051,21 @@ PV_FIGURES=(
   "Checked declarations|Checked · ([0-9]+)|$PF_CHECKED"
   "Opaque declarations|Opaque · ([0-9]+)|$PF_OPAQUE"
   "un-pre-flightable Protects|([0-9]+) of them protect|$PF_PROT_OPAQUE"
+  # `20-verification-pipeline.html`'s process figures, gated by no row until
+  # the 2026-09-14 drift sweep. `ALL N OK` is the label on its
+  # preflights-to-suites arrow; no other diagram in the set uses the phrase.
+  "host-side preflights|([0-9]+) host-side preflights|ALL ([0-9]+) OK|$PF_PREFLIGHTS"
+  "CI suites-matrix legs|suites matrix ×([0-9]+)|$PV_MATRIX"
+  # Round three: the same diagram's remaining counts, read against the truths
+  # proved by the premise above the O155 block. `NEEDS ALL N` labels its
+  # CI-to-verdict arrow and `N of M` ends every eyebrow; only M is a count.
+  "Docker suites|([0-9]+) Docker suites|$PV_SUITES_N"
+  "CI jobs|· ([0-9]+) jobs|$CI_N"
+  "jobs the CI verdict needs|NEEDS ALL ([0-9]+)|$CI_NEEDS_N"
+  "release targets per variant|([0-9]+) targets ×|$PV_REL_TARGETS"
+  "release binary archives|= ([0-9]+) archives|$PV_REL_BINARIES"
+  "multi-arch release images|([0-9]+) multi-arch GHCR images|$PV_REL_IMAGES"
+  "diagrams in the set|of ([0-9]+) · Undercroft|$PV_SET_N"
 )
 PV_FAIL=0
 PV_SEEN=0
@@ -2874,31 +3090,51 @@ for row in "${PV_FIGURES[@]}"; do
     fi
   done
 done
-# The crate count is spelled as a WORD in this set, so it needs its own read.
-# Only words that are NUMBERS are claims: "three separate crates reach it" is
-# an ordinary sentence, and a first version that took the alphabetically-first
-# match read "separate" as the count and failed on a correct tree.
-PV_CRATE_SEEN=0
-for pv_w in $(printf '%s' "$PV_TXT" | grep -oiE '[a-z]+ (Rust )?crates' \
-              | awk '{print tolower($1)}' | sort -u); do
-  pv_n=$(pf_word "$pv_w")
-  case $pv_n in ''|*[!0-9]*) continue;; esac   # not a number word — not a claim
-  PV_CRATE_SEEN=$((PV_CRATE_SEEN + 1))
-  if [ "$pv_n" != "$PF_CRATES" ]; then
-    echo "FAIL  platform-views says '$pv_w crates'; the tree has $PF_CRATES"
+# Some figures are spelled as WORDS in this set, so they need their own read —
+# ONE loop for all of them, same `name|regex|truth` grammar as above. Each
+# match is split into words, and only the words that ARE numbers are claims:
+# "three separate crates reach it" is an ordinary sentence, and a first
+# version that took the alphabetically-first match read "separate" as the
+# crate count and failed on a correct tree. Case is folded because a card
+# title capitalises the word ("Nineteen preflights").
+PV_WORD_FIGURES=(
+  "crates|[a-z]+ (Rust )?crates|$PF_CRATES"
+  "host-side preflights|[a-z]+ preflights|$PF_PREFLIGHTS"
+  "CI suites-matrix legs|matrix of [a-z]+ suites|$PV_MATRIX"
+  "Docker suites|[a-z]+ Docker suites|$PV_SUITES_N"
+  "CI jobs|[a-z]+ CI jobs|$CI_N"
+  # "five targets in two variants" is one phrase carrying two figures, and
+  # every number word in a match is compared, so each figure gets its own row.
+  "release targets per variant|[a-z]+ targets in|$PV_REL_TARGETS"
+  "release binary variants|targets in [a-z]+ variants|$PV_REL_VARIANTS"
+  "multi-arch release images|[a-z]+ multi-arch images|$PV_REL_IMAGES"
+)
+for row in "${PV_WORD_FIGURES[@]}"; do
+  pv_name=${row%%|*}; pv_rest=${row#*|}
+  pv_re=${pv_rest%|*}; pv_truth=${pv_rest##*|}
+  pv_word_seen=0
+  for pv_w in $(printf '%s' "$PV_TXT" | grep -oiE "$pv_re" | tr 'A-Z' 'a-z' \
+                | tr -cs 'a-z' '\n' | sort -u); do
+    pv_n=$(pf_word "$pv_w")
+    case $pv_n in ''|*[!0-9]*) continue;; esac   # not a number word — not a claim
+    pv_word_seen=$((pv_word_seen + 1))
+    if [ "$pv_n" != "$pv_truth" ]; then
+      echo "FAIL  platform-views says '$pv_w' for $pv_name; the tree measures $pv_truth"
+      PV_FAIL=1
+    fi
+  done
+  if [ "$pv_word_seen" -eq 0 ]; then
+    echo "FAIL  platform-views: no number word found for '$pv_name' — pattern rotted."
     PV_FAIL=1
   fi
+  PV_SEEN=$((PV_SEEN + pv_word_seen))
 done
-if [ "$PV_CRATE_SEEN" -eq 0 ]; then
-  echo "FAIL  platform-views: no '<number-word> crates' phrase found — pattern rotted."
-  PV_FAIL=1
-fi
 if [ "$PV_FAIL" -ne 0 ]; then
   echo ""
   echo "BATTERY FAILED — preflight"
   exit 1
 fi
-echo "ok    platform-views' $((PV_SEEN + 1)) published figures agree with the tree"
+echo "ok    platform-views' $PV_SEEN published figures agree with the tree"
 echo "      (counts only — a relational claim in prose is NOT gated; see O74)"
 
 fi  # end of the host-side preflight block (`--no-preflight` skips it)

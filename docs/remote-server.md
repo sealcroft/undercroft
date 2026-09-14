@@ -26,8 +26,12 @@ claude mcp add --transport http undercroft http://HOST:8765/mcp \
 - `/healthz` is unauthenticated for probes.
 - Plain HTTP: terminate TLS in a reverse proxy for anything beyond a
   trusted network.
-- Backing store: the palace volume is the system of record; Qdrant only
-  ever receives sealed content + embeddings.
+- Backing store: the palace volume is the system of record. `index push`
+  sends Qdrant sealed content from a sealed vault, beside the drawer ids, the
+  embeddings and the wing/room labels in the clear; an hmac-only vault's push
+  is refused unless `index push --allow-plaintext`. Every result is
+  re-verified locally, and each push appends an `egress/index-push` audit
+  record.
 
 Systemd alternative: `deploy/undercroft-server.service`.
 
@@ -61,7 +65,10 @@ the trust class that decides what it may retrieve — **with one exception
 since 1.2.0**: `verify-forgetting` is reachable as
 `undercroft_check_erasure_receipt`. ROADMAP O68 ruled it a DRIFT rather
 than a boundary, because it checks a CALLER-SUPPLIED document and mutates
-nothing, so the operator-only reasoning never explained its absence.
+nothing, so the operator-only reasoning never explained its absence. (MCP's
+`undercroft_history` is not a second exception: it is a different,
+agent-scoped view of the audit chain with the operator namespaces fenced
+out, not the operator-scope `history` route below.)
 
 ```text
 ── lifecycle ────────────────────────────────────────────────────────────
@@ -189,8 +196,14 @@ target's name.
 
 Vault lifecycle over HTTP lets an orchestrator auto-provision a dedicated
 memory instance per tenant and migrate a vault between instances:
-`export → verified import → drop`. Import returns the exact record count so
-the caller can verify before dropping the source.
+`export → verified import → drop`. Verify against what the destination
+HOLDS, not against the import reply: `imported` counts records PROCESSED,
+and the write is an upsert, so two records landing on one row count two.
+Before dropping the source, compare the destination's `GET …/stats`
+`records` with the drawer count the export's leading manifest line declares
+(`undercroft_manifest.counts.drawers`), and with the source's own `records`
+while nothing writes to it — the judgement `undercroft-orchestrator
+migrate` makes (ROADMAP O140).
 
 `level` is `sealed` (default) or `hmac-only`. `embedder` is `hash`
 (default) or `external:<name>@<dim>` (see below).
@@ -329,6 +342,8 @@ volumes:
 
 Bootstrap is non-interactive: with `UNDERCROFT_PASSPHRASE` set, `undercroft
 init` (or the first `serve-http`, which opens the default vault) derives the
-master key via Argon2id and writes it under `/data` with `0600` permissions
-— no TTY, no prompt, and the key is never emitted to logs. Provision each
-tenant's vaults over `/v1/vaults` once the instance is up.
+master key via Argon2id (64 MiB, t=3) from the passphrase and a random salt
+it persists at `/data/kdf.salt` (`0600`). No key material is written, so the
+passphrase must be supplied on every start — no TTY, no prompt, and the key
+is never emitted to logs. Provision each tenant's vaults over `/v1/vaults`
+once the instance is up.

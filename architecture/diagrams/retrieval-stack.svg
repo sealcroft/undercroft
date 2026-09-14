@@ -37,7 +37,7 @@
 <rect x="24" y="150" width="640" height="66" rx="8" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="1.8" stroke-dasharray="6 4"/>
 <circle cx="48" cy="183" r="13" fill="var(--d-teal,#12897e)"/><text x="48" y="188" class="f l" fill="var(--d-on,var(--d-card,#ffffff))" text-anchor="middle">2</text>
 <text x="72" y="176" class="f l" fill="var(--d-teal-ink,#0d6b62)">candidate prefilter — approximate</text>
-<text x="72" y="195" class="f b dim">PQ/IVF probes only nearby lists · FDE token-aware · HNSW graph</text>
+<text x="72" y="195" class="f b dim">PQ/IVF · FDE · HNSW, opt-in — hmac-only vaults also run FTS5 from 2,048 rows</text>
 <text x="72" y="211" class="f mono" fill="var(--d-teal-ink,#0d6b62)">UNDERCROFT_RETRIEVAL = pq | fde | hnsw</text>
 <rect x="676" y="150" width="200" height="66" rx="8" fill="var(--d-teal-bg2,#e8f6f4)" stroke="var(--d-teal,#12897e)"/>
 <text x="690" y="174" class="f s" fill="var(--d-teal-ink,#0d6b62)">measured at 20k drawers:</text>

@@ -394,8 +394,10 @@ pub struct Scope {
     _guard: imp::SpanGuard,
 }
 
-/// Open a span for an operation (`search`, `save`, `kg`, `commit`), tagged
-/// with the vault id. Nests under whatever span is already open on this
+/// Open a span for an operation (`search`, `save`, `kg` — the three names a
+/// caller passes), tagged with the vault id. The telemetry build also maps a
+/// `commit` name that no caller passes today, and any other name to a
+/// generic `op` span. Nests under whatever span is already open on this
 /// thread, so a request span becomes the parent of the work it drives.
 #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
 pub fn scope(op: &'static str, vault: &str) -> Scope {

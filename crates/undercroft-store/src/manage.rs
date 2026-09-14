@@ -163,10 +163,11 @@ pub struct VaultStats {
     /// database's: it belongs to this process for its lifetime. A restart
     /// reads zero while the holes remain — the durable question ("how many
     /// rows at rest carry a zero vector?") has no cheap answer, since a
-    /// sealed embedding is opaque until decrypted, and is filed rather than
-    /// faked here. On the CLI every command is its own process, so the count
-    /// is that command's own open (its calibration probes and its one write
-    /// or query); on `serve-http` and MCP stdio it accumulates. Under the
+    /// sealed embedding is opaque until decrypted, and it is an open entry,
+    /// ROADMAP O174, rather than faked here. On the CLI every command is its
+    /// own process, so the count is that command's own open (its calibration
+    /// probes and its one write or query); on `serve-http` and MCP stdio it
+    /// accumulates. Under the
     /// `ort` posture the multi-tenant server shares one model across every
     /// vault, so every vault's stats report the same process-wide count.
     /// Zero on the default vault always: the hash embedder cannot fail.

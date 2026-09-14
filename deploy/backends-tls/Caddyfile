@@ -14,9 +14,11 @@
 # REPLACES the public roots rather than adding to them.
 #
 # Postgres is not here: it speaks its own protocol, not HTTP, so pgvector
-# terminates TLS in the server itself (see the `pgvector` service, which
-# runs with `ssl=on` and the same generated key pair). The engine asks for
-# it with `sslmode=verify-full` and pins the same root.
+# terminates TLS in the server itself, with its own generated CA chain (the
+# `pgvector-certs` service; the `pgvector` service runs with `ssl=on`). The
+# engine asks for it with `sslmode=require` — the connector is rustls, so
+# `require` verifies the chain and the hostname — and the suite pins that CA
+# beside this terminator's root in one PEM.
 #
 # Each backend gets its own hostname rather than a path prefix, because the
 # backends' own APIs own their paths and a prefix would have to be stripped

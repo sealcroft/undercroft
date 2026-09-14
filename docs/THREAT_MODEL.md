@@ -249,10 +249,10 @@ refused unless it is on a three-entry allowlist (`POST …/search`,
 travel in a body — and `POST …/verify` — which walks every record's HMAC,
 replays the whole
 audit chain, checks every supersession receipt, checks every
-knowledge-graph fact receipt, resolves every graph audit
-label and compares four of the five mirror columns (`wing`, `room`, `kind`, `supersedes`; `filed_at` is deliberately excluded — the column takes the write path's own clock while the covered field was stamped at construction, so they differ by a clock read in normal operation and checking it reported healthy vaults as tampered) against the covered meta (**six** legs
-since 1.1.0; five from 2026-08-06 — the fact-receipt leg arrived last, and
-until it did, a forged citation answered `VERIFY OK` on every surface while
+knowledge-graph fact receipt, resolves every graph and drawer audit
+label, compares four of the five mirror columns (`wing`, `room`, `kind`, `supersedes`; `filed_at` is deliberately excluded — the column takes the write path's own clock while the covered field was stamped at construction, so they differ by a clock read in normal operation and checking it reported healthy vaults as tampered) against the covered meta, and checks every wing-trust and retention row against the chain record that assigned it in both directions — a row that does not verify or was never recorded, and a recorded assignment whose row is gone with no later clear (**seven** legs
+since 1.3.0, when O94 added declared-policy drift; six from 1.1.0; five
+from 2026-08-06 — the fact-receipt leg arrived in 1.1.0, and until it did, a forged citation answered `VERIFY OK` on every surface while
 `backup create` archived it as clean), and is a POST for cost, not for effect: it takes `&self`
 and writes nothing at all). Said plainly, because an earlier draft of
 this page said the opposite: verify does **not** fast-forward the
@@ -260,9 +260,11 @@ manifest anchor. `anchor_manifest` needs `&mut`; the fast-forward
 belongs to `init_chain` and only a store *open* reaches it. So a
 long-lived server cannot tighten a lagging anchor by calling verify —
 `store_for` caches the handle and never re-opens (ROADMAP A31). MCP
-refuses every tool on its write list, and a
-test derives that list from the tool inventory so a mutating tool added
-later cannot escape it. The shape changed because the per-handler
+refuses every tool that is not on its READ list — it fails closed the same
+way, so a tool added later is refused until someone classifies it as a
+read — and a test counts the read and write lists against the advertised
+tool inventory, so a tool in neither list fails the build. The shape
+changed because the per-handler
 version had thirteen guards for fourteen mutating routes: `POST
 …/kg/authority` was simply never given one, so a `--read-only` server
 rewrote HMAC-covered authority columns, superseded the previous
@@ -414,16 +416,24 @@ enclave execution) compose with undercroft but are not provided by it.
 | Server auth | bearer + per-vault HMAC assertion (vault id in the MAC, constant-time, bare 401s); `--read-only` decided once in front of dispatch, failing closed | A4 |
 | Write-path admission | deterministic tier-1 screen at the one write choke point (a required `Screen` argument every caller must state); flagged writes diverted to the retrieval-excluded quarantine wing; allow/deny chain-audited | A7 ingest |
 | Retrieval policy | trust floor + quarantine fence + closed-vocabulary validation resolved before candidates are drawn, and shared verbatim by the remote path | A5 result steering, A7 reach |
-| Read/egress audit | `egress/export` on every export **and `egress/index-push` on every remote-index mirror** (the second is a whole-corpus egress, and on an hmac-only vault its payload is the plaintext), both behind no declaration (a read-only replica warns and serves unaudited); `UNDERCROFT_READ_AUDIT=chain` records each content-returning read — search, get, recent, the lists and the KG readers (O50/O51) — with a **keyed** subject fingerprint, never text | A7 forensics; insider/exfil accounting |
+| Read/egress audit | `egress/export` on every export, `egress/index-push` on every remote-index mirror (a whole-corpus egress, and on an hmac-only vault its payload is the plaintext) **and `egress/refine` on every LLM distillation run that sent anything, dry runs included** — destination host with credentials stripped, model, scope and how many drawers' plaintext was POSTed, recorded on the error path too (O79/O95) — none behind a declaration (a read-only handle that serves one warns that it went unaudited); `UNDERCROFT_READ_AUDIT=chain` records each content-returning read — search, get, recent, the lists and the KG readers (O50/O51) — with a **keyed** subject fingerprint, never text | A7 forensics; insider/exfil accounting |
 | Remote-index posture | sealed bytes out, local re-verification in; feature off by default | A5 |
 | Zero-telemetry default | no telemetry deps compiled in; metadata-only when opted in | A6 |
 | Verbatim + tombstones | exact words, keyed deletion markers, chain ordering | A7 attribution/excision |
 
 ## 5. What `verify` proves
 
-`undercroft verify` (CLI, `/v1` route, and fleet console) re-checks
-every drawer record HMAC, every KG and tunnel tag, and every receipted
-supersession link, then replays the audit chain **twice over**: the
+`undercroft verify` — the CLI, the `undercroft_verify` MCP tool,
+`POST /v1/vaults/{id}/verify`, the engine's admin console at `/ui`, and
+the orchestrator's `ops <tenant> verify` pass-through, all rendering one
+seven-leg verdict — re-checks every drawer record HMAC and every KG and
+tunnel tag, every receipted supersession link and every knowledge-graph
+fact receipt; resolves every graph and drawer audit label to a live
+record (or, for a destroyed drawer, its tombstone); compares the `wing`,
+`room`, `kind` and `supersedes` mirror columns against the HMAC-covered
+meta they copy; checks every wing-trust and retention row against the
+chain record that assigned it, in both directions; and replays the audit
+chain **twice over**: the
 audit rows must reproduce exactly the head committed in `chain_meta`,
 and the manifest anchor must appear somewhere in that replay — equal in
 steady state, strictly behind after a crash-before-anchor (legal), and
@@ -462,7 +472,16 @@ whose tag was not re-keyed is byte-identical and simply stops verifying.
 The chain also carries what left and what was read. Every export
 appends an `egress/export` record binding the surface, the recipient
 (when the export names one), the record counts and the export's own
-manifest digest. That one is **not** behind a declaration — an egress
+manifest digest. Every remote-index push appends `egress/index-push`,
+binding the backend, the collection, the pushed count, the embedder, what
+actually left (sealed bytes, or the plaintext of an hmac-only vault) and
+what the operator declared. And every `refine` run that sent anything
+appends one `egress/refine`, because distillation POSTs each selected
+drawer's plaintext to `UNDERCROFT_LLM_URL`: it binds the surface, the
+destination host with any credentials stripped, the model, the scope,
+whether it was a dry run — a dry run skips the facts, not the POSTs — and
+how many drawers actually left, a count recorded on the error path too
+(ROADMAP O79, O95). None of the three is behind a declaration — an egress
 is worth recording whether or not the deployment opted into anything.
 Under `UNDERCROFT_READ_AUDIT=chain` each content-returning READ appends a
 record too — searches, by-id and bulk drawer reads, and the knowledge graph's
@@ -633,10 +652,13 @@ write path at all.
   receipt. Crash-safe by the same reconciliation the rotation path
   proves.
 - **The operator/agent boundary is counted, not remembered** (BUILT) —
-  admission review, wing-trust assignment, retention, attested
-  forgetting and key rotation are recorded as operator-only in the
-  surface-parity inventory, and a test fails the build if any of them
-  appears as an MCP tool. The same inventory counts the MCP tool
+  the operator-only capabilities are recorded in the surface-parity
+  inventory, `OPERATOR_ONLY` in `crates/undercroft-cli/src/parity.rs`,
+  and a test fails the build if any of them appears as an MCP tool. That
+  constant is the list, not this sentence: today it holds admission
+  rulings, wing-trust assignment, retention, attested forgetting, key
+  rotation, knowledge-graph authority promotion, manifest-anchor
+  tightening, export, import and `refine`. The same inventory counts the MCP tool
   surface in **both** directions, so a tool added without a line fails
   and a line naming a tool that no longer exists fails too. That
   arithmetic exists because a 14-agent audit found 65 confirmed drifts

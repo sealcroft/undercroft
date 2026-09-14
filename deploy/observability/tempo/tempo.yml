@@ -1,5 +1,6 @@
 # Minimal Tempo (local storage) — receives OTLP spans from undercroft.
-# Undercroft exports OTLP/HTTP to http://tempo:4318 (UNDERCROFT_OTLP_ENDPOINT).
+# Undercroft exports OTLP/HTTP to https://tempo-tls (UNDERCROFT_OTLP_ENDPOINT,
+# pinned via UNDERCROFT_OTLP_CA), which terminates TLS and proxies to tempo:4318.
 
 server:
   http_listen_port: 3200

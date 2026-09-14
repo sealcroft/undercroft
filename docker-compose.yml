@@ -2,7 +2,7 @@
 #
 #   docker compose run --rm test          # unit + integration tests (cargo)
 #   docker compose run --rm e2e           # end-to-end UI/UX suite against the real binary
-#   docker compose run --rm backends-e2e  # remote index suite (starts qdrant/chroma/pgvector)
+#   docker compose run --rm backends-e2e  # remote index suite (five backends, all over TLS)
 #   docker compose run --rm obs-config    # alert rules + alertmanager route (promtool/amtool)
 #   docker compose run --rm site          # build, assemble and check the website
 #   docker compose run --rm onnx-build    # build the tract backend + RUN its tests
@@ -37,7 +37,7 @@
 # Declaring the name makes that recipe true.
 #
 # The former name is DESCRIBED here and never spelled, which is not squeamish:
-# quoting it puts it back into a tracked file, and `.handover/verify-no-trace.py`
+# quoting it puts it back into a tracked file, and `tests/no-trace/verify.py`
 # is right to fail on that. The first draft of this very comment did it.
 name: undercroft
 
@@ -153,12 +153,13 @@ services:
           - milvus-tls
           - weaviate-tls
 
-  # A self-signed certificate for the pgvector server, generated once into
-  # a shared volume. Self-signed means the certificate is its own trust
-  # root, which is exactly what `sslmode=verify-full` + a pinned root
-  # needs — and the SAN has to be the compose hostname or verification
-  # fails on the name rather than on the chain, which reads as a config
-  # bug instead of the check working.
+  # A CA and a server certificate it signs, for the pgvector server,
+  # generated once into a shared volume — a two-certificate chain, for the
+  # reason the command below gives. The engine asks with `sslmode=require`,
+  # and because its connector is rustls that verifies the chain AND the
+  # hostname against the pinned `ca.crt` — so the SAN has to be the compose
+  # hostname or verification fails on the name rather than on the chain,
+  # which reads as a config bug instead of the check working.
   pgvector-certs:
     image: alpine:3.20
     entrypoint: ["sh", "-c"]
@@ -489,10 +490,10 @@ volumes:
   undercroft-data:
   # Embedding model weights, so `embed-pull` is a one-time download.
   undercroft-models:
-  # The embeddings-tls terminator's CA material — clients mount this
-  # read-only and pin the root via UNDERCROFT_EMBED_CA.
-  # The backends terminator's CA material, and the pgvector server's own
-  # self-signed certificate. The suite pins BOTH.
+  # The backends terminator's CA material, and the pgvector server's own CA
+  # chain. The suite pins BOTH roots.
   undercroft-backends-tls:
   undercroft-pgvector-tls:
+  # The embeddings-tls terminator's CA material — clients mount this
+  # read-only and pin the root via UNDERCROFT_EMBED_CA.
   undercroft-embed-tls:

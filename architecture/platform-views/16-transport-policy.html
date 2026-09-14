@@ -46,7 +46,7 @@
 
     <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="transport-policy-title transport-policy-desc">
       <title id="transport-policy-title">Undercroft outbound transport policy</title>
-      <desc id="transport-policy-desc">Every hop that leaves the engine or the orchestrator — the served embedder, the LLM runtime, the five remote vector backends, the orchestrator's calls to an engine, and the OTLP trace exporter — is built by the one transport-policy crate: cleartext is refused anywhere but loopback with no override, a declared CA pin replaces the public roots rather than adding to them, a pin that does not parse refuses to start, and the host a request reaches is always taken from the transport's own URL parser; the postgres hop cannot speak HTTP, so it takes a rustls configuration from the same crate and parses its connection string with the type the connector itself builds.</desc>
+      <desc id="transport-policy-desc">Every hop that leaves the engine or the orchestrator — the served embedder, the LLM runtime, the five remote vector backends, the orchestrator's calls to an engine, and the OTLP trace exporter — is built by the one transport-policy crate: cleartext is refused anywhere but loopback with no override, a declared CA pin replaces the public roots rather than adding to them, a pin that does not parse refuses to start, and the host a request reaches is always taken from the transport's own URL parser; the postgres hop cannot speak HTTP, so it takes a rustls configuration from the same crate and reads the host out of its connection string as tokio_postgres::Config, the type the connector's own parse delegates to — postgres::Config exposes no hostaddr, so a guard written against it cannot see the key that dials.</desc>
       <defs>
         <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7fa39c"/></marker>
         <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#35e0c2"/></marker>
@@ -137,7 +137,7 @@
       <rect x="848" y="256" width="272" height="72" rx="6" fill="#04080a"/>
       <rect x="848" y="256" width="272" height="72" rx="6" fill="rgba(217,240,234,0.03)" stroke="rgba(217,240,234,0.30)" stroke-width="1"/>
       <text x="984" y="280" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Remote vector index</text>
-      <text x="984" y="298" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">4 over ureq · pgvector over rustls + postgres::Config</text>
+      <text x="984" y="298" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">ureq ×4 · pgvector: rustls + tokio_postgres::Config</text>
       <text x="984" y="314" fill="#c9a961" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">pin: UNDERCROFT_INDEX_CA — one answer on all five</text>
 
       <!-- engine /v1, the fleet hop -->

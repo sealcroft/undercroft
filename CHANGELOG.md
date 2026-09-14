@@ -7,6 +7,212 @@ its CLI mirror `tenant-repoint` are additive — nothing that worked before
 behaves differently because they exist. Everything else in this section is a
 fix whose only observable change is that a defect is gone.
 
+### the handover gate reads the text a session acts on, not a token that moves on its own (O165)
+
+Internal tooling, no user-visible change.
+
+The preflight that keeps the gitignored session handover current compared a
+free-standing `handover-head:` marker with HEAD. The handover's own instructions
+said to re-point that marker after every commit and merge, so it moved without
+the text it vouched for, and a top block three merges stale passed. It now
+requires the first dated paragraph of `SESSION_START.md`, the first dated row of
+`NEXT_SESSION.md` and, when present, `NEXT_PROMPT.md` to name HEAD's commit; its
+reader is proved on fixtures first, and that proof runs in CI, where the
+handover itself does not exist. The defect had been filed once before and
+closed on a misreading.
+
+### a drift sweep corrected what the tree says about itself, filed fourteen gaps it found, and settled how an unanswered design question is ruled (O164, O166–O179)
+
+A sweep compared what this tree says about the product with what the code
+does: the documents, the architecture reference and its illustrative set, the
+Mermaid diagrams, both runbooks, the alert rules' annotations, the CI,
+deployment and test-script files, the crates' package descriptions and code
+comments. Each correction was checked against the code first, and states the
+code's truth where a finding's wording differed. Most are prose. The ones an
+operator meets:
+
+- **What a remote index receives.** `README.md`, `docs/PARITY.md`,
+  `docs/AGENTS.md`, `docs/remote-server.md`, `docs/architecture.md`,
+  `docs/integrations.md`, `website/src/retrieval.md`, `CLAUDE.md`, the
+  landing page, the architecture reference and its layer, key and egress
+  diagrams said an `index push` sends sealed content only, or sealed content
+  plus embeddings.
+  It sends each drawer's id and at-rest content beside its embedding and its
+  wing and room labels, and the backend reads the id, the embedding and the
+  labels in clear. The content is ciphertext only on a sealed vault: an
+  `hmac-only` vault's push is refused unless `index push --allow-plaintext`
+  is passed. Every candidate a backend returns
+  is re-loaded and HMAC-verified locally, and a push appends one
+  `egress/index-push` chain record, as does one that fails after any batch
+  landed. The CLI's help for `index push`, `index status` and
+  `search --backend`, which named three of the five backends, now names all
+  five, and the `index push` help now says which parts of a record leave
+  sealed on each vault level. The layer
+  diagram also said everything below its at-rest line is ciphertext; that
+  holds for a sealed vault only, and the diagram now says so.
+- **Getting started under Docker.** The documented alias mounts only the palace
+  volume and forwards no environment, so a passphrase exported on the host
+  never reached the container, and `mine` could not see the folder it was
+  given. The page now says to pass `-e UNDERCROFT_PASSPHRASE` to every
+  `docker run`, bind-mounts the folders for both `mine` lines, and gives
+  Claude Code the full `docker run -i` command, because a shell alias never
+  reaches a program that launches `undercroft` itself.
+- **The tamper runbooks.** The published runbook said `PalaceTamperDetected`
+  carries a `vault` label, which no rule emits. The operator quick-reference
+  had already retracted that, but it sent a responder to the per-vault gauges,
+  which carry counts rather than failures. Both now point at the live stream's
+  `hmac-fail` frame, which names the vault, or at `verify` run per vault. Both
+  runbooks' sample output paired a tampered record with `audit chain: BROKEN`,
+  but the chain replays the audit trail's own tags, so editing a drawer's bytes
+  leaves it `ok`. Both samples and the landing page's demo now show that. Each
+  runbook's `repair` line now says it re-embeds every drawer and drops the
+  PQ/IVF tables, so a served embedder receives the corpus. The lock-down
+  advice gave the vault directory `0600`, which leaves it unsearchable; it now
+  gives `0700` there and `0600` on `master.key`, and the published runbook's
+  flowchart, which said `0600 perms`, now says owner-only permissions. The
+  re-mine recovery now says it does not apply to swept drawers. The
+  observability README's tamper walk-through ran `sqlite3` inside
+  an image that carries none, with an `UPDATE … LIMIT` that parses only where
+  sqlite was built to allow it; it now runs from a throwaway container.
+  `SECURITY.md` and the header of `alerts.yml` said the quick-reference,
+  `deploy/observability/RUNBOOK.md`, is what `/docs/runbook.html` publishes;
+  that page is built from `website/src/runbook.md`, and both now say so.
+- **`alert-sink`** printed `surface` and `vault` beside each alert. No rule
+  emits `vault`, so only the tamper alert showed any location at all. It now
+  prints `instance`, `surface` and `side`, three labels the rules do emit.
+- **`LateInteractionFailures`' annotation** said to re-encode a doc-side
+  failure with `undercroft repair`, which re-embeds but backfills no token
+  matrix. It now names `repair --tokens`, the ColBERT reranker that flag
+  requires, and that it is CLI-only.
+- **A renamed anchor.** `architecture/index.html` called Stage 2's candidate
+  prefilter opt-in, while an hmac-only vault runs its FTS5 prefilter from
+  `UNDERCROFT_FTS_PREFILTER_MIN` drawers with no declaration. The heading now
+  says "partly opt-in", so its fragment is
+  `#retrieval-stage-2-candidate-prefilter-partly-opt-in`. A link to the old
+  fragment no longer reaches that heading; nothing in this tree links it.
+- **Where a retrieval figure comes from.** `website/src/retrieval.md` says
+  BM25 fusion buys +2.8 points of R@10. That subtracts the `legacy` row, from
+  the 2026-07 run, from the BM25 row re-measured on 2026-09-02, so both places
+  the figure appears now call it a cross-run comparison and name the two
+  runs. The page also said every R@10 on it was re-measured on 2026-09-02,
+  while the `legacy` and `rrf` rows, the reranker and served-embedder figures
+  and every latency come from earlier runs; and it gave the reranker as ~98%
+  (+3 pts), which is now the measured 97.68%, +3.1 over the 2026-07 base of
+  94.6 it was measured against.
+- **Smaller corrections a reader could have copied.** The systemd unit's
+  install comment copied it into the system directory and then enabled it with
+  `systemctl --user`. The orchestrator quick-start in `docs/AGENTS.md` passed
+  `migrate` its destination without `--to`, and captured `keygen`'s two lines
+  into one variable. `UPGRADING.md` named a re-point route that no `1.5.2`
+  control plane has. The closing explanation `undercroft config check` prints
+  no longer says a URL or a bearer token goes unchecked. `docs/AGENTS.md` said
+  that command validates the eight `UNDERCROFT_ORCH_*` declarations; it parses
+  seven and accepts the eighth, `UNDERCROFT_ORCH_DB`, a path, unparsed. The
+  CLI's `--language` help said a language is declared and never detected; when
+  none is declared, each drawer's own function words choose one where they
+  agree decisively, and the help now says so.
+
+**Fourteen gaps the sweep found are filed rather than fixed**, each with a shape
+and a gate. **O164**: the control plane serves every request from one loop, so
+an HTTP admin migration stalls every tenant and `/healthz` for its whole
+duration. **O166**: a vault already holding Hebrew keeps cosine vectors from
+the token space before Hebrew's reclassification, until
+`UNDERCROFT_FORCE_EMBEDDER=1` plus `repair`; the store's own comment had
+recorded this as a gap deliberately accepted. **O167**: under a served
+embedder, `repair`, `admission allow` and remote-index search send stored
+drawer text to the embedding endpoint with no `egress/` record, and whether the
+tier-2 admission advisor's posts count as egress is not yet ruled. **O168**:
+seven of the ten release binaries are compiled on no pull request — the
+Windows `-ort` binary, and both macOS targets and Linux arm64 in both the
+default and the `-ort` build. A pull request compiles Linux x86_64 in both
+builds, in its container legs, and checks rather than builds the Windows
+default; the arm64 GHCR images, default and `-ort`, are likewise built on no
+pull request, only by the release workflow and, for `-ort`, the
+`republish-ort-image` dispatch. **O174**: how many rows at rest carry a zero
+vector, the durable question O122 stated as a residual inside a closed entry,
+has no cheap answer on a sealed vault and is an open entry now. **O175**: a
+read-only `index push` ships every batch to the backend and only then fails to
+write its egress record, so the content leaves unrecorded. **O176**: the CLI's
+`--read-only export` fails outright where `/v1` warns and serves. **O177**: the
+engine's refuse-to-bind check and `undercroft_config::addr_is_loopback`
+disagree on `::1`, which O160 had recorded as a byte-identical copy. **O178**:
+two platform-views totals are gated by nothing, because the figure reader
+cannot read compound number words. **O179**: two diagram labels overflow their
+boxes, which no gate measures.
+
+**Four of them were ruled on 2026-09-14** by a three-lens panel and an
+adversarial refuter. Each ruling is recorded in its entry, and none is built
+yet. **O169**: ROADMAP's dependency map and its diff-level pass are to be
+retired as dated records rather than rebuilt; two open entries that block each
+other, must be sequenced or share a diff surface will each carry a
+`**Relations:**` line naming the other, checked for reciprocity by the
+ROADMAP-headings preflight. **O170**:
+before the admission screen rewrites a flagged drawer's id, the write path
+checks only the declared wing and room, so a malformed id with flagged
+content is quarantined rather than refused, and a refusal that quotes the
+rewritten id tells the caller its content tripped the screen. The ruling
+moves every check that depends only on the candidate into
+`admission::validate_declaration`, in front of the rewrite. **O171**: a
+sentence inside a closed entry that calls something filed is not a filing;
+seven such residuals are owed an open entry, of which O174 files one, and a
+preflight will require a code comment that claims a filing to name an open
+entry. **O172**: the
+team-server recipe declares `UNDERCROFT_QDRANT_URL: http://qdrant:6333`, which
+the index client refuses at construction. The ruling upholds the maintainer's
+2026-09-12 option, Qdrant behind its own TLS terminator with an exported CA
+root pinned through `UNDERCROFT_INDEX_CA`, corrects two parts of how that
+option was described, and adds a defect no filing named: nothing in that
+recipe runs `init`, so on a fresh volume the engine exits and restarts in a
+loop.
+
+**O150**, already open, now also records two defects in its own route-R
+tests. The tract arm's assertion message said it signals O150's retirement,
+while it fires only when the count is not 1; the message now says what it
+checks. The ORT arm's panic branch pins no payload, so ORT turning from a
+counted degrade into a panic would stay green. Both tests' doc comments now
+say what their arms assert, and no assertion's condition changed: making the tract
+arm fail on a counted degrade is owed to O150's own unit, which the entry
+also gives the ORT arm's shape — fail on any panic.
+
+**Three test gates were tightened.** The orchestrator's env-var join had a
+premise of at least six parsed engine rows. It parses every engine row, so a
+scan that found no `UNDERCROFT_ORCH_*` row at all still met that premise; it
+now counts that family and requires at least one, and no fewer than this
+binary's own inventory declares. Two `verify` attribution arms in the
+knowledge-graph tests asserted only some of the other legs, so `ok()` going
+false on a leg they skipped would have been blamed on the leg under test. Both
+now assert `policy_drift`, and the relabelled-audit-row arm
+`tampered_supersessions` as well. The observability suite's negative control
+covered four of the nine rules; the other five now have a present, healthy
+series and a quiet arm, where before they passed every test while unable to
+show they stay quiet.
+
+**The illustrative set's process figures are gated.**
+`architecture/platform-views/20-verification-pipeline.html` published fourteen
+preflights and a suite matrix of eight while the tree runs nineteen and nine,
+and no preflight row read either figure. Both are corrected, and the
+`platform-views` figure preflight now compares that page's counts with the
+tree — its preflights, suite-matrix legs, Docker suites, CI jobs, the jobs the
+CI verdict needs, and its release targets, binaries and multi-arch images — as
+well as the set size every page's eyebrow states.
+
+**How a design question the reading does not answer is decided (O173,
+closed by doctrine).** `CLAUDE.md`'s grounding rule ended in writing the
+options out and asking the maintainer. On the maintainer's instruction of
+2026-09-14 it ends in a ruling panel instead: at least three independent
+lenses, Agentic Memory Architecture always among them, plus an adversarial
+refuter on every ruling. A prior ruling is followed where it is best practice
+and otherwise refuted with evidence before it is revised, and a question with
+a recorded ruling is not asked again unless new evidence contradicts it. The
+ruling is recorded as a `#### RULED <date> by <authority>` subsection in the
+ROADMAP entry that owns the question. A panel grants no permission: commits,
+pushes, pull requests, tags, releases, long runs and outward-facing changes
+are asked for as before, and product, business, licence and naming choices
+go to the maintainer with the panel's analysis attached.
+
+No engine logic changes. The crates move only in comments, help and output
+text, package descriptions and test assertions.
+
 ### both `config check` commands now refuse a listen address that cannot bind (O160)
 
 `UNDERCROFT_ORCH_ADDR` had no parse at all, so an empty value — a failed shell
@@ -86,7 +292,7 @@ drives both shapes now.
 one-line contradiction: `UNDERCROFT_EMBEDDER` and `UNDERCROFT_RERANKER` were
 protections, the model file and the endpoint they cannot run without were
 knobs, and a bad value in either refused identically. Fourteen declarations
-move — seven model paths, five backend URLs, a pgvector DSN and two
+move — seven model paths, four backend URLs, a pgvector DSN and two
 served-runtime URLs. Three that look identical stay knobs because each has a
 real default in code: `UNDERCROFT_EMBED_MODEL`, `UNDERCROFT_LLM_MODEL` and
 `UNDERCROFT_ORCH_DB`.

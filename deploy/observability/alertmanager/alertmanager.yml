@@ -60,7 +60,7 @@ inhibit_rules:
   # "for it"; the behaviour was global, and nothing distinguished the two
   # because the label was absent rather than mismatched.
   #
-  # `instance` is emitted by all six rules — the aggregations in alerts.yml
+  # `instance` is emitted by every rule — the aggregations in alerts.yml
   # keep it deliberately — and `alerts_test.yml` asserts each one's exact
   # label set through `promtool test rules`, so a new rule that drops it is
   # a failing suite rather than a silent widening of this inhibition.

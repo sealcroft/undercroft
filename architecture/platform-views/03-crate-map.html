@@ -46,7 +46,7 @@
 
     <svg viewBox="0 0 1200 856" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="crate-map-title crate-map-desc">
       <title id="crate-map-title">Undercroft workspace dependency graph</title>
-      <desc id="crate-map-desc">Nine of Undercroft's thirteen Rust crates, arranged by how deep each one sits in the workspace dependency graph: the command-line binary and the orchestrator binary depend on nothing above them, the store depends on the vault, the configuration crate and the remote-index adapter, the served-model adapter is reached from the binary alone, both adapters leave the process only through the transport-policy crate, and the domain crate at the bottom is the one three of the drawn crates reach, holding no input-output and no cryptography of its own; the orchestrator reaches only configuration, transport and observability, and never links an engine crate.</desc>
+      <desc id="crate-map-desc">Nine of Undercroft's thirteen Rust crates, arranged by how deep each one sits in the workspace dependency graph: the command-line binary and the orchestrator binary depend on nothing above them, the store depends on the vault, the configuration crate and the remote-index adapter (its own direct edges to the domain and transport-policy crates are drawn through the vault and the index), the served-model adapter is reached from the binary alone and depends on the domain crate as well as the transport-policy crate, both adapters leave the process only through the transport-policy crate, and the domain crate at the bottom is reached by the binary, the vault and the served-model adapter — and by the store through the vault, never by the remote-index adapter — holding no input-output and no cryptography of its own; the orchestrator reaches only configuration, transport and observability, and never links an engine crate.</desc>
       <defs>
         <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7fa39c"/></marker>
         <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#35e0c2"/></marker>
@@ -89,8 +89,8 @@
       <line x1="240" y1="548" x2="240" y2="620" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
       <!-- E8 index -> net -->
       <path d="M 540,548 V 576 Q 540,584 548,584 H 672 Q 680,584 680,592 V 620" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
-      <!-- E9 index -> core -->
-      <path d="M 420,548 V 584 Q 420,592 412,592 H 288 Q 280,592 280,600 V 620" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- E9 llm -> core, under the foundation row; hops E8 at x=540 -->
+      <path d="M 880,548 V 564 Q 880,572 872,572 H 548 a 8,8 0 0,0 -16,0 H 288 Q 280,572 280,580 V 620" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
       <!-- E10 orchestrator -> config -->
       <path d="M 860,216 H 848 Q 840,216 840,224 V 424 Q 840,432 832,432 H 728 Q 720,432 720,440 V 460" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
       <!-- E11 orchestrator -> net, around the outside on the right channel, into net's right edge -->
@@ -128,7 +128,7 @@
       <text x="554" y="155" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">0 in</text>
       <text x="480" y="184" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">undercroft-cli</text>
       <text x="480" y="202" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">CLI · MCP · HTTP · tenants</text>
-      <text x="480" y="216" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">links 8 workspace crates</text>
+      <text x="480" y="216" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">links 9 workspace crates</text>
 
       <!-- undercroft-orchestrator -->
       <rect x="860" y="140" width="200" height="88" rx="6" fill="#04080a"/>

@@ -283,7 +283,7 @@
   <li class="sb-sec" data-sec="retrieval">
     <a class="sb-link" href="#retrieval">The retrieval stack</a>
     <ul class="sb-sub">
-      <li><a class="sb-sublink" href="#retrieval-stage-2-candidate-prefilter-opt-in">Stage 2 — candidate prefilter opt-in</a></li>
+      <li><a class="sb-sublink" href="#retrieval-stage-2-candidate-prefilter-partly-opt-in">Stage 2 — candidate prefilter partly opt-in</a></li>
       <li><a class="sb-sublink" href="#retrieval-stage-3-verify-decrypt-score">Stage 3 — verify, decrypt, score</a></li>
       <li><a class="sb-sublink" href="#retrieval-stage-4-the-relevance-gate">Stage 4 — the relevance gate</a></li>
       <li><a class="sb-sublink" href="#retrieval-stage-5-second-stage-opt-in">Stage 5 — second stage opt-in</a></li>
@@ -486,7 +486,7 @@
 <figure>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 600" width="900" height="600" role="img" aria-labelledby="t_layers d_layers">
 <title id="t_layers">Undercroft deployment layers and trust boundaries</title>
-<desc id="d_layers">Callers reach the engine over MCP or HTTP; the engine holds the store and knowledge graph; below the ciphertext line everything is sealed. An optional orchestrator routes tenants and remote vector backends are untrusted accelerators.</desc>
+<desc id="d_layers">Callers reach the engine over MCP or HTTP; the engine holds the store and knowledge graph. Below the dashed at-rest line, a sealed vault holds its content, embeddings, token matrices and PQ artifacts as AEAD ciphertext, each under a distinct AAD domain, while wing, room, source path and other metadata stay in clear; an hmac-only vault keeps content and vectors in plaintext beside a full-text index, and both levels HMAC-tag each drawer and record each drawer write on the audit chain. An optional orchestrator routes tenants, and remote vector backends are untrusted accelerators: an index push sends each drawer's at-rest content, ciphertext from a sealed vault, beside its embedding, wing and room, which the backend reads in clear; it refuses an hmac-only vault unless --allow-plaintext is passed, and is recorded on the audit chain; every candidate a backend returns is re-verified locally.</desc>
 <style>
   .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
   .h { font-size: 17px; font-weight: 600; }
@@ -544,19 +544,20 @@
 <text x="672" y="238" class="f b ink">orchestrator</text>
 <text x="672" y="254" class="f s dim">tenant → vault routing, /t/*</text>
 <text x="672" y="269" class="f s dim">own SQLite, sealed engine creds</text>
-<rect x="658" y="284" width="200" height="58" rx="6" fill="var(--d-red-bg,#fdf3f3)" stroke="var(--d-red,#b5453a)"/>
-<text x="672" y="306" class="f b" fill="var(--d-red-ink,#94382f)">remote vector backends</text>
-<text x="672" y="322" class="f s dim">untrusted accelerators — sealed</text>
-<text x="672" y="336" class="f s dim">payloads only, re-verified on read</text>
+<rect x="658" y="284" width="200" height="66" rx="6" fill="var(--d-red-bg,#fdf3f3)" stroke="var(--d-red,#b5453a)"/>
+<text x="672" y="302" class="f b" fill="var(--d-red-ink,#94382f)">remote vector backends</text>
+<text x="672" y="316" class="f s dim">untrusted, re-verified on read</text>
+<text x="672" y="330" class="f s dim">sealed: ciphertext + clear vectors</text>
+<text x="672" y="344" class="f s dim">hmac-only: refused by default</text>
 
 <path d="M320 360 L320 380" stroke="var(--d-teal,#12897e)" stroke-width="1.8" marker-end="url(#a)"/>
 <line x1="24" y1="374" x2="876" y2="374" stroke="var(--d-teal,#12897e)" stroke-width="1.6" stroke-dasharray="8 5"/>
-<text x="336" y="370" class="f s" fill="var(--d-teal-ink,#0d6b62)">everything below this line is ciphertext</text>
+<text x="336" y="370" class="f s" fill="var(--d-teal-ink,#0d6b62)">sealed vault: content and vectors below this line are ciphertext · hmac-only keeps them plaintext</text>
 
 <rect x="24" y="386" width="852" height="128" rx="9" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="2"/>
 <text x="42" y="410" class="f l" fill="var(--d-teal-ink,#0d6b62)">at rest — per-vault key, HKDF-derived from the master key</text>
 <rect x="42" y="420" width="266" height="80" rx="6" fill="var(--d-card,#ffffff)" stroke="var(--d-teal,#12897e)" stroke-width="1.2"/>
-<text x="58" y="442" class="f b" fill="var(--d-teal-ink,#0d6b62)">sealed artifacts</text>
+<text x="58" y="442" class="f b" fill="var(--d-teal-ink,#0d6b62)">sealed artifacts — sealed vaults only</text>
 <text x="58" y="459" class="f s dim">content · embeddings · ColBERT token</text>
 <text x="58" y="474" class="f s dim">matrices · PQ codes, codebook, pages</text>
 <text x="58" y="491" class="f s dim">each under a distinct AAD domain</text>
@@ -582,7 +583,7 @@
 </figure>
 
 <p>Callers reach the engine three ways — MCP over stdio for local agents, HTTP <code>/v1</code> for applications, and the CLI — and all three land on the same store. An admin console is served at <code>/ui</code> on every build.</p>
-<p>Two components sit deliberately outside the engine. The <strong>orchestrator</strong> is a separate binary and a pure <code>/v1</code> client: it maps tenants to vaults and proxies requests, and the engine never links it. <strong>Remote vector backends</strong> (Qdrant, Chroma, pgvector, Milvus, Weaviate) are treated as untrusted accelerators — they receive sealed payloads only, and anything they return is re-verified locally before use.</p>
+<p>Two components sit deliberately outside the engine. The <strong>orchestrator</strong> is a separate binary and a pure <code>/v1</code> client: it maps tenants to vaults and proxies requests, and the engine never links it. <strong>Remote vector backends</strong> (Qdrant, Chroma, pgvector, Milvus, Weaviate) are treated as untrusted accelerators. A push sends each drawer's at-rest content — ciphertext from a sealed vault — beside its embedding, wing and room, which the backend reads in clear; an <code>hmac-only</code> vault, whose at-rest content <em>is</em> the plaintext, is refused unless the operator passes <code>index push --allow-plaintext</code>. Every push appends an <code>egress/index-push</code> record to the audit chain, and anything a backend returns is re-verified locally before use.</p>
 <nav class="secnav"><a class="pv" href="#domain">← Palace, wing, room, drawer</a><a class="nx" href="#write">The write path →</a></nav>
 </section>
 
@@ -593,7 +594,7 @@
 <figure>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 640" width="900" height="640" role="img" aria-labelledby="t_writepath d_writepath">
 <title id="t_writepath">Undercroft write path</title>
-<desc id="d_writepath">A drawer is normalized, has structure derived from it, is embedded, then sealed, tagged and chained inside one transaction. The manifest anchor is fsynced afterwards and lags on purpose.</desc>
+<desc id="d_writepath">A drawer is normalized, has structure derived from it, is embedded, then sealed, tagged and chained inside one transaction. The manifest anchor is fsynced afterwards and lags on purpose. On a single write the PQ row, the token matrix with its FDE row, and the FTS entry follow the anchor as advisory artifacts; bulk ingest writes them inside its batch transaction.</desc>
 <style>
   .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
   .h { font-size: 17px; font-weight: 600; }
@@ -647,8 +648,8 @@
 <text x="58" y="329" class="f l" fill="var(--d-teal-ink,#0d6b62)">seal</text>
 <text x="58" y="349" class="f b dim">XChaCha20-Poly1305 over content</text>
 <text x="58" y="365" class="f b dim">and embedding.</text>
-<text x="58" y="387" class="f s dim">AAD = the drawer id, plus distinct</text>
-<text x="58" y="403" class="f s dim">domains /emb · /tok · /pq</text>
+<text x="58" y="387" class="f s dim">AAD = the drawer id, and a distinct</text>
+<text x="58" y="403" class="f s dim">/emb domain for the embedding</text>
 
 <rect x="318" y="306" width="264" height="112" rx="7" fill="var(--d-card,#ffffff)" stroke="var(--d-teal,#12897e)" stroke-width="1.3"/>
 <text x="334" y="329" class="f l" fill="var(--d-teal-ink,#0d6b62)">tag</text>
@@ -664,24 +665,25 @@
 <text x="608" y="387" class="f s dim">so no committed write can exist</text>
 <text x="608" y="403" class="f s dim">without its audit entry</text>
 
-<text x="42" y="434" class="f s dim">Bulk ingest: one transaction and one anchor per batch, not per drawer — measured ≈55× fewer fsyncs at 200 drawers.</text>
+<text x="42" y="434" class="f s dim">Bulk ingest: one transaction and one anchor per batch, not per drawer, with the derived rows inside it — measured ≈55× fewer fsyncs at 200 drawers.</text>
 
 <path d="M450 446 L450 468" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 
-<rect x="24" y="472" width="404" height="70" rx="8" fill="var(--d-card,#ffffff)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.4"/>
-<text x="42" y="496" class="f l ink">6 · then, outside the transaction</text>
-<text x="42" y="516" class="f b dim">fsync the manifest anchor through an atomic</text>
-<text x="42" y="532" class="f b dim">rename + directory sync. WAL, synchronous=FULL.</text>
+<rect x="24" y="472" width="404" height="80" rx="8" fill="var(--d-card,#ffffff)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.4"/>
+<text x="42" y="494" class="f l ink">6 · then, outside the transaction</text>
+<text x="42" y="513" class="f b dim">fsync the manifest anchor through an atomic</text>
+<text x="42" y="528" class="f b dim">rename + directory sync. WAL, synchronous=FULL.</text>
+<text x="42" y="544" class="f s dim">Then, advisory: PQ row, token matrix + FDE row, FTS entry.</text>
 
-<rect x="440" y="472" width="436" height="70" rx="8" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.6"/>
+<rect x="440" y="472" width="436" height="80" rx="8" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.6"/>
 <text x="458" y="496" class="f l" fill="var(--d-green-ink,#22603c)">why the anchor lags on purpose</text>
 <text x="458" y="517" class="f b dim">anchor behind the db at open → power loss, fast-forward</text>
 <text x="458" y="534" class="f b dim">anchor ahead of the db at open → rollback, tamper alarm</text>
 
-<rect x="24" y="554" width="852" height="62" rx="8" fill="var(--d-red-bg,#fdf3f3)" stroke="var(--d-red,#b5453a)" stroke-width="1.4"/>
-<text x="42" y="578" class="f l" fill="var(--d-red-ink,#94382f)">The asymmetry is the detector</text>
-<text x="42" y="598" class="f b dim">An anchor that never runs ahead of the database is what makes "the machine lost power" and "someone restored an older</text>
-<text x="42" y="610" class="f b dim">copy of this file" distinguishable at all. That is why the invariant is directional, not just "keep them in sync".</text>
+<rect x="24" y="562" width="852" height="62" rx="8" fill="var(--d-red-bg,#fdf3f3)" stroke="var(--d-red,#b5453a)" stroke-width="1.4"/>
+<text x="42" y="586" class="f l" fill="var(--d-red-ink,#94382f)">The asymmetry is the detector</text>
+<text x="42" y="606" class="f b dim">An anchor that never runs ahead of the database is what makes "the machine lost power" and "someone restored an older</text>
+<text x="42" y="618" class="f b dim">copy of this file" distinguishable at all. That is why the invariant is directional, not just "keep them in sync".</text>
 
 <defs><marker id="a" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--d-line2,#8fa3b4)"/></marker></defs>
 </svg>
@@ -767,7 +769,7 @@
 <rect x="24" y="150" width="640" height="66" rx="8" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="1.8" stroke-dasharray="6 4"/>
 <circle cx="48" cy="183" r="13" fill="var(--d-teal,#12897e)"/><text x="48" y="188" class="f l" fill="var(--d-on,var(--d-card,#ffffff))" text-anchor="middle">2</text>
 <text x="72" y="176" class="f l" fill="var(--d-teal-ink,#0d6b62)">candidate prefilter — approximate</text>
-<text x="72" y="195" class="f b dim">PQ/IVF probes only nearby lists · FDE token-aware · HNSW graph</text>
+<text x="72" y="195" class="f b dim">PQ/IVF · FDE · HNSW, opt-in — hmac-only vaults also run FTS5 from 2,048 rows</text>
 <text x="72" y="211" class="f mono" fill="var(--d-teal-ink,#0d6b62)">UNDERCROFT_RETRIEVAL = pq | fde | hnsw</text>
 <rect x="676" y="150" width="200" height="66" rx="8" fill="var(--d-teal-bg2,#e8f6f4)" stroke="var(--d-teal,#12897e)"/>
 <text x="690" y="174" class="f s" fill="var(--d-teal-ink,#0d6b62)">measured at 20k drawers:</text>
@@ -840,8 +842,8 @@
 <figcaption>One query descending the stack, with measured latencies. <a href="diagrams/retrieval-stack.svg">SVG</a> · <a href="pdf/retrieval-stack.pdf">PDF</a></figcaption>
 </figure>
 
-<h3 id="retrieval-stage-2-candidate-prefilter-opt-in">Stage 2 — candidate prefilter <span class="pill off">opt-in</span></h3>
-<p>By default there is no prefilter at all: search scans every live drawer inside the declared scope, exactly. Past a certain size that becomes the dominant cost, and three approximate tiers exist to avoid it: <strong>PQ/IVF</strong> clusters vectors into lists and probes only the nearest ones (roughly O(√N)), <strong>MUVERA FDE</strong> gives token-aware candidates, and an experimental in-memory <strong>HNSW</strong> graph gives O(log N).</p>
+<h3 id="retrieval-stage-2-candidate-prefilter-partly-opt-in">Stage 2 — candidate prefilter <span class="pill off">partly opt-in</span></h3>
+<p>One prefilter needs no declaration, and only an hmac-only vault can run it. A sealed vault — the default level — never has it: it scans every live drawer inside the declared scope, exactly, because it has no lexical index to draw from. An hmac-only vault scans the same way until it holds <code>UNDERCROFT_FTS_PREFILTER_MIN</code> (2048) drawers. From there its FTS5 index draws a lexical top-k as the candidates for most queries, which is already a trade: a drawer that shares no term with the query is not among them, however close its meaning. Past a certain size the exact scan becomes the dominant cost, and three approximate tiers exist to avoid it: <strong>PQ/IVF</strong> clusters vectors into lists and probes only the nearest ones (roughly O(√N)), <strong>MUVERA FDE</strong> gives token-aware candidates, and an experimental in-memory <strong>HNSW</strong> graph gives O(log N).</p>
 <div class="note violet">
   <span class="tag">Measured</span>
   <p>On a deliberately adversarial 20,000-drawer corpus (every query lexically matching every drawer), flat scan ran at <strong>499 ms</strong> p50 while <code>UNDERCROFT_RETRIEVAL=pq</code> ran at <strong>12 ms</strong> p50 — a 41× difference. Two caveats before enabling it anywhere that matters: these tiers are <em>approximate</em>, so recall must be checked against a flat baseline first; and the first query after ingest pays a one-time index build, which wants warming at startup rather than ambushing a user. The 66 s that build took in that same test is <strong>no longer representative</strong> and is left here only so the shape is not mistaken for the cost: the rebuild loop wrote one row per autocommit insert, which under <code>synchronous=FULL</code> is one fsync per row, and roughly 95% of that number was disk syncs rather than computation. One transaction around the rewrite removed it — a smoke warm-up went 36.2 s to 2.3 s — and the build is now CPU-bound, with full-scale figures still to be measured.</p>
@@ -1333,7 +1335,7 @@
 <table>
   <thead><tr><th>Property</th><th>Mechanism</th></tr></thead>
   <tbody>
-    <tr><td>Confidentiality at rest</td><td>XChaCha20-Poly1305 over content, embeddings, ColBERT token matrices, and PQ index artifacts — each under a distinct AAD domain (<code>content</code>, <code>/emb</code>, <code>/tok</code>, <code>/pq</code>)</td></tr>
+    <tr><td>Confidentiality at rest</td><td>XChaCha20-Poly1305 over content, embeddings, ColBERT token matrices, FDE rows, PQ index artifacts, the knowledge graph's fact objects and — since A10 — its subjects, predicates and entity names, each under a distinct AAD domain (<code>content</code>, <code>/emb</code>, <code>/tok</code>, <code>fde/…/tok</code>, <code>/pq</code>, and <code>kg/</code> · <code>kgterms/</code> · <code>kgname/</code> for fact objects, subject and predicate, and entity names)</td></tr>
     <tr><td>Per-vault isolation</td><td>Keys derived per vault via HKDF from the master key; vault identity bound into AAD, so cross-vault reads fail cryptographically</td></tr>
     <tr><td>Row integrity</td><td>HMAC-SHA256 over <code>id ‖ meta_json ‖ sealed content</code>, verified on every read</td></tr>
     <tr><td>History integrity</td><td>Tamper-evident audit chain; head in <code>chain_meta</code>, advanced in the same transaction as the data</td></tr>
@@ -1351,7 +1353,7 @@
 <figure>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 826" width="900" height="826" role="img" aria-labelledby="t_securitylevels d_securitylevels">
 <title id="t_securitylevels">The two security levels and what each protects</title>
-<desc id="d_securitylevels">A vault is created Sealed or HmacOnly. Sealed encrypts content, embeddings, token matrices and index artifacts and has no full-text index; HmacOnly keeps content in plaintext and indexes it. Both carry a per-row HMAC and join the audit chain. Drawer metadata is unsealed at both levels, and the exposed fields are listed.</desc>
+<desc id="d_securitylevels">A vault is created Sealed or HmacOnly. Sealed encrypts content, embeddings, token matrices and index artifacts, blinds the knowledge graph's word columns behind sealed words, and has no full-text index; HmacOnly keeps content and graph words in plaintext and indexes the content. Both carry a per-row HMAC and join the audit chain. Drawer metadata is unsealed at both levels, and the exposed fields are listed.</desc>
 <style>
   .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
   .h { font-size: 17px; font-weight: 600; }
@@ -1393,22 +1395,26 @@
 <text x="568" y="264" class="f s" fill="var(--d-teal-ink,#0d6b62)" text-anchor="middle">encrypted</text>
 <text x="768" y="264" class="f s" fill="var(--d-amber-ink,#8d5a1d)" text-anchor="middle">in clear</text>
 
-<text x="42" y="290" class="f b ink">full-text (fts5) index</text>
-<text x="568" y="290" class="f s" fill="var(--d-red-ink,#993a30)" text-anchor="middle">never exists</text>
-<text x="768" y="290" class="f s" fill="var(--d-amber-ink,#8d5a1d)" text-anchor="middle">built, and used as a prefilter</text>
+<text x="42" y="290" class="f b ink">knowledge-graph words</text>
+<text x="568" y="290" class="f s" fill="var(--d-teal-ink,#0d6b62)" text-anchor="middle">blinded columns, sealed words</text>
+<text x="768" y="290" class="f s" fill="var(--d-amber-ink,#8d5a1d)" text-anchor="middle">in clear</text>
 
-<text x="42" y="316" class="f b" fill="var(--d-red-ink,#993a30)">drawer metadata (meta_json)</text>
-<text x="568" y="316" class="f s" fill="var(--d-red-ink,#993a30)" text-anchor="middle">UNSEALED</text>
-<text x="768" y="316" class="f s" fill="var(--d-red-ink,#993a30)" text-anchor="middle">UNSEALED</text>
+<text x="42" y="316" class="f b ink">full-text (fts5) index</text>
+<text x="568" y="316" class="f s" fill="var(--d-red-ink,#993a30)" text-anchor="middle">never exists</text>
+<text x="768" y="316" class="f s" fill="var(--d-amber-ink,#8d5a1d)" text-anchor="middle">built, and used as a prefilter</text>
 
-<line x1="42" y1="330" x2="858" y2="330" stroke="var(--d-line,#c9d4dd)" stroke-width="1"/>
-<text x="42" y="352" class="f b ink">per-row HMAC tag</text>
-<text x="568" y="352" class="f s" fill="var(--d-green-ink,#22603c)" text-anchor="middle">always — verified on every read</text>
-<text x="768" y="352" class="f s" fill="var(--d-green-ink,#22603c)" text-anchor="middle">always</text>
+<text x="42" y="342" class="f b" fill="var(--d-red-ink,#993a30)">drawer metadata (meta_json)</text>
+<text x="568" y="342" class="f s" fill="var(--d-red-ink,#993a30)" text-anchor="middle">UNSEALED</text>
+<text x="768" y="342" class="f s" fill="var(--d-red-ink,#993a30)" text-anchor="middle">UNSEALED</text>
 
-<text x="42" y="378" class="f b ink">audit chain entry</text>
-<text x="568" y="378" class="f s" fill="var(--d-green-ink,#22603c)" text-anchor="middle">always — same transaction</text>
-<text x="768" y="378" class="f s" fill="var(--d-green-ink,#22603c)" text-anchor="middle">always</text>
+<line x1="42" y1="354" x2="858" y2="354" stroke="var(--d-line,#c9d4dd)" stroke-width="1"/>
+<text x="42" y="374" class="f b ink">per-row HMAC tag</text>
+<text x="568" y="374" class="f s" fill="var(--d-green-ink,#22603c)" text-anchor="middle">always — verified on every read</text>
+<text x="768" y="374" class="f s" fill="var(--d-green-ink,#22603c)" text-anchor="middle">always</text>
+
+<text x="42" y="396" class="f b ink">audit chain entry</text>
+<text x="568" y="396" class="f s" fill="var(--d-green-ink,#22603c)" text-anchor="middle">always — same transaction</text>
+<text x="768" y="396" class="f s" fill="var(--d-green-ink,#22603c)" text-anchor="middle">always</text>
 
 <rect x="24" y="422" width="418" height="88" rx="9" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="1.5"/>
 <text x="42" y="446" class="f l" fill="var(--d-teal-ink,#0d6b62)">The standing rule for a sealed vault</text>
@@ -1503,20 +1509,22 @@
 <text x="42" y="306" class="f l ink">What every sealed blob authenticates alongside itself</text>
 <text x="42" y="326" class="f s dim">The AEAD's associated data is not decoration — it is what makes a ciphertext meaningful only in the exact position it was written.</text>
 
-<rect x="42" y="338" width="404" height="100" rx="7" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="1.4"/>
+<rect x="42" y="338" width="404" height="110" rx="7" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="1.4"/>
 <text x="58" y="358" class="f b" fill="var(--d-teal-ink,#0d6b62)">AAD = vault id + record id + domain</text>
-<text x="58" y="375" class="f mono dim">&lt;drawer id&gt;</text>
-<text x="200" y="375" class="f s dim">content</text>
-<text x="58" y="390" class="f mono dim">&lt;drawer id&gt;/emb</text>
-<text x="200" y="390" class="f s dim">embedding</text>
-<text x="58" y="405" class="f mono dim">&lt;drawer id&gt;/tok</text>
-<text x="200" y="405" class="f s dim">ColBERT token matrix</text>
-<text x="58" y="420" class="f mono dim">fde/&lt;drawer id&gt;/tok</text>
-<text x="200" y="420" class="f s dim">FDE row</text>
-<text x="58" y="435" class="f mono dim">pqrow/…/pq · pq/…</text>
-<text x="200" y="435" class="f s dim">PQ rows, pages, codebooks — index ids, not drawer ids</text>
+<text x="58" y="373" class="f mono dim">&lt;drawer id&gt;</text>
+<text x="200" y="373" class="f s dim">content</text>
+<text x="58" y="386" class="f mono dim">&lt;drawer id&gt;/emb</text>
+<text x="200" y="386" class="f s dim">embedding</text>
+<text x="58" y="399" class="f mono dim">&lt;drawer id&gt;/tok</text>
+<text x="200" y="399" class="f s dim">ColBERT token matrix</text>
+<text x="58" y="412" class="f mono dim">fde/&lt;drawer id&gt;/tok</text>
+<text x="200" y="412" class="f s dim">FDE row</text>
+<text x="58" y="425" class="f mono dim">pqrow/…/pq · pq/…</text>
+<text x="200" y="425" class="f s dim">PQ rows, pages, codebooks — index ids, not drawer ids</text>
+<text x="58" y="438" class="f mono dim">kg/… · kgterms/…</text>
+<text x="200" y="438" class="f s dim">fact objects and terms · kgname/… names</text>
 
-<rect x="458" y="338" width="400" height="100" rx="7" fill="var(--d-red-bg,#fdf2f1)" stroke="var(--d-red,#b5453a)" stroke-width="1.4"/>
+<rect x="458" y="338" width="400" height="110" rx="7" fill="var(--d-red-bg,#fdf2f1)" stroke="var(--d-red,#b5453a)" stroke-width="1.4"/>
 <text x="474" y="358" class="f b" fill="var(--d-red-ink,#993a30)">so all of these FAIL, not merely return nothing</text>
 <text x="474" y="379" class="f s dim">A blob copied from vault A into vault B — the id differs.</text>
 <text x="474" y="396" class="f s dim">A row's ciphertext moved onto another row — the record id differs.</text>
@@ -1549,8 +1557,8 @@
 <text x="42" y="698" class="f s dim">operator hosting the engine, is inside the boundary — no at-rest scheme changes that, and claiming otherwise would be dishonest.</text>
 <text x="42" y="719" class="f s dim">What it does buy, precisely: a stolen disk, a leaked backup, a snapshot, a decommissioned drive, or a copied database file yields ciphertext and</text>
 <text x="42" y="734" class="f s dim">the metadata inventory — never the words.</text>
-<text x="42" y="755" class="f s dim">The remote index tier is treated as <tspan class="f s" fill="var(--d-red-ink,#993a30)">untrusted</tspan> on the same reasoning: only sealed payloads are pushed to it, and anything it returns is</text>
-<text x="42" y="770" class="f s dim">re-verified locally against the vault's own HMAC before a single byte reaches the caller. An accelerator is not a source of truth.</text>
+<text x="42" y="755" class="f s dim">The remote index tier is <tspan class="f s" fill="var(--d-red-ink,#993a30)">untrusted</tspan>: a sealed vault pushes ciphertext plus embeddings and wing/room labels it reads in clear; hmac-only</text>
+<text x="42" y="770" class="f s dim">plaintext is refused without <tspan class="f mono">--allow-plaintext</tspan>. Every push is chain-recorded; results are re-verified against the vault's HMAC before use.</text>
 </svg>
 <figcaption>Derivation, the AAD every blob carries, rotation, and recipient-encrypted export. <a href="diagrams/security-keys.svg">SVG</a> · <a href="pdf/security-keys.pdf">PDF</a></figcaption>
 </figure>
@@ -1671,10 +1679,10 @@
 <figcaption>One write, one read, and the reconciliation that separates a crash from a rollback. <a href="diagrams/security-integrity.svg">SVG</a> · <a href="pdf/security-integrity.pdf">PDF</a></figcaption>
 </figure>
 
-<p>The chain records more than writes. Every <strong>export</strong> is chain-audited unconditionally and on every surface — one <code>egress/export</code> record binding the surface, the recipient, the record counts and the export's own payload digest, anchored like any write — because content leaving the palace is precisely the event a history is worth keeping about. The same rule covers the other two egresses: every <strong>index push</strong> appends <code>egress/index-push</code> — backend, collection, the count the backend actually acknowledged (a push that fails part-way records what left before it propagates the error) and whether the pushed content was plaintext — and every <strong>refine</strong> appends <code>egress/refine</code> binding the surface, the destination host, the model, the scope and the counts, on a dry run too, since the plaintext leaves either way, and on a run that dies mid-loop the count that actually left, recorded before the error propagates. <strong>Reads</strong> are audited only where a deployment declares it (<code>UNDERCROFT_READ_AUDIT=chain</code>), a per-query append being a real durability cost: one record per content-returning <em>read</em> carrying a <em>keyed fingerprint</em> of its subject rather than the text, plus the declared scope and the count. That covers <strong>two funnels</strong>, which is the whole of the lesson: the drawer doors (search, get, recent, list, diary, tunnel, closet, hallways, the admission queue) and the knowledge graph's own (kg-query, kg-timeline, kg-entities, kg-canonical), because the graph returns words distilled out of drawers and reading it reads the corpus through a different door. Bulk doors record once per call, never once per row — a caller made one request and the trail says so. An operator holding the key can later prove a specific read was made by recomputing that fingerprint; the record on its own says nothing about what was asked.</p>
+<p>The chain records more than writes. Every <strong>export</strong> is chain-audited unconditionally and on every surface — one <code>egress/export</code> record binding the surface, the recipient, the record counts and the export's own payload digest, anchored like any write — because content leaving the palace is precisely the event a history is worth keeping about. The same rule covers the other two recorded egresses: every <strong>index push</strong> appends <code>egress/index-push</code> — backend, collection, the count the backend actually acknowledged (a push that fails part-way records what left before it propagates the error) and whether the pushed content was plaintext — and every <strong>refine</strong> appends <code>egress/refine</code> binding the surface, the destination host, the model, the scope and the counts, on a dry run too, since the plaintext leaves either way, and on a run that dies mid-loop the count that actually left, recorded before the error propagates. Those three are not yet every path stored plaintext takes out, and that is a gap rather than a design: under a served embedder, <code>repair</code> re-embeds every drawer through the embedding endpoint and leaves only a <code>migrate/repair</code> record naming the model, never the destination host, while <code>admission allow</code> re-embeds the drawer it restores and a remote-index search re-embeds every verified hit, neither leaving an egress record. A neighbouring path is unrecorded as well and not yet ruled on: the tier-2 admission advisor posts each write candidate the deterministic screen passed to the LLM endpoint with no chain record, and whether that is egress is open, since the text is still the caller's rather than the vault's. <strong>Reads</strong> are audited only where a deployment declares it (<code>UNDERCROFT_READ_AUDIT=chain</code>), a per-query append being a real durability cost: one record per content-returning <em>read</em> carrying a <em>keyed fingerprint</em> of its subject rather than the text, plus the declared scope and the count. That covers <strong>two funnels</strong>, which is the whole of the lesson: the drawer doors (search, get, recent, list, diary, tunnel, closet, hallways, the admission queue) and the knowledge graph's own (kg-query, kg-timeline, kg-entities, kg-canonical), because the graph returns words distilled out of drawers and reading it reads the corpus through a different door. Bulk doors record once per call, never once per row — a caller made one request and the trail says so. An operator holding the key can later prove a specific read was made by recomputing that fingerprint; the record on its own says nothing about what was asked.</p>
 <div class="note amber">
   <span class="tag">One boundary, stated</span>
-  <p>A read runs behind a shared reference and therefore does <em>not</em> advance the manifest anchor. That is the legitimate crash shape the open-time reconciliation already fast-forwards — but it means read records between two anchored writes share that crash window, and an attacker with write access to the file could strip the unanchored tail undetected while it lasts. A write never stretches the window beyond the single in-flight record; reads can. What closes it is the next anchored write, or the reconciliation the next store open performs — so a deployment that wants the anchor kept tight is one that writes on a cadence of its own.</p>
+  <p>A read runs behind a shared reference and therefore does <em>not</em> advance the manifest anchor. That is the legitimate crash shape the open-time reconciliation already fast-forwards — but it means read records between two anchored writes share that crash window, and an attacker with write access to the file could strip the unanchored tail undetected while it lasts. A write never stretches the window beyond the single in-flight record; reads can. What closes it is the next anchored write, the reconciliation the next store open performs, or an explicit <code>undercroft vault anchor &lt;name&gt;</code> / <code>POST /v1/vaults/{id}/anchor</code> — operator-only, classified a write, refused on a read-only handle — so a long-lived server, which caches its handle and never re-opens, should run that on a cadence of its own rather than wait for a write or a restart.</p>
 </div>
 
 <h3 id="security-what-sealing-does-and-does-not-cover">What sealing does and does not cover</h3>
@@ -1847,7 +1855,7 @@
 <p>Screening is heuristic, so the retrieval layer assumes some poison gets through — and bounds it. The standing invariant: <strong>independent per-item scoring</strong>. The default embedder is a function of one drawer's text, MaxSim maximises over one drawer's rows, the admission gate is a constant, and the lexical channels are deliberately pairwise — so a poisoned drawer can win its own slot and nothing else. Anything that couples drawers (BM25's IDF, the trained codebooks) may <em>propose candidates, never decide score</em>; coupling in candidate generation risks availability, coupling in scoring would move what decides the answer outside HMAC coverage. <strong>BM25's IDF is the one exception, and it is stated rather than hidden</strong>: it is computed over the retrieved candidate pool, not the corpus (<code>bm25_raw</code> takes <code>n = cands.len()</code> and counts <code>df</code> across that slice), so a drawer that merely enters the pool shifts every other candidate's score. Making it corpus-global would <em>add</em> coupling, not remove it, so the honest accounting is the cost: pool-shaping makes df-flooding cheaper than a corpus-wide count by roughly corpus/pool — bounded to rank order inside one answer, never reaching HMAC-covered bytes. The codebooks' training draws are bounded three ways: vectors are L2-normalized before training, so influence is bought by <em>count</em>, not magnitude; a per-wing cap holds any wing to a fraction of every global sample (with a per-agent-claim cap as the accident bound across wings); and <em>which</em> rows train is a stratified keyed draw under a vault-secret key — reproducible per vault, unguessable to a bulk writer. Non-finite vectors from a caller-supplied embedding space are refused at the door. Since the per-wing index tier, a wing is an <em>enforceable trust zone</em> for scoped retrieval: poison in another wing can neither crowd a scoped query's candidates nor shape the codebook scoring them.</p>
 
 <h3 id="defense-nothing-crosses-a-wire-in-the-clear">Nothing crosses a wire in the clear</h3>
-<p>Every path that carries drawer content out of the process obeys one transport rule with no override: <strong>TLS or loopback, or it refuses to construct</strong>. The served embedder (<code>UNDERCROFT_EMBEDDER=http</code>) and every LLM consumer (<code>refine</code>, the admission advisor) refuse cleartext http to a non-loopback host, with the error naming the fix; <code>UNDERCROFT_EMBED_CA</code> and <code>UNDERCROFT_LLM_CA</code> declare self-signed roots as <em>pins</em> — public roots out, a garbage file refusing rather than silently un-pinning — and the compose <code>embeddings-tls</code> terminator ships the compliance infrastructure beside the refusal. What TLS cannot do is also stated: the endpoint still reads your text in plaintext, which is why the in-process postures exist. Remote vector indexes obey the same rule since 1.0.0, and that is a gap closed rather than a design always held: they had no transport policy at all, and pgvector was wired <code>NoTls</code> — so for that backend no TLS-compliant configuration existed. The argument for applying it there is that every push carries <strong>embeddings</strong>, and an embedding is plaintext-derived: the sealed-vault invariant seals vectors at rest for exactly that reason, so shipping them in clear over a network is the same exposure one hop out. <code>UNDERCROFT_INDEX_CA</code> pins a self-signed root, pgvector gets a real rustls connector, and the rule itself now lives in one crate (<code>undercroft-net</code>) that all three clients call, because two copies of one rule is two places for it to drift. They remain untrusted accelerators — at-rest content only, candidates re-verified locally, never a scoring authority — and an <code>hmac-only</code> vault, whose at-rest content <em>is</em> the plaintext, is refused unless the operator states otherwise.</p>
+<p>Every path that carries drawer content out of the process obeys one transport rule with no override: <strong>TLS or loopback, or it refuses to construct</strong>. The served embedder (<code>UNDERCROFT_EMBEDDER=http</code>) and every LLM consumer (<code>refine</code>, the admission advisor) refuse cleartext http to a non-loopback host, with the error naming the fix; <code>UNDERCROFT_EMBED_CA</code> and <code>UNDERCROFT_LLM_CA</code> declare self-signed roots as <em>pins</em> — public roots out, a garbage file refusing rather than silently un-pinning — and the compose <code>embeddings-tls</code> terminator ships the compliance infrastructure beside the refusal. What TLS cannot do is also stated: the endpoint still reads your text in plaintext, which is why the in-process postures exist. Remote vector indexes obey the same rule since 1.0.0, and that is a gap closed rather than a design always held: they had no transport policy at all, and pgvector was wired <code>NoTls</code> — so for that backend no TLS-compliant configuration existed. The argument for applying it there is that every push carries <strong>embeddings</strong>, and an embedding is plaintext-derived: the sealed-vault invariant seals vectors at rest for exactly that reason, so shipping them in clear over a network is the same exposure one hop out. <code>UNDERCROFT_INDEX_CA</code> pins a self-signed root, pgvector gets a real rustls connector, and the rule itself now lives in one crate (<code>undercroft-net</code>) that builds every outbound hop — the served embedder, the LLM client, the index backends (pgvector through a rustls configuration rather than an HTTP agent), the orchestrator's hop to its engines and the OTLP trace exporter — because two copies of one rule is two places for it to drift. They remain untrusted accelerators — at-rest content only, candidates re-verified locally, never a scoring authority — and an <code>hmac-only</code> vault, whose at-rest content <em>is</em> the plaintext, is refused unless the operator states otherwise.</p>
 <p>They are now held to the same retrieval <em>policy</em> as well, and that is a defect closed rather than a design always held: the closed-vocabulary checks, the trust floor and the quarantine fence all come out of one shared, required resolution step that the local and the remote search path both call, applied per candidate off each row's HMAC-verified wing. The remote path validated none of it, so an <code>index push</code> quietly turned <code>--backend qdrant</code> into a route around admission control — the same query answering with quarantined content and below-floor wings that <code>--backend local</code> hard-excluded. The fix is a shared step with a name, not a second copy of the rules; any future retrieval path has to call it too. One residue is stated rather than papered over: a push still mirrors quarantined rows, because a push-side filter is not a boundary (an untrusted mirror can offer any id it likes) and dropping them would empty the reviewer's own scope. Remotely, then, the floor bounds what comes <em>back</em> rather than what was generated — an availability cost, never an integrity one.</p>
 
 <div class="note amber">
@@ -1859,7 +1867,7 @@
 
 <section class="doc-section" id="config" aria-labelledby="h_config">
 <h2 id="h_config">Configuration reference</h2>
-<p class="lede">Everything is environment-driven, and every default is the conservative choice. <strong>What a bad value does follows from that</strong>: where the default is already conservative and a declaration merely adjusts it, garbage warns and keeps the default — you lose tuning and nothing else. Where the <em>declaration</em> is what turns a protection on, pins an outward path, or names which vector space a vault is in, the default is <em>off</em>, so a silent fallback removes exactly what was asked for: those <strong>refuse to open</strong>. That is &ldquo;integrity is not a tier&rdquo; extended by one step — a protection an operator declared must not become a tier by typo. <code>undercroft config check</code> runs every declaration through the resolver that runs at start-up, opens nothing, and exits non-zero if the environment would refuse; the classes are an inventory the code is counted against in both directions, so a new variable cannot ship unclassified. A <strong>second axis</strong> says whether this command runs a real parse for a declaration at all &mdash; because &ldquo;I checked nothing&rdquo; and &ldquo;there is nothing to check&rdquo; are different claims that print the same sentence. A path, a URL, a bearer or a model name is validated only by the thing that consumes it, and saying so is honest; saying it about a knob whose parse somebody forgot to wire up is not. That axis is declared per variable and counted both ways too, so the count an operator reads as &ldquo;not checked&rdquo; cannot quietly grow. That includes the four <code>UNDERCROFT_ORCH_*</code> the control plane reads: three were a coverage gap until 1.1.0, because their parses lived inside a binary the engine deliberately never links, and O24 closed it by moving them to <code>undercroft-config</code> &mdash; a leaf crate both link and neither owns, carved out on the precedent <code>undercroft-net</code> set. <code>undercroft-orchestrator config check</code> pre-flights the control plane standalone.</p>
+<p class="lede">Everything is environment-driven, and every default is the conservative choice. <strong>What a bad value does follows from that</strong>: where the default is already conservative and a declaration merely adjusts it, garbage warns and keeps the default — you lose tuning and nothing else. Where the <em>declaration</em> is what turns a protection on, pins an outward path, or names which vector space a vault is in, the default is <em>off</em>, so a silent fallback removes exactly what was asked for: those <strong>refuse to open</strong>. That is &ldquo;integrity is not a tier&rdquo; extended by one step — a protection an operator declared must not become a tier by typo. <code>undercroft config check</code> runs every declaration through the resolver that runs at start-up, opens nothing, and exits non-zero if the environment would refuse; the classes are an inventory the code is counted against in both directions, so a new variable cannot ship unclassified. A <strong>second axis</strong> says whether this command runs a real parse for a declaration at all &mdash; because &ldquo;I checked nothing&rdquo; and &ldquo;there is nothing to check&rdquo; are different claims that print the same sentence. A path, a URL, a bearer or a model name is validated only by the thing that consumes it, and saying so is honest; saying it about a knob whose parse somebody forgot to wire up is not. That axis is declared per variable and counted both ways too, so the count an operator reads as &ldquo;not checked&rdquo; cannot quietly grow. That includes the eight <code>UNDERCROFT_ORCH_*</code> the control plane reads (seven with a parse the pre-flight runs; the database path is opaque): three were a coverage gap until 1.1.0, because their parses lived inside a binary the engine deliberately never links, and O24 closed it by moving them to <code>undercroft-config</code> &mdash; a leaf crate both link and neither owns, carved out on the precedent <code>undercroft-net</code> set. <code>undercroft-orchestrator config check</code> pre-flights the control plane standalone.</p>
 
 <h3 id="config-core">Core</h3>
 <table>
@@ -1875,7 +1883,7 @@
 <table>
   <thead><tr><th>Variable</th><th>Default</th><th>Effect</th></tr></thead>
   <tbody>
-    <tr><td><code>UNDERCROFT_RETRIEVAL</code></td><td>unset — flat scan</td><td><code>pq</code> · <code>fde</code> · <code>hnsw</code> (feature-gated). Approximate; verify recall before relying on it. <code>hnsw</code> is an <strong>in-process index and single-vault only</strong> — the multi-tenant server refuses it (use <code>pq</code> or <code>fde</code> there)</td></tr>
+    <tr><td><code>UNDERCROFT_RETRIEVAL</code></td><td>unset — exact scan (an hmac-only vault still runs its FTS5 prefilter from <code>UNDERCROFT_FTS_PREFILTER_MIN</code> drawers)</td><td><code>pq</code> · <code>fde</code> · <code>hnsw</code> (feature-gated). Approximate; verify recall before relying on it. <code>hnsw</code> is an <strong>in-process index and single-vault only</strong> — the multi-tenant server refuses it (use <code>pq</code> or <code>fde</code> there)</td></tr>
     <tr><td><code>UNDERCROFT_FUSION</code></td><td><code>bm25</code></td><td><code>bm25</code> · <code>legacy</code> (<code>rrf</code> removed; warns, falls back)</td></tr>
     <tr><td><code>UNDERCROFT_FUSION_WEIGHT</code></td><td>0.55</td><td>The blend's semantic weight <em>w</em> in <em>w</em>·semantic + (0.90−<em>w</em>)·lexical + 0.10·recency. Declared and clamped to 0.20–0.70 — no configuration can retire a channel; one global value, never per-query</td></tr>
     <tr><td><code>UNDERCROFT_TRUST_FLOOR</code></td><td>unset — no floor</td><td>Vault-level minimum wing trust (<code>quarantined</code> · <code>standard</code> · <code>trusted</code>): unscoped <strong>reads</strong> — search, <code>recent</code>/<code>wake_up</code> and <code>list_drawers</code> alike — exclude wings the operator assigned below it, resolved before candidates are drawn so a quarantined wing can neither crowd the pool nor starve an answer. Explicitly naming a wing bypasses the vault floor (self-scoping); a request's own <code>min_trust</code> is never bypassed. Garbage REFUSES to open — a floor that does not parse would silently apply none</td></tr>
@@ -1956,7 +1964,7 @@
     <tr><td><code>UNDERCROFT_WEAVIATE_URL</code></td><td>Weaviate</td></tr>
   </tbody>
 </table>
-<p>These receive sealed content only, and everything they return is re-verified locally. They accelerate candidate generation; they are never trusted as a source of truth — and since the shared policy step, a mirrored search applies the same closed-vocabulary checks, trust floor and quarantine fence as a local one. A mirror is an accelerator, not a different policy.</p>
+<p>These receive each drawer's at-rest content — ciphertext from a sealed vault — beside its embedding, wing and room, which they read in clear; an <code>hmac-only</code> vault's push, which would send plaintext, is refused unless <code>index push --allow-plaintext</code> declares it, and every push is chain-recorded as <code>egress/index-push</code>. Everything they return is re-verified locally. They accelerate candidate generation; they are never trusted as a source of truth — and since the shared policy step, a mirrored search applies the same closed-vocabulary checks, trust floor and quarantine fence as a local one. A mirror is an accelerator, not a different policy.</p>
 
 <h3 id="config-observability-compiled-out-by-default">Observability <span class="pill off">compiled out by default</span></h3>
 <table>
@@ -1978,7 +1986,11 @@
   <tbody>
     <tr><td><code>wing</code> · <code>room</code> · <code>limit</code></td><td><code>POST /v1/vaults/{id}/search</code></td><td>Scope and budget</td></tr>
     <tr><td><code>room_cap</code></td><td>same</td><td>Soft per-room cap on selection. Absent = pure score order</td></tr>
+    <tr><td><code>kind</code> · <code>min_trust</code></td><td>same, CLI <code>search</code> flags, MCP <code>search</code> arguments</td><td>Declared-kind filter and a per-query trust floor, both closed vocabularies: an unknown value is refused, never an empty result. While <code>kind</code> is set, drawers with no declared kind are excluded and the reply says how many</td></tr>
+    <tr><td><code>language</code> · <code>week_start</code> · <code>date_order</code> · <code>calendar</code></td><td>same, CLI <code>search</code> flags, MCP <code>search</code> arguments</td><td>The read-time locale: which scanner reads the dates in the text, which day starts a week, which field a bare numeric date puts first, and which calendar counted a year. <code>language</code> also selects the morphology the lexical channels apply; left undeclared, morphology reads each drawer's own function words. Read-time, so no re-ingest needed</td></tr>
+    <tr><td><code>when</code> · <code>when_slack_days</code> · <code>when_from_query</code></td><td>same, CLI <code>search</code> flags, MCP <code>search</code> arguments</td><td>A date window: narrow to drawers whose <code>content_date</code> falls inside a declared range, widened by the slack, or read the window out of the query and top the candidate pool up with the drawers dated inside it. Off by default; the reply names the window that ran</td></tr>
     <tr><td><code>content_date</code></td><td><code>POST …/drawers</code>, CLI <code>remember</code>, MCP <code>save</code> / <code>add_drawer</code></td><td>When the content happened</td></tr>
+    <tr><td><code>kind</code></td><td><code>POST …/drawers</code>, CLI <code>remember</code>, MCP <code>save</code> / <code>add_drawer</code></td><td>The declared record kind, from the same closed vocabulary; an unknown value is refused rather than stored as a label no filter could reach</td></tr>
     <tr><td><code>dedup_threshold</code></td><td><code>POST …/drawers</code></td><td>Similarity above which a near-duplicate refreshes the existing drawer instead of inserting. A tuning field, never a bypass: it once routed the save to a writer that skipped the admission screen, and screening now sits at the choke point both writers share</td></tr>
     <tr><td><code>fact_room</code> · <code>wing</code> · <code>room</code> · <code>limit</code></td><td><code>POST …/refine</code></td><td>Which drawers to distil and where fact-drawers land</td></tr>
   </tbody>

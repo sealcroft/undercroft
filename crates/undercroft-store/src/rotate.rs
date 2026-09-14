@@ -1237,12 +1237,11 @@ mod tests {
              CLAUDE.md invariant.{moved}"
         );
         // Audit labels: a PREFIX check, not equality. Rotation must not
-        // rewrite an existing label — but it is legitimate for it to APPEND
-        // one, and ROADMAP A19 is the open item that says it should (a key
-        // rotation is the largest single mutation the engine can perform and
-        // currently leaves no chain record of itself). Asserting equality
-        // here would have turned A19's own fix into a failing gate with a
-        // message accusing it of rewriting history.
+        // rewrite an existing label — but it legitimately APPENDS one: since
+        // A19 a key rotation, the largest single mutation the engine can
+        // perform, records itself in the chain (asserted below). Asserting
+        // equality here would have turned that record into a failing gate
+        // with a message accusing it of rewriting history.
         let relabelled = diff(&before.audit, &after.audit);
         assert!(
             relabelled.is_empty() && after.audit.starts_with(&before.audit),

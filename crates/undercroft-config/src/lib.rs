@@ -131,10 +131,15 @@ pub fn resolve_admin_token(declared: Option<&str>) -> Result<String, ConfigError
 /// Whether a listen address is loopback.
 ///
 /// `pub` since O160, because the `UNDERCROFT_ORCH_ADDR` pre-flight names the
-/// exposure in its success line. **A byte-identical inline copy lives at
-/// `undercroft-cli`'s `http.rs`**, guarding the ENGINE's refuse-to-bind rule;
-/// unifying them is filed rather than done here, because that is a change to a
-/// different listener's security gate and wants its own counterfactual.
+/// exposure in its success line. **The ENGINE's refuse-to-bind rule in
+/// `undercroft-cli`'s `http.rs` does not call this and does not agree with
+/// it**, though this line called it a byte-identical copy until 2026-09-14.
+/// That check compares the bare `--host` with the same three literals; this
+/// splits a `host:port` at the last colon, so given `"::1"` it takes host `":"`
+/// and answers false where the engine's check answers true. A drop-in would
+/// therefore refuse `--host ::1` without a token. Unifying them behind one
+/// host-only predicate is ROADMAP O177, not done here: it changes a different
+/// listener's security gate and wants its own counterfactual.
 ///
 /// Deliberately conservative and deliberately NOT a hand-rolled host parse:
 /// anything this cannot positively identify as loopback counts as exposed, so

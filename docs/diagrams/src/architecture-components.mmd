@@ -36,6 +36,7 @@ flowchart TB
     cli --> index
     cli --> llm
     cli --> obs
+    cli --> net
     cli -. "features onnx / ort" .-> onnx
     cli -. "features onnx / ort" .-> ort
     onnx --> core
