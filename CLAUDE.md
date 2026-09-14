@@ -381,7 +381,12 @@ Consequences that are binding, not advisory:
   the host clock, so a vault answers identically on every machine), hashed
   n-gram embedder (`embed.rs`: `Embedder` trait + `HashEmbedder`), reranker
   trait (`rerank.rs`: `Reranker`), late-interaction trait + MaxSim + int8
-  token packing (`late.rs`: `LateInteraction`), conversation parsing, entities
+  token packing (`late.rs`: `LateInteraction`), conversation parsing, entities,
+  and the model-panic boundary (`contain.rs`: `contain`, ROADMAP O150 — a
+  `catch_unwind` that maps a panic to the caller's own error, truncating the
+  payload to 256 bytes on a char boundary; deliberately no counter, since the
+  count belongs to the role's degrade arm where `DEGRADE_ARMS` can see it, and
+  no panic hook, since a hook is a process global)
 - `crates/undercroft-vault` — security layer (**the per-vault database is
   `vault.db` since 1.5.0, beside `vault.json` — O7: `palace` had named both
   the installation and each vault's file, and the installation keeps the
@@ -1284,8 +1289,16 @@ Consequences that are binding, not advisory:
   in-test (a ~2 KB ONNX graph + a WordLevel tokenizer, no committed bytes)
   drives all nine through the real trait methods on the real types. Route R
   measured a divergence between two SHIPPED backends nobody had run: an id
-  past the embedding table makes tract PANIC and ORT report a counted
-  degrade (O150).
+  past the embedding table made tract PANIC — on all five doors, not only the
+  embedder — and ORT report a counted degrade. **O150 CONTAINS it**: one
+  `undercroft_core::contain::contain` around each role's WHOLE inner body on
+  both backends (eight bodies, `CONTAINED_FNS` in `parity.rs`, which also
+  requires every tokenizer encode, tract plan run and ORT batch run to be
+  CALLED from inside one), a `Panicked` variant flowing into the degrade arm
+  that role already counts — so `DEGRADE_ARMS` stays nine — ORT's poisoned
+  session lock recovered rather than `expect`ed, and `compile_error!` on
+  `panic = "abort"` in both crates, since nothing else can see an abort
+  build.
   The same transport policy covers `LlmClient` itself (2026-08-04):
   refine and the admission advisor refuse cleartext beyond loopback,
   `UNDERCROFT_LLM_CA` pins a self-signed root, construction is fallible.
@@ -1324,7 +1337,14 @@ Consequences that are binding, not advisory:
   verbatim, which is result-preserving and NOT scheduling-preserving.
   `score_batch` still collapses the WHOLE window on one failing pair where
   tract degrades per passage; that divergence is PINNED as a named cost and
-  ruled in O151
+  ruled in O151. **ORT is contained too (O150)** although it refuses an
+  out-of-table id with a typed error: its tokenizer runs before the session
+  lock and its pooling indexes after it. Its three session locks RECOVER from
+  poisoning (`PoisonError::into_inner`) — `expect` turned one contained panic
+  into a panic on every later call, on the pool every tenant shares — which is
+  sound because ort 2.0.0-rc.10's run is one FFI call and the only Rust it
+  calls back into is an `extern "system"` logger, where a panic aborts rather
+  than unwinds; a claim that rests on that exact pin
 - `crates/undercroft-cli` — `undercroft` binary (main.rs: CLI, plus `Posture`
   — `open_store_as` makes read-vs-write something a caller must STATE, so
   `serve-http --read-only` opens BOTH its stores read-only; the two opens
@@ -1926,8 +1946,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (859 run,
-                                      # 4 #[ignore]d = 863 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (864 run,
+                                      # 4 #[ignore]d = 868 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2119,7 +2139,7 @@ docker compose run --rm obs-config    # the observability CONFIG suite (13 check
                                       # warning fleet-wide. The only symptom of
                                       # that class is an alert that never
                                       # arrives, which is why it needs a suite
-docker compose run --rm onnx-build    # build the tract backend + RUN its tests (10 run, 3 ignored)
+docker compose run --rm onnx-build    # build the tract backend + RUN its tests (14 run, 3 ignored)
                                       # `cargo build` does not compile #[cfg(test)] code,
                                       # so until O134a these tests were compiled by
                                       # NOTHING — three of the four that existed returned
@@ -2130,7 +2150,7 @@ docker compose run --rm onnx-build    # build the tract backend + RUN its tests 
                                       # numbers: three tests here are #[ignore]d, and a
                                       # single `run` figure cannot tell a deleted test
                                       # from a newly ignored one
-docker compose run --rm ort-build     # the ORT backend + the CLI model join (11 run, 1 ignored), built
+docker compose run --rm ort-build     # the ORT backend + the CLI model join (18 run, 1 ignored), built
                                       # --features onnx,ort. No cargo test target runs in two legs,
                                       # or a figure is counted twice: this leg tests
                                       # undercroft-embed-ort and runs ONE target from outside it,

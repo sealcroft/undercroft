@@ -90,6 +90,22 @@ observability stack fires `EmbedFailures` on the first one. The in-process
 way; until O122 they counted nothing. The remedy is the same for all three:
 `UNDERCROFT_FORCE_EMBEDDER=1` + `undercroft repair` re-embeds every row.
 
+**A panic inside a model is a failure like any other** (ROADMAP O150). A
+tokenizer and model that do not belong together can produce a token id past
+the model's embedding table, and on `onnx` that PANICKED inside the runtime —
+on every model role, not only the embedder. The panic ended the process: a
+`serve-http` answered that one request with a bare 500 and stopped serving, a
+`serve-mcp` closed without replying, and on the ColBERT late stage it did so
+after the drawer had already been saved, so a client that retried saved it
+twice. Both in-process backends now catch a panic
+inside each role's inference and route it to the same counted degrade as any
+other failure, so the write lands, the count moves, and the process keeps
+answering; the degrade line reads `inference panicked: …` so you can tell a
+caught crash from an ordinary refusal. `ort` refuses that id with a typed error
+and never panicked on it, but its tokenizer runs before the runtime, so it is
+guarded the same way. This depends on unwinding: a build with
+`panic = "abort"` refuses to compile rather than silently losing the guard.
+
 ## `onnx` / `ort` — in-process, nothing leaves
 
 For `ort`, no build is required: every release ships `…-<target>-ort`
@@ -147,7 +163,9 @@ crate's own tests** — which, since ROADMAP O134a, execute every counted
 degrade arm against a model fixture the tests generate, so no weights are
 committed and none are downloaded. Since ROADMAP O157 `ort-build` also drives
 the real `undercroft` binary with each backend over that fixture, and asserts
-that each model role's failures reach `stats` on the CLI, `/v1` and MCP.
+that each model role's failures reach `stats` on the CLI, `/v1` and MCP — and,
+since ROADMAP O150, that a write or search carrying the token id past the
+embedding table leaves `/v1` and MCP answering on both backends.
 
 ## Exporting a model (out of repo, on purpose)
 

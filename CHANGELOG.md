@@ -7,6 +7,33 @@ its CLI mirror `tenant-repoint` are additive — nothing that worked before
 behaves differently because they exist. Everything else in this section is a
 fix whose only observable change is that a defect is gone.
 
+### a panic inside a model is caught and counted instead of ending the process (O150)
+
+On the pure-Rust `onnx` backend, a tokenizer and model that do not belong
+together can produce a token id past the model's embedding table, and that
+panicked inside the runtime — for the embedder, the reranker and both sides of
+the ColBERT late stage. The panic ended the process: `serve-http` answered that
+one request with a bare 500 and then stopped serving, `serve-mcp` closed without
+replying, and on the late stage it happened after the drawer had already been
+saved, so a client that retried saved it twice. Each model role's inference now runs inside a boundary, on both
+in-process backends, that turns a panic into the same counted degrade as any
+other failure: the write lands verbatim, `embed_failures`, `rerank_failures` or
+`late_failures` moves, and the degrade line reads `inference panicked: …` so a
+caught crash can be told from an ordinary refusal. The `ort` backend never
+panicked on that id, but its tokenizer runs before the runtime, so it is guarded
+the same way, and a session lock that a caught panic poisons is recovered rather
+than turning every later call on that session into a panic of its own. A build
+with `panic = "abort"` now refuses to compile, because it would silently remove
+the boundary. Nothing that worked before behaves differently, and no
+configuration changes.
+
+Internally, the tests that classified the out-of-table outcome were first made
+to fail on the fixed outcome, the failing run was recorded, and they were then
+re-pinned as one test per model door on each backend; a source gate requires
+every tokenizer and runtime call that can panic to sit inside a guarded body;
+and the model join now drives the out-of-table word through `/v1`, MCP and the
+CLI and requires each process to keep answering.
+
 ### the ROADMAP heading gates see what a fenced block, a stray release heading and a broken scanner used to hide (O162)
 
 Internal tooling, no user-visible change.

@@ -28,14 +28,18 @@
 //! every calibration embed, so those deltas are functions of the requests
 //! alone; exact `+1` rather than "greater" is what catches a double count.
 //!
-//! **`fixture::OUT_OF_TABLE_WORD` is deliberately never driven** (ROADMAP
-//! O150): under `UNDERCROFT_EMBEDDER=onnx` it panics, and the panic unwinds
-//! out of the single-threaded `/v1` and MCP stdio loops and ends the process.
-//! Every arm drives `fixture::REFUSED_WORD`, which fails in the tokenizer on
-//! both backends. When O150's boundary lands, the follow-on arm belongs here:
-//! a write carrying that word answers, and a LATER `stats` on the same server
-//! reports it. `this_join_never_drives_the_out_of_table_trigger` keeps the
-//! word out until then.
+//! **`fixture::OUT_OF_TABLE_WORD` is driven, and every process must SURVIVE
+//! it** (ROADMAP O150). Under `UNDERCROFT_EMBEDDER=onnx` that word panicked,
+//! and the panic unwound out of the single-threaded `/v1` and MCP stdio loops
+//! and ended the process — which read as a bare 500 on `/v1` (`tiny_http`
+//! answers a request dropped during the unwind) and an EOF on MCP, never as a
+//! count. O150 contains it, and the three `*_survives_*` arms drive it on
+//! every surface that reaches each role, asserting in this order: the degrade
+//! line says WHICH failure it was (a contained panic on tract, a typed refusal
+//! on ORT — so a fixture that stopped panicking fails there, first), the count
+//! moved, the drawer is verbatim, and the same process still answers. The
+//! other arms drive `fixture::REFUSED_WORD`, which fails in the tokenizer on
+//! both backends.
 
 use std::io::{Read as _, Write as _};
 use std::net::TcpStream;
@@ -56,6 +60,13 @@ const RERANK_FAILED: &str = "error: rerank failed (";
 const DOC_ENCODE_FAILED: &str = "error: late-interaction doc encode failed (";
 const QUERY_ENCODE_FAILED: &str = "error: late-interaction query encode failed (";
 const NOT_BUILT: &str = "requires a build with";
+/// The `Panicked` variant's display: what a degrade line carries when the
+/// failure was a CONTAINED panic (ROADMAP O150). tract reports an out-of-table
+/// id this way.
+const CONTAINED_PANIC: &str = "inference panicked: ";
+/// The `Inference` variant's display: a TYPED refusal. ONNX Runtime refuses an
+/// out-of-table id this way, and must never report it as a panic.
+const TYPED_REFUSAL: &str = "inference failed: ";
 
 /// The tests spawn servers and load models: run them one at a time, so a port
 /// chosen free cannot be taken before it is bound and two model runtimes never
@@ -351,7 +362,8 @@ impl Server {
         self.call("GET", &format!("/v1/vaults/{vault}/stats"), None, 200)
     }
 
-    fn save(&self, content: &str) {
+    /// A `/v1` save that must file, answering with the id it filed under.
+    fn save(&self, content: &str) -> String {
         let saved = self.call(
             "POST",
             "/v1/vaults/default/drawers",
@@ -359,6 +371,10 @@ impl Server {
             200,
         );
         assert_eq!(saved["quarantined"], json!(false), "{saved}");
+        saved["id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("a save answered with no id: {saved}"))
+            .to_string()
     }
 }
 
@@ -434,6 +450,181 @@ fn is_poisoned(hit: &Value) -> bool {
         .as_str()
         .unwrap_or_else(|| panic!("hit without content: {hit}"))
         .contains(fixture::REFUSED_WORD)
+}
+
+/// A memory carrying the word whose id is past the fixture's embedding table
+/// (ROADMAP O150).
+fn out_of_table() -> String {
+    format!("alpha {}", fixture::OUT_OF_TABLE_WORD)
+}
+
+/// The id in an MCP `saved drawer <id> in <wing>/<room>` reply.
+fn saved_id(reply: &str) -> String {
+    reply
+        .strip_prefix("saved drawer ")
+        .and_then(|rest| rest.split(' ').next())
+        .unwrap_or_else(|| panic!("not a save reply: {reply}"))
+        .to_string()
+}
+
+/// **ROADMAP O150's premise, read before any count.** The degrade lines in
+/// `log` carrying `prefix`, each required to say WHICH failure it was: tract
+/// CONTAINS a panic on an out-of-table id, ONNX Runtime REFUSES it with a
+/// typed error. A line on the wrong side means the arm reached a different
+/// failure than it claims to test, and a fixture that stopped panicking
+/// produces no line at all — both fail HERE, by name, rather than as a count
+/// that did not move. `exactly` is `None` where the number of lines is the
+/// backend's own business: a reranked window (ROADMAP O151).
+fn assert_out_of_table_lines(
+    panics: bool,
+    prefix: &str,
+    log: &str,
+    exactly: Option<usize>,
+    what: &str,
+) {
+    let lines: Vec<&str> = log.lines().filter(|l| l.contains(prefix)).collect();
+    // Zero lines first, in both modes, so a trigger that stopped triggering is
+    // named as that rather than as a count that came out one short.
+    assert!(
+        !lines.is_empty(),
+        "{what}: PREMISE — the out-of-table trigger reached no `{prefix}` degrade, so this arm tested nothing (did the fixture stop failing?):\n{log}"
+    );
+    if let Some(n) = exactly {
+        assert_eq!(
+            lines.len(),
+            n,
+            "{what}: expected exactly {n} `{prefix}` line(s):\n{log}"
+        );
+    }
+    for line in lines {
+        if panics {
+            assert!(
+                line.contains(CONTAINED_PANIC),
+                "{what}: tract must report a CONTAINED panic: {line}"
+            );
+        } else {
+            assert!(
+                line.contains(TYPED_REFUSAL) && !line.contains(CONTAINED_PANIC),
+                "{what}: ONNX Runtime must refuse with a typed error, never a panic: {line}"
+            );
+        }
+    }
+}
+
+/// A `serve-mcp` stdio session driven one call at a time, so a later call can
+/// name an id an earlier one returned — which `mcp` cannot, because it writes
+/// every call before it reads any reply. stderr lands in a FILE (a pipe nobody
+/// drains can block the child), stdout is read on a thread so every wait is
+/// bounded, and the child is killed however the test ends.
+struct McpSession {
+    child: std::process::Child,
+    stdin: Option<std::process::ChildStdin>,
+    replies: std::sync::mpsc::Receiver<String>,
+    log: PathBuf,
+    next_id: u64,
+}
+
+impl McpSession {
+    fn spawn(mut c: Command, log_dir: &Path, label: &str) -> McpSession {
+        let log = log_dir.join(format!("serve-mcp-{label}.log"));
+        let file = std::fs::File::create(&log).expect("serve-mcp log");
+        c.arg("serve-mcp")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(file);
+        let mut child = c.spawn().expect("serve-mcp spawns");
+        let stdin = child.stdin.take();
+        let stdout = child.stdout.take().expect("serve-mcp stdout");
+        let (tx, replies) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            use std::io::BufRead as _;
+            for line in std::io::BufReader::new(stdout).lines() {
+                let Ok(line) = line else { break };
+                if tx.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        McpSession {
+            child,
+            stdin,
+            replies,
+            log,
+            next_id: 0,
+        }
+    }
+
+    fn log_text(&self) -> String {
+        std::fs::read_to_string(&self.log).unwrap_or_default()
+    }
+
+    /// One tool call, answering with its reply text, asserted not to be an
+    /// error. A reply that never comes fails naming why: EOF means the process
+    /// ended, which is what an uncontained panic does to this loop.
+    fn call(&mut self, name: &str, args: Value) -> String {
+        self.next_id += 1;
+        let id = self.next_id;
+        let msg = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/call",
+            "params": { "name": name, "arguments": args },
+        });
+        let written = match self.stdin.as_mut() {
+            Some(stdin) => writeln!(stdin, "{msg}").and_then(|()| stdin.flush()),
+            None => Err(std::io::Error::other("stdin is already closed")),
+        };
+        if let Err(e) = written {
+            panic!(
+                "{name}: writing to serve-mcp failed ({e}) — the process may have ended:\n{}",
+                self.log_text()
+            );
+        }
+        loop {
+            match self.replies.recv_timeout(Duration::from_secs(120)) {
+                Ok(line) => {
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    let reply: Value = serde_json::from_str(&line)
+                        .unwrap_or_else(|e| panic!("MCP reply is not JSON ({e}): {line}"));
+                    if reply["id"].as_u64() != Some(id) {
+                        continue;
+                    }
+                    assert_eq!(
+                        reply["result"]["isError"],
+                        json!(false),
+                        "{name} failed: {line}\n--- serve-mcp log\n{}",
+                        self.log_text()
+                    );
+                    return reply["result"]["content"][0]["text"]
+                        .as_str()
+                        .unwrap_or_else(|| panic!("MCP reply with no text: {line}"))
+                        .to_string();
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => panic!(
+                    "{name}: EOF — serve-mcp closed its stdout without replying, so the process ended:\n{}",
+                    self.log_text()
+                ),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => panic!(
+                    "{name}: no reply within 120 s:\n{}",
+                    self.log_text()
+                ),
+            }
+        }
+    }
+
+    fn count(&mut self, key: &str) -> u64 {
+        count(&status(&self.call("undercroft_status", json!({}))), key)
+    }
+}
+
+impl Drop for McpSession {
+    fn drop(&mut self) {
+        drop(self.stdin.take());
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
 }
 
 /// **The embedder.** A failed embed stores a zero vector — lexically findable,
@@ -859,22 +1050,306 @@ fn model_late_failures_reach_mcp_and_cli_and_v1_refuses_the_stage() {
     }
 }
 
-/// The out-of-table trigger may appear in this file's COMMENTS only, until
-/// ROADMAP O150's boundary lands and the follow-on arm is added.
+/// **The embedder SURVIVES an out-of-table write** (ROADMAP O150, the O157
+/// follow-on). Before O150 this write ended the `/v1` server and the MCP
+/// session under `onnx`. On each surface, in order: the degrade line says
+/// which failure it was, the count moved by exactly one, the drawer is
+/// verbatim, and the SAME process files and finds a healthy memory afterwards.
 #[test]
-fn this_join_never_drives_the_out_of_table_trigger() {
-    let needle = concat!("OUT_OF_", "TABLE_WORD");
-    let src = include_str!("model_e2e.rs");
-    let (comments, live): (Vec<&str>, Vec<&str>) = src
-        .lines()
-        .filter(|l| l.contains(needle))
-        .partition(|l| l.trim_start().starts_with("//"));
-    assert!(
-        !comments.is_empty(),
-        "premise: the module doc names the word it excludes, so this scan read the right file"
-    );
-    assert!(
-        live.is_empty(),
-        "the out-of-table trigger kills the /v1 loop under onnx until ROADMAP O150: {live:?}"
-    );
+fn model_embedder_survives_an_out_of_table_write_on_v1_mcp_and_cli() {
+    let _serial = serial();
+    let word = out_of_table();
+    for (backend, panics) in [("onnx", true), ("ort", false)] {
+        let home = tempfile::tempdir().expect("home");
+        let h = home.path();
+        let fx = fixture_files();
+        let env = declared(&vec![
+            ("UNDERCROFT_EMBEDDER", backend.to_string()),
+            ("UNDERCROFT_ONNX_MODEL", fx.model.clone()),
+            ("UNDERCROFT_ONNX_TOKENIZER", fx.tokenizer.clone()),
+            ("UNDERCROFT_ONNX_NAME", format!("fixture-{backend}")),
+        ]);
+        succeeds(&cli(h, &env, &["init"]), "init");
+
+        {
+            let server = Server::spawn(child(h, &env), h);
+            let e0 = count(&server.stats("default"), "embed_failures");
+            let id = server.save(&word);
+            assert_out_of_table_lines(
+                panics,
+                EMBED_FAILED,
+                &server.log_text(),
+                Some(1),
+                &format!("{backend}, /v1 save"),
+            );
+            assert_eq!(
+                count(&server.stats("default"), "embed_failures"),
+                e0 + 1,
+                "{backend}: the out-of-table /v1 write counts exactly once"
+            );
+            let got = server.call(
+                "GET",
+                &format!("/v1/vaults/default/drawers/{id}"),
+                None,
+                200,
+            );
+            assert_eq!(
+                got["drawer"]["content"],
+                json!(word),
+                "{backend}: the drawer is verbatim despite its degraded embed: {got}"
+            );
+            server.save(fixture::HEALTHY);
+            let found = server.call(
+                "POST",
+                "/v1/vaults/default/search",
+                Some(json!({ "query": "beta" })),
+                200,
+            );
+            assert!(
+                hits(&found)
+                    .iter()
+                    .any(|hit| hit["content"] == json!(fixture::HEALTHY)),
+                "{backend}: the server must still file and find a healthy memory: {found}"
+            );
+            assert_eq!(
+                count(&server.stats("default"), "embed_failures"),
+                e0 + 1,
+                "{backend}: the healthy write and search after it moved the count"
+            );
+        }
+
+        {
+            let mut mcp = McpSession::spawn(child(h, &env), h, &format!("embed-{backend}"));
+            let s0 = mcp.count("embed_failures");
+            let id =
+                saved_id(&mcp.call("undercroft_save", json!({ "content": word, "wing": "w" })));
+            assert_out_of_table_lines(
+                panics,
+                EMBED_FAILED,
+                &mcp.log_text(),
+                Some(1),
+                &format!("{backend}, MCP save"),
+            );
+            assert_eq!(
+                mcp.count("embed_failures"),
+                s0 + 1,
+                "{backend}: the out-of-table MCP save counts exactly once"
+            );
+            let got: Value =
+                serde_json::from_str(&mcp.call("undercroft_get_drawer", json!({ "id": id })))
+                    .expect("get_drawer answers with the drawer as JSON");
+            assert_eq!(
+                got["content"],
+                json!(word),
+                "{backend}: the drawer is verbatim despite its degraded embed: {got}"
+            );
+            let healthy = mcp.call(
+                "undercroft_save",
+                json!({ "content": fixture::HEALTHY, "wing": "w" }),
+            );
+            assert!(healthy.starts_with("saved drawer "), "{backend}: {healthy}");
+            let found = mcp.call("undercroft_search", json!({ "query": "beta" }));
+            assert!(
+                found.contains(fixture::HEALTHY),
+                "{backend}: the session must still find a healthy memory: {found}"
+            );
+            assert_eq!(
+                mcp.count("embed_failures"),
+                s0 + 1,
+                "{backend}: the healthy save and search after it moved the count"
+            );
+        }
+
+        let (_, err) = succeeds(
+            &cli(h, &env, &["remember", &word, "--wing", "w"]),
+            "remember, out-of-table",
+        );
+        assert_out_of_table_lines(
+            panics,
+            EMBED_FAILED,
+            &err,
+            Some(1),
+            &format!("{backend}, CLI remember"),
+        );
+    }
+}
+
+/// **The late stage SURVIVES an out-of-table write** (ROADMAP O150). The worst
+/// path before O150: the doc encode runs AFTER the drawer commits, so a panic
+/// there left a stored drawer and no reply, and a client's retry filed a
+/// duplicate. MCP and the CLI only — `/v1` refuses the stage at start-up,
+/// which `model_late_failures_reach_mcp_and_cli_and_v1_refuses_the_stage` pins.
+#[test]
+fn model_late_stage_survives_an_out_of_table_write_on_mcp_and_cli() {
+    let _serial = serial();
+    let word = out_of_table();
+    for (backend, panics) in [("colbert", true), ("colbert-ort", false)] {
+        let home = tempfile::tempdir().expect("home");
+        let h = home.path();
+        let fx = fixture_files();
+        let env: Env = vec![
+            ("UNDERCROFT_SEMANTIC_GATE", "off".to_string()),
+            ("UNDERCROFT_RERANKER", backend.to_string()),
+            ("UNDERCROFT_COLBERT_MODEL", fx.model.clone()),
+            ("UNDERCROFT_COLBERT_QUERY_MODEL", fx.model.clone()),
+            ("UNDERCROFT_COLBERT_TOKENIZER", fx.tokenizer.clone()),
+            ("UNDERCROFT_COLBERT_NAME", format!("fixture-{backend}")),
+        ];
+        succeeds(&cli(h, &env, &["init"]), "init");
+
+        {
+            let mut mcp = McpSession::spawn(child(h, &env), h, &format!("late-{backend}"));
+            let l0 = mcp.count("late_failures");
+            let id =
+                saved_id(&mcp.call("undercroft_save", json!({ "content": word, "wing": "w" })));
+            assert_out_of_table_lines(
+                panics,
+                DOC_ENCODE_FAILED,
+                &mcp.log_text(),
+                Some(1),
+                &format!("{backend}, MCP save"),
+            );
+            assert_eq!(
+                mcp.count("late_failures"),
+                l0 + 1,
+                "{backend}: the out-of-table doc encode counts exactly once"
+            );
+            let got: Value =
+                serde_json::from_str(&mcp.call("undercroft_get_drawer", json!({ "id": id })))
+                    .expect("get_drawer answers with the drawer as JSON");
+            assert_eq!(
+                got["content"],
+                json!(word),
+                "{backend}: the drawer is verbatim despite its missing token matrix: {got}"
+            );
+            let healthy = mcp.call(
+                "undercroft_save",
+                json!({ "content": fixture::HEALTHY, "wing": "w" }),
+            );
+            assert!(healthy.starts_with("saved drawer "), "{backend}: {healthy}");
+            let found = mcp.call("undercroft_search", json!({ "query": "beta" }));
+            assert!(
+                found.contains(fixture::HEALTHY),
+                "{backend}: the session must still find a healthy memory: {found}"
+            );
+            assert_eq!(
+                mcp.count("late_failures"),
+                l0 + 1,
+                "{backend}: the healthy save and search after it moved the count"
+            );
+        }
+
+        let (out, err) = succeeds(
+            &cli(h, &env, &["remember", &word, "--wing", "w"]),
+            "remember, out-of-table",
+        );
+        assert_out_of_table_lines(
+            panics,
+            DOC_ENCODE_FAILED,
+            &err,
+            Some(1),
+            &format!("{backend}, CLI remember"),
+        );
+        let id = out
+            .lines()
+            .find_map(|l| l.strip_prefix("Filed drawer "))
+            .and_then(|rest| rest.split(' ').next())
+            .unwrap_or_else(|| panic!("{backend}: remember named no drawer id:\n{out}"))
+            .to_string();
+        let (got, _) = succeeds(&cli(h, &env, &["drawer", "get", &id]), "drawer get");
+        assert!(
+            got.ends_with(&format!("---\n{word}\n")),
+            "{backend}: `drawer get` must print the drawer verbatim:\n{got}"
+        );
+    }
+}
+
+/// **The reranker SURVIVES an out-of-table passage** (ROADMAP O150). A search
+/// over a stored drawer carrying the word ended the `/v1` server under `onnx`.
+/// The count only has to RISE: tract degrades per passage and ORT the whole
+/// window (ROADMAP O151), and pinning either here would pin O151 twice.
+#[test]
+fn model_reranker_survives_an_out_of_table_passage_on_v1_and_mcp() {
+    let _serial = serial();
+    let word = out_of_table();
+    for (backend, panics) in [("onnx", true), ("ort", false)] {
+        let home = tempfile::tempdir().expect("home");
+        let h = home.path();
+        let fx = fixture_files();
+        let mut env: Env = vec![
+            ("UNDERCROFT_SEMANTIC_GATE", "off".to_string()),
+            ("UNDERCROFT_RERANKER", backend.to_string()),
+            ("UNDERCROFT_RERANK_MODEL", fx.model.clone()),
+            ("UNDERCROFT_RERANK_TOKENIZER", fx.tokenizer.clone()),
+            ("UNDERCROFT_RERANK_NAME", format!("fixture-{backend}")),
+        ];
+        if backend == "ort" {
+            env.push(("UNDERCROFT_ORT_POOL", "1".to_string()));
+        }
+        succeeds(&cli(h, &env, &["init"]), "init");
+
+        {
+            let server = Server::spawn(child(h, &env), h);
+            server.save(fixture::HEALTHY);
+            server.save(&word);
+            let r0 = count(&server.stats("default"), "rerank_failures");
+            let found = server.call(
+                "POST",
+                "/v1/vaults/default/search",
+                Some(json!({ "query": "alpha" })),
+                200,
+            );
+            assert_out_of_table_lines(
+                panics,
+                RERANK_FAILED,
+                &server.log_text(),
+                None,
+                &format!("{backend}, /v1 search"),
+            );
+            assert!(
+                hits(&found).iter().any(|hit| hit["content"] == json!(word)),
+                "{backend}: the search must answer with the drawer it failed to rerank: {found}"
+            );
+            assert!(
+                count(&server.stats("default"), "rerank_failures") > r0,
+                "{backend}: the failed rerank reached /v1 stats"
+            );
+            let healthy = server.call(
+                "POST",
+                "/v1/vaults/default/search",
+                Some(json!({ "query": "beta" })),
+                200,
+            );
+            assert!(
+                !hits(&healthy).is_empty(),
+                "{backend}: the server must still answer a healthy search: {healthy}"
+            );
+        }
+
+        {
+            let mut mcp = McpSession::spawn(child(h, &env), h, &format!("rerank-{backend}"));
+            let r0 = mcp.count("rerank_failures");
+            let found = mcp.call("undercroft_search", json!({ "query": "alpha" }));
+            assert_out_of_table_lines(
+                panics,
+                RERANK_FAILED,
+                &mcp.log_text(),
+                None,
+                &format!("{backend}, MCP search"),
+            );
+            assert!(
+                found.contains(&word),
+                "{backend}: the search must answer with the drawer it failed to rerank: {found}"
+            );
+            assert!(
+                mcp.count("rerank_failures") > r0,
+                "{backend}: the failed rerank reached MCP status"
+            );
+            let healthy = mcp.call("undercroft_search", json!({ "query": "beta" }));
+            assert!(
+                healthy.contains(fixture::HEALTHY),
+                "{backend}: the session must still answer a healthy search: {healthy}"
+            );
+        }
+    }
 }

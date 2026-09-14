@@ -2543,6 +2543,241 @@ mod tests {
         }
     }
 
+    /// **The eight bodies ROADMAP O150 contains.**
+    ///
+    /// An id past the embedding table panicked on every tract role and the
+    /// unwind ended the server. The ruling wraps each role's WHOLE inner body
+    /// in `undercroft_core::contain::contain`, on both backends, so a panic
+    /// reaches the counted degrade that role already has. These are those
+    /// bodies — which also covers every load probe and every `score_batch`
+    /// fan-out, because each of those calls one of them.
+    const CONTAINED_FNS: [(&str, &str, &str); 8] = [
+        ("undercroft-embed-onnx", "lib.rs", "embed_inner"),
+        ("undercroft-embed-onnx", "rerank.rs", "score_inner"),
+        ("undercroft-embed-onnx", "late.rs", "word_ids"),
+        ("undercroft-embed-onnx", "late.rs", "run"),
+        ("undercroft-embed-ort", "lib.rs", "embed_inner"),
+        ("undercroft-embed-ort", "lib.rs", "score_one"),
+        ("undercroft-embed-ort", "late.rs", "word_ids"),
+        ("undercroft-embed-ort", "late.rs", "run"),
+    ];
+
+    /// ORT's two free helpers, which reach the tokenizer and the session.
+    /// They are DEFINITIONS: what the gate checks is where they are CALLED.
+    const CONTAINED_HELPERS: [(&str, &str, &str); 2] = [
+        ("undercroft-embed-ort", "lib.rs", "encode"),
+        ("undercroft-embed-ort", "lib.rs", "run_batch"),
+    ];
+
+    /// The shipped half of a model-crate source — everything above its test
+    /// module — with comment lines blanked BYTE FOR BYTE, so an offset into
+    /// the result is an offset into the file.
+    ///
+    /// Blanking rather than deleting is what lets one offset answer both
+    /// "which body is this in" and "which line is it"; blanking per byte
+    /// rather than per character is what keeps a comment holding `—` from
+    /// shifting every offset after it; and blanking at all is what stops a doc
+    /// comment that NAMES a call from counting as one.
+    fn shipped_code(krate: &str, file: &str, body: &str) -> String {
+        let cut: Vec<usize> = body
+            .match_indices("\n#[cfg(test)]\n")
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            cut.len(),
+            1,
+            "premise: {krate}/src/{file} must have exactly one `#[cfg(test)]` module, found {} — its shipped half cannot be told from its tests",
+            cut.len()
+        );
+        body[..cut[0]]
+            .split_inclusive('\n')
+            .map(|line| {
+                if line.trim_start().starts_with("//") {
+                    line.bytes()
+                        .map(|b| if b == b'\n' { '\n' } else { ' ' })
+                        .collect::<String>()
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect()
+    }
+
+    /// The byte range of `fn name(` through its closing brace, `indent` being
+    /// the definition's own indentation — rustfmt, which `lint` enforces,
+    /// puts that brace alone on a line at exactly that indentation.
+    fn fn_span(
+        code: &str,
+        krate: &str,
+        file: &str,
+        indent: &str,
+        name: &str,
+    ) -> std::ops::Range<usize> {
+        let head = format!("\n{indent}fn {name}(");
+        let starts: Vec<usize> = code.match_indices(&head).map(|(i, _)| i + 1).collect();
+        assert_eq!(
+            starts.len(),
+            1,
+            "{krate}/src/{file} must define `fn {name}(` exactly once at indentation {indent:?} in its shipped code, found {}",
+            starts.len()
+        );
+        let close = format!("\n{indent}}}\n");
+        let end = code[starts[0]..]
+            .find(&close)
+            .map(|j| starts[0] + j + close.len())
+            .unwrap_or_else(|| {
+                panic!(
+                    "{krate}/src/{file}: `fn {name}` has no closing brace at its own indentation"
+                )
+            });
+        starts[0]..end
+    }
+
+    /// The identifier immediately before a `.`, skipping whitespace — so
+    /// `me\n            .run(` names `me` exactly as `me.run(` does.
+    fn receiver(before_dot: &str) -> &str {
+        let trimmed = before_dot.trim_end();
+        let start = trimmed
+            .char_indices()
+            .rev()
+            .take_while(|(_, c)| c.is_alphanumeric() || *c == '_')
+            .last()
+            .map(|(i, _)| i)
+            .unwrap_or(trimmed.len());
+        &trimmed[start..]
+    }
+
+    /// **Every contained body holds exactly one `contain(`, and no call that
+    /// can panic sits outside one** (ROADMAP O150, Q5 item 4).
+    ///
+    /// Coverage is a property of CALL SITES, not of the eight bodies: a ninth
+    /// path to the tokenizer panics exactly as the uncontained tree did while
+    /// every listed body still holds its `contain(`. So the scan runs both
+    /// ways — the bodies must hold the boundary, and the three calls that can
+    /// panic must sit inside one.
+    ///
+    /// The needles, and what each must not be confused with:
+    ///
+    /// * `encode(` — a tokenizer encode, or a call to ORT's `encode` helper.
+    ///   Glued to an identifier (`encode_doc(`) it is another name.
+    /// * `.run(` — a tract plan run, a session run inside ORT's `run_batch`
+    ///   helper, OR a call to ColBERT's own method named `run`, which is one of
+    ///   the eight. The last is told apart by its RECEIVER, `self` or `me`,
+    ///   read across a line break because rustfmt splits `me` from `.run(`.
+    /// * `run_batch(` — ORT's batch helper.
+    ///
+    /// Helper DEFINITIONS are exempt and their call sites are checked, which
+    /// is the difference from the first draft of this gate: that one would
+    /// have failed on ORT's `encode` and `run_batch` themselves. Premise
+    /// probes on every count, including that each exemption FIRED — dead
+    /// exemption logic admits exactly what it was written to tell apart.
+    #[test]
+    fn every_model_panic_site_sits_inside_a_contained_body() {
+        let sources = model_crate_sources();
+        let needles = ["encode(", ".run(", "run_batch("];
+
+        let mut contains_total = 0usize;
+        let mut examined = 0usize;
+        let mut run_method_calls = 0usize;
+        let mut helper_definitions = 0usize;
+        let mut inside_helpers = 0usize;
+        let mut outside: Vec<String> = Vec::new();
+
+        for (krate, file, body) in &sources {
+            let code = shipped_code(krate, file, body);
+            contains_total += code.matches("contain(").count();
+
+            let listed: Vec<(&str, std::ops::Range<usize>)> = CONTAINED_FNS
+                .iter()
+                .filter(|(k, f, _)| k == krate && f == file)
+                .map(|(_, _, name)| (*name, fn_span(&code, krate, file, "    ", name)))
+                .collect();
+            let helpers: Vec<std::ops::Range<usize>> = CONTAINED_HELPERS
+                .iter()
+                .filter(|(k, f, _)| k == krate && f == file)
+                .map(|(_, _, name)| fn_span(&code, krate, file, "", name))
+                .collect();
+
+            for (name, span) in &listed {
+                let held = code[span.clone()].matches("contain(").count();
+                assert_eq!(
+                    held, 1,
+                    "{krate}/src/{file}: `fn {name}` must hold exactly one `contain(` (ROADMAP O150), found {held}"
+                );
+                let reaches: usize = needles
+                    .iter()
+                    .map(|n| code[span.clone()].matches(n).count())
+                    .sum();
+                assert!(
+                    reaches > 0,
+                    "premise: {krate}/src/{file}: `fn {name}` reaches none of the needles, so this gate cannot see what it contains"
+                );
+            }
+
+            let file_has_run_method = listed.iter().any(|(name, _)| *name == "run");
+            for needle in needles {
+                for (at, _) in code.match_indices(needle) {
+                    let before = &code[..at];
+                    if needle == ".run(" {
+                        if file_has_run_method && matches!(receiver(before), "self" | "me") {
+                            run_method_calls += 1;
+                            continue;
+                        }
+                    } else {
+                        let glued = before
+                            .chars()
+                            .next_back()
+                            .is_some_and(|c| c.is_alphanumeric() || c == '_');
+                        if glued {
+                            continue;
+                        }
+                        if before.ends_with("fn ") {
+                            helper_definitions += 1;
+                            continue;
+                        }
+                    }
+                    examined += 1;
+                    if listed.iter().any(|(_, span)| span.contains(&at)) {
+                        continue;
+                    }
+                    if helpers.iter().any(|span| span.contains(&at)) {
+                        inside_helpers += 1;
+                        continue;
+                    }
+                    let line = before.matches('\n').count() + 1;
+                    outside.push(format!("{krate}/src/{file}:{line}: `{needle}`"));
+                }
+            }
+        }
+
+        assert!(
+            outside.is_empty(),
+            "a model call that can panic sits outside every contained body, so a panic there ends the process exactly as it did before ROADMAP O150: {outside:?}. Move it inside one of CONTAINED_FNS, or contain the new body and add its row."
+        );
+        assert_eq!(
+            contains_total,
+            CONTAINED_FNS.len(),
+            "the model crates' shipped code holds {contains_total} `contain(` call(s) and CONTAINED_FNS names {} — a contained body needs a row, and a row needs its body contained",
+            CONTAINED_FNS.len()
+        );
+
+        // PREMISES.
+        assert!(examined > 0, "premise: the scan examined no call at all");
+        assert!(
+            run_method_calls >= 4,
+            "premise: ColBERT's own `run` is called from its load probe and both encodes on each backend, and the receiver reader found {run_method_calls} — it is not reading receivers"
+        );
+        assert_eq!(
+            helper_definitions,
+            CONTAINED_HELPERS.len(),
+            "premise: the definition exemption must fire once per ORT helper"
+        );
+        assert!(
+            inside_helpers >= 2,
+            "premise: ORT's helpers call the tokenizer and the session internally, and the helper spans found {inside_helpers}"
+        );
+    }
+
     /// **The telemetry emit literals, which no count assertion can see**
     /// (ROADMAP O134a).
     ///

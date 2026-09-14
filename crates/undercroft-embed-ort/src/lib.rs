@@ -19,13 +19,22 @@
 mod late;
 pub use late::{colbert_from_env, OrtColbert};
 
-use std::sync::Mutex;
+use std::sync::{Mutex, PoisonError};
 
 use ort::session::{builder::GraphOptimizationLevel, Session};
 use ort::value::Tensor;
 use tokenizers::Tokenizer;
+use undercroft_core::contain::contain;
 use undercroft_core::embed::Embedder;
 use undercroft_core::rerank::Reranker;
+
+// ROADMAP O150 — the same refusal as the tract crate's, for the same reason:
+// the containment below catches an UNWINDING panic, an abort build has none,
+// and nothing but the compiler can see the setting.
+#[cfg(panic = "abort")]
+compile_error!(
+    "undercroft-embed-ort requires panic = \"unwind\": its model panics are contained with catch_unwind (ROADMAP O150), and an abort build turns them back into a process crash"
+);
 
 const MAX_LEN: usize = 256;
 
@@ -37,6 +46,13 @@ pub enum OrtError {
     Model(String),
     #[error("inference failed: {0}")]
     Inference(String),
+    /// A panic inside a model body, caught by `contain` and carrying the
+    /// panic's own message (ROADMAP O150). ONNX Runtime answers an
+    /// out-of-table id with a typed [`OrtError::Inference`], so this variant
+    /// on that input would be a REGRESSION; the tokenizer runs before the
+    /// session and can still panic here, which is why ORT is contained too.
+    #[error("inference panicked: {0}")]
+    Panicked(String),
 }
 
 fn sigmoid(x: f32) -> f32 {
@@ -155,50 +171,72 @@ impl OrtEmbedder {
         Ok(me)
     }
 
+    /// One embed, CONTAINED (ROADMAP O150). ONNX Runtime answers an
+    /// out-of-table id with a typed error, but the tokenizer runs before the
+    /// session and the pooling indexes `data` after it, so an unguarded ORT
+    /// would keep a crash class tract loses.
     fn embed_inner(&self, text: &str) -> Result<Vec<f32>, OrtError> {
-        let (ids, mask, types) = encode(&self.tokenizer, text, None)?;
-        let (dims, data) = {
-            let mut guard = self.session.lock().expect("ort session mutex");
-            run_batch(
-                &mut guard,
-                self.n_inputs,
-                1,
-                MAX_LEN,
-                ids,
-                mask.clone(),
-                types,
-            )?
-        };
-        // dims: (1, seq, dim) — masked mean pool + L2 normalize.
-        if dims.len() < 3 {
-            return Err(OrtError::Inference(
-                "unexpected embedder output rank".into(),
-            ));
-        }
-        let (seq, dim) = (dims[1], dims[2]);
-        let mut pooled = vec![0f32; dim];
-        let mut denom = 0f32;
-        for t in 0..seq.min(MAX_LEN) {
-            if mask[t] == 0 {
-                continue;
-            }
-            denom += 1.0;
-            for d in 0..dim {
-                pooled[d] += data[t * dim + d];
-            }
-        }
-        if denom > 0.0 {
-            for v in &mut pooled {
-                *v /= denom;
-            }
-        }
-        let norm = pooled.iter().map(|x| x * x).sum::<f32>().sqrt();
-        if norm > 0.0 {
-            for v in &mut pooled {
-                *v /= norm;
-            }
-        }
-        Ok(pooled)
+        contain(
+            || {
+                let (ids, mask, types) = encode(&self.tokenizer, text, None)?;
+                let (dims, data) = {
+                    // A poisoned lock is RECOVERED, never trusted to stay
+                    // clean (ROADMAP O150, Q2). `contain` catches a panic
+                    // raised while this guard is held, which poisons the
+                    // mutex, and `expect` then made every later call on the
+                    // session a panic of its own — on the multi-tenant server,
+                    // every vault's. Recovery is sound because no unwinding
+                    // panic can leave the session mid-run: ort's `run_inner`
+                    // is one FFI `Run` call with Rust marshalling before it
+                    // and wrapping after it, and the only Rust ONNX Runtime
+                    // calls back into during that call is an `extern "system"`
+                    // logging function, where a panic aborts rather than
+                    // unwinds. Read in ort 2.0.0-rc.10, so it rests on that
+                    // exact pin.
+                    let mut guard = self.session.lock().unwrap_or_else(PoisonError::into_inner);
+                    run_batch(
+                        &mut guard,
+                        self.n_inputs,
+                        1,
+                        MAX_LEN,
+                        ids,
+                        mask.clone(),
+                        types,
+                    )?
+                };
+                // dims: (1, seq, dim) — masked mean pool + L2 normalize.
+                if dims.len() < 3 {
+                    return Err(OrtError::Inference(
+                        "unexpected embedder output rank".into(),
+                    ));
+                }
+                let (seq, dim) = (dims[1], dims[2]);
+                let mut pooled = vec![0f32; dim];
+                let mut denom = 0f32;
+                for t in 0..seq.min(MAX_LEN) {
+                    if mask[t] == 0 {
+                        continue;
+                    }
+                    denom += 1.0;
+                    for d in 0..dim {
+                        pooled[d] += data[t * dim + d];
+                    }
+                }
+                if denom > 0.0 {
+                    for v in &mut pooled {
+                        *v /= denom;
+                    }
+                }
+                let norm = pooled.iter().map(|x| x * x).sum::<f32>().sqrt();
+                if norm > 0.0 {
+                    for v in &mut pooled {
+                        *v /= norm;
+                    }
+                }
+                Ok(pooled)
+            },
+            OrtError::Panicked,
+        )
     }
 }
 
@@ -330,16 +368,27 @@ impl OrtReranker {
         Ok(me)
     }
 
-    /// One `(query, passage)` forward on pool slot `slot`.
+    /// One `(query, passage)` forward on pool slot `slot`, CONTAINED (ROADMAP
+    /// O150). `score` calls it directly and `score_batch_inner` fans it across
+    /// rayon, so the load probe and every passage in a batch go through this
+    /// one boundary.
     fn score_one(&self, slot: usize, query: &str, passage: &str) -> Result<f32, OrtError> {
-        let (ids, mask, types) = encode(&self.tokenizer, query, Some(passage))?;
-        let (dims, data) = {
-            let mut guard = self.sessions[slot].lock().expect("ort session mutex");
-            run_batch(&mut guard, self.n_inputs, 1, MAX_LEN, ids, mask, types)?
-        };
-        // dims: (1, num_labels) — take the last (positive) logit.
-        let labels = if dims.len() >= 2 { dims[1].max(1) } else { 1 };
-        Ok(sigmoid(data.get(labels - 1).copied().unwrap_or(0.0)))
+        contain(
+            || {
+                let (ids, mask, types) = encode(&self.tokenizer, query, Some(passage))?;
+                let (dims, data) = {
+                    // Recovered, not `expect`ed — see `OrtEmbedder::embed_inner`.
+                    let mut guard = self.sessions[slot]
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner);
+                    run_batch(&mut guard, self.n_inputs, 1, MAX_LEN, ids, mask, types)?
+                };
+                // dims: (1, num_labels) — take the last (positive) logit.
+                let labels = if dims.len() >= 2 { dims[1].max(1) } else { 1 };
+                Ok(sigmoid(data.get(labels - 1).copied().unwrap_or(0.0)))
+            },
+            OrtError::Panicked,
+        )
     }
 
     /// Count `n` degraded scores and say so once (ROADMAP O131). One place,
@@ -684,67 +733,171 @@ mod tests {
         );
     }
 
-    /// **Route R: what ONNX Runtime does with an id past the embedding
-    /// table — CLASSIFIED, not predicted** (ROADMAP O134a, O150).
+    /// Bit patterns, so "unchanged" means the same floats rather than floats
+    /// that merely compare equal.
+    pub(crate) fn bits(v: &[f32]) -> Vec<u32> {
+        v.iter().map(|x| x.to_bits()).collect()
+    }
+
+    /// The TYPED refusal an out-of-table id must come back as, on ORT.
     ///
-    /// The tract backend PANICS here (observed, pinned in that crate's own
-    /// route-R arm). Whether ORT agrees is the thing this measures rather
-    /// than assumes — and it does not: ORT reports a typed error that
-    /// reaches the counted degrade, so the same misconfiguration crashes one
-    /// backend and is absorbed by the other.
+    /// ONNX Runtime has never panicked on this input — it reports `indices
+    /// element out of data bounds` — so a `Panicked` here FAILS by name. The
+    /// classifier this replaces passed on a panic with only "nothing counted"
+    /// asserted (ROADMAP O150, defect 2); contained, such a panic would be
+    /// survivable, and it would still be O150's crash class arriving on the
+    /// backend that did not have it.
+    pub(crate) fn assert_typed_refusal<T: std::fmt::Debug>(got: Result<T, OrtError>, door: &str) {
+        match got {
+            Err(OrtError::Inference(_)) => {}
+            Err(OrtError::Panicked(m)) => panic!(
+                "ROADMAP O150: ONNX Runtime PANICKED on an out-of-table id at {door}, which it has never done — it refuses the id with a typed error. Contained, but this is O150's crash class arriving on the ORT backend: {m}"
+            ),
+            other => panic!(
+                "{door}: ORT must refuse an out-of-table id with a typed inference error, got {other:?}"
+            ),
+        }
+    }
+
+    /// **Route R on ORT, embed: an out-of-table id is REFUSED, typed, and
+    /// degrades** (ROADMAP O150).
     ///
-    /// What the arms assert, because the prints say less than they seem to:
-    /// a return must carry exactly one counted failure and the zero vector
-    /// (the outcome observed today, PASS), and any other return FAILS; a
-    /// panic PASSES with only "nothing counted" asserted, and no payload is
-    /// pinned, unlike tract's arm. Both `println!`s are captured for a
-    /// passing test — the `ort-build` leg runs `cargo test` without
-    /// `--nocapture` — so ORT turning from a degrade into a panic would stay
-    /// green and print nothing anyone reads.
+    /// The inner body returns the typed refusal, the door counts one zero
+    /// vector, and — as on tract — a healthy embed before and after three
+    /// out-of-table calls is bit-identical. No `catch_unwind`: an escaped
+    /// panic fails this test by itself.
     #[test]
-    fn ort_route_r_classifies_an_out_of_table_id() {
+    fn ort_route_r_embed_refuses_an_out_of_table_id() {
         let dir = tempfile::tempdir().expect("tempdir");
         let (model, tok) = fixture::write_into(dir.path()).expect("write fixture");
         let e = OrtEmbedder::load(&model, &tok, "fixture").expect("fixture loads");
+        let before = bits(&e.embed(fixture::HEALTHY));
 
-        let prev = std::panic::take_hook();
-        std::panic::set_hook(Box::new(|_| {}));
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            e.embed(fixture::OUT_OF_TABLE_WORD)
-        }));
-        std::panic::set_hook(prev);
+        assert_typed_refusal(e.embed_inner(fixture::OUT_OF_TABLE_WORD), "embed_inner");
+        assert_eq!(
+            e.embed(fixture::OUT_OF_TABLE_WORD),
+            vec![0.0; fixture::DIM],
+            "a refused embed must degrade to the documented zero vector"
+        );
+        assert_eq!(
+            e.embed_failures(),
+            1,
+            "a refused embed must be counted exactly once"
+        );
+        assert_typed_refusal(e.embed_inner(fixture::OUT_OF_TABLE_WORD), "embed_inner");
 
-        match outcome {
-            Err(payload) => {
-                let what = payload
-                    .downcast_ref::<String>()
-                    .map(|s| s.as_str())
-                    .or_else(|| payload.downcast_ref::<&str>().copied())
-                    .unwrap_or("<non-string panic payload>");
-                println!(
-                    "ROUTE-R ort: ONNX Runtime PANICKED on an out-of-table id. Payload: {what}"
-                );
-                assert_eq!(
-                    e.embed_failures(),
-                    0,
-                    "a panic is not a degrade: nothing may have been counted"
-                );
-            }
-            Ok(v) => {
-                let counted = e.embed_failures();
-                println!(
-                    "ROUTE-R ort: ONNX Runtime returned a value, {counted} counted failure(s)"
-                );
-                assert_eq!(
-                    counted, 1,
-                    "ORT did not panic, so the out-of-table id MUST have reached the counted degrade — it returned {v:?} with {counted} counted. An Ok here is a silently wrong uncounted vector landing in the corpus."
-                );
-                assert_eq!(
-                    v,
-                    vec![0.0; fixture::DIM],
-                    "a counted degrade must be the documented zero vector"
-                );
-            }
-        }
+        assert_eq!(
+            bits(&e.embed(fixture::HEALTHY)),
+            before,
+            "an embed after three refusals must be bit-identical to one before them"
+        );
+        assert_eq!(
+            e.embed_failures(),
+            1,
+            "a healthy embed must not move the count"
+        );
+    }
+
+    /// **Route R on ORT, score: an out-of-table id is REFUSED, typed, and
+    /// degrades** (ROADMAP O150) — the embed arm's halves on `score_one`.
+    #[test]
+    fn ort_route_r_score_refuses_an_out_of_table_id() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let rr = load_fixture_reranker(dir.path());
+        let before = rr.score("query", fixture::HEALTHY).to_bits();
+
+        assert_typed_refusal(
+            rr.score_one(0, "query", fixture::OUT_OF_TABLE_WORD),
+            "score_one",
+        );
+        assert_eq!(
+            rr.score("query", fixture::OUT_OF_TABLE_WORD),
+            0.0,
+            "a refused score must degrade to 0.0"
+        );
+        assert_eq!(
+            rr.score_failures(),
+            1,
+            "a refused score must be counted exactly once"
+        );
+        assert_typed_refusal(
+            rr.score_one(0, "query", fixture::OUT_OF_TABLE_WORD),
+            "score_one",
+        );
+
+        assert_eq!(
+            rr.score("query", fixture::HEALTHY).to_bits(),
+            before,
+            "a score after three refusals must be bit-identical to one before them"
+        );
+        assert_eq!(
+            rr.score_failures(),
+            1,
+            "a healthy score must not move the count"
+        );
+    }
+
+    /// **Route R on ORT, score_batch: an out-of-table passage RETURNS**
+    /// (ROADMAP O150).
+    ///
+    /// Deliberately weaker than the other four. ORT collapses the whole
+    /// window on one failing pair, which
+    /// `ort_rerank_score_batch_degrades_the_whole_window_pinned_cost` pins and
+    /// ROADMAP O151 rules, so this asserts only that the batch comes back
+    /// without a panic and that the failure was counted. Pinning the window
+    /// here would pin O151 a second time.
+    #[test]
+    fn ort_route_r_score_batch_returns_on_an_out_of_table_id() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let rr = load_fixture_reranker(dir.path());
+        let scores = rr.score_batch("query", &[fixture::HEALTHY, fixture::OUT_OF_TABLE_WORD]);
+        assert_eq!(scores.len(), 2, "one score per passage");
+        assert!(
+            rr.score_failures() > 0,
+            "an out-of-table passage must be counted"
+        );
+    }
+
+    /// **A poisoned session lock is RECOVERED** (ROADMAP O150, Q2).
+    ///
+    /// `contain` catches a panic raised while a session guard is held, and a
+    /// guard dropped during an unwind POISONS its mutex. Under the old
+    /// `lock().expect(…)` every later call on that session then panicked in
+    /// turn — on the multi-tenant server, which shares one session pool
+    /// across vaults, every vault's embed from one bad write. Red under
+    /// `expect`: the next healthy embed panics, or, contained, degrades and
+    /// counts; recovered, it is bit-identical with nothing counted.
+    #[test]
+    fn ort_embed_recovers_a_poisoned_session_lock() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (model, tok) = fixture::write_into(dir.path()).expect("write fixture");
+        let e = OrtEmbedder::load(&model, &tok, "fixture").expect("fixture loads");
+        let before = bits(&e.embed(fixture::HEALTHY));
+
+        std::thread::scope(|s| {
+            let poisoner = s.spawn(|| {
+                let _held = e.session.lock().unwrap_or_else(PoisonError::into_inner);
+                panic!("poisoning the ORT session mutex on purpose (ROADMAP O150)");
+            });
+            assert!(
+                poisoner.join().is_err(),
+                "premise: the poisoning thread must have panicked holding the guard"
+            );
+        });
+        assert!(
+            e.session.is_poisoned(),
+            "premise: the session mutex must be poisoned, or this test recovers from nothing"
+        );
+
+        assert_eq!(
+            bits(&e.embed(fixture::HEALTHY)),
+            before,
+            "an embed on a recovered lock must be bit-identical to one before the poisoning"
+        );
+        assert_eq!(
+            e.embed_failures(),
+            0,
+            "recovering a lock is not a failure: nothing may be counted"
+        );
     }
 }
