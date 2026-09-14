@@ -7,6 +7,26 @@ its CLI mirror `tenant-repoint` are additive — nothing that worked before
 behaves differently because they exist. Everything else in this section is a
 fix whose only observable change is that a defect is gone.
 
+### the ROADMAP heading gates see what a fenced block, a stray release heading and a broken scanner used to hide (O162)
+
+Internal tooling, no user-visible change.
+
+The preflight that keeps `ROADMAP.md`'s structure honest had five blind spots,
+each reproduced before it was closed. A heading-shaped line pasted inside a
+fenced code block read as structure to every line-based reader: a fenced release
+heading let a closed entry sit under `## Open` with no signal, and a fenced entry
+heading could stand in for a renamed entry in the exemption roster. One detector
+now runs first and refuses such a line, any fence style the file does not use, a
+heading spelled so that no reader sees it, and an unclosed fence, naming the
+line and where its fence opened. An unfenced release-shaped heading could
+re-section the file the same way, so the level-2 headings are now held to their
+one order with every version once. The check that keeps a closed entry out of
+`## Open` had never been proven to fire; every check is now proven on a fixture
+as an exact set of rows. A scanner that examined nothing reached the exemption
+roster first and told the editor to delete a correct row; its premise now runs
+first. Every refusal names its line, and a heading naming an identifier that ends
+in the status token no longer passes as both closed and dated.
+
 ### the model backends are joined to the surfaces an operator reads (O157)
 
 Internal tooling, no user-visible change.
