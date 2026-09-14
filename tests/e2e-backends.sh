@@ -132,6 +132,50 @@ run_backend_suite() { # run_backend_suite <backend>
   check "[$be] probe vault"        0 "Created vault"  -- "$BIN" vault create "$probe" --level sealed
   check "[$be] absent is not zero" 0 "no mirror"      -- "$BIN" index status "$be" --vault "$probe"
   check "[$be] status creates none" 0 "no mirror"     -- "$BIN" index status "$be" --vault "$probe"
+  # ROADMAP O175. `--read-only` leaves a mutating subcommand to SQLite, which
+  # refuses the write loudly — but for an effect OUTSIDE the database that
+  # refusal came after the effect: `index push` shipped every batch before its
+  # first local write failed, recording nothing, and `forget --backend`
+  # deleted from the mirror before the local destruction was refused. The
+  # store refuses both first now. A fresh vault WITH a drawer, so a push that
+  # got through would leave a row the status checks below can see.
+  local ro="o175${be}$$" ro_id ro_hist ro_code
+  check "[$be] O175 vault"                0 "Created vault" -- "$BIN" vault create "$ro" --level sealed
+  ro_id="$("$BIN" remember "The kelp harvest quota is reviewed every spring" --wing ops --vault "$ro" 2>&1 \
+    | sed -n 's/^Filed drawer \([^ ]*\) in .*/\1/p')"
+  if [ -n "$ro_id" ]; then
+    echo "ok    [$be] O175 vault holds a drawer ($ro_id)"; PASS=$((PASS+1))
+  else
+    echo "FAIL  [$be] O175 vault holds a drawer — remember printed no id, so every check below would test an empty vault"
+    FAIL=$((FAIL+1))
+  fi
+  check "[$be] O175 vault opens read-only"   0 "posture: read-only" -- "$BIN" --read-only stats --vault "$ro"
+  check "[$be] read-only push refuses first" 1 "opened read-only, so it is refused before" -- \
+    "$BIN" --read-only index push "$be" --vault "$ro"
+  check "[$be] ...and left no mirror"        0 "no mirror" -- "$BIN" index status "$be" --vault "$ro"
+  check "[$be] ...nor did asking make one"   0 "no mirror" -- "$BIN" index status "$be" --vault "$ro"
+  ro_hist="$("$BIN" history --vault "$ro" 2>&1)"; ro_code=$?
+  if [ "$ro_code" -eq 0 ] && ! grep -qF "egress/index-push" <<<"$ro_hist"; then
+    echo "ok    [$be] ...and recorded no egress"; PASS=$((PASS+1))
+  else
+    echo "FAIL  [$be] ...and recorded no egress — exit $ro_code"; echo "$ro_hist" | sed 's/^/      /'
+    FAIL=$((FAIL+1))
+  fi
+  # The premise of the line above: a writable push of the same vault DOES
+  # leave that record, so its absence was observed rather than unshowable.
+  check "[$be] O175 writable push lands"     0 "Pushed 1 sealed record(s)" -- "$BIN" index push "$be" --vault "$ro"
+  check "[$be] ...and history shows it"      0 "egress/index-push" -- "$BIN" history --vault "$ro"
+  check "[$be] read-only forget --backend refuses first" 1 "opened read-only, so it is refused before" -- \
+    "$BIN" --read-only forget "$ro_id" --backend "$be" --vault "$ro"
+  # Milvus shows a delete only after a moment, even at its Strong consistency
+  # level — measured 2026-09-15: right after `entities/delete` answered code 0,
+  # `count(*)` and an id query both still returned the row, and 5 s later both
+  # had caught up. Read at once, this check PASSED on Milvus with the refusal
+  # removed, so there it waits twice that first. The other four showed the
+  # delete at once in the same counterfactual run. Bounded, and it cannot
+  # redden a fixed tree: nothing is deleted there to wait for.
+  if [ "$be" = milvus ]; then sleep 10; fi
+  check "[$be] ...the mirror still holds it" 0 "records:    1" -- "$BIN" index status "$be" --vault "$ro"
   check "[$be] push"            0 "Pushed 2 sealed record(s)" -- "$BIN" index push "$be"
   # C8: the transport policy is enforced at CONSTRUCTION, so pointing the
   # same backend at cleartext beyond loopback refuses before a byte moves.

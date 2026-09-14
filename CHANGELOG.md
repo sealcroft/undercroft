@@ -7,6 +7,35 @@ its CLI mirror `tenant-repoint` are additive — nothing that worked before
 behaves differently because they exist. Everything else in this section is a
 fix whose only observable change is that a defect is gone.
 
+### a read-only CLI refuses an index push and a mirrored forget before the mirror is touched (O175)
+
+`undercroft --read-only index push <backend>` sent every drawer's stored content
+and embedding to the backend and only then failed, when the vault refused its
+first local write — so the corpus reached the mirror, no `egress/index-push`
+record was written, and the command reported only that a write had been refused.
+`undercroft --read-only forget <id> --backend <backend>` had the destructive form
+of the same defect: it deleted the drawers from the mirror before the local
+destruction was refused, leaving the mirror without rows the vault still held.
+Both now refuse on a read-only open before they create, send or delete anything
+on the mirror, and the message says to re-run them on a writable open of the same
+vault — not on a copy, which keeps the vault's id and would reach the same mirror
+while its record landed in the copy. Both still exit 1, as the refusal they
+replace did, so no script sees a new exit code. Opening a pgvector index still
+completes its TLS and authentication handshake before the refusal; no content is
+sent.
+
+A push whose last local writes fail no longer hides what left. If the vault cannot
+record which embedder built the mirror, the push still writes its
+`egress/index-push` record and warns how many records left; a push that fails
+part-way reports the backend's error rather than that marker's; and a push whose
+egress record cannot be written warns with the same count.
+
+Internally, both store functions decide the posture before any remote call; store
+tests drive each refusal on a sealed vault and both marker arms through a trigger
+that refuses the marker write; a source gate requires every store function that
+takes a vector index to decide its posture first or state why it is a read; and
+`backends-e2e` drives both refusals against all five live backends.
+
 ### a panic inside a model is caught and counted instead of ending the process (O150)
 
 On the pure-Rust `onnx` backend, a tokenizer and model that do not belong

@@ -4169,6 +4169,269 @@ MINOR since O149: `PATCH /admin/tenants/{id}` and its CLI mirror are new
 capability, backward compatible. The rest of the section is PATCH work — no
 documented contract moves.
 
+### O175 — CLOSED 2026-09-15: under `--read-only`, `index push` shipped every batch before failing to record and `forget --backend` deleted from the mirror before failing — both refuse first, inside the store, and a marker write that fails no longer hides the egress
+
+**Filed 2026-09-14 from the drift sweep. Established by reading, not
+executed.**
+
+**Where it fails, read 2026-09-14.** `Command::Index`
+(`crates/undercroft-cli/src/main.rs`) opens through `open_store`, so
+`undercroft --read-only index push` gets `VaultStore::open_read_only` — a
+`SQLITE_OPEN_READ_ONLY` connection under `PRAGMA query_only=ON`.
+`VaultStore::index_push` (`crates/undercroft-store/src/remote.rs`) never asks
+`is_read_only()`. In order, it refuses an hmac-only vault without
+`--allow-plaintext`, calls `index.ensure` (the CREATE on every real backend),
+selects every row, and ships them in batches of 64 through `index.upsert`.
+Only after the last acknowledged batch does it call `record_pushed_embedder`,
+an `INSERT INTO meta` the read-only connection refuses. That `?` returns, so
+`audit_index_push` never runs and no `diag_warn!` says what left. The command
+exits with SQLite's refusal over a push that fully succeeded.
+
+**The partial-failure arm drops the real error in one case.** When a batch
+fails after earlier ones landed and the staleness marker is absent or names
+the current embedder, `this.record_pushed_embedder()?` fails the same way and
+REPLACES the backend's error, two lines above a comment saying "The ORIGINAL
+failure is what the operator needs". Only a mirror whose marker names another
+embedder reaches `audit_index_push`, whose failure does warn.
+
+**Why it matters.** `index_push`'s own doc calls this "the largest content
+egress in the tree", and on an hmac-only vault the pushed blob is the
+plaintext. `--read-only` is the incident posture (M18), and a whole-corpus
+mirror taken from it leaves the trail silent and the operator told only that a
+write was refused. Both sibling egresses decide the posture FIRST:
+`refine.rs::record_egress` warns and serves on `is_read_only()`, and the `/v1`
+export does the same on the process flag. This path is the one that leaves the
+decision to SQLite, after the bytes have gone.
+
+**Shape, for a ruling.** Decide the posture at the top of `index_push`, before
+`ensure`, so no remote write precedes the decision. Two options:
+
+- *(a) refuse*, on the `tighten_anchor` precedent (`StoreError::Invalid`
+  naming the posture). A push also writes the `index_pushed_embedder` marker,
+  so it is a mutating command. The CLI's `--read-only` doc says such a
+  subcommand is refused by SQLite rather than by a hand-kept classifier; for
+  an egress that refusal arrives after the bytes, and a store-level posture
+  check is not a list of commands. Nothing leaves.
+- *(b) warn and serve*, on the egress precedent. The marker then cannot be
+  written, so the mirror keeps a marker that no longer describes its vectors
+  and the `IndexStale` decision in `search_with_index` reads a stale value — a
+  cost neither the export nor `refine` carries.
+
+Independently of the choice, the partial arm should warn and return the
+backend's error when the marker write fails, never `?` over it.
+
+**Gate.** A store test on `remote.rs`'s `EchoIndex`, which already counts
+`ensured` and keeps `pushed`: open a vault read-only and push. Under (a) the
+push refuses naming the posture with `ensured == 0` and `pushed` empty; under
+(b) every record arrives with a warning and the `audit` table gains no row.
+Premise arm: the same push on a writable handle lands every record and exactly
+one `egress/index-push`. Counterfactual: delete the posture check and the
+read-only arm fails — `pushed` holds every record, `audit` has no
+`egress/index-push` row, and the error is SQLite's. A `backends-e2e` check
+drives `undercroft --read-only index push` against a live backend too, because
+a posture is a property of the PATH (O91), not of the store call.
+
+#### RULED 2026-09-14 by three lenses — Agentic Memory, Security, CLI/posture contract — and an adversarial refuter
+
+**Question.** Under `--read-only`, does `index push` (a) refuse before anything
+leaves, (b) warn and serve, or (c) something else; and is the partial arm's
+`?` over the marker write the fix this entry names?
+
+**Ruled: (a), scoped as a rule, not an instance.** *A mutating operation whose
+effect lands OUTSIDE the database decides its posture first* — inside the store
+function, before `index.ensure` or any other remote call, `StoreError::Invalid`
+naming the posture. It is the `tighten_anchor` shape (a write `query_only` cannot
+stop), and a store-level check is not the command list the `--read-only` doc
+rejects. **The same unit applies it to `forget_with_proof_mirrored`**: under
+`--read-only forget --backend`, `index.ensure` and `index.delete` reach the
+remote mirror before the local destruction fails under `query_only`
+(`forget.rs`), the destructive twin of this defect, which no lens found until the
+refuter applied the rule backwards. **The refusal message** names a writable open
+of the SAME vault and never a copy, and does not claim nothing was contacted.
+
+- *Lost: (b).* A push leaves a durable remote copy that two local security
+  decisions later re-find through local provenance: `search_with_index`'s
+  `IndexStale` (`remote.rs`) and `mirror_note`'s disclosure in signed forgetting
+  attestations (`forget.rs`), which returns `None` with neither the marker nor the
+  chain record — so (b) would sign "destroyed" over content on a third party and
+  disarm the stale guard, and a read-only handle can hold vectors in a space its
+  embedder does not name, so even an honest warning could not say what left.
+- *Cost of (a), accepted:* re-mirroring from a snapshot or read-only mount needs
+  a writable open of that vault, which heals — M18's stated residual. A mirror
+  push is not inspection. PATCH, no `UPGRADING.md` entry: today's SQLite refusal
+  and the new `Invalid` both exit 1, and no document says the command works.
+
+**Second question, ruled: CONFIRMED and widened.** The partial arm's
+`record_pushed_embedder()?` replaces the backend's error; it warns and returns
+the backend's error. On the success path the marker write precedes
+`audit_index_push`, and that audit's own failure prints no "records DID leave"
+warning, unlike the partial arm — it gains the same warning. *Lost:* writing the
+marker inside the audit transaction, because a marker failure would then roll
+back the egress record it exists beside.
+
+**Prior rulings.** **O79 is FOLLOWED where it applies and DISTINGUISHED here**:
+every application of its warn-and-serve (the `/v1` GET export, `refine
+--dry-run`, O167's remote search) is an egress during a READ, and a push is a
+mutating operation with a durable remote effect. **M18's "SQLite refuses, not a
+classifier" is not refuted, but its premise is scoped**: "fails loudly rather than
+happening quietly" holds for writes into the database and not for effects
+outside it, recorded beside M18.
+
+**Claims refuted — the brief first.** The brief said neither sibling egress
+writes besides its audit record; non-dry-run `refine` writes facts. It placed the
+partial arm's `?` at "~139" (it is at 204, under an `is_none_or` condition), omitted
+M18's ruling paragraph and the `forget --backend` sibling, and framed O79 as a
+general ruling for any egress. Struck grounds: "the only write is the audit
+record" (false for `refine`) and the "no-audit exfil lever" (the same lever exists
+in GET export and `refine --dry-run`, so it would refute O79, not distinguish
+it). Lens remedies refuted: "or `export`" (O176 — `--read-only export` fails
+inside SQLite on the CLI) and **"copy the vault, push from the copy", which is
+harmful**: `unlock_as` requires the manifest id to equal the directory name, so a
+copy pushes into the same `undercroft_<id>` collection while the marker and
+record land in the copy and the ORIGINAL's forget attestations omit the mirror —
+and the incident runbook tells responders to copy first. A proposed `backends-e2e`
+counterfactual ("status reports records: 2") cannot fire over a probe vault
+holding no drawers. O175's own quotation of the `--read-only` doc ("a hand-kept
+classifier") is a paraphrase.
+
+**Gates, as corrected.** A store test on a SEALED vault (an hmac-only push under
+`Refuse` already returns `Invalid` with nothing sent, so it would pass with no
+posture check) asserting the posture message, `ensured == 0` and `pushed` empty;
+premise on a writable handle, one `egress/index-push`; counterfactual without the
+check, `StoreError::Sqlite` with `pushed` full. The same shape for
+`forget_with_proof_mirrored`: ids untouched on the mirror and `ensured == 0`. The
+widened second fix on a writable handle through a `BEFORE INSERT ON meta` trigger
+for the marker key, on a FIRST push only (a trigger against the second push's
+upsert is not settled by reading), with an arm proving the trigger fires: the
+partial arm returns the backend's error and leaves exactly one
+`egress/index-push`, and the success path leaves one too. `backends-e2e`: a fresh
+vault WITH drawers, a premise that it opens read-only at all, the posture
+substring, `index status` reporting no mirror twice, and `history` gaining no
+`egress/index-push`. A source gate or a required witness so the next store
+function with a remote effect cannot skip the posture decision, since
+`forget_with_proof_mirrored` already did.
+
+**What remains.** pgvector completes its TLS and auth handshake inside
+`open_index`, before the refusal: no content, but an outbound connection on the
+read-only path, recorded rather than fixed here. `search --backend` calls
+`ensure` — a CREATE on real backends — on a read path, filed as O185 in O83's
+shape; the non-dry-run `--read-only refine` POST, filed as O184. **Not yet built**:
+sized against the session's measured context (78.3% when the refuter reported),
+the unit is left for a session that can land it whole.
+
+#### BUILT 2026-09-15, as ruled
+
+**What landed.** `VaultStore::refuse_remote_effect_when_read_only` returns
+`StoreError::Invalid` naming the posture, sends the operator to a writable open
+of the SAME vault and never a copy, and claims nothing about what was contacted.
+`index_push` calls it first, ahead of the plaintext refusal and `ensure`, and so
+does `forget_with_proof_mirrored`, ahead of the empty-id refusal and `ensure`. The
+partial arm's `record_pushed_embedder()?` is now a warning, so the backend's error
+returns and the egress record is still written. The success path tries the
+marker, writes `egress/index-push` whatever the marker said, warns with the count
+that left for each failure, and returns the audit's error ahead of the marker's.
+The marker stays outside the audit transaction, as ruled. The CLI's `--read-only`
+doc states where "refused by SQLite" stops holding. No `UPGRADING.md` entry, as
+ruled: both refusals exit 1, as SQLite's did.
+
+**Gates, as the refuter corrected them.** In `remote.rs`:
+
+- `a_read_only_push_refuses_before_anything_reaches_the_mirror` — a SEALED vault
+  reopened read-only. It asserts the posture, "this same vault" and "never against
+  a copy" in the message, no "contacted"; `ensured == 0`, `pushed` empty and no
+  `egress/index-push`. Premise on a writable open of the same vault: two records,
+  one egress record.
+- `a_read_only_mirrored_forget_refuses_before_the_mirror_is_touched` — the mirror
+  pushed from a writable open and `ensured` reset. The read-only forget is refused
+  with `ensured == 0`, every id still on the mirror and in the vault. Premise: the
+  writable forget does reach it.
+- `a_marker_that_cannot_be_written_never_hides_the_egress` — a `BEFORE INSERT ON
+  meta` trigger scoped to the marker key, on a FIRST push only, with an arm proving
+  it fires on `record_pushed_embedder` itself. The partial arm (130 drawers, the
+  backend refusing after 64) returns `StoreError::Index`, "went away", with 64
+  records sent and one egress record. The success path returns the trigger's error
+  with both records sent and one egress record. The vault verifies on both.
+- `every_store_function_that_reaches_a_mirror_decides_its_posture_first` — the
+  source gate. Its universe is every `fn` in the store crate whose signature names
+  `VectorIndex`. The two effects (`index_push`, `forget_with_proof_mirrored`) must
+  call the posture check before the first use of the index parameter; the two reads
+  carry reasons (`index_status` — O83; `search_with_index` — its `ensure` is filed as
+  O185). Both directions, behind a premise probe on synthetic source: a late
+  decision is flagged, a comment naming the index is not a use, and the parameter
+  is read across a path `::`. **A source gate and not a witness**, because a token
+  defined in `undercroft-index` cannot see this store's posture, so its constructor
+  would be reachable by any caller; and a witness on `ensure` would force O185's
+  ruling into this unit.
+- `backends-e2e`, per backend, eleven checks each: a fresh sealed vault WITH a
+  drawer; a premise that it opens read-only (`posture: read-only`); the read-only
+  push refused on the posture substring; `index status` reporting no mirror twice;
+  `history` gaining no `egress/index-push`. Then that absence's premise — a
+  writable push lands one record and `history` shows its record — and the read-only
+  `forget --backend` refused, with the mirror still holding the row. The ruling
+  named the push alone; the forget arm is the definition of done's item 1, through
+  the surface a user drives.
+
+**Counterfactuals, all run.** The store eight ran on a copy of the tree, each edit
+verified to have landed before its run, after the pristine copy passed 13 of 13:
+
+1. The posture call removed from `index_push`: the read-only push test failed on
+   `Err(Sqlite(… "attempt to write a readonly database"))` — the refuter's predicted
+   counterfactual — and the gate named `fn index_push: posture decided at None`.
+2. Removed from `forget_with_proof_mirrored`: its test failed on the same SQLite
+   error, and the gate named the function.
+3. The partial arm's `?` restored: "the partial arm reports the BACKEND's failure,
+   not the marker's: sqlite error: o175: the marker write is refused".
+4. The success path's two `?`s restored: zero egress records where one was
+   required.
+5. The posture call moved after `ensure`: `ensured` was 1 where 0 was required,
+   and the gate reported a decision after the first use.
+6. An unclassified `pub fn` taking the index: the gate named it.
+7. A READS row renamed: the gate fired on its UNCLASSIFIED arm, which runs first,
+   so this run did not isolate the stale-row arm.
+8. The trigger's creation removed: the premise arm "the trigger refuses the marker
+   write" fired, so the marker test cannot pass on a trigger that never fires.
+
+**The `backends-e2e` counterfactual, through the real binary on all five live
+backends.** It ran on a copy of the tree without both posture calls, whose build
+was premised by the `dead_code` warning the orphaned check raised: 113 passed and
+24 failed of 137, the total the published figure predicts. On every backend the
+posture substring failed for the push and for the forget, with the CLI printing
+SQLite's `attempt to write a readonly database` beneath both widened warnings,
+`1 record(s) DID leave the vault` — the only place those warnings were observed
+through the binary — and `index status` stopped reporting "no mirror". **Each
+green was read as a finding.** The five premises stay green by design. "…and
+recorded no egress" stayed green on all five: a read-only handle cannot write the
+chain in either tree, so that check — the ruling's own gate item — pins an
+invariant and does not discriminate the fix. "[milvus] …the mirror still holds
+it" stayed green although the counterfactual binary had issued the delete. A curl
+probe against the same Milvus, mirroring the engine's calls, measured why: right
+after `entities/delete` answered code 0, `count(*)` and an id query at
+`consistencyLevel: Strong` both still returned the row, and 5 s later both had
+caught up. The delete was honoured, only late, so that is no defect of the
+backend, and the Milvus arm now waits 10 s, twice that, before it reads the count. Re-run on
+the counterfactual tree with that arm: 112 passed and 25 failed, the Milvus arm
+now among the failures, so the check discriminates on all five.
+
+**Corpus drive.** The LoCoMo feed was split one turn per file — 400 drawers plus
+a probe drawer re-filed through `remember`, 401 in all, seven push batches — and
+driven through the real binary against live qdrant and pgvector, the binary
+premised to carry the refusal. On each backend the read-only push was refused, in
+7 ms on qdrant and 18 ms on pgvector, with `index status` reporting no mirror
+twice and no `egress/index-push`. The writable push then sent 401 records in 557
+and 516 ms and left one egress record. The read-only `forget --backend` was
+refused in 6 and 20 ms, with the mirror and the vault both still at 401, and the
+writable forget took both to 400. pgvector's refusals are the slower pair,
+consistent with the handshake `open_index` completes first, which this drive did
+not measure separately.
+
+**What remains.** pgvector completes its TLS and authentication handshake inside
+`open_index`, before the refusal — no content, recorded rather than fixed, as
+ruled. The two "DID leave" warnings are read by eye: `diag_warn!` writes to stderr
+and no test captures it, while the errors they accompany are pinned. The gate sees
+a signature naming `VectorIndex`; a remote effect reached some other way — a file,
+an HTTP client — is outside it, as `tighten_anchor` already is. O184 and O185 stay
+open.
+
 ### O183 — CLOSED 2026-09-14: RustSec published a TLS 1.3 handshake flaw in the rustls every outbound hop uses, and the lockfile moves to the fixed release
 
 **Found 2026-09-14 by the `Dependency audit (RustSec)` CI job on PR #188**, a
@@ -15537,156 +15800,6 @@ the difference is the defect. Premise arm: a healthy vault reports 0.
 Discriminator arm: a hash-vault drawer whose content yields no token is not
 reported as a hole. Counterfactual: a count sourced from `embed_failures`
 passes the premise and fails the restart arm.
-
-### O175 — RULED 2026-09-14 and not yet built: under `--read-only`, `index push` ships every batch to the backend and only then fails to record — refuse first, and the same for `forget --backend`
-
-**Filed 2026-09-14 from the drift sweep. Established by reading, not
-executed.**
-
-**Where it fails, read 2026-09-14.** `Command::Index`
-(`crates/undercroft-cli/src/main.rs`) opens through `open_store`, so
-`undercroft --read-only index push` gets `VaultStore::open_read_only` — a
-`SQLITE_OPEN_READ_ONLY` connection under `PRAGMA query_only=ON`.
-`VaultStore::index_push` (`crates/undercroft-store/src/remote.rs`) never asks
-`is_read_only()`. In order, it refuses an hmac-only vault without
-`--allow-plaintext`, calls `index.ensure` (the CREATE on every real backend),
-selects every row, and ships them in batches of 64 through `index.upsert`.
-Only after the last acknowledged batch does it call `record_pushed_embedder`,
-an `INSERT INTO meta` the read-only connection refuses. That `?` returns, so
-`audit_index_push` never runs and no `diag_warn!` says what left. The command
-exits with SQLite's refusal over a push that fully succeeded.
-
-**The partial-failure arm drops the real error in one case.** When a batch
-fails after earlier ones landed and the staleness marker is absent or names
-the current embedder, `this.record_pushed_embedder()?` fails the same way and
-REPLACES the backend's error, two lines above a comment saying "The ORIGINAL
-failure is what the operator needs". Only a mirror whose marker names another
-embedder reaches `audit_index_push`, whose failure does warn.
-
-**Why it matters.** `index_push`'s own doc calls this "the largest content
-egress in the tree", and on an hmac-only vault the pushed blob is the
-plaintext. `--read-only` is the incident posture (M18), and a whole-corpus
-mirror taken from it leaves the trail silent and the operator told only that a
-write was refused. Both sibling egresses decide the posture FIRST:
-`refine.rs::record_egress` warns and serves on `is_read_only()`, and the `/v1`
-export does the same on the process flag. This path is the one that leaves the
-decision to SQLite, after the bytes have gone.
-
-**Shape, for a ruling.** Decide the posture at the top of `index_push`, before
-`ensure`, so no remote write precedes the decision. Two options:
-
-- *(a) refuse*, on the `tighten_anchor` precedent (`StoreError::Invalid`
-  naming the posture). A push also writes the `index_pushed_embedder` marker,
-  so it is a mutating command. The CLI's `--read-only` doc says such a
-  subcommand is refused by SQLite rather than by a hand-kept classifier; for
-  an egress that refusal arrives after the bytes, and a store-level posture
-  check is not a list of commands. Nothing leaves.
-- *(b) warn and serve*, on the egress precedent. The marker then cannot be
-  written, so the mirror keeps a marker that no longer describes its vectors
-  and the `IndexStale` decision in `search_with_index` reads a stale value — a
-  cost neither the export nor `refine` carries.
-
-Independently of the choice, the partial arm should warn and return the
-backend's error when the marker write fails, never `?` over it.
-
-**Gate.** A store test on `remote.rs`'s `EchoIndex`, which already counts
-`ensured` and keeps `pushed`: open a vault read-only and push. Under (a) the
-push refuses naming the posture with `ensured == 0` and `pushed` empty; under
-(b) every record arrives with a warning and the `audit` table gains no row.
-Premise arm: the same push on a writable handle lands every record and exactly
-one `egress/index-push`. Counterfactual: delete the posture check and the
-read-only arm fails — `pushed` holds every record, `audit` has no
-`egress/index-push` row, and the error is SQLite's. A `backends-e2e` check
-drives `undercroft --read-only index push` against a live backend too, because
-a posture is a property of the PATH (O91), not of the store call.
-
-#### RULED 2026-09-14 by three lenses — Agentic Memory, Security, CLI/posture contract — and an adversarial refuter
-
-**Question.** Under `--read-only`, does `index push` (a) refuse before anything
-leaves, (b) warn and serve, or (c) something else; and is the partial arm's
-`?` over the marker write the fix this entry names?
-
-**Ruled: (a), scoped as a rule, not an instance.** *A mutating operation whose
-effect lands OUTSIDE the database decides its posture first* — inside the store
-function, before `index.ensure` or any other remote call, `StoreError::Invalid`
-naming the posture. It is the `tighten_anchor` shape (a write `query_only` cannot
-stop), and a store-level check is not the command list the `--read-only` doc
-rejects. **The same unit applies it to `forget_with_proof_mirrored`**: under
-`--read-only forget --backend`, `index.ensure` and `index.delete` reach the
-remote mirror before the local destruction fails under `query_only`
-(`forget.rs`), the destructive twin of this defect, which no lens found until the
-refuter applied the rule backwards. **The refusal message** names a writable open
-of the SAME vault and never a copy, and does not claim nothing was contacted.
-
-- *Lost: (b).* A push leaves a durable remote copy that two local security
-  decisions later re-find through local provenance: `search_with_index`'s
-  `IndexStale` (`remote.rs`) and `mirror_note`'s disclosure in signed forgetting
-  attestations (`forget.rs`), which returns `None` with neither the marker nor the
-  chain record — so (b) would sign "destroyed" over content on a third party and
-  disarm the stale guard, and a read-only handle can hold vectors in a space its
-  embedder does not name, so even an honest warning could not say what left.
-- *Cost of (a), accepted:* re-mirroring from a snapshot or read-only mount needs
-  a writable open of that vault, which heals — M18's stated residual. A mirror
-  push is not inspection. PATCH, no `UPGRADING.md` entry: today's SQLite refusal
-  and the new `Invalid` both exit 1, and no document says the command works.
-
-**Second question, ruled: CONFIRMED and widened.** The partial arm's
-`record_pushed_embedder()?` replaces the backend's error; it warns and returns
-the backend's error. On the success path the marker write precedes
-`audit_index_push`, and that audit's own failure prints no "records DID leave"
-warning, unlike the partial arm — it gains the same warning. *Lost:* writing the
-marker inside the audit transaction, because a marker failure would then roll
-back the egress record it exists beside.
-
-**Prior rulings.** **O79 is FOLLOWED where it applies and DISTINGUISHED here**:
-every application of its warn-and-serve (the `/v1` GET export, `refine
---dry-run`, O167's remote search) is an egress during a READ, and a push is a
-mutating operation with a durable remote effect. **M18's "SQLite refuses, not a
-classifier" is not refuted, but its premise is scoped**: "fails loudly rather than
-happening quietly" holds for writes into the database and not for effects
-outside it, recorded beside M18.
-
-**Claims refuted — the brief first.** The brief said neither sibling egress
-writes besides its audit record; non-dry-run `refine` writes facts. It placed the
-partial arm's `?` at "~139" (it is at 204, under an `is_none_or` condition), omitted
-M18's ruling paragraph and the `forget --backend` sibling, and framed O79 as a
-general ruling for any egress. Struck grounds: "the only write is the audit
-record" (false for `refine`) and the "no-audit exfil lever" (the same lever exists
-in GET export and `refine --dry-run`, so it would refute O79, not distinguish
-it). Lens remedies refuted: "or `export`" (O176 — `--read-only export` fails
-inside SQLite on the CLI) and **"copy the vault, push from the copy", which is
-harmful**: `unlock_as` requires the manifest id to equal the directory name, so a
-copy pushes into the same `undercroft_<id>` collection while the marker and
-record land in the copy and the ORIGINAL's forget attestations omit the mirror —
-and the incident runbook tells responders to copy first. A proposed `backends-e2e`
-counterfactual ("status reports records: 2") cannot fire over a probe vault
-holding no drawers. O175's own quotation of the `--read-only` doc ("a hand-kept
-classifier") is a paraphrase.
-
-**Gates, as corrected.** A store test on a SEALED vault (an hmac-only push under
-`Refuse` already returns `Invalid` with nothing sent, so it would pass with no
-posture check) asserting the posture message, `ensured == 0` and `pushed` empty;
-premise on a writable handle, one `egress/index-push`; counterfactual without the
-check, `StoreError::Sqlite` with `pushed` full. The same shape for
-`forget_with_proof_mirrored`: ids untouched on the mirror and `ensured == 0`. The
-widened second fix on a writable handle through a `BEFORE INSERT ON meta` trigger
-for the marker key, on a FIRST push only (a trigger against the second push's
-upsert is not settled by reading), with an arm proving the trigger fires: the
-partial arm returns the backend's error and leaves exactly one
-`egress/index-push`, and the success path leaves one too. `backends-e2e`: a fresh
-vault WITH drawers, a premise that it opens read-only at all, the posture
-substring, `index status` reporting no mirror twice, and `history` gaining no
-`egress/index-push`. A source gate or a required witness so the next store
-function with a remote effect cannot skip the posture decision, since
-`forget_with_proof_mirrored` already did.
-
-**What remains.** pgvector completes its TLS and auth handshake inside
-`open_index`, before the refusal: no content, but an outbound connection on the
-read-only path, recorded rather than fixed here. `search --backend` calls
-`ensure` — a CREATE on real backends — on a read path, filed as O185 in O83's
-shape; the non-dry-run `--read-only refine` POST, filed as O184. **Not yet built**:
-sized against the session's measured context (78.3% when the refuter reported),
-the unit is left for a session that can land it whole.
 
 ### O184 — a non-dry-run `--read-only refine` posts drawer plaintext before its first write fails
 
