@@ -34,6 +34,16 @@ every tokenizer and runtime call that can panic to sit inside a guarded body;
 and the model join now drives the out-of-table word through `/v1`, MCP and the
 CLI and requires each process to keep answering.
 
+### the TLS library behind every outbound connection is updated for a published handshake flaw (O183, RUSTSEC-2026-0285)
+
+`rustls` is the TLS implementation every outbound connection uses — to a served
+embedder or LLM, to the remote index backends, to pgvector, for OTLP traces, and
+from the orchestrator to its engines. It was locked at 0.23.42, which RustSec
+advisory RUSTSEC-2026-0285, published 2026-09-14, reports as accepting TLS 1.3
+handshake messages across encryption level boundaries. The lockfile now resolves
+`rustls` 0.23.45, the fixed release, and `rustls-webpki` 0.103.15, which that
+release requires. No manifest, interface or configuration changes.
+
 ### the ROADMAP heading gates see what a fenced block, a stray release heading and a broken scanner used to hide (O162)
 
 Internal tooling, no user-visible change.
