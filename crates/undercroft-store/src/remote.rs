@@ -69,6 +69,44 @@ impl VaultStore {
         format!("undercroft_{}", self.vault.id())
     }
 
+    /// **A mutating operation whose effect lands OUTSIDE the database decides
+    /// its posture first** — ROADMAP O175, ruled 2026-09-14.
+    ///
+    /// A read-only handle runs under `PRAGMA query_only=ON`, so a write this
+    /// posture did not anticipate fails inside SQLite, loudly. That holds for
+    /// writes INTO the database. It does not hold for a remote mirror, where
+    /// SQLite is asked only after the backend: `index push` shipped every
+    /// batch and then failed on its marker, recording no egress, and
+    /// `forget --backend` deleted from the mirror before the local
+    /// destruction was refused. So a store function with a remote effect
+    /// calls this before it calls anything on the index, and
+    /// `every_store_function_that_reaches_a_mirror_decides_its_posture_first`
+    /// holds every function taking a `VectorIndex` to that order, or to a
+    /// stated reason it is a read.
+    ///
+    /// The message names a writable open of THIS vault and warns off a copy,
+    /// the obvious wrong remedy: a copy keeps the vault id, so it reaches this
+    /// vault's collection while the marker and the egress record land in the
+    /// copy, and this vault's forgetting attestations stop disclosing the
+    /// mirror. It does not say nothing was contacted — a surface opens the
+    /// index before the store is asked, and pgvector completes its handshake
+    /// there.
+    pub(crate) fn refuse_remote_effect_when_read_only(
+        &self,
+        effect: &str,
+    ) -> Result<(), StoreError> {
+        if !self.read_only {
+            return Ok(());
+        }
+        Err(StoreError::Invalid(format!(
+            "{effect}, and this store was opened read-only, so it is refused before it \
+             creates, sends or deletes anything on the mirror. Run it against a writable \
+             open of this same vault (without `--read-only`), never against a copy: a \
+             copy keeps this vault's id, so it would reach this same mirror while the \
+             record of what it did landed in the copy"
+        )))
+    }
+
     /// Push every drawer to a remote index — its at-rest content blob, its
     /// embedding and its wing/room labels. Returns the number of records
     /// uploaded.
@@ -93,11 +131,22 @@ impl VaultStore {
     /// The audit happens INSIDE this function rather than at the call site,
     /// so a second caller cannot forget it — the same reason the admission
     /// screen lives at the write choke point.
+    ///
+    /// **Refused on a read-only handle, before anything reaches the mirror**
+    /// (ROADMAP O175). A push writes the mirror, this vault's marker and its
+    /// chain record; left to `query_only`, the first local write failed only
+    /// after every batch had shipped, so the corpus left and nothing recorded
+    /// it.
     pub fn index_push(
         &mut self,
         index: &mut dyn VectorIndex,
         plaintext: PlaintextPush,
     ) -> Result<u64, StoreError> {
+        // The posture first — before the level refusal below, and before
+        // `ensure`, which is the CREATE on every real backend (O175).
+        self.refuse_remote_effect_when_read_only(
+            "an index push writes this vault's records to a remote mirror",
+        )?;
         // An hmac-only vault's `content_at_rest` IS the plaintext, so this
         // push sends drawer text to the backend — while `IndexRecord`'s own
         // field said "Never plaintext", six documents repeated it, and the
@@ -201,7 +250,16 @@ impl VaultStore {
                         // non-`None` value and warns.
                         let current = this.embedder.model_name().to_string();
                         if this.pushed_embedder().is_none_or(|p| p == current) {
-                            this.record_pushed_embedder()?;
+                            // Warned, never `?` (O175): a marker write that
+                            // failed returned here and REPLACED the backend's
+                            // error — the one the comment below says the
+                            // operator needs — and skipped the egress record.
+                            if let Err(marker) = this.record_pushed_embedder() {
+                                undercroft_obs::diag_warn!(
+                                    "the partial index push could not record which embedder built the mirror ({marker}); {} record(s) DID leave the vault",
+                                    *pushed
+                                );
+                            }
                         }
                         // The ORIGINAL failure is what the operator needs.
                         // `?` here would replace "the backend went away"
@@ -240,10 +298,30 @@ impl VaultStore {
             }
         }
         ship(self, index, &mut batch, &mut pushed)?;
-        self.record_pushed_embedder()?;
+        // **Neither write after the last batch may hide the egress** (O175).
+        // The marker was `?`-ed first, so a marker that could not be written
+        // returned before the record: a push that had fully succeeded left no
+        // `egress/index-push`, and nothing said what had left. Folding the
+        // marker into the audit transaction was ruled out, because a marker
+        // failure would then roll back the record it sits beside. So the
+        // marker is tried, the egress is recorded whatever it said, each
+        // failure warns with the count that left, and the audit's error
+        // outranks the marker's when both fail.
+        let marker = self.record_pushed_embedder();
+        if let Err(e) = &marker {
+            undercroft_obs::diag_warn!(
+                "the index push could not record which embedder built the mirror ({e}); {pushed} record(s) DID leave the vault, and the mirror's recorded embedding space may no longer describe it"
+            );
+        }
         // The egress record, after the bytes have actually left. Recording
         // it first would claim an egress a failed upload never performed.
-        self.audit_index_push(&backend, &collection, pushed, plaintext)?;
+        if let Err(audit) = self.audit_index_push(&backend, &collection, pushed, plaintext) {
+            undercroft_obs::diag_warn!(
+                "the index push could not be recorded on the chain ({audit}); {pushed} record(s) DID leave the vault"
+            );
+            return Err(audit);
+        }
+        marker?;
         Ok(pushed)
     }
 
@@ -1262,6 +1340,495 @@ mod tests {
         assert_eq!(
             index.ensured, 1,
             "…and the ONE create came from the push, which is allowed to make it"
+        );
+    }
+
+    /// How many `egress/index-push` records this vault's chain holds.
+    fn index_push_records(s: &VaultStore) -> i64 {
+        s.conn
+            .query_row(
+                "SELECT COUNT(*) FROM audit WHERE record_id = 'egress/index-push'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+    }
+
+    /// A SEALED vault holding `contents`, closed again so the same vault can
+    /// be reopened under either posture. Sealed on purpose: an hmac-only push
+    /// under `PlaintextPush::Refuse` is already `Invalid` with nothing sent,
+    /// so it would pass a read-only test with no posture check at all — the
+    /// correction O175's refuter made to the filed gate.
+    fn sealed_vault(contents: &[&str]) -> (TempDir, VaultManager, Vec<String>) {
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let mut s = VaultStore::open(mgr.create("test", SecurityLevel::Sealed).unwrap()).unwrap();
+        let mut ids = Vec::new();
+        for (i, c) in contents.iter().enumerate() {
+            let d = drawer("notes", c, i as u32);
+            s.upsert(&d).unwrap();
+            ids.push(d.id);
+        }
+        drop(s);
+        (dir, mgr, ids)
+    }
+
+    fn reopen(mgr: &VaultManager, read_only: bool) -> VaultStore {
+        if read_only {
+            VaultStore::open_read_only(
+                mgr.unlock_as("test", undercroft_vault::Access::ReadOnly)
+                    .unwrap(),
+                Box::new(undercroft_core::HashEmbedder),
+            )
+            .unwrap()
+        } else {
+            VaultStore::open(mgr.unlock("test").unwrap()).unwrap()
+        }
+    }
+
+    /// **ROADMAP O175: a read-only push decides its posture before anything
+    /// reaches the mirror.**
+    ///
+    /// `index_push` never asked. It called `ensure` — the CREATE on every
+    /// real backend — shipped every batch, and only then wrote its marker,
+    /// which `query_only` refused: the corpus was on the mirror, the `?`
+    /// skipped the egress record, and the operator was told a write had been
+    /// refused. `ensured` and `pushed` are the observables, because the return
+    /// value was an error in both trees.
+    #[test]
+    fn a_read_only_push_refuses_before_anything_reaches_the_mirror() {
+        let (_d, mgr, _ids) = sealed_vault(&[
+            "the kelp harvest quota was raised",
+            "the second consignment note",
+        ]);
+
+        let mut ro = reopen(&mgr, true);
+        assert!(ro.is_read_only(), "premise: this handle is read-only");
+        assert_eq!(
+            ro.vault.level(),
+            SecurityLevel::Sealed,
+            "premise: sealed, so the plaintext refusal cannot be what answers"
+        );
+        let mut index = EchoIndex::default();
+        match ro.index_push(&mut index, PlaintextPush::Refuse) {
+            Err(StoreError::Invalid(m)) => {
+                assert!(m.contains("opened read-only"), "it names the posture: {m}");
+                assert!(
+                    m.contains("this same vault") && m.contains("never against a copy"),
+                    "it names a writable open of the SAME vault and warns off a copy: {m}"
+                );
+                assert!(
+                    !m.contains("contacted"),
+                    "it must not claim nothing was contacted: {m}"
+                );
+            }
+            other => panic!("a read-only push must refuse on its posture, got {other:?}"),
+        }
+        assert_eq!(
+            index.ensured, 0,
+            "no collection was created — `ensure` is the CREATE on every real backend"
+        );
+        assert!(index.records().is_empty(), "no record was sent");
+        assert_eq!(
+            index_push_records(&ro),
+            0,
+            "and no egress was recorded, because none happened"
+        );
+        drop(ro);
+
+        // Premise: the same push on a writable open of the same vault lands
+        // every record and exactly one egress record, so the zeros above were
+        // a refusal and not a push with nothing to send.
+        let mut w = reopen(&mgr, false);
+        let mut index = EchoIndex::default();
+        assert_eq!(w.index_push(&mut index, PlaintextPush::Refuse).unwrap(), 2);
+        assert_eq!(index.records().len(), 2);
+        assert_eq!(index_push_records(&w), 1);
+    }
+
+    /// **O175's destructive twin: a read-only mirrored forget leaves the
+    /// mirror as it found it.**
+    ///
+    /// `forget_with_proof_mirrored` deletes on the mirror FIRST, deliberately,
+    /// so that a failed remote delete leaves the vault intact. On a read-only
+    /// handle that order inverted the harm: `ensure` and `delete` ran, then
+    /// `query_only` refused the local destruction, and the mirror had lost
+    /// rows the vault still held, from a command that returned an error.
+    #[test]
+    fn a_read_only_mirrored_forget_refuses_before_the_mirror_is_touched() {
+        let (_d, mgr, ids) = sealed_vault(&[
+            "the kelp harvest quota was raised",
+            "the kelp harvest quota was disputed",
+        ]);
+        let mut index = EchoIndex::default();
+        assert_eq!(
+            reopen(&mgr, false)
+                .index_push(&mut index, PlaintextPush::Refuse)
+                .unwrap(),
+            2,
+            "premise: the mirror holds both drawers"
+        );
+        index.ensured = 0;
+
+        let mut ro = reopen(&mgr, true);
+        let refused = ro.forget_with_proof_mirrored(&ids[..1], &mut index);
+        assert!(
+            matches!(&refused, Err(StoreError::Invalid(m))
+                if m.contains("opened read-only") && m.contains("never against a copy")),
+            "a read-only mirrored forget must refuse on its posture: {refused:?}"
+        );
+        assert_eq!(index.ensured, 0, "the index was not touched");
+        assert!(
+            ids.iter().all(|id| index.ids.contains(id)),
+            "the mirror still holds every drawer the vault holds"
+        );
+        assert!(
+            ro.get(
+                &ids[0],
+                crate::Read::Internal(crate::InternalRead::Verification)
+            )
+            .unwrap()
+            .is_some(),
+            "and so does the vault"
+        );
+        drop(ro);
+
+        // Premise: on a writable open the same call does reach the mirror, so
+        // the untouched mirror above was a refusal, not a fake that cannot
+        // observe a delete.
+        let mut w = reopen(&mgr, false);
+        w.forget_with_proof_mirrored(&ids[..1], &mut index).unwrap();
+        assert_eq!(index.ensured, 1);
+        assert!(!index.ids.contains(&ids[0]));
+    }
+
+    /// Refuses the marker write and nothing else: `BEFORE INSERT`, scoped to
+    /// the marker's key, and used on a FIRST push only — whether a `BEFORE
+    /// INSERT` trigger fires for the `ON CONFLICT DO UPDATE` a second push
+    /// issues is not settled by reading (O175's ruling), so no arm relies on
+    /// it.
+    const REFUSE_THE_MARKER: &str = "CREATE TRIGGER o175_refuse_marker BEFORE INSERT ON meta \
+         WHEN NEW.key = 'index_pushed_embedder' \
+         BEGIN SELECT RAISE(ABORT, 'o175: the marker write is refused'); END;";
+
+    fn refuse_the_marker(s: &VaultStore) {
+        s.conn.execute_batch(REFUSE_THE_MARKER).unwrap();
+        assert_eq!(
+            s.pushed_embedder(),
+            None,
+            "premise: a first push — no marker exists yet"
+        );
+        // The arm proving the trigger fires, on the very write under test.
+        let err = s
+            .record_pushed_embedder()
+            .expect_err("premise: the trigger refuses the marker write");
+        assert!(
+            err.to_string()
+                .contains("o175: the marker write is refused"),
+            "{err}"
+        );
+        assert_eq!(s.pushed_embedder(), None, "and the refusal left nothing");
+    }
+
+    /// **O175's second question: a marker write that fails never hides the
+    /// egress, on either path.**
+    ///
+    /// The partial arm `?`-ed the marker, which REPLACED the backend's error
+    /// — two lines above a comment saying the original failure is what the
+    /// operator needs — and returned before the egress record. The success
+    /// path `?`-ed it before `audit_index_push`, so a push that fully
+    /// succeeded left no record at all. Moving the marker into the audit
+    /// transaction was ruled out: a marker failure would roll the record back.
+    #[test]
+    fn a_marker_that_cannot_be_written_never_hides_the_egress() {
+        // Partial arm: the backend takes the first batch of 64 and refuses the
+        // rest, so 64 records really left.
+        let (_d, mut s) = store();
+        for i in 0..130u32 {
+            s.upsert(&drawer(
+                "notes",
+                &format!("drawer number {i} about turbines"),
+                i,
+            ))
+            .unwrap();
+        }
+        refuse_the_marker(&s);
+        let mut index = EchoIndex {
+            fail_after: 64,
+            ..Default::default()
+        };
+        let err = s
+            .index_push(&mut index, PlaintextPush::Refuse)
+            .expect_err("premise: the backend refuses part-way");
+        assert!(
+            matches!(&err, StoreError::Index(e) if e.to_string().contains("went away")),
+            "the partial arm reports the BACKEND's failure, not the marker's: {err}"
+        );
+        assert_eq!(index.records().len(), 64, "premise: a real partial egress");
+        assert_eq!(
+            index_push_records(&s),
+            1,
+            "and it is recorded, marker or no marker"
+        );
+        assert!(s.verify().unwrap().ok());
+
+        // Success path: every record lands, and only the marker is refused.
+        let (_d2, mut s) = store();
+        s.upsert(&drawer("notes", "the kelp harvest quota was raised", 0))
+            .unwrap();
+        s.upsert(&drawer("notes", "the second consignment note", 1))
+            .unwrap();
+        refuse_the_marker(&s);
+        let mut index = EchoIndex::default();
+        let err = s
+            .index_push(&mut index, PlaintextPush::Refuse)
+            .expect_err("a push whose marker could not be written does not report success");
+        assert!(
+            err.to_string()
+                .contains("o175: the marker write is refused"),
+            "the error names what failed: {err}"
+        );
+        assert_eq!(index.records().len(), 2, "premise: every record left");
+        assert_eq!(
+            index_push_records(&s),
+            1,
+            "a push that fully succeeded is recorded even though its marker is not"
+        );
+        assert!(s.verify().unwrap().ok());
+    }
+
+    /// Comment lines blanked BYTE for byte, so an offset into the result is an
+    /// offset into the source and prose naming a function is not a use of it.
+    fn blank_comments(src: &str) -> String {
+        let mut text = String::with_capacity(src.len());
+        for line in src.split_inclusive('\n') {
+            if line.trim_start().starts_with("//") {
+                text.extend(line.bytes().map(|b| if b == b'\n' { '\n' } else { ' ' }));
+            } else {
+                text.push_str(line);
+            }
+        }
+        text
+    }
+
+    /// One function whose signature names the index trait: its name, the
+    /// parameter carrying the index, and the byte range of its body.
+    struct IndexTaker {
+        name: String,
+        param: String,
+        body: std::ops::Range<usize>,
+    }
+
+    /// Every `fn` in `text` (comments already blanked) whose SIGNATURE names
+    /// the index trait. The needle is split so this module is not a match.
+    fn index_takers(text: &str) -> Vec<IndexTaker> {
+        let needle = concat!("Vector", "Index");
+        let bytes = text.as_bytes();
+        let mut found = Vec::new();
+        let mut from = 0;
+        while let Some(rel) = text[from..].find("fn ") {
+            let at = from + rel;
+            from = at + 3;
+            if at > 0 && (bytes[at - 1].is_ascii_alphanumeric() || bytes[at - 1] == b'_') {
+                continue;
+            }
+            let name: String = text[at + 3..]
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            let Some(end) = text[at..].find(['{', ';']).map(|e| at + e) else {
+                continue;
+            };
+            let sig = &text[at..end];
+            let Some(hit) = sig.find(needle) else {
+                continue;
+            };
+            if name.is_empty() || bytes[end] == b';' {
+                continue;
+            }
+            // The parameter is the identifier before the last LONE `:` ahead
+            // of the needle — `index: &mut dyn undercroft_index::…` puts a
+            // path `::` between the two.
+            let head = &sig.as_bytes()[..hit];
+            let Some(colon) = (0..head.len()).rev().find(|&i| {
+                head[i] == b':' && (i == 0 || head[i - 1] != b':') && head.get(i + 1) != Some(&b':')
+            }) else {
+                continue;
+            };
+            let lead = sig[..colon].trim_end();
+            let start = lead
+                .rfind(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .map_or(0, |p| p + 1);
+            let mut depth = 0usize;
+            let mut close = None;
+            for (i, b) in bytes[end..].iter().enumerate() {
+                match b {
+                    b'{' => depth += 1,
+                    b'}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            close = Some(end + i + 1);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            found.push(IndexTaker {
+                name,
+                param: lead[start..].to_string(),
+                body: end..close.expect("every function body closes"),
+            });
+        }
+        found
+    }
+
+    /// The remote-effect functions in `text` that do not decide their posture
+    /// before the first use of the index they were handed.
+    fn posture_breaches(text: &str, effects: &[&str]) -> Vec<String> {
+        let decide = concat!("refuse_remote_effect", "_when_read_only(");
+        let word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+        index_takers(text)
+            .into_iter()
+            .filter(|t| effects.contains(&t.name.as_str()))
+            .filter_map(|t| {
+                let body = &text[t.body.clone()];
+                let first_use = body
+                    .match_indices(t.param.as_str())
+                    .map(|(i, _)| i)
+                    .find(|&i| {
+                        !word(body[..i].chars().next_back())
+                            && !word(body[i + t.param.len()..].chars().next())
+                    });
+                match (body.find(decide), first_use) {
+                    (Some(d), Some(u)) if d < u => None,
+                    (d, u) => Some(format!(
+                        "fn {}: posture decided at {d:?}, `{}` first used at {u:?}",
+                        t.name, t.param
+                    )),
+                }
+            })
+            .collect()
+    }
+
+    /// **O175: every store function that reaches a remote mirror decides its
+    /// posture before it touches the index — or is named as a read, with why.**
+    ///
+    /// `forget_with_proof_mirrored` is the reason this is a gate: the ruling
+    /// was written about `index_push`, and the destructive twin had the same
+    /// defect in another file, found only when the rule was applied backwards.
+    /// A source gate rather than a witness on the trait, because
+    /// `undercroft-index` cannot see this store's posture — a token it defined
+    /// would need a constructor any caller could reach — and a witness on
+    /// `ensure` would force O185, a read that creates, to be ruled here.
+    ///
+    /// The universe is derived from the CODE: every `fn` in this crate whose
+    /// signature names the index trait, so a new one nobody classified fails,
+    /// and a row naming a function that no longer takes an index fails too.
+    /// Scope, stated: a remote effect reached some other way — an HTTP
+    /// client, a file — is no signature this can see; `tighten_anchor` has
+    /// that shape and decides by hand.
+    #[test]
+    fn every_store_function_that_reaches_a_mirror_decides_its_posture_first() {
+        const EFFECTS: [&str; 2] = ["index_push", "forget_with_proof_mirrored"];
+        const READS: [(&str, &str); 2] = [
+            (
+                "index_status",
+                "`status` creates nothing on any backend — ROADMAP O83, proved per backend by backends-e2e",
+            ),
+            (
+                "search_with_index",
+                "a read that queries the mirror; its `ensure` is a CREATE on real backends, filed as ROADMAP O185",
+            ),
+        ];
+
+        // PREMISE, before any clean result is believed: the checker flags a
+        // function that touches the index before deciding, passes one that
+        // decides first, and reads the parameter across a path `::`.
+        let bad = blank_comments(concat!(
+            "impl S {\n    fn leak(&mut self, idx: &mut dyn undercroft_index::Vector",
+            "Index) -> R {\n        idx.ensure(\"c\", 1)?;\n        self.refuse_remote_effect",
+            "_when_read_only(\"x\")?;\n        Ok(())\n    }\n}\n"
+        ));
+        let good = blank_comments(concat!(
+            "impl S {\n    fn leak(&mut self, idx: &mut dyn Vector",
+            "Index) -> R {\n        // idx is named in a comment first\n        self.refuse_remote_effect",
+            "_when_read_only(\"x\")?;\n        idx.ensure(\"c\", 1)?;\n        Ok(())\n    }\n}\n"
+        ));
+        let takers = index_takers(&bad);
+        assert_eq!(takers.len(), 1, "premise: the scanner finds the taker");
+        assert_eq!(takers[0].param, "idx", "premise: the parameter is read");
+        assert_eq!(
+            posture_breaches(&bad, &["leak"]).len(),
+            1,
+            "premise: a decision AFTER the first use of the index is a breach"
+        );
+        assert!(
+            posture_breaches(&good, &["leak"]).is_empty(),
+            "premise: a decision first is not, and a comment naming the index is no use"
+        );
+
+        let mut dirs = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+        let mut found: Vec<(String, String)> = Vec::new();
+        let mut breaches: Vec<String> = Vec::new();
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).expect("the crate's own sources are readable") {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    dirs.push(path);
+                    continue;
+                }
+                if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                    continue;
+                }
+                let file = path.file_name().unwrap().to_string_lossy().to_string();
+                let text = blank_comments(&std::fs::read_to_string(&path).unwrap());
+                found.extend(
+                    index_takers(&text)
+                        .into_iter()
+                        .map(|t| (file.clone(), t.name)),
+                );
+                breaches.extend(
+                    posture_breaches(&text, &EFFECTS)
+                        .into_iter()
+                        .map(|b| format!("{file}: {b}")),
+                );
+            }
+        }
+
+        let names: std::collections::BTreeSet<&str> =
+            found.iter().map(|(_, n)| n.as_str()).collect();
+        assert_eq!(names.len(), found.len(), "a name found twice: {found:?}");
+        let listed: std::collections::BTreeSet<&str> = EFFECTS
+            .iter()
+            .copied()
+            .chain(READS.iter().map(|(n, why)| {
+                assert!(!why.is_empty(), "{n}: a read is listed with its reason");
+                *n
+            }))
+            .collect();
+        assert_eq!(
+            listed.len(),
+            EFFECTS.len() + READS.len(),
+            "a function listed as both an effect and a read"
+        );
+        let unclassified: Vec<&&str> = names.difference(&listed).collect();
+        assert!(
+            unclassified.is_empty(),
+            "store function(s) taking a vector index that nobody classified: {unclassified:?}. \
+             A remote EFFECT calls `refuse_remote_effect_when_read_only` before it touches the \
+             index and goes in EFFECTS (ROADMAP O175); a READ goes in READS with its reason."
+        );
+        let stale: Vec<&&str> = listed.difference(&names).collect();
+        assert!(
+            stale.is_empty(),
+            "row(s) naming a function that no longer takes a vector index: {stale:?}"
+        );
+        assert!(
+            breaches.is_empty(),
+            "a store function with a remote effect touches the index before deciding its \
+             posture, so a read-only handle reaches the mirror before SQLite refuses (ROADMAP \
+             O175): {breaches:?}"
         );
     }
 }

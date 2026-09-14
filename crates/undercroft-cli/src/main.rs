@@ -65,6 +65,13 @@ struct Cli {
     /// under this flag is therefore refused by SQLite rather than by a
     /// classifier, which is deliberate: a list of "which commands write"
     /// maintained by hand is the drift this project keeps closing.
+    ///
+    /// That holds for writes INTO the database and not for an effect outside
+    /// it, which SQLite is asked about only afterwards (ROADMAP O175):
+    /// `index push` and `forget --backend` change a remote mirror, so the
+    /// store function that has the effect refuses it on a read-only open
+    /// before it calls the backend — a decision inside that one function,
+    /// not a list of commands.
     #[arg(long, global = true)]
     read_only: bool,
 

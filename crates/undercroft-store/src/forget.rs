@@ -293,6 +293,16 @@ impl VaultStore {
         ids: &[String],
         index: &mut dyn undercroft_index::VectorIndex,
     ) -> Result<ForgetAttestation, StoreError> {
+        // **The posture FIRST, before every other refusal and before the
+        // index is touched** (ROADMAP O175). On a read-only handle the
+        // `ensure` and `delete` below reached the mirror, and only then did
+        // `query_only` refuse the local destruction — so the mirror lost rows
+        // the vault still held, from a command that reported an error. The
+        // destructive twin of `index push`'s defect; the ruling's refuter
+        // found it by applying the rule backwards.
+        self.refuse_remote_effect_when_read_only(
+            "a mirrored forget deletes drawers from a remote mirror before destroying them here",
+        )?;
         // **Every refusal the ruled path makes has to be made HERE too, or
         // the remote delete outruns it.** The ruled path checks existence
         // and the pending-evidence fence before it destroys anything —

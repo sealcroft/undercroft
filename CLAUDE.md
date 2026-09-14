@@ -1227,7 +1227,12 @@ Consequences that are binding, not advisory:
   plaintext, so the push is refused unless `index push --allow-plaintext`
   declares it (C8). Remote results are candidate ids only, re-loaded and
   HMAC-verified locally, and every push appends one `egress/index-push` chain
-  record — a failed push too, once any batch had already left
+  record — a failed push too, once any batch had already left. **On a
+  read-only open the store refuses the push, and `forget --backend`, before
+  either touches the mirror (O175)**: `query_only` refuses a write INTO the
+  database, but a remote effect ran first and SQLite was asked afterwards, so
+  a function with an effect outside the database decides its posture itself,
+  held there by a source gate over every store `fn` that takes a `VectorIndex`
 - `crates/undercroft-llm` — local LLM runtimes (Ollama/OpenAI-compatible) for
   `refine` → KG extraction, **and `embed.rs`: `HttpEmbedder`**, an `Embedder`
   backed by a served model (`UNDERCROFT_EMBEDDER=http` + `UNDERCROFT_EMBED_URL`
@@ -1946,8 +1951,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (864 run,
-                                      # 4 #[ignore]d = 868 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (868 run,
+                                      # 4 #[ignore]d = 872 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2072,7 +2077,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
 docker compose run --rm e2e           # e2e UI/UX suite against the release binary (508 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (156 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 checks)
-docker compose run --rm backends-e2e  # five live vector DBs over TLS (82 checks; weaviate
+docker compose run --rm backends-e2e  # five live vector DBs over TLS (137 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
                                       # answers HTTP before its Raft leader exists)
 bash tests/tls-pins.sh                # CA pins readable + the stack starts (13 checks).
