@@ -3507,13 +3507,21 @@ unwritten because a half-correct verdict is worse than a known-wrong one.
   so `## Gates` declared itself a sibling of `## 1.5.2 — released`, and an
   agent grepping `^## ` as an index into a 14,696-line memory artifact got it
   back as a peer of the release sections.
-  Two writing constraints follow, both learned by tripping them: an OPEN
-  entry's body may not contain the bare status token in capitals (the
-  `body-closed-heading-open` arm greps for it and cannot tell a marker from a
-  discussion of one, nor from an identifier that ends in it), and a line
-  beginning `## ` inside a fenced block is forbidden — the scanner is
-  fence-blind and would read it as a heading (filed as O162 with the
-  alternative).
+  Two writing constraints follow, both learned by tripping them. An OPEN
+  entry's body may not contain the bare status token in capitals: the
+  `body-closed-heading-open` arm matches it anywhere, even inside an
+  identifier, and O162's ruling panel KEPT that bluntness — a narrowed match
+  measurably silenced glued markers, and a loud false positive beats a silent
+  miss — so describe such an identifier rather than naming it; the refusal
+  names the line. And a heading-shaped line at levels 2–6 inside a fenced
+  block is REFUSED (O162): every reader of this file is line-based — the
+  scanner, O161's arm, the prose figures, the ruled O169 and O171 arms, an
+  agent's grep — so ONE detector runs before all of them and each stays
+  line-based. Only a column-0 three-backtick fence is accepted; to quote a
+  heading-shaped line, indent it one space. **O162 also refuted O161 on one
+  point: a release SHAPE is not enough** — an unfenced release-shaped heading
+  inside an entry re-sectioned the file with exit 0 — so the level-2 headings
+  are held to their one order, every version once.
 
 ## Conventions
 

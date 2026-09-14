@@ -3988,7 +3988,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**209** of the **223** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**210** of the **224** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4168,6 +4168,205 @@ identities.
 MINOR since O149: `PATCH /admin/tenants/{id}` and its CLI mirror are new
 capability, backward compatible. The rest of the section is PATCH work — no
 documented contract moves.
+
+### O162 — CLOSED 2026-09-14: five blind spots in and around the ROADMAP scanner — an unprobed arm, a misdirecting premise order, fence-blindness, a status token inside an identifier, and a release shape accepted anywhere
+
+**Filed 2026-09-13 out of O161's review, measured by sourcing `roadmap_scan`
+out of `tests/battery.sh` and running it on fixtures.** O161 closed the
+defect that re-sectioned the file. These are what the same reading found in
+the arms around it, none of which O161's fix touches.
+
+**1. `closed-under-open` has never been proven to fire, by anything.** The
+premise fixture — `RM_FIX` in `tests/battery.sh` — contains a release section
+and `## Unversioned`, and **no `## Open` section at all**, so that arm has no
+POSITIVE probe: its only probe is the negative one, which asserts it does not
+fire on a closed entry under a release section. Its sibling has accidental
+live coverage — the Unversioned exemption roster requires six named hits per
+run, so the Unversioned arm must fire six times — and `closed-under-open` has no such backstop. It is also
+the arm the O161 defect reached first, because O161 itself lived under
+`## Open`. An arm whose only evidence is that it has never complained is the
+shape this tree keeps finding.
+
+**2. The `PREMISE-FAILED` handler is unreachable on the real file, and what
+runs instead names the wrong cause.** `roadmap_scan` is called, then the
+exemption-roster loop, and only then the premise check. On a premise
+failure the loop fires first, prints one failure reading *"… the roster
+lists O1 … the list has outlived what it exempts; remove the row"* and exits —
+so an editor who follows it deletes correct exemptions one run at a time. It
+fails closed, so this is misdirection rather than silence, and the fix is a
+two-line reorder. Worth knowing why it matters: the same underlying fault
+produces a misdirected failure under `## Unversioned` — naming one correct
+exemption per run — and produced **silence** under `## Open`. Same bug, opposite
+symptoms, both wrong.
+
+**3. The scanner is fence-blind.** `/^## /` and `/^### /` are line rules with
+no code-fence state, so a `## ` inside a fenced block would be read as a
+heading. Measured on the live file: 26 fences, balanced, **zero headings
+inside any of them** — so this is latent, not live. It becomes reachable the
+day someone pastes a shell transcript into an entry, and O161's new arm would
+refuse that line. Two honest answers: teach both the scanner and the arm the
+same fence state (they must share it, or the arm diverges from the thing it
+protects), or state plainly that a line beginning `## ` inside a fence is
+forbidden in this file. **The second is defensible and cheaper**, because the
+scanner would mis-read such a line anyway; it needs writing down rather than
+leaving as a trap.
+
+**4. The arm that just refused this entry cannot tell an identifier from a
+status marker.** `body-closed-heading-open` greps the body for the bare status
+token in capitals, so an open entry may not NAME the exemption-roster constant
+— whose identifier ends in that word — while describing it. This entry was
+refused for exactly that, which is why the constant is referred to by
+description above rather than by name. Same blunt-proxy trade as the item
+below, cheap to live with, and written down because the next editor will hit
+it and assume they mis-typed something.
+
+**Not a finding, recorded so it is not re-filed.** `closure-without-evidence`
+greps for `[Gg]ate|[Cc]ounterfactual|test`, which `investigate` and `latest`
+satisfy. That is O47's deliberate proxy, measured at 7% false positives when
+widened and rejected, and M15 says the ruling stands.
+
+**Gate**: a fixture that exercises every arm in both directions — including
+`closed-under-open`, which has no positive probe — asserting the EXACT row set
+the scanner produces rather than that the expected rows are present, since a
+glob ignores a spurious row. Plus the reorder, which is its own one-line
+counterfactual.
+
+#### RULED 2026-09-14 by three lenses — Agentic Memory, Security (gate design) and DevSecOps/CI tooling — and an adversarial refuter
+
+**The questions.** Items 1 and 2 carried a prescribed fix and it was followed as
+filed. The panel ruled item 3 (how the heading gates treat a fenced code block)
+and item 4 (whether `body-closed-heading-open` keeps its blunt match), and the
+refuter added a fifth the reading surfaced.
+
+**Prior rulings.** O47's method — measure false positives before encoding a
+check, reject a noisy gate — is FOLLOWED: one incident in an arm's life is not
+noise. M15's line that O47 measured 7% false positives "and rejected widening"
+the evidence proxy is REFUTED: O47's 3 in 42 measured a SEPARATE check, a closed
+heading over open-work vocabulary, and this entry's body above repeated the
+misattribution; a note now sits beside M15. O161's "the fix is the file" and its
+fail-closed shape are FOLLOWED; its "a release section is a SHAPE" is REFUTED —
+an unfenced release-shaped heading inside an entry passed with exit 0 — and is
+revised by item 5. The ruled O169 and O171 arms run after the detector and rely
+on its invariant rather than modelling fences. Nothing else in O162, O161, O101,
+M15 or O47 ruled either question.
+
+**Q3, ruled: one fail-closed detector, run first, and every reader stays
+line-based.** `roadmap_fences` sits beside `roadmap_scan` and runs before every
+other ROADMAP reader. Inside a fence it refuses a heading-shaped line at levels
+2–6 (`heading-in-fence`); anywhere it refuses a fence style the file does not
+use — a tilde fence, an indented or longer backtick fence, a nested opener, a
+closer that is not exactly three backticks at column 0 (`fence-dialect`);
+outside a fence it refuses a heading indented one to three spaces, tabbed, or
+bare (`heading-spelling`); a fence still open at the end is `fence-unclosed`.
+Each row names its line and the line its fence opened. Level 1 stays allowed
+inside a fence, because that is a shell comment.
+
+- *Options that lost.* (A), a fence state taught to the readers: the readers
+  that need it sit OUTSIDE the scan — O161's grep, the prose-figures counts, the
+  ruled O169 and O171 arms, an agent's grep — so it is one copy per reader, and
+  it fails OPEN on desync, where one missing closer turns thousands of lines into
+  body and drops entries silently. A tracker inside the scan that ALSO treats
+  fenced lines as body, as the Agentic Memory lens ruled: dead code on any file
+  that passes, since every line that would change a reading is refused. (C),
+  documentation only: the fenced release heading was silent on both gates.
+  Refusing only `##` and `###`, as the Security lens ruled: a fenced
+  `#### RULED` passes and reads as a real ruling to an agent's lookup, and levels
+  2–6 cost nothing today. Modelling full CommonMark, as two lenses ruled: the
+  file uses one style — 26 column-0 three-backtick lines, 13 blocks, no tilde —
+  so refusing every other fence-shaped line keeps the model in agreement with
+  CommonMark on every line it accepts. Diffing against a real Markdown parser in
+  a container: an image dependency in a host-side preflight, for forms that
+  occur zero times.
+
+**Q4, ruled: keep the blunt match, narrow only the date arm, and name the
+line.** The "is this entry closed" test stays a bare match on the token, in
+heading and body. The Agentic Memory lens ruled a shared identifier-boundary
+predicate; the refuter measured that it silences GLUED markers — a glued
+`CLOSED2026-09-14` heading under `## Open` gave two rows at HEAD and none
+narrowed, and an open body with `**CLOSED2026-09-14**` one and none — and a silent
+miss loses to a loud false positive. What that lens found stands and is closed a
+safer way: a heading naming an identifier that ends in the token read as closed
+AND dated and printed nothing, so the DATE arm alone now requires the token not
+to continue an identifier. A failed date match is what fires that row, so the
+narrowing can only add rows, and it adds none on the live file. The body row
+carries its first matching line, every refusal prints `ROADMAP.md:<line>`, and an
+open entry that names the roster constant is a pinned COST row in the fixture.
+
+**Item 5, folded in: the sections are held to their one order.** After O161's
+arm, the level-2 headings must run: the first prose section, then release
+sections only, then the other six prose sections in roster order, each once, and
+every version once (`release-out-of-place`, `release-duplicate`,
+`section-out-of-order`, `roster-incomplete`). Monotonic versions are not the
+rule, because the MAJOR section is filed between released sections on purpose.
+
+**Claims refuted — the brief's own first.** The integrator's census read 19 bare
+tokens and one identifier: its reader ended a body at a `####` subsection, which
+the scanner does not, and the arm actually reads 72 lines — 49 bold markers, 21
+other, 2 identifier — all in closed entries. The brief's "26 fences" is 26 fence
+LINES, 13 blocks. It named two fence-blind readers; there are four in the tree
+plus the two ruled arms. This entry's filing said O161's arm would refuse a
+fenced level-2 line: false for a release-shaped one, and a release-shaped
+heading needs no fence at all. It called the Unversioned roster "six named
+hits"; it holds seven. The CI lens's "25 occurrences" of the roster constant is
+8 in tracked files; the Agentic Memory lens's "narrowing opens no silent path" is
+false (glued markers); the Security lens's fake entry fooling the prose figures
+is half true — the id count stays 209 while the level-3 total moves. The
+refuter's own first run of the narrowed variant never applied — perl refused the
+substitution and every case printed exit 0 — and was re-run behind a check that
+the edit landed.
+
+**Found alongside, filed separately:** O180, the round-four heading check that
+has examined nothing since 2026-08-19.
+
+#### Gates
+
+- The fence detector's fixture, 26 lines, compared as the EXACT 13 rows (four
+  `heading-in-fence`, three `heading-spelling`, five `fence-dialect`, one
+  `fence-unclosed`), with clean controls: a fenced shell comment, an indented
+  line inside a fence, a four-space-indented fence line, a backtick in an info
+  string, an unfenced level-4 heading.
+- The scanner's fixture: eleven entries across a release section, `## Open` and
+  `## Unversioned`, every arm in both directions, compared as the EXACT 8 rows,
+  plus a no-entry fixture that must yield only the premise row.
+- The section-order fixture, one of each defect, compared as the EXACT 4 rows.
+- The premise before the roster, a default arm in the drift handler, and the
+  preflight count unchanged at nineteen.
+
+#### Measured
+
+Every case on a copy of the real file, each edit checked to have landed first,
+HEAD's preflight block against the built one, both extracted from
+`tests/battery.sh`:
+
+| case | HEAD | built |
+|---|---|---|
+| a fenced release heading, then a closed entry under `## Open` | exit 0 | exit 1: `ROADMAP.md:13534`, inside the fence opened at 13533 |
+| O1 renamed, a fenced `O1` entry heading with a gate word inside O5 | exit 0, id count still 209 | exit 1: the line and its fence |
+| the first closing fence deleted (4235) | exit 0 | exit 1: first row inside the fence opened at 4233 |
+| an unfenced release heading inside `## Open`, then a closed entry | exit 0 | exit 1: `release-out-of-place` |
+| a duplicated `1.5.0` section | exit 0 | exit 1: `release-duplicate` |
+| no entry heading readable | "lists O1 … remove the row" | "examined NO sections" |
+| a closed entry planted under `## Open` | exit 1 | exit 1, now naming its line |
+| the real file | exit 0 | exit 0 |
+
+Seven mutations of the built block each fail its own fixture on the real file:
+the fence opener never matching, a closer accepting indented or longer runs, no
+unclosed row, the `closed-under-open` arm deleted, the date arm reverted, the
+body row without its line, and `release-out-of-place` never printed. A first
+reproduction of the fake-entry case failed loudly at HEAD for an unrelated
+reason — its fake entry held no evidence word — and was re-run with one before it
+was recorded.
+
+#### Residuals, stated
+
+- mawk was not run here. CI's `preflight` job runs these on ubuntu-latest and is
+  the portability probe; the programs use no interval expression, no
+  three-argument `match()` and no apostrophe.
+- A setext heading, a heading inside an HTML block, a fence nested four spaces
+  deep in a list item, and a new version section inserted among released ones
+  are seen by no reader; each occurs zero times today.
+- The body arm still cannot tell a marker from a discussion of one; that stays a
+  stated writing constraint in `CLAUDE.md`.
 
 ### O157 — CLOSED 2026-09-14: the model backends reach every surface, and the ruling's reach was refuted by a measurement before it was built
 
@@ -10077,6 +10276,12 @@ still passes whenever the body happens to contain the word "gate", "test" or
 positives and rejected widening. **That ruling stands and is not reopened
 here.**
 
+**Corrected 2026-09-14 by O162's ruling panel, beside the sentence above rather
+than in place of it.** The 7% figure is not the evidence proxy's. O47's 3 in 42
+measured a SEPARATE check — a closed heading over a body still using open-work
+vocabulary — and rejected THAT one as noise. What stands is O47's decision to
+keep the evidence proxy, which was never measured at 7%.
+
 **What was open is the section BOUNDARY, and it made the proxy weaker than it
 read.** The scanner started an entry on `^### [A-Z][0-9]+` and ended one only
 on `^## `. Every other level-3 heading fell through to the accumulator, so the
@@ -13751,68 +13956,6 @@ in a pipeline and fast enough to run on a machine that lacks the weights — so
 the symptom string goes in `UPGRADING.md` instead and the entry says plainly
 that this class is not pre-flightable.
 
-### O162 — four blind spots in and around the ROADMAP scanner: an unprobed arm, a misdirecting premise order, fence-blindness, and an arm that cannot tell an identifier from a status
-
-**Filed 2026-09-13 out of O161's review, measured by sourcing `roadmap_scan`
-out of `tests/battery.sh` and running it on fixtures.** O161 closed the
-defect that re-sectioned the file. These are what the same reading found in
-the arms around it, none of which O161's fix touches.
-
-**1. `closed-under-open` has never been proven to fire, by anything.** The
-premise fixture — `RM_FIX` in `tests/battery.sh` — contains a release section
-and `## Unversioned`, and **no `## Open` section at all**, so that arm has no
-POSITIVE probe: its only probe is the negative one, which asserts it does not
-fire on a closed entry under a release section. Its sibling has accidental
-live coverage — the Unversioned exemption roster requires six named hits per
-run, so the Unversioned arm must fire six times — and `closed-under-open` has no such backstop. It is also
-the arm the O161 defect reached first, because O161 itself lived under
-`## Open`. An arm whose only evidence is that it has never complained is the
-shape this tree keeps finding.
-
-**2. The `PREMISE-FAILED` handler is unreachable on the real file, and what
-runs instead names the wrong cause.** `roadmap_scan` is called, then the
-exemption-roster loop, and only then the premise check. On a premise
-failure the loop fires first, prints one failure reading *"… the roster
-lists O1 … the list has outlived what it exempts; remove the row"* and exits —
-so an editor who follows it deletes correct exemptions one run at a time. It
-fails closed, so this is misdirection rather than silence, and the fix is a
-two-line reorder. Worth knowing why it matters: the same underlying fault
-produces a misdirected failure under `## Unversioned` — naming one correct
-exemption per run — and produced **silence** under `## Open`. Same bug, opposite
-symptoms, both wrong.
-
-**3. The scanner is fence-blind.** `/^## /` and `/^### /` are line rules with
-no code-fence state, so a `## ` inside a fenced block would be read as a
-heading. Measured on the live file: 26 fences, balanced, **zero headings
-inside any of them** — so this is latent, not live. It becomes reachable the
-day someone pastes a shell transcript into an entry, and O161's new arm would
-refuse that line. Two honest answers: teach both the scanner and the arm the
-same fence state (they must share it, or the arm diverges from the thing it
-protects), or state plainly that a line beginning `## ` inside a fence is
-forbidden in this file. **The second is defensible and cheaper**, because the
-scanner would mis-read such a line anyway; it needs writing down rather than
-leaving as a trap.
-
-**4. The arm that just refused this entry cannot tell an identifier from a
-status marker.** `body-closed-heading-open` greps the body for the bare status
-token in capitals, so an open entry may not NAME the exemption-roster constant
-— whose identifier ends in that word — while describing it. This entry was
-refused for exactly that, which is why the constant is referred to by
-description above rather than by name. Same blunt-proxy trade as the item
-below, cheap to live with, and written down because the next editor will hit
-it and assume they mis-typed something.
-
-**Not a finding, recorded so it is not re-filed.** `closure-without-evidence`
-greps for `[Gg]ate|[Cc]ounterfactual|test`, which `investigate` and `latest`
-satisfy. That is O47's deliberate proxy, measured at 7% false positives when
-widened and rejected, and M15 says the ruling stands.
-
-**Gate**: a fixture that exercises every arm in both directions — including
-`closed-under-open`, which has no positive probe — asserting the EXACT row set
-the scanner produces rather than that the expected rows are present, since a
-glob ignores a spurious row. Plus the reorder, which is its own one-line
-counterfactual.
-
 ### O135 — three reads the audit has never run, carried in a gitignored file
 
 **Filed 2026-09-09.** Three carry-ins have been recorded across sessions in
@@ -14351,6 +14494,10 @@ match, and the real-file premise fails as the READER rather than reporting a
 clean tree. Leave O47's heading total unmoved after step 3, and the `prose
 figures` preflight fails naming both numbers. Read the three dated-record
 bodies for any line beginning with two hashes and a space (O162 item 3).
+**Since O162 was built (2026-09-14) that invariant is ENFORCED**:
+`roadmap_fences` runs before this arm and refuses a heading-shaped line inside a
+fence, so this arm stays line-based and must not model fences itself. Its
+fixture can also reuse O162's, which already holds an `Open` section.
 
 #### Residuals
 
@@ -15292,6 +15439,28 @@ on the current tree fails naming exactly these lines, and passes once they are
 relabelled. Residual, stated: an estimate cannot see font fallback or kerning,
 so a label within a few pixels of its bound stays a judgement for a rendered
 page.
+
+### O180 — the round-four heading check has examined nothing since 2026-08-19, and a missing heading reads as a pass
+
+**Filed 2026-09-14 out of O162's ruling panel; verified by reading and grep.**
+The `prose figures` preflight in `tests/battery.sh` compares the heading
+`### Still open from round four — N verified rows` with the rows its list
+paragraph holds. That heading has not existed in `ROADMAP.md` since `db9f027`
+(2026-08-19, the unit that moved those rows), and the check guards itself with
+`if [ -n "$RF_HEAD" ]`, so the absence of the very thing it counts turns the
+whole check into a skip. It has printed nothing for four weeks — which is also
+exactly what an agreeing heading and list print.
+
+**Two honest answers, and choosing between them is a ruling, not a
+preference.** Retire the check with its reason recorded, because the list it
+guarded no longer lives in this file; or make absence FAIL, which is right only
+if a round-four list is expected back. Either way the reader must stop turning a
+missing heading into silence — the shape this tree has recorded for O134b, O161
+and O162.
+
+**Gate**: whichever lands, a counterfactual on a copy of the file with the
+heading absent: retired, the check and its reader are gone and the reason is
+recorded; kept, the preflight fails naming the missing heading. Never nothing.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 

@@ -784,6 +784,132 @@ echo "$NOTRACE_OUT" | grep -E '^  (files scanned|pdf streams):' | sed 's/^  /   
 # here: this comment said `47 of 60` long after the tree moved on, and the
 # `prose figures` preflight gates O47's pair against the headings instead.
 echo "═══ preflight: ROADMAP headings ═══"
+# **A fenced code block may not hold a heading-shaped line (ROADMAP O162).**
+#
+# Every reader of ROADMAP.md is LINE-based: `roadmap_scan` below, O161's
+# level-2 arm, the prose-figures counts, the ruled O169 and O171 arms, and an
+# agent grepping `^### O` or `^#### RULED`. None models a fenced block, so a
+# heading-shaped line inside one reads as structure to all of them. Measured
+# before this arm, each with exit 0: a fenced release-shaped `## ` line passed
+# BOTH heading arms while a closed entry after it sat under `## Open`, and a
+# fenced `### O1 — CLOSED` satisfied the exemption roster for an entry that no
+# longer existed.
+#
+# So the FILE carries the invariant and ONE detector enforces it, before every
+# other reader, which is what lets each of them stay line-based. It models only
+# the dialect the file uses — three backticks at column 0, closed by exactly
+# three at column 0 — and REFUSES every other fence-shaped line, so on every
+# line it accepts it agrees with CommonMark. A level-1 line inside a fence is a
+# shell comment and stays allowed. Outside fences it refuses a heading spelled
+# so that it renders but no `^## ` reader sees it (indented, tabbed, bare).
+#
+# Rows are `kind|line|opener|text`. The program sits in a single-quoted shell
+# string, so it may hold no apostrophe, and CI runs mawk, so no intervals.
+roadmap_fences() { awk '
+  function run(s, c,   n) { n = 0; while (substr(s, n + 1, 1) == c) n++; return n }
+  {
+    t = $0; lead = 0
+    while (lead < 4 && substr(t, 1, 1) == " ") { t = substr(t, 2); lead++ }
+    ticks = (lead < 4) ? run(t, "`") : 0
+    tildes = (lead < 4) ? run(t, "~") : 0
+    if (!open) {
+      if (tildes >= 3) { print "fence-dialect|" NR "||" $0; next }
+      if (ticks >= 3) {
+        # a backtick in the info string means this is not a fence at all
+        if (index(substr(t, ticks + 1), "`") > 0) next
+        if (ticks > 3 || lead > 0) { print "fence-dialect|" NR "||" $0; next }
+        open = NR; opener = $0; next
+      }
+      if (lead >= 1 && lead <= 3 && (t " ") ~ /^##+[ \t]/) { print "heading-spelling|" NR "||" $0; next }
+      if (lead == 0 && ($0 ~ /^##+\t/ || $0 ~ /^##+$/)) { print "heading-spelling|" NR "||" $0; next }
+      next
+    }
+    if (ticks >= 3) {
+      if (lead == 0 && ticks == 3 && substr(t, 4) ~ /^[ \t]*$/) { open = 0; next }
+      print "fence-dialect|" NR "|" open "|" $0; next
+    }
+    if (($0 " ") ~ /^##+[ \t]/) print "heading-in-fence|" NR "|" open "|" $0
+  }
+  END { if (open) print "fence-unclosed|" open "|" open "|" opener }
+' "$1"; }
+# PREMISE, as an EXACT row set: a detector that died prints nothing, and so
+# does a clean file; a glob over the output would also pass a spurious row.
+RM_TAB=$(printf '\t')
+RM_FENCE_FIX="$(mktemp)"
+printf '%s\n' \
+  '# Fixture' \
+  '' \
+  '```bash' \
+  '# shell comment' \
+  ' ## indented inside' \
+  '## Gates' \
+  '#### RULED 2099-01-01' \
+  '~~~' \
+  '```' \
+  '#### real subsection' \
+  ' ## indented outside' \
+  "##${RM_TAB}tabbed" \
+  '##' \
+  '```foo`bar' \
+  '~~~' \
+  '  ```' \
+  '````' \
+  '    ```' \
+  '```rust' \
+  '```text' \
+  '### O9 — CLOSED 2099-01-01' \
+  '  ```' \
+  '```' \
+  '## Real section' \
+  '```' \
+  '## x' > "$RM_FENCE_FIX"
+RM_FENCE_WANT='heading-in-fence|6|3
+heading-in-fence|7|3
+heading-spelling|11|
+heading-spelling|12|
+heading-spelling|13|
+fence-dialect|15|
+fence-dialect|16|
+fence-dialect|17|
+fence-dialect|20|19
+heading-in-fence|21|19
+fence-dialect|22|19
+heading-in-fence|26|25
+fence-unclosed|25|25'
+RM_FENCE_GOT=$(roadmap_fences "$RM_FENCE_FIX" | cut -d'|' -f1-3); rm -f "$RM_FENCE_FIX"
+if [ "$RM_FENCE_GOT" != "$RM_FENCE_WANT" ]; then
+  echo "FAIL  premise: the fence detector did not produce the exact rows its fixture"
+  echo "      requires (ROADMAP O162). A detector that cannot see a planted fence reports"
+  echo "      what a clean file reports. Wanted (<) against got (>):"
+  diff <(printf '%s\n' "$RM_FENCE_WANT") <(printf '%s\n' "$RM_FENCE_GOT") | sed 's/^/        /'
+  echo ""; echo "BATTERY FAILED — preflight"; exit 1
+fi
+RM_FENCE_ROWS=$(roadmap_fences ROADMAP.md)
+if [ -n "$RM_FENCE_ROWS" ]; then
+  echo "FAIL  ROADMAP.md holds a fence the preflight refuses (ROADMAP O162). Every reader"
+  echo "      of this file is line-based, so a heading-shaped line inside a fenced block"
+  echo "      reads as structure to all of them. The FIRST row is the cause; later rows"
+  echo "      may only be its consequences, because a refused fence shifts what follows."
+  rm_fn=0
+  while IFS='|' read -r kind line opener text; do
+    [ -z "$kind" ] && continue
+    rm_fn=$((rm_fn + 1))
+    [ "$rm_fn" -gt 10 ] && continue
+    printf '        ROADMAP.md:%s  %s\n' "$line" "$text"
+    if [ -n "$opener" ] && [ "$kind" != fence-unclosed ]; then
+      printf '          inside the fence opened at ROADMAP.md:%s\n' "$opener"
+    fi
+    case "$kind" in
+      heading-in-fence) echo "          $kind: indent that line one space inside the fence" ;;
+      fence-dialect)    echo "          $kind: use a fence of exactly three backticks at column 0" ;;
+      heading-spelling) echo "          $kind: put the heading at column 0 with one space after the hashes" ;;
+      fence-unclosed)   echo "          $kind: this fence never closes; add a line of three backticks" ;;
+      *)                echo "          $kind: a row kind this handler does not describe; extend it" ;;
+    esac
+  done <<< "$RM_FENCE_ROWS"
+  [ "$rm_fn" -gt 10 ] && echo "        ... and $((rm_fn - 10)) more"
+  echo ""; echo "BATTERY FAILED — preflight"; exit 1
+fi
 # A FUNCTION over a file argument rather than an inline awk over ROADMAP.md,
 # so the fourth arm below can be PROBED on a fixture before the real scan is
 # believed (ROADMAP O101): a closed entry sitting under a section whose header
@@ -793,17 +919,23 @@ roadmap_scan() { awk '
   function flush() {
     if (sec != "") {
       seen++
-      if (body ~ /CLOSED/ && sec !~ /CLOSED/) print "body-closed-heading-open|" sec
+      # Every row names a LINE (O162): the heading, or for a body claim the
+      # first body line carrying the token, so a refusal points at the text.
+      if (body ~ /CLOSED/ && sec !~ /CLOSED/) print "body-closed-heading-open|" bline "|" sec
       if (sec ~ /CLOSED/) {
-        if (body !~ /[Gg]ate|[Cc]ounterfactual|test/) print "closure-without-evidence|" sec
-        if (sec !~ /CLOSED [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ &&
-            sec !~ /CLOSED by doctrine/) print "closure-without-a-date|" sec
-        if (top ~ /^## Unversioned/) print "closed-under-unversioned|" sec
-        if (top ~ /^## Open /) print "closed-under-open|" sec
+        if (body !~ /[Gg]ate|[Cc]ounterfactual|test/) print "closure-without-evidence|" secline "|" sec
+        # The DATE arm alone is narrowed to a token that does not continue an
+        # identifier (O162): a heading naming an identifier that ends in the
+        # token read as closed AND as dated, and printed nothing. A FAILED
+        # match is what fires this row, so the narrowing can only add rows.
+        if ((" " sec) !~ /[^A-Za-z0-9_]CLOSED [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ &&
+            (" " sec) !~ /[^A-Za-z0-9_]CLOSED by doctrine/) print "closure-without-a-date|" secline "|" sec
+        if (top ~ /^## Unversioned/) print "closed-under-unversioned|" secline "|" sec
+        if (top ~ /^## Open /) print "closed-under-open|" secline "|" sec
       }
     }
   }
-  /^### [A-Z][0-9]+/ { flush(); sec = $0; body = ""; next }
+  /^### [A-Z][0-9]+/ { flush(); sec = $0; secline = NR; body = ""; bline = ""; next }
   # ANY other heading at this level ENDS the current entry (ROADMAP M15). It
   # used to fall through to the accumulator below, so the 15 non-id headings
   # in this file were ABSORBED into whichever entry preceded them, along with
@@ -822,7 +954,7 @@ roadmap_scan() { awk '
   # comment broke the file.
   /^### /             { flush(); sec = "";  body = ""; next }
   /^## /              { flush(); sec = "";  body = ""; top = $0; next }
-  { if (sec != "") body = body " " $0 }
+  { if (sec != "") { body = body " " $0; if (bline == "" && $0 ~ /CLOSED/) bline = NR } }
   END {
     flush()
     # The premise. An awk that cannot run prints nothing, and nothing is
@@ -832,23 +964,48 @@ roadmap_scan() { awk '
     if (seen == 0) print "PREMISE-FAILED-no-sections-examined"
   }
 ' "$1"; }
-# PREMISE for the fourth arm: a closed entry under `## Unversioned` must be
-# named, and the same entry under a release section must not be. A scanner
-# whose new arm never fires reports exactly what a migrated tree reports.
+# PREMISE, as an EXACT row set over EVERY arm in both directions (ROADMAP
+# O162). The fixture this replaced held a release section and `## Unversioned`
+# and no `## Open`, so `closed-under-open` was proven by nothing: deleted, the
+# preflight still passed. Rows the fixture must NOT produce are part of the set
+# too — a glob that the wanted rows are present would pass a spurious one. The
+# O9995 row is a pinned COST: an open entry that names an identifier ending in
+# the status token is refused, and a change that stops it is a decision to
+# record, not an improvement to absorb.
 RM_FIX="$(mktemp)"
-printf '## 1.9.9 — released 2099-01-01\n\n### O9999 — CLOSED 2099-01-01: probe\n\nbody with a gate.\n\n## Unversioned — decisions and external actions, not code\n\n### O9998 — CLOSED 2099-01-01: probe\n\nbody with a gate.\n' > "$RM_FIX"
-RM_PROBE=$(roadmap_scan "$RM_FIX"); rm -f "$RM_FIX"
-case "$RM_PROBE" in
-  *"closed-under-unversioned|### O9998"*) ;;
-  *) echo "FAIL  premise: the closed-under-unversioned arm did not fire on a"
-     echo "      fixture that places a CLOSED entry under Unversioned: $RM_PROBE"
-     echo ""; echo "BATTERY FAILED — preflight"; exit 1 ;;
-esac
-case "$RM_PROBE" in
-  *"closed-under-unversioned|### O9999"*|*"closed-under-open|### O9999"*)
-     echo "FAIL  premise: the arm fired on a closed entry under a RELEASE section"
-     echo ""; echo "BATTERY FAILED — preflight"; exit 1 ;;
-esac
+printf '%s\n' \
+  '## 1.9.9 — released 2099-01-01' '' \
+  '### O9999 — CLOSED 2099-01-01: probe' '' 'body with a gate.' '' \
+  '### O9990 — CLOSED 2099-01-01: probe' '' 'body with nothing to show.' '' \
+  '### O9991 — CLOSED: probe' '' 'body with a gate.' '' \
+  '### O9992 — UNVERSIONED_CLOSED 2099-01-01: probe' '' '**CLOSED 2099-01-02** with a gate.' '' \
+  '### O9993 — CLOSED by doctrine: probe' '' 'body with a gate.' '' \
+  '## Open — releasable work' '' \
+  '### O9994 — an open probe' '' '**CLOSED 2099-01-01** in the body.' '' \
+  '### O9995 — an open probe that names the roster' '' 'the roster constant UNVERSIONED_CLOSED is read here.' '' \
+  '### O9988 — an open probe' '' '**CLOSED2099-01-01** glued.' '' \
+  '### O9996 — CLOSED 2099-01-01: probe' '' 'body with a gate.' '' \
+  '### O9989 — an open probe' '' 'plain body.' '' \
+  '## Unversioned — decisions and external actions, not code' '' \
+  '### O9998 — CLOSED 2099-01-01: probe' '' 'body with a gate.' > "$RM_FIX"
+RM_SCAN_WANT='closure-without-evidence|7|### O9990 — CLOSED 2099-01-01: probe
+closure-without-a-date|11|### O9991 — CLOSED: probe
+closure-without-a-date|15|### O9992 — UNVERSIONED_CLOSED 2099-01-01: probe
+body-closed-heading-open|27|### O9994 — an open probe
+body-closed-heading-open|31|### O9995 — an open probe that names the roster
+body-closed-heading-open|35|### O9988 — an open probe
+closed-under-open|37|### O9996 — CLOSED 2099-01-01: probe
+closed-under-unversioned|47|### O9998 — CLOSED 2099-01-01: probe'
+RM_PROBE=$(roadmap_scan "$RM_FIX")
+printf '%s\n' '## Open — releasable work' '' 'no entry in this section.' > "$RM_FIX"
+RM_PROBE_EMPTY=$(roadmap_scan "$RM_FIX"); rm -f "$RM_FIX"
+if [ "$RM_PROBE" != "$RM_SCAN_WANT" ] || [ "$RM_PROBE_EMPTY" != "PREMISE-FAILED-no-sections-examined" ]; then
+  echo "FAIL  premise: the heading scanner did not produce the exact rows its fixture"
+  echo "      requires (ROADMAP O162). Wanted (<) against got (>), then the no-entry probe:"
+  diff <(printf '%s\n' "$RM_SCAN_WANT") <(printf '%s\n' "$RM_PROBE") | sed 's/^/        /'
+  echo "        no-entry probe: ${RM_PROBE_EMPTY:-nothing}"
+  echo ""; echo "BATTERY FAILED — preflight"; exit 1
+fi
 # **Closed entries that BELONG under `Unversioned`, each with its reason** —
 # a decision or an action outside this repository is closed and is still not
 # releasable, and the scanner cannot judge releasability. Counted BOTH ways
@@ -866,17 +1023,10 @@ UNVERSIONED_CLOSED=(
   "O173|closed by doctrine: how an unanswered design question is ruled and where the ruling is recorded"
 )
 ROADMAP_DRIFT=$(roadmap_scan ROADMAP.md)
-RM_UNV_HITS=$(printf '%s\n' "$ROADMAP_DRIFT" | grep '^closed-under-unversioned|' || true)
-for row in "${UNVERSIONED_CLOSED[@]}"; do
-  id="${row%%|*}"
-  if ! printf '%s\n' "$RM_UNV_HITS" | grep -qE "^closed-under-unversioned\|### ${id} "; then
-    echo "FAIL  UNVERSIONED_CLOSED lists $id (${row#*|}) but no closed entry"
-    echo "      with that id sits under '## Unversioned' — the list has outlived"
-    echo "      what it exempts; remove the row"
-    echo ""; echo "BATTERY FAILED — preflight"; exit 1
-  fi
-  ROADMAP_DRIFT=$(printf '%s\n' "$ROADMAP_DRIFT" | grep -vE "^closed-under-unversioned\|### ${id} " || true)
-done
+# The premise BEFORE the roster (ROADMAP O162). It used to run after it, so a
+# scan that examined nothing reached the roster loop first, which found none of
+# its ids and said "the list has outlived what it exempts; remove the row" — an
+# instruction to delete a CORRECT exemption, one per run, for a broken scanner.
 if [ "$ROADMAP_DRIFT" = "PREMISE-FAILED-no-sections-examined" ]; then
   echo "FAIL  the ROADMAP heading scan examined NO sections. The scanner is"
   echo "      broken, not the tree — a checker that cannot run reports exactly"
@@ -885,9 +1035,21 @@ if [ "$ROADMAP_DRIFT" = "PREMISE-FAILED-no-sections-examined" ]; then
   echo "BATTERY FAILED — preflight"
   exit 1
 fi
+RM_UNV_HITS=$(printf '%s\n' "$ROADMAP_DRIFT" | grep '^closed-under-unversioned|' || true)
+for row in "${UNVERSIONED_CLOSED[@]}"; do
+  id="${row%%|*}"
+  if ! printf '%s\n' "$RM_UNV_HITS" | grep -qE "^closed-under-unversioned\|[0-9]+\|### ${id} "; then
+    echo "FAIL  UNVERSIONED_CLOSED lists $id (${row#*|}) but no closed entry"
+    echo "      with that id sits under '## Unversioned' — the list has outlived"
+    echo "      what it exempts; remove the row"
+    echo ""; echo "BATTERY FAILED — preflight"; exit 1
+  fi
+  ROADMAP_DRIFT=$(printf '%s\n' "$ROADMAP_DRIFT" | grep -vE "^closed-under-unversioned\|[0-9]+\|### ${id} " || true)
+done
 if [ -n "$ROADMAP_DRIFT" ]; then
-  while IFS='|' read -r kind sec; do
+  while IFS='|' read -r kind line sec; do
     [ -z "$kind" ] && continue
+    rm_token=1
     case "$kind" in
       body-closed-heading-open)
         echo "FAIL  this entry says CLOSED in the body and not in the heading."
@@ -910,8 +1072,18 @@ if [ -n "$ROADMAP_DRIFT" ]; then
       closed-under-open)
         echo "FAIL  this CLOSED entry sits under '## Open', which holds open work"
         echo "      only. Move it under the release that shipped it (ROADMAP O101):" ;;
+      # A row kind with no arm used to print only its heading, with no cause
+      # (ROADMAP O162): the scanner can grow a row this handler never learned.
+      *)
+        rm_token=0
+        echo "FAIL  the heading scan emitted a row kind this handler does not"
+        echo "      describe ($kind); extend the handler:" ;;
     esac
-    printf '        %s\n' "$sec"
+    printf '        ROADMAP.md:%s  %s\n' "$line" "$sec"
+    if [ "$rm_token" -eq 1 ]; then
+      echo "        (these checks key on the capital status token anywhere, even inside an"
+      echo "        identifier: describe such an identifier rather than naming it)"
+    fi
   done <<< "$ROADMAP_DRIFT"
   echo ""
   echo "BATTERY FAILED — preflight"
@@ -1012,8 +1184,80 @@ if [ "$RM_H2_BAD" -ne 0 ]; then
   echo "BATTERY FAILED — preflight"
   exit 1
 fi
+# **And the sections come in their ORDER (ROADMAP O162, item 5).** The arm
+# above accepts a release-shaped heading ANYWHERE, because a release section is
+# a shape rather than a roster row — so an UNFENCED `## 1.7.0 — unreleased`
+# written inside an `## Open` entry re-sectioned everything after it, and a
+# closed entry there escaped the placement arm with exit 0 (measured). The
+# file has one order: the first prose section, then release sections only,
+# then the other six prose sections in roster order, each once; and a version
+# appears once. Monotonic versions are NOT the rule — `## 2.0.0` is filed
+# between released sections on purpose.
+rm_order_rows() { # rm_order_rows <the grep -n listing of level-2 headings>
+  local state=0 next=1 matched=0 versions="" entry no txt ver want
+  while IFS= read -r entry; do
+    [ -z "$entry" ] && continue
+    no=${entry%%:*}
+    txt=${entry#*:}
+    case "$txt" in
+      '## '[0-9]*.[0-9]*.[0-9]*' — '*)
+        ver=${txt#'## '}
+        ver=${ver%% *}
+        [ "$state" -ne 1 ] && printf 'release-out-of-place|%s|%s\n' "$no" "$txt"
+        printf '%s\n' "$versions" | grep -qxF "$ver" && printf 'release-duplicate|%s|%s\n' "$no" "$txt"
+        versions="$versions
+$ver"
+        continue ;;
+    esac
+    rm_is_section "$txt" || continue
+    if [ "$state" -eq 0 ]; then want="${RM_PROSE_SECTIONS[0]}"; else want="${RM_PROSE_SECTIONS[$next]:-}"; fi
+    if [ -n "$want" ] && case "$txt" in "## $want"*) true ;; *) false ;; esac; then
+      matched=$((matched + 1))
+      if [ "$state" -eq 0 ]; then state=1; else state=2; next=$((next + 1)); fi
+    else
+      printf 'section-out-of-order|%s|%s\n' "$no" "$txt"
+    fi
+  done <<< "$1"
+  if [ "$matched" -ne "${#RM_PROSE_SECTIONS[@]}" ]; then
+    printf 'roster-incomplete|0|matched %s of %s prose sections in roster order\n' "$matched" "${#RM_PROSE_SECTIONS[@]}"
+  fi
+}
+# PREMISE, as an exact row set on a planted listing with one of each defect.
+RM_ORDER_FIX='1:## How this file is organised — probe
+2:## 1.1.0 — released 2099-01-01
+3:## 1.1.0 — released 2099-01-01
+4:## Open — releasable work, probe
+5:## 1.7.0 — unreleased
+6:## What `A12`, `C8`, `R4`, `U12` mean — probe
+7:## The round-three audit — probe
+8:## Unversioned — decisions and external actions, probe
+9:## Shipped — the operability track'
+RM_ORDER_WANT='release-duplicate|3|## 1.1.0 — released 2099-01-01
+release-out-of-place|5|## 1.7.0 — unreleased
+section-out-of-order|9|## Shipped — the operability track
+roster-incomplete|0|matched 5 of 7 prose sections in roster order'
+RM_ORDER_GOT=$(rm_order_rows "$RM_ORDER_FIX")
+if [ "$RM_ORDER_GOT" != "$RM_ORDER_WANT" ]; then
+  echo "FAIL  premise: the section-order check did not produce the exact rows its"
+  echo "      fixture requires (ROADMAP O162). Wanted (<) against got (>):"
+  diff <(printf '%s\n' "$RM_ORDER_WANT") <(printf '%s\n' "$RM_ORDER_GOT") | sed 's/^/        /'
+  echo ""; echo "BATTERY FAILED — preflight"; exit 1
+fi
+RM_ORDER_ROWS=$(rm_order_rows "$RM_H2")
+if [ -n "$RM_ORDER_ROWS" ]; then
+  echo "FAIL  the ROADMAP sections are out of their one order (ROADMAP O162): the first"
+  echo "      prose section, release sections only, then the other six prose sections in"
+  echo "      roster order, each once, and every version once. A release-shaped line"
+  echo "      anywhere else re-sections every entry after it, silently:"
+  while IFS='|' read -r kind line txt; do
+    [ -z "$kind" ] && continue
+    printf '        %s  ROADMAP.md:%s  %s\n' "$kind" "$line" "$txt"
+  done <<< "$RM_ORDER_ROWS"
+  echo ""; echo "BATTERY FAILED — preflight"; exit 1
+fi
 echo "ok    all $RM_H2_N ROADMAP level-2 headings are sections (${#RM_PROSE_SECTIONS[@]} prose"
-echo "      + release shape, both directions); entry subsections stay '####'"
+echo "      + release shape, both directions), in their one order with every version"
+echo "      once; no fence holds a heading; entry subsections stay '####'"
 
 # ── preflight: every compose file DECLARES its project name ────────────────
 # Undeclared, Compose derives the project from the DIRECTORY, so every
