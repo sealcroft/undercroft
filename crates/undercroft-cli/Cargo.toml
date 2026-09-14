@@ -57,3 +57,14 @@ assert_cmd = { workspace = true }
 predicates = { workspace = true }
 tempfile = { workspace = true }
 rusqlite = { workspace = true }
+
+# ROADMAP O157. The CLI and /v1 join over the GENERATED model fixture, run BY
+# NAME from the ort-build leg only, so a lost feature is a hard error rather than
+# a skip. It reaches undercroft_embed_onnx::fixture through the OPTIONAL
+# dependency above and never a dev-dependency: this crate is a default member, so
+# a dev-dependency is compiled by every cargo test and --all-targets over it -- the
+# test leg, both lint definitions, windows-check and the Dockerfile builder stage.
+[[test]]
+name = "model_e2e"
+path = "tests/model_e2e.rs"
+required-features = ["onnx", "ort", "undercroft-embed-onnx/test-fixture"]

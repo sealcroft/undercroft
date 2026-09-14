@@ -4169,6 +4169,389 @@ MINOR since O149: `PATCH /admin/tenants/{id}` and its CLI mirror are new
 capability, backward compatible. The rest of the section is PATCH work — no
 documented contract moves.
 
+### O157 — CLOSED 2026-09-14: the model backends reach every surface, and the ruling's reach was refuted by a measurement before it was built
+
+**Filed 2026-09-12, split out of O134b rather than carried inside it.** The
+model backends are exercised through their own crates' tests; nothing drives
+one through the CLI and `/v1` to a SURFACE — a `remember` that lands a
+poisoned write, `stats` reporting `embed_failures`, a search reporting
+`rerank_failures`. That join is the last thing the O134 family leaves
+uncovered, and it is the one a deployment actually sees.
+
+**Why it is not plumbing, which is why it is filed rather than done.** The
+fixture exists only inside `cargo test`: it is a `pub mod` behind
+`#[cfg(any(test, feature = "test-fixture"))]`, and a shell suite cannot call
+it. Materialising it on disk needs a way to RUN the generator outside a test —
+realistically a small feature-gated binary or example target on
+`undercroft-embed-onnx`, which is new public surface on a shipped crate. That
+is a design decision with a cost (a target that exists only to write a test
+artifact, on a crate that is publishable by default and simply never
+published), not a mechanical extension of O134b.
+
+Three shapes, with their costs:
+
+1. **A feature-gated `--example write-fixture`.** Smallest code, but examples
+   are built by `cargo test --all-targets`, so the feature has to be on
+   wherever that runs.
+2. **A `[[bin]]` behind `test-fixture`.** Explicit and greppable; adds a
+   binary target to a crate whose only job is a library.
+3. **Drive the join from a Rust integration test instead of a shell suite**,
+   so the fixture never leaves the process — no new target at all, at the cost
+   that it exercises the store and `/v1` in-process rather than through the
+   real binary, which is the thing an e2e suite exists to do.
+
+(3) is the cheapest and the weakest; (2) is the most honest about what it is.
+The tree does not settle it, so it is a ruling rather than a preference.
+
+**The corpus arm rides with it.** `.handover/locomo_feed.txt` and
+`crates/undercroft-store/testdata/*_50k.txt` are BOTH gitignored, so any drive
+over them is local-only and can never be a gate;
+`benchmarks/model_eval/datasets/` is 47 tracked files across 10 languages,
+allowlisted in `.dockerignore` and COPYd by nothing. Whichever shape wins, the
+entry must say plainly whether the corpus drive is a GATE or a MANUAL drive
+recorded in prose — and a manual drive is a legitimate answer, not a gap,
+provided it is stated as one.
+
+#### RULED 2026-09-13 by a three-lens review plus an adversarial refuter
+
+**The menu above is refuted, and the correction is the important part.** Option
+(3) is described as exercising the store and `/v1` *"in-process rather than
+through the real binary"*. That is **false of this tree**:
+`crates/undercroft-cli/tests/cli.rs:1140` already spawns
+`assert_cmd::cargo::cargo_bin("undercroft") serve-http` as a CHILD PROCESS and
+talks raw HTTP to it over a `TcpStream`. A Rust integration test here drives
+the real binary out of process, on `/v1`, today. So the three-option menu was
+written against a constraint that does not exist, and the option labelled
+"cheapest and weakest" is neither.
+
+**The ruled shape is a fourth**: a `[[test]]` target on `undercroft-cli` with
+`required-features = ["onnx"]`, reaching the generator through
+`undercroft-embed-onnx` as a **dev-dependency** with `test-fixture` — not a
+new feature on a shipped crate, and not a new binary or example — driven from
+the `ort-build` leg by
+
+```
+cargo test --release -p undercroft-cli --features onnx,ort --test model_e2e
+```
+
+so ONE target exercises both `UNDERCROFT_EMBEDDER=onnx` and `=ort` from one
+binary, which is the coexistence that leg exists for. `model leg parity` greps
+each leg for its own crate and `-p undercroft-cli` names neither, so it does
+not trip.
+
+#### The blocking probe is RUN, and it settles the disagreement
+
+Two reviewers drew opposite conclusions from the same cargo behaviour. Neither
+stated the discriminator, and there is **zero `required-features` precedent
+tree-wide**, so it was measured:
+
+| invocation | result |
+|---|---|
+| `cargo test -p undercroft-cli --test probe_rf`, feature NOT enabled | **`error: target 'probe_rf' in package 'undercroft-cli' requires the features: 'onnx'`**, exit 101 |
+| the unnamed invocation the default `test` leg runs | exit 0, the target mentioned **0 times** — silently skipped |
+
+**So `required-features` is safe iff the leg NAMES the target.** A lost
+`--features` is then a hard error rather than a silent skip, and the default
+`test` suite skips it correctly, adding no empty target to its log. That is
+what makes the ruled shape safe and what would have made a `[[bin]]` or
+`[[example]]` unsafe — those are reached by unnamed invocations.
+
+#### What the join must assert, because the entry's sketch cannot work
+
+`embed_failures` belongs to the PROCESS (`undercroft-store/src/manage.rs:163`),
+so on the CLI `remember` then `stats` are two processes and the second reports
+its own open, not the first's write. And the fixture's 14-word vocabulary
+excludes probe pair 1's words (`"the quarterly revenue report"`,
+`undercroft-core/src/embed.rs:139`), so calibration makes the count **non-zero
+at every open anyway**. A suite written to the sketch would go green while
+asserting a causal relation the CLI cannot produce.
+
+- **CLI**: assert provenance per process — with `UNDERCROFT_SEMANTIC_GATE=off`
+  and `UNDERCROFT_SEMANTIC_FLOOR=0.0` declared, `stats` prints no
+  `embed failures:` line at all (it prints only when non-zero); with them
+  removed, one process reports a non-zero count and `gate_source: refused`.
+  The two differ by exactly two environment variables, which is the
+  counterfactual built in.
+- **`/v1`**: assert a DELTA across one long-lived process — baseline, one
+  write carrying the refused word, then `embed_failures` strictly greater.
+  Never an absolute, which is a function of those two declarations.
+
+**The fixture must NOT widen to fix this.** Making all 14 probe pairs tokenize
+needs ~100 vocabulary entries, which pushes the embedding table past 128 rows
+and re-prices `OUT_OF_TABLE_ID` — in the one file both backends must agree on,
+invalidating the hand-written assertions in all nine arm tests across two
+crates. And it would buy nothing: in 4 dimensions the calibration returns its
+clamps regardless, so the join would be asserting a measurement that measured
+nothing.
+
+#### Sequencing against O150
+
+**O157 does not wait for O150, and the dependency runs the other way.** The
+join must drive `REFUSED_WORD` (a tokenizer-model-layer failure that degrades
+identically on tract and ORT), never `OUT_OF_TABLE_WORD` — under
+`UNDERCROFT_EMBEDDER=onnx` that PANICS, and on `/v1` the request loop is
+single-threaded, so the panic unwinds out of it and **kills the server**,
+reading as a connection reset rather than as O150. Once O150's `catch_unwind`
+boundary lands, the follow-on arm is that the server SURVIVES such a write and
+reports it on `stats`.
+
+#### The corpus arm, ruled
+
+**MANUAL, recorded in prose.** `.handover/locomo_feed.txt` and
+`crates/undercroft-store/testdata/*_50k.txt` are gitignored, so a drive over
+them can never be a gate; `benchmarks/model_eval/datasets/` is tracked but
+COPYd by no image, and a DIM-4 fixture cannot make a recall claim anyway. A
+stated manual drive is a legitimate answer; a silent one is a gap.
+
+#### Still to do
+
+Build it. The shape, the leg, the probe and the assertions are settled above;
+what remains is the code, the published `(N run, M ignored)` figure for the
+leg — **set from the run, never from a prediction** — and a premise arm
+proving which embedder was in hand, since "no embed-failures line" is
+otherwise produced identically by a healthy run, a binary without the feature,
+and a driver whose trigger stopped triggering.
+
+#### RULED 2026-09-14 by two panels — Agentic Memory, Rust/Cargo and DevSecOps-CI lenses on the mechanics; Agentic Memory, Security and test-design lenses on the assertions — each with an adversarial refuter
+
+**The 2026-09-13 ruling above was followed only where it was best practice, and
+three of its parts were refuted with evidence first** (the maintainer's
+standing instruction of 2026-09-14, O173). It stays verbatim above rather than
+edited in place, because the refuted reasoning is the lesson. The questions: how
+the target reaches the fixture (refuted and replaced); what `required-features`
+lists (refuted and replaced); the leg, its figure and the parity preflight
+(upheld with corrections); the assertions (upheld with corrections); the scope
+against the filing (refuted and replaced); the O150 sequencing (upheld).
+
+**The reach — refuted and replaced.** The ruled dev-dependency was measured
+before it was built, on one target directory in sequence, each figure
+incremental over the step before it:
+
+| invocation | HEAD | dev-dependency (ruled) | no manifest edge (built) |
+|---|---|---|---|
+| `cargo test --release --no-run` (the default `test` leg) | 186 s cold, 0 ML units | **+265 s**, 4 ML units | +1 s, 0 |
+| `windows-check`'s shape (`check --workspace --all-targets --exclude …`) | 40 s, 0 | +41 s, **4 ML units despite `--exclude`** | +2 s, 0 |
+| named, fixture feature missing | — | — | exit 101 naming it |
+
+A dev-dependency cannot be optional, so on a default member it is compiled by
+every `cargo test` and `--all-targets` over it — the `test` leg, both lint
+definitions, `windows-check`, and the Dockerfile builder stage every CI image
+and the release image are built from. The precedent it copied
+(`undercroft-embed-ort`'s dev-dependency) justifies itself as costing no build
+time, which holds only for a NON-default member. So the target lists
+`required-features = ["onnx", "ort", "undercroft-embed-onnx/test-fixture"]` and
+reaches the fixture through the CLI's existing optional dependency. The ruled
+`["onnx"]` is refuted too: a lost `ort` compiled a binary whose ort arm bails at
+runtime, and without the fixture feature the target fails to compile (E0433)
+instead of being refused. A dev-dependency and the built reach put an equivalent
+binary under test, so the choice moved cost and never what the join proves —
+which is why cost decided it.
+
+**The scope — refuted and replaced.** The filing named three observables (a
+poisoned write, `embed_failures`, `rerank_failures`) and the ruling's assertions
+covered one, recording no residual: a narrowing nobody stated. Both other roles
+are reachable today through existing variables and the existing fixture, so the
+join covers all three O131 counters on every surface that can carry each. "A
+search reporting `rerank_failures`" named no surface — no search reply carries
+the field — and is corrected to `stats` after a search. `/v1` cannot carry the
+late stage at all, because `serve-http` refuses ColBERT at start-up, so that
+refusal is pinned as a BOUNDARY rather than left as a missing arm. CLI `stats`
+can print neither a rerank nor a late count, because both load probes take
+uncounted inner paths, so the CLI arms for those two roles read the command's
+own degrade lines.
+
+**The leg — upheld, with corrections.** The join runs by name in `ort-build`,
+appended LAST after `&&`, and the shipped-shape `cargo build` stays first: it is
+the only pull-request compile of `release.yml`'s `onnx,ort` WITHOUT
+`test-fixture`. ONE per-leg figure spans `undercroft-embed-ort`'s targets and
+`model_e2e`, and CLAUDE.md says so. "Each leg tests ONLY its own crate" is
+corrected to the invariant it was a proxy for: **no cargo test target runs in
+two legs, and a required-features target runs in exactly one** — never "every
+target runs in exactly one leg", a coverage claim no gate measures, and O134a is
+this tree's record of targets run by nothing. The ruling's "`model leg parity`
+does not trip" was a BLINDNESS, not a property: its needles name only the model
+crates, so a leg that dropped `--test model_e2e` would have run every CLI target,
+which `test` already counts, and the only signal would have been a figure drift
+that invites editing the figure. The binary under test differs from the shipped
+`-ort` asset in one unreferenced `pub mod`, the unification of the CLI's existing
+dev-dependencies (already true of every `cli.rs` spawn) and the platform, so the
+join claims source-and-feature behaviour on linux x86_64 and never the shipped
+artifact.
+
+**The assertions — upheld with seven corrections.** Match the LAST ` · ` field
+of the `semantic:` line (the gate VALUE prints `refused` in both arms, so a
+substring passes both); exact `+1` on every long-lived surface with a healthy
+zero-delta control (the ruled "strictly greater" passes a double count, and a
+counterfactual proved it); MCP stdio added (Definition of done item 3); the filed
+poisoned `remember` added; a routing premise per backend (a missing model path
+must be refused by THAT backend's loader); every child strips all inherited
+`UNDERCROFT_*` and the locale; a count compared to the process's own degrade
+lines rather than to the calibration constant. The reranker's deltas stay
+"greater" and no order is asserted, because tract degrades per passage and ORT
+the whole window, and pinning either would pin O151 a second time.
+"`embed_failures` belongs to the process" is corrected to the embedder INSTANCE:
+`serve-http` holds a `/mcp` instance beside the `/v1` ones, one per vault under
+onnx and one shared under ort, and the `/v1` arm asserts that sharing contract.
+
+**Upheld unchanged:** the `[[test]]` target shape, driving the real binary out of
+process, "no new feature, binary or example", driving `REFUSED_WORD` and never
+`OUT_OF_TABLE_WORD` (extended to every role until O150 lands), and the MANUAL
+corpus arm.
+
+**Options that lost, with their cost.** A separate `model-e2e` compose service
+and CI leg: a second copy of `ort-build`'s toolchain install and a second cold
+ML+ORT build per pull request, for attribution the named target and the log's
+`Running` headers already give. An identity-filtered sub-figure for `model_e2e`:
+new published grammar and a new reader, to guard a swap class every per-leg sum
+already carries. Dropping `ort-build`'s `cargo build`: it removes the only
+pull-request compile of the shipped feature set. `;` between the steps: the leg's
+status would become the last command's. The leg's `--features` EQUAL to
+`required-features`: Cargo defines the latter as a minimum, so the rule is
+superset. An in-file `cfg!(feature = "ort")` assert: `required-features` already
+refuses that invocation, and the assert observes the test crate rather than the
+spawned binary. `assert_cmd`'s path heuristic: the binary is
+`env!("CARGO_BIN_EXE_undercroft")`, the documented Cargo contract.
+
+**Claims refuted in the 2026-09-13 record and its brief.** The vocabulary does
+not exclude probe pair 1's words — `the` is in it; the pair fails on `quarterly`
+and on the single-token Japanese side, and an undeclared open counts exactly
+four. "`[[bin]]` or `[[example]]` are reached by unnamed invocations" is false:
+`required-features` skips them exactly as it skips a `[[test]]`, so rejecting
+them stands only on "new public surface on a shipped crate". "A lost
+`--features` is a hard error" held only for features the list names. "Degrades
+identically on tract and ORT" holds for embed and ColBERT and is false for the
+reranker as the store calls it. The brief's cost map omitted the Dockerfile
+builder stage, the most frequent landing site of all.
+
+**The new rule, applied backwards** (a default member reaches a non-default
+member only optionally): it CONFIRMS `undercroft-cli` and `undercroft-bench`,
+excludes `undercroft-embed-ort`'s dev-dependency by scope, and RECLASSIFIES
+exactly one decision — this entry's own unbuilt ruled reach. Its history is two
+conforming manifests; this is its first application. The exactly-one clause for
+a required-features target has no history at all.
+
+#### Gates
+
+- `crates/undercroft-cli/tests/model_e2e.rs`, four tests, run by the `ort-build`
+  leg: the embedder, the reranker and the late stage across CLI, `/v1` and MCP,
+  plus a source check that the out-of-table trigger appears in comments only.
+- `model leg parity` gains arms B–F inside the same preflight, so the preflight
+  count does not move: B the join is present as spelled; C no model leg runs a
+  default member's targets whole, and the Dockerfile never names the join; D
+  every `required-features` target is run by exactly one leg whose `--features`
+  are a superset; E such a target's source carries no feature cfg; F a default
+  member reaches a non-default member ONLY through an optional `[dependencies]`
+  entry. Each carries a premise arm.
+- The existing per-leg figure comparison, which now spans the join.
+
+#### Measured at the integrated tree
+
+**The scratch verification did not survive the merge, and that is mine.** The
+drafts were run before PR #184's drift sweep landed its crate edits (`main.rs`,
+the store's `lib.rs` and `manage.rs`, both model crates), so every
+counterfactual site had moved and nothing measured in scratch described the tree
+this merges into. Everything below was re-run on a copy of the integrated tree,
+each site found by CONTENT at run time rather than by a carried line number.
+The first run passed 4 of 4, then ten consecutive runs 4 of 4. Seven
+counterfactuals, each edit checked to have landed on its line, restored from a
+saved copy and judged against a PREDICTED failure message, all fired where
+predicted: C1 `stats` reads no embed count → *"calibration degraded and stats
+printed no count"*; C3 one save embeds twice → *"one poisoned write embeds
+once"*; C4 `/v1` projects zero → *"one poisoned /v1 write counts exactly
+once"*; C8 the shared tract reranker hides its count → *"the failed rerank
+reached /v1 stats"*; C11 the tract doc encode uncounted → *"one poisoned doc
+encodes once"*; C12 `/v1` accepts ColBERT → *"did not name its refusal of the
+late stage"*; CP the ort arm routed to onnx → `expected "loading ORT embedder:"`.
+The clean pass after every restore: 4 of 4. The default hash embedder cannot
+produce the refused signature — it prints `gate 0.560 · floor 0.000 ·
+embedder-constant` and no count — so a binary silently lacking the model
+features could not pass the embed arm.
+
+**The drafted test had never been formatted, which is mine as its integrator.**
+The same run's `cargo fmt --all --check` failed on the CLEAN copy — fourteen
+hunks, all in `model_e2e.rs` — so the lint suite and CI's lint job would have
+gone red on arrival. The script judged its reach check "ok" without first
+requiring the clean tree to pass, a premise arm it lacked. Formatted, the file
+differs from the one measured above in whitespace and added trailing commas
+only (compared with whitespace stripped); on a fresh copy of the formatted tree
+the check passes clean and, with a probe defect appended, fails naming
+`model_e2e.rs` and no other file. So `rustfmt` reaches a `required-features`
+target — which the panel believed and had not verified.
+
+**The parity harness carried a defect of mine too.** Its Q3-CF5 edit — break arm
+D's TOML target reader — put `\\[` inside a sed pattern, which opens a bracket
+expression, so it matched nothing and changed nothing. The harness reported
+`EDIT DID NOT LAND` rather than a pass, which is the only reason it was seen.
+With the literal alternation replaced instead, the twelve cases were run against
+arms B–F EXTRACTED from `tests/battery.sh` — the artifact, not the draft beside
+it: 12 of 12, D's premise included. And one case through the real script: with
+` --test model_e2e` dropped from `ort-build`, `bash tests/battery.sh
+--preflight-only` failed arms D ("named by 0 compose service(s)"), B and C and
+ended at `BATTERY FAILED — preflight`; restored byte for byte, all nineteen
+preflights pass.
+
+**The leg, run by name through the battery with every code edit in place**
+(`bash tests/battery.sh --no-preflight ort-build`, the invocation CI's matrix
+uses): exit 0, `11 passed, 0 failed, 1 ignored over 3 targets` — the ORT crate's
+7 and 1, its empty doc-test target, and `model_e2e`'s 4 — with no premise failure
+and exactly one `Running tests/model_e2e.rs` header. It ran while CLAUDE.md still
+published `(7 run, 1 ignored)`, and the per-leg comparison reported *"CLAUDE.md
+publishes 7/1 (run/ignored), this run measured 11/1"*: the panel's figure-gate
+counterfactual, proving the join's tests are inside the compared sum. The figure
+is published as measured, `(11 run, 1 ignored)`.
+
+#### The corpus arm, driven
+
+**MANUAL, as ruled, and recorded here rather than gated.** The 400 non-empty
+lines of `.handover/locomo_feed.txt` (gitignored, 59,084 bytes) went through the
+binary the counterfactual run built, over the generated fixture, once per
+embedder backend, under the two declarations that skip calibration. On `/v1`,
+one save per line inside one `serve-http`: 400 saved, `embed_failures` 0 → 400,
+and the server's own degrade lines 0 → 400 — the count equals the process's own
+evidence at a scale no fixture test reaches, on `onnx` and on `ort` alike. Every
+line fails, because the fixture's fourteen-word vocabulary refuses real text in
+the tokenizer, and that is the point of the drive rather than a flaw in it: the
+server survived 400 consecutive degrades, still answered `/healthz`, and found
+the zero-vector drawers lexically (`Caroline` → 5 hits). On the CLI, `mine` over
+the same file filed 85 drawers and printed 85 degrade lines, per backend.
+
+**The drive's first routing premise examined nothing, and that is mine.** It
+called `init`, which loads no embedder, so it printed no loader at all. Re-run
+with `stats` on the same binary and the same declarations, a missing model is
+refused by `loading ONNX embedder:` under `onnx` and by `loading ORT embedder:`
+under `ort`, and the fixture opens under each. The degrade text is identical on
+both backends — the failure is the tokenizer's — so that premise is what
+establishes which backend each half drove. No latency is claimed: 13 s for 400
+saves is dominated by one `jq` and one `curl` process per request.
+
+#### Residuals, stated
+
+- The reach rests on measured cargo 1.90 behaviour the Cargo targets reference
+  does not document (a `dep/feature` entry in `required-features`, and the hard
+  error when a named target's features are unmet). Every failure direction is
+  loud: exit 101 naming the feature, E0433 if ignored, a figure drop if skipped.
+- `model_e2e.rs` is linted by no clippy invocation — every lint invocation is
+  unnamed, so `required-features` skips it. Filed inside O153. `rustfmt` does
+  reach it, measured above.
+- The `/v1` reranker's tract-vs-ORT identity is established by reading the total
+  dispatch; no surface observable separates them without pinning O151.
+- The telemetry series and the `ui.html` renderer are not joined: the leg builds
+  without telemetry and `e2e-telemetry` builds no model feature.
+- The tract reranker's and the ColBERT encoders' behaviour on an out-of-table id
+  is unclassified; a route-R arm per role belongs with O150.
+- The combined per-leg figure cannot separate a same-unit swap of join tests for
+  ORT-crate tests, the class every per-leg sum carries.
+- The model legs are CI-only, so the join runs on pull requests and not in a
+  default local battery; arms B–F are the local, source-level feedback.
+- The join claims the shipped source and feature set on linux x86_64 only;
+  `release.yml`'s packaged-layout smoke remains the authority on the shipped
+  artifacts.
+- Settled from the panel's list of neighbouring drift, not closed here: the
+  `release.yml` header already names five targets and the `ort` posture (PR
+  #184); the Windows `-ort` asset compiled on no pull request is O168; and
+  `vendor/tiny_http` is a `[patch]` path, not a workspace member, so it is no
+  target that no leg runs.
+
 ### O165 — CLOSED 2026-09-14: the handover gate read a token that moves on its own, so it now reads the text a session acts on first
 
 **Filed and closed 2026-09-14, ruled by a three-lens panel plus an adversarial
@@ -13186,150 +13569,6 @@ scanner (O33, O47). The mechanism here is a heading, not a gate.
 
 
 
-### O157 — RULED 2026-09-13 and not yet built: the shape is settled, the blocking probe is run, and the filing's own menu was refuted
-
-**Filed 2026-09-12, split out of O134b rather than carried inside it.** The
-model backends are exercised through their own crates' tests; nothing drives
-one through the CLI and `/v1` to a SURFACE — a `remember` that lands a
-poisoned write, `stats` reporting `embed_failures`, a search reporting
-`rerank_failures`. That join is the last thing the O134 family leaves
-uncovered, and it is the one a deployment actually sees.
-
-**Why it is not plumbing, which is why it is filed rather than done.** The
-fixture exists only inside `cargo test`: it is a `pub mod` behind
-`#[cfg(any(test, feature = "test-fixture"))]`, and a shell suite cannot call
-it. Materialising it on disk needs a way to RUN the generator outside a test —
-realistically a small feature-gated binary or example target on
-`undercroft-embed-onnx`, which is new public surface on a shipped crate. That
-is a design decision with a cost (a target that exists only to write a test
-artifact, on a crate that is publishable by default and simply never
-published), not a mechanical extension of O134b.
-
-Three shapes, with their costs:
-
-1. **A feature-gated `--example write-fixture`.** Smallest code, but examples
-   are built by `cargo test --all-targets`, so the feature has to be on
-   wherever that runs.
-2. **A `[[bin]]` behind `test-fixture`.** Explicit and greppable; adds a
-   binary target to a crate whose only job is a library.
-3. **Drive the join from a Rust integration test instead of a shell suite**,
-   so the fixture never leaves the process — no new target at all, at the cost
-   that it exercises the store and `/v1` in-process rather than through the
-   real binary, which is the thing an e2e suite exists to do.
-
-(3) is the cheapest and the weakest; (2) is the most honest about what it is.
-The tree does not settle it, so it is a ruling rather than a preference.
-
-**The corpus arm rides with it.** `.handover/locomo_feed.txt` and
-`crates/undercroft-store/testdata/*_50k.txt` are BOTH gitignored, so any drive
-over them is local-only and can never be a gate;
-`benchmarks/model_eval/datasets/` is 47 tracked files across 10 languages,
-allowlisted in `.dockerignore` and COPYd by nothing. Whichever shape wins, the
-entry must say plainly whether the corpus drive is a GATE or a MANUAL drive
-recorded in prose — and a manual drive is a legitimate answer, not a gap,
-provided it is stated as one.
-
-#### RULED 2026-09-13 by a three-lens review plus an adversarial refuter
-
-**The menu above is refuted, and the correction is the important part.** Option
-(3) is described as exercising the store and `/v1` *"in-process rather than
-through the real binary"*. That is **false of this tree**:
-`crates/undercroft-cli/tests/cli.rs:1140` already spawns
-`assert_cmd::cargo::cargo_bin("undercroft") serve-http` as a CHILD PROCESS and
-talks raw HTTP to it over a `TcpStream`. A Rust integration test here drives
-the real binary out of process, on `/v1`, today. So the three-option menu was
-written against a constraint that does not exist, and the option labelled
-"cheapest and weakest" is neither.
-
-**The ruled shape is a fourth**: a `[[test]]` target on `undercroft-cli` with
-`required-features = ["onnx"]`, reaching the generator through
-`undercroft-embed-onnx` as a **dev-dependency** with `test-fixture` — not a
-new feature on a shipped crate, and not a new binary or example — driven from
-the `ort-build` leg by
-
-```
-cargo test --release -p undercroft-cli --features onnx,ort --test model_e2e
-```
-
-so ONE target exercises both `UNDERCROFT_EMBEDDER=onnx` and `=ort` from one
-binary, which is the coexistence that leg exists for. `model leg parity` greps
-each leg for its own crate and `-p undercroft-cli` names neither, so it does
-not trip.
-
-#### The blocking probe is RUN, and it settles the disagreement
-
-Two reviewers drew opposite conclusions from the same cargo behaviour. Neither
-stated the discriminator, and there is **zero `required-features` precedent
-tree-wide**, so it was measured:
-
-| invocation | result |
-|---|---|
-| `cargo test -p undercroft-cli --test probe_rf`, feature NOT enabled | **`error: target 'probe_rf' in package 'undercroft-cli' requires the features: 'onnx'`**, exit 101 |
-| the unnamed invocation the default `test` leg runs | exit 0, the target mentioned **0 times** — silently skipped |
-
-**So `required-features` is safe iff the leg NAMES the target.** A lost
-`--features` is then a hard error rather than a silent skip, and the default
-`test` suite skips it correctly, adding no empty target to its log. That is
-what makes the ruled shape safe and what would have made a `[[bin]]` or
-`[[example]]` unsafe — those are reached by unnamed invocations.
-
-#### What the join must assert, because the entry's sketch cannot work
-
-`embed_failures` belongs to the PROCESS (`undercroft-store/src/manage.rs:163`),
-so on the CLI `remember` then `stats` are two processes and the second reports
-its own open, not the first's write. And the fixture's 14-word vocabulary
-excludes probe pair 1's words (`"the quarterly revenue report"`,
-`undercroft-core/src/embed.rs:139`), so calibration makes the count **non-zero
-at every open anyway**. A suite written to the sketch would go green while
-asserting a causal relation the CLI cannot produce.
-
-- **CLI**: assert provenance per process — with `UNDERCROFT_SEMANTIC_GATE=off`
-  and `UNDERCROFT_SEMANTIC_FLOOR=0.0` declared, `stats` prints no
-  `embed failures:` line at all (it prints only when non-zero); with them
-  removed, one process reports a non-zero count and `gate_source: refused`.
-  The two differ by exactly two environment variables, which is the
-  counterfactual built in.
-- **`/v1`**: assert a DELTA across one long-lived process — baseline, one
-  write carrying the refused word, then `embed_failures` strictly greater.
-  Never an absolute, which is a function of those two declarations.
-
-**The fixture must NOT widen to fix this.** Making all 14 probe pairs tokenize
-needs ~100 vocabulary entries, which pushes the embedding table past 128 rows
-and re-prices `OUT_OF_TABLE_ID` — in the one file both backends must agree on,
-invalidating the hand-written assertions in all nine arm tests across two
-crates. And it would buy nothing: in 4 dimensions the calibration returns its
-clamps regardless, so the join would be asserting a measurement that measured
-nothing.
-
-#### Sequencing against O150
-
-**O157 does not wait for O150, and the dependency runs the other way.** The
-join must drive `REFUSED_WORD` (a tokenizer-model-layer failure that degrades
-identically on tract and ORT), never `OUT_OF_TABLE_WORD` — under
-`UNDERCROFT_EMBEDDER=onnx` that PANICS, and on `/v1` the request loop is
-single-threaded, so the panic unwinds out of it and **kills the server**,
-reading as a connection reset rather than as O150. Once O150's `catch_unwind`
-boundary lands, the follow-on arm is that the server SURVIVES such a write and
-reports it on `stats`.
-
-#### The corpus arm, ruled
-
-**MANUAL, recorded in prose.** `.handover/locomo_feed.txt` and
-`crates/undercroft-store/testdata/*_50k.txt` are gitignored, so a drive over
-them can never be a gate; `benchmarks/model_eval/datasets/` is tracked but
-COPYd by no image, and a DIM-4 fixture cannot make a recall claim anyway. A
-stated manual drive is a legitimate answer; a silent one is a gap.
-
-#### Still to do
-
-Build it. The shape, the leg, the probe and the assertions are settled above;
-what remains is the code, the published `(N run, M ignored)` figure for the
-leg — **set from the run, never from a prediction** — and a premise arm
-proving which embedder was in hand, since "no embed-failures line" is
-otherwise produced identically by a healthy run, a binary without the feature,
-and a driver whose trigger stopped triggering.
-
-
 ### O150 — an out-of-table id PANICS on tract and degrades on ORT, and one of those is a crash
 
 **Filed 2026-09-12, OBSERVED rather than predicted** — the route-R classifier
@@ -13470,6 +13709,17 @@ first, then add the invocation to BOTH the compose `lint` service and the CI
 `lint` job — the `lint parity` preflight compares them as sets, and O84
 records that adding it to only one covers every local battery and no pull
 request.
+
+**A third unlinted target joined it on 2026-09-14 (O157).**
+`crates/undercroft-cli/tests/model_e2e.rs` sits in a DEFAULT member and is
+linted by nothing either: every clippy invocation in both `lint` definitions is
+unnamed, so the target's `required-features` skip it exactly as they skip it in
+`test`. Its fix belongs with this one — a clippy invocation naming
+`--test model_e2e` with the join's features, in BOTH `lint` definitions, on an
+image carrying the toolchain `ort-build` installs — and it is the cheapest part
+of this entry, because the file is new. `rustfmt` DOES reach it: `cargo fmt
+--all --check` found the drafted file never formatted, which is how that was
+measured rather than assumed.
 
 ### O154 — the model loaders' fail-fast probes do not probe what can fail
 

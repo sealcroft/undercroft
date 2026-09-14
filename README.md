@@ -460,7 +460,7 @@ docker compose run --rm backends-e2e      # remote-index suite (five live vector
 docker compose run --rm obs-config        # alert rules + Alertmanager route (promtool/amtool)
 docker compose run --rm site              # build, assemble and check the website
 docker compose run --rm onnx-build        # build the tract backend + RUN its tests
-docker compose run --rm ort-build         # build the ORT backend + RUN its tests
+docker compose run --rm ort-build         # build the ORT backend + RUN its tests + the CLI model join
 
 bash tests/battery.sh                     # all ten suites, one tree, raw exit codes
 ```

@@ -152,7 +152,12 @@ jobs:
         #                    compose service run by neither CI nor the
         #                    battery, so a published artifact compiled on no
         #                    pull request — the `windows-check` shape (O102)
-        #                    on the feature axis instead of the platform one
+        #                    on the feature axis instead of the platform one.
+        #                    RUNS that crate's own tests and, last, the CLI's
+        #                    `model_e2e` join (O157): the real binary with each
+        #                    model backend, driven to `stats` on the CLI, /v1
+        #                    and MCP — the one target it runs from outside
+        #                    its crate, and the only leg that runs it
         #   arch-check       TWO verifications: the architecture reference is
         #                    what diagrams/ and its own headings derive to
         #                    (ROADMAP M14), and platform-views/check.py gates

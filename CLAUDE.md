@@ -1301,7 +1301,11 @@ Consequences that are binding, not advisory:
   committed and the premise of every counterfactual stays readable in a diff.
   `undercroft-embed-ort` takes it as a dev-dependency with that feature — ONE
   generator for both backends, as a real Cargo EDGE rather than `#[path]`,
-  which would hide it from every gate that reads edges. The graph is two
+  which would hide it from every gate that reads edges. The CLI's `model_e2e`
+  target reaches it the OTHER way (O157) — the feature named in its
+  `required-features`, over the CLI's existing optional dependency — because
+  the CLI is a default member, and a dev-dependency there measured +265 s on
+  every default test build and four ML crates in `windows-check`. The graph is two
   `Gather`s into an `Add`: gathering the MASK through a two-row table removes
   the `Cast` and the `Unsqueeze` whose ONNX signature moved at opset 13, so
   one file compiles at seq 256 and at 32 in BOTH runtimes
@@ -1469,7 +1473,9 @@ Consequences that are binding, not advisory:
   KNOWLEDGE tabs), `include_str!`'d and served at `GET /ui` on every
   build; monitor.html: the Palace Monitor
   UI, `include_str!`'d and served at `GET /monitor` on telemetry builds);
-  integration tests in `tests/cli.rs`
+  integration tests in `tests/cli.rs`, and `tests/model_e2e.rs` — the
+  model-backend join (ROADMAP O157), a `required-features` target run BY NAME
+  from the `ort-build` leg and nowhere else
 - `crates/undercroft-orchestrator` — `undercroft-orchestrator` binary: the
   optional multi-tenant control plane (docs/MULTI_TENANCY.md) — instance
   registry + tenant→vault map in its own SQLite (engine creds sealed,
@@ -2017,7 +2023,10 @@ docker compose run --rm test          # cargo unit + integration tests (859 run,
                                       # measurement anyone can reproduce here until
                                       # those two lists are fetched; the
                                       # onnx crate's own ignored test is outside
-                                      # default-members and never in this count)
+                                      # default-members and never in this count,
+                                      # and neither is `model_e2e` (O157): it lives in
+                                      # a default member, but its required-features
+                                      # skip it on the unnamed invocation this runs)
 docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on the
                                       # default build AND the TELEMETRY build of
                                       # both feature-bearing binaries (O84).
@@ -2121,9 +2130,12 @@ docker compose run --rm onnx-build    # build the tract backend + RUN its tests 
                                       # numbers: three tests here are #[ignore]d, and a
                                       # single `run` figure cannot tell a deleted test
                                       # from a newly ignored one
-docker compose run --rm ort-build     # the same for the ORT backend (7 run, 1 ignored), built
-                                      # --features onnx,ort. Each leg tests ONLY its own
-                                      # crate, or the tract figures are counted twice.
+docker compose run --rm ort-build     # the ORT backend + the CLI model join (11 run, 1 ignored), built
+                                      # --features onnx,ort. No cargo test target runs in two legs,
+                                      # or a figure is counted twice: this leg tests
+                                      # undercroft-embed-ort and runs ONE target from outside it,
+                                      # the CLI's `model_e2e` (ROADMAP O157), whose required-features
+                                      # no other leg enables and which `test` skips. The figure spans both.
                                       # NOT a clippy run: this line once claimed it
                                       # lint-checked ort-gated code (corrected
                                       # 2026-09-12), and the leg has never run clippy —
