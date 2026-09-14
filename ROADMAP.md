@@ -3988,7 +3988,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**212** of the **226** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**213** of the **227** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4168,6 +4168,55 @@ identities.
 MINOR since O149: `PATCH /admin/tenants/{id}` and its CLI mirror are new
 capability, backward compatible. The rest of the section is PATCH work — no
 documented contract moves.
+
+### O183 — CLOSED 2026-09-14: RustSec published a TLS 1.3 handshake flaw in the rustls every outbound hop uses, and the lockfile moves to the fixed release
+
+**Found 2026-09-14 by the `Dependency audit (RustSec)` CI job on PR #188**, a
+pull request that changed no dependency: `main` had passed the same audit at
+15:53Z, and RUSTSEC-2026-0285 was published that day. `rustls` 0.23.42 —
+*"TLS 1.3 handshake messages incorrectly accepted across encryption level
+boundaries"*, solution `>= 0.23.45`. From the moment it was published, `main`
+and every open pull request fail that check.
+
+**An upgrade, not an ignore.** `.cargo/audit.toml`'s one exemption,
+RUSTSEC-2024-0437, is argued from reachability: `protobuf` is decoded nowhere.
+No such argument exists here. `cargo tree -i rustls` lists `undercroft-net`,
+`undercroft-llm`, `undercroft-index`, `ureq`, `tokio-rustls` and
+`tokio-postgres-rustls` — the served embedder and LLM, the index backends,
+pgvector, OTLP traces and the orchestrator-to-engine hop, i.e. every outbound TLS
+client, each speaking TLS 1.3 to a server this project does not control. No prior
+ruling on dependency advisories was found, and best practice settles it, so no
+panel was convened.
+
+**The change.** `cargo update -p rustls`, in Docker: `rustls` 0.23.42 → 0.23.45,
+and `rustls-webpki` 0.103.13 → 0.103.15, which that release requires. Four lines
+of `Cargo.lock` — two versions, two checksums — and no manifest touched. No
+published figure moves; the change adds no test, check or surface.
+
+**Gate and counterfactual.** The gate is the CI job itself, run locally with
+`cargo-audit` against both lockfiles: the new one exits 0 with the three warnings
+it already allowed, and `main`'s exits 1 on exactly RUSTSEC-2026-0285.
+`cargo tree --locked -i rustls` resolves 0.23.45. Its first attempt exited 101
+while that container was still downloading crates, with the message cut off by a
+`head`; the re-run passed, and the cause of the first is recorded as unknown
+rather than guessed.
+
+**The corpus drive, manual.** The patched release CLI mined
+`.handover/locomo_feed.txt` through the served `bge-m3` behind the compose
+`embeddings-tls` Caddy terminator, pinned to its exported root — a real rustls
+TLS 1.3 client handshake against a real server on every embed. The terminator
+negotiated TLSv1.3; `mine` filed 85 drawers with no embed degrade; `stats` read 85
+records and a *measured* semantic gate, so the calibration probes round-tripped
+too; `search` answered; and the model server logged 257 `POST /api/embeddings`
+in that window, every one answered 200. **A defect of mine in the drive**: its
+script also required an `embedder` line from CLI `stats`, which prints none, so it
+reported FAILED over a run whose every measured leg passed. The model server's
+own request log is the premise that replaced it.
+
+**What remains.** The audit's three allowed warnings — `paste` and
+`rustls-pemfile` unmaintained (RUSTSEC-2024-0436, RUSTSEC-2025-0134), `chacha20`
+0.10.1 yanked — predate this entry, were reported on every green run before it,
+and were not assessed here.
 
 ### O162 — CLOSED 2026-09-14: five blind spots in and around the ROADMAP scanner — an unprobed arm, a misdirecting premise order, fence-blindness, a status token inside an identifier, and a release shape accepted anywhere
 
