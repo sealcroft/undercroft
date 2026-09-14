@@ -121,8 +121,11 @@ fn resolve_semantic_gate<E: Embedder + ?Sized>(
 /// here — that is the variable's `ConfigClass`, which lives in the inventory
 /// the code is counted against.
 ///
-/// A variable with no arm is accepted: it is a path, a URL, a token or a
-/// model name whose only validation is the thing that consumes it, and
+/// A variable with no arm is accepted. From `undercroft config check` that is
+/// narrower than it reads: the CLI's `check_one` runs its own arms first —
+/// among them the outward URLs and the pgvector DSN, through the transport
+/// policy — so what falls through to here is a path, a model name, a key or a
+/// setting whose only validation is the thing that consumes it, and
 /// claiming to have checked it would be a stronger statement than the truth.
 pub fn check_declaration(name: &str, raw: &str) -> Result<Option<String>, String> {
     let described = |v: String| Ok(Some(v));
@@ -589,7 +592,8 @@ const KNOWN_EMBEDDER_UPGRADES: &[(&str, &str)] = &[
     ),
 ];
 
-// KNOWN GAP, deliberately accepted — no v4.
+// KNOWN GAP, filed OPEN as ROADMAP O166 — no v4 yet, and whether to spend one
+// is that entry's ruling, not this comment's.
 //
 // Moving Hebrew out of the delimiting script class changed its token space:
 // `segment` now emits character bigrams for Hebrew where it emitted one word,
@@ -605,9 +609,10 @@ const KNOWN_EMBEDDER_UPGRADES: &[(&str, &str)] = &[
 // what this change was for, and what carries Hebrew from 0% to 87.5% — are
 // recomputed at read and are correct immediately.
 //
-// This is a judgement that a whole-fleet re-embed is not worth one script's
-// cosine leg, not a claim that nothing changed. If Hebrew corpora become a
-// real workload, the fix is a v4 row above and it costs 45.9 µs/drawer.
+// Declining a v4 was a judgement that a whole-fleet re-embed is not worth one
+// script's cosine leg, not a claim that nothing changed. The fix is a v4 row
+// above; the walk costs 45.9 µs/drawer, and O166 records the wider costs
+// (mirrors refused as stale until re-pushed, read-only replicas left stale).
 /// Default number of fusion-ranked candidates a **cross-encoder** re-scores
 /// per search (override with `UNDERCROFT_RERANK_TOP_N`). One transformer
 /// forward pass runs per candidate, so this is a genuine latency cap: the
@@ -1830,9 +1835,12 @@ pub struct SearchHit {
     /// Lexical evidence that the drawer holds a *morphological relative* of a
     /// query term rather than the term itself — the pairwise morphological
     /// relations `morph_relation` admits: a whole word contained inside a
-    /// longer one (`Dampfschiff` in `Donaudampfschifffahrt`), an `IRREGULAR`
-    /// pair, a `suffix_family` ending, the per-language inflection tables
-    /// and `ar_root_family`. See `morph_relation` for the exact set.
+    /// longer one (`Dampfschiff` in `Donaudampfschifffahrt`), Arabic and
+    /// Hebrew consonant-skeleton equality (`skeleton_with` over `ar_weak` /
+    /// `he_weak`, at least `SKELETON_FLOOR` consonants left), `ar_root_family`,
+    /// an `IRREGULAR` pair, a `suffix_family` ending, the per-language
+    /// inflection tables, and Greek's `greek_word_family`. See
+    /// `morph_relation` for the exact set.
     ///
     /// This admits, like `lexical_exact`, and unlike the approximate channel.
     /// The reason it is a separate field rather than folded into either is
@@ -2505,7 +2513,7 @@ pub struct VerifyReport {
     /// well**: `kg_verify` walks every triple's `tag` and a forged receipt
     /// leaves it verifying, which is why `bad_records` stays empty over
     /// exactly this tampering (asserted, not assumed — see
-    /// `a_forged_fact_receipt_fails_the_vault_verdict`, which pins all five
+    /// `a_forged_fact_receipt_fails_the_vault_verdict`, which pins all six
     /// other legs clean so the verdict is attributable to this one). `kg_verify_receipts` could see
     /// it and was called by `kg receipts`, `/v1 …/kg/receipts` and the bench
     /// — **by nothing inside `verify()`**. So the product's headline promise
@@ -11011,17 +11019,15 @@ mod tests {
         assert_eq!(s.count().unwrap(), 2, "two drawers remain");
     }
 
-    /// **The export walk hands over one drawer at a time and never
-    /// materializes the corpus** (ROADMAP O113).
+    /// **Every row reaches the export visitor exactly once, in seq order**
+    /// (ROADMAP O113), and the `export_all` wrapper still answers the old
+    /// contract.
     ///
-    /// The visitor is the whole fix, so the gate has to observe the property
-    /// the fix is ABOUT — how many decoded drawers are alive at once — rather
-    /// than peak RSS, which is allocator-dependent and would be flaky. The
-    /// visitor counts the maximum it is ever holding: with `export_each` that
-    /// is 1 for any corpus, and with the `collect` it replaces it is N.
-    ///
-    /// Counterfactual: route this through `export_all()` instead and
-    /// `max_live` becomes the row count, failing by name.
+    /// This pins the walk's CONTRACT, not its memory property. A visitor sees
+    /// one drawer per call whether or not the store collected the corpus
+    /// first, so no test that drives the export can observe materialization;
+    /// that is gated by the source assertion in
+    /// `the_export_walk_does_not_materialize_the_corpus`, below.
     #[test]
     fn export_streams_one_drawer_at_a_time() {
         let (_d, mut s) = store(SecurityLevel::Sealed);
@@ -20446,8 +20452,10 @@ mod tests {
     /// Construction: one constant component that every text carries, plus
     /// that text's own hash vector, in equal measure. Two texts then score
     /// `(1 + cos_hash) / 2`, so a lexically unrelated pair lands at raw
-    /// cosine ~0.5 — `semantic` 0.75, which is where `EMBEDDER_RESEARCH.md`
-    /// puts the E5 and BGE families. Related texts ride above it.
+    /// cosine ~0.5 — where `docs/EMBEDDERS.md` puts a served model's unrelated
+    /// text — and `semantic` 0.75 under the shipped map. The untracked research
+    /// note this once cited carries no such figure today. Related texts ride
+    /// above it.
     ///
     /// **This is a stand-in, not a measurement.** No model weights exist in
     /// this test environment, so the 0.75 figure is a citation rather than
@@ -21448,8 +21456,8 @@ mod tests {
     /// Words that look related and are not — the half of the evidence the
     /// morphology work has never had.
     ///
-    /// `.handover/LANGUAGE_COVERAGE_AUDIT.md` states it at line 105: **none of
-    /// its 167 pairs is a negative control.** Every row is a true morphological
+    /// An untracked language-coverage audit states it plainly: **none of its
+    /// pairs is a negative control.** Every row is a true morphological
     /// relation, so a rule that admitted every string pair would score 100% on
     /// it. That is exactly how the containment floor went 8 → 5 on a "3.03 mean
     /// links, safe" reading and admitted `other`/`mother`. A recall measurement

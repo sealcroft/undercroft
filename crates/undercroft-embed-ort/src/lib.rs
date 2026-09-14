@@ -692,6 +692,15 @@ mod tests {
     /// than assumes — and it does not: ORT reports a typed error that
     /// reaches the counted degrade, so the same misconfiguration crashes one
     /// backend and is absorbed by the other.
+    ///
+    /// What the arms assert, because the prints say less than they seem to:
+    /// a return must carry exactly one counted failure and the zero vector
+    /// (the outcome observed today, PASS), and any other return FAILS; a
+    /// panic PASSES with only "nothing counted" asserted, and no payload is
+    /// pinned, unlike tract's arm. Both `println!`s are captured for a
+    /// passing test — the `ort-build` leg runs `cargo test` without
+    /// `--nocapture` — so ORT turning from a degrade into a panic would stay
+    /// green and print nothing anyone reads.
     #[test]
     fn ort_route_r_classifies_an_out_of_table_id() {
         let dir = tempfile::tempdir().expect("tempdir");

@@ -1,5 +1,5 @@
 flowchart TB
-    alert["PalaceTamperDetected<br/><i>alert / monitor beacon / verify count</i>"] --> loc["1 · Where?<br/><i>surface label on the counter;<br/>vault · id · wing · room on the event</i>"]
+    alert["PalaceTamperDetected<br/><i>alert / monitor beacon / verify count</i>"] --> loc["1 · Where?<br/><i>surface label on the counter,<br/>vault · id · wing · room on the event</i>"]
     loc --> conf["2 · Confirm + pinpoint<br/><i>undercroft verify --vault —<br/>names the exact record(s), chain state</i>"]
     conf --> mit["3 · Mitigate<br/><i>preserve evidence copy FIRST ·<br/>freeze writes (--read-only) · isolate vault</i>"]
     mit --> fix{"4 · Fix — verbatim restore,<br/>never repair-in-place"}
@@ -7,4 +7,4 @@ flowchart TB
     fix -- "single MINED record,<br/>source document available" --> refile["re-file it —<br/><i>source-derived id ⇒ idempotent re-seal</i>"]
     restore --> clean["repair (housekeeping) →<br/>read-write only once verify is clean"]
     refile --> clean
-    clean --> prev["5 · Prevent<br/><i>scheduled backups · 0600 perms ·<br/>OS-level FIM · alerting on ·<br/>per-vault assertions</i>"]
+    clean --> prev["5 · Prevent<br/><i>scheduled backups ·<br/>owner-only permissions ·<br/>OS-level FIM · alerting on ·<br/>per-vault assertions</i>"]

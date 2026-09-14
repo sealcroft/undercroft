@@ -165,8 +165,8 @@ services:
   #
   # Arrived with the pin itself (ROADMAP M7): the commit that gave the OTLP
   # hop a transport policy declared this path without checking which uid
-  # would read it, and nothing in the repo brings this stack up, so it went
-  # unnoticed.
+  # would read it, and nothing in the repo brought this stack up at the time,
+  # so it went unnoticed. tests/tls-pins.sh now does (ROADMAP O63).
   tls-export:
     image: alpine:3.20
     depends_on:

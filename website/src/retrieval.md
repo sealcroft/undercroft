@@ -47,9 +47,12 @@ synthetic corpora for the pure scaling curves.
 
 ### Fusion is a free accuracy win
 
-Hash embedder, no reranker, all fusion modes measured. **R@10 figures on this
-page were re-measured 2026-09-02** (ROADMAP O89); latencies are the 2026-07
-run on that run's hardware and are not comparable across machines.
+Hash embedder, no reranker, all fusion modes measured. **The hash + BM25,
+MiniLM + BM25 and ColBERT R@10 figures on this page were re-measured
+2026-09-02** (ROADMAP O89). The `legacy` and `rrf` rows below, the reranker
+and served-embedder R@10s, and every latency come from earlier runs that were
+not re-run; a latency is also specific to its run's hardware and is not
+comparable across machines.
 
 
 | Fusion | R@10 | Latency/query |
@@ -58,8 +61,10 @@ run on that run's hardware and are not comparable across machines.
 | legacy | 92.7% | ~5 ms |
 | rrf (removed) | 92.5% | ~6 ms |
 
-BM25 buys **+2.8 pts at zero latency cost** — it re-ranks already-verified
-candidates and is embedder-independent. The rrf mode measured below both
+BM25 buys **+2.8 pts at zero latency cost** — a cross-run figure: the BM25
+row is the 2026-09-02 re-measurement (ROADMAP O89) and the `legacy` row the
+2026-07-15/16 run, which was not re-run beside it. BM25 re-ranks
+already-verified candidates and is embedder-independent. The rrf mode measured below both
 score blends (rank fusion discards score magnitude) and has been removed;
 its row stays as the record of why.
 
@@ -117,8 +122,9 @@ never language identification, and the hash default stays bit-identical.
 ### The reranker: big accuracy, big cost — then tamed
 
 A cross-encoder re-scores the top candidates by the full `(query, passage)`
-pair. It lifts LoCoMo R@10 to **~98%** (+3 pts) but naively costs one forward
-per candidate:
+pair. It lifts LoCoMo R@10 to **97.68%** — +3.1 over the 2026-07 base of 94.6
+it was measured against, about +2.3 over the re-measured MiniLM base above,
+against which it was not re-run — but naively costs one forward per candidate:
 
 | Reranker config | Latency/query | R@10 |
 |---|---|---|
@@ -281,7 +287,9 @@ then completes in 26.2 s with 215 mappings at peak.
 
 ### Remote vector backends are untrusted accelerators, not a store swap
 
-Undercroft can push **sealed** content + embeddings to Qdrant / Weaviate /
+Undercroft can push a sealed vault's **sealed** content — beside the drawer
+ids, embeddings and wing/room labels in the clear; an hmac-only vault's push
+is refused unless `index push --allow-plaintext` — to Qdrant / Weaviate /
 pgvector / Milvus / Chroma, but they only return candidate **ids** — every
 candidate is re-verified (HMAC) and re-scored locally. Measured on LoCoMo, the
 remote backends sat at **~0.5% CPU** while the client did all the work, and were
@@ -350,7 +358,8 @@ query-time forwards**:
   at a flat 92.7 ms/query** on pure-Rust tract, **70.3 ms/query** with the
   opt-in ONNX Runtime forwards + token-PQ LUT (recall identical across
   runtimes; ingest 3.3× faster too) — the same on 4 cores or 24, while the
-  cross-encoder's 97.68% costs 101–327 ms *on 24 cores* and ~5× that on 4.
+  cross-encoder (~98% R@10) costs 101–327 ms *on 24 cores* with ORT + int8
+  and ~5× that on 4.
 - **A stronger bi-encoder with no reranker** is also one forward, core- and
   `top_n`-independent, at some accuracy cost.
 
@@ -414,10 +423,11 @@ Concrete configurations with the measured expectations:
 | **Fast + accurate compromise** | + reranker `top_n=5–10`, `ort` + int8 | ~100–170 ms/query, ~98% |
 | **4-core / edge, large corpus** | **PQ prefilter** (sealed or hmac-only — both tiers ship); reranker `pool=1` or off | bounded RAM, ~ms retrieval |
 | **GPU box** | `ort` CUDA (each forward ~1–5 ms) | reranked query well under 50 ms |
-| **Huge corpus, RAM-rich** | HNSW (tune `ef` with N) or PQ+IVF (shipped) | 300+ q/s (HNSW) / bounded RAM (PQ+IVF) |
+| **Huge corpus, RAM-rich** | HNSW (`ef` scales with N automatically) or PQ+IVF (shipped) | 300+ q/s (HNSW) / bounded RAM (PQ+IVF) |
 
 Rules of thumb from the measurements: **BM25 fusion is always on** (free
-+2.8 pts); **MiniLM is not worth 20× latency under BM25, but a modern served
++2.8 pts — cross-run: the 2026-09-02 BM25 row against the 2026-07-15/16
+`legacy` row); **MiniLM is not worth 20× latency under BM25, but a modern served
 embedder is** (+3.2–4.2pp of turn all-gold, and the *only* way to retrieve
 across languages at all); **the reranker is the accuracy lever** (+2.3 pts against the current base,
 though that arm was last measured in 2026-07 and has not been re-run) and is
@@ -432,5 +442,7 @@ stays local regardless.
 Every option obeys the vault rules: sealed vaults never persist a
 plaintext-derived index to disk (in-memory ANN is RAM-only; on-disk indexes for
 sealed vaults are encrypted at rest, mirroring drawer sealing). Remote backends
-are untrusted — content is sealed before upload and every result re-verified
-locally. Faster never means less safe.
+are untrusted — a sealed vault's content is sealed before upload (its
+embeddings and wing/room labels are not, and an hmac-only vault's push is
+refused unless `--allow-plaintext`) and every result re-verified locally.
+Faster never means less safe.

@@ -2,7 +2,7 @@
 //! WITHOUT opening the state database or binding a port.
 //!
 //! **Why this exists (ROADMAP O21).** `undercroft config check` runs the
-//! ENGINE's resolvers. Four `UNDERCROFT_ORCH_*` declarations are read by this
+//! ENGINE's resolvers. Four `UNDERCROFT_ORCH_*` declarations were read by this
 //! binary instead, and it had no pre-flight command at all — so three of them
 //! sat on the engine's `PREFLIGHT_EXEMPT` list with "orchestrator-owned" as
 //! the reason. `UPGRADING.md` tells an operator that if `config check` exits
@@ -403,7 +403,9 @@ mod tests {
     /// across the SOURCE, in both directions, name and class.
     ///
     /// Without it, `ENGINE_ENV_VARS` and [`ORCH_ENV_VARS`] are two hand-kept
-    /// lists of the same six variables, which is the arrangement whose first
+    /// lists that must agree on the `UNDERCROFT_ORCH_*` family by name, class
+    /// and parse, while every other declaration this binary lists must at
+    /// least appear in the engine's — which is the arrangement whose first
     /// instance in this tree shipped five dead gauge names.
     #[test]
     fn the_orchestrator_and_the_engine_agree_on_every_orch_variable() {
@@ -414,13 +416,15 @@ mod tests {
         let src = std::fs::read_to_string(path)
             .unwrap_or_else(|e| panic!("cannot read the engine inventory at {path}: {e}"));
 
-        // Matching `("UNDER…CROFT_ORCH_X", Protects),`. The needle is SPLIT,
-        // and not for tidiness: the engine's own inventory gate scans every
-        // `.rs` file under `crates/` for a quoted `UNDER…CROFT_` literal and
-        // requires each one to be a variable it knows. Written contiguously,
-        // this line declares a variable called `UNDERCROFT_ORCH_` — the bare
-        // prefix — and fails that gate. It did, on the first battery. One
-        // gate's needle is another gate's input.
+        // Matching every `("UNDER…CROFT_X", Class, Parse),` row; the ORCH
+        // family is filtered out of them below. That filter's needle is
+        // SPLIT, and not for tidiness: the engine's own inventory gate scans
+        // every `.rs` file under `crates/` for a quoted `UNDER…CROFT_` literal
+        // and requires each one to be a variable it knows. Written
+        // contiguously, it declares a variable called `UNDERCROFT_ORCH_` — the
+        // bare prefix — and fails that gate. It did, on the first battery,
+        // when the ORCH prefix was still part of this row needle. One gate's
+        // needle is another gate's input.
         let mut engine: Vec<(String, ConfigClass, Parse)> = Vec::new();
         for line in src.lines() {
             let line = line.trim();
@@ -459,11 +463,25 @@ mod tests {
 
         // PREMISE. A parser that matched nothing reports two agreeing empty
         // sets, which reads exactly like a clean tree — the failure mode this
-        // file's own doctrine names.
+        // file's own doctrine names. Counted over the ORCH family and not over
+        // every parsed row: the engine lists some eighty declarations, so a
+        // floor on the whole parse is met by a scan that read no ORCH row.
+        let orch = concat!("UNDER", "CROFT_ORCH_");
+        let engine_orch = engine
+            .iter()
+            .filter(|(n, _, _)| n.starts_with(orch))
+            .count();
+        let mine_orch = ORCH_ENV_VARS
+            .iter()
+            .filter(|(n, _, _)| n.starts_with(orch))
+            .count();
         assert!(
-            engine.len() >= 6,
-            "premise failed: parsed {} ORCH entries out of {path} — the scan found \
-             nothing to compare, which is not the same as agreement",
+            engine_orch > 0 && engine_orch >= mine_orch,
+            "premise failed: parsed {engine_orch} ORCH-family rows out of {path} ({} rows in \
+             all) against {mine_orch} in ORCH_ENV_VARS. It needs at least one, or both \
+             directions below can pass over an empty family; and no fewer than this binary \
+             declares, or a scan that under-read the family is reported below as inventory \
+             drift rather than as the scan fault it is",
             engine.len()
         );
 
@@ -541,10 +559,12 @@ mod tests {
             .expect("crates/ is this crate's parent")
             .join("undercroft-obs/src");
 
-        // Split for the reason the join above splits its needle: written
-        // contiguously this declares a variable called by the bare prefix,
-        // which the engine's own env-var inventory gate scans for and
-        // rejects.
+        // Split to match the join above, NOT because a contiguous literal
+        // here would trip the engine's env-var inventory gate: that gate
+        // records a quoted literal only when it is LONGER than this prefix
+        // (`name.len() > prefix.len()` in `parity.rs`), so the bare prefix
+        // passes it. The join's `…CROFT_ORCH_` filter needle is longer, which
+        // is why THAT split is required and this one is not.
         let prefix = concat!("UNDER", "CROFT_");
         let mut reads: std::collections::BTreeSet<String> = Default::default();
         let mut scanned = 0usize;

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # End-to-end suite for remote vector-index backends (qdrant, chroma,
-# pgvector). Runs inside the builder container via docker compose, which
-# provides the three services and the UNDERCROFT_* connection env vars.
+# pgvector, milvus, weaviate), all reached over TLS. Runs inside the builder
+# container via docker compose, which provides the five services, the
+# `backends-tls` terminator in front of the four HTTP ones, pgvector's
+# generated certificate chain and the UNDERCROFT_* connection env vars.
 #
 # For each backend: fresh palace → remember → index push → search --backend
 # → status. Also proves the security contract: the bytes stored server-side

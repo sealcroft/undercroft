@@ -15,7 +15,7 @@ Palace (data dir, one master key)
 
 ## Components and dependencies
 
-Twelve crates. Solid arrows are `Cargo.toml` dependencies; the dashed
+Thirteen crates. Solid arrows are `Cargo.toml` dependencies; the dashed
 arrow is the one deliberate non-dependency in the design — the
 orchestrator talks to engines **only over HTTP** (`/v1`), so the engine
 stays tree-blind and portable.
@@ -59,6 +59,7 @@ flowchart TB
     cli --> index
     cli --> llm
     cli --> obs
+    cli --> net
     cli -. "features onnx / ort" .-> onnx
     cli -. "features onnx / ort" .-> ort
     onnx --> core
@@ -83,9 +84,10 @@ flowchart TB
 | `undercroft-core` | Domain types, chunking, deterministic ids, normalization, hash embedder, MUVERA FDE construction, MaxSim kernel, transcript parsing, entity detection |
 | `undercroft-vault` | Master key (file or Argon2id), HKDF per-vault keys, XChaCha20-Poly1305 sealing, HMAC tags, audit-chain arithmetic, MAC'd manifests |
 | `undercroft-store` | Per-vault SQLite (system of record), hybrid search, PQ/IVF prefilter, ColBERT token store + LUT MaxSim, FDE candidate index, knowledge graph, management, remote-index integration |
-| `undercroft-index` | Qdrant / Chroma / pgvector / Milvus / Weaviate clients — untrusted accelerators, sealed content only |
-| `undercroft-llm` | Local LLM runtimes (Ollama / OpenAI-compatible) for `refine` → KG extraction |
-| `undercroft-net` | The outbound transport policy, in one place: **TLS or loopback, nothing else, no override**, refused at construction; plus CA pinning, where a declared root *replaces* the public roots and a file that pins nothing refuses rather than falling back. Every HTTP client calls it — the served embedder, the LLM runtimes, the remote index backends, and the orchestrator's hop to its engines |
+| `undercroft-index` | Qdrant / Chroma / pgvector / Milvus / Weaviate clients — untrusted accelerators. A sealed vault pushes sealed content; an hmac-only vault, whose stored content is plaintext, is refused unless `index push --allow-plaintext`. Every candidate is re-verified locally, and a push appends an `egress/index-push` chain record, a partly failed one included |
+| `undercroft-llm` | Local LLM runtimes (Ollama / OpenAI-compatible) for `refine` → KG extraction and the tier-2 admission advisor, plus the served embedder (`UNDERCROFT_EMBEDDER=http`) |
+| `undercroft-net` | The outbound transport policy, in one place: **TLS or loopback, nothing else, no override**, refused at construction; plus CA pinning, where a declared root *replaces* the public roots and a file that pins nothing refuses rather than falling back. Every outbound hop is built by it — the served embedder, the LLM runtimes, the remote index backends (pgvector through a rustls config rather than an HTTP agent), the orchestrator's hop to its engines, and the OTLP trace exporter — and it holds the one request-body ceiling every listener and every hop reads through |
+| `undercroft-config` | The declaration resolvers the engine and the control plane share (`resolve_orch_key`, `resolve_admin_token`, `resolve_rate_limit`, …) — a leaf crate both link and neither owns, depending on `thiserror` and `hex` alone |
 | `undercroft-obs` | Observability shim: zero-dep no-op by default; logs, `/metrics`, OTLP, SSE under `--features telemetry` |
 | `undercroft-cli` | `undercroft` binary: CLI + MCP stdio + HTTP (MCP `/mcp` + multi-tenant `/v1`) |
 | `undercroft-embed-onnx` | Feature-gated tract backend: sentence embedder, cross-encoder reranker, ColBERT encoder |
@@ -106,7 +108,7 @@ flowchart TB
     master["Master key<br/><i>file or Argon2id passphrase</i>"]
     master -- "HKDF-SHA256(vault A salt, label)" --> ka["vault A subkeys<br/>enc · mac · manifest · sample<br/><i>fingerprints = truncated HMAC under mac</i>"]
     master -- "HKDF-SHA256(vault B salt, label)" --> kb["vault B subkeys<br/>enc · mac · manifest · sample"]
-    ka --> doms["AAD domains (vault A)<br/><br/>{id} — drawer content<br/>{id}/emb — embeddings<br/>{id}/tok — token matrices<br/>fde/{id}/tok — FDE rows<br/>pqrow/…/pq — PQ index artifacts<br/>kg/{id} — graph words"]
+    ka --> doms["AAD domains (vault A)<br/><br/>{id} — drawer content<br/>{id}/emb — embeddings<br/>{id}/tok — token matrices<br/>fde/{id}/tok — FDE rows<br/>pqrow/…/pq — PQ index artifacts<br/>kg/{id} — fact objects<br/>kgterms/{id} — subject + predicate<br/>kgname/{blind} — entity names"]
     ka --> kgs["kg blind secret<br/><i>32 random bytes sealed in meta —<br/>STORED, re-sealed on rotation,<br/>never re-derived: ids must not move</i>"]
     kb -. "vault B ciphertext under<br/>vault A keys ⇒ fails to open" .-> ka
 ```
@@ -129,14 +131,14 @@ sequenceDiagram
     participant S as store
     participant V as vault
     participant DB as SQLite (one transaction)
-    C->>S: save(content, wing, room)
-    S->>S: normalize (verbatim-preserving) → chunk → deterministic id
+    C->>C: normalize (verbatim-preserving) → chunk → deterministic id at construction
+    C->>S: save(drawer — content, wing, room)
     S->>S: embed (hash / onnx / ort / http / external vector)
     S->>S: validate the declaration, then Screen (admission tier 1 + rate)
     Note over S: a flagged write is DIVERTED into the reserved review wing<br/>and re-enters this path with Bypass(AlreadyDiverted) — never dropped
+    S->>DB: BEGIN IMMEDIATE
     S->>V: seal content + embedding (sealed vaults — AAD binds vault id + record id)
     S->>V: HMAC tag over id ␟ meta_at_rest ␟ sealed content
-    S->>DB: BEGIN IMMEDIATE
     DB->>DB: drawer row (sealed blobs + tag)
     DB->>DB: audit row + chain_append → chain_meta head advances
     DB->>DB: COMMIT  — data and chain move together or not at all

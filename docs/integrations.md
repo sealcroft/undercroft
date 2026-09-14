@@ -29,7 +29,7 @@ flowchart LR
     http --> store
     mine --> store
     daemon --> store
-    store -. "index push: sealed content only,<br/>re-verified locally, chain-audited<br/>as an egress" .-> remote["remote vector indexes<br/><i>Qdrant / Chroma / pgvector /<br/>Milvus / Weaviate — untrusted<br/>accelerators</i>"]
+    store -. "index push: at-rest content (sealed on a<br/>sealed vault, hmac-only refused unless<br/>--allow-plaintext) plus the decrypted<br/>embedding and clear wing/room labels,<br/>re-verified locally, chain-audited<br/>as an egress" .-> remote["remote vector indexes<br/><i>Qdrant / Chroma / pgvector /<br/>Milvus / Weaviate — untrusted<br/>accelerators</i>"]
     store -. "refine: drawer plaintext out,<br/>screened facts back, chain-audited<br/>as an egress (dry run too)" .-> llmx["local LLM<br/><i>Ollama / OpenAI-compatible,<br/>TLS or loopback only</i>"]
 ```
 

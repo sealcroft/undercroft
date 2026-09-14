@@ -265,7 +265,7 @@ POST   /v1/vaults                      {"id":"acme","level":"sealed"}       # cr
 POST   /v1/vaults/acme/drawers         {"text":"...","wing":"notes"}        # save
 POST   /v1/vaults/acme/search          {"query":"...","limit":8}            # search
 GET    /v1/vaults/acme/export                                              # lossless NDJSON
-POST   /v1/vaults/acme/import                                              # count-verified restore
+POST   /v1/vaults/acme/import                                              # restore; judge it by the destination's stats
 ```
 
 Two options worth knowing:
@@ -304,8 +304,8 @@ engines never know it exists. Full docs:
 [MULTI_TENANCY.md](https://github.com/sealcroft/undercroft/blob/main/docs/MULTI_TENANCY.md).
 
 ```bash
-export UNDERCROFT_ORCH_KEY=$(undercroft-orchestrator keygen)   # seals engine creds
-export UNDERCROFT_ORCH_ADMIN_TOKEN=...                        # /admin bearer (>=16 chars)
+eval "$(undercroft-orchestrator keygen)"                      # sealing key + a suggested /admin bearer (>=16 chars)
+export UNDERCROFT_ORCH_KEY UNDERCROFT_ORCH_ADMIN_TOKEN        # store both: the key opens the sealed engine creds
 undercroft-orchestrator config check                          # pre-flight the CONTROL PLANE
 undercroft-orchestrator serve                                 # 127.0.0.1:8900 (UNDERCROFT_ORCH_ADDR)
 
@@ -313,7 +313,11 @@ undercroft-orchestrator serve                                 # 127.0.0.1:8900 (
 undercroft-orchestrator instance-add engine-a https://a:8800 \
   --bearer <bearer> --assertion-secret <assertion-secret>
 undercroft-orchestrator tenant-create acme
-undercroft-orchestrator migrate acme engine-b     # export→import→count-verify→flip→delete
+undercroft-orchestrator migrate acme --to engine-b  # snapshot→export→import→judge the copy→flip→delete
+
+# a vault already copied by hand (`undercroft export` / `undercroft import`):
+# move the mapping only, refused unless the instance reports holding the vault
+undercroft-orchestrator tenant-repoint acme --instance engine-b
 
 # scale read routing: replicas serve /t/* from a read-only state db
 # (shared volume or replicated snapshot); /admin and /ui stay on the writer
@@ -323,8 +327,16 @@ undercroft-orchestrator serve --read-replica --addr 0.0.0.0:8901
 Tenants call `/t/<subpath>` with their own bearer; the orchestrator
 resolves the token (stored only as an HMAC), forwards to
 `/v1/vaults/{their-vault}/<subpath>` with the engine bearer + a fresh
-assertion. The subpath allowlist is `drawers | search | stats | export |
-import` — vault lifecycle is deliberately unreachable with a tenant token.
+assertion. The subpath allowlist (`data_subpath_ok` in the orchestrator's
+`proxy.rs`) is a closed set of whole shapes: `drawers` and
+`drawers/{drawer_id}` (any one segment, so `drawers/check-duplicate` too),
+`search`, `stats` and `stats/history`, `export`,
+`import`, `taxonomy`, the knowledge-graph reads (`kg/stats`, `kg/entities`,
+`kg/query`, `kg/timeline`, `kg/receipts`, `kg/rel`, `kg/canonical/{key}`),
+`index/status`, `dedup`, `tunnels`, `tunnels/{tid}` and
+`tunnels/{tid}/drawers`, `diary` and `diary/agents`, `wake-up`, `closets`
+and `hallways` — vault lifecycle and the operator plane are deliberately
+unreachable with a tenant token.
 Optional per-tenant rate limiting: `UNDERCROFT_ORCH_RATE_LIMIT=<req/min>`
 (a plain integer; a declaration it cannot read refuses to start rather
 than serving unlimited in silence).
@@ -349,10 +361,12 @@ those is fixed by looking at the engine.
 
 `undercroft-orchestrator ops <tenant> <op> [--body '<json>']` mirrors the
 admin plane for scripted use, over a closed vocabulary of operations:
-`verify`, `anchor`, `supersessions`, `admission`, `admission-rule`,
-`trust`, `trust-set`, `retention`, `retention-set`, `retention-sweep`,
-`forget`, `verify-forgetting`. Drawer reads and key rotation are
-deliberately NOT among them.
+`verify`, `repair`, `anchor`, `supersessions`, `admission`,
+`admission-rule`, `trust`, `trust-set`, `retention`, `retention-set`,
+`retention-sweep`, `forget`, `verify-forgetting`, `authority`,
+`backup-create`, `backups`, `backup-restore` (a maintenance-window
+operation: the engine answers 409 while the vault is in use). Drawer reads
+and key rotation are deliberately NOT among them.
 
 `anchor` is the one worth knowing about if you run a long-lived server:
 read-audit records append without advancing the manifest anchor, and only a
@@ -408,13 +422,14 @@ per vault on first write, and a model swap is refused unless you set
 setup recipes, the model-export procedure, and the security trades is
 [docs/EMBEDDERS.md](https://sealcroft.com/undercroft/docs/embedders.html) — published as the "Choosing an
 embedder posture" chapter. Since the posture-configs unit, releases ship
-the `ort` posture ready-made: a `…-x86_64-unknown-linux-gnu-ort.tar.gz`
-binary asset and a `ghcr.io/sealcroft/undercroft:<tag>-ort` image, both
-smoke-probed for the compiled feature at build):
+the `ort` posture ready-made: a `…-<target>-ort` binary asset for each of
+the five release targets and a multi-arch (amd64 + arm64)
+`ghcr.io/sealcroft/undercroft:<tag>-ort` image, each smoke-probed for the
+compiled feature at build):
 
 | Value | What | When |
 |---|---|---|
-| `hash` (default) | deterministic hashed n-grams, offline, zero deps | correct default; measured LoCoMo R@10 92.7% with hybrid search. **Single-language only** — see below |
+| `hash` (default) | deterministic hashed n-grams, offline, zero deps | correct default; measured LoCoMo session R@10 95.5% under the shipped `bm25` fusion (re-measured 2026-09-02). **Single-language only** — see below |
 | `http` | a model served over HTTPS (or loopback) — Ollama, llama.cpp server, LM Studio, vLLM, TEI. `UNDERCROFT_EMBED_URL` + `_MODEL` (+ optional `_API`, `_KEY`, `_DIM`, `_CA`); dimension is probed from the endpoint. **Cleartext http to a non-loopback host is refused at construction, no override** — front the endpoint with TLS (the compose `embeddings-tls` terminator ships ready) and pin a self-signed root with `UNDERCROFT_EMBED_CA` | **the recommended configuration when the endpoint is loopback or a TLS-fronted private service** — the largest measured lever on retrieval quality (**+3.2 to +4.2pp** turn all-gold over `hash` across four models, which span only 1.0pp between them; each figure is n=1, so no specific model is recommended until repeat runs separate them), and no ONNX export needed. Stays opt-in rather than default because **the endpoint reads drawer text in plaintext** (TLS protects the wire, not the destination) — the default must remain zero-egress, and that posture is the product's, not a tuning knob. Costs one request per drawer at ingest (11–29×) and +20–57% search |
 | `onnx` | user-supplied MiniLM-class ONNX via tract (pure Rust); needs `UNDERCROFT_ONNX_MODEL`/`_TOKENIZER`, build `--features onnx` | best recall, pure-Rust constraint |
 | `ort` | same models via ONNX Runtime (C++ dep, build `--features ort`); ~2.5× faster/forward, int8 support, ~4–5× faster ingest | throughput matters; same env vars, switching is one env change |
@@ -756,9 +771,12 @@ Export recipes and all measured tables:
 
 **Remote vector DBs** (Qdrant/Chroma/pgvector/Milvus/Weaviate via
 `undercroft index push` + `search --backend`) are **untrusted
-accelerators**: they hold sealed bytes, every candidate is re-verified and
-decrypted locally. They pay off only at very large corpora — measure
-before adopting. After a key rotation, re-run `index push`.
+accelerators**: from a sealed vault they hold sealed content, beside the
+drawer ids, embeddings and wing/room labels in the clear (an hmac-only
+vault's push is refused unless `index push --allow-plaintext`), and every
+candidate is re-verified and decrypted locally. They pay off only at very
+large corpora — measure before adopting. After a key rotation, re-run
+`index push`.
 
 A mirror-served query answers under the **same retrieval policy** as
 `--backend local`: the closed vocabularies (`--kind`, `--min-trust`) are
@@ -1058,7 +1076,11 @@ The deployment stack — Prometheus, Alertmanager, Loki, Tempo, Grafana, with
 rules and a runbook — is in `deploy/observability/`. Two things to know
 before you wire alerts:
 
-- **Every rule aggregates `by (instance)` and that is load-bearing.**
+- **Every rule preserves the `instance` label, and that is load-bearing.**
+  Most aggregate `by (instance)` — the latency rule `by (instance, le)` for
+  its quantile, the late-interaction rule `by (instance, side)` — and
+  `PalaceTamperDetected` and `UndercroftDown` are left unaggregated, so they
+  keep every label their series carries.
   Alertmanager scopes inhibition with `equal:`, and a label absent from BOTH
   the source and the target counts as EQUAL — so equalling on a label no
   rule emits makes the inhibition global rather than narrow. The shipped
@@ -1126,7 +1148,7 @@ because nothing stated them:
   ASSERT a fact, not about whether facts can appear.
 
 Write tools (marked **W**) are refused when the server runs `--read-only`.
-There are 13 of them, and the list is not maintained by hand: the code is
+There are 12 of them, and the list is not maintained by hand: the code is
 counted against an inventory (`crates/undercroft-cli/src/parity.rs`) in both
 directions, so a tool added without a line fails the build and a line naming
 a tool that no longer exists fails it too.
@@ -1268,14 +1290,18 @@ background facts breaks exactly the multi-hop questions the graph is for.
 recipient and the export's own manifest digest, with no variable to set. A
 read-only engine is the one exception: it warns and serves.
 
-Orchestrator: tenant data plane `/t/<drawers|search|stats|export|import>`
-with the tenant bearer; admin plane `/admin/instances[…]`,
-`/admin/tenants[…]` (+ `/rotate`, `/migrate`, `/stats` — metadata-only
-relay) and the **operator relay**
+Orchestrator: tenant data plane `/t/<subpath>` with the tenant bearer, over
+the closed allowlist of whole shapes listed in §5 (`data_subpath_ok`); admin
+plane `/admin/instances[…]`, `/admin/tenants[…]` (+ `/rotate`, `/migrate`,
+`/stats` — a metadata-only relay; and `PATCH /admin/tenants/{id}` with
+`{"instance": …}`, which re-points a tenant at an instance that already
+holds its vault, moves no data, and is refused unless that instance reports
+holding the vault) and the **operator relay**
 `/admin/tenants/{id}/ops/<subpath>`, a closed vocabulary forwarding
-`POST verify`, `GET supersessions`, `POST forget`,
-`POST verify-forgetting`, `GET`/`POST admission`,
-`GET`/`POST retention`, `POST retention/sweep` and `GET`/`POST trust` to the
+`POST verify`, `POST repair`, `POST anchor`, `GET supersessions`,
+`POST forget`, `POST verify-forgetting`, `GET`/`POST admission`,
+`GET`/`POST retention`, `POST retention/sweep`, `GET`/`POST trust`,
+`GET`/`POST backups`, `POST backups/restore` and `POST kg/authority` to the
 tenant's engine (these live on the ADMIN plane, never the data plane: a
 tenant token must not rule on the admission queue that screened its own
 writes, nor assign the trust its wings are floored by — the same boundary
@@ -1294,9 +1320,11 @@ and `/ui` answer 403.
 
 **Check them before you deploy.** `undercroft config check` runs every
 `UNDERCROFT_*` declaration in the current environment through the resolver
-that runs at start-up, opening nothing — **including the eight
-`UNDERCROFT_ORCH_*` the control plane reads** (three were a coverage gap
-until 1.1.0; O24 moved the shared parses into a crate both binaries link).
+that runs at start-up, opening nothing — **including the seven checked
+`UNDERCROFT_ORCH_*` declarations the control plane reads** (three were a
+coverage gap until 1.1.0; O24 moved the shared parses into a crate both
+binaries link). The eighth, `UNDERCROFT_ORCH_DB`, is a path declared Opaque:
+it is accepted, not validated.
 `undercroft-orchestrator config check` pre-flights the control plane
 standalone, which a fleet still wants. Both run every declaration through the
 resolver that runs at start-up, opening nothing — no vault, no database, no socket, no
@@ -1306,9 +1334,16 @@ difference between finding out in a pipeline and finding out during a rolling
 restart, one node at a time.
 
 It reports **validated** and **accepted** apart, and the distinction is
-deliberate: only some variables have a parse to run, and a path, a URL, a
-token or a model name is validated by whatever consumes it. Claiming to have
-checked those would be a stronger statement than the truth.
+deliberate. Every numeric knob and most closed vocabularies run through the
+resolver start-up runs, and so do the outward URLs, the pgvector DSN, the CA
+pins, the bearers, the passphrase, the assertion secret and the control
+plane's sealing key — which checks what can be checked without a peer, never
+whether a peer will accept them. A model file, tokenizer or model name, an
+API key or header list, the home and state-database paths, the trusted-source
+list and a few free-form settings (log level and format, language, service
+name, the trace and force-embedder switches) are declared Opaque: no parse
+exists to run, so each is validated by whatever consumes it, and claiming to
+have checked those would be a stronger statement than the truth.
 
 **Which variables refuse a bad value, and which fall back.** The rule comes
 from the architecture's own configuration doctrine — *every default is the
@@ -1419,9 +1454,15 @@ close the window explicitly with `POST /v1/vaults/{id}/anchor` (or
 `undercroft vault anchor <name>`) on a cadence of your own. **Not**
 `POST …/verify`: it is a genuine read and does not anchor, and this
 paragraph told you otherwise before 1.0.0.
-Egress is chain-audited unconditionally — one `egress/export` record per export, and one `egress/index-push` record per remote-index mirror
-binding surface, recipient, counts and the export's own manifest digest —
-with no variable to set) ·
+Egress is chain-audited unconditionally, with no variable to set: one
+`egress/export` record per export, binding surface, recipient, counts and
+the export's own manifest digest; one `egress/index-push` record per
+remote-index mirror push, binding backend, collection, count, embedding
+space, whether the content left sealed or in plaintext, and whether
+plaintext was permitted; and one `egress/refine` record per refine run that
+POSTed at least one drawer, dry runs included (a run that selected nothing
+records nothing), binding surface, destination host, model, scope and
+counts) ·
 `UNDERCROFT_TRAIN_SOURCE_CAP` (4 — per-wing cap divisor on global
 codebook training draws: no single wing supplies more than 1/N of a
 training sample while others can fill it; within-quota corpora draw

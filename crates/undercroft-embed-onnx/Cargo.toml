@@ -1,6 +1,6 @@
 [package]
 name = "undercroft-embed-onnx"
-description = "ONNX sentence-embedding backend (MiniLM-class models) for Undercroft, via tract (pure Rust)"
+description = "ONNX embedder, cross-encoder reranker and ColBERT late-interaction encoder for Undercroft, via tract (pure Rust)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

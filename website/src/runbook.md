@@ -15,7 +15,7 @@ The whole procedure at a glance — each step is detailed below:
 
 ```mermaid
 flowchart TB
-    alert["PalaceTamperDetected<br/><i>alert / monitor beacon / verify count</i>"] --> loc["1 · Where?<br/><i>surface label on the counter;<br/>vault · id · wing · room on the event</i>"]
+    alert["PalaceTamperDetected<br/><i>alert / monitor beacon / verify count</i>"] --> loc["1 · Where?<br/><i>surface label on the counter,<br/>vault · id · wing · room on the event</i>"]
     loc --> conf["2 · Confirm + pinpoint<br/><i>undercroft verify --vault —<br/>names the exact record(s), chain state</i>"]
     conf --> mit["3 · Mitigate<br/><i>preserve evidence copy FIRST ·<br/>freeze writes (--read-only) · isolate vault</i>"]
     mit --> fix{"4 · Fix — verbatim restore,<br/>never repair-in-place"}
@@ -23,7 +23,7 @@ flowchart TB
     fix -- "single MINED record,<br/>source document available" --> refile["re-file it —<br/><i>source-derived id ⇒ idempotent re-seal</i>"]
     restore --> clean["repair (housekeeping) →<br/>read-write only once verify is clean"]
     refile --> clean
-    clean --> prev["5 · Prevent<br/><i>scheduled backups · 0600 perms ·<br/>OS-level FIM · alerting on ·<br/>per-vault assertions</i>"]
+    clean --> prev["5 · Prevent<br/><i>scheduled backups ·<br/>owner-only permissions ·<br/>OS-level FIM · alerting on ·<br/>per-vault assertions</i>"]
 ```
 
 ## 1. Where did it happen?
@@ -32,7 +32,15 @@ The alert carries two labels that localize the failure:
 
 - **`surface`** — which structure failed: `drawer`, `kg`, `tunnel`, or
   `manifest`.
-- **`vault`** — which vault (on the live event stream / Palace Monitor).
+- **`instance`** — which server process counted it.
+
+There is **no `vault` label**, on this alert or any other: the integrity
+counter is emitted with `surface` alone. The vault is on the live event stream
+instead — the `hmac-fail` frame the Palace Monitor reads names it, beside the
+`id`, `wing` and `room` the failing row *claims* (marked `unverified`, since
+that row has just failed its own HMAC). The stream is live only, so it names
+the vault only to a subscriber connected when the failure happened; otherwise
+run step 2's `verify` against each vault the process serves.
 
 In Grafana, the **“Tamper by surface”** panel and the **HMAC verify failures**
 stat show the same signal; the **Logs** panel shows the
@@ -48,12 +56,22 @@ undercroft verify --vault <vault>
 # records checked: 1284
 # hmac failures:   1
 #   TAMPERED: 5a2fc91d…
-# audit chain:     BROKEN
+# audit chain:     ok
+# orphan labels:   0
+# mirror drift:    0
+# policy drift:    0
+# VERIFY FAILED
 ```
 
-The named id is the tampered record; a `BROKEN` audit chain tells you the
-tamper also broke chain continuity (an attacker who edited content but couldn't
-forge the chain MAC).
+The named id is the tampered record, and `VERIFY FAILED` exits **2**. Expect
+`audit chain: ok` beside it: the chain is replayed from the audit trail's own
+tags against the committed head and the manifest anchor, so editing the
+tampered record's bytes does not move it. `audit chain: BROKEN` is a separate
+finding — the audit trail itself was edited or truncated, or the database was
+rolled back relative to the anchor. The next three lines are further legs, and
+a non-zero count on any of them fails the verdict too; a vault holding
+supersession links or fact receipts prints a line for each of those legs as
+well, where only a tampered count fails.
 
 ## 3. Mitigate now (stop the bleeding)
 
@@ -63,10 +81,17 @@ forge the chain MAC).
    ```bash
    cp -a "$UNDERCROFT_HOME/vaults/<vault>" "/tmp/<vault>.evidence.$(date +%s)"
    ```
-   Since 1.0.0 a read-only open no longer touches any of those (see step 2),
-   so this is no longer a race you can lose. Take the copy anyway: it is the
-   only thing that survives a *writable* process someone else starts, and a
-   forensic copy costs seconds.
+   Since 1.2.1 a read-only open (see step 2) writes nothing to the database,
+   `vault.json`, `vault.json.next` or a hot `-wal`. In a writable directory it
+   may still create the `-shm` wal-index and a zero-length `-wal` — SQLite's
+   scaffolding for reading a WAL database, carrying no database content. From
+   1.0.0 through 1.2.0 an embedder lookup ran before the posture took effect —
+   on a `/v1` request from 1.0.0, and on the CLI's own read-only open from
+   1.2.0 — and could create a missing database or checkpoint a crashed
+   writer's hot `-wal` into it (ROADMAP O91), so on those versions the copy has
+   to come before any process opens the vault. Take the copy on every version:
+   it is the only thing that survives a *writable* process someone else
+   starts, and a forensic copy costs seconds.
 2. **Freeze writes.** Restart the server read-only so nothing new is written on
    top of a compromised store while you investigate:
    ```bash
@@ -81,8 +106,9 @@ forge the chain MAC).
    **not** fast-forward the manifest anchor (an earlier version of this step
    said it did).
 
-   **The open is a read too, since 1.0.0.** It used to be the one write
-   `--read-only` did not bound, and the worst of it ran on the very path this
+   **The open is a read too — the open itself since 1.0.0, and the embedder
+   lookup that ran ahead of it since 1.2.1 (step 1).** It used to be the one
+   write `--read-only` did not bound, and the worst of it ran on the very path this
    step recommends: rotation reconciliation happened before the
    read-only/read-write split, so the first request against a cold handle
    either promoted a staged `vault.json.next` over `vault.json` — adopting a
@@ -125,9 +151,10 @@ forge the chain MAC).
    the read-only open escalates to SQLite's `immutable=1` mode and says so in a
    warning — correct there, and wrong if anything is still writing, which is
    why it is reached only after the ordinary open has failed.
-3. **Isolate.** If this is a multi-tenant server, the vault id in the alert
-   scopes the blast radius — other vaults have independent HKDF-derived keys, so
-   one vault falling tells an attacker nothing about its siblings.
+3. **Isolate.** If this is a multi-tenant server, the vault named by the
+   `hmac-fail` event (or by `verify`) scopes the blast radius — other vaults
+   have independent HKDF-derived keys, so one vault falling tells an attacker
+   nothing about its siblings.
 
 ## 4. Fix (restore verbatim)
 
@@ -141,17 +168,21 @@ restore**, not a repair-in-place of forged bytes:
    undercroft backup restore <vault>-<stamp> --force   # --force to overwrite the live vault
    undercroft verify --vault <vault>   # must now report 0 hmac failures, chain ok
    ```
-2. **If a single record was hit and you have the source document**, re-file it:
-   a mined or swept drawer's id is derived from (wing, room, source, chunk
-   index, normalize version), so re-mining is idempotent and simply re-seals
-   the row. Re-verify afterwards. This does **not** hold for drawers written
-   through `remember` / the API, which have no source and carry a unique append
-   index instead — re-saving those creates a *new* drawer beside the tampered
-   one rather than replacing it, so restore from backup is the only verbatim
-   fix there.
+2. **If a single *mined* record was hit and you have the source document**,
+   re-mine it with the same path, `--wing` and `--mode` it was mined with: a mined
+   drawer's id is derived from (wing, room, source, chunk index, normalize
+   version), so re-mining rewrites that row under a fresh seal. Re-verify
+   afterwards. This does **not** hold for drawers filed by `sweep`, which skips
+   any message whose content fingerprint is already stored — and an edit to the
+   content bytes leaves the fingerprint column in place, so a re-sweep counts
+   the tampered message as already filed and never rewrites it. Nor does it
+   hold for drawers written through `remember` / the API, which have no source
+   and carry a unique append index instead — re-saving those creates a *new*
+   drawer beside the tampered one rather than replacing it. Restore from backup
+   is the only verbatim fix for both.
 3. **Housekeeping** after a clean restore:
    ```bash
-   undercroft repair --vault <vault>  # backfill fingerprints, vacuum, re-verify
+   undercroft repair --vault <vault>  # backfill fingerprints, re-embed every drawer + drop PQ/IVF (a served embedder receives the corpus), vacuum, re-verify
    ```
 
 Only return the server to read-write once `verify` is clean.
@@ -162,9 +193,9 @@ Only return the server to read-write once `verify` is clean.
   recovery path above; without a good backup, a verbatim restore isn't possible.
   Only the ten most recent snapshots per vault are kept — older ones are pruned
   on each create, so a schedule needs its own off-box retention.
-- **Lock down the store.** The vault directory and `master.key` should be
-  `0600`/owner-only. Anything that can write the vault DB out-of-band can
-  tamper; anything that can read `master.key` can forge.
+- **Lock down the store.** `master.key` should be `0600` and the vault
+  directory `0700` (owner-only). Anything that can write the vault DB
+  out-of-band can tamper; anything that can read `master.key` can forge.
 - **Add OS-level file-integrity monitoring** (auditd / a tripwire) on the vault
   directory — Undercroft catches tamper on *read*; FIM catches the *write*.
 - **Keep telemetry alerting on.** `PalaceTamperDetected` fires within a scrape

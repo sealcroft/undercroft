@@ -18,9 +18,10 @@
 # promtool proves these expectations are what the rules really emit, and the
 # script proves the inhibition is scoped by something they all carry.
 #
-# Adding a rule? Add a block. A rule with no block is not covered, and the
-# script fails if the alert count here drops below the rule count in
-# alerts.yml.
+# Adding a rule? Add a block, and add a quiet arm for it to the negative
+# control at the bottom. A rule with no block is not covered: the script
+# fails for any rule in alerts.yml whose name has no `alertname:` line here.
+# It does not yet check for the quiet arm, so that half is by eye.
 
 rule_files:
   - alerts.yml
@@ -203,7 +204,7 @@ tests:
               side: doc
             exp_annotations:
               summary: "Late-interaction encodes are degrading (doc side)"
-              description: "The ColBERT encoder degraded at least one doc-side encode to an empty matrix in the last 10m. A doc-side failure leaves that drawer with no token matrix at rest — re-encode with `undercroft repair`; a query-side failure silently retired the late stage for those searches."
+              description: "The ColBERT encoder degraded at least one doc-side encode to an empty matrix in the last 10m. A doc-side failure leaves that drawer with no token matrix at rest — re-encode with `undercroft repair --tokens` (UNDERCROFT_RERANKER=colbert or colbert-ort; CLI only); a query-side failure silently retired the late stage for those searches."
 
   # ── AuthRejectionsSpike ──────────────────────────────────────────────────
   # 30/min = 0.5/s, over the 0.2/s threshold.
@@ -226,6 +227,18 @@ tests:
   # ── The negative control ─────────────────────────────────────────────────
   # A healthy instance fires nothing. Without this, a rule that fired
   # unconditionally would satisfy every block above.
+  #
+  # Every rule needs a PRESENT, healthy series here, not merely an absent
+  # one: an expression over an empty vector returns nothing whatever its
+  # comparison says, so a quiet arm with no input would pass `> 0` mutated
+  # to `>= 0` just as happily. This block covered four of the nine rules
+  # until 2026-09-14, and the other five passed every test while being
+  # unable to show they stay quiet.
+  #
+  # Search: every observation lands at or under 0.1s, so p95 interpolates to
+  # 0.095, under the 0.5s threshold. HTTP: a 200 route climbing and a 5xx
+  # route present but flat, so the 5xx selector matches a zero rate rather
+  # than nothing. Failure counters: present and flat.
   - interval: 1m
     input_series:
       - series: 'up{job="undercroft",instance="undercroft:8765",service="undercroft"}'
@@ -238,6 +251,24 @@ tests:
         values: "0+0x20"
       - series: 'undercroft_auth_rejections_total{job="undercroft",instance="undercroft:8765",service="undercroft"}'
         values: "0+0x20"
+      - series: 'undercroft_search_duration_seconds_bucket{job="undercroft",instance="undercroft:8765",service="undercroft",le="0.1"}'
+        values: "0+10x20"
+      - series: 'undercroft_search_duration_seconds_bucket{job="undercroft",instance="undercroft:8765",service="undercroft",le="1"}'
+        values: "0+10x20"
+      - series: 'undercroft_search_duration_seconds_bucket{job="undercroft",instance="undercroft:8765",service="undercroft",le="+Inf"}'
+        values: "0+10x20"
+      - series: 'undercroft_http_requests_total{job="undercroft",instance="undercroft:8765",service="undercroft",route="v1_search",status="200"}'
+        values: "0+1x20"
+      - series: 'undercroft_http_requests_total{job="undercroft",instance="undercroft:8765",service="undercroft",route="v1_save",status="500"}'
+        values: "0+0x20"
+      - series: 'undercroft_embed_failures_total{job="undercroft",instance="undercroft:8765",service="undercroft",backend="http"}'
+        values: "0+0x20"
+      - series: 'undercroft_rerank_failures_total{job="undercroft",instance="undercroft:8765",service="undercroft",backend="onnx"}'
+        values: "0+0x20"
+      - series: 'undercroft_late_failures_total{job="undercroft",instance="undercroft:8765",service="undercroft",backend="onnx",side="doc"}'
+        values: "0+0x20"
+      - series: 'undercroft_late_failures_total{job="undercroft",instance="undercroft:8765",service="undercroft",backend="onnx",side="query"}'
+        values: "0+0x20"
     alert_rule_test:
       - eval_time: 15m
         alertname: UndercroftDown
@@ -247,6 +278,21 @@ tests:
         exp_alerts: []
       - eval_time: 15m
         alertname: AuditChainStalled
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: HighSearchLatencyP95
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: HttpServerErrors
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: EmbedFailures
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: RerankFailures
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: LateInteractionFailures
         exp_alerts: []
       - eval_time: 15m
         alertname: AuthRejectionsSpike

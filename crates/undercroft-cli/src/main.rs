@@ -184,10 +184,14 @@ enum Command {
         /// candidate competition; unassigned wings count as standard.
         #[arg(long)]
         min_trust: Option<String>,
-        /// Language of the stored text, declared not detected: en, de, nl,
-        /// it, es, fr, pt, tr, ru, el, hi, ka, ko. Reaches word forms one
-        /// script cannot settle — German -er takes Kind→Kinder, and the
-        /// Romance/Dutch/Turkish tables need saying too
+        /// Language of the stored text: en, de, nl, it, es, fr, pt, tr, ru,
+        /// el, hi, ka, ko. Reaches word forms one script cannot settle —
+        /// German -er takes Kind→Kinder; the Romance, Dutch and Turkish tables
+        /// work alike. Declared, it applies to every drawer; undeclared, each
+        /// drawer's own function words choose en, de, nl, it, es, fr, pt or tr
+        /// where they agree decisively. Cyrillic, Greek, Devanagari, Georgian
+        /// and Hangul words take the ru, el, hi, ka or ko table from their
+        /// script either way. `ar` selects Arabic date reading and nothing else
         #[arg(long)]
         language: Option<String>,
         /// Which day begins a week (`monday`, `sunday`, `saturday`): moves
@@ -238,12 +242,14 @@ enum Command {
         #[arg(long, default_value_t = false)]
         when_from_query: bool,
         /// Retrieval backend: local (scan), or a remote vector index
-        /// (qdrant | chroma | pgvector) used as an untrusted accelerator —
-        /// results are always re-verified and re-ranked locally
+        /// (qdrant | chroma | pgvector | milvus | weaviate) used as an
+        /// untrusted accelerator — results are always re-verified and
+        /// re-ranked locally
         #[arg(long, default_value = "local")]
         backend: String,
     },
-    /// Remote vector indexes: push sealed records, check status
+    /// Remote vector indexes: push records (content sealed on a sealed vault;
+    /// an hmac-only vault is refused without --allow-plaintext), check status
     Index {
         #[command(subcommand)]
         action: IndexAction,
@@ -777,20 +783,26 @@ enum TranscriptAction {
 
 #[derive(Subcommand)]
 enum IndexAction {
-    /// Upload every drawer (at-rest content + embedding) to a remote index
+    /// Upload every drawer to a remote index: at-rest content, embedding, wing/room
+    ///
+    /// The content is sealed only on a sealed vault; the embedding (decrypted)
+    /// and the wing/room labels leave unsealed on either level. Candidates the
+    /// index offers a search are re-loaded and HMAC-verified locally. A push
+    /// appends one `egress/index-push` chain record, and so does a failed one
+    /// once any batch has landed.
     Push {
-        /// qdrant | chroma | pgvector
+        /// qdrant | chroma | pgvector | milvus | weaviate
         backend: String,
         /// Push an **hmac-only** vault, whose at-rest content is the
         /// PLAINTEXT. Refused without this: a remote index is an untrusted
-        /// accelerator in another trust domain, and every document about
-        /// this feature says "sealed content only".
+        /// accelerator in another trust domain, and only a sealed vault's
+        /// push carries sealed content.
         #[arg(long)]
         allow_plaintext: bool,
     },
     /// Show a remote index's record count for this vault
     Status {
-        /// qdrant | chroma | pgvector
+        /// qdrant | chroma | pgvector | milvus | weaviate
         backend: String,
     },
 }
@@ -4161,7 +4173,7 @@ SQLite reported: {}"
             println!(
                 "{accepted} more are declared Opaque — no parse exists to run, so this command"
             );
-            println!("has NOT checked those: a path, a URL, a token or a model name is validated");
+            println!("has NOT checked those: a path, model name, key or setting is validated");
             println!("by the thing that consumes it, and claiming otherwise would be a stronger");
             println!("statement than the truth. Which declarations are Opaque is DECLARED in the");
             println!("inventory and counted against this command in both directions, so the");

@@ -77,9 +77,10 @@ Every memory namespace is a **vault** — a hard isolation boundary:
 - **HMAC integrity** — every record carries an **HMAC-SHA256** tag (independent
   MAC key) over its id, metadata, and at-rest content; reads verify before
   returning data. An append-only audit table feeds a **tamper-evident HMAC
-  chain** whose head lives in the vault manifest — and the manifest itself is
-  MAC'd, so offline edits (chain resets, security-level downgrades) are caught
-  at unlock. `undercroft verify` walks all of it.
+  chain** whose head is committed in the database inside each write's own
+  transaction and anchored outside it in the vault manifest — and the
+  manifest itself is MAC'd, so offline edits (chain resets, security-level
+  downgrades) are caught at unlock. `undercroft verify` walks all of it.
 - **Choice of level** — `sealed` (encrypt everything) or `hmac-only`
   (plaintext + full-text indexing, but still integrity-tagged and chained) for
   memories where searchability outweighs confidentiality.
@@ -130,8 +131,11 @@ supported as **untrusted search accelerators**:
 | `weaviate` | Remote ANN index (REST + GraphQL) | `UNDERCROFT_WEAVIATE_URL` |
 
 Unlike MemPalace — which stores plaintext documents in these
-databases — Undercroft uploads only the **sealed** content blob plus the
-embedding and wing/room labels. Remote search returns candidate ids; every
+databases — Undercroft uploads the **sealed** content blob plus the
+embedding and wing/room labels, and refuses to push an `hmac-only` vault,
+whose stored content is plaintext, unless you pass `--allow-plaintext`; a
+push is recorded on the audit chain as `egress/index-push`. Remote search
+returns candidate ids; every
 candidate is re-loaded from the local vault, HMAC-verified, decrypted, and
 re-ranked locally. A compromised index can hide results but cannot forge,
 alter, or inject them. Retrieval policy is the local path's, from the same
@@ -144,7 +148,7 @@ search. Remotely the floor can only bound what came *back* rather than
 what was generated, which costs availability, never integrity.
 
 ```bash
-undercroft index push qdrant            # upload sealed records
+undercroft index push qdrant            # mirror records; hmac-only needs --allow-plaintext
 undercroft search "query" --backend qdrant
 undercroft index status qdrant
 ```
@@ -422,11 +426,14 @@ Passphrase mode: set `UNDERCROFT_PASSPHRASE` before `init` and every command.
 | Maintenance | `dedup`, `check_erasure_receipt`, `index_status` |
 
 Deliberately **absent** from MCP: admission rulings, wing trust, retention,
-forgetting, key rotation, and **placing a fact on the authority tier** —
-operator surfaces (CLI + `/v1`) only, because an agent must not rule on its
-own quarantined writes, raise its own standing, shorten the life of the
-memory it reads, or make its own fact the single answer `lookup_canonical`
-returns. Both halves of that
+forgetting, key rotation, **placing a fact on the authority tier**, anchor
+tightening, `export`, `import` and `refine` — operator surfaces (CLI +
+`/v1`) only, because an agent must not rule on its own quarantined writes,
+raise its own standing, shorten the life of the memory it reads, make its
+own fact the single answer `lookup_canonical` returns, move the
+out-of-database evidence a rollback is detected against, move a whole
+corpus out in one call, write records it did not compose, or launder its own
+text into the graph through a model. Both halves of that
 sentence are enforced by a test rather than by this table: the tool list
 above is inventoried in code and counted against the server in **both**
 directions (a tool without an entry fails the build, an entry without a tool

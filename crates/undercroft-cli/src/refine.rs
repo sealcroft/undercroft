@@ -24,9 +24,9 @@
 //! the fix survived — the "union is right for prose and wrong for code"
 //! hazard, one level worse, because four governance surfaces then stated the
 //! opposite of the tree and the battery could not tell (`tests/e2e.sh`'s
-//! "refine needs llm url" check, line 405, only asks that `refine` demands
-//! an LLM URL, which both implementations did; the dry-run egress check at
-//! lines 409–424 is O79's and postdates this). The
+//! `refine needs llm url` check only asks that `refine` demands an LLM URL,
+//! which both implementations did; its `a dry-run refine records its egress`
+//! check is O79's and postdates this). The
 //! shape that makes a repeat visible is `distillation_has_exactly_one_
 //! implementation` below: it counts the extractor calls in this crate's
 //! sources and fails the build if a second one appears anywhere.
@@ -858,7 +858,8 @@ mod tests {
     /// Distillation must exist once in this crate. It did not: `abe5167`
     /// pointed the CLI at this module, `45f3daa` merged the old loop back in
     /// — and because both implementations demand an LLM URL, the only e2e
-    /// check on `refine` (`tests/e2e.sh:269`) passed either way. A count over
+    /// check on `refine` then (`refine needs llm url` in `tests/e2e.sh`)
+    /// passed either way. A count over
     /// the crate's own sources is the shape that can say so, borrowed from
     /// `admission_divert_has_exactly_one_caller` one crate down.
     ///

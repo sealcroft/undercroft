@@ -78,7 +78,8 @@ undercroft (telemetry) ──/metrics──▶ Prometheus ──rules──▶ A
   (`prometheus.yml`).
 - Prometheus evaluates `alerts.yml` and pushes firing alerts to Alertmanager,
   which routes them to **`alert-sink`** — a tiny webhook receiver that logs
-  every delivered alert to stdout (`docker compose logs -f alert-sink`), so the
+  every delivered alert to stdout
+  (`docker compose -f docker-compose.observability.yml logs -f alert-sink`), so the
   whole path is visible without external creds. Swap in Slack/email in
   `alertmanager/alertmanager.yml`.
 
@@ -95,14 +96,19 @@ Defined in `alerts.yml`:
 | **HttpServerErrors** | warning | any HTTP 5xx (5m). |
 | **EmbedFailures** | warning | any `undercroft_embed_failures_total` increase (10m window, fires at the first) — the embedder degraded an embed to a zero vector, so a drawer landed lexically findable and semantically invisible (ROADMAP O122). |
 | **RerankFailures** | warning | any `undercroft_rerank_failures_total` increase — a cross-encoder pass degraded to `0.0`, which `search` writes over the fusion score, so the candidate SINKS and is then indistinguishable from an irrelevant passage (ROADMAP O131). |
-| **LateInteractionFailures** | warning | any `undercroft_late_failures_total` increase, **per `side`** — `doc` left a drawer with no token matrix at rest (re-encode with `repair`), `query` retired the late stage for those searches (ROADMAP O131). |
+| **LateInteractionFailures** | warning | any `undercroft_late_failures_total` increase, **per `side`** — `doc` left a drawer with no token matrix at rest (re-encode with `repair --tokens`, which is CLI-only — the `/v1` residual is stated in `docs/AGENTS.md`), `query` retired the late stage for those searches (ROADMAP O131). |
 | **AuthRejectionsSpike** | warning | elevated bearer/assertion rejections (10m). |
 
-A firing tamper alert links to the [**runbook**](RUNBOOK.md) (published at
-`/docs/runbook.html`) — where it happened, and how to confirm, mitigate, fix,
-and prevent it.
+A firing tamper alert's `runbook_url` links to the published
+[**runbook**](https://sealcroft.com/undercroft/docs/runbook.html), built from
+`website/src/runbook.md` — where it happened, and how to confirm, mitigate,
+fix, and prevent it. [`RUNBOOK.md`](RUNBOOK.md) beside this file is its
+operator quick-reference, not the published page.
 
-**Every rule is aggregated `by (instance)`, and the inhibition depends on it.**
+**Every rule preserves `instance`, and the inhibition depends on it.** Most
+aggregate `by (instance)`; `HighSearchLatencyP95` keeps `(instance, le)` and
+`LateInteractionFailures` `(instance, side)`, while `PalaceTamperDetected` and
+`UndercroftDown` are not aggregated at all, so their series carry it already.
 Alertmanager silences warnings while a critical is firing on the *same*
 instance, scoping that with `equal: ["instance"]`. A label absent from both the
 source and the target counts as **equal**, so an `equal:` naming a label no
@@ -132,15 +138,18 @@ Corrupt one drawer's bytes on disk, then read it — the HMAC check fails, the
 metric increments, and `PalaceTamperDetected` fires within a scrape interval:
 
 ```bash
-# rewrite a drawer's content column directly in the vault DB (bypassing the HMAC)
-docker compose exec undercroft sh -c \
-  "sqlite3 /data/vaults/demo/vault.db \"UPDATE drawers SET content=x'00' WHERE 1 LIMIT 1\"" \
-  || echo "(install sqlite3 in the image, or use the python one-liner in RUNBOOK.md)"
+# rewrite a drawer's content column directly in the vault DB (bypassing the HMAC).
+# The engine image carries no sqlite3, so do it from a throwaway container on
+# the stack's data volume (`<project>_<volume>`). A subquery rather than
+# `UPDATE … LIMIT`, which only a sqlite built with
+# SQLITE_ENABLE_UPDATE_DELETE_LIMIT parses.
+docker run --rm -v undercroft-observability_undercroft-data:/data alpine:3.20 sh -c \
+  "apk add --no-cache sqlite >/dev/null && sqlite3 /data/vaults/demo/vault.db \"UPDATE drawers SET content=x'00' WHERE id = (SELECT id FROM drawers LIMIT 1)\""
 # now search so the record is read + verified → hmac-fail
 curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"query":"xchacha","limit":5}' http://localhost:8765/v1/vaults/demo/search
 # watch it arrive:
-docker compose logs -f alert-sink
+docker compose -f docker-compose.observability.yml logs -f alert-sink
 ```
 
 ## Security note

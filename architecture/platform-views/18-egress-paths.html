@@ -42,11 +42,11 @@
 <body>
   <div class="frame">
     <p class="eyebrow">Swimlane · 18 of 22 · Undercroft</p>
-    <h1>Three ways content leaves a vault, and the record each one leaves behind</h1>
+    <h1>Three egress doors, and the record each one leaves behind</h1>
 
     <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="egress-paths-title egress-paths-desc">
       <title id="egress-paths-title">Undercroft egress paths and their chain records</title>
-      <desc id="egress-paths-desc">Content leaves a vault by three doors, each chain-recorded unconditionally under the egress namespace: an export records before it writes the recipient-sealed or plaintext bundle, because a local write can be re-run; an index push ships sealed content and embeddings to a remote backend in batches of sixty-four and records after the bytes have left, binding the count the backend acknowledged, and a batch that fails part-way records what left before the error propagates; and a refine posts each selected drawer's plaintext to the LLM endpoint and records after the loop, dry run included, with the surface, the destination host, the model, the scope and the counts, and a refine that errors mid-loop records the drawers that left before the error propagates; a run that selected nothing records nothing. A read-only handle serves each and says the egress went unaudited.</desc>
+      <desc id="egress-paths-desc">The egress namespace records three doors, each unconditionally: an export records before it writes the recipient-sealed or plaintext bundle, because a local write can be re-run; an index push ships each drawer's at-rest content beside its embedding, wing and room, which the backend reads in clear, to a remote backend in batches of sixty-four — ciphertext from a sealed vault; an hmac-only vault's content is the plaintext, so its push is refused unless --allow-plaintext is passed, and the record binds which was sent — and records after the bytes have left, binding the count the backend acknowledged, and a batch that fails part-way records what left before the error propagates; and a refine posts each selected drawer's plaintext to the LLM endpoint and records after the loop, dry run included, with the surface, the destination host, the model, the scope and the counts, and a refine that errors mid-loop records the drawers that left before the error propagates; a run that selected nothing records nothing. On a read-only handle a /v1 export and a refine say the egress went unaudited; a CLI export is refused before it writes, and an index push ships its batches, then fails unrecorded. The three are not every path stored plaintext takes out: under a served embedder, repair re-embeds every drawer through the embedding endpoint and is recorded only as a repair migration naming the model, never the destination host, while admission allow and a remote-index search re-embed the drawers they touch with no egress record — gaps, not further recorded doors.</desc>
       <defs>
         <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7fa39c"/></marker>
         <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#35e0c2"/></marker>
@@ -155,8 +155,8 @@
       <rect x="548" y="464" width="224" height="80" rx="6" fill="#04080a"/>
       <rect x="548" y="464" width="224" height="80" rx="6" fill="rgba(217,240,234,0.03)" stroke="rgba(217,240,234,0.30)" stroke-width="1"/>
       <text x="660" y="492" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">a remote vector backend</text>
-      <text x="660" y="510" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">sealed content + embeddings — or PLAINTEXT</text>
-      <text x="660" y="524" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">when the vault is hmac-only, said in the record</text>
+      <text x="660" y="510" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">sealed content + clear vector, wing, room</text>
+      <text x="660" y="524" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">hmac-only: PLAINTEXT, said in the record</text>
       <text x="660" y="538" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">quarantined rows are mirrored, never a boundary</text>
 
       <rect x="848" y="464" width="224" height="80" rx="6" fill="#04080a"/>

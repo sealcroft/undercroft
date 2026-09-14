@@ -10,7 +10,7 @@ see "License lineage" below), updated 2026-09-02.
 |---|---|
 | Palace model (wings/rooms/drawers, verbatim) | `undercroft-core` (same metadata fields, deterministic ids) |
 | `sqlite_exact` backend | `undercroft-store` (SQLite system of record) |
-| Chroma/Qdrant/pgvector server backends | `undercroft-index` — **sealed client-side** (MemPalace sent plaintext) |
+| Chroma/Qdrant/pgvector server backends | `undercroft-index` — content **sealed client-side** on a sealed vault (MemPalace sent plaintext) |
 | Embedder + identity tracking (RFC 001) | `Embedder` trait + per-vault identity enforcement (a swap is refused, not silently ranked; only hash→hash migrates automatically) |
 | Model embeddings (sentence-transformers) | four postures — `undercroft-embed-onnx` (tract, pure Rust), `undercroft-embed-ort` (ONNX Runtime, ~2.5×/forward + int8), `http` (any served model, TLS-or-loopback enforced), or caller-supplied `external:<name>@<dim>`. Models are user-supplied throughout; see [EMBEDDERS.md](https://sealcroft.com/undercroft/docs/embedders.html) |
 | File miner | `mine --mode files` |
@@ -88,7 +88,7 @@ this project, which is why the two codebases share concepts but not code
 **Security layer** (MemPalace stored everything in plaintext):
 
 - Vault isolation: per-vault SQLite databases with per-vault
-  HKDF-SHA256-derived keys (enc/mac/manifest domains) from one master key
+  HKDF-SHA256-derived keys (enc/mac/manifest/sample domains) from one master key
   (file or Argon2id passphrase).
 - Sealed-at-rest storage: XChaCha20-Poly1305 over content *and*
   embeddings *and* every derived artifact (ColBERT token matrices, PQ
@@ -225,7 +225,9 @@ this project, which is why the two codebases share concepts but not code
   reference.
 
 **Also only here:** Weaviate backend; sealed-client remote indexing (all
-five backends receive ciphertext; MemPalace uploaded plaintext); zstd
+five backends receive sealed content from a sealed vault, with the
+embeddings and wing/room labels in the clear, and an hmac-only vault's push
+is refused unless `--allow-plaintext`; MemPalace uploaded plaintext); zstd
 compress-then-encrypt; int8 embedding quantization; deterministic
 offline hash embedder as the default.
 
@@ -257,10 +259,14 @@ the bundled SQLite store and the in-memory embedding cache respectively.
   above ~2k drawers, an FTS5 BM25 prefilter (tunable via
   `UNDERCROFT_FTS_PREFILTER_MIN`, `off` to disable) that narrows the
   candidate scan without changing final scoring.
-- Remote backends receive sealed content; MemPalace uploaded plaintext. A
-  mirror is an accelerator, not a different policy: remote search takes
-  its trust floor, quarantine fence and closed vocabularies from the same
-  resolver the local path uses.
+- Remote backends receive sealed content from a sealed vault, beside the
+  drawer ids, the embeddings and the wing/room labels in the clear; an
+  hmac-only vault's push is refused unless `index push --allow-plaintext`.
+  Every candidate a mirror returns is re-loaded and HMAC-verified locally,
+  and each push appends an `egress/index-push` audit record.
+  MemPalace uploaded plaintext. A mirror is an accelerator, not a different policy:
+  remote search takes its trust floor, quarantine fence and closed
+  vocabularies from the same resolver the local path uses.
 - Benchmark numbers with the default hash embedder are not comparable to
   MemPalace's published model-based numbers — use a model posture with a
   MiniLM-class model for like-for-like conditions. Measured here, the

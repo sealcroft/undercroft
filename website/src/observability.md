@@ -1,8 +1,8 @@
 # Observability
 
 Undercroft ships an **opt-in** observability layer: structured logs, a
-Prometheus `/metrics` endpoint, and OpenTelemetry (OTLP) trace/metric
-export. It is built to preserve the project's stance:
+Prometheus `/metrics` endpoint, and OpenTelemetry (OTLP) trace export. It
+is built to preserve the project's stance:
 
 - **Off by default.** A standard build carries none of the telemetry
   dependencies and no runtime overhead — the layer only exists when you
@@ -27,7 +27,7 @@ and every signal is metadata/counts only:
 flowchart LR
     e["undercroft engine<br/><i>--features telemetry</i>"]
     e -- "UNDERCROFT_METRICS=1<br/>/metrics behind the palace bearer<br/>whenever one is declared" --> prom["Prometheus"]
-    prom --> am["Alertmanager<br/><i>PalaceTamperDetected, chain stalls,<br/>latency, engine down, 5xx, auth spikes</i>"] --> hook["webhook sink"]
+    prom --> am["Alertmanager<br/><i>PalaceTamperDetected, chain stalls,<br/>latency, engine down, 5xx, auth spikes,<br/>embed / rerank / late-interaction failures</i>"] --> hook["webhook sink"]
     e -- "UNDERCROFT_LOG_FORMAT=json<br/>stdout" --> promtail["promtail"] --> loki["Loki"]
     e -- "UNDERCROFT_OTLP_ENDPOINT<br/><i>metadata-only spans, on the policed<br/>agent, root pinned by UNDERCROFT_OTLP_CA</i>" --> tls["tempo-tls<br/><i>Caddy terminator</i>"] --> tempo["Tempo"]
     e -- "SSE /v1/vaults/{id}/stream<br/><i>bearer + assertion</i>" --> monitor["Palace Monitor<br/><i>GET /monitor</i>"]
@@ -43,9 +43,10 @@ flowchart LR
 declared by `UNDERCROFT_ORCH_METRICS_ADDR`: its serving port must be reachable
 by tenants, so a `/metrics` path there would be exposed in every real fleet.
 Loopback needs no token; any other address refuses to start without
-`UNDERCROFT_ORCH_METRICS_TOKEN`. It exports `undercroft_orch_*` counters —
-requests by route class, refused credentials by kind, rate-screen firings,
-engine-call outcomes — and **carries no tenant, vault or tenant-name label**;
+`UNDERCROFT_ORCH_METRICS_TOKEN`. It exports four `undercroft_orch_*` counters
+— requests by route class, refused credentials by kind, rate-screen firings,
+engine-call outcomes — and a request-duration histogram by route class, and
+**carries no tenant, vault or tenant-name label**;
 per-tenant figures live on the admin plane. No scrape job or alert rules ship
 for it yet.
 
@@ -139,7 +140,8 @@ verification — i.e. tamper was detected on read.
 
 ## OpenTelemetry (OTLP)
 
-Set an endpoint to export traces and metrics over OTLP/HTTP:
+Set an endpoint to export traces over OTLP/HTTP. Metrics stay on the
+Prometheus `/metrics` pull endpoint above — there is no OTLP metric push:
 
 ```bash
 # Loopback cleartext is allowed — the collector never leaves the machine.
@@ -166,9 +168,10 @@ undercroft serve-http
 | `UNDERCROFT_SERVICE_NAME` | `service.name` resource attribute (default `undercroft`). |
 | `UNDERCROFT_OTLP_HEADERS` | Optional headers for the exporter. |
 
-Spans cover the hot paths (search, save/dedup, KG writes, vault
-seal/commit). Export is synchronous and thread-based — the server itself
-stays fully synchronous, with no async runtime introduced.
+Spans cover each inbound request (a `request` root span per `/v1` request
+and per MCP method call) and the search, save/dedup and KG-write operations,
+which nest under it when a request drives them. Export is synchronous and thread-based — the server
+itself stays fully synchronous, with no async runtime introduced.
 
 ## The full stack (Grafana)
 
@@ -192,9 +195,9 @@ undercroft (telemetry) ──/metrics──▶ Prometheus ──rules──▶ A
 ```
 
 The dashboard surfaces request rate by route, search rate and p95/p50 latency,
-drawer writes (created vs deduped), audit-chain commit rate, HTTP 5xx and auth
-rejections, tamper broken out by surface, recent logs and traces, active
-alerts, and — front and centre — the **HMAC-verify-failures** stat that turns
+drawer writes by outcome (created / deduped / quarantined), audit-chain commit
+rate, HTTP 5xx and auth rejections, tamper broken out by surface, recent logs
+and traces, active alerts, and — front and centre — the **HMAC-verify-failures** stat that turns
 red the instant tamper is detected.
 
 ![The Undercroft — Palace Grafana dashboard: metrics, tamper-by-surface, active
@@ -222,8 +225,10 @@ credentials — swap in Slack/email/PagerDuty in `alertmanager/alertmanager.yml`
 A firing tamper alert links straight to the [tamper runbook](runbook.md) —
 where it happened, and how to confirm, mitigate, fix, and prevent it.
 
-Every rule is aggregated `by (instance)`, so an alert names the process that
-is slow or erroring rather than reporting that somebody, somewhere, is — and
+Every rule preserves `instance` (each aggregation keeps it in its `by (…)`
+list, and the two rules that do not aggregate carry it through), so an alert
+names the process that is slow or erroring
+rather than reporting that somebody, somewhere, is — and
 Alertmanager's inhibition (a critical silences warnings **on that instance**)
 has a label to compare on. That detail is load-bearing: a label missing from
 both sides of an `equal:` counts as equal, so scoping an inhibition by a label
@@ -283,19 +288,29 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 Frames:
 
-- `event: sample` — `{ts, drawers, rooms, wings, kg_triples, kg_entities,
-  kg_active, tunnels, chain_height, db_bytes, sealed}`. Emitted on the
-  sampler tick (default 2s, `UNDERCROFT_SAMPLE_INTERVAL_MS`), and only for
-  vaults with an active subscriber.
-- `event: drawer-saved` / `drawer-quarantined` / `drawer-deleted` /
-  `search` / `kg-triple` / `chain-commit` — discrete pings carrying vault +
-  wing/room, on every security level. `drawer-quarantined` is a write the
-  admission screen DIVERTED: it carries the intended wing/room and the
-  tier-1 signal codes (a closed vocabulary — never the flagged text, never
-  its offsets), and it is deliberately not a `drawer-saved` into a wing
-  named `quarantine-pending`. `chain-commit` carries `records`, how many
-  chain records that anchor committed. A comment heartbeat (`: ping`) every 15s keeps the
-  connection detectably alive.
+- `event: sample` — `{ts, vault, sealed, drawers, rooms, wings, kg_triples,
+  kg_entities, kg_active, tunnels, chain_height, db_bytes}`, where `wings`
+  is a list of `[name, drawers]` pairs. Emitted on the sampler tick (default
+  2s, `UNDERCROFT_SAMPLE_INTERVAL_MS`), and only for vaults with an active
+  subscriber.
+- Discrete pings as they happen, on every security level, each with its own
+  payload: `drawer-saved` `{vault, wing, room, deduped}`,
+  `drawer-quarantined` `{vault, intended_wing, room, signals}`,
+  `drawer-deleted` `{vault}`, `search` `{vault, wing, room, hits}` (the
+  search's declared scope, `null` where it declared none — never its query),
+  `kg-triple` `{vault}` and `chain-commit` `{vault, records}`.
+  `drawer-quarantined` is a write the admission screen DIVERTED: it carries
+  the intended wing/room and the tier-1 signal codes (a closed vocabulary —
+  never the flagged text, never its offsets), and it is deliberately not a
+  `drawer-saved` into a wing named `quarantine-pending`. `chain-commit`'s
+  `records` is how many chain records that anchor committed.
+- `event: hmac-fail` — `{vault, surface, id, wing, room, unverified}`, the
+  tamper signal the monitor's beacon fires on. `id`, `wing` and `room` are
+  what the failing row says about itself — it has just failed its own HMAC —
+  and `unverified` is always `true`, so the payload says so.
+
+A comment heartbeat (`: ping`) every 15s keeps the connection detectably
+alive.
 
 Each connection is served on its own thread (the request is handed off so
 the single-threaded server keeps serving), reading only from an in-process
@@ -310,7 +325,7 @@ A telemetry build also serves a self-contained pixel-art dashboard at
 http://127.0.0.1:8765/monitor
 ```
 
-![The Palace Monitor connected live: nine wings named for the conversation
+![The Palace Monitor connected live: eight wings named for the conversation
 participants of a LoCoMo-derived vault, each filling with filed drawers, an
 archivist mid-file, and gold audit-chain links stamping between wings.](images/palace-monitor-live.png)
 

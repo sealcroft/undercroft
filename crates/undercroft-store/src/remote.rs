@@ -69,15 +69,25 @@ impl VaultStore {
         format!("undercroft_{}", self.vault.id())
     }
 
-    /// Push every drawer to a remote index (sealed content + embeddings).
-    /// Returns the number of records uploaded.
+    /// Push every drawer to a remote index — its at-rest content blob, its
+    /// embedding and its wing/room labels. Returns the number of records
+    /// uploaded.
     ///
-    /// **Chain-audited, like every other egress.** This moves the whole
-    /// corpus out of the vault to a third party — and on an hmac-only
-    /// vault the pushed blob IS the plaintext, as the comment below has
-    /// always said — while `docs/THREAT_MODEL.md` states that the egress
-    /// record is "not behind a declaration" and the CHANGELOG says exports
-    /// are audited "unconditionally, on every surface". Both were false
+    /// **"Sealed content" holds only on a sealed vault.** There the blob is
+    /// AEAD ciphertext; on an hmac-only vault it IS the plaintext, and the
+    /// push is refused unless the caller passes [`PlaintextPush::Allow`]
+    /// (`undercroft index push --allow-plaintext`). The embedding leaves
+    /// decrypted on either level. Nothing the mirror later offers is trusted:
+    /// [`search_with_index`](VaultStore::search_with_index) re-loads every
+    /// candidate from this vault and verifies its HMAC.
+    ///
+    /// **Chain-audited, like every other egress** — one `egress/index-push`
+    /// record per push, and one for a push that failed after any batch
+    /// landed. This moves the whole corpus out of the vault to a third party
+    /// — and on an hmac-only vault the pushed blob IS the plaintext, as the
+    /// comment below has always said — while `docs/THREAT_MODEL.md` states
+    /// that the egress record is "not behind a declaration" and the CHANGELOG
+    /// says exports are audited "unconditionally, on every surface". Both were false
     /// here: this was the largest content egress in the tree and it left no
     /// chain record at all, only an `index_pushed_embedder` row in `meta`.
     /// The audit happens INSIDE this function rather than at the call site,
@@ -953,7 +963,7 @@ mod tests {
     ///
     /// `index push` hands the whole corpus to a third party, and
     /// `VectorIndex::delete` — declared on the trait and implemented by all
-    /// five backends — had **zero callers**. So `forget --prove` minted a
+    /// five backends — had **zero callers**. So `forget --sign <identity>` minted a
     /// signed attestation of destruction while the at-rest blob sat on
     /// someone else's Qdrant, and the `egress/index-push` record made the
     /// pair explicit: the chain said the corpus left on date X, and the

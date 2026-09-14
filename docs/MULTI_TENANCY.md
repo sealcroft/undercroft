@@ -41,7 +41,9 @@ self-contained, auditable memory store you can run by hand.
 
 The multi-tenant REST layer lives in the same process and behind the same
 palace bearer as `serve-http`, and adds per-vault enforcement plus vault
-lifecycle over HTTP. Routes (see `tenant.rs`):
+lifecycle over HTTP. Selected routes (see `tenant.rs`); the complete list,
+counted against `route()` in both directions, is in
+[remote-server.md](remote-server.md) and §10 of [AGENTS.md](AGENTS.md):
 
 | Method + path | Purpose |
 |---|---|
@@ -60,7 +62,7 @@ lifecycle over HTTP. Routes (see `tenant.rs`):
 | `POST /v1/vaults/{id}/refine` | LLM distillation of a drawer into KG facts (`UNDERCROFT_LLM_*`; nothing is contacted unless a URL is set) |
 | `GET`/`POST /v1/vaults/{id}/trust` · `.../admission` · `.../retention` · `POST .../retention/sweep` · `POST .../forget` · `POST .../verify-forgetting` | operator surfaces (never MCP): wing trust, admission review, retention policy + sweep, attested forgetting — and, since 1.1.0, **checking** an attestation (a READ; typed verdict, 409 + `class: "integrity"` for a document that does not describe this vault) |
 | `POST /v1/vaults/{id}/verify` · `POST .../anchor` · `POST .../rotate` | integrity report (a read) · tighten the manifest rollback anchor onto the committed chain head (a **write**: a cached handle never re-opens, so nothing else closes that window) · key rotation (sole-writer contract — 409 for the vault the same process serves over `/mcp`) |
-| `GET /v1/vaults/{id}/export` · `POST .../import` | lossless migration pair. Export is **chain-audited unconditionally** (one `egress/export` record binding surface, counts and the export's own manifest digest); import re-stamps `added_by` and screens every record | **Bounded at 256 MiB (O136):** the control plane reads the engine's export reply through the one body ceiling, so a tenant whose export exceeds it cannot be migrated or imported over `/v1` — a typed 413 naming the tenant, its size and the remedy. Migrate such a vault directly between hosts with `undercroft export`/`import`, then re-point it with `PATCH /admin/tenants/{id}`. The ceiling is not raised: it is what stops an unbounded reply, and raising it would trade a clean refusal for an OOM on the control plane.
+| `GET /v1/vaults/{id}/export` · `POST .../import` | lossless migration pair. Export is **chain-audited unconditionally** (one `egress/export` record binding surface, counts and the export's own manifest digest); import re-stamps `added_by` and screens every record. **Bounded at 256 MiB (O136):** the control plane reads the engine's export reply through the one body ceiling, so a tenant whose export exceeds it cannot be migrated or imported over `/v1` — a typed 413 naming the tenant, its size and the remedy. Migrate such a vault directly between hosts with `undercroft export`/`import`, then re-point it with `PATCH /admin/tenants/{id}`. The ceiling is not raised: it is what stops an unbounded reply, and raising it would trade a clean refusal for an OOM on the control plane. |
 | `GET /ui` | vault admin console (static page, every build) |
 
 Stores are opened on demand and cached in a `HashMap` — the `tiny_http`
@@ -192,8 +194,9 @@ The reference proposes `[0x01][nonce][ciphertext]`. Undercroft's
 `undercroft-vault` layer is stronger:
 
 - **Per-vault keys via HKDF** from the master key (`keys.rs`) — each vault
-  derives its own content, MAC, and fingerprint keys; keys live in
-  `SecretKey` (zeroize-on-drop, never `Debug`-printed).
+  derives its own encryption, MAC, manifest and sample-rank keys (a content
+  fingerprint is a MAC tag under its own domain, not a separate key); keys
+  live in `SecretKey` (zeroize-on-drop, never `Debug`-printed).
 - **XChaCha20-Poly1305** content sealing plus an **HMAC-SHA256 integrity
   tag** per record (`seal.rs`).
 - **AAD binds the vault id** into every sealing operation, so ciphertext
@@ -297,9 +300,10 @@ arm means an ordinary hash vault was reachable. `1e39` is an
 unremarkable finite JSON number, and `1e39_f64 as f32` is infinity.
 And **an external save is screened at all**; it previously
 reached the raw writer with no screen, which was the third of the three
-admission bypasses on this surface. Same recorded gap as the dedup arm:
-`upsert_external` returns only "was the id new", so a diverted external
-save is contained but answers 200 with `quarantined: false`.
+admission bypasses on this surface. It reports the verdict too (1.0.0,
+ROADMAP R5), as the dedup arm does: `upsert_external` returns the write's
+landing rather than "was the id new", so a diverted external save answers
+202 with `quarantined: true` and the id it landed under.
 
 ## Cross-vault isolation
 
@@ -382,8 +386,9 @@ sequenceDiagram
     participant O as orchestrator
     participant E as engine /v1
     T->>O: POST /t/search — Bearer tenant-token
+    O->>O: a read replica refuses anything but GET or search
     O->>O: token → HMAC → tenant row (vault, instance)
-    O->>O: per-tenant rate screen — a read replica refuses anything but GET or search
+    O->>O: per-tenant rate screen
     O->>O: subpath allowlist (vault root unroutable)
     O->>O: unseal instance creds, mint X-Vault-Assertion(vault)
     O->>E: POST /v1/vaults/tenant-a/search — engine bearer + assertion
@@ -411,7 +416,7 @@ sequenceDiagram
     D-->>O: {imported: n, quarantined: q}
     O->>D: GET /v1/vaults/{v}/stats (what the destination HOLDS)
     O->>S: GET /v1/vaults/{v}/stats + history (what changed during the export)
-    alt source quiet, export matches the snapshot, destination holds it, q == 0
+    alt source quiet, export matches the snapshot, destination holds it, q == 0 or keep_source
         O->>O: flip tenant→instance mapping (compare-and-set)
         O->>S: DELETE /v1/vaults/{v} (unless keep_source, and only if still quiet)
         O-->>A: {records, source_deleted, verified}
@@ -430,14 +435,16 @@ sequenceDiagram
 | `POST/GET /admin/instances`, `DELETE /admin/instances/{name}`, `GET .../{name}/health` | admin | instance registry (+ live engine probe); removal refused while tenants map to it |
 | `POST/GET /admin/tenants`, `DELETE /admin/tenants/{id}` | admin | tenant lifecycle: pick instance (least-loaded default) → create engine vault → record mapping → **return the token once** |
 | `GET /admin/tenants/{id}/stats` | admin | metadata-only stats relay (counts, sizes, chain head) via the stored engine creds — content stays behind the tenant's own token |
+| `POST /admin/tenants/{id}/rotate` | admin | mint a fresh tenant token and revoke the old one in the same statement; the new token appears once, in the response |
 | `POST /admin/tenants/{id}/migrate` | admin | live migration (below) |
 | `PATCH /admin/tenants/{id}` | admin | re-point a tenant at an instance that **already holds its vault**, moving no data — the completion of a by-hand move. The destination is asked whether it holds the vault and the re-point is refused if it cannot answer, because the mapping is what every tenant request follows |
-| `GET`/`POST /admin/tenants/{id}/ops/<subpath>` | admin | the **operator plane**: attested forgetting **and the verification of what it mints**, retention policy + sweep, wing trust, admission review, verify, anchor tightening, supersession receipts — forwarded to the tenant's engine over a closed vocabulary (`OPS_ROUTES` in `proxy.rs`). Deliberately admin-only: a tenant token must not rule on the admission queue that screened its own writes, nor assign the trust its wings are floored by. `POST …/ops/verify-forgetting` arrived in 1.1.0 (O14) and closes the half `forget` had been missing: a fleet could produce a right-to-erasure receipt through this plane and had no door anywhere to verify one. `POST …/ops/authority` arrived in 1.2.0 (O67) for the same reason one capability over: the golden-values tier is `OPERATOR_ONLY` on the engine, so the data plane correctly refuses it — and it was on no ops route either, which left it drivable from **no door at all** in a fleet |
-| `ANY /t/<subpath>` | data | tenant-token-routed proxy onto `/v1/vaults/{vault}/<subpath>`, over a closed allowlist of whole shapes (`data_subpath_ok`): drawers, one drawer, search, stats, stats/history, export, import — and, since 1.2.0 (O67), the tenant's own `taxonomy` and knowledge-graph READS (`kg/stats`, `kg/entities`, `kg/query`, `kg/timeline`, `kg/receipts`, `kg/canonical/{key}`). Those seven were reachable from NEITHER plane and answered a bare `unknown route`, which reads as a capability the product does not have |
+| `GET`/`POST /admin/tenants/{id}/ops/<subpath>` | admin | the **operator plane**: attested forgetting **and the verification of what it mints**, retention policy + sweep, wing trust, admission review, verify **and `repair`**, anchor tightening, supersession receipts, the authority tier, and backups (create, list, and a restore the engine answers with 409 while the vault is in use) — forwarded to the tenant's engine over a closed vocabulary (`OPS_ROUTES` in `proxy.rs`). Deliberately admin-only: a tenant token must not rule on the admission queue that screened its own writes, nor assign the trust its wings are floored by. `POST …/ops/verify-forgetting` arrived in 1.1.0 (O14) and closes the half `forget` had been missing: a fleet could produce a right-to-erasure receipt through this plane and had no door anywhere to verify one. `POST …/ops/authority` arrived in 1.2.0 (O67) for the same reason one capability over: the golden-values tier is `OPERATOR_ONLY` on the engine, so the data plane correctly refuses it — and it was on no ops route either, which left it drivable from **no door at all** in a fleet |
+| `ANY /t/<subpath>` | data | tenant-token-routed proxy onto `/v1/vaults/{vault}/<subpath>`, over a closed allowlist of whole shapes (`data_subpath_ok`): drawers, one drawer, search, stats, stats/history, export, import — and, since 1.2.0 (O67), the tenant's own `taxonomy` and knowledge-graph READS (`kg/stats`, `kg/entities`, `kg/query`, `kg/timeline`, `kg/receipts`, `kg/canonical/{key}`). Those seven were reachable from NEITHER plane and answered a bare `unknown route`, which reads as a capability the product does not have. Since 1.2.0 (O68) it also carries the further capabilities the engine already exposes to agents over MCP: `kg/rel`, `index/status`, `dedup`, `tunnels` (+ `{tid}`, `{tid}/drawers`), `diary` (+ `agents`), `wake-up`, `closets` and `hallways`; `drawers` carries the filtered `DELETE …?source=` and one drawer carries `check-duplicate` |
 
 The admin plane sits behind `UNDERCROFT_ORCH_ADMIN_TOKEN`; every auth
 failure is a uniform 401. The CLI (`instance-add`, `tenant-create`,
-`migrate`, …) mirrors the admin plane for scripted use, plus `keygen`.
+`migrate`, `tenant-repoint`, …) mirrors the admin plane for scripted use,
+plus `keygen`.
 
 **Observe the control plane** (ROADMAP O20, `--features telemetry` builds):
 
@@ -476,10 +483,10 @@ engine:
 undercroft-orchestrator config check    # or: config-check --verbose
 ```
 
-It runs the six checked `UNDERCROFT_ORCH_*` declarations this binary reads
-through the same resolvers `serve` runs — the sealing key, the admin bearer,
-the metrics listener and its token, the rate limit and the engine-hop CA pin;
-`_ADDR` and `_DB` are opaque payload validated by their consumers — and opens
+It runs the seven checked `UNDERCROFT_ORCH_*` declarations this binary reads
+through the same resolvers `serve` runs — the listen address, the sealing key,
+the admin bearer, the metrics listener and its token, the rate limit and the
+engine-hop CA pin; `_DB` is opaque payload validated by its consumer — and opens
 no state database and binds no
 port. Exit 1 means this environment would refuse to start.
 
@@ -516,8 +523,9 @@ hardened the way the engine hardens its own secrets:
   vault AAD both carry the vault id.
 - The data-plane allowlist keeps **operator** capabilities off a tenant
   token too, and that is now stated rather than incidental: forgetting,
-  retention, trust, admission and verify live on the admin plane's
-  `ops/` prefix. The one deletion a tenant token reaches
+  retention, trust, admission, verify and repair, anchor tightening,
+  backups and the authority tier live on the admin plane's `ops/` prefix.
+  The one deletion a tenant token reaches
   (`DELETE /t/…/drawers/{id}`) produces a bare tombstone, so an erasure
   request should be answered through `ops/forget`, which returns a
   chain-attested receipt — and checked through `ops/verify-forgetting`,
@@ -557,6 +565,17 @@ another tenant's vault, a replica refusing data-plane writes while still
 serving `POST search`, and the query string actually arriving at the
 engine.
 
+**While an HTTP migration runs, the whole control plane waits for it**
+(ROADMAP O164). The orchestrator serves `/t/*`, `/admin/*` and `/healthz`
+from one request loop, and `POST /admin/tenants/{id}/migrate` runs inline in
+that loop — the export, the import, the snapshot checks and, unless
+`keep_source`, the source delete. Every tenant request, every other admin
+request and every health check queues behind it for the migration's whole
+duration, so a load balancer probing `/healthz` can take the control plane
+for down. `undercroft-orchestrator migrate` runs the same steps in its own
+process and stalls no listener, and a read replica keeps serving `/t/*`
+reads from its own process.
+
 ### Deploying the orchestrator (hardening)
 
 - **Bind loopback, terminate TLS in front.** The orchestrator (like the
@@ -571,9 +590,10 @@ engine.
   rule the embedder, the LLM clients and the index backends obey. A
   fleet registered at `http://engine.internal:8080` is refused; declare
   a self-signed root with `UNDERCROFT_ORCH_ENGINE_CA` if you terminate
-  TLS yourself. Known residue, recorded in ROADMAP: the variable is read
-  per outbound call rather than at startup, so a bad pin binds the port
-  and fails per request instead of refusing to start.
+  TLS yourself. The pin is resolved and validated once, before any
+  subcommand serves or sends anything, so a bad pin refuses to start
+  rather than binding the port and failing per request, and
+  `undercroft-orchestrator config check` reports it beforehand.
   Everything auth-bearing (tenant tokens, engine bearers, assertions)
   must only ever transit inside TLS or on loopback.
 - **Rate limiting** (`UNDERCROFT_ORCH_RATE_LIMIT`, requests/minute per

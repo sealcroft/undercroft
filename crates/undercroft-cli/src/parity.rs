@@ -89,7 +89,7 @@ pub enum ConfigClass {
 /// as *"no parse to run; the consumer validates it"* (it prints *"declared
 /// Opaque: no parse exists…"* now) — and that message was
 /// indistinguishable between a variable that genuinely has nothing to parse
-/// (a path, a URL, a bearer, a model name) and one whose parse somebody
+/// (a model, a tokenizer, an API key) and one whose parse somebody
 /// forgot to wire up. The `Protects` half of that gap was closed by
 /// round-four #9's both-directions gate; the `Tunes` half was not, and O48
 /// widened it by teaching eleven `Tunes` resolvers to validate values the

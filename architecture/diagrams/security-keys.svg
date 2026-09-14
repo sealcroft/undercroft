@@ -65,20 +65,22 @@
 <text x="42" y="306" class="f l ink">What every sealed blob authenticates alongside itself</text>
 <text x="42" y="326" class="f s dim">The AEAD's associated data is not decoration — it is what makes a ciphertext meaningful only in the exact position it was written.</text>
 
-<rect x="42" y="338" width="404" height="100" rx="7" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="1.4"/>
+<rect x="42" y="338" width="404" height="110" rx="7" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="1.4"/>
 <text x="58" y="358" class="f b" fill="var(--d-teal-ink,#0d6b62)">AAD = vault id + record id + domain</text>
-<text x="58" y="375" class="f mono dim">&lt;drawer id&gt;</text>
-<text x="200" y="375" class="f s dim">content</text>
-<text x="58" y="390" class="f mono dim">&lt;drawer id&gt;/emb</text>
-<text x="200" y="390" class="f s dim">embedding</text>
-<text x="58" y="405" class="f mono dim">&lt;drawer id&gt;/tok</text>
-<text x="200" y="405" class="f s dim">ColBERT token matrix</text>
-<text x="58" y="420" class="f mono dim">fde/&lt;drawer id&gt;/tok</text>
-<text x="200" y="420" class="f s dim">FDE row</text>
-<text x="58" y="435" class="f mono dim">pqrow/…/pq · pq/…</text>
-<text x="200" y="435" class="f s dim">PQ rows, pages, codebooks — index ids, not drawer ids</text>
+<text x="58" y="373" class="f mono dim">&lt;drawer id&gt;</text>
+<text x="200" y="373" class="f s dim">content</text>
+<text x="58" y="386" class="f mono dim">&lt;drawer id&gt;/emb</text>
+<text x="200" y="386" class="f s dim">embedding</text>
+<text x="58" y="399" class="f mono dim">&lt;drawer id&gt;/tok</text>
+<text x="200" y="399" class="f s dim">ColBERT token matrix</text>
+<text x="58" y="412" class="f mono dim">fde/&lt;drawer id&gt;/tok</text>
+<text x="200" y="412" class="f s dim">FDE row</text>
+<text x="58" y="425" class="f mono dim">pqrow/…/pq · pq/…</text>
+<text x="200" y="425" class="f s dim">PQ rows, pages, codebooks — index ids, not drawer ids</text>
+<text x="58" y="438" class="f mono dim">kg/… · kgterms/…</text>
+<text x="200" y="438" class="f s dim">fact objects and terms · kgname/… names</text>
 
-<rect x="458" y="338" width="400" height="100" rx="7" fill="var(--d-red-bg,#fdf2f1)" stroke="var(--d-red,#b5453a)" stroke-width="1.4"/>
+<rect x="458" y="338" width="400" height="110" rx="7" fill="var(--d-red-bg,#fdf2f1)" stroke="var(--d-red,#b5453a)" stroke-width="1.4"/>
 <text x="474" y="358" class="f b" fill="var(--d-red-ink,#993a30)">so all of these FAIL, not merely return nothing</text>
 <text x="474" y="379" class="f s dim">A blob copied from vault A into vault B — the id differs.</text>
 <text x="474" y="396" class="f s dim">A row's ciphertext moved onto another row — the record id differs.</text>
@@ -111,6 +113,6 @@
 <text x="42" y="698" class="f s dim">operator hosting the engine, is inside the boundary — no at-rest scheme changes that, and claiming otherwise would be dishonest.</text>
 <text x="42" y="719" class="f s dim">What it does buy, precisely: a stolen disk, a leaked backup, a snapshot, a decommissioned drive, or a copied database file yields ciphertext and</text>
 <text x="42" y="734" class="f s dim">the metadata inventory — never the words.</text>
-<text x="42" y="755" class="f s dim">The remote index tier is treated as <tspan class="f s" fill="var(--d-red-ink,#993a30)">untrusted</tspan> on the same reasoning: only sealed payloads are pushed to it, and anything it returns is</text>
-<text x="42" y="770" class="f s dim">re-verified locally against the vault's own HMAC before a single byte reaches the caller. An accelerator is not a source of truth.</text>
+<text x="42" y="755" class="f s dim">The remote index tier is <tspan class="f s" fill="var(--d-red-ink,#993a30)">untrusted</tspan>: a sealed vault pushes ciphertext plus embeddings and wing/room labels it reads in clear; hmac-only</text>
+<text x="42" y="770" class="f s dim">plaintext is refused without <tspan class="f mono">--allow-plaintext</tspan>. Every push is chain-recorded; results are re-verified against the vault's HMAC before use.</text>
 </svg>

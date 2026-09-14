@@ -514,7 +514,7 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
     <div class="term">
       <div class="term-bar">
         <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-        <span class="term-title">undercroft — sealed vault · ~/.undercroft</span>
+        <span class="term-title">undercroft — sealed vault · ~/.undercroft · output abridged</span>
       </div>
       <div class="term-body" id="term"></div>
       <div class="chip-row" id="chips" role="tablist" aria-label="demo scenes"></div>
@@ -643,7 +643,8 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
     <div class="mon-how">
       <div class="mon-note">
         <h3>Alertmanager-routed</h3>
-        <p>Six rules ship out of the box — tamper, chain-stalled, target-down, latency, 5xx, auth.
+        <p>Nine rules ship out of the box — tamper, chain-stalled, target-down, latency, 5xx, auth,
+           and one for each model role that degrades silently (embed, rerank, late interaction).
            Route them to Slack, email, or PagerDuty; the demo stack logs every delivery.</p>
       </div>
       <div class="mon-note">
@@ -741,7 +742,7 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
         <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
         <span class="term-title">reproduce — benchmarks/RESULTS.md has the exact recipe</span>
       </div>
-      <div class="term-body"><span class="t-prompt">❯ </span><span class="t-cmd">docker compose run --rm onnx-build</span>   <span class="t-out"># model rows: build with --features onnx</span>
+      <div class="term-body"><span class="t-prompt">❯ </span><span class="t-cmd">cargo build --release -p undercroft-bench --features onnx</span>   <span class="t-out"># model rows, inside the builder image</span>
 <span class="t-prompt">❯ </span><span class="t-cmd">undercroft-bench longmemeval longmemeval_s_cleaned.json --k 5</span>
 <span class="t-out">LongMemEval-S · 500 questions · session R@5 95.0% (hash, zero model)</span>
 <span class="t-prompt">❯ </span><span class="t-cmd">undercroft-bench locomo locomo10.json --k 10</span>
@@ -827,7 +828,9 @@ footer a:hover { text-decoration: underline; text-underline-offset: 4px; }
       </div>
       <div class="feat" data-glyph="V">
         <h3>Untrusted accelerators</h3>
-        <p>Qdrant, Chroma, pgvector, Milvus, Weaviate — fed only sealed bytes. Their answers are
+        <p>Qdrant, Chroma, pgvector, Milvus, Weaviate — fed sealed content, each drawer's
+           embedding and its wing and room names; an hmac-only vault's plaintext goes only if
+           you pass <code>--allow-plaintext</code>. Their answers are
            re-verified against local HMACs before you ever see them, then filtered by the
            same retrieval policy the local path uses — trust floor, quarantine fence, closed
            vocabularies — off each candidate's verified metadata. An index push is not a
@@ -1063,11 +1066,11 @@ document.body.classList.add('js');
       {cmd: 'undercroft verify'},
       {out: [['t-out','records checked: 1284'],['t-out','hmac failures:   0'],
              ['t-out','audit chain:     ok'],['t-ok','VERIFY OK']]},
-      {cmd: "sqlite3 vault.db \"UPDATE drawers SET content='forged'\"   # an attacker edits the disk"},
+      {cmd: "sqlite3 vault.db \"UPDATE drawers SET content='forged' WHERE id LIKE '5a2fc91d%'\"   # an attacker edits the disk"},
       {out: []},
       {cmd: 'undercroft verify'},
       {out: [['t-out','records checked: 1284'],['t-out','hmac failures:   1'],
-             ['t-bad','  TAMPERED: 5a2fc91d'],['t-out','audit chain:     BROKEN'],
+             ['t-bad','  TAMPERED: 5a2fc91d'],['t-out','audit chain:     ok'],
              ['t-bad','VERIFY FAILED  (exit 2)']]}
     ]
   };
@@ -1216,13 +1219,13 @@ document.body.classList.add('js');
     { t: 'Initialize', p: 'A palace holds isolated vaults — each with its own database and its own HKDF-derived keys. Sealed is the default: content and embeddings encrypted at rest.',
       c: 'undercroft init\n# Palace initialized at ~/.undercroft\n# Created vault \'default\' (level: sealed)\nundercroft vault create work          # more isolated namespaces',
       l: [['docs/security.html','security model →']] },
-    { t: 'Feed it', p: 'Verbatim in, always. One memory, a directory of documents, a folder of agent transcripts, or a JSONL export — ingest is idempotent and batched in one transaction.',
+    { t: 'Feed it', p: 'Verbatim in, always. One memory, a directory of documents, a folder of agent transcripts, or a JSONL export — mining, sweeps and imports are idempotent and commit in batches of 256, one transaction each, while each remember call files a new drawer (collapsing repeats is dedup’s job).',
       c: 'undercroft remember "We chose GraphQL over REST" --wing backend --room decisions\nundercroft mine ~/notes               # documents → chunked drawers\nundercroft sweep ~/.claude/projects   # transcripts → one drawer per message\nundercroft import backup.jsonl',
       l: [['docs/agents.html','agents guide: ingestion →']] },
     { t: 'Ask it', p: 'Hybrid semantic + lexical + recency search returns your exact words (one typo tolerated). wake-up loads a session’s worth of identity and recent essentials.',
       c: 'undercroft search "why did we pick graphql"\nundercroft wake-up                    # L0 identity + L1 essential story\nundercroft kg query alice --as-of 2024-06-15',
       l: [['docs/retrieval.html','retrieval & scaling →']] },
-    { t: 'Wire an agent', p: 'The MCP stdio server exposes 38 tools — memory, taxonomy, tunnels and the knowledge graph. Operator capabilities (admission review, wing trust, retention, forgetting, rotation, and placing a fact on the authority tier) are deliberately absent: an agent must not rule on the queue that contains it. Hooks print ready-to-paste auto-save settings so every session files its own memories.',
+    { t: 'Wire an agent', p: 'The MCP stdio server exposes 38 tools — memory, taxonomy, tunnels and the knowledge graph. Operator capabilities (admission review, wing trust, retention, forgetting, key rotation, anchor tightening, placing a fact on the authority tier, and export, import and refine) are deliberately absent: an agent must not rule on the queue that contains it. Hooks print ready-to-paste auto-save settings so every session files its own memories.',
       c: '# claude_desktop_config.json / .mcp.json\n{ "mcpServers": { "undercroft": {\n    "command": "undercroft", "args": ["serve-mcp"] } } }\n\nundercroft hooks claude-code          # auto-save hook snippet',
       l: [['docs/integrations.html','integrations →'],['docs/agents.html','agents guide →']] },
     { t: 'Share it', p: 'One server, a whole team — or a whole product. Bearer beyond loopback, per-vault assertions (enforced on /mcp as well as /v1), a process-wide read-only posture, and an orchestrator for fleets.',

@@ -3,7 +3,7 @@
 # Multi-stage build:
 #   * builder — compiles the workspace with the full test toolchain
 #   * test    — runs unit + integration tests (docker build --target test)
-#   * runtime — minimal image with just the `undercroft` binary
+#   * runtime — minimal image with the `undercroft` and `undercroft-orchestrator` binaries
 #
 # Everything persists under /data (palace: vaults, keys, identity), so
 # mount a volume there:

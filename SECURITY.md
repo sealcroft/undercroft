@@ -54,9 +54,11 @@ or manifest that fails its HMAC surfaces immediately: `undercroft verify` names
 the record, and (on a `--features telemetry` build) the
 `undercroft_hmac_verify_failures_total` metric, the live event stream, and the
 Palace Monitor beacon all fire on the same real signal — never synthetically.
-`deploy/observability/` ships a `PalaceTamperDetected` alert, and
-`deploy/observability/RUNBOOK.md` (published at `/docs/runbook.html`) covers
-how to confirm, mitigate, fix, and prevent it.
+`deploy/observability/` ships a `PalaceTamperDetected` alert, and the
+[tamper runbook](https://sealcroft.com/undercroft/docs/runbook.html) — built
+from `website/src/runbook.md`, with `deploy/observability/RUNBOOK.md` as its
+operator quick-reference — covers how to confirm, mitigate, fix, and prevent
+it.
 
 Details are documented in `crates/undercroft-vault/src/lib.rs` and the
 [security model](https://sealcroft.com/undercroft/docs/security.html);

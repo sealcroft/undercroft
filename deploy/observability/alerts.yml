@@ -3,7 +3,9 @@
 # The headline rule is PalaceTamperDetected: any HMAC-verify failure means a
 # record, KG triple, tunnel, or vault manifest failed its integrity tag on
 # read — i.e. on-disk tampering was caught. The `surface` label says WHERE.
-# See RUNBOOK.md (published at /docs/runbook.html) for how to respond.
+# See RUNBOOK.md (the operator quick-reference) for how to respond; the full
+# runbook the alerts' runbook_url links to is website/src/runbook.md,
+# published at /docs/runbook.html.
 #
 # **Every rule below preserves `instance`, and that is load-bearing rather
 # than cosmetic.** `alertmanager.yml` inhibits warnings while a critical is
@@ -12,9 +14,9 @@
 # expression emits does not scope the inhibition — it makes it global, and
 # one tamper alert anywhere silences every warning fleet-wide. A bare
 # `sum(...)` drops `instance` along with everything else, which is how five
-# of these six rules came to emit no shared label at all. Aggregate `by
-# (instance)`, and check any new rule against `alerts_test.yml`, which
-# asserts the exact label set each one produces.
+# of the six rules this file then held came to emit no shared label at all.
+# Keep `instance` in every aggregation, and check any new rule against
+# `alerts_test.yml`, which asserts the exact label set each one produces.
 #
 # The per-instance form is also the more useful alert: it names the process
 # that is slow or erroring instead of reporting that somebody, somewhere, is.
@@ -143,7 +145,8 @@ groups:
             The ColBERT encoder degraded at least one {{ $labels.side }}-side
             encode to an empty matrix in the last 10m. A doc-side failure
             leaves that drawer with no token matrix at rest — re-encode with
-            `undercroft repair`; a query-side failure silently retired the
+            `undercroft repair --tokens` (UNDERCROFT_RERANKER=colbert or
+            colbert-ort; CLI only); a query-side failure silently retired the
             late stage for those searches.
 
       - alert: AuthRejectionsSpike

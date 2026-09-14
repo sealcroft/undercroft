@@ -1,7 +1,12 @@
-# On every version tag: build prebuilt binaries for the four desktop/server
-# targets and attach them to the GitHub release, and publish the runtime
-# container image to GHCR. Default cargo features only — offline, zero
-# telemetry, exactly what `docker build` produces.
+# On every version tag: build prebuilt binaries for five targets (linux
+# x86_64/arm64, macOS Intel/Apple Silicon, windows) and attach them to the
+# GitHub release, and publish the runtime container image to GHCR as one
+# multi-arch manifest. Those default artifacts carry default cargo features
+# only — offline, zero telemetry, exactly what `docker build` produces. The
+# `ort` posture ships beside them from the same tag: an `-ort` binary per
+# target (`--features onnx,ort`, job `binaries-ort`) and a `:tag-ort`
+# multi-arch image (`docker-ort` per arch, merged by `manifest-ort`), the
+# binary and each per-arch image smoke-probed for the feature.
 name: release
 on:
   push:

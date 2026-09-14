@@ -318,12 +318,22 @@ mod tests {
     /// written from a prediction is not verification, so this resolves to
     /// one of three NAMED outcomes and prints what it saw:
     ///
-    /// * a panic — the predicted behaviour, PASS, and ROADMAP O150 stands;
-    /// * a typed `Err` routed to the counted degrade — PASS, and O150 must
-    ///   be RETIRED, which is why this prints loudly;
-    /// * `Ok` — FAIL, because a silently wrong uncounted vector lands in the
-    ///   corpus and joins the codebook training draw, which is strictly the
-    ///   worst of the three.
+    /// * a panic carrying the pinned bounds message, with nothing counted —
+    ///   PASS. Observed on tract 0.22.3, and ROADMAP O150 stands;
+    /// * a return with exactly one counted failure and the zero vector — an
+    ///   inference error routed to the counted degrade — PASS as well, and
+    ///   that is the outcome O150's fix produces;
+    /// * a return with any other count or any other vector — FAIL: it breaks
+    ///   the degrade's contract, and with nothing counted it is a silently
+    ///   wrong vector landing in the corpus and joining the codebook training
+    ///   draw, which is strictly the worst of the three.
+    ///
+    /// **The second outcome is not an alarm.** Its `println!` is captured for
+    /// a passing test — cargo shows a passing test's stdout only under
+    /// `--nocapture` or `--show-output`, and the `onnx-build` leg passes
+    /// neither — so landing O150's boundary would change what this test means
+    /// with nothing visible. O150's unit must make that arm FAIL first,
+    /// observe the failure, and only then re-pin it (ROADMAP O150, Gate).
     ///
     /// Depends on `[profile.release]` carrying no `panic = "abort"`.
     #[test]
@@ -373,7 +383,7 @@ mod tests {
                 println!("ROUTE-R onnx: tract returned a value, {counted} counted failure(s)");
                 assert_eq!(
                     counted, 1,
-                    "tract did not panic, so the out-of-table id MUST have reached the counted degrade — it returned {v:?} with {counted} counted. If this is a typed Err routed to the degrade, ROADMAP O150 is wrong and must be RETIRED; if it is Ok, a silently wrong uncounted vector just landed."
+                    "tract did not panic, and the out-of-table id was not counted exactly once — it returned {v:?} with {counted} counted. 0 means inference returned Ok and a silently wrong uncounted vector just landed; 2 or more means one call was counted more than once. This fires only when the count is not 1: a typed Err routed to the degrade counts 1 and PASSES here, so O150's retirement is not signalled by this assert (ROADMAP O150)."
                 );
                 assert_eq!(
                     v,

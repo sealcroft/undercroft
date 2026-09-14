@@ -1457,8 +1457,8 @@ mod tests {
     fn pg_table_name_sanitized() {
         // Ensured indirectly: names map to a fixed alphabet.
         // (Construction requires a live server; only the pure helpers are
-        // unit-tested. Live-server coverage is in tests/backends.rs, gated
-        // on the backend URL variables the compose suite sets.)
+        // unit-tested. Live-server coverage is `tests/e2e-backends.sh`, run
+        // by the `backends-e2e` compose service.)
         //
         // This calls the PRODUCTION function. It used to call a duplicate
         // of the body kept in this test module, which meant the assertion

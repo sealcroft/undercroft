@@ -11,7 +11,7 @@ sequenceDiagram
     D-->>O: {imported: n, quarantined: q}
     O->>D: GET /v1/vaults/{v}/stats (what the destination HOLDS)
     O->>S: GET /v1/vaults/{v}/stats + history (what changed during the export)
-    alt source quiet, export matches the snapshot, destination holds it, q == 0
+    alt source quiet, export matches the snapshot, destination holds it, q == 0 or keep_source
         O->>O: flip tenant→instance mapping (compare-and-set)
         O->>S: DELETE /v1/vaults/{v} (unless keep_source, and only if still quiet)
         O-->>A: {records, source_deleted, verified}

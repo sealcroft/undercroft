@@ -40,10 +40,11 @@ class Handler(BaseHTTPRequestHandler):
             ann = a.get("annotations", {})
             sev = labels.get("severity", "?")
             name = labels.get("alertname", "?")
-            surface = labels.get("surface")
-            vault = labels.get("vault")
+            # The labels the rules actually emit: `instance` on every rule,
+            # `surface` on the tamper alert, `side` on the late-interaction
+            # one. There is no `vault` label anywhere (see RUNBOOK.md).
             where = "".join(
-                f" {k}={v}" for k, v in (("surface", surface), ("vault", vault)) if v
+                f" {k}={labels[k]}" for k in ("instance", "surface", "side") if labels.get(k)
             )
             log(f"[alert-sink] {a.get('status', '?').upper():8} "
                 f"[{sev}] {name}{where} :: {ann.get('summary', '')}")

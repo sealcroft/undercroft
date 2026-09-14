@@ -3423,12 +3423,16 @@ fn mutates(method: &str, segs: &[&str]) -> bool {
 /// queue and both rulings stay on `/v1`.
 ///
 /// Two residues, both deliberate:
-/// * `GET …/export` still carries quarantined rows. Excluding them here
-///   would be worse than the leak: `migrate_tenant` copies then verifies by
-///   COUNT and deletes the source, so an export that quietly dropped rows
-///   would destroy the only copy of them. Whether quarantine travels
-///   through an export at all is ROADMAP A16, and it needs a decision, not
-///   a patch smuggled in beside this one.
+/// * `GET …/export` still carries quarantined rows. Whether quarantine
+///   travels through an export at all — and what `migrate_tenant` should do
+///   with a non-empty queue — is ROADMAP O148, and it needs a ruling, not a
+///   patch smuggled in beside this one. Dropping the rows here would not
+///   settle it, only move the cost: the orchestrator judges a migration
+///   against the source's own snapshot (O140), whose `records` counts them,
+///   so an export that silently omitted them is refused as `ExportOmitsRows`
+///   and a vault with a queue could not be migrated at all. The tenant data
+///   plane already refuses an export carrying them (the orchestrator proxy's
+///   `export_carries_reserved_wing`).
 /// * a deployment with no assertion secret is unchanged — it is the
 ///   single-tenant shape, where `/v1` really is the operator. Stated
 ///   plainly, because it is also the precondition of this whole boundary:

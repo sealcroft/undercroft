@@ -1,6 +1,6 @@
 [package]
 name = "undercroft-bench"
-description = "Retrieval benchmarks for Undercroft: LongMemEval-format harness + synthetic self-contained benchmark"
+description = "Retrieval benchmarks for Undercroft: LongMemEval, LoCoMo, ConvoMem and MemBench harnesses, model evaluation, and measurement instruments (scale, cross-lingual, admission screen, cost)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
