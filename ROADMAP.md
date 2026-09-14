@@ -3988,7 +3988,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**210** of the **224** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**212** of the **226** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -13774,7 +13774,7 @@ scanner (O33, O47). The mechanism here is a heading, not a gate.
 
 
 
-### O150 — an out-of-table id PANICS on tract and degrades on ORT, and one of those is a crash
+### O150 — RULED 2026-09-14 and not yet built: an out-of-table id PANICS on every tract role and degrades on ORT, and the fix is one containment on both backends
 
 **Filed 2026-09-12, OBSERVED rather than predicted** — the route-R classifier
 O134a shipped is what ran it, and the panel that designed that classifier
@@ -13846,6 +13846,169 @@ Found by the 2026-09-14 drift sweep, verified by reading both tests.
    would still pass a pinned panic. **Gate**: counterfactual — make the ORT
    embed path panic on the out-of-table id in a scratch copy, and the test goes
    red where it is green today.
+
+#### RULED 2026-09-14 by three lenses — Agentic Memory, Security, Rust runtime and test engineering — and an adversarial refuter
+
+**Probe run first, by the integrator** (throwaway tests on a scratch copy of
+`91e4d0f`, release, 24 rayon threads). On tract ALL FIVE paths panic with the
+pinned bounds payload and count nothing — `embed`, `score`, `score_batch`
+(rayon re-throws), `encode_doc`, `encode_query` — not the embedder alone. After
+50 caught panics a healthy embed stayed bit-identical to its pre-panic value
+every time, and under rayon 200 panics on sibling workers changed 0 of 200
+healthy vectors. On ORT all five degrade typed and count (embed 1, score 1,
+`score_batch` the whole window, doc and query 1 each), healthy outputs
+unchanged.
+
+**Q1, ruled: contain each role's WHOLE inner body with one core function, on
+both backends.** `undercroft_core::contain::contain(f, panicked) -> Result<T, E>`
+wraps `f` in `catch_unwind(AssertUnwindSafe(..))`, downcasts the payload
+(`String`, `&'static str`, else a placeholder), truncates it to 256 bytes on a
+char boundary, and holds no counter, hook or `fetch_add`. A panic maps to a new
+`OnnxError::Panicked` / `OrtError::Panicked` (`inference panicked: …`) and
+flows into the existing counted degrade arms. Eight bodies: tract
+`embed_inner`, `score_inner`, ColBERT `word_ids` and `run`; ORT `embed_inner`,
+`score_one`, ColBERT `word_ids` and `run` — which also covers every
+`score_batch` fan-out and every load probe.
+
+- *Lost:* O150's own "helper around `SimplePlan::run`" (the Security lens).
+  Tract has reachable panic sites AFTER `run` returns — `outputs[0]`,
+  `shape[1]`/`shape[2]` and `hidden[[0,t,d]]` with no rank check — and in the
+  tokenizer, both reachable by a real model pair. The ColBERT doc plan is never
+  probed (O154), so a wrong-rank doc export panics inside `post_write` AFTER
+  COMMIT and the manifest anchor: no reply, and a DUPLICATE drawer on every
+  retry, since saves use `next_append_index`. Reuse after those classes is safe
+  BY READING: post-run code touches call-local values, and tokenizers' only
+  shared state on the encode path (`utils::cache::Cache`) uses
+  `try_read`/`try_write`, so a poisoned lock is a cache miss.
+- *Lost:* a `Contained<E>` in core with a `caught_panics()` accessor (the Rust
+  lens) — a count read only by tests is O122's shape, and a counter in core is
+  invisible to `DEGRADE_ARMS`. A catch in the server loop — an unwind through
+  `upsert_many`'s raw `BEGIN IMMEDIATE` leaves a transaction open.
+
+**Q2, ruled: ORT gets the same containment, and a poisoned session lock is
+RECOVERED.** Tokenizer panics happen before ORT takes its lock, so an unguarded
+ORT keeps a crash class tract loses. The three `lock().expect("ort session
+mutex")` become `unwrap_or_else(PoisonError::into_inner)`: `ort`'s `run_inner`
+runs no Rust between entering and leaving the C++ call, so a Rust panic under
+the guard is marshalling before it or wrapping after it and cannot leave the
+session mid-run. *Lost:* an unguarded ORT (the Security lens), and a typed
+latch (the Rust lens), which turns one bad write into an off switch for the
+pool every tenant shares.
+
+**Q3, ruled: keep the default panic hook and document it.** No library installs
+a hook; each contained panic prints one `panicked at` line beside its counted
+degrade line. The `take_hook`/`set_hook` pairs in both route-R tests are
+deleted, because they swap a process global under libtest's parallel runner.
+*Lost:* a flag-scoped hook installed once (the Rust lens) — its suppressions
+move nothing counted, so its failure is invisible to any gate.
+
+**Q4, ruled: trust the instance after a caught panic, pin it per arm, and
+refuse an abort build.** Every tract route-R arm compares a healthy value
+before and after three out-of-table calls, bit for bit; `score_batch` runs in a
+one-thread rayon pool so the panicking worker is the reused one. No
+fresh-instance comparison: thread-local state is per thread, so a fresh
+instance cannot see it. Reuse inside `run` is safe by reading tract 0.22.3: a
+fresh `SimpleState` per call, a matmul scratch space re-synced by a per-eval
+generation stamp, and no executor configured anywhere. `#[cfg(panic = "abort")]
+compile_error!` goes in both model crates, because Cargo ignores `panic` for
+test targets and a preflight over `Cargo.toml` cannot see
+`CARGO_PROFILE_RELEASE_PANIC`, `RUSTFLAGS` or `.cargo/config`; both legs build
+release first. The guarantee lives while `Cargo.lock` resolves tract 0.22.3 and
+ort 2.0.0-rc.10 — the manifest's `"0.22"` lets a lock refresh move tract with
+no manifest diff — and is re-proven on every `onnx-build` and `ort-build`.
+
+**Q5, ruled: everything in this unit.**
+
+1. The flip exactly as the Gate above says: the tract `Ok` arm and ORT's panic
+   arm FAIL naming this entry with `onnx-build` green; land the containment and
+   record the red run; then re-pin.
+2. Re-pinned route-R arms, five doors per backend, with no `catch_unwind` in the
+   tests, so an escaped panic fails the test on its own. Tract: the inner
+   function returns `Panicked` containing "out of range", the door returns its
+   documented degrade, count 1, plus the identity check. ORT: the inner function
+   returns a typed `Inference` and `Panicked` fails naming this entry; door
+   degrade and count 1 for embed, score, doc and query; `score_batch` only
+   returns without panicking and counts more than zero, so O151 is not pinned
+   twice. Asserting the VARIANT closes defect 1 above; dropping the catch closes
+   defect 2.
+3. `ort_embed_recovers_a_poisoned_session_lock`: poison the mutex from a thread
+   that panics holding the guard; the next healthy embed is bit-identical with
+   nothing counted, and it is red under today's `expect`.
+4. `CONTAINED_FNS: [(crate, file, fn); 8]` in `parity.rs` beside `DEGRADE_ARMS`:
+   each listed body holds exactly one `contain(`, the non-test sources hold
+   exactly eight, and every tokenizer encode, tract plan run and ORT batch run
+   is CALLED only from inside a listed body. ORT's own `encode` and `run_batch`
+   helpers are definitions, so the gate checks their call sites — the refuter's
+   first draft of this gate would have failed on those two helpers. Premise
+   probes on every count.
+5. `DEGRADE_ARMS` stays 9: no new `.fetch_add(` or `note_failure`-prefixed name
+   anywhere in the scanned files, tests included, because the scan's
+   `fn note_failure` needle also matches `fn note_failures`.
+6. The O157 follow-on on both backends, with
+   `this_join_never_drives_the_out_of_table_trigger` and its module-doc
+   paragraph retired. Embedder — `/v1` and MCP stdio, one process each: a save
+   carrying the out-of-table word answers with an id, a later `stats` shows
+   `embed_failures` exactly +1, `get` returns the exact words, and a following
+   healthy save and search answer; CLI `remember` exits 0 with exactly one
+   degrade line. Late stage — MCP and CLI: the save answers, `late_failures` +1,
+   `get` verbatim. Reranker — `/v1` and MCP: a search over that drawer answers
+   and `rerank_failures` rises. Every arm's premise: the onnx degrade line
+   contains `inference panicked:` and ORT's does not.
+7. No `UPGRADING.md` entry — a crash becoming a counted degrade stops nothing
+   that ran — and the model-leg figures are set from the runs.
+
+**Counterfactuals owed:** the flip's red run; `contain` removed from tract
+`score_inner` alone (`CONTAINED_FNS` and the score arm go red); a `panic!`
+inside ORT `embed_inner` (red on `Panicked`); the poison test under `expect`
+(red); `CARGO_PROFILE_RELEASE_PANIC=abort cargo build --release -p
+undercroft-cli --features onnx` failing on the `compile_error!`; `model_e2e`
+with the boundary removed failing as a reset on `/v1` and EOF on MCP, and
+against a fixture that stops panicking failing on its premise; the
+single-thread pool arm run ten times; and a LoCoMo drive with the out-of-table
+word injected into k drawers, where the server survives and `embed_failures`
+equals k.
+
+**Prior rulings.** O150's prescription above is filing text, not a ruling: it is
+FOLLOWED on one implementation, the flip and both test defects, and its "cheaper
+as insurance once O154 widens the probe" is REFUTED — no id probe reaches the
+tokenizer class, the rank panics or the unprobed ColBERT doc plan, so
+containment is the primary fix. O157's sequencing is upheld and its "a route-R
+arm per role belongs with O150" followed. O131 is followed (no series, label or
+stats field). O134a is followed (the classifier deliberately becomes a pin).
+O151 is untouched. O154's maintainer exemption is unaffected.
+
+**Claims refuted — the integrator's brief first.** It said every measured panic
+is inside `run`: true of the fixture, false of the code. Its fresh-instance
+comparison cannot see thread-local corruption, and it named tract's thread-local
+caches without the facts that settle reuse. The Agentic Memory lens's ColBERT
+`frame`+`run` wrap misses the load probe, its `Cargo.toml` preflight is blind to
+env and flag abort settings, and its lexical-findability check proves
+`fts_index` ran only on an hmac-only vault. The Security lens's "exactly one
+`.run(` per tract file" gate fails on today's tree, because ColBERT has its own
+method named `run`, and its "nobody measured reuse after tokenizer or
+post-processing panics" is settled by reading. The Rust lens's accessor, latch
+and hook lose as above, and its "a tract pool thread may still print" is
+settled: there is no tract executor.
+
+**Dissent, settled on evidence rather than vote:** run-only containment and an
+unguarded ORT lost to the reachable post-run and tokenizer panic classes; the
+typed latch and the scoped hook lost to the shared-pool off switch and to a
+failure no gate can see.
+
+**Filed alongside:** O181 (content-derived token ids reach the logs on both
+backends) and O182 (whether the tokenizer can panic on arbitrary text is
+unmeasured). Recorded beside O154: the ColBERT doc plan becomes contained but
+stays unprobed, and tract lacks the rank check ORT has.
+
+**Not yet built, and deliberately.** Sized against the session's measured
+context (74.0% at the ruling), the unit as ruled — eight contained bodies, ten
+re-pinned arms with a recorded red run, a poison test, a source gate, the O157
+follow-on across three surfaces, eight counterfactuals and three model legs — is
+left for a session that can land it whole, not half. Residuals: `AssertUnwindSafe`
+would hide interior mutability someone later adds to these structs; the reuse
+guarantee covers the panic sites the fixture reaches plus the 0.22.3 reading,
+and another tract version needs both again; `into_inner` rests on the exact ort
+pin.
 
 ### O151 — ORT's `score_batch` zeroes the whole reranked window when one pair fails
 
@@ -13955,6 +14118,11 @@ restart" obligation rather than giving that command a model-opening arm.
 in a pipeline and fast enough to run on a machine that lacks the weights — so
 the symptom string goes in `UPGRADING.md` instead and the entry says plainly
 that this class is not pre-flightable.
+
+**Recorded 2026-09-14 by O150's ruling panel.** O150's containment will turn a
+panic in the unprobed ColBERT doc plan into a counted degrade, but the plan stays
+UNPROBED — sub-case 2 above is untouched — and tract still lacks the output-rank
+check ORT performs, so a wrong-rank export is caught only as a panic.
 
 ### O135 — three reads the audit has never run, carried in a gitignored file
 
@@ -15461,6 +15629,46 @@ and O162.
 **Gate**: whichever lands, a counterfactual on a copy of the file with the
 heading absent: retired, the check and its reader are gone and the reason is
 recorded; kept, the preflight fails naming the missing heading. Never nothing.
+
+### O181 — content-derived token ids reach the logs on both model backends
+
+**Filed 2026-09-14 by O150's ruling panel; verified by reading and by the O150
+probe's own output.** ORT's shipped degrade line carries the runtime's error
+text, `indices element out of data bounds, idx=4096 …`, and tract's bounds panic
+carries `range end index 16388`, which is `(id + 1) × dim` — so the token id,
+and through the vocabulary the word the drawer held, is recoverable from a log
+line. The degrade doors format the error with `{e}` into `diag_error!`, which
+prints to stderr and, under `--features telemetry`, goes to `tracing` and so to
+any configured log exporter. That breaks the invariant that telemetry signals
+are metadata and counts only, never content, and O150's `Panicked` variant will
+carry tract's payload the same way.
+
+**Shape of a fix, and why it needs a ruling.** Redact in the one place each door
+formats its error, never per call site. What to keep — the error class, the op
+name, the table bound — and what to drop — any index or number derived from
+input — is a policy question no panel has ruled.
+
+**Gate**: the out-of-table degrade line, on both backends and every role,
+contains neither the id nor `(id + 1) × DIM`; counterfactual — restore `{e}` and
+it fails.
+
+### O182 — whether the tokenizer can panic on arbitrary text is unmeasured
+
+**Filed 2026-09-14 by O150's ruling panel.** Both backends tokenize with
+`tokenizers` 0.20.4 before any model runs, and its normalizer and template code
+carry dozens of `unwrap`s (39 in `normalizer.rs`, 51 in `template.rs`). Whether
+any is reachable from ordinary user text has never been measured. Once O150
+lands, such a panic is contained and counted rather than a crash, so this entry
+is about KNOWING the class, not surviving it.
+
+**Probe**: property-test arbitrary UTF-8 through the generated fixture tokenizer
+and through a real BERT tokenizer, counting panics by payload class. Zero panics
+over a stated budget is a result worth recording; a panic is a defect to report
+upstream and pin here.
+
+**Gate**: whatever the probe finds becomes a pinned test in the model crate that
+ran it, so a `tokenizers` upgrade that introduces or removes a panic changes a
+test result rather than nothing.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 
