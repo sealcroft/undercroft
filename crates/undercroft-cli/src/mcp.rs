@@ -1252,7 +1252,7 @@ fn call_tool(store: &mut VaultStore, name: &str, args: &Value) -> Result<String>
         }
         "undercroft_dedup" => {
             let apply = args.get("apply").and_then(Value::as_bool).unwrap_or(false);
-            let report = store.dedup(apply)?;
+            let report = store.dedup(apply, "mcp")?;
             Ok(serde_json::to_string_pretty(&report)?)
         }
         other => anyhow::bail!("unknown tool: {other}"),

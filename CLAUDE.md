@@ -1046,6 +1046,19 @@ Consequences that are binding, not advisory:
   either mode. The record lives in `refine.rs` — the one
   implementation both surfaces drive — not at each call site, which is
   why the read-only warn-and-serve reaches the CLI as well as `/v1`;
+  **and a served model is an egress by CUSTODY, not by call site (O167)** —
+  a POST owes `egress/` when its input was read out of a committed row
+  within the same operation, so `repair` records `egress/embed/repair` in
+  its own transaction after the COMMIT or the ROLLBACK (the last anchor
+  naming the newest head, because `anchor_manifest` overwrites unchecked),
+  `dedup` records `egress/advise/dedup` off a counter at the one `.assess(`
+  site, and remote search, `admission allow` and `dedup` reuse the stored
+  vector through `open_stored_embedding` and send nothing; a caller's
+  arriving text — a save, an import, a query — is not recorded, and
+  `every_embed_and_advisor_call_is_classified_by_custody` counts that line
+  against the source. A mode whose writes cannot land read-only refuses
+  before its first egress (`refuse_when_read_only`); a dry run warns and
+  serves;
   **reads audited under `UNDERCROFT_READ_AUDIT=chain`** —
   `record_read`, the one recording function every content-returning door
   calls (the search and remote tails, get/recent/list and their siblings,
@@ -1605,6 +1618,10 @@ Consequences that are binding, not advisory:
   `promtool` and `amtool` lifted from the pinned Prometheus/Alertmanager
   images onto debian. Pinning matters — a check that runs a different
   version than the deployment is a check of something else
+- `architecture/DIAGRAM_LESSONS.md` — **read it before changing any diagram, in
+  any of the three sets**: which file is each set's source, the standards a change
+  keeps (text fit included, O188), how width is estimated and measured, the fix
+  order for a spill, and the traps already paid for
 - `architecture/` — illustrated architecture reference: eleven theme-aware
   SVG diagrams (`diagrams/`), the same as PDF (`pdf/`), and `index.html`
   which inlines them and documents every layer plus **all 81**
@@ -1746,7 +1763,15 @@ Consequences that are binding, not advisory:
   endings, a 9-node /
   2-accent budget, and the geometry rules a renderer would otherwise be needed
   to catch — no diagonal connector, none passing behind a non-endpoint box, no
-  label mask painted over by a later node. It carries a **premise probe**: the
+  label mask painted over by a later node — and, since O188, **every `<text>`
+  fits the box that holds it**. That arm is an ESTIMATE (characters × size ×
+  an advance in em, since a stdlib checker has no font engine), and it exists
+  because the geometry arms read rects and lines and never a text's width:
+  113 lines spilled out of their boxes under a green gate, seen by the
+  maintainer on the rendered page. Monospace is gated at 0.60 em, the widest
+  common face — Consolas, which the Windows pane renders, is 0.55, so a line
+  drawn to fit there spills on a Mac — while the proportional 0.56 is an
+  average, not a bound, and says so. It carries a **premise probe**: the
   geometry checks must fail on a known-bad fixture before any clean result is
   believed. **`rx` is the discriminator between a node and a zone** (6 vs 8) —
   a first version treated every large stroked rect as a node and reported 96
@@ -1951,8 +1976,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (868 run,
-                                      # 4 #[ignore]d = 872 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (886 run,
+                                      # 4 #[ignore]d = 890 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote

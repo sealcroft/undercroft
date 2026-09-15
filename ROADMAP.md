@@ -3988,7 +3988,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**217** of the **231** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**219** of the **233** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4168,6 +4168,518 @@ identities.
 MINOR since O149: `PATCH /admin/tenants/{id}` and its CLI mirror are new
 capability, backward compatible. The rest of the section is PATCH work — no
 documented contract moves.
+
+### O188 — CLOSED 2026-09-15: text spilled out of its boxes across the platform-views set, and `check.py` could not see a text's width
+
+**Reported 2026-09-15 by the maintainer on the rendered page**: diagram 18's box
+text ran past the box edges. Measured in the Browser pane (each `<text>`'s
+`getBBox` against the smallest rect holding it) and statically, it was not one
+diagram: 17 of 22 spilled, 113 lines under the gate as finally written. **Cause:**
+the layouts fit a narrow monospace. The Windows pane renders Consolas at 0.55 em
+per glyph; Menlo, SF Mono and DejaVu Sans Mono advance about 0.60, so a line that
+fits there spills on a Mac, and some spilled even here. `check.py` read rects and
+lines and never a text's width, so it was green throughout — *ask what a gate can
+SEE*, one more time.
+
+**Fix.** Four read-only agents proposed exact replacements (21, 18, 24 and 39),
+applied all or nothing, each anchor required to match once, diffs read. Shortening
+came first; a 1 pt cut only where shortening dropped a fact, never below 7. Amended
+by hand: 01's `SQLITE` kept, its letter-spacing dropped, against a proposed `SQL`;
+18's "no creds" became "no userinfo", because only the URL's userinfo is stripped;
+14's `PRESERVED` and `discard` kept at 7 pt; 18's refine-column `2 · RECORD` label
+moved inside its lane, and its callout split into two lines.
+
+**Gate.** A `text fit` arm in `check.py`: monospace at 0.60 em (a bound),
+proportional at 0.56 (an average, stated as not a bound), 4 units of padding, and
+text no rect holds bounded by the viewBox. A premise fixture must flag exactly the
+spilling line. Counterfactual: red on the unfixed tree, 113 problems across 17
+diagrams; green after, 22 clean. **Mine, corrected:** the first version bounded
+free text by the lanes, 80 in from each edge, and flagged the standard `LEGEND`
+labels, which spill nothing.
+
+**Residual, stated.** The proportional estimate is not a bound; a label mask
+outside its lane is not checked; the other two diagram sets are O189's. The
+standards and the method are recorded in `architecture/DIAGRAM_LESSONS.md`.
+
+**It closed half of O179**, filed 2026-09-14 and not found when this entry was
+written: that entry's egress-view sublabels are among the 102 lines, and its
+proposed `check.py` arm is this gate, except that proportional text is bounded
+by a flat 0.56 em average rather than the metrics table it named. Its
+`layers.svg` half is O189's; the disposition is recorded in O179.
+
+### O179 — CLOSED 2026-09-15: two diagram labels overran their bounds and no gate measured a label's width — the egress view is fixed and gated by O188, the layers footer carried by O189
+
+**Filed 2026-09-14 from the drift sweep. Widths are ESTIMATED from font
+metrics, not rendered.**
+
+**`architecture/diagrams/layers.svg`, the footer.** The second footer line
+(`<text x="42" y="568" class="f s dim">`, 11px sans) is the 157-character
+sentence beginning "Outward paths are opt-ins". With Arial advance widths it
+measures about 933px from x=42, ending near 975 in a 900-wide viewBox —
+roughly 75px past the edge, taking the sentence's closing claim (every outward
+path is TLS or loopback via `undercroft-net`) with it. `diagrams/` is the
+source, and `build.sh` derives the inlined copy and the PDF from it, so the
+overrun reaches all three.
+
+**`architecture/platform-views/18-egress-paths.html`, the destination boxes.**
+Lines 160 and 165–167 are 9px monospace sublabels centred in 224px boxes (`a
+remote vector backend` from x=548, `the LLM endpoint` from x=848), 47, 48, 48
+and 50 characters long. At a 0.6em advance they measure 254–270px, and at
+Consolas' narrower 0.55em 233–248px, so every estimate crosses its box's
+stroke on both sides.
+
+**No gate measures it.** `platform-views/check.py` checks rect geometry,
+connectors and label masks, never text extent, and `build.sh --check` compares
+derived bytes. Both pass these files.
+
+**Fix shape.** Shorten or wrap the five lines in their source files and re-run
+`build.sh` for `layers.svg`. Add an estimated-extent check: in `check.py`,
+monospace at a declared advance and sans from a metrics table, measured against
+the node rect the label sits in (the `rx` discriminator already separates a
+node from a zone); in `build.sh --check`, every `<text>` against its viewBox.
+
+**Gate and counterfactual.** Premise probe before any clean result: an
+overlong fixture label inside a node fails, and an exemplar label verified by
+eye passes — `check.py`'s own calibration rule. Counterfactual: the new check
+on the current tree fails naming exactly these lines, and passes once they are
+relabelled. Residual, stated: an estimate cannot see font fallback or kerning,
+so a label within a few pixels of its bound stays a judgement for a rendered
+page.
+
+#### CLOSED 2026-09-15 by O188 and O189, and found late
+
+**The egress half is O188's.** The four destination sublabels named above were
+reworded there, and each now fits under the 0.60 em monospace bound: `one POST
+per drawer, plaintext · TLS or loopback` became `plaintext POST/drawer · TLS or
+loopback`, `destination = the host ureq dials, no credential` became `dest =
+the host ureq dials, no userinfo`, `the endpoint READS the text — TLS is the
+wire only` became `endpoint READS the text; TLS: wire only`, and `quarantined
+rows are mirrored, never a boundary` became `quarantined rows mirrored: no
+boundary`. The `check.py` half of the gate this entry asked for is O188's
+`text fit` arm — monospace at a declared advance, each `<text>` against the
+smallest rect holding it — with a premise fixture and a counterfactual: red at
+113 lines across 17 views on the unfixed tree, 22 clean after. It differs in
+one respect: proportional text is bounded by a flat 0.56 em average, stated as
+not a bound, rather than by a metrics table.
+
+**The layers half is O189's.** Measured in a renderer rather than estimated,
+the `Outward paths are opt-ins` line ends 39 px past its 852-wide CARD in
+Segoe UI, not about 75 past the viewBox: the card is the bound, and an Arial
+estimate is not the font a page renders. This entry's `build.sh --check` arm —
+every `<text>` against its viewBox — goes to O189's gate question as a prior
+filing, not a ruling.
+
+**Ours.** O188 and O189 were filed on 2026-09-15 without finding this entry,
+which had owned the question since the day before; CLAUDE.md asks for that
+search before any filing. The next session found it through a CHANGELOG line.
+
+### O167 — CLOSED 2026-09-15: a served embedder received stored drawer plaintext on paths that recorded no egress — paths reuse the vector the vault holds, and what still leaves is recorded
+
+**Filed 2026-09-14, established by reading the code, not by a run.** Under
+`UNDERCROFT_EMBEDDER=http` every `Embedder::embed` call POSTs its text to
+`UNDERCROFT_EMBED_URL`. Three paths hand that endpoint text the vault already
+HOLDS — decrypted out of a stored drawer — and none appends an `egress/`
+record:
+
+- **`repair`.** `repair_stmts` (`manage.rs`) re-embeds every drawer through
+  `embedder_embed`: the whole corpus, in one operator command. Its only chain
+  record is `migrate/repair`, through `audit_migration`, whose canonical binds
+  the model name, the time and the fingerprint-backfill count — not how many
+  drawers were re-embedded, and not the host they went to.
+- **`admission allow`.** `admission_allow` (`admission.rs`) embeds the
+  restored drawer's content before writing it back, one drawer per ruling —
+  exactly the content the screen diverted. The ruling is recorded; the egress
+  is not.
+- **Remote-index search.** `search_with_index` (`remote.rs`) passes each
+  candidate that survives verification and the retrieval policy to
+  `score_drawer` (`lib.rs`), which re-embeds the decrypted content locally
+  rather than trust the mirror's vector — up to `max(20, depth·4)` drawers per
+  search. Its `read/search` record is opt-in under
+  `UNDERCROFT_READ_AUDIT=chain` and describes a read returned to a caller,
+  never a destination.
+
+The open-time embedder walk is not a fourth: `KNOWN_EMBEDDER_UPGRADES` moves
+hash identities only, and a hash embedder sends nothing anywhere.
+
+**Scope, stated.** A write's own content and a search's query text reach the
+endpoint too, and they are not this entry: that text is the caller's, on its
+way in, where these three send what the vault already holds — the side of the
+line `refine` and `index_push` both sit on. Whether arriving text owes a record
+is not argued here, and the advisor below is that same question.
+
+**Why each owes a record — O79's own argument.** `index_push` records
+`egress/index-push` unconditionally for embeddings, which are merely
+plaintext-derived, and O79 made `refine` record for plaintext POSTed to a model
+endpoint. These three POST the plaintext itself. Each owes an `egress/` record
+binding the destination host, the model and the drawer count — when, and only
+when, the embedder is a served endpoint; the in-process backends (`hash`,
+`onnx`, `ort`) move nothing.
+
+**Shape, and what it costs:**
+
+- The host must come from the transport's own parser (O92), credential-stripped
+  as `LlmClient::destination` is for `refine`. `HttpEmbedder` has no such
+  accessor today and the store sees only the `Embedder` trait, so the trait, or
+  the store's construction, has to learn to name a destination, with the
+  in-process backends answering none.
+- `repair` runs inside one transaction, and a rollback erases a record written
+  inside it while the corpus prefix is already at the endpoint — O95's
+  error-path lesson. The record must survive the abort: written outside the
+  bracket, counting drawers actually POSTed, on both exits.
+- An unconditional record per remote search makes every such search a chain
+  write — the volume that made the `read/` trail opt-in — and a read-only
+  handle cannot append, so it would warn and serve on the replica precedent.
+  Recording only under `UNDERCROFT_READ_AUDIT=chain` is cheaper and breaks the
+  rule that `egress/` is unconditional; that trade is part of the ruling.
+- `admission allow` already appends its ruling on an operator surface, so its
+  record is the cheap one.
+
+#### The tier-2 admission advisor is unclassified
+
+With `UNDERCROFT_ADMISSION_LLM=advisory`, `LlmAdmissionAdvisor::assess`
+(`undercroft-llm/src/advisor.rs`) sends each tier-1-clean write candidate's
+content to `UNDERCROFT_LLM_URL` through `LlmClient::complete`, and nothing
+records it. Unlike the three paths above, that content is the candidate on its
+way IN — a save, an update, an imported record — never text read back out of
+storage. The tree does not settle whether that is an egress, so:
+
+- **An `egress/` record per consultation.** O79 read literally. It adds a chain
+  record beside each screened write on an advisory vault, and `upsert_many`
+  consults the advisor before its transaction opens, so a record written
+  inside a batch that rolls back is erased after the content has left — O95's
+  lesson again.
+- **The destination folded into the write's own record.** No second record, but
+  it changes a write canonical that is byte-identical today, which is an
+  audit-format change owing its own argument.
+- **Ruled not an egress, and said so.** The candidate is text the writer
+  already holds, sent to an endpoint the operator declared. Cheapest — and the
+  ruling must then cover a served embedder's embed of the same write too, or
+  the tree carries two answers to one question.
+
+**Gate**: a `repair` under a served embedder pointed at an unreachable loopback
+URL, with `UNDERCROFT_EMBED_DIM` declared so construction does not probe,
+appends exactly one `egress/` record binding host, model and count; every
+embed degrading to a counted zero vector is what makes it drivable without a
+model, as O79's gates were. Counterfactual: today's tree appends none. Negative
+arm: the same `repair` under the hash embedder appends none either.
+
+#### RULED 2026-09-15 by three lenses — Agentic Memory, Security, storage/transaction engineering — and an adversarial refuter, with two probes run by the integrator
+
+**Questions.** Q1, remote-index search re-embedding stored candidates. Q2, the
+tier-2 advisor and a served embed of ARRIVING write content. Q3, how the store
+names a destination. Q4, the record shape, placement and read-only posture for
+`repair` and `admission allow` — and for `dedup`, which every lens found and the
+filing missed. Q5, the gates.
+
+**Prior rulings.** O79 and O95 are FOLLOWED: stored plaintext POSTed to a
+declared endpoint is an egress, recorded unconditionally under `egress/`, counted
+by attempt, recorded on both exits from one site, and not recorded when nothing
+left. O92 is FOLLOWED: a destination comes from the transport's own parser. O122
+is FOLLOWED: a required trait method where a default would be the silent shape.
+**O175 is not the rule here.** The lenses reached for it by analogy, and the
+refuter held them to O184's own sentence — a POST is an egress, not a remote
+mutation, so O175 does not decide it. The posture rule below is new, and it is
+O184's question too, so it is recorded there as well.
+
+**Ruled — two principles.** *Send less before recording more*: where the vault
+already holds the vector a path would compute, the path uses it and sends
+nothing, and a record is owed only for stored text that still has to leave.
+*Custody, not call site*: a POST owes `egress/` when its input was read out of a
+committed row, or derived from one, within the same operation. The caller's own
+text on this call — a save, an import, an update, a query, the advisor's
+candidate — is not an egress, for the advisor and the embedder alike. Residual,
+stated: the chain cannot name the endpoint that received arriving text; the
+deployment's configuration does.
+
+**Q1 — remote search: (c), score from the stored embedding.** `score_drawer`
+takes its semantic leg from the candidate's stored embedding through one helper
+shared with local hydration. An embedding that will not open maps to
+`CorruptRow`: it is never skipped and never re-embedded, because a re-embed
+fallback would hand an offline writer a trigger for plaintext egress. The query
+embed stays, being the caller's text. Nothing is sent, so no record is owed. The
+mirror never offered a vector (`Candidate` is `{id, score}`), and the vector it
+does hold is the stored one `index_push` sent. **Costs, stated.** On an hmac-only
+vault the score now rests on an embedding outside HMAC coverage, which an
+offline writer can move — the default local path's cost today. And remote search
+becomes exactly as stale as local search in the known windows (the force
+override on a read-only open, O166's Hebrew leg), no longer fresher. *Lost:* (a)
+a chain write per search to record a POST that can be removed, nothing recorded
+on a read-only handle, and an untrusted mirror still setting the volume — no
+backend truncates to `limit`, and repeats are O186. (b) two rules for `egress/`,
+and force-disabled on read-only opens.
+
+**Q2 — the advisor and arriving text: (c), by custody as above.** *Lost:* (a) a
+record per write carrying a deployment constant, which `upsert_many`'s rollback
+would erase because the batch screens before its `BEGIN IMMEDIATE`. (b) a URL
+bound into a durable write canonical that is byte-identical today, and erased
+along with a refused write.
+
+**Q3 — the destination: (a).** A required `egress_destination(&self) ->
+Option<String>` on `Embedder` AND on `AdmissionAdvisor`. In-process backends and
+`ExternalEmbedder` answer `None` and say why; wrappers (`SharedOrtEmbedder`, the
+bench's) delegate, each with its own delegation test, because a required method
+forces a statement, not a true one. It never enters `model_name`: a re-hosted
+endpoint would then refuse every vault. `LlmClient::destination`'s body and
+`UNPARSEABLE_DESTINATION` move verbatim into `undercroft-net` beside
+`is_loopback`, both clients delegate, and O92's table does not move. The property
+test compares against the host of the URL actually POSTed, not the base. *Lost:*
+(b) a construction parameter — a second statement of one fact, set at two
+construction sites (`open_store_as` and `embedder_factory`), and able to be wrong:
+an `ExternalEmbedder` rebuilt from the recorded identity sends nothing.
+
+**Q4 — the paths.**
+
+- **`repair`** records `egress/embed/repair` with canonical
+  `egress␟embed␟repair␟{surface}␟{destination}␟{model}␟{sent}␟{now}`, `sent`
+  incremented immediately before each embed. The record is written in its own
+  transaction after COMMIT or after ROLLBACK, with no fallible step between, and
+  the LAST anchor written names the newest head — `Vault::anchor_manifest`
+  overwrites without a check, so an older anchor written after the record would
+  regress the manifest and leave the record a strippable tail. Skipped when the
+  destination is `None` or `sent == 0`. An audit failure warns and never replaces
+  the original error. `migrate/repair` stays byte-identical.
+- **`admission allow` sends nothing.** It reuses the quarantined row's stored
+  vector, whose content is byte-identical to the restored drawer's. That removes
+  the POST, the read-only leak, and a defect no entry recorded: on an external
+  vault `allow` replaced the caller's vector with `ExternalEmbedder`'s zero vector.
+  `repair` rewrites the quarantine row too, so the reused vector is never staler
+  than any other.
+- **`dedup`** reuses the survivor's stored vector (its content is unchanged) and
+  sends no embed. Its advisor consultations on stored survivors stay —
+  `Screen::Apply` is not this panel's to move — and record `egress/advise/dedup`,
+  binding surface, destination, the consultation count and `apply`, in both modes
+  when the count is above zero. It consults only when `gained > 0`.
+- **`write_drawer` stops re-embedding a diverted copy** and stores the embedding
+  its caller passed. `admission_divert` changes no content in any branch — the
+  rate, destination and advisor screens only push signals — so the second forward
+  pass did no work, doubled every diverted POST of arriving text, and would have
+  sent a diverted `dedup` survivor's stored plaintext unrecorded. A carried vector
+  on import then lands on the quarantine row exactly as on a non-diverted row,
+  which is parity, not a gap. The refuter settled this against filing it
+  separately and narrowing `dedup`'s guarantee, which would have left that
+  unrecorded POST inside the unit written to close it.
+- **Labels `egress/<channel>/<op>`.** The id is the only field `history` shows,
+  `dedup` reaches two destinations, and no reader matches a middle segment. A
+  drawer id is not content-derived and already sits in clear in
+  `admission/{id}/…`. **`surface` is bound**: `repair` and `allow` are CLI and
+  `/v1`, and `dedup` adds MCP, a different principal. **No `failed` field**: a
+  counted embed failure includes requests the endpoint received — a wrong
+  dimension, an unparseable answer — so it cannot mean "did not leave", and it is
+  already live on `VaultStats.embed_failures`.
+- **Posture: a non-dry-run mode decides its posture before its first egress; a
+  mode that can finish read-only keeps O79's warn-and-serve.** `admission allow`
+  and `dedup --apply` refuse on a read-only handle before any embed or
+  consultation, with `StoreError::Invalid` naming the posture; a read-only `dedup`
+  dry run warns and serves. `repair` refuses before `BEGIN IMMEDIATE` too, as
+  hardening: probe P1 shows it sends nothing read-only today, but only because
+  `BEGIN IMMEDIATE` opens a write transaction on the TEMP database slot, which
+  `query_only` refuses — an accident, and the tree's own idiom of embedding before
+  the write lock (`lib.rs`, `upsert_many`) would undo it silently. **Cost, owed
+  in the build unit:** `--read-only dedup --apply` on a vault with no duplicates
+  exits 0 today and will exit 1, so `UPGRADING.md` gets an entry. `repair` and
+  `allow` already exit 1 read-only.
+
+**Q5 — gates, as corrected.** Store tests use a counting embedder that declares
+its gate and floor (otherwise the open's calibration issues embeds), counted
+after open. A real `HttpEmbedder` against a counting loopback stub lives in the
+CLI crate, which carries `tiny_http` and the `stub_llm` precedent; an unreachable
+URL cannot tell 0 POSTs from 1.
+
+- `repair`: N requests and one `egress/embed/repair`, whose tag verifies with N
+  and refuses N±1. Abort arm: row k tampered, `sent = k−1`, no `migrate/repair`.
+  The manifest head equals `chain_meta` after the run. `hash` and an empty vault
+  record nothing. Read-only: `Invalid` naming the posture with 0 requests — the
+  counterfactual is the error variant, `Sqlite(ReadOnly)`, since today's tree
+  already sends 0.
+- `admission allow`: 0 requests writable and read-only; the restored vector
+  equals the quarantine row's; the external-vault arm is non-zero; the read-only
+  counterfactual is 1 request, then `Sqlite(ReadOnly)`.
+- `dedup`: 0 embed requests, including for a survivor the screen diverts; a
+  counting advisor stub; read-only `--apply` refused with 0 requests.
+- A diverted `upsert_screened`: exactly 1 embed, and the quarantine row's vector
+  equals the caller's. Counterfactual with the diverted re-embed restored: 2.
+- Remote search: 1 embed (the query) with two or more candidates, and with a
+  mirror repeating ids. Remote `semantic` equals local hydration's. Sealed arm: a
+  corrupted `/emb` gives `CorruptRow` with 0 embeds.
+- The destination property against the POSTed URL, O92's table unchanged, and a
+  delegation test per wrapper.
+- A source inventory derived from the source, per O80: every
+  `self.embedder.embed(`, `embedder_embed(` and `.assess(`, and every caller of
+  `write_drawer`/`upsert_screened`, classified as custody with its recorder or as
+  arriving with its reason, both directions, with a premise probe. It inventories
+  functions, not data flow, and says so.
+
+**Claims refuted — the brief's first.** The integrator's brief missed `dedup`;
+called `upsert_screened` arriving-only; cited `open_store_as` as
+`embedder_factory`; stated `max(20, depth·4)` as a re-embed count when it is the
+fetch size an untrusted mirror need not honour; said "two attempts", which is
+false on a wrong dimension; called the mirror's vector a different object when it
+is the stored one; omitted the fragment `destination` keeps; and summarised O175
+without O184's sentence. The filing's own gate cannot open its vault under `http`
+without `UNDERCROFT_FORCE_EMBEDDER=1`, and its unreachable URL cannot tell 0 POSTs
+from 1. Lens claims refuted: that the advisor never sees stored text (`dedup`);
+that a read-only `dedup` dry run "fails nowhere" (the CLI only — MCP and `/v1`
+refuse it); both proposed anchor placements, one of which regresses the manifest
+and the other of which loses the record on a failed anchor; and O175 applied by
+analogy.
+
+**Probes, run by the integrator on a scratch copy of `88000a6`.** P1: `repair()`
+on a read-only handle returned `Sqlite(ReadOnly)` with **0 embeds** on a modern
+vault and on one with a NULL fingerprint; the writable premise made 3. **It
+refuted the Agentic Memory lens's reading and the refuter's own prediction of one
+embed** — two agents reading the pinned SQLite source agreed on an observable that
+execution contradicted — and the refuter then located the cause in the temp
+slot. P2: `admission_allow` on a read-only handle issued **1 embed** and then
+`Sqlite(ReadOnly)`; the writable premise made 1. Confirmed.
+
+**Dissent, settled by evidence.** Security would have kept one `egress/embed`
+with the operation only inside the canonical — settled by the id being the only
+readable field. Storage and the Agentic Memory lens would have bound `failed` —
+settled by what that number means.
+
+**What remains.** Filed: O186, a mirror repeating an id gets duplicate hits back;
+O187, refine's fact-mirror drawers are embedded and screened with no record
+naming those endpoints. The build is not done.
+
+#### BUILT 2026-09-15, as ruled — with one reading of the `surface` sentence, and one gate row kind the ruling did not name
+
+**What landed, in four steps on one branch.** (1) `undercroft_net::egress_destination`
+and `UNPARSEABLE_DESTINATION`, moved verbatim from `LlmClient::destination`, which
+delegates; a required `egress_destination` on `Embedder` — `hash`, external, `onnx`,
+`ort` and every test impl answer `None`, `HttpEmbedder` answers `Some`, the CLI's and
+the bench's wrappers delegate — and on `AdmissionAdvisor` (`LlmAdmissionAdvisor`
+`Some`). (2) `open_stored_embedding`, ONE decision for local hydration and every
+reuse — `CorruptRow`, never a re-embed — and `stored_embedding(id)`: `score_drawer`
+scores from the stored vector, `admission_allow` reuses the quarantined row's,
+`dedup` rewrites its survivor through `upsert_screened_with` with its own, and
+`write_drawer` stores the caller's embedding on a diverted copy. (3) `repair` records
+`egress/embed/repair` (`egress␟embed␟repair␟{surface}␟{destination}␟{model}␟{sent}␟{now}`)
+through `audit_embed_egress`, in its own transaction after the COMMIT or the
+ROLLBACK with nothing fallible between; `sent` is incremented immediately before each
+embed and owned by the caller, so the abort knows it; the anchor written last names
+the newest head; nothing is recorded when the destination is `None` or `sent == 0`.
+On the abort path an audit failure warns and the original error returns; on the
+success path it warns, still anchors and VACUUMs, and returns the audit's error —
+`index_push`'s success-path shape. `dedup` records `egress/advise/dedup`
+(`egress␟advise␟dedup␟{surface}␟{destination}␟{consulted}␟{apply}␟{now}`) from a
+counter incremented immediately before the one `.assess(` call, on both exits of a
+body split out as `dedup_groups`; a read-only dry run warns and serves. (4)
+`refuse_when_read_only` — `StoreError::Invalid` naming the posture — first in
+`repair` (before `BEGIN IMMEDIATE`), `admission_allow` and `dedup` under `apply`;
+`surface` threaded as `cli`, `http` and `mcp`; `UPGRADING.md` carries the
+`--read-only dedup --apply` exit change.
+
+**Read, not added: no `surface` on `admission_allow`.** The labels bullet above says
+"`surface` is bound: `repair` and `allow` are CLI and `/v1`", written while an allow
+still sent an embed. The same ruling makes `allow` send nothing, and a record is owed
+only for what leaves, so `allow` mints no egress record and a `surface` parameter
+there would be accepted and dropped — which the O30 doctrine calls a promise the
+signature makes and the body breaks. The session handover had listed it; the
+ruling's substance decides it.
+
+**Residual, stated: the fence did not move.** `egress/` stays fenced from
+`HistoryScope::Agent`, and `dedup` is also an MCP tool, so an agent that runs
+`undercroft_dedup` under a destination-naming advisor cannot read the
+`egress/advise/dedup` record its own run appends — the residual `del/` already
+states for an agent's own deletions, one namespace over. The ruling did not
+address the fence, and unfencing `egress/` would hand an agent every export,
+push and refine record with it.
+
+**Gates, as Q5 corrected them.** Store tests run over `egress_doubles`: a counting
+hash embedder that DECLARES its gate and floor and names a destination, and a
+counting advisor.
+
+- `repair`: `a_served_repair_records_the_drawers_it_sent_and_anchors_that_record` —
+  4 embeds, one record whose tag verifies for `(cli, 4)` and refuses `(cli, 3)`,
+  `(cli, 5)` and `(http, 4)`, `migrate/repair` kept, the newest audit row the egress,
+  and the manifest's head and writes equal to `chain_meta`;
+  `an_aborted_served_repair_records_the_prefix_that_left` — the fourth row tampered, 3
+  embeds, a record verifying 3 and refusing 2, 4 and 6, no `migrate/repair`, the
+  anchor current; `a_repair_that_sends_nothing_records_no_egress` — the hash embedder,
+  and a served empty vault; `a_read_only_repair_is_refused_by_posture_before_it_sends`.
+- `admission allow`: `admission_allow_sends_nothing_and_a_read_only_allow_is_refused_first`
+  — 0 embeds on both postures, the restored vector the quarantined row's;
+  `admission_allow_on_an_external_vault_keeps_the_callers_vector`.
+- `dedup`: `dedup_reuses_stored_vectors_and_sends_no_embed` — a rewritten and a
+  diverted survivor, 0 embeds; `dedup_records_its_advisor_consultations_in_both_modes`
+  — 2 consultations per mode, tags binding count, mode and surface, no embed, and an
+  advisor with no destination recording nothing;
+  `a_read_only_dedup_apply_is_refused_first_and_a_dry_run_serves`.
+- A diverted save: `a_diverted_save_embeds_once_and_the_quarantine_row_keeps_its_vector`.
+- Remote search: `remote_search_embeds_only_the_query_and_scores_like_local_hydration`
+  — 1 embed over 3 candidates and 1 under a mirror repeating every id, `semantic`
+  equal to local hydration's; `a_corrupt_stored_vector_fails_remote_search_without_a_re_embed`
+  — `CorruptRow` naming the row, with the query the only embed. The ruling's "0
+  embeds" for this arm reads as none for the candidate: the query is the caller's text
+  and is embedded before any candidate is read.
+- The CLI crate: `a_served_repair_records_the_host_its_posts_reached` — a real
+  `HttpEmbedder` against a loopback `tiny_http` stub that counts POSTs carrying drawer
+  text: 3 POSTs, one record whose tag verifies against `egress_destination()`, every
+  POST's `Host` rendering to that destination through `undercroft_net`, and a canonical
+  naming another port refused. `tests/cli.rs`
+  `a_served_vault_records_repair_egress_and_refuses_read_only_mutations_before_sending`
+  drives the binary under `UNDERCROFT_EMBEDDER=http` against the same kind of stub.
+- A delegation test per wrapper — the CLI's `SharedOrtEmbedder` and the bench's
+  `SharedEmbedder` (its two loaders' local structs made one) — each made generic over
+  its model ONLY so a test can hand it a model that names a destination. The shipped
+  models answer `None`, so a delegation test built on them could not tell a wrapper
+  that delegates from one that answers for itself.
+- `every_embed_and_advisor_call_is_classified_by_custody` — the source inventory per
+  O80, derived from the store crate's production code: every call of
+  `self.embedder.embed(`, `embedder_embed(`, `.assess(`, `write_drawer(`,
+  `upsert_screened(`, `upsert_screened_with(` and `screen_and_divert(`, by enclosing
+  function, 23 rows, both directions, behind a premise probe (a `'}'`, a `"}"`, a
+  comment, a string, a raw string, a definition and a `#[cfg(test)]` item). Beyond the
+  ruling's wording, stated: the last two needles, because the advisor is reached only
+  through `screen_and_divert` and `dedup` rewrites through `upsert_screened_with`;
+  and a third row kind, `Forwards`, for a door whose custody its own callers decide
+  (`write_drawer`, `screened_write`, `admission_divert`, `embedder_embed`). It
+  inventories functions, not data flow, and says so.
+
+**Counterfactuals — 21 arms, each on a fresh copy, every anchor required to match
+exactly once or the arm runs nothing.** Every named test failed for its predicted
+reason: no success record (0 records, while the hash negative arm stayed green); no
+abort record (0); the repair's older head anchored last (the anchor assertion); the
+`repair` refusal removed (`Sqlite(ReadOnly)` after **0** embeds — probe P1
+reproduced); `allow` re-embedding with no refusal (`Sqlite(ReadOnly)` after **1**
+embed — P2 reproduced — and the external arm restored the zero vector); `dedup`
+through `upsert_screened` (2 embeds); no advise record (0); the `dedup --apply`
+refusal removed (`Sqlite(ReadOnly)` after 0 embeds and **1** consultation); the
+diverted re-embed restored (2 embeds, not 1); `score_drawer` re-embedding (4 embeds
+for 3 candidates, and the corrupt vector returned hits rather than an error — the
+re-embed masked the corruption); the counter removed (no record); an unclassified
+call; a stale row; each wrapper answering `None`; `HttpEmbedder` naming
+`http://127.0.0.1:1` (the `Host` property); and through the binary, `repair` not
+refused (SQLite's message), `dedup --apply` not refused (**exit 0** — the
+`UPGRADING.md` case), no record (0), and `allow` re-embedding (8 POSTs, not 7).
+**Mine, found by reading the arm's one assertion:** the first stale-row arm RENAMED a
+row, which also unclassified a live call, and that assertion fires first — so the
+stale direction had not been shown at all; a separate arm adding a row alone showed it.
+
+**Evidence — a real corpus through a served model.** The LoCoMo feed (85 drawers)
+mined into two wings of a sealed vault under `UNDERCROFT_EMBEDDER=http`, bge-m3
+served through the shipped `embeddings-tls` terminator with its CA pinned, driven
+through a freshly built release binary — premise first: its read-only
+`dedup --apply` refused with the O167 message before any figure was taken. The
+endpoint's own request log counted the embed POSTs it RECEIVED around each command.
+Every open costs 57 (one dimension probe and two 28-text calibration passes), so each
+figure is that baseline plus: `mine` +85 per wing; `repair` **+170**, every drawer,
+with exactly one `egress/embed/repair` in `history` and `verify` ok over 170 records;
+`--read-only repair`, `--read-only dedup --apply` and `--read-only admission allow`
++0, each exit 1 naming the posture; the read-only `dedup` preview +0; `dedup
+--apply` +0 while collapsing 85 duplicate groups; a quarantined save +1; `admission
+allow` +0. A second vault, its 85 drawers pushed to a live qdrant over TLS with one
+`egress/index-push`: a local search +1, and a remote search **+1** at `--limit 10`
+and again at `--limit 25`, whose mirror fetch asks for 100 candidates — each
+verified hit was re-embedded before.
+
+**Mine, in the drive itself, twice.** Its first freshness probe ran before the vault
+had a database, so a read-only open refused it as A33's missing database and the
+script reported a stale binary; the probe now follows the first writable open, and
+its failure message names both causes. And qdrant still held a 384-dimensional
+`undercroft_default` from an earlier hash-embedder run, so the first push was
+refused with the backend's own 400 — loudly, not silently — until that one
+service's state was reset, the battery's own narrow reset.
 
 ### O175 — CLOSED 2026-09-15: under `--read-only`, `index push` shipped every batch before failing to record and `forget --backend` deleted from the mirror before failing — both refuse first, inside the store, and a marker write that fails no longer hides the egress
 
@@ -14809,273 +15321,50 @@ arm: before the open the vector must DIFFER from a fresh embed, or the test
 passes on both trees. Counterfactual: without the new rows the open leaves the
 vector untouched and the equality fails.
 
-### O167 — RULED 2026-09-15 and not yet built: a served embedder receives stored drawer plaintext on paths that record no egress — send nothing where the vault already holds the vector, record what still leaves
+### O189 — the other two diagram sets, checked for O188's spill: four lines spill in `architecture/diagrams/`, and the Mermaid set could not be measured
 
-**Filed 2026-09-14, established by reading the code, not by a run.** Under
-`UNDERCROFT_EMBEDDER=http` every `Embedder::embed` call POSTs its text to
-`UNDERCROFT_EMBED_URL`. Three paths hand that endpoint text the vault already
-HOLDS — decrypted out of a stored drawer — and none appends an `egress/`
-record:
+**Filed 2026-09-15, measured, not argued.**
 
-- **`repair`.** `repair_stmts` (`manage.rs`) re-embeds every drawer through
-  `embedder_embed`: the whole corpus, in one operator command. Its only chain
-  record is `migrate/repair`, through `audit_migration`, whose canonical binds
-  the model name, the time and the fingerprint-backfill count — not how many
-  drawers were re-embedded, and not the host they went to.
-- **`admission allow`.** `admission_allow` (`admission.rs`) embeds the
-  restored drawer's content before writing it back, one drawer per ruling —
-  exactly the content the screen diverted. The ruling is recorded; the egress
-  is not.
-- **Remote-index search.** `search_with_index` (`remote.rs`) passes each
-  candidate that survives verification and the retrieval policy to
-  `score_drawer` (`lib.rs`), which re-embeds the decrypted content locally
-  rather than trust the mirror's vector — up to `max(20, depth·4)` drawers per
-  search. Its `read/search` record is opt-in under
-  `UNDERCROFT_READ_AUDIT=chain` and describes a read returned to a caller,
-  never a destination.
+**`architecture/diagrams/`** — the 11 source SVGs, measured in a renderer where
+`architecture/index.html` inlines them, 579 text elements. Four lines spill:
 
-The open-time embedder walk is not a fourth: `KNOWN_EMBEDDER_UPGRADES` moves
-hash identities only, and a hash embedder sends nothing anywhere.
+- `domain-model.svg`: `triple_id keyed by a stored secret ⇒ repeats collapse · …`,
+  68 past its 384-wide card.
+- `layers.svg`: `Outward paths are opt-ins — UNDERCROFT_LLM_URL, …`, 43 past the
+  852-wide card.
+- `write-path.svg`: `Then the Screen every write_drawer must state: …`, 73 past its
+  card.
+- `security-keys.svg`: `PQ rows, pages, codebooks — index ids, not drawer ids`, 26
+  past.
 
-**Scope, stated.** A write's own content and a search's query text reach the
-endpoint too, and they are not this entry: that text is the caller's, on its
-way in, where these three send what the vault already holds — the side of the
-line `refine` and `index_push` both sit on. Whether arriving text owes a record
-is not argued here, and the advisor below is that same question.
+That is the Windows pane's Segoe UI; `-apple-system` on macOS renders a few percent
+wider, so a line near an edge needs margin. A static 0.56 em estimate flagged 92
+lines on this prose-heavy set and is not usable here. **Shape of the fix:** reword
+in the SVG, the only source; run `build.sh` in Docker so the inlined copies and
+`pdf/` regenerate; `arch-check` green; look at the page. **Open question for the
+build:** `build.sh --check` verifies inlining, not fit, and a renderer-true check
+needs a headless browser that the stdlib checker does not have. Decide between a
+calibrated estimate and a measured review step.
 
-**Why each owes a record — O79's own argument.** `index_push` records
-`egress/index-push` unconditionally for embeddings, which are merely
-plaintext-derived, and O79 made `refine` record for plaintext POSTed to a model
-endpoint. These three POST the plaintext itself. Each owes an `egress/` record
-binding the destination host, the model and the drawer count — when, and only
-when, the embedder is a served endpoint; the in-process backends (`hash`,
-`onnx`, `ort`) move nothing.
+**`docs/diagrams/`** — 14 Mermaid SVGs whose labels are HTML in `<foreignObject>`,
+widths frozen by mermaid-cli 10.9.1's fonts. Not measured: the Browser pane refused
+to open them standalone, from the scratchpad, and from `.battery/`. **Method for
+next time:** inline them into a page the pane will open, and compare each label's
+`scrollWidth` with its `foreignObject` width.
 
-**Shape, and what it costs:**
+**Also found:** `22-storage-layout.html`'s `17 TABLES + 1` may be stale. A read of
+the schema found 18 regular tables besides the full-text one, including
+`kg_audit_relabel`, which may be temporary. Verify the count against the schema
+before trusting either number.
 
-- The host must come from the transport's own parser (O92), credential-stripped
-  as `LlmClient::destination` is for `refine`. `HttpEmbedder` has no such
-  accessor today and the store sees only the `Embedder` trait, so the trait, or
-  the store's construction, has to learn to name a destination, with the
-  in-process backends answering none.
-- `repair` runs inside one transaction, and a rollback erases a record written
-  inside it while the corpus prefix is already at the endpoint — O95's
-  error-path lesson. The record must survive the abort: written outside the
-  bracket, counting drawers actually POSTed, on both exits.
-- An unconditional record per remote search makes every such search a chain
-  write — the volume that made the `read/` trail opt-in — and a read-only
-  handle cannot append, so it would warn and serve on the replica precedent.
-  Recording only under `UNDERCROFT_READ_AUDIT=chain` is cheaper and breaks the
-  rule that `egress/` is unconditional; that trade is part of the ruling.
-- `admission allow` already appends its ruling on an operator surface, so its
-  record is the cheap one.
+**O179 filed the `layers.svg` line first**, on 2026-09-14, from an Arial estimate
+of about 75 past the viewBox; the renderer's 39 past the card is the
+measurement, and the card is the bound. Its proposed `build.sh --check` arm,
+every `<text>` against its viewBox, is a prior filing and not a ruling, so the
+gate question above must answer it. O179's egress half was O188's.
 
-#### The tier-2 admission advisor is unclassified
-
-With `UNDERCROFT_ADMISSION_LLM=advisory`, `LlmAdmissionAdvisor::assess`
-(`undercroft-llm/src/advisor.rs`) sends each tier-1-clean write candidate's
-content to `UNDERCROFT_LLM_URL` through `LlmClient::complete`, and nothing
-records it. Unlike the three paths above, that content is the candidate on its
-way IN — a save, an update, an imported record — never text read back out of
-storage. The tree does not settle whether that is an egress, so:
-
-- **An `egress/` record per consultation.** O79 read literally. It adds a chain
-  record beside each screened write on an advisory vault, and `upsert_many`
-  consults the advisor before its transaction opens, so a record written
-  inside a batch that rolls back is erased after the content has left — O95's
-  lesson again.
-- **The destination folded into the write's own record.** No second record, but
-  it changes a write canonical that is byte-identical today, which is an
-  audit-format change owing its own argument.
-- **Ruled not an egress, and said so.** The candidate is text the writer
-  already holds, sent to an endpoint the operator declared. Cheapest — and the
-  ruling must then cover a served embedder's embed of the same write too, or
-  the tree carries two answers to one question.
-
-**Gate**: a `repair` under a served embedder pointed at an unreachable loopback
-URL, with `UNDERCROFT_EMBED_DIM` declared so construction does not probe,
-appends exactly one `egress/` record binding host, model and count; every
-embed degrading to a counted zero vector is what makes it drivable without a
-model, as O79's gates were. Counterfactual: today's tree appends none. Negative
-arm: the same `repair` under the hash embedder appends none either.
-
-#### RULED 2026-09-15 by three lenses — Agentic Memory, Security, storage/transaction engineering — and an adversarial refuter, with two probes run by the integrator
-
-**Questions.** Q1, remote-index search re-embedding stored candidates. Q2, the
-tier-2 advisor and a served embed of ARRIVING write content. Q3, how the store
-names a destination. Q4, the record shape, placement and read-only posture for
-`repair` and `admission allow` — and for `dedup`, which every lens found and the
-filing missed. Q5, the gates.
-
-**Prior rulings.** O79 and O95 are FOLLOWED: stored plaintext POSTed to a
-declared endpoint is an egress, recorded unconditionally under `egress/`, counted
-by attempt, recorded on both exits from one site, and not recorded when nothing
-left. O92 is FOLLOWED: a destination comes from the transport's own parser. O122
-is FOLLOWED: a required trait method where a default would be the silent shape.
-**O175 is not the rule here.** The lenses reached for it by analogy, and the
-refuter held them to O184's own sentence — a POST is an egress, not a remote
-mutation, so O175 does not decide it. The posture rule below is new, and it is
-O184's question too, so it is recorded there as well.
-
-**Ruled — two principles.** *Send less before recording more*: where the vault
-already holds the vector a path would compute, the path uses it and sends
-nothing, and a record is owed only for stored text that still has to leave.
-*Custody, not call site*: a POST owes `egress/` when its input was read out of a
-committed row, or derived from one, within the same operation. The caller's own
-text on this call — a save, an import, an update, a query, the advisor's
-candidate — is not an egress, for the advisor and the embedder alike. Residual,
-stated: the chain cannot name the endpoint that received arriving text; the
-deployment's configuration does.
-
-**Q1 — remote search: (c), score from the stored embedding.** `score_drawer`
-takes its semantic leg from the candidate's stored embedding through one helper
-shared with local hydration. An embedding that will not open maps to
-`CorruptRow`: it is never skipped and never re-embedded, because a re-embed
-fallback would hand an offline writer a trigger for plaintext egress. The query
-embed stays, being the caller's text. Nothing is sent, so no record is owed. The
-mirror never offered a vector (`Candidate` is `{id, score}`), and the vector it
-does hold is the stored one `index_push` sent. **Costs, stated.** On an hmac-only
-vault the score now rests on an embedding outside HMAC coverage, which an
-offline writer can move — the default local path's cost today. And remote search
-becomes exactly as stale as local search in the known windows (the force
-override on a read-only open, O166's Hebrew leg), no longer fresher. *Lost:* (a)
-a chain write per search to record a POST that can be removed, nothing recorded
-on a read-only handle, and an untrusted mirror still setting the volume — no
-backend truncates to `limit`, and repeats are O186. (b) two rules for `egress/`,
-and force-disabled on read-only opens.
-
-**Q2 — the advisor and arriving text: (c), by custody as above.** *Lost:* (a) a
-record per write carrying a deployment constant, which `upsert_many`'s rollback
-would erase because the batch screens before its `BEGIN IMMEDIATE`. (b) a URL
-bound into a durable write canonical that is byte-identical today, and erased
-along with a refused write.
-
-**Q3 — the destination: (a).** A required `egress_destination(&self) ->
-Option<String>` on `Embedder` AND on `AdmissionAdvisor`. In-process backends and
-`ExternalEmbedder` answer `None` and say why; wrappers (`SharedOrtEmbedder`, the
-bench's) delegate, each with its own delegation test, because a required method
-forces a statement, not a true one. It never enters `model_name`: a re-hosted
-endpoint would then refuse every vault. `LlmClient::destination`'s body and
-`UNPARSEABLE_DESTINATION` move verbatim into `undercroft-net` beside
-`is_loopback`, both clients delegate, and O92's table does not move. The property
-test compares against the host of the URL actually POSTed, not the base. *Lost:*
-(b) a construction parameter — a second statement of one fact, set at two
-construction sites (`open_store_as` and `embedder_factory`), and able to be wrong:
-an `ExternalEmbedder` rebuilt from the recorded identity sends nothing.
-
-**Q4 — the paths.**
-
-- **`repair`** records `egress/embed/repair` with canonical
-  `egress␟embed␟repair␟{surface}␟{destination}␟{model}␟{sent}␟{now}`, `sent`
-  incremented immediately before each embed. The record is written in its own
-  transaction after COMMIT or after ROLLBACK, with no fallible step between, and
-  the LAST anchor written names the newest head — `Vault::anchor_manifest`
-  overwrites without a check, so an older anchor written after the record would
-  regress the manifest and leave the record a strippable tail. Skipped when the
-  destination is `None` or `sent == 0`. An audit failure warns and never replaces
-  the original error. `migrate/repair` stays byte-identical.
-- **`admission allow` sends nothing.** It reuses the quarantined row's stored
-  vector, whose content is byte-identical to the restored drawer's. That removes
-  the POST, the read-only leak, and a defect no entry recorded: on an external
-  vault `allow` replaced the caller's vector with `ExternalEmbedder`'s zero vector.
-  `repair` rewrites the quarantine row too, so the reused vector is never staler
-  than any other.
-- **`dedup`** reuses the survivor's stored vector (its content is unchanged) and
-  sends no embed. Its advisor consultations on stored survivors stay —
-  `Screen::Apply` is not this panel's to move — and record `egress/advise/dedup`,
-  binding surface, destination, the consultation count and `apply`, in both modes
-  when the count is above zero. It consults only when `gained > 0`.
-- **`write_drawer` stops re-embedding a diverted copy** and stores the embedding
-  its caller passed. `admission_divert` changes no content in any branch — the
-  rate, destination and advisor screens only push signals — so the second forward
-  pass did no work, doubled every diverted POST of arriving text, and would have
-  sent a diverted `dedup` survivor's stored plaintext unrecorded. A carried vector
-  on import then lands on the quarantine row exactly as on a non-diverted row,
-  which is parity, not a gap. The refuter settled this against filing it
-  separately and narrowing `dedup`'s guarantee, which would have left that
-  unrecorded POST inside the unit written to close it.
-- **Labels `egress/<channel>/<op>`.** The id is the only field `history` shows,
-  `dedup` reaches two destinations, and no reader matches a middle segment. A
-  drawer id is not content-derived and already sits in clear in
-  `admission/{id}/…`. **`surface` is bound**: `repair` and `allow` are CLI and
-  `/v1`, and `dedup` adds MCP, a different principal. **No `failed` field**: a
-  counted embed failure includes requests the endpoint received — a wrong
-  dimension, an unparseable answer — so it cannot mean "did not leave", and it is
-  already live on `VaultStats.embed_failures`.
-- **Posture: a non-dry-run mode decides its posture before its first egress; a
-  mode that can finish read-only keeps O79's warn-and-serve.** `admission allow`
-  and `dedup --apply` refuse on a read-only handle before any embed or
-  consultation, with `StoreError::Invalid` naming the posture; a read-only `dedup`
-  dry run warns and serves. `repair` refuses before `BEGIN IMMEDIATE` too, as
-  hardening: probe P1 shows it sends nothing read-only today, but only because
-  `BEGIN IMMEDIATE` opens a write transaction on the TEMP database slot, which
-  `query_only` refuses — an accident, and the tree's own idiom of embedding before
-  the write lock (`lib.rs`, `upsert_many`) would undo it silently. **Cost, owed
-  in the build unit:** `--read-only dedup --apply` on a vault with no duplicates
-  exits 0 today and will exit 1, so `UPGRADING.md` gets an entry. `repair` and
-  `allow` already exit 1 read-only.
-
-**Q5 — gates, as corrected.** Store tests use a counting embedder that declares
-its gate and floor (otherwise the open's calibration issues embeds), counted
-after open. A real `HttpEmbedder` against a counting loopback stub lives in the
-CLI crate, which carries `tiny_http` and the `stub_llm` precedent; an unreachable
-URL cannot tell 0 POSTs from 1.
-
-- `repair`: N requests and one `egress/embed/repair`, whose tag verifies with N
-  and refuses N±1. Abort arm: row k tampered, `sent = k−1`, no `migrate/repair`.
-  The manifest head equals `chain_meta` after the run. `hash` and an empty vault
-  record nothing. Read-only: `Invalid` naming the posture with 0 requests — the
-  counterfactual is the error variant, `Sqlite(ReadOnly)`, since today's tree
-  already sends 0.
-- `admission allow`: 0 requests writable and read-only; the restored vector
-  equals the quarantine row's; the external-vault arm is non-zero; the read-only
-  counterfactual is 1 request, then `Sqlite(ReadOnly)`.
-- `dedup`: 0 embed requests, including for a survivor the screen diverts; a
-  counting advisor stub; read-only `--apply` refused with 0 requests.
-- A diverted `upsert_screened`: exactly 1 embed, and the quarantine row's vector
-  equals the caller's. Counterfactual with the diverted re-embed restored: 2.
-- Remote search: 1 embed (the query) with two or more candidates, and with a
-  mirror repeating ids. Remote `semantic` equals local hydration's. Sealed arm: a
-  corrupted `/emb` gives `CorruptRow` with 0 embeds.
-- The destination property against the POSTed URL, O92's table unchanged, and a
-  delegation test per wrapper.
-- A source inventory derived from the source, per O80: every
-  `self.embedder.embed(`, `embedder_embed(` and `.assess(`, and every caller of
-  `write_drawer`/`upsert_screened`, classified as custody with its recorder or as
-  arriving with its reason, both directions, with a premise probe. It inventories
-  functions, not data flow, and says so.
-
-**Claims refuted — the brief's first.** The integrator's brief missed `dedup`;
-called `upsert_screened` arriving-only; cited `open_store_as` as
-`embedder_factory`; stated `max(20, depth·4)` as a re-embed count when it is the
-fetch size an untrusted mirror need not honour; said "two attempts", which is
-false on a wrong dimension; called the mirror's vector a different object when it
-is the stored one; omitted the fragment `destination` keeps; and summarised O175
-without O184's sentence. The filing's own gate cannot open its vault under `http`
-without `UNDERCROFT_FORCE_EMBEDDER=1`, and its unreachable URL cannot tell 0 POSTs
-from 1. Lens claims refuted: that the advisor never sees stored text (`dedup`);
-that a read-only `dedup` dry run "fails nowhere" (the CLI only — MCP and `/v1`
-refuse it); both proposed anchor placements, one of which regresses the manifest
-and the other of which loses the record on a failed anchor; and O175 applied by
-analogy.
-
-**Probes, run by the integrator on a scratch copy of `88000a6`.** P1: `repair()`
-on a read-only handle returned `Sqlite(ReadOnly)` with **0 embeds** on a modern
-vault and on one with a NULL fingerprint; the writable premise made 3. **It
-refuted the Agentic Memory lens's reading and the refuter's own prediction of one
-embed** — two agents reading the pinned SQLite source agreed on an observable that
-execution contradicted — and the refuter then located the cause in the temp
-slot. P2: `admission_allow` on a read-only handle issued **1 embed** and then
-`Sqlite(ReadOnly)`; the writable premise made 1. Confirmed.
-
-**Dissent, settled by evidence.** Security would have kept one `egress/embed`
-with the operation only inside the canonical — settled by the id being the only
-readable field. Storage and the Agentic Memory lens would have bound `failed` —
-settled by what that number means.
-
-**What remains.** Filed: O186, a mirror repeating an id gets duplicate hits back;
-O187, refine's fact-mirror drawers are embedded and screened with no record
-naming those endpoints. The build is not done.
+**Gate:** each of the four lines inside its card, measured in a renderer, and the
+14 Mermaid labels inside their `foreignObject` widths.
 
 ### O168 — seven of the ten release binaries are compiled on no pull request: Windows `-ort`, and both macOS targets and Linux arm64 in both builds
 
@@ -16184,45 +16473,6 @@ the same unit; a row that matches nothing fails, so the two cannot drift apart.
 change `Eighty-one` to `Eighty-two` and `ALL 81` to `ALL 82` — the preflight
 passes today and must fail after the unit, naming each. For the label: with the
 regex moved and the label left alone, the row reports that it found no figure.
-
-### O179 — two diagram labels overrun their bounds by estimate, and no gate measures a label's width
-
-**Filed 2026-09-14 from the drift sweep. Widths are ESTIMATED from font
-metrics, not rendered.**
-
-**`architecture/diagrams/layers.svg`, the footer.** The second footer line
-(`<text x="42" y="568" class="f s dim">`, 11px sans) is the 157-character
-sentence beginning "Outward paths are opt-ins". With Arial advance widths it
-measures about 933px from x=42, ending near 975 in a 900-wide viewBox —
-roughly 75px past the edge, taking the sentence's closing claim (every outward
-path is TLS or loopback via `undercroft-net`) with it. `diagrams/` is the
-source, and `build.sh` derives the inlined copy and the PDF from it, so the
-overrun reaches all three.
-
-**`architecture/platform-views/18-egress-paths.html`, the destination boxes.**
-Lines 160 and 165–167 are 9px monospace sublabels centred in 224px boxes (`a
-remote vector backend` from x=548, `the LLM endpoint` from x=848), 47, 48, 48
-and 50 characters long. At a 0.6em advance they measure 254–270px, and at
-Consolas' narrower 0.55em 233–248px, so every estimate crosses its box's
-stroke on both sides.
-
-**No gate measures it.** `platform-views/check.py` checks rect geometry,
-connectors and label masks, never text extent, and `build.sh --check` compares
-derived bytes. Both pass these files.
-
-**Fix shape.** Shorten or wrap the five lines in their source files and re-run
-`build.sh` for `layers.svg`. Add an estimated-extent check: in `check.py`,
-monospace at a declared advance and sans from a metrics table, measured against
-the node rect the label sits in (the `rx` discriminator already separates a
-node from a zone); in `build.sh --check`, every `<text>` against its viewBox.
-
-**Gate and counterfactual.** Premise probe before any clean result: an
-overlong fixture label inside a node fails, and an exemplar label verified by
-eye passes — `check.py`'s own calibration rule. Counterfactual: the new check
-on the current tree fails naming exactly these lines, and passes once they are
-relabelled. Residual, stated: an estimate cannot see font fallback or kerning,
-so a label within a few pixels of its bound stays a judgement for a rendered
-page.
 
 ### O180 — the round-four heading check has examined nothing since 2026-08-19, and a missing heading reads as a pass
 

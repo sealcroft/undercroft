@@ -1714,13 +1714,24 @@ fn embedder_factory() -> tenant::EmbedderFactory {
     )
 }
 
-/// A cheap handle onto the one shared [`undercroft_embed_ort::OrtEmbedder`]
-/// session pool the multi-tenant server loaded.
-#[cfg(feature = "ort")]
-struct SharedOrtEmbedder(std::sync::Arc<undercroft_embed_ort::OrtEmbedder>);
+/// A cheap handle onto the one shared session pool the multi-tenant server
+/// loaded — `undercroft_embed_ort::OrtEmbedder` in every shipped build.
+///
+/// Generic over the model only so a test can prove it DELEGATES (ROADMAP
+/// O167): the shipped model answers `None` for its destination, and a wrapper
+/// answering `None` itself would pass any test built on that model.
+#[cfg(any(test, feature = "ort"))]
+struct SharedOrtEmbedder<E>(std::sync::Arc<E>);
 
-#[cfg(feature = "ort")]
-impl undercroft_core::embed::Embedder for SharedOrtEmbedder {
+#[cfg(any(test, feature = "ort"))]
+impl<E: undercroft_core::embed::Embedder> undercroft_core::embed::Embedder
+    for SharedOrtEmbedder<E>
+{
+    /// Delegated, never answered here: a wrapper that said `None` for a
+    /// backend that sends would hide its egress (ROADMAP O167).
+    fn egress_destination(&self) -> Option<String> {
+        self.0.egress_destination()
+    }
     fn model_name(&self) -> &str {
         self.0.model_name()
     }
@@ -3919,7 +3930,7 @@ fn run(cli: Cli) -> Result<()> {
         }
         Command::Dedup { vault, apply } => {
             let mut store = open_store(&cli, vault)?;
-            let report = store.dedup(*apply)?;
+            let report = store.dedup(*apply, "cli")?;
             println!(
                 "{} duplicate group(s), {} extra drawer(s) {}",
                 report.duplicate_groups,
@@ -3964,7 +3975,7 @@ fn run(cli: Cli) -> Result<()> {
                 }
                 return Ok(());
             }
-            let (report, backfilled) = store.repair()?;
+            let (report, backfilled) = store.repair("cli")?;
             println!("fingerprints backfilled: {backfilled}");
             println!("records checked: {}", report.records_checked);
             println!(
@@ -4957,6 +4968,189 @@ mod tests {
         assert!(
             windowed.starts_with('…') && windowed.contains("twelve"),
             "a deep match is still windowed with an ellipsis: {windowed}"
+        );
+    }
+
+    /// **The ORT wrapper delegates, the destination included** (ROADMAP O167).
+    /// A required `egress_destination` forces a wrapper to SAY something, not
+    /// the true thing — so the inner model here names a destination, which the
+    /// shipped model never does, and every method must pass it on.
+    #[test]
+    fn the_shared_ort_wrapper_delegates_every_method_including_the_destination() {
+        use undercroft_core::embed::Embedder;
+        struct Served;
+        impl Embedder for Served {
+            fn model_name(&self) -> &str {
+                "served"
+            }
+            fn dimension(&self) -> usize {
+                3
+            }
+            fn embed(&self, _text: &str) -> Vec<f32> {
+                vec![0.25, 0.5, 0.75]
+            }
+            fn embed_failures(&self) -> u64 {
+                7
+            }
+            fn egress_destination(&self) -> Option<String> {
+                Some("https://embed.example".to_string())
+            }
+        }
+        let wrapped = SharedOrtEmbedder(std::sync::Arc::new(Served));
+        assert_eq!(
+            wrapped.egress_destination().as_deref(),
+            Some("https://embed.example")
+        );
+        assert_eq!(
+            (
+                wrapped.model_name(),
+                wrapped.dimension(),
+                wrapped.embed_failures()
+            ),
+            ("served", 3, 7)
+        );
+        assert_eq!(wrapped.embed("x"), vec![0.25, 0.5, 0.75]);
+    }
+
+    /// **A served `repair`, through the real `HttpEmbedder`, records the host
+    /// its POSTs actually reached** (ROADMAP O167, O92). The store's tests count
+    /// a double; this counts requests a loopback stub RECEIVED and reads the
+    /// `Host` each arrived with, so the recorded destination is checked against
+    /// the transport rather than against the string it was built from.
+    #[test]
+    fn a_served_repair_records_the_host_its_posts_reached() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, Mutex};
+        use undercroft_core::embed::Embedder;
+        const MARK: &str = "zephyrquill";
+
+        let server = Arc::new(tiny_http::Server::http("127.0.0.1:0").unwrap());
+        let port = server.server_addr().to_ip().unwrap().port();
+        let marked = Arc::new(AtomicUsize::new(0));
+        let hosts = Arc::new(Mutex::new(Vec::<String>::new()));
+        {
+            let (server, marked, hosts) = (server.clone(), marked.clone(), hosts.clone());
+            std::thread::spawn(move || {
+                for mut req in server.incoming_requests() {
+                    let mut body = String::new();
+                    let _ = req.as_reader().read_to_string(&mut body);
+                    // Only drawer text carries the mark; an open's calibration
+                    // probes do not, and must not be counted as a drawer.
+                    if body.contains(MARK) {
+                        marked.fetch_add(1, Ordering::SeqCst);
+                        if let Some(h) = req.headers().iter().find(|h| h.field.equiv("Host")) {
+                            hosts.lock().unwrap().push(h.value.as_str().to_string());
+                        }
+                    }
+                    let seed = body.len() as f32;
+                    let v: Vec<f32> = (0..8)
+                        .map(|i| ((seed + 7.0 * i as f32) % 13.0) / 13.0 + 0.05)
+                        .collect();
+                    let _ = req.respond(
+                        tiny_http::Response::from_string(
+                            serde_json::json!({ "embedding": v }).to_string(),
+                        )
+                        .with_header(
+                            tiny_http::Header::from_bytes(
+                                &b"Content-Type"[..],
+                                &b"application/json"[..],
+                            )
+                            .unwrap(),
+                        ),
+                    );
+                }
+            });
+        }
+        let base = format!("http://127.0.0.1:{port}");
+        let embedder = undercroft_llm::HttpEmbedder::connect(
+            &base,
+            "stub",
+            undercroft_llm::ApiKind::Ollama,
+            "",
+            Some(8),
+        )
+        .unwrap();
+        let destination = embedder
+            .egress_destination()
+            .expect("a served embedder names where it sends");
+        let dir = TempDir::new().unwrap();
+        let mgr = undercroft_vault::VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr
+            .create("served", undercroft_vault::SecurityLevel::Sealed)
+            .unwrap();
+        let mut store = VaultStore::open_with_embedder(vault, Box::new(embedder)).unwrap();
+        for i in 0..3u32 {
+            let text = format!("{MARK} note {i} on the turbines");
+            store
+                .upsert(&undercroft_core::Drawer::new(
+                    "ops", "r", text, None, i, "test",
+                ))
+                .unwrap();
+        }
+        assert_eq!(
+            marked.load(Ordering::SeqCst),
+            3,
+            "premise: each save reached the stub"
+        );
+        marked.store(0, Ordering::SeqCst);
+        hosts.lock().unwrap().clear();
+
+        let (report, _) = store.repair("cli").unwrap();
+        assert!(report.ok());
+        assert_eq!(
+            marked.load(Ordering::SeqCst),
+            3,
+            "every stored drawer was POSTed"
+        );
+
+        let rows: Vec<_> = store
+            .history(
+                undercroft_store::manage::HistoryScope::Operator,
+                None,
+                500,
+                0,
+            )
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.record_id == "egress/embed/repair")
+            .collect();
+        assert_eq!(rows.len(), 1, "one record for the run");
+        let tag = hex::decode(&rows[0].tag).unwrap();
+        let canonical = |dest: &str, sent: u64| {
+            format!(
+                "egress\u{1f}embed\u{1f}repair\u{1f}cli\u{1f}{dest}\u{1f}http:stub\u{1f}{sent}\u{1f}{}",
+                rows[0].at
+            )
+        };
+        assert!(
+            store
+                .vault()
+                .verify_tag(canonical(&destination, 3).as_bytes(), &tag)
+                .is_ok(),
+            "the record binds the embedder's destination and the count"
+        );
+        assert!(store
+            .vault()
+            .verify_tag(canonical(&destination, 2).as_bytes(), &tag)
+            .is_err());
+        // The O92 property, against the transport: each POST's `Host` names
+        // the destination the record binds.
+        let hosts = hosts.lock().unwrap();
+        assert_eq!(hosts.len(), 3, "premise: every POST was seen");
+        for host in hosts.iter() {
+            assert_eq!(
+                undercroft_net::egress_destination(&format!("http://{host}")),
+                destination,
+                "POSTed to {host}"
+            );
+        }
+        let elsewhere = format!("http://127.0.0.1:{}", port.wrapping_add(1));
+        assert!(
+            store
+                .vault()
+                .verify_tag(canonical(&elsewhere, 3).as_bytes(), &tag)
+                .is_err(),
+            "a different port is refused, so the binding is not decoration"
         );
     }
 }

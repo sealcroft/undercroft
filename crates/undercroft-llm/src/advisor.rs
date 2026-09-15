@@ -103,6 +103,11 @@ pub(crate) fn parse_verdict(answer: &str) -> Option<bool> {
 }
 
 impl AdmissionAdvisor for LlmAdmissionAdvisor {
+    /// The LLM endpoint every consultation POSTs to (ROADMAP O167).
+    fn egress_destination(&self) -> Option<String> {
+        Some(self.client.destination())
+    }
+
     fn assess(&self, content: &str) -> Option<bool> {
         let user = format!("<candidate>\n{content}\n</candidate>");
         match self.client.complete(SYSTEM, &user) {

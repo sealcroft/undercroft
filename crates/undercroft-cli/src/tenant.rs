@@ -1385,7 +1385,7 @@ impl Tenancy {
         // would be a second mechanism for a case the operator can avoid.
         self.deny_co_resident(id, "repairing", "run `undercroft repair <name>`")?;
         let store = self.store_for(id)?;
-        let (report, backfilled) = store.repair().map_err(store_err)?;
+        let (report, backfilled) = store.repair("http").map_err(store_err)?;
         let mut body = Self::verify_report_json(&report);
         // The one field this route adds over `verify`. Everything else comes
         // from the SHARED projection, so a new `VerifyReport` leg reaches both
@@ -2285,7 +2285,7 @@ impl Tenancy {
                 .unwrap_or(false)
         };
         let store = self.store_for(id)?;
-        let r = store.dedup(apply).map_err(store_err)?;
+        let r = store.dedup(apply, "http").map_err(store_err)?;
         Ok((
             200,
             Body::Json(json!({

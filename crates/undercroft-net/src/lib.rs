@@ -490,6 +490,96 @@ pub fn read_json_bounded(resp: ureq::Response) -> Result<serde_json::Value, Body
     Ok(serde_json::from_slice(&bytes)?)
 }
 
+/// Rendered in place of a destination when a base URL does not parse — a
+/// marker no parser mistakes for a host (ROADMAP O92). Shared by every client
+/// that names where it sends (ROADMAP O167).
+pub const UNPARSEABLE_DESTINATION: &str = "<unparseable base url>";
+
+/// Where a client whose base URL is `base` sends, **with any credential
+/// stripped** — the destination an egress record names.
+///
+/// **One implementation for every client that POSTs vault content (ROADMAP
+/// O167)**: the LLM client `refine` and the tier-2 advisor use, and the served
+/// embedder. It moved here verbatim from `LlmClient::destination`, so every
+/// rendering — and every canonical already built from one — is unchanged.
+///
+/// **It asks the parser the transport uses and never hand-parses (ROADMAP
+/// O92).** `ureq` resolves the host with this same `url` crate, so the host
+/// named here cannot differ from the host dialed. Userinfo is dropped. Residual,
+/// stated: what follows the authority is kept verbatim, so a credential an
+/// operator put in a path or query still reaches the result.
+pub fn egress_destination(base: &str) -> String {
+    // Ask the parser the TRANSPORT uses. `ureq` resolves the host with
+    // this same `url` crate, so reading the host from it is what makes
+    // this function structurally unable to name somewhere else.
+    let Ok(u) = url::Url::parse(base) else {
+        return UNPARSEABLE_DESTINATION.to_string();
+    };
+    let Some(host) = u.host_str() else {
+        return UNPARSEABLE_DESTINATION.to_string();
+    };
+    let mut out = format!("{}://{host}", u.scheme());
+    // `port()` and not `port_or_known_default()`: an implicit 443 was
+    // never in the string an operator configured, and adding one would
+    // move every existing canonical for no gain.
+    if let Some(port) = u.port() {
+        out.push(':');
+        out.push_str(&port.to_string());
+    }
+    // Both clients trim trailing slashes from their base at construction,
+    // so a path of exactly `/` is the parser's normalization of "no path"
+    // and is dropped — that keeps the ordinary local-runtime rendering, and
+    // so every canonical built from it, byte-identical to what shipped.
+    let path = u.path();
+    if !(path == "/" && u.query().is_none() && u.fragment().is_none()) {
+        out.push_str(path);
+    }
+    if let Some(q) = u.query() {
+        out.push('?');
+        out.push_str(q);
+    }
+    if let Some(f) = u.fragment() {
+        out.push('#');
+        out.push_str(f);
+    }
+    out
+}
+
+#[cfg(test)]
+mod destination_tests {
+    use super::*;
+
+    /// **The O92 property, at the one implementation**: the host and port this
+    /// names are the ones the parser — and so the transport — resolves, over
+    /// spellings built to make a hand-parse disagree, and no userinfo survives.
+    #[test]
+    fn the_destination_is_the_parsers_host_and_carries_no_userinfo() {
+        for base in [
+            "http://127.0.0.1:1234/v1",
+            "https://user:secret@gateway.example/v1",
+            "https://evil.com\\@127.0.0.1/v1",
+            "http://127.0.0.1:8080@evil.com/",
+            "https://a:b@host.example:8443/x?y=z#f",
+            "https://host.example/v1/models/llama@latest",
+            "https://host.example/v1?contact=ops@example.com",
+            "http://[::1]:11434",
+        ] {
+            let parsed = url::Url::parse(base).unwrap();
+            let named = egress_destination(base);
+            let reparsed =
+                url::Url::parse(&named).unwrap_or_else(|e| panic!("{base} -> {named}: {e}"));
+            assert_eq!(reparsed.host_str(), parsed.host_str(), "{base} -> {named}");
+            assert_eq!(reparsed.port(), parsed.port(), "{base} -> {named}");
+            assert!(
+                reparsed.username().is_empty() && reparsed.password().is_none(),
+                "no credential may survive: {base} -> {named}"
+            );
+        }
+        assert_eq!(egress_destination("not a url"), UNPARSEABLE_DESTINATION);
+        assert!(url::Url::parse(UNPARSEABLE_DESTINATION).is_err());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

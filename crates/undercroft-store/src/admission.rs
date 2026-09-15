@@ -428,7 +428,12 @@ impl VaultStore {
             // never shown to the model, so talking the classifier into
             // "clean" bypasses nothing), and a failed or unparseable
             // answer is a non-event, never a blocked write.
-            match self.admission_advisor.as_ref()?.assess(&drawer.content) {
+            let advisor = self.admission_advisor.as_ref()?;
+            // Counted immediately before the call, whatever it answers
+            // (ROADMAP O167): the candidate has left by then. `dedup` reads
+            // the count to record the stored survivors it showed the advisor.
+            self.advisor_consults.set(self.advisor_consults.get() + 1);
+            match advisor.assess(&drawer.content) {
                 Some(true) => signals.push(undercroft_core::admission::AdmissionSignal {
                     code: undercroft_core::admission::LLM_ADVISORY_CODE.to_string(),
                     offset: 0,
@@ -574,6 +579,11 @@ impl VaultStore {
     /// in the chain, not on the record), then remove the quarantined
     /// copy. Returns the re-filed drawer's id.
     pub fn admission_allow(&mut self, id: &str) -> Result<String, StoreError> {
+        // The posture first (ROADMAP O167): re-filing is a write that cannot
+        // land read-only. The allow sends nothing any more — it reuses the
+        // quarantined row's stored vector below — and a mode with no dry run
+        // decides its posture before it does anything at all.
+        self.refuse_when_read_only("admission allow re-files a quarantined drawer")?;
         let d = self.quarantined(id)?;
         let wing = d.meta.intended_wing.clone().unwrap_or_default();
         let room = d.meta.intended_room.clone().unwrap_or_default();
@@ -626,7 +636,12 @@ impl VaultStore {
         // still trips the screen (that is why it was here), and the
         // human ruling IS the override — re-screening would trap every
         // allowed drawer forever.
-        let embedding = self.embedder.embed(&restored.content);
+        // The quarantined row's own stored vector (ROADMAP O167). Its content
+        // is byte-identical to `restored`'s — only metadata and id moved — so
+        // asking the embedder again sent the drawer to a served endpoint for a
+        // vector the vault already held, and on an external vault replaced the
+        // caller's vector with `ExternalEmbedder`'s zero vector.
+        let embedding = self.stored_embedding(id)?;
         // The human ruling IS the override — stated, not implied.
         self.write_drawer(
             &restored,

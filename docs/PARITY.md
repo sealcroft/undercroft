@@ -147,7 +147,12 @@ this project, which is why the two codebases share concepts but not code
   binding surface, destination host (credentials stripped), model, scope
   and counts, written on a dry run too because the corpus leaves
   identically either way, and on a run that errors mid-loop with the
-  count that actually left; a run that selected nothing records nothing. Reads are audited under
+  count that actually left; a run that selected nothing records nothing.
+  Since O167 so are the two paths that hand stored drawers to a served
+  model — `repair` through the embedder (`egress/embed/repair`) and `dedup`
+  through the tier-2 advisor (`egress/advise/dedup`) — while remote search,
+  `admission allow` and `dedup`'s rewrite reuse stored vectors and send
+  nothing. Reads are audited under
   `UNDERCROFT_READ_AUDIT=chain` across **thirteen doors** — nine that
   return drawer content and four knowledge-graph readers — one record per
   read, with a **keyed fingerprint of the subject, never its text**. The

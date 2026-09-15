@@ -182,7 +182,7 @@ restore**, not a repair-in-place of forged bytes:
    is the only verbatim fix for both.
 3. **Housekeeping** after a clean restore:
    ```bash
-   undercroft repair --vault <vault>  # backfill fingerprints, re-embed every drawer + drop PQ/IVF (a served embedder receives the corpus), vacuum, re-verify
+   undercroft repair --vault <vault>  # backfill fingerprints, re-embed every drawer + drop PQ/IVF (a served embedder receives the corpus, recorded as egress/embed/repair), vacuum, re-verify
    ```
 
 Only return the server to read-write once `verify` is clean.

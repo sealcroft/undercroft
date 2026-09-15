@@ -529,7 +529,7 @@ impl VaultStore {
                     continue;
                 }
             }
-            hits.push(self.score_drawer(drawer, query, &qvec, now));
+            hits.push(self.score_drawer(drawer, query, &qvec, now)?);
         }
         // The exact channel, for the same reason as the local gate: an
         // approximate match should reorder a result set, never populate one.
@@ -652,6 +652,9 @@ mod tests {
         /// How many times `ensure` was called. A status call must not move
         /// it (ROADMAP O83): `ensure` is the CREATE on every real backend.
         ensured: u64,
+        /// Answer every query with each id TWICE — a mirror need not honour
+        /// uniqueness, and repeats must buy no extra egress (ROADMAP O167).
+        repeat: bool,
     }
 
     impl EchoIndex {
@@ -699,12 +702,13 @@ mod tests {
             _wing: Option<&str>,
             _limit: usize,
         ) -> Result<Vec<Candidate>, IndexError> {
-            Ok(self
-                .ids
-                .iter()
-                .map(|id| Candidate {
-                    id: id.clone(),
-                    score: 1.0,
+            let times = if self.repeat { 2 } else { 1 };
+            Ok((0..times)
+                .flat_map(|_| {
+                    self.ids.iter().map(|id| Candidate {
+                        id: id.clone(),
+                        score: 1.0,
+                    })
                 })
                 .collect())
         }
@@ -1830,5 +1834,521 @@ mod tests {
              posture, so a read-only handle reaches the mirror before SQLite refuses (ROADMAP \
              O175): {breaches:?}"
         );
+    }
+
+    // ---- ROADMAP O167 -------------------------------------------------------
+
+    /// **Remote search embeds the QUERY and nothing else, and scores exactly as
+    /// local hydration does** (ROADMAP O167). `score_drawer` re-embedded every
+    /// candidate's plaintext "rather than trust the server" — but a candidate
+    /// is an id and a score, so the re-embed guarded nothing and sent each
+    /// candidate to a served endpoint, as many as an untrusted mirror chose to
+    /// return. Counterfactual: 1 + candidates, and twice that under repeats.
+    #[test]
+    fn remote_search_embeds_only_the_query_and_scores_like_local_hydration() {
+        use crate::egress_doubles::{count, reset, served_store};
+        let (_d, mut s, calls) = served_store(SecurityLevel::Sealed);
+        for (i, text) in [
+            "the turbine inspection is on tuesday",
+            "the turbine blades were replaced",
+            "turbine noise complaints rose",
+        ]
+        .iter()
+        .enumerate()
+        {
+            s.upsert(&drawer("notes", text, i as u32)).unwrap();
+        }
+        let mut index = EchoIndex::default();
+        s.index_push(&mut index, PlaintextPush::Refuse).unwrap();
+        let opts = SearchOptions {
+            limit: 10,
+            ..Default::default()
+        };
+
+        reset(&calls);
+        let remote = s.search_with_index(&mut index, "turbine", &opts).unwrap();
+        assert!(
+            remote.len() >= 2,
+            "premise: several candidates were scored: {}",
+            remote.len()
+        );
+        assert_eq!(count(&calls), 1, "the query, and no candidate");
+
+        index.repeat = true;
+        reset(&calls);
+        s.search_with_index(&mut index, "turbine", &opts).unwrap();
+        assert_eq!(count(&calls), 1, "a mirror repeating ids buys no egress");
+
+        let local = s.search("turbine", &opts).unwrap();
+        for hit in &remote {
+            let twin = local
+                .iter()
+                .find(|l| l.drawer.id == hit.drawer.id)
+                .expect("the same drawer is found locally");
+            assert_eq!(
+                hit.semantic, twin.semantic,
+                "remote scores from the stored vector, as hydration does"
+            );
+        }
+    }
+
+    /// **A stored vector that will not open fails the search as an integrity
+    /// error, and is never re-embedded** (ROADMAP O167): a fallback would hand
+    /// an offline writer a trigger for plaintext egress. The one embed is the
+    /// query — the caller's text, embedded before any candidate is read.
+    #[test]
+    fn a_corrupt_stored_vector_fails_remote_search_without_a_re_embed() {
+        use crate::egress_doubles::{count, reset, served_store};
+        let (_d, mut s, calls) = served_store(SecurityLevel::Sealed);
+        s.upsert(&drawer("notes", "the turbine inspection is on tuesday", 0))
+            .unwrap();
+        s.upsert(&drawer("notes", "the turbine blades were replaced", 1))
+            .unwrap();
+        let mut index = EchoIndex::default();
+        s.index_push(&mut index, PlaintextPush::Refuse).unwrap();
+        let victim = index.records()[0].id.clone();
+        let mut blob: Vec<u8> = s
+            .conn
+            .query_row(
+                "SELECT embedding FROM drawers WHERE id = ?1",
+                [&victim],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let last = blob.len() - 1;
+        blob[last] ^= 0x01;
+        s.conn
+            .execute(
+                "UPDATE drawers SET embedding = ?1 WHERE id = ?2",
+                rusqlite::params![blob, victim],
+            )
+            .unwrap();
+
+        reset(&calls);
+        let opts = SearchOptions {
+            limit: 10,
+            ..Default::default()
+        };
+        let err = s
+            .search_with_index(&mut index, "turbine", &opts)
+            .unwrap_err();
+        assert!(
+            matches!(&err, StoreError::CorruptRow { id, .. } if *id == victim),
+            "an integrity error naming the row: {err:?}"
+        );
+        assert_eq!(
+            count(&calls),
+            1,
+            "the query only; the candidate is not re-embedded"
+        );
+    }
+
+    /// Source with comments, string literals and char literals blanked BYTE for
+    /// byte, newlines kept, so a brace or a call is read only where it is code.
+    /// `blank_comments` is enough for a signature; a BODY scan needs this,
+    /// because a `'}'` inside a function would end its body early and hand its
+    /// calls to nobody.
+    fn mask_code(src: &str) -> String {
+        let b = src.as_bytes();
+        let mut out = b.to_vec();
+        let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+        let blank = |out: &mut Vec<u8>, from: usize, to: usize| {
+            for x in &mut out[from.min(b.len())..to.min(b.len())] {
+                if *x != b'\n' {
+                    *x = b' ';
+                }
+            }
+        };
+        let mut i = 0;
+        while i < b.len() {
+            match b[i] {
+                b'/' if b.get(i + 1) == Some(&b'/') => {
+                    let end = b[i..]
+                        .iter()
+                        .position(|&c| c == b'\n')
+                        .map_or(b.len(), |p| i + p);
+                    blank(&mut out, i, end);
+                    i = end;
+                }
+                b'/' if b.get(i + 1) == Some(&b'*') => {
+                    let (mut depth, mut j) = (0usize, i);
+                    while j < b.len() {
+                        if b[j] == b'/' && b.get(j + 1) == Some(&b'*') {
+                            depth += 1;
+                            j += 2;
+                        } else if b[j] == b'*' && b.get(j + 1) == Some(&b'/') {
+                            depth -= 1;
+                            j += 2;
+                            if depth == 0 {
+                                break;
+                            }
+                        } else {
+                            j += 1;
+                        }
+                    }
+                    blank(&mut out, i, j);
+                    i = j;
+                }
+                b'r' if (i == 0
+                    || !ident(b[i - 1])
+                    || (b[i - 1] == b'b' && (i < 2 || !ident(b[i - 2]))))
+                    && matches!(b.get(i + 1), Some(b'#') | Some(b'"')) =>
+                {
+                    let hashes = b[i + 1..].iter().take_while(|&&c| c == b'#').count();
+                    let open = i + 1 + hashes;
+                    if b.get(open) != Some(&b'"') {
+                        i += 1;
+                        continue;
+                    }
+                    let close: Vec<u8> = std::iter::once(b'"')
+                        .chain(std::iter::repeat_n(b'#', hashes))
+                        .collect();
+                    let end = b[open + 1..]
+                        .windows(close.len())
+                        .position(|w| w == close.as_slice())
+                        .map_or(b.len(), |p| open + 1 + p);
+                    blank(&mut out, open + 1, end);
+                    i = end + close.len();
+                }
+                b'"' => {
+                    let mut j = i + 1;
+                    while j < b.len() && b[j] != b'"' {
+                        j += if b[j] == b'\\' { 2 } else { 1 };
+                    }
+                    blank(&mut out, i + 1, j);
+                    i = j + 1;
+                }
+                b'\'' if b.get(i + 1) == Some(&b'\\') => {
+                    let end = b[(i + 3).min(b.len())..]
+                        .iter()
+                        .position(|&c| c == b'\'')
+                        .map_or(b.len(), |p| i + 3 + p);
+                    blank(&mut out, i + 1, end);
+                    i = end + 1;
+                }
+                b'\'' => {
+                    let width = src[i + 1..].chars().next().map_or(0, char::len_utf8);
+                    if width > 0 && b.get(i + 1 + width) == Some(&b'\'') {
+                        blank(&mut out, i + 1, i + 1 + width);
+                        i += 2 + width;
+                    } else {
+                        // A lifetime.
+                        i += 1;
+                    }
+                }
+                _ => i += 1,
+            }
+        }
+        String::from_utf8(out).expect("blanking writes spaces over whole characters")
+    }
+
+    /// `masked` with every `#[cfg(test)]` item blanked — a module, a function,
+    /// a constant — so only production code is left.
+    fn blank_test_items(masked: &str) -> String {
+        const GATE: &str = "#[cfg(test)]";
+        let bytes = masked.as_bytes();
+        let mut out = bytes.to_vec();
+        let mut from = 0;
+        while let Some(rel) = masked[from..].find(GATE) {
+            let at = from + rel;
+            let mut depth = 0usize;
+            let mut end = bytes.len();
+            for (i, &c) in bytes.iter().enumerate().skip(at + GATE.len()) {
+                match c {
+                    b'{' => depth += 1,
+                    b'}' if depth <= 1 => {
+                        end = i + 1;
+                        break;
+                    }
+                    b'}' => depth -= 1,
+                    b';' if depth == 0 => {
+                        end = i + 1;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            for c in &mut out[at..end] {
+                if *c != b'\n' {
+                    *c = b' ';
+                }
+            }
+            from = end;
+        }
+        String::from_utf8(out).expect("blanking writes spaces over whole characters")
+    }
+
+    /// Every function body in `code` (already masked): its name and byte range.
+    fn fn_bodies(code: &str) -> Vec<(String, std::ops::Range<usize>)> {
+        let bytes = code.as_bytes();
+        let mut out = Vec::new();
+        let mut from = 0;
+        while let Some(rel) = code[from..].find("fn ") {
+            let at = from + rel;
+            from = at + 3;
+            if at > 0 && (bytes[at - 1].is_ascii_alphanumeric() || bytes[at - 1] == b'_') {
+                continue;
+            }
+            let name: String = code[at + 3..]
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            let Some(open) = code[at..].find(['{', ';']).map(|e| at + e) else {
+                continue;
+            };
+            if name.is_empty() || bytes[open] == b';' {
+                continue;
+            }
+            let mut depth = 0usize;
+            let close = bytes[open..].iter().enumerate().find_map(|(i, &c)| {
+                match c {
+                    b'{' => depth += 1,
+                    b'}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return Some(open + i + 1);
+                        }
+                    }
+                    _ => {}
+                }
+                None
+            });
+            out.push((name, open..close.expect("every function body closes")));
+        }
+        out
+    }
+
+    /// The calls through which a drawer's text can reach a served embedder or
+    /// the tier-2 advisor: the two embed doors, the one consultation, and the
+    /// write paths that screen (and so may consult).
+    const CUSTODY_NEEDLES: [&str; 7] = [
+        "self.embedder.embed(",
+        "embedder_embed(",
+        ".assess(",
+        "write_drawer(",
+        "upsert_screened(",
+        "upsert_screened_with(",
+        "screen_and_divert(",
+    ];
+
+    /// Each call of a [`CUSTODY_NEEDLES`] entry in `code`, attributed to the
+    /// innermost function containing it. A definition is not a call.
+    fn custody_calls(code: &str) -> Vec<(String, &'static str)> {
+        let bodies = fn_bodies(code);
+        let word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+        let mut out = Vec::new();
+        for needle in CUSTODY_NEEDLES {
+            for (at, _) in code.match_indices(needle) {
+                let before = &code[..at];
+                if word(needle.chars().next()) && word(before.chars().next_back()) {
+                    continue;
+                }
+                if before.trim_end().ends_with("fn") {
+                    continue;
+                }
+                let owner = bodies
+                    .iter()
+                    .filter(|(_, r)| r.contains(&at))
+                    .min_by_key(|(_, r)| r.len())
+                    .map(|(n, _)| n.clone())
+                    .unwrap_or_else(|| panic!("`{needle}` at byte {at} is inside no function"));
+                out.push((owner, needle));
+            }
+        }
+        out
+    }
+
+    /// How a call handles a drawer's text on its way to an embedder or advisor.
+    enum Custody {
+        /// Stored text leaves and this record says so; `proven_by` names the
+        /// test that drives the record.
+        Records {
+            label: &'static str,
+            proven_by: &'static str,
+        },
+        /// Stored text is handled and nothing leaves, for the stated reason.
+        SendsNothing(&'static str),
+        /// The caller's own text on this call — a save, an import, a query.
+        Arriving(&'static str),
+        /// A door whose own callers are each classified in this table.
+        Forwards(&'static str),
+    }
+
+    /// **O167: every call through which drawer text can reach a served embedder
+    /// or the advisor is classified by CUSTODY — stored text with its recorder,
+    /// the caller's arriving text with its reason — counted against the source
+    /// in both directions.**
+    ///
+    /// The ruling's line is custody, not call site: a POST owes `egress/` when
+    /// its input was read out of a committed row within the same operation.
+    /// That line was drawn by reading every one of these calls, and a new call
+    /// nobody classified is how the next unrecorded egress would arrive. The
+    /// universe is derived from the CODE — every production call of a
+    /// [`CUSTODY_NEEDLES`] entry, by enclosing function — so an unlisted call
+    /// fails, and a row naming a call that is gone fails too.
+    ///
+    /// **It inventories FUNCTIONS, not data flow.** A row says what the
+    /// function's call carries today; a change that routes stored text into an
+    /// "arriving" function passes this gate, and the behavioural tests the
+    /// `Records` rows name are what would see it. `Forwards` is a third kind
+    /// the ruling's two did not name: a door such as `write_drawer`, whose
+    /// custody is decided by the callers this table also lists. Scope: this
+    /// crate. The CLI's `refine` writes fact-mirror drawers through the store,
+    /// and what those send is ROADMAP O187's, not this gate's.
+    #[test]
+    fn every_embed_and_advisor_call_is_classified_by_custody() {
+        use Custody::*;
+        const INVENTORY: &[(&str, &str, Custody)] = &[
+            (
+                "repair_stmts",
+                "embedder_embed(",
+                Records {
+                    label: "egress/embed/repair",
+                    proven_by: "a_served_repair_records_the_drawers_it_sent_and_anchors_that_record",
+                },
+            ),
+            (
+                "dedup_groups",
+                "upsert_screened_with(",
+                Records {
+                    label: "egress/advise/dedup",
+                    proven_by: "dedup_records_its_advisor_consultations_in_both_modes",
+                },
+            ),
+            (
+                "dedup_groups",
+                "screen_and_divert(",
+                Records {
+                    label: "egress/advise/dedup",
+                    proven_by: "dedup_records_its_advisor_consultations_in_both_modes",
+                },
+            ),
+            (
+                "admission_allow",
+                "write_drawer(",
+                SendsNothing("`Bypass(OperatorRuling)` consults no advisor, and the vector is the quarantined row's stored one"),
+            ),
+            (
+                "migrate_embedding_space",
+                "embedder_embed(",
+                SendsNothing("runs only for a `KNOWN_EMBEDDER_UPGRADES` row, every one a hash identity, and a hash embedder names no destination"),
+            ),
+            ("upsert", "upsert_screened(", Arriving("the caller's drawer on its way in")),
+            ("upsert_screened", "self.embedder.embed(", Arriving("the caller's drawer on its way in")),
+            ("upsert_external", "write_drawer(", Arriving("the caller's drawer and the caller's vector")),
+            ("upsert_many", "self.embedder.embed(", Arriving("a batch of the caller's drawers")),
+            ("upsert_many", "screen_and_divert(", Arriving("a batch of the caller's drawers")),
+            ("save_with_dedup", "self.embedder.embed(", Arriving("the incoming drawer")),
+            ("save_with_dedup_vec", "write_drawer(", Arriving("the incoming content, refreshing a match in place or inserted")),
+            ("import_record", "write_drawer(", Arriving("an imported record — the importer's text on its way in")),
+            ("import_record", "upsert_screened(", Arriving("an imported record — the importer's text on its way in")),
+            ("update_drawer", "upsert_screened(", Arriving("the caller's replacement content")),
+            ("diary_write", "upsert_screened(", Arriving("the agent's diary entry")),
+            ("search_page", "self.embedder.embed(", Arriving("the query")),
+            ("search_with_index", "embedder_embed(", Arriving("the query")),
+            (
+                "admission_divert",
+                ".assess(",
+                Forwards("the one consultation, counted just before it; custody is its caller's — `dedup` records it, every other screened write carries arriving text"),
+            ),
+            (
+                "screened_write",
+                "write_drawer(",
+                Forwards("the shared tail of `upsert_screened` and `upsert_screened_with`"),
+            ),
+            (
+                "write_drawer",
+                "screen_and_divert(",
+                Forwards("the write choke point; every caller of `write_drawer` is listed here"),
+            ),
+            (
+                "write_drawer",
+                "write_drawer(",
+                Forwards("the diverted copy: the caller's vector, and `Bypass(AlreadyDiverted)` consults nothing more"),
+            ),
+            (
+                "embedder_embed",
+                "self.embedder.embed(",
+                Forwards("the crate's door onto the embedder; each caller is listed here"),
+            ),
+        ];
+
+        // PREMISE, before any clean result is believed: a call is found in the
+        // function that holds it even past a `'}'` and a `"}"`, while a comment,
+        // a string, a raw string, a definition and a `#[cfg(test)]` item are not.
+        let probe = mask_code(concat!(
+            "impl S {\n",
+            "    fn sends(&self) {\n        let close = '}';\n        let s = \"}\";\n",
+            "        let v = self.embedder.embed(\"x\");\n    }\n",
+            "    fn talks(&self) {\n        // self.embedder.embed(\n",
+            "        let s = \"write_drawer(\";\n        let r = r#\"upsert_screened(\"#;\n    }\n",
+            "    fn write_drawer(&mut self) {}\n",
+            "    #[cfg(test)]\n    fn hidden(&self) { self.embedder.embed(\"{\"); }\n",
+            "    fn after(&mut self) { let lt: &'static str = \"\"; self.write_drawer(); }\n",
+            "}\n",
+        ));
+        let seen: std::collections::BTreeSet<(String, &str)> =
+            custody_calls(&blank_test_items(&probe))
+                .into_iter()
+                .collect();
+        let want: std::collections::BTreeSet<(String, &str)> = [
+            ("sends".to_string(), "self.embedder.embed("),
+            ("after".to_string(), "write_drawer("),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(seen, want, "premise: the scanner reads code, and only code");
+
+        let mut dirs = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+        let mut found: std::collections::BTreeSet<(String, &str)> = Default::default();
+        let mut defined: std::collections::BTreeSet<String> = Default::default();
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).expect("the crate's own sources are readable") {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    dirs.push(path);
+                    continue;
+                }
+                if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                    continue;
+                }
+                let masked = mask_code(&std::fs::read_to_string(&path).unwrap());
+                defined.extend(fn_bodies(&masked).into_iter().map(|(n, _)| n));
+                found.extend(custody_calls(&blank_test_items(&masked)));
+            }
+        }
+        assert!(
+            found.len() >= 20,
+            "premise: the scan found the store's calls: {found:?}"
+        );
+
+        let listed: std::collections::BTreeSet<(String, &str)> = INVENTORY
+            .iter()
+            .map(|(f, n, _)| (f.to_string(), *n))
+            .collect();
+        assert_eq!(listed.len(), INVENTORY.len(), "a row listed twice");
+        let unclassified: Vec<_> = found.difference(&listed).collect();
+        assert!(
+            unclassified.is_empty(),
+            "call(s) through which drawer text can reach a served embedder or the advisor, \
+             classified by nobody: {unclassified:?}. Stored text that leaves owes an `egress/` \
+             record (ROADMAP O167); arriving text states why it is the caller's."
+        );
+        let stale: Vec<_> = listed.difference(&found).collect();
+        assert!(
+            stale.is_empty(),
+            "row(s) naming a call that is no longer in the source: {stale:?}"
+        );
+        for (f, n, custody) in INVENTORY {
+            match custody {
+                Records { label, proven_by } => assert!(
+                    defined.contains(*proven_by),
+                    "{f} / {n} records {label}, and `{proven_by}` names no function in this crate"
+                ),
+                SendsNothing(why) | Arriving(why) | Forwards(why) => {
+                    assert!(!why.is_empty(), "{f} / {n}: a row states its reason")
+                }
+            }
+        }
     }
 }

@@ -84,7 +84,8 @@ pub struct LlmClient {
 /// dial that never happened; echoing the base could put userinfo into an
 /// audit record, which is the one thing that function exists to prevent. A
 /// marker that cannot be mistaken for a host is the honest third answer.
-const UNPARSEABLE_DESTINATION: &str = "<unparseable base url>";
+#[cfg(test)]
+const UNPARSEABLE_DESTINATION: &str = undercroft_net::UNPARSEABLE_DESTINATION;
 
 impl LlmClient {
     /// Build a client for `base_url` and `model` with NO bearer — `with_key`
@@ -236,40 +237,10 @@ impl LlmClient {
     /// an egress destination should be a bare origin, which changes what the
     /// canonical binds.
     pub fn destination(&self) -> String {
-        // Ask the parser the TRANSPORT uses. `ureq` resolves the host with
-        // this same `url` crate, so reading the host from it is what makes
-        // this function structurally unable to name somewhere else.
-        let Ok(u) = url::Url::parse(&self.base) else {
-            return UNPARSEABLE_DESTINATION.to_string();
-        };
-        let Some(host) = u.host_str() else {
-            return UNPARSEABLE_DESTINATION.to_string();
-        };
-        let mut out = format!("{}://{host}", u.scheme());
-        // `port()` and not `port_or_known_default()`: an implicit 443 was
-        // never in the string an operator configured, and adding one would
-        // move every existing canonical for no gain.
-        if let Some(port) = u.port() {
-            out.push(':');
-            out.push_str(&port.to_string());
-        }
-        // The base is trimmed of trailing slashes at construction, so a path
-        // of exactly `/` is the parser's normalization of "no path" and is
-        // dropped — that keeps the ordinary local-runtime rendering, and so
-        // every canonical built from it, byte-identical to what shipped.
-        let path = u.path();
-        if !(path == "/" && u.query().is_none() && u.fragment().is_none()) {
-            out.push_str(path);
-        }
-        if let Some(q) = u.query() {
-            out.push('?');
-            out.push_str(q);
-        }
-        if let Some(f) = u.fragment() {
-            out.push('#');
-            out.push_str(f);
-        }
-        out
+        // One implementation, shared with the served embedder since ROADMAP
+        // O167, so the two clients that POST vault content cannot name their
+        // destinations two different ways. Moved verbatim.
+        undercroft_net::egress_destination(&self.base)
     }
 
     /// One chat completion, deterministic settings (temperature 0).

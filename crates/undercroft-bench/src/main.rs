@@ -581,6 +581,34 @@ fn fresh_store_id(level: SecurityLevel, id: &str) -> Result<(tempfile::TempDir, 
     Ok((dir, store))
 }
 
+/// One loaded embedding model behind a cheap per-vault handle, for the two
+/// shared loaders below.
+///
+/// Generic over the model only so a test can prove it DELEGATES (ROADMAP
+/// O167): both shipped models answer `None` for their destination, and a
+/// wrapper answering `None` itself would pass any test built on them.
+#[cfg(any(test, feature = "onnx", feature = "ort"))]
+struct SharedEmbedder<E>(std::sync::Arc<E>);
+
+#[cfg(any(test, feature = "onnx", feature = "ort"))]
+impl<E: undercroft_core::embed::Embedder> undercroft_core::embed::Embedder for SharedEmbedder<E> {
+    fn egress_destination(&self) -> Option<String> {
+        self.0.egress_destination()
+    }
+    fn model_name(&self) -> &str {
+        self.0.model_name()
+    }
+    fn dimension(&self) -> usize {
+        self.0.dimension()
+    }
+    fn embed(&self, text: &str) -> Vec<f32> {
+        self.0.embed(text)
+    }
+    fn embed_failures(&self) -> u64 {
+        self.0.embed_failures()
+    }
+}
+
 /// The ONNX model is loaded once and shared across every per-question
 /// vault — model load costs seconds and LongMemEval creates 500 stores.
 #[cfg(feature = "onnx")]
@@ -592,23 +620,7 @@ fn onnx_shared() -> Box<dyn undercroft_core::embed::Embedder + Send> {
             Arc::new(undercroft_embed_onnx::from_env().expect("loading ONNX embedder from env"))
         })
         .clone();
-
-    struct Shared(Arc<undercroft_embed_onnx::OnnxEmbedder>);
-    impl undercroft_core::embed::Embedder for Shared {
-        fn model_name(&self) -> &str {
-            self.0.model_name()
-        }
-        fn dimension(&self) -> usize {
-            self.0.dimension()
-        }
-        fn embed(&self, text: &str) -> Vec<f32> {
-            self.0.embed(text)
-        }
-        fn embed_failures(&self) -> u64 {
-            self.0.embed_failures()
-        }
-    }
-    Box::new(Shared(arc))
+    Box::new(SharedEmbedder(arc))
 }
 
 /// The cross-encoder reranker, loaded once and shared across every per-question
@@ -689,22 +701,7 @@ fn ort_embedder_shared() -> Box<dyn undercroft_core::embed::Embedder + Send> {
             )
         })
         .clone();
-    struct Shared(Arc<undercroft_embed_ort::OrtEmbedder>);
-    impl undercroft_core::embed::Embedder for Shared {
-        fn model_name(&self) -> &str {
-            self.0.model_name()
-        }
-        fn dimension(&self) -> usize {
-            self.0.dimension()
-        }
-        fn embed(&self, text: &str) -> Vec<f32> {
-            self.0.embed(text)
-        }
-        fn embed_failures(&self) -> u64 {
-            self.0.embed_failures()
-        }
-    }
-    Box::new(Shared(arc))
+    Box::new(SharedEmbedder(arc))
 }
 
 /// ORT reranker, loaded once and shared, mirroring `rerank_shared`.
@@ -5121,5 +5118,45 @@ mod tests {
         let mut gseen: Vec<usize> = matches.iter().map(|m| m.1).collect();
         gseen.dedup();
         assert_eq!(gseen.len(), 2);
+    }
+
+    /// **The shared-model wrapper delegates, the destination included**
+    /// (ROADMAP O167). The inner model names a destination, which neither
+    /// shipped model does, so a wrapper that answered for itself would fail.
+    #[test]
+    fn the_shared_embedder_wrapper_delegates_every_method_including_the_destination() {
+        use undercroft_core::embed::Embedder;
+        struct Served;
+        impl Embedder for Served {
+            fn model_name(&self) -> &str {
+                "served"
+            }
+            fn dimension(&self) -> usize {
+                3
+            }
+            fn embed(&self, _text: &str) -> Vec<f32> {
+                vec![0.25, 0.5, 0.75]
+            }
+            fn embed_failures(&self) -> u64 {
+                7
+            }
+            fn egress_destination(&self) -> Option<String> {
+                Some("https://embed.example".to_string())
+            }
+        }
+        let wrapped = SharedEmbedder(std::sync::Arc::new(Served));
+        assert_eq!(
+            wrapped.egress_destination().as_deref(),
+            Some("https://embed.example")
+        );
+        assert_eq!(
+            (
+                wrapped.model_name(),
+                wrapped.dimension(),
+                wrapped.embed_failures()
+            ),
+            ("served", 3, 7)
+        );
+        assert_eq!(wrapped.embed("x"), vec![0.25, 0.5, 0.75]);
     }
 }
