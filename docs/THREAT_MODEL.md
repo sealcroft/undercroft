@@ -416,7 +416,7 @@ enclave execution) compose with undercroft but are not provided by it.
 | Server auth | bearer + per-vault HMAC assertion (vault id in the MAC, constant-time, bare 401s); `--read-only` decided once in front of dispatch, failing closed | A4 |
 | Write-path admission | deterministic tier-1 screen at the one write choke point (a required `Screen` argument every caller must state); flagged writes diverted to the retrieval-excluded quarantine wing; allow/deny chain-audited | A7 ingest |
 | Retrieval policy | trust floor + quarantine fence + closed-vocabulary validation resolved before candidates are drawn, and shared verbatim by the remote path | A5 result steering, A7 reach |
-| Read/egress audit | `egress/export` on every export, `egress/index-push` on every remote-index mirror (a whole-corpus egress, and on an hmac-only vault its payload is the plaintext) **and `egress/refine` on every LLM distillation run that sent anything, dry runs included** — destination host with credentials stripped, model, scope and how many drawers' plaintext was POSTed, recorded on the error path too (O79/O95) — none behind a declaration (a read-only handle that serves one warns that it went unaudited; an index push, and a `forget --backend`, are refused on a read-only handle before anything reaches the mirror — O175); `UNDERCROFT_READ_AUDIT=chain` records each content-returning read — search, get, recent, the lists and the KG readers (O50/O51) — with a **keyed** subject fingerprint, never text | A7 forensics; insider/exfil accounting |
+| Read/egress audit | `egress/export` on every export, `egress/index-push` on every remote-index mirror (a whole-corpus egress, and on an hmac-only vault its payload is the plaintext) **and `egress/refine` on every LLM distillation run that sent anything, dry runs included** — destination host with credentials stripped, model, scope and how many drawers' plaintext was POSTed, recorded on the error path too (O79/O95); `egress/embed/repair` when a repair re-embeds stored drawers through a served embedder, and `egress/advise/dedup` when `dedup` shows stored survivors to the tier-2 advisor, while remote search, `admission allow` and `dedup` reuse stored vectors and send the embedder nothing (O167) — none behind a declaration (a read-only handle that serves one warns that it went unaudited; an index push, and a `forget --backend`, are refused on a read-only handle before anything reaches the mirror — O175 — and `repair`, `admission allow` and `dedup --apply` before their first egress — O167); `UNDERCROFT_READ_AUDIT=chain` records each content-returning read — search, get, recent, the lists and the KG readers (O50/O51) — with a **keyed** subject fingerprint, never text | A7 forensics; insider/exfil accounting |
 | Remote-index posture | sealed bytes out, local re-verification in; feature off by default | A5 |
 | Zero-telemetry default | no telemetry deps compiled in; metadata-only when opted in | A6 |
 | Verbatim + tombstones | exact words, keyed deletion markers, chain ordering | A7 attribution/excision |
@@ -481,8 +481,21 @@ drawer's plaintext to `UNDERCROFT_LLM_URL`: it binds the surface, the
 destination host with any credentials stripped, the model, the scope,
 whether it was a dry run — a dry run skips the facts, not the POSTs — and
 how many drawers actually left, a count recorded on the error path too
-(ROADMAP O79, O95). None of the three is behind a declaration — an egress
-is worth recording whether or not the deployment opted into anything.
+(ROADMAP O79, O95). Two more records name what a served model is handed out
+of storage (ROADMAP O167): `repair`, which under a served embedder re-embeds
+every drawer through the endpoint, appends `egress/embed/repair` — surface,
+destination host, model and how many drawers it sent, written after its
+transaction commits or rolls back so an aborted repair still records what
+left — and `dedup` appends `egress/advise/dedup` for the stored survivors its
+admission screen showed the tier-2 advisor. The line is custody, not call
+site: text read out of a stored drawer owes a record, and text a caller is
+sending in — a save, an import, a query, the advisor's view of a new write —
+does not, its endpoint being named by the deployment's configuration. Where
+the vault already holds the vector a path would compute, it sends nothing:
+remote search scores each verified hit from its stored embedding, and
+`admission allow` and `dedup` reuse the vectors they rewrite. None of the
+five is behind a declaration — an egress is worth recording whether or not
+the deployment opted into anything.
 Under `UNDERCROFT_READ_AUDIT=chain` each content-returning READ appends a
 record too — searches, by-id and bulk drawer reads, and the knowledge graph's
 own doors — carrying a **keyed fingerprint of the subject** (never its text),

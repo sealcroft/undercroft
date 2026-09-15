@@ -30,6 +30,15 @@ WHAT IT CHECKS, and why each one is here rather than assumed:
   geometry    no diagonal connector; no connector passing behind a box that is
               not its endpoint; no label mask covered by a node painted later
               (the node fill clips the text and it renders as a fragment).
+  text fit    every <text> fits inside the smallest rect holding it, 4 units
+              in from each side, or inside the viewBox, 4 in from its edges,
+              when no rect holds it. The geometry arms read rects and
+              lines and never a text's WIDTH, so 102 lines across sixteen
+              diagrams spilled out of their boxes under a green gate, and the
+              maintainer saw it on the rendered page, not this script. Width is
+              ESTIMATED — characters x font-size x an advance in em — because a
+              stdlib checker has no font engine; see MONO_EM for why the
+              monospace figure is a bound and the proportional one is not.
 
 WHY THERE IS A PREMISE PROBE: a checker that examines nothing prints exactly
 what a clean tree prints. Before any result is believed, the geometry checks
@@ -44,6 +53,7 @@ set whose exemplar had already been verified by eye. Any check that flags
 01-platform-overview.html is wrong about the check, not about the diagram.
 """
 import glob
+import html
 import os
 import re
 import sys
@@ -154,6 +164,65 @@ def geometry(svg):
     return bad
 
 
+# ------------------------------------------------------------ text fit
+# Per-glyph advance, in em, for estimating how wide a <text> renders.
+#
+# MONOSPACE IS A BOUND. Menlo, SF Mono and DejaVu Sans Mono advance about
+# 0.60 em; Consolas advances 0.55, which is what the Windows browser pane
+# measured when the spill was reported — so a line drawn to fit there spills
+# on a Mac. 0.60 fits the widest common face.
+#
+# PROPORTIONAL IS AN ESTIMATE, not a bound: a proportional face's width depends
+# on the letters in the string, and 0.56 is a mixed-case prose average, so a
+# title near its limit can still spill on a wide face. Stated, not hidden.
+MONO_EM = 0.60
+PROPORTIONAL_EM = 0.56
+TEXT_PAD = 4.0
+# Text no rect holds is bounded by the viewBox — what a renderer clips — and
+# not by the lane frame. A first version used a frame 80 in from each edge and
+# flagged the set's standard LEGEND labels at x=64 and x=80, which spill
+# nothing: a check that flags a layout confirmed by eye is wrong about the check.
+FRAME_INSET = 0.0
+
+
+def text_fit(svg):
+    bad = []
+    vx, vw = 0.0, 1200.0
+    vb = re.search(r'viewBox="([^"]+)"', svg)
+    if vb:
+        parts = [float(p) for p in vb.group(1).split()]
+        vx, vw = parts[0], parts[2]
+    boxes = [b for _, b, _ in rects(svg) if b[2] > 0 and b[3] > 0]
+    for m in re.finditer(r"<text\b([^>]*)>(.*?)</text>", svg, re.S):
+        g = _attrs(m.group(1))
+        body = html.unescape(re.sub(r"<[^>]+>", "", m.group(2)))
+        if not body.strip():
+            continue
+        try:
+            x, y = float(g["x"]), float(g["y"])
+            fs = float(g.get("font-size", "12"))
+        except (KeyError, ValueError):
+            continue
+        em = MONO_EM if "monospace" in g.get("font-family", "") else PROPORTIONAL_EM
+        ls = g.get("letter-spacing", "")
+        spacing = float(ls[:-2]) * fs if ls.endswith("em") else 0.0
+        width = len(body) * (fs * em + spacing)
+        anchor = g.get("text-anchor", "start")
+        left = x - (width / 2 if anchor == "middle" else width if anchor == "end" else 0.0)
+        mid = y - 0.35 * fs
+        holding = [b for b in boxes
+                   if b[0] <= x <= b[0] + b[2] and b[1] <= mid <= b[1] + b[3]]
+        if holding:
+            bx, _, bw, _ = min(holding, key=lambda b: b[2] * b[3])
+            lo, hi = bx + TEXT_PAD, bx + bw - TEXT_PAD
+        else:
+            lo, hi = vx + FRAME_INSET + TEXT_PAD, vx + vw - FRAME_INSET - TEXT_PAD
+        over = max(lo - left, left + width - hi)
+        if over > 0:
+            bad.append("text spills its box by ~%d: %r" % (round(over), body[:40]))
+    return bad
+
+
 def inspect(path):
     raw = open(path, "rb").read()
     s = raw.decode("utf-8")
@@ -184,6 +253,7 @@ def inspect(path):
     if len(accent) > 2:
         bad.append("%d accent nodes — the editorial budget is 2" % len(accent))
     bad += geometry(svg)
+    bad += text_fit(svg)
     slug = re.search(r'id="([a-z0-9-]+)-title"', svg)
     return (slug.group(1) if slug else None), len(ns), len(accent), bad
 
@@ -198,6 +268,15 @@ BAD_FIXTURE = (
     '<line x1="0" y1="6" x2="300" y2="6" marker-end="url(#a)"/>'
     '<line x1="0" y1="0" x2="90" y2="70" marker-end="url(#a)"/>'
     '<rect x="10" y="0" width="100" height="60" rx="6" fill="#071014" stroke="#d9f0ea"/>'
+    '</svg>')
+
+
+TEXT_FIXTURE = (
+    '<svg viewBox="0 0 1200 200" role="img">'
+    '<rect x="100" y="20" width="100" height="40" rx="6" fill="#071014" stroke="#d9f0ea"/>'
+    '<text x="150" y="34" font-size="9" font-family="monospace" text-anchor="middle">fits</text>'
+    '<text x="150" y="50" font-size="9" font-family="monospace" text-anchor="middle">'
+    'a subline far too long for this box</text>'
     '</svg>')
 
 
@@ -216,6 +295,13 @@ def main():
         print("Its zero-results would be meaningless. Fix the checker.")
         return 2
     print("premise probe: all three geometry faults detected on a known-bad fixture")
+    spills = text_fit(TEXT_FIXTURE)
+    if len(spills) != 1 or "far too long" not in spills[0]:
+        print("PREMISE FAILURE: the text-fit arm did not flag exactly the one spilling line "
+              "on a known-bad fixture: %s" % spills)
+        print("Its zero-results would be meaningless. Fix the checker.")
+        return 2
+    print("premise probe: the text-fit arm flags a spilling line and passes one that fits")
 
     files = sorted(glob.glob(os.path.join(HERE, "[0-9][0-9]-*.html")))
     if not files:

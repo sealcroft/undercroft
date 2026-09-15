@@ -7,6 +7,77 @@ its CLI mirror `tenant-repoint` are additive — nothing that worked before
 behaves differently because they exist. Everything else in this section is a
 fix whose only observable change is that a defect is gone.
 
+### drawers a served embedder or advisor is sent from storage are recorded, and three paths stop sending them (O167)
+
+With `UNDERCROFT_EMBEDDER=http`, several operations sent the embeddings
+endpoint drawer text the vault already held, and wrote no egress record. A
+search through a remote index (`search --backend`) re-embedded every candidate
+the mirror returned. `admission allow` re-embedded the drawer it restored.
+`dedup --apply` re-embedded each surviving drawer it rewrote — twice when the
+admission screen diverted it. And `repair` re-embedded the whole vault,
+recording only a `migrate/repair` entry that named the model but not where the
+drawers went or how many. Under `UNDERCROFT_ADMISSION_LLM=advisory`, `dedup`
+also showed each surviving drawer to the advisor's LLM endpoint, on a dry run
+as well, with no record.
+
+Remote search, `admission allow` and `dedup` now reuse the vector the vault
+already stores and send the embedder nothing; only a search's query is
+embedded. A save the admission screen diverts is embedded once rather than
+twice. `repair` still has to send every drawer, and now records that: one
+`egress/embed/repair` entry binding the surface, the destination host with any
+credentials removed, the model and the number of drawers sent — written even
+when the repair fails part-way. `dedup` records the drawers its screen showed
+the advisor as `egress/advise/dedup`, binding the surface, the destination, the
+count and whether it applied, dry runs included. Nothing is recorded when
+nothing left: the default `hash` embedder and the in-process `onnx` and `ort`
+backends send nothing.
+
+On an external-embedding vault, `admission allow` replaced the restored
+drawer's vector with zeros, so an allowed drawer could be found only by its
+words; it now keeps the caller's vector. A remote search that meets a stored
+vector that will not open fails as an integrity error rather than re-embedding
+the drawer.
+
+On a read-only open, `repair`, `admission allow` and `dedup --apply` now refuse
+before they embed, consult or write anything, and say the store was opened
+read-only. `repair` and `admission allow` already exited 1 there. `dedup
+--apply` on a vault with no duplicates exited 0 and now exits 1 — see
+`UPGRADING.md`. A read-only `dedup` preview still runs, and warns when the
+drawers it showed the advisor could not be recorded. A `repair` whose egress
+record cannot be written after it has committed now reports that error instead
+of success.
+
+Internally, `Embedder` and `AdmissionAdvisor` each gained a required
+`egress_destination`, rendered by the transport's own URL parser, which
+`refine`'s LLM client now shares. Store tests count every request a served
+double would receive and verify each record's tag against the exact count; a
+CLI test runs a real `HttpEmbedder` against a loopback stub and checks the
+recorded host against the one each request reached; a binary test drives the
+refusals and the record; and a source gate classifies every call through which
+drawer text can reach an embedder or the advisor as stored text with its record
+or arriving text with its reason.
+
+### text in the platform-views diagrams stays inside its boxes, and a check measures it (O188)
+
+In 17 of the 22 diagrams under `architecture/platform-views/`, lines of text
+ran past the edges of the boxes that hold them. The layouts had been drawn
+against a narrow monospace: the Windows browser renders Consolas at about
+0.55 em per character, while Menlo, SF Mono and DejaVu Sans Mono take about
+0.60, so a line that fit on Windows spilled on a Mac, and some spilled on
+Windows too. 102 lines were reworded, keeping every fact each one states;
+where shortening would have dropped a fact the line was set one point smaller,
+never below 7; one label moved inside its lane and one callout was split in two.
+
+`platform-views/check.py`, which the `arch-check` suite runs, never measured a
+text's width. It now bounds every `<text>` by the smallest box that holds it,
+with monospace at 0.60 em — a bound — and proportional text at 0.56 em, which
+is an average and says so. It fails on a known-overflowing fixture before any
+clean result is believed; on the unfixed tree it reported 113 lines across 17
+diagrams, and it passes all 22 now. This closes the platform-views half of
+O179; the other two diagram sets are O189's. `architecture/DIAGRAM_LESSONS.md`
+records the diagram standards, how width is measured, and the order in which
+to fix a spill.
+
 ### a read-only CLI refuses an index push and a mirrored forget before the mirror is touched (O175)
 
 `undercroft --read-only index push <backend>` sent every drawer's stored content

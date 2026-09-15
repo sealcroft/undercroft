@@ -110,9 +110,9 @@
       <rect x="472" y="154" width="60" height="12" rx="2" fill="transparent" stroke="rgba(127,163,156,0.40)" stroke-width="0.8"/>
       <text x="502" y="163" fill="rgba(127,163,156,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">INTERNAL</text>
       <text x="600" y="184" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">The engine reads for itself</text>
-      <text x="600" y="202" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">8 reasons: hydration · write-path lookup · maintenance</text>
+      <text x="600" y="202" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">8 reasons: hydration · write-path lookup · maintenance</text>
       <text x="600" y="216" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">verification · policy fence · bulk member ·</text>
-      <text x="600" y="230" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">export-audited · refine-audited — egress/ covers those</text>
+      <text x="600" y="230" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">export-audited · refine-audited (egress/ covers)</text>
 
       <!-- record_read (FOCAL) -->
       <rect x="96" y="272" width="272" height="88" rx="6" fill="#04080a"/>
@@ -120,9 +120,9 @@
       <rect x="104" y="278" width="52" height="12" rx="2" fill="transparent" stroke="rgba(53,224,194,0.50)" stroke-width="0.8"/>
       <text x="130" y="287" fill="#35e0c2" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">ONE SITE</text>
       <text x="232" y="310" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">record_read</text>
-      <text x="232" y="328" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">op · keyed fingerprint of the subject · scope · count</text>
-      <text x="232" y="342" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">was three inline copies; the 2nd funnel would have made 11</text>
-      <text x="232" y="356" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">never text — an operator with the key can re-derive the fp</text>
+      <text x="232" y="328" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">op · subject's keyed fingerprint · scope · count</text>
+      <text x="232" y="342" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">was 3 inline copies; 2nd funnel would've made 11</text>
+      <text x="232" y="356" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">never text — operator + key can re-derive the fp</text>
 
       <!-- declared? decision -->
       <polygon points="232,388 328,420 232,452 136,420" fill="#04080a"/>
@@ -134,7 +134,7 @@
       <rect x="464" y="384" width="272" height="72" rx="6" fill="#04080a"/>
       <rect x="464" y="384" width="272" height="72" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
       <text x="600" y="412" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Nothing is written</text>
-      <text x="600" y="430" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">a per-read append is a real durability cost, so declared</text>
+      <text x="600" y="430" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">a per-read append costs durability, so declared</text>
       <text x="600" y="444" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">a read-only open force-disables it and warns</text>
 
       <!-- read record -->
@@ -150,7 +150,7 @@
       <!-- ============ READOP CHIPS ============ -->
       <text x="848" y="86" fill="rgba(127,163,156,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" letter-spacing="0.14em">DRAWER FUNNEL · 9</text>
       <rect x="848" y="96" width="272" height="24" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>
-      <text x="860" y="112" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">search — the query is the subject, fingerprinted</text>
+      <text x="860" y="112" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">search — query is the subject, fingerprinted</text>
       <rect x="848" y="128" width="272" height="24" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>
       <text x="860" y="144" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">get — one drawer by id</text>
       <rect x="848" y="160" width="272" height="24" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>
@@ -160,7 +160,7 @@
       <rect x="848" y="224" width="272" height="24" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>
       <text x="860" y="240" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">diary · tunnel · closet · hallways — navigation</text>
       <rect x="848" y="256" width="272" height="24" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>
-      <text x="860" y="272" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">admission-list — the review queue, operator only</text>
+      <text x="860" y="272" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">admission-list — review queue, operator only</text>
 
       <text x="848" y="310" fill="rgba(127,163,156,0.90)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" letter-spacing="0.14em">KNOWLEDGE-GRAPH FUNNEL · 4</text>
       <rect x="848" y="320" width="272" height="24" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>

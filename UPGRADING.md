@@ -73,6 +73,29 @@ or when they could never be presented.
 
 ## 1.6.0 (unreleased)
 
+### `undercroft --read-only dedup --apply` now exits 1, even on a vault with no duplicates (O167)
+
+**Who is affected:** anyone whose script runs `dedup --apply` together with
+`--read-only`.
+
+**What happens:** a command that writes now decides its posture before it
+sends anything. `dedup --apply` rewrites surviving drawers and deletes their
+duplicates, and none of that can happen on a read-only open — but on a vault
+holding no duplicates it never attempted a write, so it exited 0. It now
+refuses before it screens or consults anything, on every vault. `repair` and
+`admission allow` refuse the same way; both already exited 1 on a read-only
+open, refused later by SQLite, so only their message changes.
+
+**Symptom to expect:** exit 1 and an error ending
+`… and this store was opened read-only, so it is refused before it embeds,
+consults or writes anything …`.
+
+**What to do:** run `dedup --apply` without `--read-only`. A preview —
+`dedup` without `--apply` — still runs on a read-only open.
+
+`config check` cannot detect this: it is a flag combination on one command,
+not a declaration.
+
 ### both `config check` commands now refuse a listen address that cannot bind (O160)
 
 **Who is affected:** anyone who gates a pipeline on either `config check` AND

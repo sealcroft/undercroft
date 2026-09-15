@@ -76,6 +76,16 @@ suggested:
   wire, not the destination — construction says so at warning level.
   If that trade is unacceptable, use an in-process posture.
 
+**What the endpoint is sent out of storage is recorded, and less is sent**
+(ROADMAP O167). `repair` re-embeds every drawer through the endpoint and
+appends one `egress/embed/repair` chain record binding the surface, the
+endpoint's host with any credentials stripped, the model and how many drawers
+it sent — an aborted repair included. A remote-index search, `admission allow`
+and `dedup` reuse the vector the vault already stores, and send the endpoint
+nothing but a search's query. What a caller sends in — a save, an import, a
+query — is embedded and not recorded: that text was never the vault's, and the
+endpoint receiving it is the one `UNDERCROFT_EMBED_URL` names.
+
 A failed embed can never fail a write: it degrades to a counted zero
 vector (lexically findable, semantically invisible until re-embedded).
 **The count is read, not merely kept** (ROADMAP O122): `undercroft stats`,

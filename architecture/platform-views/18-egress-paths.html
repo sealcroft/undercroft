@@ -42,11 +42,11 @@
 <body>
   <div class="frame">
     <p class="eyebrow">Swimlane · 18 of 22 · Undercroft</p>
-    <h1>Three egress doors, and the record each one leaves behind</h1>
+    <h1>Egress doors, and the records they leave behind</h1>
 
     <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="egress-paths-title egress-paths-desc">
       <title id="egress-paths-title">Undercroft egress paths and their chain records</title>
-      <desc id="egress-paths-desc">The egress namespace records three doors, each unconditionally: an export records before it writes the recipient-sealed or plaintext bundle, because a local write can be re-run; an index push ships each drawer's at-rest content beside its embedding, wing and room, which the backend reads in clear, to a remote backend in batches of sixty-four — ciphertext from a sealed vault; an hmac-only vault's content is the plaintext, so its push is refused unless --allow-plaintext is passed, and the record binds which was sent — and records after the bytes have left, binding the count the backend acknowledged, and a batch that fails part-way records what left before the error propagates; and a refine posts each selected drawer's plaintext to the LLM endpoint and records after the loop, dry run included, with the surface, the destination host, the model, the scope and the counts, and a refine that errors mid-loop records the drawers that left before the error propagates; a run that selected nothing records nothing. On a read-only handle a /v1 export and a refine say the egress went unaudited; a CLI export is refused before it writes, and an index push is refused before it creates or sends anything on the mirror. The three are not every path stored plaintext takes out: under a served embedder, repair re-embeds every drawer through the embedding endpoint and is recorded only as a repair migration naming the model, never the destination host, while admission allow and a remote-index search re-embed the drawers they touch with no egress record — gaps, not further recorded doors.</desc>
+      <desc id="egress-paths-desc">The egress namespace records three doors, each unconditionally: an export records before it writes the recipient-sealed or plaintext bundle, because a local write can be re-run; an index push ships each drawer's at-rest content beside its embedding, wing and room, which the backend reads in clear, to a remote backend in batches of sixty-four — ciphertext from a sealed vault; an hmac-only vault's content is the plaintext, so its push is refused unless --allow-plaintext is passed, and the record binds which was sent — and records after the bytes have left, binding the count the backend acknowledged, and a batch that fails part-way records what left before the error propagates; and a refine posts each selected drawer's plaintext to the LLM endpoint and records after the loop, dry run included, with the surface, the destination host, the model, the scope and the counts, and a refine that errors mid-loop records the drawers that left before the error propagates; a run that selected nothing records nothing. On a read-only handle a /v1 export and a refine say the egress went unaudited; a CLI export is refused before it writes, and an index push is refused before it creates or sends anything on the mirror. Two more records, noted beneath the chain lane rather than drawn as doors, name what a served model is handed out of storage: a repair under a served embedder re-embeds every drawer and records egress/embed/repair with the surface, the destination host, the model and the drawers sent, after its transaction commits or rolls back; and dedup records egress/advise/dedup for the stored survivors its admission screen showed the tier-2 advisor. Remote search, admission allow and dedup reuse the vectors the vault already stores and send the embedder nothing, and on a read-only handle repair, admission allow and dedup --apply are refused before anything is sent.</desc>
       <defs>
         <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7fa39c"/></marker>
         <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#35e0c2"/></marker>
@@ -99,9 +99,9 @@
       <text x="848" y="449" fill="#35e0c2" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">2 · RECORD</text>
 
       <rect x="852" y="404" width="76" height="12" rx="2" fill="#04080a"/>
-      <text x="890" y="413" fill="#c9a961" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">1 · POST EACH</text>
-      <rect x="1112" y="440" width="72" height="12" rx="2" fill="#04080a"/>
-      <text x="1148" y="449" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">2 · RECORD</text>
+      <text x="890" y="413" fill="#c9a961" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">1 · POSTS</text>
+      <rect x="1024" y="440" width="72" height="12" rx="2" fill="#04080a"/>
+      <text x="1060" y="449" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">2 · RECORD</text>
 
       <!-- ============ NODES — caller lane ============ -->
       <rect x="248" y="96" width="224" height="72" rx="6" fill="#04080a"/>
@@ -114,7 +114,7 @@
       <rect x="548" y="96" width="224" height="72" rx="6" fill="rgba(127,163,156,0.10)" stroke="#5c7f79" stroke-width="1"/>
       <text x="660" y="124" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">index push</text>
       <text x="660" y="142" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">CLI · the bench harness</text>
-      <text x="660" y="156" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">hmac-only vault: --allow-plaintext, stated</text>
+      <text x="660" y="156" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">hmac-only: --allow-plaintext, stated</text>
 
       <rect x="848" y="96" width="224" height="72" rx="6" fill="#04080a"/>
       <rect x="848" y="96" width="224" height="72" rx="6" fill="rgba(127,163,156,0.10)" stroke="#5c7f79" stroke-width="1"/>
@@ -134,15 +134,15 @@
       <rect x="548" y="272" width="224" height="96" rx="6" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1.2"/>
       <text x="660" y="300" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">index_push, batches of 64</text>
       <text x="660" y="318" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">the record comes AFTER the bytes left,</text>
-      <text x="660" y="332" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">binding the count the backend acknowledged</text>
-      <text x="660" y="352" fill="#35e0c2" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">a failed batch records what left, then errors</text>
+      <text x="660" y="332" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">binding the count the backend acked</text>
+      <text x="660" y="352" fill="#35e0c2" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">failed batch records what left, then errors</text>
 
       <rect x="848" y="272" width="224" height="96" rx="6" fill="#04080a"/>
       <rect x="848" y="272" width="224" height="96" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
       <text x="960" y="300" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">the refine loop</text>
       <text x="960" y="318" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">audit_refine AFTER the loop: sources ·</text>
-      <text x="960" y="332" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">failed · dry_run; read-only warns and serves</text>
-      <text x="960" y="352" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">an error mid-loop records what left, then errors</text>
+      <text x="960" y="332" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">failed · dry_run; read-only warns, runs</text>
+      <text x="960" y="352" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">mid-loop error records what left, then fails</text>
 
       <!-- ============ NODES — destination lane ============ -->
       <rect x="248" y="464" width="224" height="80" rx="6" fill="#04080a"/>
@@ -150,41 +150,44 @@
       <text x="360" y="492" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">a bundle file</text>
       <text x="360" y="510" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">recipient-sealed: X25519 + ML-KEM-768,</text>
       <text x="360" y="524" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">signed manifest — or plaintext NDJSON</text>
-      <text x="360" y="538" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">the record says which, by the recipient field</text>
+      <text x="360" y="538" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">the record's recipient field says which</text>
 
       <rect x="548" y="464" width="224" height="80" rx="6" fill="#04080a"/>
       <rect x="548" y="464" width="224" height="80" rx="6" fill="rgba(217,240,234,0.03)" stroke="rgba(217,240,234,0.30)" stroke-width="1"/>
       <text x="660" y="492" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">a remote vector backend</text>
-      <text x="660" y="510" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">sealed content + clear vector, wing, room</text>
+      <text x="660" y="510" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">sealed content + clear vector/wing/room</text>
       <text x="660" y="524" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">hmac-only: PLAINTEXT, said in the record</text>
-      <text x="660" y="538" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">quarantined rows are mirrored, never a boundary</text>
+      <text x="660" y="538" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">quarantined rows mirrored: no boundary</text>
 
       <rect x="848" y="464" width="224" height="80" rx="6" fill="#04080a"/>
       <rect x="848" y="464" width="224" height="80" rx="6" fill="rgba(217,240,234,0.03)" stroke="rgba(217,240,234,0.30)" stroke-width="1"/>
       <text x="960" y="492" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">the LLM endpoint</text>
-      <text x="960" y="510" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">one POST per drawer, plaintext · TLS or loopback</text>
-      <text x="960" y="524" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">destination = the host ureq dials, no credential</text>
-      <text x="960" y="538" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">the endpoint READS the text — TLS is the wire only</text>
+      <text x="960" y="510" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">plaintext POST/drawer · TLS or loopback</text>
+      <text x="960" y="524" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">dest = the host ureq dials, no userinfo</text>
+      <text x="960" y="538" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">endpoint READS the text; TLS: wire only</text>
 
       <!-- ============ RECORD CHIPS — audit lane ============ -->
       <rect x="248" y="608" width="224" height="48" rx="4" fill="#04080a"/>
       <rect x="248" y="608" width="224" height="48" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>
       <text x="260" y="626" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">egress/export</text>
-      <text x="260" y="640" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">surface · recipient · 4 counts · manifest digest</text>
+      <text x="260" y="640" fill="#5c7f79" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">surface · recipient · 4 counts · manifest digest</text>
 
       <rect x="548" y="608" width="224" height="48" rx="4" fill="#04080a"/>
       <rect x="548" y="608" width="224" height="48" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>
       <text x="560" y="626" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">egress/index-push</text>
-      <text x="560" y="640" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">backend · collection · acked count · embedder · plaintext?</text>
+      <text x="560" y="640" fill="#5c7f79" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">backend · collection · acked · embedder · sealed?</text>
 
       <rect x="848" y="608" width="224" height="48" rx="4" fill="#04080a"/>
       <rect x="848" y="608" width="224" height="48" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>
       <text x="860" y="626" fill="#d9f0ea" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">egress/refine</text>
-      <text x="860" y="640" fill="#5c7f79" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">surface · host · model · scope · sources · failed · dry_run</text>
+      <text x="860" y="640" fill="#5c7f79" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">surface · host · model · scope · counts · dry_run</text>
+
+      <text x="248" y="676" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">also egress/embed/repair — drawers a repair sends a served embedder · egress/advise/dedup — survivors shown to the advisor</text>
 
       <!-- ============ CALLOUT ============ -->
       <text x="80" y="716" fill="#5c7f79" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" letter-spacing="0.14em">TWO CONVENTIONS, BOTH DELIBERATE</text>
-      <text x="80" y="736" fill="#d9f0ea" font-size="14" font-style="italic" font-family="Georgia, 'Times New Roman', serif">An export writes locally and can be re-run, so it records first. A push or a refine cannot be undone, so each records what actually left — and the record goes on the door, never on a shared helper.</text>
+      <text x="80" y="731" fill="#d9f0ea" font-size="14" font-style="italic" font-family="Georgia, 'Times New Roman', serif">An export writes locally and can be re-run, so it records first. A push or a refine cannot be undone,</text>
+      <text x="80" y="749" fill="#d9f0ea" font-size="14" font-style="italic" font-family="Georgia, 'Times New Roman', serif">so each records what actually left — and the record goes on the door, never on a shared helper.</text>
 
       <!-- ============ LEGEND ============ -->
       <line x1="80" y1="756" x2="1120" y2="756" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>

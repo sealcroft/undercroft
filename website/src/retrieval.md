@@ -291,7 +291,8 @@ Undercroft can push a sealed vault's **sealed** content — beside the drawer
 ids, embeddings and wing/room labels in the clear; an hmac-only vault's push
 is refused unless `index push --allow-plaintext` — to Qdrant / Weaviate /
 pgvector / Milvus / Chroma, but they only return candidate **ids** — every
-candidate is re-verified (HMAC) and re-scored locally. Measured on LoCoMo, the
+candidate is re-verified (HMAC) and re-scored locally, from the vector the vault
+already stores rather than by re-embedding the drawer. Measured on LoCoMo, the
 remote backends sat at **~0.5% CPU** while the client did all the work, and were
 **slower** than the local full-scan for corpora this size (network + a bounded
 local decrypt per candidate outweigh ANN when the vault is small). They earn

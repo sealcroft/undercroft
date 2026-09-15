@@ -102,37 +102,37 @@
       <text x="276" y="141" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">rotate · operator only</text>
 
       <rect x="428" y="164" width="188" height="12" rx="2" fill="#04080a"/>
-      <text x="522" y="173" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">rotation_candidate: fresh salt, 4 subkeys</text>
+      <text x="522" y="173" fill="#7fa39c" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">rotation_candidate: fresh salt, 4 keys</text>
 
       <rect x="520" y="196" width="244" height="12" rx="2" fill="#04080a"/>
-      <text x="642" y="205" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">stage vault.json.next · fsync + directory sync</text>
+      <text x="642" y="205" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">stage vault.json.next · fsync + dir sync</text>
 
       <rect x="640" y="228" width="200" height="12" rx="2" fill="#04080a"/>
-      <text x="740" y="237" fill="#35e0c2" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">BEGIN — one transaction for all of it</text>
+      <text x="740" y="237" fill="#35e0c2" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">BEGIN — one transaction for it all</text>
 
       <rect x="452" y="284" width="308" height="12" rx="2" fill="#04080a"/>
-      <text x="606" y="293" fill="#35e0c2" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">reseal every artifact: content · emb · tok · pq · fde · kg words · kg secret</text>
+      <text x="606" y="293" fill="#35e0c2" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">reseal all: content · emb · tok · pq · fde · kg words + secret</text>
 
       <rect x="616" y="308" width="248" height="12" rx="2" fill="#04080a"/>
       <text x="740" y="317" fill="#35e0c2" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">re-tag wing_trust and retention_policy rows</text>
 
       <rect x="576" y="340" width="328" height="12" rx="2" fill="#04080a"/>
-      <text x="740" y="349" fill="#35e0c2" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">re-key the chain over PRESERVED tags · rotate/ record · flip keycheck</text>
+      <text x="740" y="349" fill="#35e0c2" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">re-key chain over PRESERVED tags · rotate/ record · flip keycheck</text>
 
       <rect x="700" y="372" width="80" height="12" rx="2" fill="#04080a"/>
       <text x="740" y="381" fill="#35e0c2" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">COMMIT</text>
 
       <rect x="544" y="404" width="196" height="12" rx="2" fill="#04080a"/>
-      <text x="642" y="413" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">promote vault.json.next over vault.json</text>
+      <text x="642" y="413" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">promote .next over vault.json</text>
 
       <rect x="196" y="428" width="164" height="12" rx="2" fill="#04080a"/>
-      <text x="278" y="437" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">RotationReport, chain-recorded</text>
+      <text x="278" y="437" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">RotationReport · chain record</text>
 
       <rect x="740" y="508" width="240" height="12" rx="2" fill="#04080a"/>
-      <text x="860" y="517" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">rotation_verdict(db keycheck) — decided, not done</text>
+      <text x="860" y="517" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">rotation_verdict(db keycheck) — no effect</text>
 
       <rect x="628" y="556" width="264" height="12" rx="2" fill="#04080a"/>
-      <text x="760" y="565" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">matches ⇒ promote · else discard · read-only ⇒ REPORT</text>
+      <text x="760" y="565" fill="#7fa39c" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">matches ⇒ promote · else discard · read-only ⇒ REPORT</text>
 
       <!-- ============ ACTORS ============ -->
       <rect x="80" y="64" width="160" height="64" rx="6" fill="#04080a"/>
