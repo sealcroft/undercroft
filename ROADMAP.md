@@ -3988,7 +3988,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**215** of the **229** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**217** of the **231** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -14809,7 +14809,7 @@ arm: before the open the vector must DIFFER from a fresh embed, or the test
 passes on both trees. Counterfactual: without the new rows the open leaves the
 vector untouched and the equality fails.
 
-### O167 — a served embedder receives stored drawer plaintext on three paths that record no egress
+### O167 — RULED 2026-09-15 and not yet built: a served embedder receives stored drawer plaintext on paths that record no egress — send nothing where the vault already holds the vector, record what still leaves
 
 **Filed 2026-09-14, established by reading the code, not by a run.** Under
 `UNDERCROFT_EMBEDDER=http` every `Embedder::embed` call POSTs its text to
@@ -14898,6 +14898,184 @@ appends exactly one `egress/` record binding host, model and count; every
 embed degrading to a counted zero vector is what makes it drivable without a
 model, as O79's gates were. Counterfactual: today's tree appends none. Negative
 arm: the same `repair` under the hash embedder appends none either.
+
+#### RULED 2026-09-15 by three lenses — Agentic Memory, Security, storage/transaction engineering — and an adversarial refuter, with two probes run by the integrator
+
+**Questions.** Q1, remote-index search re-embedding stored candidates. Q2, the
+tier-2 advisor and a served embed of ARRIVING write content. Q3, how the store
+names a destination. Q4, the record shape, placement and read-only posture for
+`repair` and `admission allow` — and for `dedup`, which every lens found and the
+filing missed. Q5, the gates.
+
+**Prior rulings.** O79 and O95 are FOLLOWED: stored plaintext POSTed to a
+declared endpoint is an egress, recorded unconditionally under `egress/`, counted
+by attempt, recorded on both exits from one site, and not recorded when nothing
+left. O92 is FOLLOWED: a destination comes from the transport's own parser. O122
+is FOLLOWED: a required trait method where a default would be the silent shape.
+**O175 is not the rule here.** The lenses reached for it by analogy, and the
+refuter held them to O184's own sentence — a POST is an egress, not a remote
+mutation, so O175 does not decide it. The posture rule below is new, and it is
+O184's question too, so it is recorded there as well.
+
+**Ruled — two principles.** *Send less before recording more*: where the vault
+already holds the vector a path would compute, the path uses it and sends
+nothing, and a record is owed only for stored text that still has to leave.
+*Custody, not call site*: a POST owes `egress/` when its input was read out of a
+committed row, or derived from one, within the same operation. The caller's own
+text on this call — a save, an import, an update, a query, the advisor's
+candidate — is not an egress, for the advisor and the embedder alike. Residual,
+stated: the chain cannot name the endpoint that received arriving text; the
+deployment's configuration does.
+
+**Q1 — remote search: (c), score from the stored embedding.** `score_drawer`
+takes its semantic leg from the candidate's stored embedding through one helper
+shared with local hydration. An embedding that will not open maps to
+`CorruptRow`: it is never skipped and never re-embedded, because a re-embed
+fallback would hand an offline writer a trigger for plaintext egress. The query
+embed stays, being the caller's text. Nothing is sent, so no record is owed. The
+mirror never offered a vector (`Candidate` is `{id, score}`), and the vector it
+does hold is the stored one `index_push` sent. **Costs, stated.** On an hmac-only
+vault the score now rests on an embedding outside HMAC coverage, which an
+offline writer can move — the default local path's cost today. And remote search
+becomes exactly as stale as local search in the known windows (the force
+override on a read-only open, O166's Hebrew leg), no longer fresher. *Lost:* (a)
+a chain write per search to record a POST that can be removed, nothing recorded
+on a read-only handle, and an untrusted mirror still setting the volume — no
+backend truncates to `limit`, and repeats are O186. (b) two rules for `egress/`,
+and force-disabled on read-only opens.
+
+**Q2 — the advisor and arriving text: (c), by custody as above.** *Lost:* (a) a
+record per write carrying a deployment constant, which `upsert_many`'s rollback
+would erase because the batch screens before its `BEGIN IMMEDIATE`. (b) a URL
+bound into a durable write canonical that is byte-identical today, and erased
+along with a refused write.
+
+**Q3 — the destination: (a).** A required `egress_destination(&self) ->
+Option<String>` on `Embedder` AND on `AdmissionAdvisor`. In-process backends and
+`ExternalEmbedder` answer `None` and say why; wrappers (`SharedOrtEmbedder`, the
+bench's) delegate, each with its own delegation test, because a required method
+forces a statement, not a true one. It never enters `model_name`: a re-hosted
+endpoint would then refuse every vault. `LlmClient::destination`'s body and
+`UNPARSEABLE_DESTINATION` move verbatim into `undercroft-net` beside
+`is_loopback`, both clients delegate, and O92's table does not move. The property
+test compares against the host of the URL actually POSTed, not the base. *Lost:*
+(b) a construction parameter — a second statement of one fact, set at two
+construction sites (`open_store_as` and `embedder_factory`), and able to be wrong:
+an `ExternalEmbedder` rebuilt from the recorded identity sends nothing.
+
+**Q4 — the paths.**
+
+- **`repair`** records `egress/embed/repair` with canonical
+  `egress␟embed␟repair␟{surface}␟{destination}␟{model}␟{sent}␟{now}`, `sent`
+  incremented immediately before each embed. The record is written in its own
+  transaction after COMMIT or after ROLLBACK, with no fallible step between, and
+  the LAST anchor written names the newest head — `Vault::anchor_manifest`
+  overwrites without a check, so an older anchor written after the record would
+  regress the manifest and leave the record a strippable tail. Skipped when the
+  destination is `None` or `sent == 0`. An audit failure warns and never replaces
+  the original error. `migrate/repair` stays byte-identical.
+- **`admission allow` sends nothing.** It reuses the quarantined row's stored
+  vector, whose content is byte-identical to the restored drawer's. That removes
+  the POST, the read-only leak, and a defect no entry recorded: on an external
+  vault `allow` replaced the caller's vector with `ExternalEmbedder`'s zero vector.
+  `repair` rewrites the quarantine row too, so the reused vector is never staler
+  than any other.
+- **`dedup`** reuses the survivor's stored vector (its content is unchanged) and
+  sends no embed. Its advisor consultations on stored survivors stay —
+  `Screen::Apply` is not this panel's to move — and record `egress/advise/dedup`,
+  binding surface, destination, the consultation count and `apply`, in both modes
+  when the count is above zero. It consults only when `gained > 0`.
+- **`write_drawer` stops re-embedding a diverted copy** and stores the embedding
+  its caller passed. `admission_divert` changes no content in any branch — the
+  rate, destination and advisor screens only push signals — so the second forward
+  pass did no work, doubled every diverted POST of arriving text, and would have
+  sent a diverted `dedup` survivor's stored plaintext unrecorded. A carried vector
+  on import then lands on the quarantine row exactly as on a non-diverted row,
+  which is parity, not a gap. The refuter settled this against filing it
+  separately and narrowing `dedup`'s guarantee, which would have left that
+  unrecorded POST inside the unit written to close it.
+- **Labels `egress/<channel>/<op>`.** The id is the only field `history` shows,
+  `dedup` reaches two destinations, and no reader matches a middle segment. A
+  drawer id is not content-derived and already sits in clear in
+  `admission/{id}/…`. **`surface` is bound**: `repair` and `allow` are CLI and
+  `/v1`, and `dedup` adds MCP, a different principal. **No `failed` field**: a
+  counted embed failure includes requests the endpoint received — a wrong
+  dimension, an unparseable answer — so it cannot mean "did not leave", and it is
+  already live on `VaultStats.embed_failures`.
+- **Posture: a non-dry-run mode decides its posture before its first egress; a
+  mode that can finish read-only keeps O79's warn-and-serve.** `admission allow`
+  and `dedup --apply` refuse on a read-only handle before any embed or
+  consultation, with `StoreError::Invalid` naming the posture; a read-only `dedup`
+  dry run warns and serves. `repair` refuses before `BEGIN IMMEDIATE` too, as
+  hardening: probe P1 shows it sends nothing read-only today, but only because
+  `BEGIN IMMEDIATE` opens a write transaction on the TEMP database slot, which
+  `query_only` refuses — an accident, and the tree's own idiom of embedding before
+  the write lock (`lib.rs`, `upsert_many`) would undo it silently. **Cost, owed
+  in the build unit:** `--read-only dedup --apply` on a vault with no duplicates
+  exits 0 today and will exit 1, so `UPGRADING.md` gets an entry. `repair` and
+  `allow` already exit 1 read-only.
+
+**Q5 — gates, as corrected.** Store tests use a counting embedder that declares
+its gate and floor (otherwise the open's calibration issues embeds), counted
+after open. A real `HttpEmbedder` against a counting loopback stub lives in the
+CLI crate, which carries `tiny_http` and the `stub_llm` precedent; an unreachable
+URL cannot tell 0 POSTs from 1.
+
+- `repair`: N requests and one `egress/embed/repair`, whose tag verifies with N
+  and refuses N±1. Abort arm: row k tampered, `sent = k−1`, no `migrate/repair`.
+  The manifest head equals `chain_meta` after the run. `hash` and an empty vault
+  record nothing. Read-only: `Invalid` naming the posture with 0 requests — the
+  counterfactual is the error variant, `Sqlite(ReadOnly)`, since today's tree
+  already sends 0.
+- `admission allow`: 0 requests writable and read-only; the restored vector
+  equals the quarantine row's; the external-vault arm is non-zero; the read-only
+  counterfactual is 1 request, then `Sqlite(ReadOnly)`.
+- `dedup`: 0 embed requests, including for a survivor the screen diverts; a
+  counting advisor stub; read-only `--apply` refused with 0 requests.
+- A diverted `upsert_screened`: exactly 1 embed, and the quarantine row's vector
+  equals the caller's. Counterfactual with the diverted re-embed restored: 2.
+- Remote search: 1 embed (the query) with two or more candidates, and with a
+  mirror repeating ids. Remote `semantic` equals local hydration's. Sealed arm: a
+  corrupted `/emb` gives `CorruptRow` with 0 embeds.
+- The destination property against the POSTed URL, O92's table unchanged, and a
+  delegation test per wrapper.
+- A source inventory derived from the source, per O80: every
+  `self.embedder.embed(`, `embedder_embed(` and `.assess(`, and every caller of
+  `write_drawer`/`upsert_screened`, classified as custody with its recorder or as
+  arriving with its reason, both directions, with a premise probe. It inventories
+  functions, not data flow, and says so.
+
+**Claims refuted — the brief's first.** The integrator's brief missed `dedup`;
+called `upsert_screened` arriving-only; cited `open_store_as` as
+`embedder_factory`; stated `max(20, depth·4)` as a re-embed count when it is the
+fetch size an untrusted mirror need not honour; said "two attempts", which is
+false on a wrong dimension; called the mirror's vector a different object when it
+is the stored one; omitted the fragment `destination` keeps; and summarised O175
+without O184's sentence. The filing's own gate cannot open its vault under `http`
+without `UNDERCROFT_FORCE_EMBEDDER=1`, and its unreachable URL cannot tell 0 POSTs
+from 1. Lens claims refuted: that the advisor never sees stored text (`dedup`);
+that a read-only `dedup` dry run "fails nowhere" (the CLI only — MCP and `/v1`
+refuse it); both proposed anchor placements, one of which regresses the manifest
+and the other of which loses the record on a failed anchor; and O175 applied by
+analogy.
+
+**Probes, run by the integrator on a scratch copy of `88000a6`.** P1: `repair()`
+on a read-only handle returned `Sqlite(ReadOnly)` with **0 embeds** on a modern
+vault and on one with a NULL fingerprint; the writable premise made 3. **It
+refuted the Agentic Memory lens's reading and the refuter's own prediction of one
+embed** — two agents reading the pinned SQLite source agreed on an observable that
+execution contradicted — and the refuter then located the cause in the temp
+slot. P2: `admission_allow` on a read-only handle issued **1 embed** and then
+`Sqlite(ReadOnly)`; the writable premise made 1. Confirmed.
+
+**Dissent, settled by evidence.** Security would have kept one `egress/embed`
+with the operation only inside the canonical — settled by the id being the only
+readable field. Storage and the Agentic Memory lens would have bound `failed` —
+settled by what that number means.
+
+**What remains.** Filed: O186, a mirror repeating an id gets duplicate hits back;
+O187, refine's fact-mirror drawers are embedded and screened with no record
+naming those endpoints. The build is not done.
 
 ### O168 — seven of the ten release binaries are compiled on no pull request: Windows `-ort`, and both macOS targets and Linux arm64 in both builds
 
@@ -15801,7 +15979,7 @@ Discriminator arm: a hash-vault drawer whose content yields no token is not
 reported as a hole. Counterfactual: a count sourced from `embed_failures`
 passes the premise and fails the restart arm.
 
-### O184 — a non-dry-run `--read-only refine` posts drawer plaintext before its first write fails
+### O184 — RULED 2026-09-15 and not yet built: a non-dry-run `--read-only refine` posts drawer plaintext before its first write fails — refuse before the first POST
 
 **Filed 2026-09-14 by O175's ruling panel; verified by reading.** `refine` POSTs
 each drawer to `UNDERCROFT_LLM_URL` (`refine.rs`, the request) before its first
@@ -15817,6 +15995,23 @@ read-only handle before the first POST, or keep today's warned partial egress.
 **Gate**: a `refine` test against a loopback fake endpoint on a read-only handle,
 counting requests received.
 
+#### RULED 2026-09-15 by O167's panel — three lenses (Agentic Memory, Security, storage/transaction engineering) and an adversarial refuter
+
+**The question is O167's too, and it is ruled once, there**: *a non-dry-run mode
+decides its posture before its first egress; a mode that can finish read-only
+keeps O79's warn-and-serve.* O175's rule does not decide it — this entry says so
+itself, and O167's refuter held the lenses to that sentence when they reached for
+O175 by analogy. Applied here: a non-dry-run `refine` on a read-only handle
+refuses before its first POST, with `StoreError::Invalid` naming the posture;
+`refine --dry-run` keeps warn-and-serve. The reason is O167's: a non-dry run has
+data writes that cannot land read-only, so every POST before the refusal serves
+nothing and cannot be recorded. Recorded here so the question is not asked again.
+**The build is this entry's own unit**, with this entry's gate — a loopback fake
+endpoint counting requests on a read-only handle, expecting 0 for a non-dry run
+and the dry run unchanged. Whether the refusal moves an exit code a script sees
+(a read-only non-dry run whose every extraction fails writes nothing today) is
+that build's to check against `UPGRADING.md`.
+
 ### O185 — `search --backend` calls `ensure` — a CREATE on real backends — on a read path
 
 **Filed 2026-09-14 by O175's ruling panel; verified by reading.**
@@ -15829,6 +16024,36 @@ proved per backend by asking twice. **Shape**: query without `ensure`, treating
 an absent collection as "no mirror" the way `status` does. **Gate**: the O83
 shape in `backends-e2e` — `search --backend` against a never-pushed vault, then
 `index status` twice reporting no mirror.
+
+### O186 — a mirror that repeats a candidate id gets duplicate hits back from remote search
+
+**Filed 2026-09-15 by O167's refuter; verified by reading, not executed.**
+`search_with_index` (`remote.rs`) walks every candidate the backend returns with
+no seen-set, so an id the mirror offers twice is loaded, scored and returned
+twice. Nothing bounds the response either: Qdrant, Chroma, Milvus and Weaviate
+keep the whole array their server sends, and pgvector's `LIMIT` runs on the
+server — which the module's own header calls untrusted. Integrity holds, since
+every hit is re-verified locally; the page does not, and until O167's build lands
+each repeat also re-embeds a stored drawer through a served embedder. **Shape**:
+drop repeated candidate ids before hydration, keeping first-seen order, and cap
+the candidates hydrated at what was asked for. **Gate**: an index fixture
+returning one id twice, and more ids than `limit`, yields one hit per drawer and
+no more than the page.
+
+### O187 — `refine`'s fact-mirror drawers are embedded and screened with no record naming those endpoints
+
+**Filed 2026-09-15 by O167's panel; verified by reading.** `refine` files each
+distilled fact as a mirror drawer through `upsert_screened` (`refine.rs`), so
+under a served embedder that text — derived from stored drawers inside the same
+operation — is POSTed to `UNDERCROFT_EMBED_URL`, and under
+`UNDERCROFT_ADMISSION_LLM=advisory` it reaches the advisor too. By O167's custody
+rule both owe a record, and `egress/refine` binds only the LLM host. **Shape**:
+record the embed and advisor egress from `refine`'s one recording site
+(`record_egress`), on both exits, through O167's `egress_destination` — which
+moves O79's and O95's tag tests, so it is its own unit. **Gate**: a non-dry-run
+`refine` against a loopback extractor stub, under a served embedder pointed at a
+counting loopback stub, records that endpoint with the number of mirror drawers
+it sent.
 
 ### O176 — `undercroft --read-only export` fails inside SQLite at the audit record, while `/v1` export on a read-only server warns and serves
 
