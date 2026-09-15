@@ -1721,6 +1721,11 @@ struct SharedOrtEmbedder(std::sync::Arc<undercroft_embed_ort::OrtEmbedder>);
 
 #[cfg(feature = "ort")]
 impl undercroft_core::embed::Embedder for SharedOrtEmbedder {
+    /// Delegated, never answered here: a wrapper that said `None` for a
+    /// backend that sends would hide its egress (ROADMAP O167).
+    fn egress_destination(&self) -> Option<String> {
+        self.0.egress_destination()
+    }
     fn model_name(&self) -> &str {
         self.0.model_name()
     }

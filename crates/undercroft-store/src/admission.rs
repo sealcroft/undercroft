@@ -626,7 +626,12 @@ impl VaultStore {
         // still trips the screen (that is why it was here), and the
         // human ruling IS the override — re-screening would trap every
         // allowed drawer forever.
-        let embedding = self.embedder.embed(&restored.content);
+        // The quarantined row's own stored vector (ROADMAP O167). Its content
+        // is byte-identical to `restored`'s — only metadata and id moved — so
+        // asking the embedder again sent the drawer to a served endpoint for a
+        // vector the vault already held, and on an external vault replaced the
+        // caller's vector with `ExternalEmbedder`'s zero vector.
+        let embedding = self.stored_embedding(id)?;
         // The human ruling IS the override — stated, not implied.
         self.write_drawer(
             &restored,

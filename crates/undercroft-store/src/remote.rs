@@ -529,7 +529,7 @@ impl VaultStore {
                     continue;
                 }
             }
-            hits.push(self.score_drawer(drawer, query, &qvec, now));
+            hits.push(self.score_drawer(drawer, query, &qvec, now)?);
         }
         // The exact channel, for the same reason as the local gate: an
         // approximate match should reorder a result set, never populate one.

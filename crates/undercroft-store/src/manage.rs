@@ -1348,7 +1348,12 @@ impl VaultStore {
                     // re-screened here and re-diverted, and a declared rate
                     // screen counts a burst of duplicates from one agent,
                     // which is the corpus `dedup --apply` is run against.
-                    diverted = self.upsert_screened(keep)?.quarantined;
+                    // The survivor's own stored vector (ROADMAP O167): only its
+                    // occurrence dates changed, so its content, and the vector the
+                    // vault holds for it, did not; a fresh embed sent stored
+                    // plaintext to a served endpoint for nothing.
+                    let embedding = self.stored_embedding(&keep.id)?;
+                    diverted = self.upsert_screened_with(keep, embedding)?.quarantined;
                 } else if gained > 0 {
                     // **A dry run must preview what `--apply` will do.**
                     // Making `apply` honest about a diverted survivor left

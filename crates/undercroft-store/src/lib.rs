@@ -4590,6 +4590,31 @@ impl VaultStore {
             return Err(StoreError::ExternalVault);
         }
         let embedding = self.embedder.embed(&drawer.content);
+        self.screened_write(drawer, embedding)
+    }
+
+    /// [`upsert_screened`](Self::upsert_screened) with the vector SUPPLIED —
+    /// for a path re-writing a drawer whose content this vault already holds a
+    /// vector for, so no embedder is asked (ROADMAP O167: `dedup`'s survivor,
+    /// whose content is unchanged).
+    pub(crate) fn upsert_screened_with(
+        &mut self,
+        drawer: &Drawer,
+        embedding: Vec<f32>,
+    ) -> Result<SaveOutcome, StoreError> {
+        let _span = undercroft_obs::scope("save", self.vault.id());
+        if self.external_dim.is_some() {
+            return Err(StoreError::ExternalVault);
+        }
+        self.screened_write(drawer, embedding)
+    }
+
+    /// The screened write, event and outcome both screened saves share.
+    fn screened_write(
+        &mut self,
+        drawer: &Drawer,
+        embedding: Vec<f32>,
+    ) -> Result<SaveOutcome, StoreError> {
         let landed = self.write_drawer(drawer, embedding, Screen::Apply)?;
         // Silent when diverted: the choke point already emitted the counter
         // and the frame for where the row actually landed. The counter used
@@ -4695,11 +4720,12 @@ impl VaultStore {
         // — including `write_drawer_stmts`' own guard — then sees the
         // reserved constant rather than what the caller asked for.
         if let Some(diverted) = self.screen_and_divert(drawer, screen)? {
-            let emb = if self.external_dim.is_some() {
-                embedding.clone()
-            } else {
-                self.embedder.embed(&diverted.content)
-            };
+            // The caller's embedding, on every vault (ROADMAP O167):
+            // `admission_divert` changes metadata and id, never content, so a
+            // second forward pass did no work, doubled every diverted POST to a
+            // served embedder, and would have sent a diverted `dedup` survivor's
+            // stored plaintext unrecorded.
+            let emb = embedding;
             let id = diverted.id.clone();
             let landed = self.write_drawer(
                 &diverted,
@@ -6592,15 +6618,7 @@ impl VaultStore {
                         StoreError::Integrity(id.clone())
                     })?;
                 let drawer = Self::decode_with(vault, &id, &meta_json, &content_rest)?;
-                let emb = match cached {
-                    Some(e) => e,
-                    None => vault.embedding_from_rest(&id, &emb_rest).map_err(|e| {
-                        StoreError::CorruptRow {
-                            id: id.clone(),
-                            reason: e.to_string(),
-                        }
-                    })?,
-                };
+                let emb = Self::open_stored_embedding(vault, &id, cached, &emb_rest)?;
                 let semantic = calibrated_semantic(sem_floor, cosine(qv, &emb));
                 let recency = recency_boost(&drawer.meta.filed_at, now);
                 // ROADMAP O108: the date term, computed only while a window
@@ -7489,18 +7507,76 @@ impl VaultStore {
         calibrated_semantic(self.sem_floor, cos)
     }
 
-    /// Score one already-decrypted drawer against a query (used by the
-    /// remote-index path, where the embedding is recomputed locally from
-    /// the verified plaintext rather than trusted from the server).
+    /// A drawer's stored vector: the cached copy when there is one, else its
+    /// at-rest blob opened under its own id, and `CorruptRow` when that blob
+    /// will not open.
+    ///
+    /// **ONE decision for local hydration and for every path that reuses a
+    /// vector this vault already holds (ROADMAP O167)** — remote search,
+    /// `admission allow`, `dedup`. It never falls back to re-embedding: an
+    /// offline writer who corrupts a stored vector must meet an integrity
+    /// error, not a trigger that sends the drawer's plaintext to a served
+    /// endpoint. An associated function so the hydration pass can call it
+    /// inside its rayon closure, which must not capture `&self`.
+    fn open_stored_embedding(
+        vault: &undercroft_vault::Vault,
+        id: &str,
+        cached: Option<Vec<f32>>,
+        rest: &[u8],
+    ) -> Result<Vec<f32>, StoreError> {
+        match cached {
+            Some(e) => Ok(e),
+            None => vault
+                .embedding_from_rest(id, rest)
+                .map_err(|e| StoreError::CorruptRow {
+                    id: id.to_string(),
+                    reason: e.to_string(),
+                }),
+        }
+    }
+
+    /// The vector this vault already holds for drawer `id`, through
+    /// [`open_stored_embedding`](Self::open_stored_embedding) (ROADMAP O167).
+    pub(crate) fn stored_embedding(&self, id: &str) -> Result<Vec<f32>, StoreError> {
+        let cached = self
+            .emb_cache
+            .borrow()
+            .as_ref()
+            .and_then(|c| c.get(id).cloned());
+        let rest: Vec<u8> = match cached {
+            Some(_) => Vec::new(),
+            None => self
+                .conn
+                .query_row(
+                    "SELECT embedding FROM drawers WHERE id = ?1",
+                    params![id],
+                    |r| r.get(0),
+                )
+                .optional()?
+                .ok_or_else(|| StoreError::NotFound(id.to_string()))?,
+        };
+        Self::open_stored_embedding(&self.vault, id, cached, &rest)
+    }
+
+    /// Score one already-decrypted drawer against a query, for the
+    /// remote-index path.
+    ///
+    /// **The semantic leg is the drawer's STORED vector (ROADMAP O167).** It
+    /// used to re-embed the verified plaintext "rather than trust the server",
+    /// but the mirror never offers a vector — a candidate is an id and a score
+    /// — so the re-embed guarded against nothing and sent every candidate to a
+    /// served endpoint, as many as an untrusted mirror chose to return. The
+    /// stored vector is the one `index_push` sent, opened here from its
+    /// authenticated origin, exactly as local hydration ranks on it.
     pub(crate) fn score_drawer(
         &self,
         drawer: undercroft_core::Drawer,
         query: &str,
         qvec: &[f32],
         now: OffsetDateTime,
-    ) -> SearchHit {
+    ) -> Result<SearchHit, StoreError> {
         let qterms: Vec<String> = tokenize(query);
-        let emb = self.embedder.embed(&drawer.content);
+        let emb = self.stored_embedding(&drawer.id)?;
         let semantic = self.semantic_of(cosine(qvec, &emb));
         let (lexical, lexical_exact) = lexical_score(&qterms, query, &drawer.content);
         let recency = recency_boost(&drawer.meta.filed_at, now);
@@ -7516,14 +7592,14 @@ impl VaultStore {
             self.fusion_weight
         };
         let score = w * semantic + (0.90 - w) * lexical + 0.10 * recency;
-        SearchHit {
+        Ok(SearchHit {
             drawer,
             score,
             semantic,
             lexical,
             lexical_exact,
             lexical_morph: 0.0,
-        }
+        })
     }
 
     /// Walk every record verifying its HMAC, replay the audit chain
@@ -15393,6 +15469,9 @@ mod tests {
             calls: std::sync::Arc<AtomicUsize>,
         }
         impl undercroft_core::admission::AdmissionAdvisor for Stub {
+            fn egress_destination(&self) -> Option<String> {
+                None
+            }
             fn assess(&self, _content: &str) -> Option<bool> {
                 self.calls.fetch_add(1, Ordering::SeqCst);
                 self.verdict
@@ -15504,6 +15583,9 @@ mod tests {
             calls: std::sync::Arc<AtomicUsize>,
         }
         impl undercroft_core::admission::AdmissionAdvisor for Flipping {
+            fn egress_destination(&self) -> Option<String> {
+                None
+            }
             fn assess(&self, _content: &str) -> Option<bool> {
                 Some(self.calls.fetch_add(1, Ordering::SeqCst) == 0)
             }
@@ -20465,6 +20547,9 @@ mod tests {
     struct HighFloorEmbedder;
 
     impl Embedder for HighFloorEmbedder {
+        fn egress_destination(&self) -> Option<String> {
+            None
+        }
         fn model_name(&self) -> &str {
             "test-high-floor"
         }
@@ -20496,6 +20581,9 @@ mod tests {
     struct BrokenEmbedder(std::cell::Cell<u64>);
 
     impl Embedder for BrokenEmbedder {
+        fn egress_destination(&self) -> Option<String> {
+            None
+        }
         fn model_name(&self) -> &str {
             "test-broken"
         }
@@ -20521,6 +20609,9 @@ mod tests {
     }
 
     impl Embedder for FlakyEmbedder {
+        fn egress_destination(&self) -> Option<String> {
+            None
+        }
         fn model_name(&self) -> &str {
             "test-flaky"
         }
@@ -20870,6 +20961,9 @@ mod tests {
     struct TopicEmbedder;
 
     impl Embedder for TopicEmbedder {
+        fn egress_destination(&self) -> Option<String> {
+            None
+        }
         fn model_name(&self) -> &str {
             "test-topic"
         }

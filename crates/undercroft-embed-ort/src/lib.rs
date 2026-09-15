@@ -241,6 +241,12 @@ impl OrtEmbedder {
 }
 
 impl Embedder for OrtEmbedder {
+    /// ONNX Runtime runs the model inside this process, so an embed sends
+    /// nothing anywhere (ROADMAP O167).
+    fn egress_destination(&self) -> Option<String> {
+        None
+    }
+
     fn model_name(&self) -> &str {
         &self.name
     }

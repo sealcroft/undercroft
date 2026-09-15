@@ -55,6 +55,18 @@ pub trait Embedder {
     /// other side.
     fn embed_failures(&self) -> u64;
 
+    /// Where [`Self::embed`] sends the text it is handed, with any credential
+    /// stripped, or `None` for an embedder that sends nothing out of this
+    /// process (ROADMAP O167).
+    ///
+    /// **Required rather than defaulted, on O122's reasoning**: a defaulted
+    /// `None` is exactly the silent shape — a served backend, or a wrapper
+    /// around one, that forgot to override would read as in-process and its
+    /// egress would go unrecorded. A wrapper delegates. The value names a
+    /// DESTINATION for an egress record and never enters `model_name`: a
+    /// re-hosted endpoint must not change a vault's recorded identity.
+    fn egress_destination(&self) -> Option<String>;
+
     /// The `semantic` score above which this vector space may admit a drawer
     /// on cosine evidence alone, or `None` for a space whose floor is not
     /// knowable here — in which case admission rests on the lexical channels
@@ -368,6 +380,12 @@ pub const HASH_EMBEDDER: &str = "undercroft-hash-v3";
 pub const HASH_ADMISSION_GATE: f32 = 0.56;
 
 impl Embedder for HashEmbedder {
+    /// Feature hashing runs inside this process and sends nothing (ROADMAP
+    /// O167).
+    fn egress_destination(&self) -> Option<String> {
+        None
+    }
+
     fn model_name(&self) -> &str {
         HASH_EMBEDDER
     }
@@ -448,6 +466,12 @@ impl ExternalEmbedder {
 }
 
 impl Embedder for ExternalEmbedder {
+    /// The caller computes these vectors elsewhere; this identity sends
+    /// nothing (ROADMAP O167).
+    fn egress_destination(&self) -> Option<String> {
+        None
+    }
+
     fn model_name(&self) -> &str {
         &self.name
     }

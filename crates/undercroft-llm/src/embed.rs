@@ -263,6 +263,12 @@ fn parse_embedding(resp: &Value) -> Option<Vec<f32>> {
 pub(crate) use undercroft_net::is_loopback;
 
 impl Embedder for HttpEmbedder {
+    /// The endpoint every embed POSTs to, named by the transport's own parser
+    /// with any credential stripped (ROADMAP O92, O167).
+    fn egress_destination(&self) -> Option<String> {
+        Some(undercroft_net::egress_destination(&self.base))
+    }
+
     fn model_name(&self) -> &str {
         &self.identity
     }

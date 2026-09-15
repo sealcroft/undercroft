@@ -100,6 +100,13 @@ pub trait AdmissionAdvisor {
     /// (transport or model failure — logged by the implementation,
     /// never surfaced as a write error).
     fn assess(&self, content: &str) -> Option<bool>;
+
+    /// Where [`Self::assess`] sends the candidate, with any credential
+    /// stripped, or `None` for an advisor that sends nothing out of this
+    /// process (ROADMAP O167). Required rather than defaulted, for the reason
+    /// `Embedder::egress_destination` is: a defaulted `None` would let an
+    /// advisor that POSTs read as one that does not.
+    fn egress_destination(&self) -> Option<String>;
 }
 
 /// Phrases that address a future READER of the memory rather than

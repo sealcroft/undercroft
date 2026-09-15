@@ -595,6 +595,9 @@ fn onnx_shared() -> Box<dyn undercroft_core::embed::Embedder + Send> {
 
     struct Shared(Arc<undercroft_embed_onnx::OnnxEmbedder>);
     impl undercroft_core::embed::Embedder for Shared {
+        fn egress_destination(&self) -> Option<String> {
+            self.0.egress_destination()
+        }
         fn model_name(&self) -> &str {
             self.0.model_name()
         }
@@ -691,6 +694,9 @@ fn ort_embedder_shared() -> Box<dyn undercroft_core::embed::Embedder + Send> {
         .clone();
     struct Shared(Arc<undercroft_embed_ort::OrtEmbedder>);
     impl undercroft_core::embed::Embedder for Shared {
+        fn egress_destination(&self) -> Option<String> {
+            self.0.egress_destination()
+        }
         fn model_name(&self) -> &str {
             self.0.model_name()
         }
