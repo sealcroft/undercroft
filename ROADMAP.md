@@ -4169,6 +4169,96 @@ MINOR since O149: `PATCH /admin/tenants/{id}` and its CLI mirror are new
 capability, backward compatible. The rest of the section is PATCH work — no
 documented contract moves.
 
+### O184 — CLOSED 2026-09-16: a non-dry-run `--read-only refine` posted drawer plaintext before its first write failed — it now refuses before the first POST
+
+**Filed 2026-09-14 by O175's ruling panel; verified by reading.** `refine` POSTs
+each drawer to `UNDERCROFT_LLM_URL` (`refine.rs`, the request) before its first
+fact write (`refine.rs`, the write), and under `--read-only` that write fails
+inside SQLite — so every drawer up to the first one yielding a valid triple has
+already left. The error arm warns (O95's egress record path) and says what left,
+so the trail is honest; what is not settled is whether a mutating `refine` under
+the incident posture should decide its posture FIRST, as O175 rules for effects
+outside the database, or keep O79's warn-and-serve, which was ruled for the dry
+run. The POST is an egress, not a remote mutation, so O175's rule does not decide
+it by itself. **Shape, for a ruling**: refuse a non-dry-run `refine` on a
+read-only handle before the first POST, or keep today's warned partial egress.
+**Gate**: a `refine` test against a loopback fake endpoint on a read-only handle,
+counting requests received.
+
+#### RULED 2026-09-15 by O167's panel — three lenses (Agentic Memory, Security, storage/transaction engineering) and an adversarial refuter
+
+**The question is O167's too, and it is ruled once, there**: *a non-dry-run mode
+decides its posture before its first egress; a mode that can finish read-only
+keeps O79's warn-and-serve.* O175's rule does not decide it — this entry says so
+itself, and O167's refuter held the lenses to that sentence when they reached for
+O175 by analogy. Applied here: a non-dry-run `refine` on a read-only handle
+refuses before its first POST, with `StoreError::Invalid` naming the posture;
+`refine --dry-run` keeps warn-and-serve. The reason is O167's: a non-dry run has
+data writes that cannot land read-only, so every POST before the refusal serves
+nothing and cannot be recorded. Recorded here so the question is not asked again.
+**The build is this entry's own unit**, with this entry's gate — a loopback fake
+endpoint counting requests on a read-only handle, expecting 0 for a non-dry run
+and the dry run unchanged. Whether the refusal moves an exit code a script sees
+(a read-only non-dry run whose every extraction fails writes nothing today) is
+that build's to check against `UPGRADING.md`.
+
+#### BUILT 2026-09-16
+
+**Built as ruled.** `refine` (`crates/undercroft-cli/src/refine.rs`) calls
+`VaultStore::refuse_when_read_only` first on a non-dry run, before it reads or
+sends a drawer. That store door is `pub` now, because `refine` is its one
+caller outside the store crate, and a second copy of the refusal would be a
+second place for the posture decision to drift. A dry run is untouched and
+keeps O79's warn-and-serve in `record_egress`. No `/v1` change was needed: a
+read-only server refuses `POST …/refine` in front of dispatch (`mutates`),
+dry run included. `CLAUDE.md` said the warn-and-serve "reaches the CLI as well
+as `/v1`", which no path ever did, so that sentence is corrected.
+
+**The exit code the ruling asked about moves, and `UPGRADING.md` says so.** A
+read-only non-dry run whose every extraction failed used to write nothing and
+exit 0. It now exits 1 before it sends anything. When an extraction
+succeeded, the run already exited 1, on SQLite's refusal of the first write.
+`config check` cannot detect this, because it is a flag combination on one
+command.
+
+**Gate:** `a_read_only_refine_refuses_before_its_first_post`. It uses a
+loopback stub that now counts the requests it RECEIVES, the ruling's
+instrument.
+- **The refused run:** 0 requests, and `StoreError::Invalid` naming the
+  posture.
+- **A dry run on the same read-only handle:** 3 requests.
+- **The premise run on a writable handle:** 3 requests and one
+  `egress/refine`.
+- **Counterfactual.** The same test on the tree before the fix fails on its
+  first assertion with `left: 1, right: 0`: one drawer was POSTed, then SQLite
+  refused the fact write.
+- **e2e:** `--read-only refine` against a dead endpoint exits 1 naming the
+  posture. The binary before the fix exits 0 there, because every extraction
+  fails at connect and nothing is written.
+
+**Real corpus.** The LoCoMo feed was mined into 4 wings (340 drawers) and run
+against a counting loopback extractor, through the fixed binary:
+
+| run | exit | requests received | `egress/refine` records |
+|---|---|---|---|
+| `--read-only refine --limit 50` | 1 | 0 | 0 |
+| `--read-only refine --dry-run --limit 50` | 0 | 50 | 0, with the "not chain-audited" warning |
+| writable `refine --limit 50` | 0 | 50 | 1 |
+
+**Battery:** OK at this tree, every suite exiting 0 (`.battery/battery-o184.out`):
+- `test`: 899 passed and 4 ignored;
+- `e2e`: 513;
+- `orchestrator-e2e`: 156;
+- `e2e-telemetry`: 57;
+- `backends-e2e`: 137;
+- `obs-config`: 13;
+- `site`: 7;
+- `tls-pins`: 13;
+- `lint` and `arch-check` clean, and all 20 preflights passing.
+
+The figures moved: cargo 898 → 899 (903 compiled), e2e 512 → 513, and the
+landing tiles to 899 and 876.
+
 ### O170 — CLOSED 2026-09-16: a flagged write was quarantined on a declaration the store refused when the same write was clean — every check the candidate alone can settle now runs in front of the screen
 
 **Filed and ruled 2026-09-14, recorded rather than built.** The diagrams say the
@@ -17260,39 +17350,6 @@ the difference is the defect. Premise arm: a healthy vault reports 0.
 Discriminator arm: a hash-vault drawer whose content yields no token is not
 reported as a hole. Counterfactual: a count sourced from `embed_failures`
 passes the premise and fails the restart arm.
-
-### O184 — RULED 2026-09-15 and not yet built: a non-dry-run `--read-only refine` posts drawer plaintext before its first write fails — refuse before the first POST
-
-**Filed 2026-09-14 by O175's ruling panel; verified by reading.** `refine` POSTs
-each drawer to `UNDERCROFT_LLM_URL` (`refine.rs`, the request) before its first
-fact write (`refine.rs`, the write), and under `--read-only` that write fails
-inside SQLite — so every drawer up to the first one yielding a valid triple has
-already left. The error arm warns (O95's egress record path) and says what left,
-so the trail is honest; what is not settled is whether a mutating `refine` under
-the incident posture should decide its posture FIRST, as O175 rules for effects
-outside the database, or keep O79's warn-and-serve, which was ruled for the dry
-run. The POST is an egress, not a remote mutation, so O175's rule does not decide
-it by itself. **Shape, for a ruling**: refuse a non-dry-run `refine` on a
-read-only handle before the first POST, or keep today's warned partial egress.
-**Gate**: a `refine` test against a loopback fake endpoint on a read-only handle,
-counting requests received.
-
-#### RULED 2026-09-15 by O167's panel — three lenses (Agentic Memory, Security, storage/transaction engineering) and an adversarial refuter
-
-**The question is O167's too, and it is ruled once, there**: *a non-dry-run mode
-decides its posture before its first egress; a mode that can finish read-only
-keeps O79's warn-and-serve.* O175's rule does not decide it — this entry says so
-itself, and O167's refuter held the lenses to that sentence when they reached for
-O175 by analogy. Applied here: a non-dry-run `refine` on a read-only handle
-refuses before its first POST, with `StoreError::Invalid` naming the posture;
-`refine --dry-run` keeps warn-and-serve. The reason is O167's: a non-dry run has
-data writes that cannot land read-only, so every POST before the refusal serves
-nothing and cannot be recorded. Recorded here so the question is not asked again.
-**The build is this entry's own unit**, with this entry's gate — a loopback fake
-endpoint counting requests on a read-only handle, expecting 0 for a non-dry run
-and the dry run unchanged. Whether the refusal moves an exit code a script sees
-(a read-only non-dry run whose every extraction fails writes nothing today) is
-that build's to check against `UPGRADING.md`.
 
 ### O185 — `search --backend` calls `ensure` — a CREATE on real backends — on a read path
 

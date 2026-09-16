@@ -470,6 +470,13 @@ else
   echo "FAIL  a read-only refine must say the egress went unaudited"
   sed 's/^/      /' /tmp/ro-refine.txt; FAIL=$((FAIL+1))
 fi
+# ROADMAP O184: that warn-and-serve is the DRY run's. A run that would write
+# facts cannot finish read-only, so it refuses before it sends a drawer. The
+# endpoint is dead on purpose: before the fix every extraction failed at
+# connect, the run wrote nothing, and it exited 0 — so exit 0 is what a
+# binary without the fix prints here, and the check cannot pass on one.
+check "a read-only refine that would write refuses first" 1 "opened read-only" -- \
+  env UNDERCROFT_LLM_URL="http://127.0.0.1:1" "$BIN" --read-only refine
 
 # ROADMAP O92. That warning NAMES the destination, which makes it the one
 # place the CLI shows what `audit_refine` HMACs. The label must be the host
