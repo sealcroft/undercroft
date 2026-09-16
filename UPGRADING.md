@@ -73,6 +73,31 @@ or when they could never be presented.
 
 ## 1.6.0 (unreleased)
 
+### `undercroft --read-only refine` without `--dry-run` now exits 1 before it sends anything (O184)
+
+**Who is affected:** anyone whose script runs `refine` with `--read-only` and
+without `--dry-run`.
+
+**What happens:** such a run used to POST drawers to `UNDERCROFT_LLM_URL`
+before it could discover that its writes cannot land. When an extraction
+succeeded, the run failed inside SQLite at its first fact write. When every
+extraction failed, it wrote nothing and exited 0, reporting `0 fact(s)`. It
+now refuses before it reads or sends a drawer, on every vault.
+
+**Symptom to expect:** exit 1, and an error beginning `refine writes the facts
+it distils and their searchable mirror drawers, and this store was opened
+read-only, so it is refused before …`.
+
+**What to do:**
+- To distil, run it without `--read-only`.
+- To preview on a read-only open, add `--dry-run`. A dry run still sends the
+  drawers, and warns that the egress went unaudited.
+- `/v1` is unchanged: a read-only server already refused `POST …/refine`,
+  dry run included.
+
+`config check` cannot detect this: it is a flag combination on one command,
+not a declaration.
+
 ### with admission screening on, an import or save carrying an invalid declaration is refused instead of quarantined (O170)
 
 **Who is affected:** anyone running with `UNDERCROFT_ADMISSION=quarantine` who

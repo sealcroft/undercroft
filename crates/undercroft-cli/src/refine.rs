@@ -112,6 +112,17 @@ pub(crate) fn refine(
     llm: &LlmClient,
     opts: &RefineOptions<'_>,
 ) -> Result<RefineReport, StoreError> {
+    // The posture first (ROADMAP O184, on the rule O167's panel ruled): a run
+    // that writes facts cannot finish on a read-only handle, so every drawer
+    // it POSTed before SQLite refused the first write served nothing and went
+    // unrecorded. It refuses before it reads or sends anything. A dry run
+    // writes nothing and can finish read-only, so it keeps O79's
+    // warn-and-serve in `record_egress`.
+    if !opts.dry_run {
+        store.refuse_when_read_only(
+            "refine writes the facts it distils and their searchable mirror drawers",
+        )?;
+    }
     // Distillation reads through `recent(wing, ..)`, which opts back into the
     // reserved wing the moment one is named — the reviewer's own exemption.
     // So scoping a refine at the queue lifts pending evidence out of it and
@@ -712,12 +723,24 @@ mod tests {
     /// anywhere else, and the point is that the plaintext REALLY leaves the
     /// process — the stub receives it — so the record under test describes
     /// an egress that happened.
-    fn stub_llm(reply: &'static str) -> (LlmClient, std::sync::Arc<tiny_http::Server>) {
+    ///
+    /// The third element counts the requests the stub received, which is how
+    /// a test asserts what LEFT rather than what was recorded (ROADMAP O184).
+    fn stub_llm(
+        reply: &'static str,
+    ) -> (
+        LlmClient,
+        std::sync::Arc<tiny_http::Server>,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) {
         let server = std::sync::Arc::new(tiny_http::Server::http("127.0.0.1:0").unwrap());
         let port = server.server_addr().to_ip().unwrap().port();
         let s2 = server.clone();
+        let received = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = received.clone();
         std::thread::spawn(move || {
             for req in s2.incoming_requests() {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let body =
                     serde_json::json!({ "message": { "role": "assistant", "content": reply } });
                 let _ = req.respond(
@@ -737,7 +760,7 @@ mod tests {
             ApiKind::Ollama,
         )
         .unwrap();
-        (client, server)
+        (client, server, received)
     }
 
     /// **A refine that errors mid-loop records what actually left, and only
@@ -762,7 +785,7 @@ mod tests {
         // the failure below belongs to the screen and not to the stub.
         {
             let (_dir, mut store) = three_clean();
-            let (llm, _srv) = stub_llm(TRIPLE);
+            let (llm, _srv, _sent) = stub_llm(TRIPLE);
             let rep = refine(&mut store, &llm, &opts(None)).expect("premise: the stub distils");
             assert_eq!(rep.sources, 3);
             assert_eq!(
@@ -779,7 +802,7 @@ mod tests {
 
         let (_dir, mut store) = three_clean();
         store.set_admission(true);
-        let (llm, _srv) = stub_llm(TRIPLE);
+        let (llm, _srv, _sent) = stub_llm(TRIPLE);
         let err = refine(&mut store, &llm, &opts(None))
             .expect_err("premise: the screen refuses the distilled object");
         assert!(
@@ -833,6 +856,72 @@ mod tests {
             store.verify().unwrap().ok(),
             "the chain stays green through the partial record"
         );
+    }
+
+    /// **ROADMAP O184: a non-dry-run refine on a read-only handle refuses
+    /// before its first POST, and a dry run still serves.**
+    ///
+    /// A non-dry run's writes cannot land read-only, so every drawer it POSTed
+    /// before SQLite refused the first fact served nothing, and the read-only
+    /// handle could not record it either. The ruling (O167's, applied here):
+    /// a non-dry-run mode decides its posture before its first egress; a mode
+    /// that can finish read-only keeps O79's warn-and-serve. So the assertion
+    /// is on what the endpoint RECEIVED, not on what the chain says.
+    #[test]
+    fn a_read_only_refine_refuses_before_its_first_post() {
+        use std::sync::atomic::Ordering;
+        const TRIPLE: &str = r#"[{"subject":"release","predicate":"leaves","object":"friday"}]"#;
+        let (dir, store) = three_clean();
+        drop(store);
+        let read_only = || {
+            let mgr = VaultManager::open(dir.path(), None).unwrap();
+            let vault = mgr
+                .unlock_as("acme", undercroft_vault::Access::ReadOnly)
+                .unwrap();
+            VaultStore::open_read_only(vault, Box::new(undercroft_core::HashEmbedder)).unwrap()
+        };
+
+        // The non-dry run: refused, naming the posture, with nothing sent.
+        let mut ro = read_only();
+        assert!(ro.is_read_only(), "premise: the handle is read-only");
+        let (llm, _srv, sent) = stub_llm(TRIPLE);
+        let err = refine(&mut ro, &llm, &opts(None))
+            .expect_err("a non-dry-run refine cannot finish on a read-only handle");
+        assert_eq!(
+            sent.load(Ordering::SeqCst),
+            0,
+            "a drawer left for a run whose writes could never land ({err:?})"
+        );
+        assert!(matches!(err, StoreError::Invalid(_)), "{err:?}");
+        assert!(err.to_string().contains("opened read-only"), "{err}");
+
+        // The dry run on the same handle: served, every drawer sent, and the
+        // unaudited egress is the warn-and-serve O79 rules.
+        let (llm, _srv, sent) = stub_llm(TRIPLE);
+        let mut o = opts(None);
+        o.dry_run = true;
+        let rep = refine(&mut ro, &llm, &o).expect("a dry run can finish read-only");
+        assert_eq!(rep.sources, 3);
+        assert_eq!(
+            sent.load(Ordering::SeqCst),
+            3,
+            "the dry run still reads the corpus"
+        );
+        drop(ro);
+
+        // PREMISE: the same non-dry run on a WRITABLE handle reaches the stub
+        // once per drawer, so the zero above is the refusal and not a stub
+        // that answers nobody.
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let mut rw = VaultStore::open(mgr.unlock("acme").unwrap()).unwrap();
+        let (llm, _srv, sent) = stub_llm(TRIPLE);
+        refine(&mut rw, &llm, &opts(None)).expect("premise: a writable refine distils");
+        assert_eq!(
+            sent.load(Ordering::SeqCst),
+            3,
+            "premise: every drawer was sent"
+        );
+        assert_eq!(egress_records(&rw).len(), 1, "premise: and it was recorded");
     }
 
     /// **A refine that selected nothing records nothing** (ROADMAP O95, the

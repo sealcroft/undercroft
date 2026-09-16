@@ -1062,8 +1062,13 @@ Consequences that are binding, not advisory:
   through the ONE recording function on either exit, never
   `sources.len()`, and a run that selected nothing records nothing on
   either mode. The record lives in `refine.rs` — the one
-  implementation both surfaces drive — not at each call site, which is
-  why the read-only warn-and-serve reaches the CLI as well as `/v1`;
+  implementation both surfaces drive — not at each call site. The
+  read-only warn-and-serve is reached from the CLI alone, and only by a
+  DRY run: a read-only `/v1` server refuses `POST …/refine` in front of
+  dispatch (`mutates`), dry run included, and since O184 a non-dry-run
+  `--read-only refine` refuses before its first POST. This sentence said
+  the warn-and-serve "reaches the CLI as well as `/v1`" until 2026-09-16,
+  and no path ever took it there;
   **and a served model is an egress by CUSTODY, not by call site (O167)** —
   a POST owes `egress/` when its input was read out of a committed row
   within the same operation, so `repair` records `egress/embed/repair` in
@@ -2021,8 +2026,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (898 run,
-                                      # 4 #[ignore]d = 902 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (899 run,
+                                      # 4 #[ignore]d = 903 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2144,7 +2149,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (512 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (513 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (156 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (137 checks; weaviate

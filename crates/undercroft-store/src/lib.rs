@@ -2982,7 +2982,11 @@ impl VaultStore {
     /// The sibling of O175's `refuse_remote_effect_when_read_only`, which is
     /// for an effect on a mirror. A POST is an egress rather than a remote
     /// mutation, so this is its own door with its own message.
-    pub(crate) fn refuse_when_read_only(&self, effect: &str) -> Result<(), StoreError> {
+    ///
+    /// Public since O184: `refine` lives in the CLI crate and is the one
+    /// caller outside this one, so the posture decision stays a single door
+    /// rather than a second copy of its message.
+    pub fn refuse_when_read_only(&self, effect: &str) -> Result<(), StoreError> {
         if !self.read_only {
             return Ok(());
         }

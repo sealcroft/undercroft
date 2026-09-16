@@ -7,6 +7,32 @@ its CLI mirror `tenant-repoint` are additive — nothing that worked before
 behaves differently because they exist. Everything else in this section is a
 fix whose only observable change is that a defect is gone.
 
+### a read-only `refine` refuses before it sends a drawer, unless it is a dry run (O184)
+
+`undercroft --read-only refine` without `--dry-run` used to POST drawers to the
+extractor before it could discover that its writes cannot land. The first fact
+write then failed inside SQLite, and every POST before it served nothing and
+went unrecorded. When every extraction failed, the run wrote nothing and exited
+0.
+
+It now refuses before it reads or sends anything, through the store's
+`refuse_when_read_only`. That follows the rule O167's panel ruled for this
+question: a mode whose writes cannot land read-only decides its posture before
+its first egress. `refine --dry-run` on a read-only open is unchanged: it
+serves, and warns that the egress went unaudited. `UPGRADING.md` has the entry.
+
+**Checked by** a unit test that counts what a stub extractor RECEIVED:
+- 0 requests for the refused run;
+- 3 for a dry run on the same handle;
+- 3 for the premise run on a writable handle, which is also recorded.
+
+Before the fix the refused run sent one request and failed in SQLite. An e2e
+check drives the CLI.
+
+**Corrected:** `CLAUDE.md` said the read-only warn-and-serve "reaches the CLI
+as well as `/v1`". A read-only server refuses `POST …/refine` before dispatch,
+dry run included, so no path ever took it to `/v1`.
+
 ### a write the screen flags is refused on the same declaration a clean write is refused on, and no refusal names the review-queue id (O170)
 
 With admission screening on, the store checked most of a write's declaration
