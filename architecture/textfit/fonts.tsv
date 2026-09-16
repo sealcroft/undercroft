@@ -1,0 +1,46 @@
+# The ONE fetch list for the text-fit advance table (ROADMAP O189, V1 of the font-version ruling).
+# gen_advances.sh fetches the https rows, gen_advances.py prices every row, and the calibration
+# harness embeds the same files: one list, so the table and its calibration cannot name different fonts.
+#
+#   slot    which pinned set the file belongs to. The table is the per-glyph maximum over every slot.
+#   file    the name the generator prices it under (gen_advances.py COLUMNS and FALLBACKS).
+#   sha256  the file's digest, checked before any byte of it is read as a font.
+#   source  debian:<package>=<version> for a file an apt pin installs, or the https URL it is fetched from.
+#
+# Slot debian is the Debian bookworm pin and holds every file the generator prices. Slot noto-23.7.1 is
+# the notofonts monthly release 23.7.1, per file from its tag; DejaVu comes from Debian only. Moving any
+# row is a decision recorded in ROADMAP, and textfit/pins.py fails until the table header agrees.
+# No font file enters the tree.
+slot	file	sha256	source
+debian	dejavu/DejaVuSans.ttf	abdc775b21b1bc470d50c97e790d276f2054b7504e56e5bd3e64f48d68582322	debian:fonts-dejavu-core=2.37-6
+debian	noto/NotoSans-Regular.ttf	89c3c497f618fdaa0b2d1e98fef93582f28c71debd2c4a8cdf41f190ced2909d	debian:fonts-noto-core=20201225-1
+debian	dejavu/DejaVuSans-Bold.ttf	0d977336a6d5fba34eab8e3199eb218327161b5143749f802982c2bc34df0c96	debian:fonts-dejavu-core=2.37-6
+debian	noto/NotoSans-Bold.ttf	e83493c945848ecd4a9ad0f6d19164541a0d3e23a9c952304a00a46e00272ac5	debian:fonts-noto-core=20201225-1
+debian	dejavu/DejaVuSansMono.ttf	0f5db4f1749979d961019838b160bec74abdf7f9eca69553fe1aa856bbff49a4	debian:fonts-dejavu-core=2.37-6
+debian	dejavu/DejaVuSansMono-Bold.ttf	2964f6dac8e6e9d71613928340f17bf868e9ea51692cca333c79e74962f02233	debian:fonts-dejavu-core=2.37-6
+debian	dejavu/DejaVuSerif.ttf	13e61509f5c81d7c3132810f4f903e3523df89c802bf6e0674621e8f659cdfe1	debian:fonts-dejavu-core=2.37-6
+debian	dejavu/DejaVuSerif-Italic.ttf	889a2b9daff9f091f7cf1ff6c88e5c1a5b55b3afb221571393ccb71ec9301ec9	debian:fonts-dejavu-extra=2.37-6
+debian	noto/NotoSerif-Regular.ttf	9d7583b7dc9e812afd32a14280c5cac3160012efe50c8d08938f4fea266ff67f	debian:fonts-noto-core=20201225-1
+debian	noto/NotoSerif-Italic.ttf	bc25600aa27cd409e1e5b3d86340df3a329bb860fcfbe57a03a95070b229e1b0	debian:fonts-noto-core=20201225-1
+debian	noto/NotoSansArabic-Regular.ttf	504d7407d86875acf7d04dfaa0fd7524d0b8797723bc4aa18022f29db25b0b6e	debian:fonts-noto-core=20201225-1
+debian	noto/NotoSansArabic-Bold.ttf	ded6fc7359ca36d15d7aab9ef0c066e21ce48b26a069994d6602fa2cb9a1b952	debian:fonts-noto-core=20201225-1
+debian	noto/NotoSansThai-Regular.ttf	dfbd5ed0f1e68c3cbc51aa08f646d1ab0e68e7c4ceab70a69e465225ff701f93	debian:fonts-noto-core=20201225-1
+debian	noto/NotoSansThai-Bold.ttf	97bbc8ea98328325285f2f552228c7aac1db39d8f38f0096a61ba7df1f1f780e	debian:fonts-noto-core=20201225-1
+debian	noto/NotoLoopedThai-Regular.ttf	a13ebdee881ce1dcc84067c266345c86d2ace50cb599d2df02a1aa835552c1aa	debian:fonts-noto-core=20201225-1
+debian	noto/NotoLoopedThai-Bold.ttf	63112a2b7bb342442993c71c0e8d52e3dacd9606eabfa344a436c9578cb74f35	debian:fonts-noto-core=20201225-1
+debian	noto/NotoSansDevanagari-Regular.ttf	79a470365ccb210fa3c7d8d8ff2e005ef9d983cfd067f735a0caf7e15070ca9f	debian:fonts-noto-core=20201225-1
+debian	noto/NotoSansDevanagari-Bold.ttf	77ad688cfe1dc55185bf4edb4db3c614202c65dd23a1463ad0e23fc52bcc9a5c	debian:fonts-noto-core=20201225-1
+debian	noto/NotoSansMath-Regular.ttf	8242bd1e55368b27e32455260754cf9aa58f3ad7ea80664b66c21f1b09910d6c	debian:fonts-noto-core=20201225-1
+noto-23.7.1	noto/NotoSans-Regular.ttf	0e90d375cdb64f088a6a676eb560b755afa184e523fefbb9c33fdda4d7dd8461	https://raw.githubusercontent.com/notofonts/notofonts.github.io/noto-monthly-release-23.7.1/fonts/NotoSans/hinted/ttf/NotoSans-Regular.ttf
+noto-23.7.1	noto/NotoSans-Bold.ttf	eddd07b08d9e81a17920c200d42c166eb8847f5d336c53fbd058d9740c016ad8	https://raw.githubusercontent.com/notofonts/notofonts.github.io/noto-monthly-release-23.7.1/fonts/NotoSans/hinted/ttf/NotoSans-Bold.ttf
+noto-23.7.1	noto/NotoSerif-Regular.ttf	89b2fefbb4480cee049ae87282a6cf4a64c96b9ccdb7c0292407082f103d2436	https://raw.githubusercontent.com/notofonts/notofonts.github.io/noto-monthly-release-23.7.1/fonts/NotoSerif/hinted/ttf/NotoSerif-Regular.ttf
+noto-23.7.1	noto/NotoSerif-Italic.ttf	3a5525718a52e15672a4ecaa14cffaab485eda1bc9185eb12a8fc42b23b903ba	https://raw.githubusercontent.com/notofonts/notofonts.github.io/noto-monthly-release-23.7.1/fonts/NotoSerif/hinted/ttf/NotoSerif-Italic.ttf
+noto-23.7.1	noto/NotoSansArabic-Regular.ttf	d6efa4c9fac8ecefd2de19676acc3a396ba7aee99ba7a2d513950246841b6725	https://raw.githubusercontent.com/notofonts/notofonts.github.io/noto-monthly-release-23.7.1/fonts/NotoSansArabic/hinted/ttf/NotoSansArabic-Regular.ttf
+noto-23.7.1	noto/NotoSansArabic-Bold.ttf	457926cb001ac787dc7415c89e6f5b1c4ce3a0f2c91d0cabc1bc19a05638e7de	https://raw.githubusercontent.com/notofonts/notofonts.github.io/noto-monthly-release-23.7.1/fonts/NotoSansArabic/hinted/ttf/NotoSansArabic-Bold.ttf
+noto-23.7.1	noto/NotoSansThai-Regular.ttf	1b7f825fc07deebbaac860bde0ca0827b79ee6e5c78e7dd8f0f740ab11d864a1	https://raw.githubusercontent.com/notofonts/notofonts.github.io/noto-monthly-release-23.7.1/fonts/NotoSansThai/hinted/ttf/NotoSansThai-Regular.ttf
+noto-23.7.1	noto/NotoSansThai-Bold.ttf	9d486006b451c9666185e414836c7225fba71666d89be399986dfa99ce8408b4	https://raw.githubusercontent.com/notofonts/notofonts.github.io/noto-monthly-release-23.7.1/fonts/NotoSansThai/hinted/ttf/NotoSansThai-Bold.ttf
+noto-23.7.1	noto/NotoLoopedThai-Regular.ttf	1443e3b8e3f87a6215260631ffb051f9390fb36f89acf0fcf63ccedf510f8534	https://raw.githubusercontent.com/notofonts/notofonts.github.io/noto-monthly-release-23.7.1/fonts/NotoLoopedThai/hinted/ttf/NotoLoopedThai-Regular.ttf
+noto-23.7.1	noto/NotoLoopedThai-Bold.ttf	ec16316a0dd64acda755ab5724fb08926d4d64ab2a231ac865df407635d7395f	https://raw.githubusercontent.com/notofonts/notofonts.github.io/noto-monthly-release-23.7.1/fonts/NotoLoopedThai/hinted/ttf/NotoLoopedThai-Bold.ttf
+noto-23.7.1	noto/NotoSansDevanagari-Regular.ttf	dc0eb899c5852c819bfb30482e6f2ee1e44a4c8cd28f6622a2d4561bf1e3e444	https://raw.githubusercontent.com/notofonts/notofonts.github.io/noto-monthly-release-23.7.1/fonts/NotoSansDevanagari/hinted/ttf/NotoSansDevanagari-Regular.ttf
+noto-23.7.1	noto/NotoSansDevanagari-Bold.ttf	115e2b780f881323fde8184136f4ba7fb9ff697c1ae4a9de388059be08d267d2	https://raw.githubusercontent.com/notofonts/notofonts.github.io/noto-monthly-release-23.7.1/fonts/NotoSansDevanagari/hinted/ttf/NotoSansDevanagari-Bold.ttf
+noto-23.7.1	noto/NotoSansMath-Regular.ttf	b6580a3b592c04dc15ea3bec26415375471bb4ed071eb2d7f7efc88e81fa5ae9	https://raw.githubusercontent.com/notofonts/notofonts.github.io/noto-monthly-release-23.7.1/fonts/NotoSansMath/hinted/ttf/NotoSansMath-Regular.ttf

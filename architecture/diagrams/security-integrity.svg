@@ -2,12 +2,12 @@
 <title id="t">How a write, a read and an open are actually handled</title>
 <desc id="d">A write seals the content, tags it with an HMAC, advances the audit chain, and commits all three in one SQLite transaction before the manifest anchor is fsynced. A read recomputes the tag before the row becomes data. At open the anchor is compared with the committed chain head: behind means a crash and fast-forwards, ahead means the database was rolled back and raises a tamper alarm.</desc>
 <style>
-  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .f { font-family: "DejaVu Sans", "Noto Sans", sans-serif; }
   .h { font-size: 17px; font-weight: 600; }
   .l { font-size: 13.5px; font-weight: 600; }
   .b { font-size: 12px; }
   .s { font-size: 11px; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .mono { font-family: "DejaVu Sans Mono", monospace; font-size: 11px; }
   .ink { fill: var(--d-ink,#14202b); }
   .dim { fill: var(--d-dim,#55697a); }
   .white { fill: var(--d-card,#ffffff); }

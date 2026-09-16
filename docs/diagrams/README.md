@@ -7,10 +7,11 @@ them (`src/*.mmd` holds the extracted sources; rendered with the pinned
 `minlag/mermaid-cli:10.9.1` image, light theme, white background):
 
 ```bash
-docker run --rm -v "$PWD/docs/diagrams:/data" --entrypoint sh minlag/mermaid-cli:10.9.1 \
+docker run --rm -v "$PWD/docs/diagrams:/data" --entrypoint sh \
+  minlag/mermaid-cli:10.9.1@sha256:f0e8d29ef5385d797724d78c2a1bb00c8398476e8370f0219c0da86cce07d44c \
   -c 'for f in /data/src/*.mmd; do n=$(basename "$f" .mmd); \
       /home/mermaidcli/node_modules/.bin/mmdc -p /puppeteer-config.json \
-      -i "$f" -o "/data/$n.svg" -b white -t default -q; done'
+      -c /data/mermaid-config.json -i "$f" -o "/data/$n.svg" -b white -t default -q; done'
 ```
 
 | Diagram | Lives in |

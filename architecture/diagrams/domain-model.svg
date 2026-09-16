@@ -2,12 +2,12 @@
 <title id="t">Undercroft domain model</title>
 <desc id="d">Palace contains vaults; a vault contains wings; a wing contains rooms; a room contains drawers. The knowledge graph and audit chain sit inside the vault alongside the wings.</desc>
 <style>
-  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .f { font-family: "DejaVu Sans", "Noto Sans", sans-serif; }
   .h { font-size: 17px; font-weight: 600; }
   .l { font-size: 13.5px; font-weight: 600; }
   .b { font-size: 12px; }
   .s { font-size: 11px; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .mono { font-family: "DejaVu Sans Mono", monospace; font-size: 11px; }
   .ink { fill: var(--d-ink,#14202b); }
   .dim { fill: var(--d-dim,#55697a); }
   .white { fill: var(--d-card,#ffffff); }
@@ -39,7 +39,7 @@
 <rect x="60" y="174" width="780" height="256" rx="8" fill="var(--d-card,#ffffff)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.4"/>
 <text x="78" y="199" class="f l ink">wing</text>
 <text x="120" y="199" class="f b dim">person · project · tenant user</text>
-<text x="762" y="199" class="f s dim">search scope</text>
+<text x="760" y="199" class="f s dim">search scope</text>
 
 <rect x="78" y="214" width="380" height="198" rx="7" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.2"/>
 <text x="94" y="238" class="f l ink">room</text>
@@ -49,7 +49,7 @@
 <text x="108" y="273" class="f l" fill="var(--d-blue-ink,#33527d)">drawer</text>
 <text x="168" y="273" class="f b dim">one verbatim chunk</text>
 <text x="108" y="292" class="f s dim">content (sealed) · embedding (sealed) · HMAC tag</text>
-<text x="108" y="309" class="f s dim">meta: content_date · occurrences · time_mentions · entities</text>
+<text x="108" y="309" class="f s dim">meta: content_date, occurrences, time_mentions, entities</text>
 
 <rect x="94" y="334" width="348" height="26" rx="6" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.1"/>
 <text x="108" y="351" class="f s dim">drawer · drawer · drawer …</text>
@@ -71,9 +71,9 @@
 <rect x="60" y="444" width="384" height="116" rx="7" fill="var(--d-violet-bg,#f6f3fb)" stroke="var(--d-violet,#6b4fa8)" stroke-width="1.4"/>
 <text x="78" y="468" class="f l" fill="var(--d-violet-ink,#523a86)">knowledge graph</text>
 <text x="78" y="491" class="f b dim">Receipted triples — subject, predicate, object.</text>
-<text x="78" y="508" class="f b dim">valid_from: the words in the note that date the fact,</text>
-<text x="78" y="525" class="f b dim">else the drawer's own content_date.</text>
-<text x="78" y="547" class="f s dim">triple_id keyed by a stored secret ⇒ repeats collapse · stated / background / unevaluated</text>
+<text x="78" y="508" class="f b dim">valid_from: the note's dating words, else its content_date.</text>
+<text x="78" y="530" class="f s dim">triple_id keyed by a stored secret ⇒ repeats collapse</text>
+<text x="78" y="547" class="f s dim">grounding: stated / background / unevaluated</text>
 
 <rect x="458" y="444" width="382" height="116" rx="7" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.4"/>
 <text x="476" y="468" class="f l" fill="var(--d-green-ink,#22603c)">audit chain</text>

@@ -37,17 +37,17 @@
   </g>
 
   <!-- wordmark -->
-  <text x="450" y="286" font-family="Segoe UI, Helvetica, Arial, sans-serif"
+  <text x="450" y="286" font-family="DejaVu Sans, Noto Sans, sans-serif"
         font-size="96" font-weight="700" letter-spacing="-3" fill="url(#word)">Undercroft</text>
 
-  <text x="454" y="342" font-family="Segoe UI, Helvetica, Arial, sans-serif"
+  <text x="454" y="342" font-family="DejaVu Sans, Noto Sans, sans-serif"
         font-size="30" font-weight="400" fill="#8ea6ab">Hardened, local-first AI memory in Rust.</text>
 
-  <text x="454" y="392" font-family="Consolas, Menlo, monospace"
+  <text x="454" y="392" font-family="DejaVu Sans Mono, monospace"
         font-size="23" fill="#35e0c2">encrypted vaults · HMAC integrity · verbatim recall</text>
 
   <!-- rule + house line -->
   <rect x="454" y="432" width="150" height="3" fill="#c9a961"/>
-  <text x="454" y="486" font-family="Consolas, Menlo, monospace"
+  <text x="454" y="486" font-family="DejaVu Sans Mono, monospace"
         font-size="22" letter-spacing="5" fill="#5d7378">A SEALCROFT PROJECT</text>
 </svg>

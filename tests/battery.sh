@@ -2919,6 +2919,351 @@ if [ "$HERITAGE_FAIL" -ne 0 ]; then
 fi
 echo "ok    ${#HERITAGE_ALLOW[@]} contexts where the heritage name may sit, all live"
 
+echo "═══ preflight: fonts are openly licensed ═══"
+# ROADMAP O189, decided by the maintainer on 2026-09-15: no proprietary font is
+# named anywhere in the tree. A font list names openly licensed faces and then
+# a generic family, and no font file is shipped for it. `FONT_ALLOW` is an
+# ALLOWLIST on purpose: a denylist fails open, because the next vendor face
+# somebody pastes in is by definition one nobody has listed yet.
+#
+# WHAT IT READS. Every tracked TEXT file — git decides binary (`i/-text` in
+# `git ls-files --eol`) and `grep -I` agrees, which keeps the PDFs, the PNGs
+# and the vendored woff2 faces out — except vendored third-party code:
+# `vendor/` and `website/assets/mermaid.min.js`, whose built-in stack is not
+# ours to edit (O189 changes Mermaid through its configuration instead).
+# Inside those files it reads DECLARATIONS, in these shapes:
+#   * the CSS family property, in a stylesheet, a style block or a style
+#     attribute, names quoted, unquoted, entity-quoted or backslash-escaped;
+#   * the SVG family attribute, with either quote on the outside;
+#   * a custom property holding a stack: a name ending in sans, serif, mono or
+#     didot, or containing the word font without a sub-property after it
+#     (size, weight, style and the rest, which hold no family);
+#   * the family part of the font shorthand, after its size, and a canvas
+#     assignment, whose string literals are joined before they are read;
+#   * a JS or JSON fontFamily setting whose value is a string literal.
+# A `var(--…)` reference is admitted, and its fallback is a list of its own
+# that is read like any other.
+#
+# WHAT IT LEAVES ALONE, so that history and prose stay quiet: a name outside a
+# declaration is never read (the gate matches declarations, not words), and a
+# declaration inside a Markdown code span or fenced block, or on a Rust `//`
+# comment, is a QUOTATION — CHANGELOG and ROADMAP quote removed stacks.
+#
+# WHAT IT CANNOT SEE, stated rather than discovered:
+#   * a stack built at run time from a variable, a shorthand whose size is
+#     itself a `var()` or `calc()`, and a declaration split across lines;
+#   * `@font-face` `local()` sources, the obsolete font element's face
+#     attribute and SVG's font-face-name element;
+#   * a Markdown code block some renderer WOULD style, a Rust block comment,
+#     and anything after a `//` that sits outside a Rust string literal;
+#   * vendored defaults — Mermaid's own stack still applies wherever its
+#     configuration does not load;
+#   * untracked files, until they are added;
+#   * what a reader's machine substitutes for a generic family, which is
+#     O189's stated residual and not this gate's.
+FONT_ALLOW=(
+  "dejavu sans" "dejavu sans mono" "dejavu serif" "noto sans" "noto serif"
+  "ibm plex sans" "ibm plex mono" "gfs didot"
+  "sans-serif" "serif" "monospace" "inherit"
+)
+# The extractor: prints `path:line: name` for every family name a declaration
+# holds. One program for the probe and the tree, so the probe measures the
+# code that judges the tree rather than a copy of it. No apostrophe may appear
+# inside it (it is a single-quoted shell string), hence every \047.
+FONT_AWK='
+BEGIN {
+  SENT = "\001"
+  ENT[1] = "&quot;"; ENT[2] = "&#34;"; ENT[3] = "&#39;"; ENT[4] = "&apos;"
+  ENT[5] = "&#x27;"; ENT[6] = "&#x22;"; NENT = 6
+  SIZE = "^(([0-9.]+|[$][{][^}]*[}])(px|em|rem|pt|pc|%|ex|ch|vw|vh|vmin|vmax|cm|mm|in|q|lh|rlh)|px|xx-small|x-small|small|medium|large|x-large|xx-large|xxx-large|smaller|larger)(/.*)?$"
+}
+function emit(n) {
+  gsub(/^[ \t]+|[ \t]+$/, "", n); gsub(/[ \t]+/, " ", n)
+  if (n != "") printf "%s:%d: %s\n", FILENAME, FNR, n
+}
+function ws(s, i) { while (i <= length(s) && substr(s, i, 1) ~ /[ \t]/) i++; return i }
+function idch(ch) { return ch ~ /[a-z0-9_-]/ }
+# The content of a string literal that opens s, or SENT when s opens none.
+function strlit(s,    c, j, n, r) {
+  c = substr(s, 1, 1)
+  if (c != "\"" && c != "\047" && c != "`") return SENT
+  n = length(s)
+  for (j = 2; j <= n; j++) {
+    r = substr(s, j, 1)
+    if (r == "\\") { j++; continue }
+    if (r == c) return substr(s, 2, j - 2)
+  }
+  return SENT
+}
+# Every string literal up to the end of the statement, joined: a canvas
+# assignment concatenates a size variable with a literal stack.
+function literals(s,    i, n, c, t, out) {
+  out = ""; i = 1; n = length(s)
+  while (i <= n) {
+    c = substr(s, i, 1)
+    if (c == ";") break
+    if (c == "\"" || c == "\047" || c == "`") {
+      t = strlit(substr(s, i)); if (t == SENT) break
+      out = out t; i += length(t) + 2; continue
+    }
+    i++
+  }
+  return out
+}
+# A comma-separated family list opening s. Stops at the first thing that is
+# not an element: a semicolon, a brace, the quote closing an attribute.
+function families(s,    i, c, n, rest, ent, j, e, depth) {
+  i = 1; depth = 0
+  while (1) {
+    i = ws(s, i)
+    if (i > length(s)) return
+    c = substr(s, i, 1)
+    if (c == "\\") { i++; c = substr(s, i, 1) }
+    ent = ""
+    for (e = 1; e <= NENT; e++)
+      if (tolower(substr(s, i, length(ENT[e]))) == ENT[e]) { ent = ENT[e]; break }
+    if (ent != "") {
+      rest = substr(s, i + length(ent)); j = index(tolower(rest), ent)
+      if (j == 0) return
+      emit(substr(rest, 1, j - 1)); i += 2 * length(ent) + j - 1
+    } else if (c == "\"" || c == "\047") {
+      rest = substr(s, i + 1); j = index(rest, c)
+      if (j == 0) return
+      n = substr(rest, 1, j - 1); sub(/[\\]$/, "", n); emit(n); i += j + 1
+    } else if (tolower(substr(s, i, 4)) == "var(") {
+      rest = substr(s, i + 4)
+      if (!match(rest, /^[ \t]*--[A-Za-z0-9_-]+/)) return
+      n = substr(rest, 1, RLENGTH); gsub(/[ \t]/, "", n); emit("var(" n ")")
+      i = ws(s, i + 4 + RLENGTH); depth++
+      if (substr(s, i, 1) == ",") { i++; continue }
+    } else if (c ~ /[A-Za-z_-]/) {
+      rest = substr(s, i); match(rest, /^[A-Za-z0-9_ \t-]+/)
+      emit(substr(rest, 1, RLENGTH)); i += RLENGTH
+    } else return
+    i = ws(s, i)
+    while (depth > 0 && substr(s, i, 1) == ")") { depth--; i = ws(s, i + 1) }
+    if (substr(s, i, 1) == ",") { i++; continue }
+    return
+  }
+}
+# The font shorthand: the family list follows the size (and a line height).
+# A value with no size is prose or a keyword, except a system-font keyword
+# standing alone, which requests the platform face and is reported as a name.
+function shorthand(v,    i, w, nw, rest) {
+  i = 1; nw = 0
+  while (nw < 8) {
+    i = ws(v, i); rest = substr(v, i)
+    if (!match(rest, /^[^ \t,;}"\047`]+/)) return
+    w = tolower(substr(rest, 1, RLENGTH)); i += RLENGTH; nw++
+    if (nw == 1 && w ~ /^(inherit|initial|unset|revert|revert-layer)$/) return
+    if (nw == 1 && w ~ /^(caption|icon|menu|message-box|small-caption|status-bar)$/) {
+      if (substr(v, i) ~ /^[ \t]*([;}"\047`]|$)/) emit(w)
+      return
+    }
+    if (w ~ SIZE) {
+      rest = substr(v, i)
+      if (match(rest, /^[ \t]*[\/][ \t]*[^ \t,;}"\047`]+/)) i += RLENGTH
+      families(substr(v, i)); return
+    }
+  }
+}
+function fontprop(name) {
+  if (name ~ /(^|-)(sans|serif|mono|didot)$/) return 1
+  if (name !~ /font/) return 0
+  return name !~ /font-?(size|weight|style|stretch|variant|feature|variation|kerning|synthesis|optical|palette|smoothing|language|display|face|color)/
+}
+# j is the column just past a key in lc; kind says which key it was.
+function decl(j, kind,    keyq, sep, v, t) {
+  keyq = 0
+  if (substr(lc, j, 1) == "\"" || substr(lc, j, 1) == "\047") { keyq = 1; j++ }
+  j = ws(lc, j); sep = substr(lc, j, 1)
+  if (sep != ":" && sep != "=") return
+  if (substr(lc, j + 1, 1) == "=") return
+  if (kind == "canvas" && sep != "=") return
+  if (kind == "short" && sep != ":") return
+  j = ws(line, j + 1); v = substr(line, j, 2000)
+  if (kind == "canvas") { shorthand(literals(v)); return }
+  if (kind == "js" || keyq || (kind == "family" && sep == "=")) {
+    t = strlit(v)
+    if (t != SENT) { if (kind == "short") shorthand(t); else families(t) }
+    return
+  }
+  if (kind == "short") { t = strlit(v); shorthand(t != SENT ? t : v); return }
+  families(v)
+}
+function scan_font(    off, k, p, before) {
+  off = 0
+  while ((k = index(substr(lc, off + 1), "font")) > 0) {
+    p = off + k; off = p + 3
+    before = (p > 1) ? substr(lc, p - 1, 1) : ""
+    if (substr(lc, p, 11) == "font-family") {
+      if (!idch(before)) decl(p + 11, "family")
+    } else if (substr(lc, p, 10) == "fontfamily") {
+      if (before !~ /[a-z0-9_]/) decl(p + 10, "js")
+    } else if (!idch(substr(lc, p + 4, 1))) {
+      if (before == ".") decl(p + 4, "canvas")
+      else if (!idch(before)) decl(p + 4, "short")
+    }
+  }
+}
+function scan_props(    off, k, p, rest) {
+  off = 0
+  while ((k = index(substr(lc, off + 1), "--")) > 0) {
+    p = off + k; off = p + 1
+    if (p > 1 && idch(substr(lc, p - 1, 1))) continue
+    rest = substr(lc, p, 200)
+    if (!match(rest, /^--[a-z0-9_-]+/)) continue
+    off = p + RLENGTH - 1
+    if (fontprop(substr(rest, 3, RLENGTH - 2))) decl(p + RLENGTH, "prop")
+  }
+}
+# The part of a Rust line before a // that sits outside a string literal.
+function rs_code(s,    off, k, pre, t) {
+  off = 0
+  while ((k = index(substr(s, off + 1), "//")) > 0) {
+    pre = substr(s, 1, off + k - 1); t = pre
+    if (gsub(/"/, "", t) % 2 == 0) return pre
+    off += k + 1
+  }
+  return s
+}
+FNR == 1 { fence = 0; md = (tolower(FILENAME) ~ /[.](md|markdown)$/); rs = (FILENAME ~ /[.]rs$/) }
+{
+  line = $0; sub(/\r$/, "", line)
+  if (md) {
+    if (line ~ /^[ \t]*(```|~~~)/) { fence = !fence; next }
+    if (fence) next
+    gsub(/`[^`]*`/, "", line)
+  }
+  if (rs) { if (line ~ /^[ \t]*\/\//) next; line = rs_code(line) }
+  lc = tolower(line)
+  if (lc !~ /font|--/) next
+  scan_font(); scan_props()
+}'
+font_decl_names() { LC_ALL=C awk "$FONT_AWK" "$@"; }
+font_offenders() {  # `path:line: name` on stdin -> the lines the allowlist does not admit
+  LC_ALL=C awk -v allow="$(IFS='|'; printf '%s' "${FONT_ALLOW[*]}")" '
+    BEGIN { n = split(allow, a, "|"); for (i = 1; i <= n; i++) ok[a[i]] = 1 }
+    NF {
+      name = tolower(substr($0, index($0, ": ") + 2))
+      if (!(name in ok) && name !~ /^var[(]--[a-z0-9_-]+[)]$/) print
+    }'
+}
+font_gate_files() {  # tracked TEXT files that could hold a declaration, NUL-separated
+  git -c core.quotepath=off ls-files --eol -- \
+      ':(exclude)vendor/' ':(exclude)website/assets/mermaid.min.js' \
+    | awk -F '\t' '$1 !~ /(^|[ ])[iw]\/-text/ { print $2 }' \
+    | while IFS= read -r f; do [ -f "$f" ] && printf '%s\0' "$f"; done \
+    | xargs -0 -r grep -lIiZE -e 'font|--(sans|serif|mono|didot)' -- || true
+}
+
+# PREMISE, before the tree is judged. Each fixture's declaration is assembled
+# from fragments, so this file scans clean without being excluded by path.
+# A clean fixture must also yield its NAMES: an extractor that reads nothing
+# passes a clean declaration exactly as a working one does.
+FONT_PROBE=".battery/font-probe"
+rm -rf "$FONT_PROBE"; mkdir -p "$FONT_PROBE"
+FP_FF='font-''family'; FP_F='fo''nt'; FP_JS='font''Family'; FP_M='--mo''no'
+printf 'code { %s: Consolas, monospace; }\n' "$FP_FF" > "$FONT_PROBE/consolas.css"
+printf '<text x="1" %s="%s">a</text>\n<text x="2" %s=%s>b</text>\n' \
+  "$FP_FF" "'Segoe UI', sans-serif" "$FP_FF" "'\"Segoe UI\", sans-serif'" > "$FONT_PROBE/segoe.svg"
+printf 'body { %s: "DejaVu Sans", "Noto Sans", sans-serif; }\ncode { %s: var(%s); }\n' \
+  "$FP_FF" "$FP_FF" "$FP_M" > "$FONT_PROBE/clean.css"
+printf 'The delegation flew to Georgia in March; Georgia, the country, is no typeface.\n' \
+  > "$FONT_PROBE/prose.md"
+# Every other shape the extractor claims, one proprietary name per line, in order.
+{
+  printf '<p style="%s: &quot;Helvetica&quot;, sans-serif">x</p>\n' "$FP_FF"
+  printf ':root { %s: Menlo, monospace; }\n' "$FP_M"
+  printf '#m { --mermaid-%s: Arial, sans-serif; }\n' "$FP_FF"
+  printf '.x { %s: italic 600 12px/1.4 Verdana, serif; }\n' "$FP_F"
+  printf 'ctx.%s = fs + %s;\n' "$FP_F" "'px Tahoma, sans-serif'"
+  printf 'mermaid.initialize({ %s: %s });\n' "$FP_JS" "'\"Trebuchet MS\", sans-serif'"
+  printf 'h1 { %s: var(--sans, Roboto), serif; }\n' "$FP_FF"
+  printf 'nav { %s: system-ui; }\n' "$FP_FF"
+  printf '{"%s": "Calibri, sans-serif"}\n' "$FP_FF"
+  printf 'el.setAttribute("style", "%s: \\"Lucida Grande\\", sans-serif");\n' "$FP_FF"
+} > "$FONT_PROBE/forms.html"
+# Quotations stay quiet and inline HTML outside them does not.
+{
+  printf 'History quotes `%s: Consolas` in a code span.\n' "$FP_FF"
+  printf '```css\ncode { %s: Consolas; }\n```\n' "$FP_FF"
+  printf 'An inline <span style="%s: Arial">span</span> is rendered.\n' "$FP_FF"
+} > "$FONT_PROBE/history.md"
+printf '// the old stack was %s: Consolas, monospace\nlet a = 1; // %s: Menlo\n' \
+  "$FP_FF" "$FP_FF" > "$FONT_PROBE/comment.rs"
+FP_BAD=""
+fp_expect() {  # LABEL EXPECTED ACTUAL
+  if [ "$2" != "$3" ]; then
+    FP_BAD="$FP_BAD
+      $1: expected [$(printf '%s' "$2" | tr '\n' '|')], got [$(printf '%s' "$3" | tr '\n' '|')]"
+  fi
+}
+fp_expect "a Consolas declaration must FAIL" \
+  "$FONT_PROBE/consolas.css:1: Consolas" \
+  "$(font_decl_names "$FONT_PROBE/consolas.css" | font_offenders)"
+fp_expect "a mixed-quote SVG attribute naming Segoe UI must FAIL, both quote orders" \
+  "$FONT_PROBE/segoe.svg:1: Segoe UI
+$FONT_PROBE/segoe.svg:2: Segoe UI" \
+  "$(font_decl_names "$FONT_PROBE/segoe.svg" | font_offenders)"
+fp_expect "a clean declaration must PASS" "" \
+  "$(font_decl_names "$FONT_PROBE/clean.css" | font_offenders)"
+fp_expect "a clean declaration must still be READ (four names)" "4" \
+  "$(font_decl_names "$FONT_PROBE/clean.css" | grep -c . || true)"
+fp_expect "prose naming Georgia the country must PASS, reading no name" "" \
+  "$(font_decl_names "$FONT_PROBE/prose.md")"
+fp_expect "every declaration shape must be read" \
+  "Helvetica|Menlo|Arial|Verdana|Tahoma|Trebuchet MS|Roboto|system-ui|Calibri|Lucida Grande" \
+  "$(font_decl_names "$FONT_PROBE/forms.html" | font_offenders \
+     | sed 's/^[^ ]* //' | tr '\n' '|' | sed 's/|$//')"
+fp_expect "a Markdown quotation is quiet, inline HTML beside it is not" \
+  "$FONT_PROBE/history.md:5: Arial" \
+  "$(font_decl_names "$FONT_PROBE/history.md" | font_offenders)"
+fp_expect "a Rust comment is quiet" "" "$(font_decl_names "$FONT_PROBE/comment.rs")"
+rm -rf "$FONT_PROBE"
+if [ -n "$FP_BAD" ]; then
+  echo "FAIL  premise: the font extractor went the wrong way on its own fixtures:$FP_BAD"
+  echo "      A reader that cannot tell these apart reports what a clean tree reports."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+
+mapfile -d '' FONT_FILES < <(font_gate_files)
+if [ "${#FONT_FILES[@]}" -lt 10 ]; then
+  echo "FAIL  premise: only ${#FONT_FILES[@]} tracked text file(s) mention a font; the tree"
+  echo "      has dozens. The file selection is broken, not the tree."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+FONT_NAMES=$(font_decl_names "${FONT_FILES[@]}")
+FONT_NAMES_N=$(printf '%s\n' "$FONT_NAMES" | grep -c . || true)
+if [ "${FONT_NAMES_N:-0}" -lt 100 ]; then
+  echo "FAIL  premise: the extractor read $FONT_NAMES_N family name(s) from ${#FONT_FILES[@]} files;"
+  echo "      the diagram sets alone declare hundreds. The reader is broken, not the tree."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+FONT_HITS=$(printf '%s\n' "$FONT_NAMES" | font_offenders)
+if [ -n "$FONT_HITS" ]; then
+  FONT_HITS_N=$(printf '%s\n' "$FONT_HITS" | grep -c . || true)
+  echo "FAIL  $FONT_HITS_N font name(s) outside the open allowlist (ROADMAP O189):"
+  printf '%s\n' "$FONT_HITS" | head -60 | sed 's/^/        /'
+  if [ "$FONT_HITS_N" -gt 60 ]; then
+    echo "        … and $((FONT_HITS_N - 60)) more; by file:"
+    printf '%s\n' "$FONT_HITS" | cut -d: -f1 | sort | uniq -c | sed 's/^/      /'
+  fi
+  echo "      Name only an openly licensed face from FONT_ALLOW, then a generic family."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+FONT_DECL_FILES=$(printf '%s\n' "$FONT_NAMES" | cut -d: -f1 | sort -u | grep -c . || true)
+echo "ok    $FONT_NAMES_N family names in the font declarations of $FONT_DECL_FILES files,"
+echo "      every one openly licensed, generic or a var() reference"
+
 echo "═══ preflight: prose figures ═══"
 
 pf_word() {
@@ -3557,7 +3902,7 @@ done
 # "three separate crates reach it" is an ordinary sentence, and a first
 # version that took the alphabetically-first match read "separate" as the
 # crate count and failed on a correct tree. Case is folded because a card
-# title capitalises the word ("Nineteen preflights").
+# title capitalises the number word that opens it.
 PV_WORD_FIGURES=(
   "crates|[a-z]+ (Rust )?crates|$PF_CRATES"
   "host-side preflights|[a-z]+ preflights|$PF_PREFLIGHTS"

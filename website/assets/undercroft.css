@@ -53,7 +53,7 @@ html {
 }
 
 h1, h2, h3, h4, h5 {
-  font-family: "GFS Didot", "Times New Roman", serif;
+  font-family: "GFS Didot", serif;
   font-weight: 400;
   color: #d9f0ea;
 }
@@ -69,7 +69,7 @@ h1, h2, h3, h4, h5 {
 }
 
 .menu-title {
-  font-family: "GFS Didot", "Times New Roman", serif;
+  font-family: "GFS Didot", serif;
   font-weight: 400;
   letter-spacing: .3em;
   text-transform: uppercase;
@@ -87,7 +87,7 @@ h1, h2, h3, h4, h5 {
 }
 
 .sidebar .part-title {
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-family: "IBM Plex Mono", monospace;
   font-size: .72rem;
   letter-spacing: .3em;
   text-transform: uppercase;
@@ -95,12 +95,12 @@ h1, h2, h3, h4, h5 {
 }
 
 :not(pre) > code {
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-family: "IBM Plex Mono", monospace;
   font-size: .86em;
 }
 
 pre > code, pre > .hljs {
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-family: "IBM Plex Mono", monospace;
   background: #071014 !important;
   border: 1px solid #0f2228;
 }
@@ -118,7 +118,7 @@ blockquote {
 }
 
 table th {
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-family: "IBM Plex Mono", monospace;
   font-size: .78rem;
   letter-spacing: .08em;
   text-transform: uppercase;
@@ -132,7 +132,7 @@ table th {
 
 /* home link injected by undercroft.js */
 .uc-home {
-  font-family: "GFS Didot", "Times New Roman", serif;
+  font-family: "GFS Didot", serif;
   font-size: 1.35rem;
   line-height: 1;
   color: #c9a961 !important;

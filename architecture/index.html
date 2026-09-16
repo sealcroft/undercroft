@@ -15,7 +15,7 @@
     --amber: #b5762a; --amber-bg: #fdf6ee; --amber-ink: #8d5a1d;
     --green: #2f7d4f; --green-bg: #f1f8f2; --green-ink: #22603c;
     --red: #b5453a; --red-bg: #fdf3f3; --red-ink: #94382f;
-    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --mono: "DejaVu Sans Mono", monospace;
     --shadow: rgba(20,32,43,.05);
   }
   /* Variables consumed by the inlined diagrams. Their own dark media query is
@@ -66,7 +66,7 @@
   * { box-sizing: border-box; }
   body {
     margin: 0; background: var(--bg); color: var(--ink);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-family: "DejaVu Sans", "Noto Sans", sans-serif;
     font-size: 16px; line-height: 1.65;
   }
   /* Only the header uses this now, and it must track `.shell` exactly or the
@@ -376,12 +376,12 @@
 <title id="t_domainmodel">Undercroft domain model</title>
 <desc id="d_domainmodel">Palace contains vaults; a vault contains wings; a wing contains rooms; a room contains drawers. The knowledge graph and audit chain sit inside the vault alongside the wings.</desc>
 <style>
-  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .f { font-family: "DejaVu Sans", "Noto Sans", sans-serif; }
   .h { font-size: 17px; font-weight: 600; }
   .l { font-size: 13.5px; font-weight: 600; }
   .b { font-size: 12px; }
   .s { font-size: 11px; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .mono { font-family: "DejaVu Sans Mono", monospace; font-size: 11px; }
   .ink { fill: var(--d-ink,#14202b); }
   .dim { fill: var(--d-dim,#55697a); }
   .white { fill: var(--d-card,#ffffff); }
@@ -403,7 +403,7 @@
 <rect x="60" y="174" width="780" height="256" rx="8" fill="var(--d-card,#ffffff)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.4"/>
 <text x="78" y="199" class="f l ink">wing</text>
 <text x="120" y="199" class="f b dim">person · project · tenant user</text>
-<text x="762" y="199" class="f s dim">search scope</text>
+<text x="760" y="199" class="f s dim">search scope</text>
 
 <rect x="78" y="214" width="380" height="198" rx="7" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.2"/>
 <text x="94" y="238" class="f l ink">room</text>
@@ -413,7 +413,7 @@
 <text x="108" y="273" class="f l" fill="var(--d-blue-ink,#33527d)">drawer</text>
 <text x="168" y="273" class="f b dim">one verbatim chunk</text>
 <text x="108" y="292" class="f s dim">content (sealed) · embedding (sealed) · HMAC tag</text>
-<text x="108" y="309" class="f s dim">meta: content_date · occurrences · time_mentions · entities</text>
+<text x="108" y="309" class="f s dim">meta: content_date, occurrences, time_mentions, entities</text>
 
 <rect x="94" y="334" width="348" height="26" rx="6" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.1"/>
 <text x="108" y="351" class="f s dim">drawer · drawer · drawer …</text>
@@ -435,9 +435,9 @@
 <rect x="60" y="444" width="384" height="116" rx="7" fill="var(--d-violet-bg,#f6f3fb)" stroke="var(--d-violet,#6b4fa8)" stroke-width="1.4"/>
 <text x="78" y="468" class="f l" fill="var(--d-violet-ink,#523a86)">knowledge graph</text>
 <text x="78" y="491" class="f b dim">Receipted triples — subject, predicate, object.</text>
-<text x="78" y="508" class="f b dim">valid_from: the words in the note that date the fact,</text>
-<text x="78" y="525" class="f b dim">else the drawer's own content_date.</text>
-<text x="78" y="547" class="f s dim">triple_id keyed by a stored secret ⇒ repeats collapse · stated / background / unevaluated</text>
+<text x="78" y="508" class="f b dim">valid_from: the note's dating words, else its content_date.</text>
+<text x="78" y="530" class="f s dim">triple_id keyed by a stored secret ⇒ repeats collapse</text>
+<text x="78" y="547" class="f s dim">grounding: stated / background / unevaluated</text>
 
 <rect x="458" y="444" width="382" height="116" rx="7" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.4"/>
 <text x="476" y="468" class="f l" fill="var(--d-green-ink,#22603c)">audit chain</text>
@@ -488,12 +488,12 @@
 <title id="t_layers">Undercroft deployment layers and trust boundaries</title>
 <desc id="d_layers">Callers reach the engine over MCP or HTTP; the engine holds the store and knowledge graph. Below the dashed at-rest line, a sealed vault holds its content, embeddings, token matrices and PQ artifacts as AEAD ciphertext, each under a distinct AAD domain, while wing, room, source path and other metadata stay in clear; an hmac-only vault keeps content and vectors in plaintext beside a full-text index, and both levels HMAC-tag each drawer and record each drawer write on the audit chain. An optional orchestrator routes tenants, and remote vector backends are untrusted accelerators: an index push sends each drawer's at-rest content, ciphertext from a sealed vault, beside its embedding, wing and room, which the backend reads in clear; it refuses an hmac-only vault unless --allow-plaintext is passed, and is recorded on the audit chain; every candidate a backend returns is re-verified locally.</desc>
 <style>
-  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .f { font-family: "DejaVu Sans", "Noto Sans", sans-serif; }
   .h { font-size: 17px; font-weight: 600; }
   .l { font-size: 13.5px; font-weight: 600; }
   .b { font-size: 12px; }
   .s { font-size: 11px; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .mono { font-family: "DejaVu Sans Mono", monospace; font-size: 11px; }
   .ink { fill: var(--d-ink,#14202b); }
   .dim { fill: var(--d-dim,#55697a); }
 </style>
@@ -547,7 +547,7 @@
 <rect x="658" y="284" width="200" height="66" rx="6" fill="var(--d-red-bg,#fdf3f3)" stroke="var(--d-red,#b5453a)"/>
 <text x="672" y="302" class="f b" fill="var(--d-red-ink,#94382f)">remote vector backends</text>
 <text x="672" y="316" class="f s dim">untrusted, re-verified on read</text>
-<text x="672" y="330" class="f s dim">sealed: ciphertext + clear vectors</text>
+<text x="672" y="330" class="f s dim">sealed: ciphertext, clear vectors</text>
 <text x="672" y="344" class="f s dim">hmac-only: refused by default</text>
 
 <path d="M320 360 L320 380" stroke="var(--d-teal,#12897e)" stroke-width="1.8" marker-end="url(#a)"/>
@@ -574,7 +574,7 @@
 
 <rect x="24" y="526" width="852" height="56" rx="8" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)"/>
 <text x="42" y="549" class="f b ink">Default posture: local-first and offline. No telemetry deps compiled in, no external API, deterministic embedder.</text>
-<text x="42" y="568" class="f s dim">Outward paths are opt-ins — UNDERCROFT_LLM_URL, UNDERCROFT_EMBED_URL, UNDERCROFT_OTLP_ENDPOINT, a remote index URL — each TLS or loopback via undercroft-net.</text>
+<text x="42" y="568" class="f s dim">Outward paths are opt-ins (UNDERCROFT_LLM_URL, _EMBED_URL, _OTLP_ENDPOINT, a remote index URL), each TLS or loopback via undercroft-net.</text>
 
 <defs><marker id="a" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--d-line2,#8fa3b4)"/></marker></defs>
 </svg>
@@ -596,12 +596,12 @@
 <title id="t_writepath">Undercroft write path</title>
 <desc id="d_writepath">A drawer is normalized, has structure derived from it, is embedded, then sealed, tagged and chained inside one transaction. The manifest anchor is fsynced afterwards and lags on purpose. On a single write the PQ row, the token matrix with its FDE row, and the FTS entry follow the anchor as advisory artifacts; bulk ingest writes them inside its batch transaction.</desc>
 <style>
-  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .f { font-family: "DejaVu Sans", "Noto Sans", sans-serif; }
   .h { font-size: 17px; font-weight: 600; }
   .l { font-size: 13.5px; font-weight: 600; }
   .b { font-size: 12px; }
   .s { font-size: 11px; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .mono { font-family: "DejaVu Sans Mono", monospace; font-size: 11px; }
   .ink { fill: var(--d-ink,#14202b); }
   .dim { fill: var(--d-dim,#55697a); }
 </style>
@@ -634,9 +634,9 @@
 <path d="M450 160 L450 176" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 
 <rect x="24" y="180" width="852" height="56" rx="8" fill="var(--d-amber-bg,#fdf7ee)" stroke="var(--d-amber,#b8781f)" stroke-width="1.6"/>
-<text x="42" y="200" class="f l" fill="var(--d-amber-ink,#8d5a1d)">4 · at the write choke point: validate the declaration, then screen</text>
+<text x="42" y="200" class="f l" fill="var(--d-amber-ink,#8d5a1d)">4 · at the write_drawer choke point: validate the declaration, then screen</text>
 <text x="42" y="216" class="f b dim">wing/room/kind names, the id shape and a finite vector are checked first, and refused as invalid input — never rewritten by the store.</text>
-<text x="42" y="230" class="f s dim">Then the Screen every write_drawer must state: Apply (tier-1 signals · declared rate · advisor) or Bypass(reason). A flagged write is DIVERTED into the review wing and sealed like any other.</text>
+<text x="42" y="230" class="f s dim">A required Screen: Apply (tier-1 signals · declared rate · advisor) or Bypass(reason). Flagged → DIVERTED into the review wing, sealed like any other.</text>
 
 <path d="M450 240 L450 262" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 
@@ -665,7 +665,7 @@
 <text x="608" y="387" class="f s dim">so no committed write can exist</text>
 <text x="608" y="403" class="f s dim">without its audit entry</text>
 
-<text x="42" y="434" class="f s dim">Bulk ingest: one transaction and one anchor per batch, not per drawer, with the derived rows inside it — measured ≈55× fewer fsyncs at 200 drawers.</text>
+<text x="42" y="434" class="f s dim">Bulk ingest: one transaction + one anchor per batch, not per drawer, with the derived rows inside it — measured ≈55× fewer fsyncs at 200 drawers.</text>
 
 <path d="M450 446 L450 468" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 
@@ -744,12 +744,12 @@
 <title id="t_retrievalstack">Undercroft retrieval stack</title>
 <desc id="d_retrievalstack">Seven stages from scoping a query to assembling context, marking which tiers are optional and which stages decide recall, precision and interpretability.</desc>
 <style>
-  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .f { font-family: "DejaVu Sans", "Noto Sans", sans-serif; }
   .h { font-size: 17px; font-weight: 600; }
   .l { font-size: 14px; font-weight: 600; }
   .b { font-size: 12px; }
   .s { font-size: 11px; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .mono { font-family: "DejaVu Sans Mono", monospace; font-size: 11px; }
   .ink { fill: var(--d-ink,#14202b); }
   .dim { fill: var(--d-dim,#55697a); }
 </style>
@@ -907,12 +907,12 @@
 <title id="t_languagetokens">From text to tokens</title>
 <desc id="d_languagetokens">Text passes through a six-stage retrieval fold and then a script-aware split. Delimiting scripts yield whole words; scripts that attach without a delimiter yield bigrams flagged as n-grams and refused the exact match channel; Han yields unigrams because a character is a morpheme.</desc>
 <style>
-  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .f { font-family: "DejaVu Sans", "Noto Sans", sans-serif; }
   .h { font-size: 17px; font-weight: 600; }
   .l { font-size: 13.5px; font-weight: 600; }
   .b { font-size: 12px; }
   .s { font-size: 11px; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .mono { font-family: "DejaVu Sans Mono", monospace; font-size: 11px; }
   .ink { fill: var(--d-ink,#14202b); }
   .dim { fill: var(--d-dim,#55697a); }
   .white { fill: var(--d-card,#ffffff); }
@@ -920,7 +920,7 @@
 <rect width="900" height="776" fill="var(--d-bg,#fbfcfd)"/>
 
 <text x="28" y="38" class="f h ink">From text to tokens — the fold, then the split</text>
-<text x="28" y="58" class="f b dim">The query and the drawer take exactly this path. Stored bytes are never folded: the promise is verbatim, so this produces comparison keys only.</text>
+<text x="28" y="58" class="f b dim">The query and the drawer take exactly this path. Stored bytes are never folded: the promise is verbatim, so this yields comparison keys only.</text>
 
 <rect x="24" y="76" width="852" height="256" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
 <text x="42" y="102" class="f l ink">1 · the fold</text>
@@ -968,7 +968,7 @@
 
 <rect x="42" y="258" width="404" height="58" rx="7" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.4"/>
 <text x="58" y="278" class="f l" fill="var(--d-green-ink,#22603c)">Conflations, each pinned by test</text>
-<text x="58" y="299" class="f mono dim">على/علي · كتابة/كتابه · Masse/Maße · πότε/ποτέ · все/всё</text>
+<text x="58" y="299" class="f mono dim">على/علي, كتابة/كتابه, Masse/Maße, πότε/ποτέ, все/всё</text>
 
 <rect x="458" y="258" width="400" height="58" rx="7" fill="var(--d-red-bg,#fdf2f1)" stroke="var(--d-red,#b5453a)" stroke-width="1.4"/>
 <text x="474" y="278" class="f l" fill="var(--d-red-ink,#993a30)">Deliberately NOT stripped</text>
@@ -979,7 +979,7 @@
 <text x="42" y="374" class="f l ink">2 · the split</text>
 <text x="130" y="374" class="f mono dim">script::segment</text>
 <text x="600" y="374" class="f s dim">the script decides, and the script alone</text>
-<text x="42" y="394" class="f s dim">Splitting on “not alphanumeric” finds no boundary at all in Han, Kana, Hangul, Arabic, Khmer, Thai, Lao or Myanmar — a whole clause became one token.</text>
+<text x="42" y="394" class="f s dim">Splitting on “not alphanumeric” finds no boundary in Han, Kana, Hangul, Arabic, Khmer, Thai, Lao or Myanmar — a whole clause became one token.</text>
 
 <rect x="42" y="408" width="266" height="188" rx="8" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.6"/>
 <text x="58" y="432" class="f l" fill="var(--d-blue-ink,#33527d)">delimiting</text>
@@ -1047,12 +1047,12 @@
 <title id="t_languagemorphology">How a language is resolved and what it admits</title>
 <desc id="d_languagemorphology">Language is resolved by declaration first, else by the drawer's own closed-class function words; a query written in a script that names one language adds that language beside the resolved one rather than replacing it. Five pairwise morphology rules then feed the lexical morph channel, which admits a drawer without claiming the drawer said the word.</desc>
 <style>
-  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .f { font-family: "DejaVu Sans", "Noto Sans", sans-serif; }
   .h { font-size: 17px; font-weight: 600; }
   .l { font-size: 13.5px; font-weight: 600; }
   .b { font-size: 12px; }
   .s { font-size: 11px; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .mono { font-family: "DejaVu Sans Mono", monospace; font-size: 11px; }
   .ink { fill: var(--d-ink,#14202b); }
   .dim { fill: var(--d-dim,#55697a); }
   .white { fill: var(--d-card,#ffffff); }
@@ -1091,7 +1091,7 @@
 <text x="614" y="195" class="f s dim">one language. Cyrillic → Russian and</text>
 <text x="614" y="210" class="f s dim">Devanagari → Hindi, labelled approximate.</text>
 <text x="614" y="233" class="f s" fill="var(--d-violet-ink,#523a86)">Joins as a SECOND inflecting language;</text>
-<text x="614" y="248" class="f s" fill="var(--d-violet-ink,#523a86)">never replaces 1 or 2, never feeds suffixes.</text>
+<text x="614" y="248" class="f s" fill="var(--d-violet-ink,#523a86)">never replaces 1 or 2, nor feeds suffixes.</text>
 
 <text x="42" y="274" class="f s dim">Read per candidate, not per query: a vault may hold several languages, and the drawer is the unit that has one.</text>
 
@@ -1120,14 +1120,14 @@
 <rect x="552" y="338" width="158" height="80" rx="7" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)" stroke-width="1.6"/>
 <text x="564" y="358" class="f mono" fill="var(--d-amber-ink,#8d5a1d)">ar_root_family</text>
 <text x="564" y="376" class="f s dim">144 roots × 20 patterns</text>
-<text x="564" y="391" class="f s dim">= 2859 forms. Two words</text>
-<text x="564" y="406" class="f s dim">meet only if ONE root fits.</text>
+<text x="564" y="391" class="f s dim">= 2859 forms. A pair</text>
+<text x="564" y="406" class="f s dim">meets only via ONE root.</text>
 
 <rect x="722" y="338" width="136" height="80" rx="7" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.2"/>
 <text x="734" y="358" class="f mono ink">IRREGULAR</text>
-<text x="734" y="376" class="f s dim">201 forms no rule</text>
-<text x="734" y="391" class="f s dim">over shape can reach:</text>
-<text x="734" y="406" class="f s dim">go/went, Mann/Männer</text>
+<text x="734" y="376" class="f s dim">201 pairs no rule</text>
+<text x="734" y="391" class="f s dim">over shape reaches:</text>
+<text x="734" y="406" class="f s dim">go/went, gehen/ging</text>
 
 <rect x="42" y="430" width="404" height="74" rx="7" fill="var(--d-red-bg,#fdf2f1)" stroke="var(--d-red,#b5453a)" stroke-width="1.4"/>
 <text x="58" y="450" class="f l" fill="var(--d-red-ink,#993a30)">Why not a stemmer</text>
@@ -1138,8 +1138,8 @@
 <rect x="458" y="430" width="400" height="74" rx="7" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)" stroke-width="1.4"/>
 <text x="474" y="450" class="f l" fill="var(--d-amber-ink,#8d5a1d)">Why Arabic needed its own table</text>
 <text x="474" y="468" class="f s dim">An ALLOWLIST: a form the table cannot generate matches nothing.</text>
-<text x="474" y="483" class="f s dim">Subsequence rules failed three times — بيت→بيوت and يجب→يجيب</text>
-<text x="474" y="497" class="f s dim">are the same string operation, and no rule over shape separates them.</text>
+<text x="474" y="483" class="f s dim">Three subsequence rules failed: بيت→بيوت and يجب→يجيب</text>
+<text x="474" y="497" class="f s dim">are the same string operation; no rule over shape separates them.</text>
 
 <rect x="24" y="534" width="852" height="122" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
 <text x="42" y="560" class="f l ink">3 · three channels, and only two of them are a claim about words</text>
@@ -1213,12 +1213,12 @@
 <title id="t_languagedates">Reading a date the writer already wrote</title>
 <desc id="d_languagedates">An era marker typed beside a year outranks the calendar the caller declared. Field order takes four signals strongest-first: declared, demonstrated by an unambiguous date in the same text, implied by the language per CLDR, then day-first as a documented default. Script and numeral system are never treated as evidence.</desc>
 <style>
-  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .f { font-family: "DejaVu Sans", "Noto Sans", sans-serif; }
   .h { font-size: 17px; font-weight: 600; }
   .l { font-size: 13.5px; font-weight: 600; }
   .b { font-size: 12px; }
   .s { font-size: 11px; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .mono { font-family: "DejaVu Sans Mono", monospace; font-size: 11px; }
   .ink { fill: var(--d-ink,#14202b); }
   .dim { fill: var(--d-dim,#55697a); }
   .white { fill: var(--d-card,#ffffff); }
@@ -1226,7 +1226,7 @@
 <rect width="900" height="856" fill="var(--d-bg,#fbfcfd)"/>
 
 <text x="28" y="38" class="f h ink">Reading a date the writer already wrote</text>
-<text x="28" y="58" class="f b dim">Four read-time declarations, and one signal that outranks every one of them. Dates are read live, so a fix reaches existing vaults with no migration.</text>
+<text x="28" y="58" class="f b dim">Four read-time declarations, and one signal that outranks all of them. Dates are read live, so a fix reaches existing vaults with no migration.</text>
 
 <rect x="24" y="76" width="852" height="146" rx="10" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)" stroke-width="1.8"/>
 <text x="42" y="102" class="f l" fill="var(--d-amber-ink,#8d5a1d)">The marker beside the year outranks the calendar the caller declared</text>
@@ -1257,7 +1257,7 @@
 
 <rect x="42" y="382" width="382" height="52" rx="6" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.4"/>
 <text x="56" y="402" class="f s" fill="var(--d-blue-ink,#33527d)">3 · implied by the language, per CLDR</text>
-<text x="56" y="420" class="f s dim">Arabic is d/M/y in every territory. English splits, so it implies nothing.</text>
+<text x="56" y="420" class="f s dim">Arabic is d/M/y in every territory. English splits: no order implied.</text>
 
 <text x="56" y="446" class="f s dim">4 · else day-first — a documented default, not a confident reading</text>
 
@@ -1271,8 +1271,8 @@
 
 <rect x="472" y="358" width="386" height="76" rx="7" fill="var(--d-violet-bg,#f6f3fb)" stroke="var(--d-violet,#6b4fa8)" stroke-width="1.4"/>
 <text x="486" y="378" class="f b" fill="var(--d-violet-ink,#523a86)">a different calendar — the whole date converts</text>
-<text x="486" y="397" class="f s dim">Hijri, Umm al-Qura — the Saudi CIVIL calendar printed on documents,</text>
-<text x="486" y="412" class="f s dim">deliberately not the tabular variant, which is wrong by a day or two.</text>
+<text x="486" y="397" class="f s dim">Hijri, Umm al-Qura — Saudi CIVIL calendar printed on documents,</text>
+<text x="486" y="412" class="f s dim">deliberately not the tabular one, which is wrong by a day or two.</text>
 <text x="486" y="428" class="f s dim">Jalali turns at the vernal equinox, so no offset reaches it either.</text>
 
 <rect x="24" y="466" width="852" height="76" rx="9" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.5"/>
@@ -1355,12 +1355,12 @@
 <title id="t_securitylevels">The two security levels and what each protects</title>
 <desc id="d_securitylevels">A vault is created Sealed or HmacOnly. Sealed encrypts content, embeddings, token matrices and index artifacts, blinds the knowledge graph's word columns behind sealed words, and has no full-text index; HmacOnly keeps content and graph words in plaintext and indexes the content. Both carry a per-row HMAC and join the audit chain. Drawer metadata is unsealed at both levels, and the exposed fields are listed.</desc>
 <style>
-  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .f { font-family: "DejaVu Sans", "Noto Sans", sans-serif; }
   .h { font-size: 17px; font-weight: 600; }
   .l { font-size: 13.5px; font-weight: 600; }
   .b { font-size: 12px; }
   .s { font-size: 11px; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .mono { font-family: "DejaVu Sans Mono", monospace; font-size: 11px; }
   .ink { fill: var(--d-ink,#14202b); }
   .dim { fill: var(--d-dim,#55697a); }
   .white { fill: var(--d-card,#ffffff); }
@@ -1456,12 +1456,12 @@
 <title id="t_securitykeys">Key derivation and the AAD that binds every ciphertext</title>
 <desc id="d_securitykeys">One master key derives four subkeys per vault via HKDF — encryption, MAC, manifest MAC and the training-sample draw — while the knowledge graph's blind-index secret is stored sealed and re-sealed on rotation rather than derived, so fact identifiers never move. Every sealed blob binds the vault id and the record id into its AAD, so a ciphertext moved between vaults or between rows fails to decrypt. Rotation re-seals every artifact and re-keys the chain in one transaction; export bundles use a hybrid X25519 + ML-KEM-768 exchange to a recipient key.</desc>
 <style>
-  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .f { font-family: "DejaVu Sans", "Noto Sans", sans-serif; }
   .h { font-size: 17px; font-weight: 600; }
   .l { font-size: 13.5px; font-weight: 600; }
   .b { font-size: 12px; }
   .s { font-size: 11px; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .mono { font-family: "DejaVu Sans Mono", monospace; font-size: 11px; }
   .ink { fill: var(--d-ink,#14202b); }
   .dim { fill: var(--d-dim,#55697a); }
   .white { fill: var(--d-card,#ffffff); }
@@ -1469,7 +1469,7 @@
 <rect width="900" height="812" fill="var(--d-bg,#fbfcfd)"/>
 
 <text x="28" y="38" class="f h ink">One master key, a separate key per vault, and an AAD that names the row</text>
-<text x="28" y="58" class="f b dim">Isolation is cryptographic, not a WHERE clause: a blob lifted from one vault into another does not decrypt, because the vault id is authenticated.</text>
+<text x="28" y="58" class="f b dim">Isolation is cryptographic, not a WHERE clause: a blob lifted from one vault to another does not decrypt, because the vault id is authenticated.</text>
 
 <rect x="24" y="76" width="852" height="188" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
 <text x="42" y="102" class="f l ink">Derivation</text>
@@ -1493,17 +1493,17 @@
 
 <rect x="660" y="110" width="198" height="34" rx="7" fill="var(--d-teal-bg,#f2fbfa)" stroke="var(--d-teal,#12897e)" stroke-width="1.5"/>
 <text x="674" y="132" class="f mono" fill="var(--d-teal-ink,#0d6b62)">enc_key</text>
-<text x="740" y="132" class="f s dim">XChaCha20-Poly1305</text>
+<text x="728" y="132" class="f s dim">XChaCha20-Poly1305</text>
 
 <rect x="660" y="150" width="198" height="34" rx="7" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.5"/>
 <text x="674" y="172" class="f mono" fill="var(--d-green-ink,#22603c)">mac_key</text>
-<text x="740" y="172" class="f s dim">HMAC-SHA256 + chain</text>
+<text x="728" y="172" class="f s dim">HMAC-SHA256 · chain</text>
 
 <text x="42" y="200" class="f s dim">Four subkeys, independent outputs of one derivation: <tspan class="f mono">enc</tspan> seals, <tspan class="f mono">mac</tspan> tags records and the chain (and keys the dedup fingerprints),</text>
 <text x="42" y="214" class="f s dim"><tspan class="f mono">manifest</tspan> MACs the rollback anchor, <tspan class="f mono">sample</tspan> draws the training rows — so a tag can never be forged from a decryption key.</text>
 <text x="42" y="228" class="f s dim">All live in a zeroize-on-drop wrapper, are never <tspan class="f mono">Debug</tspan>-printed, and the key file is fsynced at creation; a <tspan class="f mono">keycheck</tspan> marker refuses a wrong</text>
 <text x="42" y="242" class="f s dim">passphrase up front rather than as a wall of decryption failures.</text>
-<text x="42" y="256" class="f s dim">The graph's blind-index secret is NOT derived: 32 random bytes sealed in meta, re-sealed by rotation, never regenerated — or every fact id would move.</text>
+<text x="42" y="256" class="f s dim">The graph's blind-index secret is NOT derived: 32 random bytes sealed in meta, re-sealed by rotation, never regenerated; else fact ids would move.</text>
 
 <rect x="24" y="280" width="852" height="176" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
 <text x="42" y="306" class="f l ink">What every sealed blob authenticates alongside itself</text>
@@ -1519,8 +1519,8 @@
 <text x="200" y="399" class="f s dim">ColBERT token matrix</text>
 <text x="58" y="412" class="f mono dim">fde/&lt;drawer id&gt;/tok</text>
 <text x="200" y="412" class="f s dim">FDE row</text>
-<text x="58" y="425" class="f mono dim">pqrow/…/pq · pq/…</text>
-<text x="200" y="425" class="f s dim">PQ rows, pages, codebooks — index ids, not drawer ids</text>
+<text x="58" y="425" class="f mono dim">pqrow|pqpage|pq/…/pq</text>
+<text x="200" y="425" class="f s dim">PQ rows, pages, codebooks: not drawer ids</text>
 <text x="58" y="438" class="f mono dim">kg/… · kgterms/…</text>
 <text x="200" y="438" class="f s dim">fact objects and terms · kgname/… names</text>
 
@@ -1570,12 +1570,12 @@
 <title id="t_securityintegrity">How a write, a read and an open are actually handled</title>
 <desc id="d_securityintegrity">A write seals the content, tags it with an HMAC, advances the audit chain, and commits all three in one SQLite transaction before the manifest anchor is fsynced. A read recomputes the tag before the row becomes data. At open the anchor is compared with the committed chain head: behind means a crash and fast-forwards, ahead means the database was rolled back and raises a tamper alarm.</desc>
 <style>
-  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .f { font-family: "DejaVu Sans", "Noto Sans", sans-serif; }
   .h { font-size: 17px; font-weight: 600; }
   .l { font-size: 13.5px; font-weight: 600; }
   .b { font-size: 12px; }
   .s { font-size: 11px; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .mono { font-family: "DejaVu Sans Mono", monospace; font-size: 11px; }
   .ink { fill: var(--d-ink,#14202b); }
   .dim { fill: var(--d-dim,#55697a); }
   .white { fill: var(--d-card,#ffffff); }
@@ -1724,12 +1724,12 @@
 <title id="t_defenseadmission">The write-path defense: screened at the door, ruled by a human, receipted on the way out</title>
 <desc id="d_defenseadmission">A save arrives from a surface which stamps added_by. Deployment-trusted surfaces bypass by declaration. Everything else passes the deterministic tier-1 detector (seven signal classes including fixture similarity, the declared rate screen, and the declared DESTINATION when a wing or room name itself trips) and optionally an advisory-only LLM tier. Clean writes land where they aimed; flagged writes divert sealed into the quarantine wing, excluded from retrieval, where a human allows (re-files) or denies (destroys through attested forgetting, returning a receipt). Every ruling is chain-audited.</desc>
 <style>
-  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .f { font-family: "DejaVu Sans", "Noto Sans", sans-serif; }
   .h { font-size: 17px; font-weight: 600; }
   .l { font-size: 13.5px; font-weight: 600; }
   .b { font-size: 12px; }
   .s { font-size: 11px; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .mono { font-family: "DejaVu Sans Mono", monospace; font-size: 11px; }
   .ink { fill: var(--d-ink,#14202b); }
   .dim { fill: var(--d-dim,#55697a); }
 </style>
@@ -1741,17 +1741,17 @@
 <!-- A save arrives -->
 <rect x="24" y="76" width="560" height="96" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
 <text x="42" y="100" class="f l ink">A save arrives</text>
-<text x="42" y="120" class="f s dim">MCP tool · REST <tspan class="mono">/v1</tspan> · CLI · bulk ingest — the <tspan class="f s" fill="var(--d-blue-ink,#33527d)">handler stamps</tspan> <tspan class="mono">added_by</tspan>: a writer cannot choose its surface.</text>
+<text x="42" y="120" class="f s dim">MCP tool · REST <tspan class="mono">/v1</tspan> · CLI · bulk ingest — <tspan class="f s" fill="var(--d-blue-ink,#33527d)">handler stamps</tspan> <tspan class="mono">added_by</tspan>: no writer picks its surface.</text>
 <text x="42" y="136" class="f s dim">Updates are re-stamped with the surface writing NOW — never the original writer's standing.</text>
-<text x="42" y="158" class="f s dim">Provenance claims (<tspan class="mono">agent</tspan> / <tspan class="mono">channel</tspan> / <tspan class="mono">session</tspan>) travel HMAC-covered — <tspan class="f s" fill="var(--d-amber-ink,#8d5a1d)">evidence, never a boundary</tspan>.</text>
+<text x="42" y="158" class="f s dim">Provenance claims (<tspan class="mono">agent</tspan>/<tspan class="mono">channel</tspan>/<tspan class="mono">session</tspan>) are HMAC-covered — <tspan class="f s" fill="var(--d-amber-ink,#8d5a1d)">evidence, never a boundary</tspan>.</text>
 
 <!-- Trusted-surface bypass -->
 <rect x="616" y="76" width="260" height="96" rx="10" fill="var(--d-green-bg,#f1faf4)" stroke="var(--d-green,#2e7d4f)" stroke-width="1.5"/>
 <text x="634" y="100" class="f l" fill="var(--d-green-ink,#22623d)">Trusted surface? Straight in.</text>
 <text x="634" y="120" class="f s dim"><tspan class="mono">UNDERCROFT_ADMIT_TRUSTED_SOURCES</tspan></text>
-<text x="634" y="136" class="f s dim">matches the stamped <tspan class="mono">added_by</tspan> only — a claim</text>
-<text x="634" y="151" class="f s dim">cannot admit itself. The bypass is the</text>
-<text x="634" y="166" class="f s dim">deployment's own declaration.</text>
+<text x="634" y="136" class="f s dim">matches the stamped <tspan class="mono">added_by</tspan> only —</text>
+<text x="634" y="151" class="f s dim">a claim cannot admit itself. The bypass</text>
+<text x="634" y="166" class="f s dim">is the deployment's own declaration.</text>
 
 <line x1="304" y1="172" x2="304" y2="200" stroke="var(--d-line2,#8ba0b2)" stroke-width="1.6"/>
 <path d="M304 200 l-5 -8 h10 z" fill="var(--d-line2,#8ba0b2)"/>
@@ -1759,7 +1759,7 @@
 <!-- Tier 1 -->
 <rect x="24" y="204" width="852" height="204" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.6"/>
 <text x="42" y="230" class="f l ink">Tier 1 — deterministic. No model, no network; signal codes and byte offsets, never content.</text>
-<text x="42" y="248" class="f s dim">A closed vocabulary, so the review queue reads as data. One signal per class, offsets into the candidate; independent classes record independent evidence.</text>
+<text x="42" y="248" class="f s dim">A closed vocabulary, so the review queue reads as data. One signal per class, offsets into the candidate; classes record independent evidence.</text>
 
 <rect x="42" y="262" width="208" height="30" rx="6" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.2"/>
 <text x="146" y="281" class="mono" fill="var(--d-blue-ink,#33527d)" text-anchor="middle">imperative-instruction</text>
@@ -1792,10 +1792,10 @@
 
 <!-- Tier 2 -->
 <rect x="24" y="440" width="560" height="88" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
-<text x="42" y="464" class="f l ink">Tier 2 — a local model's opinion, advisory-only <tspan class="f s dim">(<tspan class="mono">UNDERCROFT_ADMISSION_LLM=advisory</tspan>)</tspan></text>
-<text x="42" y="484" class="f s dim">Consulted <tspan class="f s" fill="var(--d-blue-ink,#33527d)">only for tier-1-clean candidates</tspan>, <tspan class="f s" fill="var(--d-blue-ink,#33527d)">only toward quarantine</tspan> — flagged content is never shown</text>
-<text x="42" y="499" class="f s dim">to it, so talking the classifier into "clean" bypasses nothing. A failed answer is a non-event, never</text>
-<text x="42" y="514" class="f s dim">a blocked write. The model is itself an injection target, steerable only in the safe direction.</text>
+<text x="42" y="464" class="f l ink">Tier 2 — a local model, advisory-only <tspan class="f s dim">(<tspan class="mono">UNDERCROFT_ADMISSION_LLM=advisory</tspan>)</tspan></text>
+<text x="42" y="484" class="f s dim">Consulted <tspan class="f s" fill="var(--d-blue-ink,#33527d)">only for tier-1-clean candidates</tspan>, <tspan class="f s" fill="var(--d-blue-ink,#33527d)">only toward quarantine</tspan> — flagged content is never</text>
+<text x="42" y="499" class="f s dim">shown to it: talking the classifier into "clean" bypasses nothing. A failed answer is a non-event,</text>
+<text x="42" y="514" class="f s dim">never a blocked write. The model is itself an injection target, steerable only in the safe direction.</text>
 
 <!-- lands -->
 <rect x="616" y="440" width="260" height="88" rx="10" fill="var(--d-green-bg,#f1faf4)" stroke="var(--d-green,#2e7d4f)" stroke-width="1.5"/>
@@ -1811,10 +1811,10 @@
 <!-- Quarantine -->
 <rect x="24" y="560" width="852" height="106" rx="10" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)" stroke-width="1.6"/>
 <text x="42" y="586" class="f l" fill="var(--d-amber-ink,#8d5a1d)">The quarantine wing — reserved, sealed, and outside every answer</text>
-<text x="42" y="606" class="f s dim">The drawer keeps its verbatim content, sealed like any other; signal codes, offsets and the intended destination ride in metadata. Hard-excluded from</text>
-<text x="42" y="621" class="f s dim">retrieval except a reviewer's explicitly named scope — it can neither answer nor crowd. The wing refuses forged residents (a caller cannot aim a save</text>
-<text x="42" y="636" class="f s dim">here), quarantined drawers are not editable (the reviewer rules on exactly what the screen saw), and a flagged UPDATE diverts while the original</text>
-<text x="42" y="651" class="f s dim">drawer keeps its previous content.</text>
+<text x="42" y="606" class="f s dim">The drawer keeps its verbatim content, sealed like any other; signal codes, offsets and the intended destination ride in metadata. Hard-excluded</text>
+<text x="42" y="621" class="f s dim">from retrieval except a reviewer's explicitly named scope — it can neither answer nor crowd. The wing refuses forged residents (a caller cannot aim</text>
+<text x="42" y="636" class="f s dim">a save here), quarantined drawers are not editable (the reviewer rules on exactly what the screen saw), and a flagged UPDATE diverts while the</text>
+<text x="42" y="651" class="f s dim">original drawer keeps its previous content.</text>
 
 <line x1="230" y1="666" x2="230" y2="694" stroke="var(--d-green,#2e7d4f)" stroke-width="1.6"/>
 <path d="M230 694 l-5 -8 h10 z" fill="var(--d-green,#2e7d4f)"/>
@@ -1832,8 +1832,8 @@
 <text x="482" y="740" class="f s dim">Rides the attested-forgetting path (C3.2): heads before/after, the</text>
 <text x="482" y="755" class="f s dim">tombstone interval, content fingerprints — verifiable by third parties.</text>
 
-<text x="42" y="792" class="f s dim">Every ruling is a chain record with the verdict inside its tag's canonical — the review trail is as tamper-evident as the data. Detection is heuristic and says so:</text>
-<text x="42" y="804" class="f s dim">markerless poison passes, prose about injection can trip — which is exactly why a signal quarantines for a human and never rejects.</text>
+<text x="42" y="792" class="f s dim">Every ruling is a chain record with the verdict inside its tag's canonical — the review trail is as tamper-evident as the data. Detection is heuristic</text>
+<text x="42" y="804" class="f s dim">and says so: markerless poison passes, prose about injection can trip — which is exactly why a signal quarantines for a human and never rejects.</text>
 </svg>
 <figcaption>The admission flow: trusted surfaces bypass by declaration, everything else is screened, flagged writes divert sealed into quarantine, and a human's ruling ends in a re-file or a receipt. <a href="diagrams/defense-admission.svg">SVG</a> · <a href="pdf/defense-admission.pdf">PDF</a></figcaption>
 </figure>

@@ -21,6 +21,11 @@
       startOnLoad: false,
       theme: activeIsDark() ? "dark" : "default",
       securityLevel: "strict",
+      // Only openly licensed fonts are named in this tree (ROADMAP O189). The
+      // book already ships IBM Plex Sans, so live diagrams are sized in the face
+      // the page loads instead of mermaid's proprietary default.
+      fontFamily: '"IBM Plex Sans", sans-serif',
+      themeVariables: { fontFamily: '"IBM Plex Sans", sans-serif' },
     });
     mermaid.run({ querySelector: ".mermaid" });
   }

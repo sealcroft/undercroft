@@ -2,12 +2,12 @@
 <title id="t">Undercroft write path</title>
 <desc id="d">A drawer is normalized, has structure derived from it, is embedded, then sealed, tagged and chained inside one transaction. The manifest anchor is fsynced afterwards and lags on purpose. On a single write the PQ row, the token matrix with its FDE row, and the FTS entry follow the anchor as advisory artifacts; bulk ingest writes them inside its batch transaction.</desc>
 <style>
-  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .f { font-family: "DejaVu Sans", "Noto Sans", sans-serif; }
   .h { font-size: 17px; font-weight: 600; }
   .l { font-size: 13.5px; font-weight: 600; }
   .b { font-size: 12px; }
   .s { font-size: 11px; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .mono { font-family: "DejaVu Sans Mono", monospace; font-size: 11px; }
   .ink { fill: var(--d-ink,#14202b); }
   .dim { fill: var(--d-dim,#55697a); }
   @media (prefers-color-scheme: dark) {
@@ -50,9 +50,9 @@
 <path d="M450 160 L450 176" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 
 <rect x="24" y="180" width="852" height="56" rx="8" fill="var(--d-amber-bg,#fdf7ee)" stroke="var(--d-amber,#b8781f)" stroke-width="1.6"/>
-<text x="42" y="200" class="f l" fill="var(--d-amber-ink,#8d5a1d)">4 · at the write choke point: validate the declaration, then screen</text>
+<text x="42" y="200" class="f l" fill="var(--d-amber-ink,#8d5a1d)">4 · at the write_drawer choke point: validate the declaration, then screen</text>
 <text x="42" y="216" class="f b dim">wing/room/kind names, the id shape and a finite vector are checked first, and refused as invalid input — never rewritten by the store.</text>
-<text x="42" y="230" class="f s dim">Then the Screen every write_drawer must state: Apply (tier-1 signals · declared rate · advisor) or Bypass(reason). A flagged write is DIVERTED into the review wing and sealed like any other.</text>
+<text x="42" y="230" class="f s dim">A required Screen: Apply (tier-1 signals · declared rate · advisor) or Bypass(reason). Flagged → DIVERTED into the review wing, sealed like any other.</text>
 
 <path d="M450 240 L450 262" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 
@@ -81,7 +81,7 @@
 <text x="608" y="387" class="f s dim">so no committed write can exist</text>
 <text x="608" y="403" class="f s dim">without its audit entry</text>
 
-<text x="42" y="434" class="f s dim">Bulk ingest: one transaction and one anchor per batch, not per drawer, with the derived rows inside it — measured ≈55× fewer fsyncs at 200 drawers.</text>
+<text x="42" y="434" class="f s dim">Bulk ingest: one transaction + one anchor per batch, not per drawer, with the derived rows inside it — measured ≈55× fewer fsyncs at 200 drawers.</text>
 
 <path d="M450 446 L450 468" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 

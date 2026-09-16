@@ -3988,7 +3988,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**219** of the **233** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**226** of the **240** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4169,6 +4169,889 @@ MINOR since O149: `PATCH /admin/tenants/{id}` and its CLI mirror are new
 capability, backward compatible. The rest of the section is PATCH work — no
 documented contract moves.
 
+### O189 — CLOSED 2026-09-16: the other two diagram sets, checked for O188's spill — 22 lines reworded, the PDFs rebuilt, and a pinned per-glyph standard that only openly licensed faces feed, calibrated in a renderer and gated
+
+**Filed 2026-09-15, measured, not argued.**
+
+**`architecture/diagrams/`** — the 11 source SVGs, measured in a renderer where
+`architecture/index.html` inlines them, 579 text elements. Four lines spill:
+
+- `domain-model.svg`: `triple_id keyed by a stored secret ⇒ repeats collapse · …`,
+  68 past its 384-wide card.
+- `layers.svg`: `Outward paths are opt-ins — UNDERCROFT_LLM_URL, …`, 43 past the
+  852-wide card.
+- `write-path.svg`: `Then the Screen every write_drawer must state: …`, 73 past its
+  card.
+- `security-keys.svg`: `PQ rows, pages, codebooks — index ids, not drawer ids`, 26
+  past.
+
+That is the Windows pane's Segoe UI; `-apple-system` on macOS renders a few percent
+wider, so a line near an edge needs margin. A static 0.56 em estimate flagged 92
+lines on this prose-heavy set and is not usable here. **Shape of the fix:** reword
+in the SVG, the only source; run `build.sh` in Docker so the inlined copies and
+`pdf/` regenerate; `arch-check` green; look at the page. **Open question for the
+build:** `build.sh --check` verifies inlining, not fit, and a renderer-true check
+needs a headless browser that the stdlib checker does not have. Decide between a
+calibrated estimate and a measured review step.
+
+**`docs/diagrams/`** — 14 Mermaid SVGs whose labels are HTML in `<foreignObject>`,
+widths frozen by mermaid-cli 10.9.1's fonts. Not measured: the Browser pane refused
+to open them standalone, from the scratchpad, and from `.battery/`. **Method for
+next time:** inline them into a page the pane will open, and compare each label's
+`scrollWidth` with its `foreignObject` width.
+
+**Also found:** `22-storage-layout.html`'s `17 TABLES + 1` may be stale. A read of
+the schema found 18 regular tables besides the full-text one, including
+`kg_audit_relabel`, which may be temporary. Verify the count against the schema
+before trusting either number.
+
+**O179 filed the `layers.svg` line first**, on 2026-09-14, from an Arial estimate
+of about 75 past the viewBox; the renderer's 39 past the card is the
+measurement, and the card is the bound. Its proposed `build.sh --check` arm,
+every `<text>` against its viewBox, is a prior filing and not a ruling, so the
+gate question above must answer it. O179's egress half was O188's.
+
+**Gate:** each of the four lines inside its card, measured in a renderer, and the
+14 Mermaid labels inside their `foreignObject` widths.
+
+#### RULED 2026-09-15 by three lenses (Agentic Memory Architecture, verification and gate engineering, rendering and typography) and an adversarial refuter
+
+**The question.** What defines "a line fits its box" for the proportional text of
+`architecture/diagrams/` and the Mermaid set, and what keeps it true: the standard
+(Q1), the gate (Q2), O179's proposed `build.sh --check` viewBox arm (Q3), and
+whether the Mermaid set needs a fit gate (Q4).
+
+**Prior rulings found, and their disposition.** Searched `rul(ed|ing)` in this
+entry, in every entry it names (O188, O179, O105, O78, M14, O74) and in O162.
+- **M14**, the maintainer's: `arch-check` in full parity, on a stock python image
+  with a read-only mount, "nearly free". Best practice; followed.
+- **O74**, the maintainer's: depend on the diagrams, so gate them rather than
+  label them. Followed.
+- **O78**: system font stacks, no vendored faces the product does not use.
+  Followed; a table of advance widths is not a vendored font.
+- **O162's RULED**, on O47's method: a check is judged by its measured false
+  positives. Followed, and it is what fixes calibration at the gate's own padding.
+- **O188's "0.60 em is a monospace bound"** is a closure claim, not a ruling, and
+  it is refuted: DejaVu Sans Mono advances 1233/2048 = 0.60205 em.
+- **O179's viewBox arm** is a filing, refuted under Q3.
+
+**Measured this session.** The panel material holds each figure's provenance.
+- **Windows pane, Segoe UI.** 611 texts, not the filing's 579. Four lines end past
+  their card by 65 / 39 / 70 / 22 px with no padding. The filing's 68 / 43 / 73 /
+  26 are the same four lines measured against the 4-unit padded edge, so its "43"
+  beside the "39" below is two conventions written as one measurement.
+- **Headless Chromium in the pinned `minlag/mermaid-cli:10.9.1`**
+  (`sha256:f0e8d29ef538…`). Its `.f` stack resolves to DejaVu Sans 2.37, confirmed
+  by `fc-match` and by CDP `CSS.getPlatformFontsForNode` (Book for `.s`, Bold for
+  `.l`, DejaVu Sans Mono for `.mono`). 22 lines end past their card at device scale
+  1 and 21 at scale 2: `XChaCha20-Poly1305` ends 0.03 px past at scale 1. At the
+  4-unit padding the count is 27.
+- **Screenshots of all 21 lines.** Six were read by eye, chosen for the smallest
+  overs and the likeliest misattributions. Every one visibly spills.
+- **Each face forced in that Chromium.** DejaVu Sans puts 21 lines past their card,
+  Noto Sans 6, Liberation Sans 4. DejaVu is the widest face for every line but
+  `ß→ss, ø→o`, which Noto renders 1.4 px wider because of the arrow.
+- **Advance sums on the host.** Segoe < Trebuchet < Arial/Liberation < Verdana ≈
+  DejaVu. A Segoe table reproduces the pane's four as membership but reads
+  `domain-model` 3.7 px low. A flat 0.56 em estimate flags 83 lines and misses 3
+  real spills.
+- **The committed PDFs** embed Noto Sans and DejaVu Sans Mono. `pdftotext -bbox`
+  puts all four lines past their cards today: `domain-model` +89, `security-keys`
+  +39, and `layers` and `write-path` cut off mid-word at the page edge.
+- **platform-views under DejaVu:** 21 of 22 clean. Two `18-egress-paths.html` lines
+  sit 0.4 units into the padding, and would be +0.37 once monospace is priced at
+  0.60205.
+- **Mermaid:** of the 14 files, the 11 that carry `foreignObject` labels show none
+  wider than its box. That holds by construction, since the render image sized
+  them; the 3 sequence diagrams carry `<text>` only.
+- **`architecture/` is not published.** `website/build-site.sh` assembles only the
+  landing page and the book.
+
+**Q1, the standard: the per-glyph maximum of DejaVu Sans and Noto Sans.**
+- Book/Regular for weight 400, Bold for weight 600.
+- 1233/2048 em for monospace.
+- A declared conservative advance for any script neither face covers.
+
+This is a declared worst case over faces the tree can install and measure. It is
+not a bound over every reader: the stack ends in a generic family the reader
+controls, and SF Pro and Roboto are unmeasured. A panel may rule it, because the
+tree already chose the widest common face over the maintainer's pane for monospace
+in O188.
+
+Rejected:
+- **Segoe UI.** The narrowest face measured, and proprietary, so no container can
+  see it: O188's Consolas trap on the proportional axis.
+- **DejaVu alone.** Noto is wider on one line, and the PDFs embed Noto.
+- **A flat em.** 83 flagged and 3 missed; a true bound would flag nearly every
+  long line.
+- **A known-metric face first in the stack.** It renders only where installed or
+  embedded, reopens O78, and is a typography choice for the maintainer, which no one
+  has asked for.
+
+**Q2, the gate: a stdlib per-glyph table, calibrated at the gate's own padding.**
+A hand-run generator records font versions and file digests and writes the table
+under `architecture/`, the only directory `arch-check` mounts. One fit implementation
+reads it for `architecture/diagrams/` and for `platform-views/check.py`, and M14's
+stock image, read-only mount and zero network all stay. Conditions the lenses left
+out, each binding:
+1. **The 4-unit padding is the table's declared error budget**, because its error
+   runs in both directions: kerning, integer advances, contextual Arabic forms.
+   Calibration must show renderer − table < 4 on every line, at device scale 1 and 2.
+2. **Fail closed** on a codepoint with no row, a class with no parsed rule, an
+   inline `style`, and a `tspan` with `x`/`dx`/`dy`, `transform` or `letter-spacing`.
+3. **The monospace revision turns two `18-egress-paths.html` lines red on arrival.**
+   They are reworded in the same unit.
+4. **Headless Chromium, pinned by digest, is the calibration instrument**, never a
+   CI leg.
+
+Rejected:
+- **A headless-browser leg.** A 1.6 GB image pinned by a mutable tag, whose installed
+  fonts would decide the verdict; no Noto CJK; and the end of M14's "nearly free".
+- **A review step alone.** O188's 113 spilled lines are what attention delivers; it
+  stays a checklist item.
+
+**Q3, O179's viewBox arm: refuted as a check.** It sees 2 of the 4 Segoe spills, and
+none of the 611 texts lacks a holding rect, so a viewBox fallback never fires on
+this set. Past the viewBox stays as a severity label: a clip, not an overlap. O179's
+own figure was right: Arial ends 75.5 past the viewBox. The paragraph above this
+record and O179's closure treated it as superseded; O179's closure carries the
+correction.
+
+**Q4, the Mermaid set: no fit gate.** In the render image a gate can only agree with
+itself. In any other environment it measures a reader nobody has, because the book
+renders the canonical blocks live in the reader's own fonts and no page embeds
+`docs/diagrams/*.svg`. What rots there is drift from source to render, which only
+O105's residual names; that entry is closed, so it is filed as O190.
+
+**Decided by the maintainer on the panel's escalation, 2026-09-15.**
+- **Attribution:** courtesy `NOTICE` lines for the fonts the width table derives
+  from (DejaVu Sans 2.37 under the Bitstream Vera licence, Noto Sans under the OFL)
+  and for the fonts the committed PDFs already embed.
+- **Landing:** the unit ships as one pull request, with its filings.
+- **SF Pro:** stays unmeasured, escalated again only if a spill is reported on a Mac.
+
+**Claims refuted.**
+- **The brief:**
+  - `.l` is 14 px in `retrieval-stack.svg`, not 13.5;
+  - "~23" DejaVu spills matches no convention (21 or 22 by device scale, 27 at the
+    padding);
+  - "0 label spills over 14 files" covered 11.
+- **The memory lens:** "16 non-Latin characters"; there are 61 Arabic, 24 CJK, 10
+  Thai, 6 Devanagari, 18 Cyrillic and 16 Greek.
+- **The gates lens:**
+  - that a table's errors fall on the false-positive side (it reads `domain-model`
+    3.7 px low);
+  - its "Noto" figures were Nerd Font Propo, and its "DejaVu" figures were Verdana.
+- **The typography lens:** "35 tspans" (49 elements on 35 lines); "DejaVu Sans
+  absent from three PDFs" (two).
+- **This entry's filing:**
+  - 579 texts;
+  - "past its card" for figures measured to the padded edge;
+  - macOS "a few percent wider", never measured;
+  - "14 Mermaid labels" for 245 `foreignObject`s in 11 files.
+- **`DIAGRAM_LESSONS.md`:** 0.60 em as a bound.
+
+**Dissent.** The refuter dissented from the lenses on five points:
+- DejaVu alone;
+- errors running one way;
+- the rewording count;
+- sharing the table with `check.py` at no cost;
+- reading the screenshots as proof that the holder rule is sound.
+
+The first four are absorbed into the ruling above. The fifth stands as a residual:
+only flagged lines were inspected, and a misattributed holder produces a miss, not a
+flag.
+
+**Probes still owed.**
+- **P-A, calibration, once the table exists.** Force DejaVu and force Noto, at device
+  scale 1 and 2, and take unrounded widths for `architecture/index.html` and the 22
+  views. Renderer − table must be < 4 on every line, and the padded flagged sets must
+  agree within 2.
+- **P-E, after the rewording and `build.sh`:** `pdftotext -bbox` over all 11 PDFs.
+- **P-C, macOS:** not owed, by the maintainer's decision above.
+
+**What would make this fail silently.**
+- The table reading 4 px low on a line the renderer spills.
+- A holder misattributed from a line's centre, among the 150 texts bounded by a
+  canvas-wide rect.
+- A collision with a sibling card or a connector.
+- Vertical overflow.
+- A stale PDF, which `--check` sees only as coverage (O191).
+- A reader's default fonts, minimum sizes, and SF.
+
+**Filed from this ruling:** O190 (Mermaid drift) and O191 (stale PDFs). Filed
+beside it from the same session: O192 (a backend that never becomes ready leaves
+no diagnostics).
+
+#### RULED 2026-09-15, revised on the P-A evidence by the refuter; font names decided by the maintainer
+
+**P-A ran, and condition 2 as ruled failed. It was the wrong test.** 7,156 renderer
+rows (1,789 texts, each face, device scale 1 and 2) were joined to the table.
+- **Condition 1 held:** renderer − table peaked at +1.64 (DejaVu pass) and +0.06
+  (Noto pass). No line reached 2, and device scale moved no advance width.
+- **At the 4-unit padding, `architecture/diagrams/` did not agree:** the table
+  flagged 30 lines and the worst face 27, with 0 misses and 3 table-only flags.
+  `platform-views` agreed at 2 and 2.
+
+"Within 2" counted a miss (silent, an integrity failure) the same as a false flag
+(loud, noise). Restated on O47's method:
+- **2a:** zero misses at the gate's padding, for every face and device scale. Met.
+- **2b:** false flags are at most 7% of flagged lines, and each is named by its
+  mechanism. The table as built fails it at 3 of 30 (10%), so the restatement moves
+  no goalpost.
+
+**The table owes three repairs before P-A runs again.**
+- **Arabic by positional form.** Two of the false flags priced Arabic by isolated
+  forms, and isolated forms are not a bound: 73 of the 164 positional-form rows are
+  wider than their isolated form, and across two-letter words positional forms are
+  wider in 447 of 3,330 pairs (worst +0.235 em). Price each letter at the form its
+  joining context forces: GSUB `isol`/`init`/`medi`/`fina` per face, the maximum over
+  faces, the joining type stored. A lam-alef ligature is priced by its components,
+  and generation fails if a ligature is wider than they are. A per-letter minimum
+  would under-read; this does not.
+- **Every fallback face the renderer used.** Noto Looped Thai rendered the run's
+  worst line (+1.64 over four glyphs, and a ten-glyph Thai run would breach the
+  budget); Noto Sans Math rendered arrows in the Noto pass. Calibration fails on any
+  platform font that is not in the table's header.
+- **Calibration joins by file and document index**, never by label (31 duplicate
+  labels), with its harness kept beside its output.
+
+The third false flag is kerning (about 2.9 of 3.1 px) and is reworded. Devanagari
+over-reads +7.24 on its only line: loud, and not calibrated.
+
+**Not option (ii).** Condition 1 held on every row, with 0 misses; the failure is
+repairable noise in one class.
+
+**The serif column is a faithful application, not an overreach.** It prices
+platform-views' 26 Georgia callouts from DejaVu Serif (Book, Italic) and Noto Serif
+(Regular, Italic). Q2 rules one implementation shared with `check.py`, and fail-closed
+would otherwise turn correct views red. It calibrated at +0.04 to +3.45.
+
+**Decided by the maintainer, 2026-09-15: no proprietary font is named anywhere in the
+tree.**
+- **Font lists name only openly licensed fonts, then a generic family.** No font file
+  is shipped for this.
+- **Removed:** Segoe UI, Helvetica, Arial, Georgia, Times New Roman, Trebuchet MS and
+  Verdana, and the names and keywords that request a vendor's UI font:
+  `-apple-system`, `BlinkMacSystemFont`, `SFMono-Regular`/`SF Mono`, `ui-monospace`,
+  Menlo and Consolas.
+- **Everywhere they appeared:** the architecture diagrams and pages, `platform-views`,
+  the three served consoles, the brand SVGs, the landing page's fallbacks, and
+  Mermaid's rendered and live diagrams. Mermaid is changed through configuration,
+  never by editing the vendored `mermaid.min.js`.
+- **What it does not do:** a reader without the named open fonts sees their system's
+  generic font. The decision removes the tree's dependency on proprietary fonts, not
+  the fonts a reader has installed, and the fit standard remains the worst case over
+  DejaVu and Noto.
+- **Other rulings:** this revises O78's choice of system stacks, which named
+  proprietary faces; O78's no-vendoring half stands. The attribution the maintainer
+  approved extends to every face the table is generated from.
+
+#### RULED 2026-09-15, second revision by the refuter, on the positional-Arabic build
+
+**The revised rule was built, and its guard fired.** Generation refused because 31
+Noto Sans Arabic ligatures (the lam-alef family in `rlig`, and the Allah ligature)
+are wider than their components, by up to +0.129 em. Against the priced forms,
+`sans400` and `serif` under-read the widest of them by about 1.3 px at 11 px.
+
+The build also got three joining types wrong. It derived them from the forms each
+font carries, which gives U for U+0759, U+08AC and U+08B1, where
+`ArabicShaping.txt` gives R. That derivation came from the integrator's brief, not
+from the ruling.
+
+**Revised:**
+- **(a) Joining types** come from the pinned `ArabicShaping.txt`, and the Arabic
+  letter set comes from the same Unicode version, with the fonts cross-checked
+  against it. A shaper picks a form by joining type, not by the glyphs a font
+  carries.
+- **(b) Ligatures.** A ligature-forming sequence is priced at the maximum of its
+  positional components and its widest ligature over faces, under four conditions:
+  1. the maximum is taken over all non-overlapping segmentations, never a greedy
+     match;
+  2. matching is a superset of where any face fires: it skips marks and ZWJ, and
+     accepts precomposed and decomposed spellings, since a false match only
+     over-reads;
+  3. substitutions applied to a ligature's own output are closed over;
+  4. the generator refuses:
+     - a ligature it cannot trace to codepoints;
+     - a chain it cannot flatten;
+     - any on-by-default GSUB feature it does not model (the first build skipped
+       these silently);
+     - any header claim written before its check.
+
+  An unmatched sequence prices as its components, and that is safe only while the
+  generator is complete. The refusals in condition 4 are what keep it fail-closed.
+- **(c) Calibration stands, and gains a ligature fixture**, because today's text
+  holds no ligature and none of the three letters. The fixture covers:
+  - every lam-alef variant, isolated and final, with harakat and decomposed;
+  - Allah, with and without shadda;
+  - the three letters after a D letter;
+  - every letter in all four positions.
+
+  Each string must render at most 0.05 px wider than the table prices it, because a
+  1.3 px under-read would still pass a 4-unit line budget. P-A re-runs on the
+  reworded tree.
+
+**Re-measured by the refuter** on the text P-A rendered:
+- all 7,156 rows join;
+- the worst under-read is +0.076 px;
+- Thai now reads wider than it renders;
+- at the 4-unit padding the diagrams show 1 table-only line of 28, and 0 misses.
+
+**What would make it fail silently:**
+- matching narrower than a production shaper (ZWJ, marks, mark-filtering sets);
+- a greedy parse;
+- GPOS cursive attachment or kerning;
+- an Arabic face outside the measured set;
+- Unicode version skew;
+- a diagnostic run that bypasses the refusals but writes a file named like the
+  table.
+
+#### BUILT IN PART 2026-09-15: the table under the second revision, and one open question
+
+**The table.** `advances.tsv` has sha256 `afa2a1f7…` and is byte-identical over two
+regenerations. It holds 7,380 codepoint rows, 924 positional-form rows (231
+letters) and 229 ligature rows traced from 190 substitutions. Joining types and the
+letter set come from pinned Unicode 15.0.0 data. Every header claim is written
+after its check, and each of the generator's refusals fired under its own
+counterfactual.
+
+On this table both diagram sets pass: 11 diagrams and 22 views. The tightest line
+is `12-integrity-chain` at −0.014, and every Arabic and Thai line keeps at least
+28 px of room.
+
+**Three implementation choices beyond the ruling's text, each forced by a
+measurement. They are recorded here for the next panel to ratify.**
+1. **A ligature row records the form each component must take.** Unkeyed, DejaVu's
+   yeh+hamza composition priced every medial yeh at an isolated ligature's width,
+   +24 px on one line.
+2. **A ligature made only of marks closes over the non-positional lookups.** Six
+   Noto mark ligatures refused otherwise.
+3. **A face that lacks a precomposed letter is priced at its decomposition.**
+   DejaVu Sans draws U+06C0 as U+06D5+U+0654: +0.585 px at weight 400 and +1.319 px
+   at 700.
+
+**The ligature fixture: 1,669 strings × 4 passes × 2 weights.**
+- **On the fonts the table is built from,** every string renders within 0.05 px of
+  the table (worst +0.015).
+- **In the ruled renderer passes it fails,** on 88 to 111 strings per pass,
+  worst +4.41 px. The pinned headless image ships Noto Sans Arabic 2.010, while
+  the table is built from Debian's 2.005, and every failure traces to that version
+  difference: 33 changed advances, worst U+FC5E–U+FC63; new forms for U+0759 and
+  U+069C; and wider initial glyphs for U+0679 and U+06BB.
+
+**Open, for a ruling panel:** which font versions the standard pins. The options
+are the Debian versions only, or the per-glyph maximum over Debian's and the
+calibration image's versions, and nothing else settles which. This is the
+refuter's "an Arabic face outside the measured set", now measured. P-A has not yet
+been re-run on the reworded tree.
+
+**P-E, on the rebuilt PDFs.** Each diagram line was matched to its words in
+`pdftotext -bbox` at its own SVG baseline.
+- **602 of 611 lines matched, none past its box, and no word is clipped at a page
+  edge.**
+- **The 9 unmatched lines** are non-Latin text the extraction does not reproduce, or
+  words that come out in a different order. `textfit` alone verifies them.
+- **Mine:** a first run matched words without the baseline and flagged two
+  single-token labels, `admits` and `4`. It had found the same word elsewhere on the
+  page; neither was a spill.
+
+#### RULED 2026-09-15 by three lenses (Agentic Memory Architecture, verification and gate engineering, rendering and typography) and an adversarial refuter: which font versions the standard pins, and how calibration runs
+
+**The question.** The `#### BUILT IN PART` subsection above left it open: which Noto versions
+`advances.tsv` takes its maximum over (V1); ratify or revise the builder's three forced choices
+(V2); how calibration runs under V1 (V3). The panel's brief, evidence (E1–E14), lens verdicts, the
+refuter's two verdicts and every probe script and raw output are in the session scratchpad
+(`o189-versions/`, `probe/`, `o189-pa3/`, `o189-fix2/`); this subsection is the record.
+
+**Prior rulings found, and their disposition.**
+- **Q1, "a declared worst case over faces the tree can install and measure":** best practice,
+  followed. It is the rule that decides which slots count.
+- **Q2 condition 4, "Headless Chromium, pinned by digest, is the calibration instrument":** revised.
+  The digest pins the shaper (Chromium 124.0.6367.78 linking the system HarfBuzz 8.3.0), never the
+  Noto faces: the image carries none, and every Noto face the first P-A run and the ligature fixture's
+  image passes rendered came from an unversioned `apk add` resolving to 23.7.1-r0. Fonts are pinned
+  by sha256 and embedded; embedded and installed rendering measured identical (widest |difference|
+  0.0000 px over 15,093 rows).
+- **Revision 1, "calibration fails on any platform font that is not in the table's header":** revised
+  to a digest check, because a CDP row carries a family and a PostScript name and no version: in the
+  `apk` P-A run every face matched the header by name and none by digest. CJK is the one declared
+  exception, since textfit prices it by rule.
+- **Revision 2 (b)2, matching "a superset of where any face fires":** the ruling stands; the
+  implementation, which skips by Unicode Mn/Me, is narrower and is revised in V2.
+- **Revision 2 (c), 0.05 px per fixture string:** followed, per slot.
+- **The maintainer's open-fonts decision and O78's no-vendoring half:** followed. No font file enters
+  the tree; `NOTICE` gains a Noto 23.7.1 attribution line.
+- **`gen_advances.sh`'s "moving it is then a decision, recorded in ROADMAP":** followed; this is that
+  record.
+
+**V1: the per-glyph maximum over two slots, each pinned by sha256, taken inside `gen_advances.py`.**
+- **Slot 1:** Debian bookworm as today, re-fetchable by version from snapshot.debian.org (all five
+  pinned packages present).
+- **Slot 2:** Noto monthly release 23.7.1, fetched per file from
+  `raw.githubusercontent.com/notofonts/notofonts.github.io/noto-monthly-release-23.7.1/fonts/<Family>/hinted/ttf/<file>`.
+  All 15 files are byte-equal to the files calibrated here, and aports' 3.19-stable `APKBUILD`
+  installs exactly that tag's `fonts/*/hinted/ttf/*.ttf`. DejaVu comes from Debian in both slots:
+  its advances are identical in both sources.
+- **Why it wins.**
+  - Q1's rule: the tree installs 23.7.1 and the generator models it with no refusal.
+  - It costs nothing measured: under the maximum, 0 diagram lines are newly flagged, and joined to
+    the P-A renders there are 0 misses and 0 table-only lines. The fixture generated from the maximum
+    rendered 0 strings over 0.05 px in 18 passes over both slots (mono prices aside, V2 item 6).
+  - It closes under-reads measured for readers on 23.7.1 (Noto Sans Arabic 2.010): lam-alef ligatures
+    +0.08 em (0.88 px at 11 px) each, positional forms up to +0.069 em, U+FC5E +0.40 em. A silent miss
+    outweighs a loud false flag (O47, O162).
+- **What slot 2 is not: a stand-in for later releases.** Noto 2025.05.01 is a real redesign, measured
+  on static files with unchanged glyph names: HEH 0.405 → 0.672 em, Arabic-Indic digits about
+  0.28 → 0.572 em, the minus sign 0.322 → 0.572 em, Math arrows 0.794 → 1.012 em. Rendered as a 2025
+  reader over today's text, every condition still holds under every candidate table, with a worst
+  under-read of +1.502 px (a Math arrow) that the 23.7.1 slot does not change. That slot is filed
+  (O193).
+- **Rejected.**
+  - **Debian only, by digest** (two lenses' choice): it keeps an under-read that measurably costs
+    nothing to close — a gap written up as a decision.
+  - **Model `rtlm` now and take 2025.05.01, or three slots** (the typography lens's direction):
+    generation from 2025.05.01 refuses on `rtlm`, and `refuse()` exits at the first refusal, so the
+    size of the modelling is unknown; three slots also needs the dominance probe first.
+  - **Replace Debian with a newer set:** newer is not wider — 23.7.1 is narrower than Debian's on
+    137–173 codepoints per face.
+  - **An open list of slots:** no stopping rule.
+- **Slot membership, from here on:** the Debian stable pin, plus the newest upstream release the
+  generator models. An older slot stays only while `max(Debian, newest)` does not cover it cell-wise.
+
+**V2.**
+1. **Ligature rows keyed by positional form:** ratified.
+2. **Mark-only ligatures closed over the non-positional lookups:** ratified; the `bare > 0` refusal
+   keeps it fail-closed.
+3. **A missing precomposed letter priced at its decomposition:** ratified for codepoint rows. The
+   decomposition probe found 186 face/codepoint pairs, 108 where the shortest supported decomposition
+   differs from the full one, and 0 under-reads.
+4. **Recomposition is a real under-read, and this unit refuses it.** A shaper recomposes a decomposed
+   spelling the face has precomposed; textfit prices the parts. Worst measured: U+1F9C in Noto Sans
+   Bold, 1.462 em against 0.837 em for its parts. Built: the generator emits the canonical
+   composition pairs whose result has a row, reading the pinned `UnicodeData.txt` and
+   `CompositionExclusions.txt` and refusing if the latter is absent; textfit refuses a line where a
+   mark follows a base it composes with, outside Arabic (0 hits in U+0600–06FF, and the fixture's
+   decomposed Arabic passed). It fires on no line today. Pricing such a line instead is filed (O194).
+5. **A GDEF skip set.** Built: the generator emits every codepoint whose glyph any Arabic face in
+   either slot classes as a mark (GDEF class 3); only textfit's ligature matcher skips them, and
+   joining stays by Unicode. Generation refuses a reachable ligature lookup that uses a mark filtering
+   set or a non-zero MarkAttachmentType (none today). Its premise arm uses a synthetic table, because
+   the maximum table hides the defect (see the claims refuted).
+6. **ZWJ and ZWNJ in every column.** Built: U+200C and U+200D take a price in every column from a
+   script face that maps them, and generation refuses if none does. The mono column had none, so 717
+   fixture strings per slot were never measured.
+7. **Unicode version.** Built: textfit asserts `unicodedata.unidata_version` equals the table's
+   declared version. It read Python's `unicodedata` and never checked it (`python:3.12-slim` carries
+   15.0.0 today; its tag moves).
+8. **Pins.** Built: `python3-fonttools` pinned to a version and the base image by digest; a font-free
+   `arch-check` arm compares the header's package and slot lines with the generator's pins, in both
+   directions, behind a premise fixture.
+
+**V3.**
+- **The instrument:** every face embedded by data URI, one slot per page; every stack names the
+  slot's script faces explicitly, Looped Thai included; every CDP row must report
+  `isCustomFont: true`; identity is the sha256 taken when a file is embedded, checked both ways.
+  Installed fonts let fontconfig choose: with all 19 header files installed, the first strict-less run
+  rendered Thai in FreeSerif and Devanagari in FreeSans, and used no Noto script face at all.
+- **Coverage belongs to the fixture.** P-A over today's text uses 12 of the 19 header files — no bold
+  Arabic, Thai or Devanagari, no upright serif, no Looped Thai — so the fixture must use every header
+  face of every slot, or the run fails. It gains per-script cluster strings for Thai, Looped Thai,
+  Devanagari and Math at 400 and 700, and a mono pass at 700; a script string is a valid cluster (base,
+  then its marks), never a lone mark. P-A records the faces it used and must show no platform font.
+- **CJK:** the stack names `Noto Sans CJK SC` (fontconfig otherwise chose Mono CJK TC in one run and CJK
+  SC in another, from the same collection file); the face is identified by (collection sha256,
+  PostScript name); every CJK glyph the fixture renders is at most 1 em + 0.05 px; in P-A a CJK face
+  may count at most as many glyphs as the line has CJK codepoints.
+- **Tolerances:** fixture 0.05 px per string per slot, an unmeasurable price failing the run; P-A
+  condition 1 (< 4 px), 2a (zero misses) and 2b (≤ 7% false flags) per slot. Each calibration also runs
+  the strict P-A against the newest upstream snapshot as a canary and records its figures.
+- **Where it lives:** the harness is tracked in `architecture/textfit/calibrate/` — fixture, P-A,
+  judges and ONE fetch list shared with the generator — hand-run and never CI, on `gen_advances.sh`'s
+  precedent; the first P-A harness died with its session's scratchpad. Raw outputs go in a gitignored
+  run folder with a README; ROADMAP records the table sha256, every font sha256, the image digest, the
+  commit and the output digests.
+- **Scope:** V1 and V3 land together or not at all; V2 items 4–8 are independent of each other.
+
+**Claims refuted.**
+- **The integrator's (mine):**
+  - *"F3: no under-read, no ligature formed across U+FC5E."* The fixture prices came from the maximum
+    table, where U+FC5E is 0.40 em. Against the tree's own table the Debian-slot renders exceed the
+    price by up to +0.73 px (`FEDF FC5E FE82`: 7.47 px against 6.74–6.83), wider than any unligated
+    reading, so the ligature did form. The lam-alef lookup is `rlig` with LookupFlag 0x0009
+    (RightToLeft | IgnoreMarks) in both versions, and U+FC5E is GDEF class 3 in 2.005, class 1 in 2.010.
+  - *"F2 passed."* Its judge printed `FAIL (1434)` and counts an unmeasurable price as a failure: 717
+    strings per slot were never measured in mono.
+  - *"In `dir-debian` every header face matches by name and digest."* True only of the 8 faces its rows
+    used; no Noto script face was exercised.
+  - *"The 2025 gap is large"* is a per-face, per-codepoint figure; across whole lines today it is
+    +1.502 px. Several raw outputs were printed and not saved, and were re-run to files.
+- **The refuter's first verdict (its own):** "slot 2 stands in for later releases"; "every header face
+  used by at least one P-A row"; the F3 magnitude (~1.2 px, from the column's widest ligature).
+- **The memory lens:** "unproven on 2.010's GSUB" (generation succeeds); "(b) is the Q4 trap" (the
+  table comes from the font bytes, not a render); "Greek/Latin decomposition can under-read" (0).
+- **The gates lens:** "once calibration embeds its files, there is no reason to add 2.010" — calibration
+  on 2.005 says nothing about readers on 2.010.
+- **The typography lens:** "no new code" (the `rtlm` refusal and path-keyed faces); "(a) keeps a
+  +4.41 px under-read" in text (U+FC5E is a zero-width mark in 2.005 and in no diagram line; the
+  common-text figure is 0.88 px per lam-alef).
+- **The recomposition probe's own count** (805 under-reads over 154 codepoints) is an overcount: it
+  ignores composition exclusions (Hebrew presentation forms, U+2ADC, singletons). The class stands.
+
+**Probes run by the integrator.** Generation from 23.7.1 (succeeds) and from 2025.05.01 (refuses on
+`rtlm`); snapshot.debian.org availability; Chromium's HarfBuzz; decomposition; GDEF mark classes and
+the lam-alef lookup's flags; per-file upstream source; fixture on the two-slot maximum; embedded against
+installed; the 2025 codepoint gap and its glyph-level check; full P-A runs on the pinned `apk` fonts,
+on the table's Debian files, strictly on both, and as a 2025 reader. Every one ran in Docker; the harness
+and outputs sit beside each other in the scratchpad.
+
+**Dissent.** Two lenses chose Debian only and one chose a newer upstream slot; both are settled on Q1's
+rule and on the `rtlm` refusal. Unverified from HarfBuzz source: that Chromium hides default ignorables,
+and that HarfBuzz reorders marks before recomposing.
+
+**What remains.** O193 (a slot for current Noto: model `rtlm` and whatever refuses after it, then the
+dominance probe) and O194 (price a recomposed spelling instead of refusing it). Residuals, stated:
+Devanagari and Thai shaping are not modelled, and the new cluster strings are their first measurement;
+Arabic faces outside the set and a reader's platform fonts are not measured.
+
+#### BUILT 2026-09-15: V1 and V2 items 4–8 of the font-version ruling, built by an agent and verified by the integrator
+
+**What changed.**
+- **New:** `architecture/textfit/fonts.tsv`, the one fetch list: 32 rows, 19 in slot `debian`
+  (source `debian:<package>=<version>`) and 13 in slot `noto-23.7.1` (per-file URLs at the
+  notofonts tag), each with its sha256. `architecture/textfit/pins.py` reads it (`read_fonts` is
+  its one reader) and compares the table header with `gen_advances.sh`'s apt pins and with
+  `fonts.tsv`, both ways, behind a premise fixture of ten one-line mutations.
+- **Rewritten:** `gen_advances.sh` (the base image by digest, six apt pins, a fetch step that
+  refuses a failed, oversized or mis-digested download before the generator reads a byte),
+  `gen_advances.py` (both slots in every column; the `compose` and `gdefmark` sections; joiners in
+  every column; the declared Unicode version), `textfit.py` (the recomposition refusal, the
+  GDEF-mark skip set in the ligature matcher, the Unicode-version assertion in `load_table`), and
+  `advances.tsv`, regenerated.
+- **Edited:** `build.sh` runs `pins.py` before textfit in both modes; `platform-views/check.py` loads
+  the table inside `main()`, so a premise failure exits 2 instead of raising.
+
+**The table.** sha256 `c17f84495b8d00abcd66ca6126b318ce04c7c02b959f741c770fec304081bed8`,
+reproduced by the builder's two regenerations, by a run on a scratch copy, and by the integrator's
+own run in `debian:bookworm-slim@sha256:7b140f374b28…`. Sections: cp 7,417; arabic 924; ligature
+229; compose 836; gdefmark 257, of which 22 are outside Mn/Me (U+FBB2–U+FBC1, U+FC5E–U+FC63). The
+header declares Unicode 15.0.0 and records every file's slot, version, upm, sha256 and source.
+
+**Verified by the integrator, not taken from the report.**
+- **The numbers:** the cp, arabic and ligature sections equal, on all 8,573 lines, a cell-wise
+  maximum the integrator computed independently from the previous table and a table generated from
+  the 23.7.1 files — except the two mono cells for U+200C and U+200D, which V2 item 6 adds.
+- **The gate:** `docker compose run --rm arch-check` exits 0: the pins agree both ways (6 apt pins,
+  32 files, 2 slots), all 11 diagrams fit, all 22 views are clean.
+- **The code,** read for `load_table`, `recomposition`, `ligature_spans`, the generator's
+  composition pairs, its lookup-flag refusal, its GDEF-mark collection and its joiner prices, and
+  `pins.py` in full.
+
+**Counterfactuals, run by the builder on scratch copies** (logs in the session scratchpad's
+`o189-build/`).
+- **The generator refused as expected in 11 of 11:** a Debian digest mismatch; a fetched file
+  carrying another URL; a wrong package; a row it does not price; DejaVu outside slot `debian`;
+  `CompositionExclusions.txt` absent; disagreeing Unicode versions; a mark filtering set
+  (LookupFlag 0x0011 written into DejaVu Sans); a MarkAttachmentType of 0x0100 in the 23.7.1 Arabic
+  face; U+200D removed from every fallback face.
+- **The fetch step** refused a slot-2 digest mismatch and a 404, leaving the table untouched. The 2025.05.01
+  Arabic face dropped into slot 2 still refuses on `rtlm`.
+- **textfit and pins, 26 of 26:** a Unicode mismatch exits 2 from textfit, `check.py` and
+  `build.sh --check`, including under `python:3.13-slim` (15.1.0); every recomposition arm (the
+  refusal removed, the Arabic exemption removed, the starter never updated, the section missing, a
+  real diagram line holding U+0397 U+0313); every skip-set arm; every pins mutation.
+
+**The builder's choices beyond the ruling's text.**
+- `ca-certificates=20250419~deb12u1` is pinned and recorded, because Python's TLS check fails without it
+  in bookworm-slim.
+- Composition pairs also exclude decompositions that begin with a combining mark.
+- The gdefmark section shares the cp rows' domain.
+- A mono joiner is priced from the widest script or fallback face.
+- A Debian row's package ownership is confirmed with `dpkg-query`.
+- Each fetched file carries a `.source` note, and downloads are capped at 32 MiB.
+
+**The builder's own defects, found and fixed.** Its first matcher only skipped GDEF marks, which
+would have made the 54 ligature rows that name U+FC5E–U+FC63 as a component unmatchable — a silent
+under-read, caught by a guard it had added; the matcher now tries such a mark both consumed and
+skipped, under a new premise arm. A docstring claiming recomposition ignores blocking was corrected:
+only blocking by an intervening mark is ignored.
+
+**Found by the integrator, owed before any commit.** `architecture/textfit/` is untracked, so no
+preflight has read it. Intent-to-added, `fonts are openly licensed` fails on
+`textfit.py:620: Noto Sans Arabic`, and the preflights after it do not run.
+
+#### RULED 2026-09-15 by three lenses (Agentic Memory Architecture, verification and gate engineering, rendering and typography) and an adversarial refuter: which cells the table may price, and how CJK kerning is bounded (panel 2)
+
+**The question.** The V3 calibration (run `v3d`, `architecture/textfit/calibrate/`) met every P-A
+condition on both slots and on the canary `noto-monthly-release-2026.09.01` (worst +1.502 px), and its
+fixture failed: 403 platform, 108 over, 20 cjk-em. Arabic, the F3 strings, Thai, Looped Thai and
+Devanagari were clean. QM: what the table does with a codepoint a modelled reader draws from a face
+outside its price. QC: how CJK kerning is bounded. QR: what closes O189.
+
+**Measured for the panel** (brief, data, lens verdicts and probes in the session scratchpad
+`o189-versions/`):
+- Math codepoints no face of a pass's stack maps fall to faces outside the page: the image's own DejaVu
+  Sans (sha256 `7da195a7…`, not the pinned file), FreeMono, Noto Color Emoji, or the CJK face at 1 em.
+  Worst +5.63 px, U+2307 on the Noto-primary passes. On the Debian page U+23B7, U+2B1B, U+2B1D and U+2B25
+  took a price from the 23.7.1 slot's Noto Sans Math, which the Debian reader lacks.
+- 84 further Math rows were drawn by the CJK face and classed as CJK rather than platform, so the rows
+  drawn outside the page are 487, not 403. U+2318 at 11.0 px passed silently on both pages.
+- CJK kerning is real: U+304E U+3050 measures 22.234 px with kerning on and 22.000 px with it off.
+  Separately, per-character substrings snap to 1/64 px. The largest positive default-on GPOS pair
+  adjustment in Noto Sans CJK SC is +50 units, 0.05 em, 0.55 px at 11 px, in both weights.
+- Cross-column fallback in today's text: 0. The any-mapper coverage predicate over today's text: 0
+  losses (P1).
+
+**Prior rulings, and their disposition.**
+- **Q1, "a declared worst case over faces the tree can install and measure":** followed, and applied per
+  reader: a maximum is a worst case only for a reader whose drawing face entered it.
+- **Q1's "a declared conservative advance for any script neither face covers":** revised to CJK only.
+  For symbols no width can be tested: the renders drew 0.6 em (FreeMono), 1.0 em (CJK) and 1.247 em
+  (emoji).
+- **Q2 condition 1, kerning inside the 4-unit budget:** refuted for CJK. A positive pair adjustment grows
+  with the glyph count and the font size, while the padding is a fixed 4 units. Applied backwards it
+  reaches every column; probe K decides the others.
+- **V1's "a gap written up as a decision" and O47/O162's loud-over-silent:** followed; they decide QM.
+- **V3, "no platform font except CJK":** stands. The code checked less than it says: the exception was
+  granted by face, not by codepoint.
+- **V3, "every CJK glyph at most 1 em + 0.05 px":** revised. The quantity is the advance, read from font
+  data, because `getSubStringLength` includes kerning and 1/64-px snapping (group 6's substrings sum to
+  704.98 px against a 704 px total).
+- **The maintainer's open-font lists:** followed; naming a Math fallback in the diagrams' stacks is a
+  font-list choice and is not needed.
+
+**QM: price each cell from the face every modelled reader actually draws with, and refuse a cell where
+some reader draws with none.** To build:
+1. **One reader model**, `architecture/textfit/readers.py` (stdlib), imported by `gen_advances.py` and
+   `calibrate/common.py`, replacing common.py's own stacks: per slot and per column (serif upright and
+   italic, weight by column), the DejaVu-primary and Noto-primary stacks, the CJK face excluded.
+2. **Generator:** for every (slot, reader), the FIRST stack face that maps the codepoint, with
+   `rendered()`'s decomposition semantics; none means the cell is `-`, otherwise that face's advance joins
+   the maximum beside the column faces. The header records the cells withdrawn and added.
+3. **textfit:** no logic change; `-` already fails closed.
+4. **Fixture:** its skip set derived from the table's `-` cells, checked both ways against coverage
+   computed from the font bytes.
+5. **Judge arms**, in both judges, each behind a premise arm that must fire on `v3d`'s own rows: (i) every
+   codepoint of a row is mapped by some face CDP reports (U+2AAC and U+2BFE on the 23.7.1 page render at
+   0.6 em and look like `.notdef`); (ii) a CJK face drawing a codepoint outside `CJK_BLOCKS` fails (the 84
+   rows); (iii) the faces the reader model predicts equal the faces CDP reports (U+2212 on the Debian
+   page's Noto passes, drawn from Noto Sans Devanagari).
+
+Rejected: the fixture skip alone (the table keeps pricing U+2B1B at 10.21 px for a Debian reader who
+renders it at 13.72 px); a per-slot "some face maps it" rule (U+2307 stays +5.63 px silent for the
+Noto-primary reader); the any-mapper wording two lenses gave (it admits U+2212, whose drawing face is
+priced in no cell); a declared conservative width (untestable); naming a Math fallback in the stacks (a
+font-list choice, and unnecessary).
+
+**QC: `CJK_EM` = 1 + the largest positive default-on adjustment, from the declared faces' data.** The split
+is settled by evidence: the typography lens's own threshold (≥ 0.023 em) and the gates lens's (> 0.05 px)
+both fire at 0.05 em. To build: a calibration step reading the hmtx advance of every `CJK_BLOCKS` glyph
+and every positive XAdvance in default-on GPOS (Value1 and Value2; SinglePos, PairPos and contextual
+lookups; glyphs reachable by default-on GSUB), from both collections by sha256; the fixture judge fails
+if `CJK_EM` is below 1 + that figure or any advance exceeds 1 em; `CJK_EM = 1.05` written in textfit with
+its derivation (arch-check still reads a constant); the cjk-em arm rendered with `font-kerning:none`;
+textfit refuses an unassigned `CJK_BLOCKS` codepoint. Cost today: the text is Han only, and the four Han
+lines keep at least 48 px against at most 4.8 px added. Rejected: kerning inside the budget (at 17 px
+five maximal pairs exceed it); pricing CJK from a pinned face's advances (advances are not the mechanism);
+1.0213 em (one snapped pair from a render).
+
+**QR.** O189 closes only when all of this holds: everything above built and the table regenerated;
+`arch-check` green with no line refused, or any refused line reworded in the same unit; the calibration
+re-run with every judge exiting 0 on both slots, every premise arm firing and the canary recorded — a long
+run that needs the maintainer's explicit go; a `#### BUILT` record with the digests; the docs corrected
+(textfit's CJK comment, gen_advances.py's faces docstring, `DIAGRAM_LESSONS.md` §4, `calibrate/README.md`);
+`architecture/textfit/` committed only on approval.
+
+**Filed.** O195: the reader model is declared, not observed. O196 only if probe K fires. O193 and O194
+stand.
+
+**Claims refuted.**
+- **The brief (the integrator's, mine):** "11–15 over per pass" (8–15); "586 mapped by DejaVu Sans alone"
+  (the script never tested Math, and U+2192 draws from Math); "0 by both family faces" (U+2212 is mapped
+  by both on 23.7.1); "the image's DejaVu Sans, same width as the price" (a different file, unmeasured);
+  "U+23B7 mapped by no face on that page" (DejaVu Serif draws it); "23.7.1 clean" (U+2AAC and U+2BFE
+  render as what looks like `.notdef`); "Arabic, Thai and Devanagari by no family face" (DejaVu Sans maps
+  U+0627–U+0669); "0.0213 em" (the font data says 0.05 em); "falls to the image's DejaVu Sans" (84 rows
+  fall to the CJK face). My failure aggregation read the judge's first 200 of 531 rows and named each
+  CJK group's first codepoint, not the failing one.
+- **The calibration report:** coverage and "no platform font" rest on CDP attribution, which credits a
+  `.notdef` to the page's face; platform failures are 487, not 403.
+- **The memory lens:** its citation of Q1; "Q2 condition 1 stands where P-A measured", never applied
+  backwards; a netted-window probe, since group 6 totals 704 px with a +15/64 px kern inside it.
+- **The gates lens:** the per-slot residual; "do not move `CJK_EM`", which its own rule overturns.
+- **The typography lens:** QC by the budget, which its own threshold overturns; the any-mapper wording.
+- **The probes:** P1 used the any-mapper predicate; the kern probe read PairPos Value1 only, over cmap
+  glyphs, without re-hashing the collections.
+
+**Dissent.** The gates lens's per-slot residual is settled on V1's rule and U+2307's measured +5.63 px.
+Unverified, from memory rather than source: that Chromium falls back to the first stack family per
+character, that it chooses fonts per cluster, that no kerning crosses fonts, and HarfBuzz's default
+feature list.
+
+**What would make this fail silently.** Real readers' fallback differing from the model (O195); a cluster
+drawn from one face, since arm (iii) sees which faces were used and not which codepoint each drew;
+kerning outside the probe's reach; accumulating positive kerning in the table's own faces (probe K); CJK
+codepoints the faces do not map; an empty glyph a face does map, counted as drawn by arm (i); calibration
+run against a table other than the committed one.
+
+**Probes owed.** P1′, the first-mapper rule over today's text (expected 0 refused, and U+2212 attributed to
+Devanagari; a refused cell means rewording or a new panel). K: over CJK, the hmtx maximum and every
+default-on positive adjustment (a figure above 0.05 em raises `CJK_EM` to it); over every table face,
+whether ⌈4 / (k·17 px)⌉ pairs fit in the longest line (if so, file O196). textfit at `CJK_EM = 1.05` over
+both diagram sets (expected 0 new flags). The glyph-0 advance of DejaVu Sans and Serif and Noto Sans and
+Serif (6.609 px at 11 px would confirm the `.notdef` reading). The calibration re-run, after the
+maintainer's go.
+
+#### BUILT 2026-09-16: panel 2's QM and QC, built by an agent, verified by the integrator, and calibrated in run `v4`
+
+**What changed.**
+- **New:**
+  - `architecture/textfit/readers.py` (stdlib), the one reader model. It holds the page-to-files
+    rule, the four stack variants, the styles per column, the @font-face matching inside a
+    family, and `first_mapper` with the decomposition rule.
+  - `calibrate/cjk_font_data.py`, the `cjk-font-data` step. It runs in the pinned Debian image,
+    with fontTools and unicode-data at `gen_advances.sh`'s pins, read through `pins.apt_pins`.
+- **`gen_advances.py`:**
+  - each cell is priced from every reader's first mapper, and is `-` where some reader has none;
+  - the same withdrawal applies to Arabic form cells;
+  - the domain is every codepoint any stack face maps;
+  - the header lists every reader's stack and, per column, the cells withdrawn, added and raised
+    against the previous rule, computed in the same run.
+- **Calibration:**
+  - `calibrate/common.py` takes its stacks from `readers.py`, and adds cmaps read from font bytes,
+    clusters and face prediction.
+  - `fixture.py` derives its skip set from the table's `-` cells and checks it both ways against
+    the staged font bytes.
+  - Both judges gain `unmapped`, `cjk-foreign` and `faces`. The fixture judge also gains
+    `cjk-kern`, `cjk-advance`, `cjk-font-data` and `stale`. Each carries a planted-copy premise
+    arm.
+  - `render.js` measures every CJK group a second time with `font-kerning:none`.
+- **`textfit.py`:** `CJK_EM = 1.05` with its derivation, and an unassigned codepoint in the CJK
+  blocks refused, with a probe arm.
+
+**The table.** sha256 `e26cfcf9f827835ec52b9deb863c534433eef173a7b404246132ba129b4ee1b8`,
+byte-identical over the builder's two regenerations and the integrator's own.
+- **Sections:** cp 5,640 rows (was 7,417), arabic 924, ligature 229, compose 836, gdefmark 257.
+- **Against the previous rule:**
+
+| column | withdrawn | added | raised |
+|---|---|---|---|
+| sans400 | 2,643 | 71 | 8 |
+| sans600 | 2,643 | 71 | 8 |
+| mono | 8: U+23B7, U+27BF, U+2AAC, U+2B1B, U+2B1D, U+2B24–U+2B25, U+2BFE | 117 | 0 |
+| serif | 1,636 | 78 | 23 |
+
+  Every column also adds U+FF5B and U+FF5D, which are in the CJK blocks.
+- **Arabic form cells:** 0 withdrawn. All 231 letters are mapped by both slots' Arabic faces.
+
+**Verified by the integrator, not taken from the report.**
+- **The cells:** an independent recomputation, written from this ruling's text, matches the cp
+  section on all 5,640 rows and every cell. It uses fontTools cmaps and hmtx over run `v3d`'s
+  staged files (sha256-checked), Python's unicodedata 15.0.0, and its own stack definitions.
+- **The gate:** `docker compose run --rm arch-check` exits 0. The pins agree; textfit's probe
+  covers the CJK arms; 11 diagrams fit; all 22 views are clean.
+- **The widths:** five lines changed, all Han in `language-dates.svg`, by +1.65 to +4.40 px.
+  0 lines are newly over and 0 refused, and the tightest line is still −0.014
+  (`12-integrity-chain.html`). That settles the owed "textfit at CJK_EM = 1.05" probe (expected
+  0 new flags) and P1′'s refusal half (expected 0 refused).
+- **The code,** read in full: `readers.py`, `cjk_font_data.py`, `common.py`, `fixture.py`,
+  `judge_fixture.py` and `judge_pa.py`, and the changed parts of `gen_advances.py`, `textfit.py`
+  and `render.js`.
+
+**The owed probes, run.**
+- **K over CJK:** run twice, by the builder's step and by the integrator's own probe. The probe
+  reads Value1, Value2, SinglePos and contextual lookups over 46,249 glyphs reachable from 28,346
+  cmap glyphs through default-on GSUB.
+  - The largest positive default-on XAdvance is +50 units = 0.05 em (kern, lookup 6), and the
+    largest combined per-glyph adjustment is also 0.05 em.
+  - The widest advance is 1.0 em, with no glyph over it, and there is no cursive lookup.
+  - `palt`, off by default, carries +132 and +173 units.
+
+  `CJK_EM = 1.05` stands.
+- **K over the table faces:** fires, so O196 is filed with the figures.
+- **Glyph 0:** DejaVu Sans and Serif advance 1229/2048 em (6.601 px at 11 px), and Noto Sans and
+  Serif 600/1000 em (6.600 px).
+  - On the 23.7.1 page no embedded face maps U+2AAC or U+2BFE, yet v3d rendered both at
+    6.609375 px (6.625 px in mono) and CDP credited the page's primary face.
+  - The `.notdef` reading is confirmed. The table had priced both from Debian's Math face, at
+    7.491 and 7.172 px, and now withdraws them.
+- **P1′:** the refusal half is above. U+2212 is attributed to Noto Sans Devanagari for the Debian
+  page's Noto readers: the `faces` arm predicts that face, and CDP reports it on v3d's rows.
+
+**On v3d's own rows**, in a copy (`runs/v3d-p2`) judged with v3d's original `strings.json`:
+- **(i) `unmapped`** fires on the 20 U+2AAC/U+2BFE rows of the 23.7.1 page.
+- **(ii) `cjk-foreign`** fires on exactly 84 rows, all Math: 44 on the Debian page and 40 on
+  23.7.1.
+- **(iii) `faces`** fires on none of the U+2212 rows, and on all 4 of the Debian page's Noto passes
+  once Noto Sans Devanagari is planted out of the stack.
+- **The full fixture verdict:** stale 2, platform 403, unmapped 423, faces 507 (every one a Math
+  row drawn outside the page), over 108, join 20 (v3d carries no kerning-off advances) and
+  cjk-foreign 84. Every premise arm fired.
+- **Re-run by the integrator:** the fixture judge and the Debian page's P-A judge, on the same
+  copy. The fixture counts above are reproduced category for category, and all 14 fixture arms
+  and all 10 P-A arms fire. Under the new table, the Debian P-A judge finds 0 failures in every
+  category, the new `unmapped`, `cjk-foreign` and `faces` included, so the reader model predicted
+  the faces of every diagram row on that page. Condition 1's worst is +0.0756 px.
+- **A fixture generated from the new table** (`runs/v3d-p2gen`): the both-ways coverage check
+  over 30,892 cells finds 0 disagreements; 4,053 strings, 0 unmeasurable, 260 (string, column)
+  cells skipped, all Math.
+- **A bounded smoke render** measured U+304E U+3050 at 22.234 px with kerning and 22.000 px
+  without.
+
+**Choices beyond the ruling's text, recorded for the next panel.**
+1. **Arabic form cells follow the reader rule.** This is the integrator's reading of "each
+   cell"; today it withdraws nothing.
+2. **CJK-block cells follow the rule too,** and the header counts them apart.
+3. **The cluster model has two rules, both taken from v3d's rows.** The first model gave 4,563
+   `faces` mismatches, and every one outside Math had one of two shapes:
+   - a joiner joins the preceding cluster only after a virama: 4,036 Arabic rows reported the
+     stack's first face for a trailing ZWJ, while 740 Devanagari rows kept it with the virama;
+   - a CJK-block codepoint an earlier stack face maps is drawn from that face, as U+FF5B and
+     U+FF5D are drawn from Noto Sans Math.
+
+   Those rows do not settle whether the virama or the script decides the joiner case.
+4. **`unmapped` skips** Unicode 15.0's Default_Ignorable_Code_Point list.
+5. **A `stale` category** fails a `strings.json` priced against another table or another
+   `CJK_EM`. It covers the ruling's "calibration run against a table other than the committed
+   one".
+6. **U+FF5B and U+FF5D** are drawn by Noto Sans Math and priced by textfit's CJK rule at 1.05 em.
+   The integrator measured Math's advance for both at exactly 1.0 em in both slots, so the price
+   bounds them.
+
+**The builder's own defects, found and fixed.**
+- The stale and font-data premise arms first planted conditions v3d already failed, so they did
+  not fire.
+- Faces were first looked up by PostScript name alone, which read the render image's own DejaVu
+  Sans as the embedded one: `unmapped` counted 125 instead of 423.
+- An unmeasured figure was written into `common.py`, and corrected before anything reported it.
+- `CJK_EM` was written before the measurement confirmed 0.05 em.
+
+**The calibration re-run: run `v4`, on the maintainer's go, every gating judge clean.**
+- **Provenance:** commit `e6af429` with the tree dirty (81 paths); table
+  `e26cfcf9f827835ec52b9deb863c534433eef173a7b404246132ba129b4ee1b8`; `readers.py`
+  `2553fa6cdc3a29e253bb8659d0ac8411f11b448418fdd33a5fda268b7070d0a6`; Chromium 124.0.6367.78 on
+  HarfBuzz 8.3.0; the three images by digest (`python:3.12-slim@sha256:423ed6ab…`,
+  `debian:bookworm-slim@sha256:7b140f37…`, `minlag/mermaid-cli:10.9.1@sha256:f0e8d29e…`);
+  57 font files over 3 pages and 47 outputs digested into `summary.json`.
+- **Every step exits 0,** and so does the gating verdict.
+- **The fixture:** 4,053 strings and 450 CJK groups over 28,740 codepoints, 20 passes per page.
+  On both gating pages: 0 over tolerance, 0 unmeasurable, 0 platform fonts, 0 unmapped rows and
+  0 `faces` mismatches. The worst render − table is +0.0155 px. The coverage check finds 0
+  disagreements over 30,892 cells, and 260 (string, column) cells are skipped, all Math.
+- **CJK:** 287,400 per-character advances measured with `font-kerning:none`. The worst exceeds
+  1 em by +0.0156 px (U+FFE6, mono at 700), inside the 0.05 px tolerance. The font-data step
+  reads the same 0.0500 em adjustment and 1.0000 em widest advance the integrator's own probe
+  did.
+- **P-A:** conditions 1, 2a and 2b are met on both gating pages and on the canary
+  `noto-monthly-release-2026.09.01`. The worst render − table is +0.0756 px on the gating pages
+  and +1.5020 px on the canary (a Math arrow, `language-tokens.svg[18]`), against the 4 px
+  budget. Over 611 svg and 1,178 html lines there are 0 table flags and 0 pass flags, and 0
+  unmapped, 0 `cjk-foreign` and 0 `faces` on every page.
+- **Premise arms:** 44 across the four judges, all of them fired.
+
+**Not done.** Synthetic bold for Math at weight 700 is not modelled. The previous table,
+`c17f8449…`, was overwritten untracked, so its record above is all that survives of it.
+
 ### O188 — CLOSED 2026-09-15: text spilled out of its boxes across the platform-views set, and `check.py` could not see a text's width
 
 **Reported 2026-09-15 by the maintainer on the rendered page**: diagram 18's box
@@ -4206,6 +5089,11 @@ written: that entry's egress-view sublabels are among the 102 lines, and its
 proposed `check.py` arm is this gate, except that proportional text is bounded
 by a flat 0.56 em average rather than the metrics table it named. Its
 `layers.svg` half is O189's; the disposition is recorded in O179.
+
+**Refuted 2026-09-15 by O189's ruling panel: that 0.60 em is a monospace bound.**
+DejaVu Sans Mono advances 1233/2048 = 0.60205 em. The 4-unit padding absorbs the
+difference today, but under the true figure two `18-egress-paths.html` lines move
+from +0.00 to +0.37. The number is revised in O189's build.
 
 ### O179 — CLOSED 2026-09-15: two diagram labels overran their bounds and no gate measured a label's width — the egress view is fixed and gated by O188, the layers footer carried by O189
 
@@ -4272,6 +5160,14 @@ filing, not a ruling.
 **Ours.** O188 and O189 were filed on 2026-09-15 without finding this entry,
 which had owned the question since the day before; CLAUDE.md asks for that
 search before any filing. The next session found it through a CHANGELOG line.
+
+**Corrected 2026-09-15 by O189's ruling panel.** The paragraph above treats this
+entry's "about 75 past the viewBox" as superseded, and it was not. Arial renders the
+`Outward paths` line 933.5 wide, 75.5 past the viewBox, exactly as filed. Segoe UI's
+39 past the card is a different face against a different bound, and the two lines
+that run past the viewBox are clipped for every reader. The width-sum method the
+paragraph dismissed became the ruled gate, with DejaVu Sans and Noto Sans in place
+of Arial.
 
 ### O167 — CLOSED 2026-09-15: a served embedder received stored drawer plaintext on paths that recorded no egress — paths reuse the vector the vault holds, and what still leaves is recorded
 
@@ -14194,6 +15090,12 @@ to both families — three CSS custom properties and three inline SVG
 `font-family` attributes, six exact strings — is a system stack. `Geist` and
 `Instrument Serif` now appear nowhere in the tree.
 
+**Revised 2026-09-15 by the maintainer, recorded in O189.** The system stacks shipped
+here named proprietary faces: Segoe UI, `-apple-system`, SF Mono, Menlo, Consolas,
+Helvetica, Arial and Georgia. The maintainer decided that no proprietary font is named
+anywhere in the tree, so font lists name only openly licensed fonts and a generic
+family. This entry's other half stands: no font is vendored, and no page fetches one.
+
 **The gate is the point, not the edit.** `FONT_HOSTS` is DELETED, so
 `check.py`'s existing `external request:` arm stops being a formality and
 becomes the check — it now fires on any `https?://` in a `src`/`href`, with no
@@ -15320,51 +16222,6 @@ binary: afterwards the stored vector equals a fresh embed, and a Hebrew query's
 arm: before the open the vector must DIFFER from a fresh embed, or the test
 passes on both trees. Counterfactual: without the new rows the open leaves the
 vector untouched and the equality fails.
-
-### O189 — the other two diagram sets, checked for O188's spill: four lines spill in `architecture/diagrams/`, and the Mermaid set could not be measured
-
-**Filed 2026-09-15, measured, not argued.**
-
-**`architecture/diagrams/`** — the 11 source SVGs, measured in a renderer where
-`architecture/index.html` inlines them, 579 text elements. Four lines spill:
-
-- `domain-model.svg`: `triple_id keyed by a stored secret ⇒ repeats collapse · …`,
-  68 past its 384-wide card.
-- `layers.svg`: `Outward paths are opt-ins — UNDERCROFT_LLM_URL, …`, 43 past the
-  852-wide card.
-- `write-path.svg`: `Then the Screen every write_drawer must state: …`, 73 past its
-  card.
-- `security-keys.svg`: `PQ rows, pages, codebooks — index ids, not drawer ids`, 26
-  past.
-
-That is the Windows pane's Segoe UI; `-apple-system` on macOS renders a few percent
-wider, so a line near an edge needs margin. A static 0.56 em estimate flagged 92
-lines on this prose-heavy set and is not usable here. **Shape of the fix:** reword
-in the SVG, the only source; run `build.sh` in Docker so the inlined copies and
-`pdf/` regenerate; `arch-check` green; look at the page. **Open question for the
-build:** `build.sh --check` verifies inlining, not fit, and a renderer-true check
-needs a headless browser that the stdlib checker does not have. Decide between a
-calibrated estimate and a measured review step.
-
-**`docs/diagrams/`** — 14 Mermaid SVGs whose labels are HTML in `<foreignObject>`,
-widths frozen by mermaid-cli 10.9.1's fonts. Not measured: the Browser pane refused
-to open them standalone, from the scratchpad, and from `.battery/`. **Method for
-next time:** inline them into a page the pane will open, and compare each label's
-`scrollWidth` with its `foreignObject` width.
-
-**Also found:** `22-storage-layout.html`'s `17 TABLES + 1` may be stale. A read of
-the schema found 18 regular tables besides the full-text one, including
-`kg_audit_relabel`, which may be temporary. Verify the count against the schema
-before trusting either number.
-
-**O179 filed the `layers.svg` line first**, on 2026-09-14, from an Arial estimate
-of about 75 past the viewBox; the renderer's 39 past the card is the
-measurement, and the card is the bound. Its proposed `build.sh --check` arm,
-every `<text>` against its viewBox, is a prior filing and not a ruling, so the
-gate question above must answer it. O179's egress half was O188's.
-
-**Gate:** each of the four lines inside its card, measured in a renderer, and the
-14 Mermaid labels inside their `foreignObject` widths.
 
 ### O168 — seven of the ten release binaries are compiled on no pull request: Windows `-ort`, and both macOS targets and Linux arm64 in both builds
 
@@ -16535,6 +17392,176 @@ upstream and pin here.
 **Gate**: whatever the probe finds becomes a pinned test in the model crate that
 ran it, so a `tokenizers` upgrade that introduces or removes a panic changes a
 test result rather than nothing.
+
+### O190 — the Mermaid diagram SVGs have no drift gate: nothing compares `src/*.mmd` with the canonical blocks, or the SVGs with their sources
+
+**Filed 2026-09-15 by O189's ruling.** The residual lived only inside O105, which
+is closed: `docs/diagrams/` "has no gate: nothing compares `src/*.mmd` to the
+canonical blocks or the SVGs to the sources". No open entry owned it. O189's panel
+ruled that the Mermaid set needs no fit gate, because the render image's own fonts
+size its labels and the book renders the canonical blocks live. What rots there is
+drift: O105 found 4 of the 14 SVGs out of step with their own blocks.
+
+**Shape.**
+- **Extract and compare.** Pull every `mermaid`-fenced block from the docs `docs/diagrams/README.md` lists, and
+  compare each byte for byte with its `src/*.mmd`, in both directions, behind a
+  premise probe.
+- **Comparing a rendered SVG with its source needs mermaid-cli**, and whether that
+  render is byte-stable is a question to probe before building on it.
+
+**Gate:** a doc block edited without its `.mmd` fails, and so does a `.mmd` no doc
+block produces.
+
+### O191 — a stale architecture PDF passes `build.sh --check`
+
+**Filed 2026-09-15 by O189's ruling.** `--check` verifies PDF coverage in both
+directions and never PDF content. M14 measured why: 11 of 11 PDFs rebuilt from
+identical input differ byte for byte. So an SVG fixed without re-running `build.sh`
+leaves a PDF that still carries the old text. Measured today, the four lines O189
+fixes run past their cards in the committed PDFs, and two are cut off mid-word at
+the page edge.
+
+**Shape.**
+- **Compare text, not bytes:** check each PDF's text layer (`pdftotext`, poppler)
+  against its SVG's `<text>` content, diagram by diagram.
+- **Not in `arch-check`:** it runs in a container carrying poppler, which
+  `arch-check`'s stock python image does not.
+- **Probe first:** whether word order survives extraction.
+
+**Gate:** an SVG line changed without a rebuild fails; a rebuilt tree passes.
+
+### O192 — a vector backend that never becomes ready leaves no diagnostics in CI
+
+**Filed 2026-09-15.** PR #193's first CI run lost `suite (backends-e2e)` to milvus:
+- its container started at 11:05:06Z;
+- `wait_for` was still failing at 11:13:51Z;
+- every milvus call returned 502 from its TLS terminator.
+
+A re-run passed all 137 checks. `tests/e2e-backends.sh` runs inside a container and
+prints only `FAIL  milvus did not become ready`, so the cause could not be read from
+the job log. It is the first such failure in the last 25 `ci.yml` runs, and the image
+is pinned at `milvusdb/milvus:v2.4.15`.
+
+**Shape.** When `backends-e2e` fails, `tests/battery.sh` — which drives Docker on the
+host and in CI — dumps `docker compose logs --tail` for each backend service before
+it prints its verdict. The suite cannot do this itself, since it has no Docker
+socket.
+
+**Gate:** a job log for a readiness failure carries the failing service's own output,
+and a green run adds nothing to its log.
+
+### O193 — the text-fit standard has no slot for current Noto: 2025.05.01 widens Arabic heh and digits, the minus sign and the math arrows, and the generator refuses it on `rtlm`
+
+**Filed 2026-09-15 by O189's font-version ruling.** The standard takes its maximum over
+Debian bookworm's Noto and Noto 23.7.1. The ruling's slot rule is the Debian stable pin plus
+the newest upstream release the generator models, and today that is 23.7.1 only because the
+next release cannot be modelled: generation from Alpine 3.22's `font-noto*-2025.05.01-r0`
+(Noto Sans Arabic 2.012) refuses on the `rtlm` feature, and `refuse()` stops at the first
+refusal, so whatever refuses after it is unknown.
+
+**What the gap is, measured.** On static files with unchanged glyph names, 2025.05.01 is wider
+than both slots at 1,311 codepoints: HEH 0.405 → 0.672 em, the Arabic-Indic digits about
+0.28 → 0.572 em, the minus sign 0.322 → 0.572 em, Noto Sans Math's arrows 0.794 → 1.012 em.
+Rendered strictly as a 2025 reader over today's diagram text, every calibration condition
+holds under every candidate table, and the worst under-read is +1.502 px, a Math arrow on
+`language-tokens.svg`. That is inside the 4-unit budget, and it is silent.
+
+**Shape.**
+- Model `rtlm`, and each refusal generation meets after it, until generation from the newest
+  upstream release succeeds.
+- Run the dominance probe: does 23.7.1 exceed `max(Debian, newest)` in any cell? It stays a
+  slot only if it does.
+- Add the newest release as a slot, fetched per file by sha256 from the notofonts tag, and
+  calibrate it as the ruling prescribes.
+
+**Trigger.** It becomes a blocker the day the calibration's canary run against the newest
+upstream snapshot shows a miss or breaks condition 1.
+
+**Gate:** generation from the newest upstream release exits 0 and its table is byte-identical
+over two runs; its fixture and P-A passes meet the ruled conditions per slot.
+
+### O194 — a decomposed spelling a shaper recomposes is refused rather than priced
+
+**Filed 2026-09-15 by O189's font-version ruling.** A shaper recomposes a base followed by a
+mark into the precomposed glyph when the face has one, while textfit prices the parts. Measured
+over the Debian faces, a precomposed glyph is wider than its parts for 154 codepoints, before
+composition exclusions are applied: worst U+1F9C in Noto Sans Bold, 1.462 em against 0.837 em.
+The class is mostly Greek Extended and Latin Extended Additional. O189's ruling closes it
+fail-closed: the generator emits the canonical composition pairs and textfit refuses a line
+where a mark follows a base it composes with, outside Arabic. No diagram line holds such a
+spelling today.
+
+**Shape.** Price the line at the wider of its written and composed spellings: canonical
+ordering, composition exclusions honoured, the composed spelling priced by its own rows.
+
+**Trigger.** The refusal fires on a diagram line.
+
+**Gate:** a decomposed Greek capital with prosgegrammeni is priced at its precomposed width,
+the refusal is gone, and a fixture string of that spelling renders at most 0.05 px over the
+table in every slot.
+
+### O195 — the text-fit reader model is declared, not observed: a reader's own system fallback can draw a codepoint from a face no stack models
+
+**Filed 2026-09-15 by O189's panel-2 ruling.** The ruling prices each table cell from the face every
+*modelled* reader draws with: per slot and column, a DejaVu-primary and a Noto-primary stack followed
+by the declared script and Math faces. The diagrams' own font lists name only DejaVu and Noto and end
+in a generic family, so what a real reader's browser falls back to for a codepoint those faces lack is
+chosen by that reader's system, not by the model. Calibration renders forced stacks, so it cannot
+observe it either. Measured in the calibration image: the serif pass fell back to DejaVu Sans, and
+other codepoints went to FreeMono, Noto Color Emoji and the CJK face.
+
+**Shape.** Observe rather than declare: render the diagrams' real stacks in more than one
+environment's default fallback configuration, record which face each codepoint was drawn from, and
+compare that with the reader model; where they differ, either the model gains the observed face or
+the cell is refused.
+
+**Trigger.** A spill reported by a reader, or a canary row drawn from a face outside the model.
+
+**Gate:** a calibration arm that renders the diagrams' real, unforced stacks and fails when a
+codepoint is drawn from a face the reader model does not contain, behind a premise arm that plants
+one.
+
+### O196 — positive kerning in the table's own faces can exceed the text-fit error budget: two to four maximal pairs at 17 px, on lines that hold far more
+
+**Filed 2026-09-15 by O189's panel-2 probe K.** textfit prices a line as a sum of advances and keeps
+4 units of padding as its declared error budget for what a sum cannot see. Panel 2 refuted "kerning
+fits inside that budget" for CJK, and ruled that, applied backwards, the refutation reaches every
+column, with probe K deciding. K fired.
+
+**What K measured** (the integrator's probe, `python:3.12-slim` with fonttools 4.38.0, over run
+`v3d`'s staged files). It read every default-on GPOS lookup (kern, dist, curs, mark, mkmk, abvm,
+blwm, in every script and language system) of all 32 table face files: SinglePos, PairPos Value1 and
+Value2, and the nested lookups of contextual and extension lookups. It took the glyphs reachable from
+each cmap through default-on GSUB.
+- **Largest positive XAdvance:**
+  - DejaVu Sans +0.0737 em, and +0.0688 em in Bold;
+  - DejaVu Serif and DejaVu Serif Italic +0.1274 em;
+  - Noto Sans +0.1100 em, in both weights and both slots;
+  - Noto Serif +0.1000 em, and +0.1300 em in Debian's Italic;
+  - Noto Looped Thai +0.0500 em;
+  - Noto Sans Arabic 2.005 +0.0250 em (+0.0300 em in Bold), and none in 2.010;
+  - Noto Sans Thai +0.0100 em;
+  - none in DejaVu Sans Mono, Noto Sans Devanagari or Noto Sans Math.
+
+  No face has a cursive lookup. The largest combined per-glyph adjustment equals the single maximum
+  in every face.
+- **Pairs that exhaust the budget at 17 px,** ⌈4 / (k · 17)⌉: 2 in the serif faces, 3 in Noto Sans,
+  4 in DejaVu Sans. Today's longest line holds 150 characters (`defense-admission.svg`, 11 px).
+  Measured against each column's own lines: sans400 needs 4 pairs, on a 150-character line;
+  sans600 3, on a 103-character line at 13.5 px; serif 3, on a 131-character line at 15 px.
+- **What bounds it today is the text, not the table.** Calibration's P-A met condition 1 on both
+  slots and on the canary: render − table < 4 px on every line, worst +1.502 px (run `v3d`). Real
+  text rarely strings maximal pairs together, and nothing in the gate would notice a line that did.
+
+**Shape.** Price kerning the way ligatures are priced. The generator emits, per column, every
+positive default-on pair adjustment over reachable glyphs, taking the widest over the column's faces
+and slots. textfit then adds the adjustments for the adjacent pairs a line actually contains, and the
+budget keeps only rounding and shaping. A flat per-pair surcharge is the fallback: it is simpler, and
+it would flag most long lines.
+
+**Gate:** a textfit arm that prices a synthetic line of repeated maximal pairs past the budget and
+fails it, behind a premise arm that fires on today's kerning-blind implementation. Calibration's P-A
+condition 1 remains the check against real text.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 

@@ -35,10 +35,11 @@ WHAT IT CHECKS, and why each one is here rather than assumed:
               when no rect holds it. The geometry arms read rects and
               lines and never a text's WIDTH, so 102 lines across sixteen
               diagrams spilled out of their boxes under a green gate, and the
-              maintainer saw it on the rendered page, not this script. Width is
-              ESTIMATED — characters x font-size x an advance in em — because a
-              stdlib checker has no font engine; see MONO_EM for why the
-              monospace figure is a bound and the proportional one is not.
+              maintainer saw it on the rendered page, not this script. Width
+              comes from architecture/textfit/textfit.py, the one fit
+              implementation both diagram sets share: a per-glyph advance
+              table generated from the openly licensed faces ROADMAP O189
+              rules the standard, not a flat estimate.
 
 WHY THERE IS A PREMISE PROBE: a checker that examines nothing prints exactly
 what a clean tree prints. Before any result is believed, the geometry checks
@@ -165,62 +166,24 @@ def geometry(svg):
 
 
 # ------------------------------------------------------------ text fit
-# Per-glyph advance, in em, for estimating how wide a <text> renders.
-#
-# MONOSPACE IS A BOUND. Menlo, SF Mono and DejaVu Sans Mono advance about
-# 0.60 em; Consolas advances 0.55, which is what the Windows browser pane
-# measured when the spill was reported — so a line drawn to fit there spills
-# on a Mac. 0.60 fits the widest common face.
-#
-# PROPORTIONAL IS AN ESTIMATE, not a bound: a proportional face's width depends
-# on the letters in the string, and 0.56 is a mixed-case prose average, so a
-# title near its limit can still spill on a wide face. Stated, not hidden.
-MONO_EM = 0.60
-PROPORTIONAL_EM = 0.56
-TEXT_PAD = 4.0
-# Text no rect holds is bounded by the viewBox — what a renderer clips — and
-# not by the lane frame. A first version used a frame 80 in from each edge and
-# flagged the set's standard LEGEND labels at x=64 and x=80, which spill
-# nothing: a check that flags a layout confirmed by eye is wrong about the check.
-FRAME_INSET = 0.0
+# ONE implementation for both diagram sets: architecture/textfit/textfit.py,
+# ruled in ROADMAP O189. It replaced two flat estimates that lived here — 0.56 em
+# for proportional text, which flagged lines that fit and missed lines that did
+# not, and 0.60 em for monospace, called a bound while DejaVu Sans Mono advances
+# 1233/2048 = 0.60205. The module reads a per-glyph advance table generated from
+# the fonts the ruling names, keeps 4 units of padding as its error budget, and
+# fails closed on anything it cannot price.
+sys.dont_write_bytecode = True          # the arch-check mount is read-only
+sys.path.insert(0, os.path.join(HERE, os.pardir, "textfit"))
+import textfit  # noqa: E402
+
+TABLE = None                            # loaded in main(), where a premise failure exits 2
 
 
 def text_fit(svg):
-    bad = []
-    vx, vw = 0.0, 1200.0
-    vb = re.search(r'viewBox="([^"]+)"', svg)
-    if vb:
-        parts = [float(p) for p in vb.group(1).split()]
-        vx, vw = parts[0], parts[2]
-    boxes = [b for _, b, _ in rects(svg) if b[2] > 0 and b[3] > 0]
-    for m in re.finditer(r"<text\b([^>]*)>(.*?)</text>", svg, re.S):
-        g = _attrs(m.group(1))
-        body = html.unescape(re.sub(r"<[^>]+>", "", m.group(2)))
-        if not body.strip():
-            continue
-        try:
-            x, y = float(g["x"]), float(g["y"])
-            fs = float(g.get("font-size", "12"))
-        except (KeyError, ValueError):
-            continue
-        em = MONO_EM if "monospace" in g.get("font-family", "") else PROPORTIONAL_EM
-        ls = g.get("letter-spacing", "")
-        spacing = float(ls[:-2]) * fs if ls.endswith("em") else 0.0
-        width = len(body) * (fs * em + spacing)
-        anchor = g.get("text-anchor", "start")
-        left = x - (width / 2 if anchor == "middle" else width if anchor == "end" else 0.0)
-        mid = y - 0.35 * fs
-        holding = [b for b in boxes
-                   if b[0] <= x <= b[0] + b[2] and b[1] <= mid <= b[1] + b[3]]
-        if holding:
-            bx, _, bw, _ = min(holding, key=lambda b: b[2] * b[3])
-            lo, hi = bx + TEXT_PAD, bx + bw - TEXT_PAD
-        else:
-            lo, hi = vx + FRAME_INSET + TEXT_PAD, vx + vw - FRAME_INSET - TEXT_PAD
-        over = max(lo - left, left + width - hi)
-        if over > 0:
-            bad.append("text spills its box by ~%d: %r" % (round(over), body[:40]))
-    return bad
+    if "</svg>" not in svg:
+        svg += "</svg>"
+    return textfit.spills(svg, TABLE)
 
 
 def inspect(path):
@@ -295,6 +258,15 @@ def main():
         print("Its zero-results would be meaningless. Fix the checker.")
         return 2
     print("premise probe: all three geometry faults detected on a known-bad fixture")
+    global TABLE
+    try:
+        TABLE = textfit.load_table()
+    except textfit.PremiseFailure as e:
+        print("PREMISE FAILURE: %s" % e)
+        return 2
+    except (OSError, textfit.Unmeasurable) as e:
+        print("PREMISE FAILURE: the advance table cannot be read: %s" % e)
+        return 2
     spills = text_fit(TEXT_FIXTURE)
     if len(spills) != 1 or "far too long" not in spills[0]:
         print("PREMISE FAILURE: the text-fit arm did not flag exactly the one spilling line "

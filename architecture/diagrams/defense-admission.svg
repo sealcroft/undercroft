@@ -2,12 +2,12 @@
 <title id="t">The write-path defense: screened at the door, ruled by a human, receipted on the way out</title>
 <desc id="d">A save arrives from a surface which stamps added_by. Deployment-trusted surfaces bypass by declaration. Everything else passes the deterministic tier-1 detector (seven signal classes including fixture similarity, the declared rate screen, and the declared DESTINATION when a wing or room name itself trips) and optionally an advisory-only LLM tier. Clean writes land where they aimed; flagged writes divert sealed into the quarantine wing, excluded from retrieval, where a human allows (re-files) or denies (destroys through attested forgetting, returning a receipt). Every ruling is chain-audited.</desc>
 <style>
-  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .f { font-family: "DejaVu Sans", "Noto Sans", sans-serif; }
   .h { font-size: 17px; font-weight: 600; }
   .l { font-size: 13.5px; font-weight: 600; }
   .b { font-size: 12px; }
   .s { font-size: 11px; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .mono { font-family: "DejaVu Sans Mono", monospace; font-size: 11px; }
   .ink { fill: var(--d-ink,#14202b); }
   .dim { fill: var(--d-dim,#55697a); }
   @media (prefers-color-scheme: dark) {
@@ -29,17 +29,17 @@
 <!-- A save arrives -->
 <rect x="24" y="76" width="560" height="96" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
 <text x="42" y="100" class="f l ink">A save arrives</text>
-<text x="42" y="120" class="f s dim">MCP tool · REST <tspan class="mono">/v1</tspan> · CLI · bulk ingest — the <tspan class="f s" fill="var(--d-blue-ink,#33527d)">handler stamps</tspan> <tspan class="mono">added_by</tspan>: a writer cannot choose its surface.</text>
+<text x="42" y="120" class="f s dim">MCP tool · REST <tspan class="mono">/v1</tspan> · CLI · bulk ingest — <tspan class="f s" fill="var(--d-blue-ink,#33527d)">handler stamps</tspan> <tspan class="mono">added_by</tspan>: no writer picks its surface.</text>
 <text x="42" y="136" class="f s dim">Updates are re-stamped with the surface writing NOW — never the original writer's standing.</text>
-<text x="42" y="158" class="f s dim">Provenance claims (<tspan class="mono">agent</tspan> / <tspan class="mono">channel</tspan> / <tspan class="mono">session</tspan>) travel HMAC-covered — <tspan class="f s" fill="var(--d-amber-ink,#8d5a1d)">evidence, never a boundary</tspan>.</text>
+<text x="42" y="158" class="f s dim">Provenance claims (<tspan class="mono">agent</tspan>/<tspan class="mono">channel</tspan>/<tspan class="mono">session</tspan>) are HMAC-covered — <tspan class="f s" fill="var(--d-amber-ink,#8d5a1d)">evidence, never a boundary</tspan>.</text>
 
 <!-- Trusted-surface bypass -->
 <rect x="616" y="76" width="260" height="96" rx="10" fill="var(--d-green-bg,#f1faf4)" stroke="var(--d-green,#2e7d4f)" stroke-width="1.5"/>
 <text x="634" y="100" class="f l" fill="var(--d-green-ink,#22623d)">Trusted surface? Straight in.</text>
 <text x="634" y="120" class="f s dim"><tspan class="mono">UNDERCROFT_ADMIT_TRUSTED_SOURCES</tspan></text>
-<text x="634" y="136" class="f s dim">matches the stamped <tspan class="mono">added_by</tspan> only — a claim</text>
-<text x="634" y="151" class="f s dim">cannot admit itself. The bypass is the</text>
-<text x="634" y="166" class="f s dim">deployment's own declaration.</text>
+<text x="634" y="136" class="f s dim">matches the stamped <tspan class="mono">added_by</tspan> only —</text>
+<text x="634" y="151" class="f s dim">a claim cannot admit itself. The bypass</text>
+<text x="634" y="166" class="f s dim">is the deployment's own declaration.</text>
 
 <line x1="304" y1="172" x2="304" y2="200" stroke="var(--d-line2,#8ba0b2)" stroke-width="1.6"/>
 <path d="M304 200 l-5 -8 h10 z" fill="var(--d-line2,#8ba0b2)"/>
@@ -47,7 +47,7 @@
 <!-- Tier 1 -->
 <rect x="24" y="204" width="852" height="204" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.6"/>
 <text x="42" y="230" class="f l ink">Tier 1 — deterministic. No model, no network; signal codes and byte offsets, never content.</text>
-<text x="42" y="248" class="f s dim">A closed vocabulary, so the review queue reads as data. One signal per class, offsets into the candidate; independent classes record independent evidence.</text>
+<text x="42" y="248" class="f s dim">A closed vocabulary, so the review queue reads as data. One signal per class, offsets into the candidate; classes record independent evidence.</text>
 
 <rect x="42" y="262" width="208" height="30" rx="6" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.2"/>
 <text x="146" y="281" class="mono" fill="var(--d-blue-ink,#33527d)" text-anchor="middle">imperative-instruction</text>
@@ -80,10 +80,10 @@
 
 <!-- Tier 2 -->
 <rect x="24" y="440" width="560" height="88" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
-<text x="42" y="464" class="f l ink">Tier 2 — a local model's opinion, advisory-only <tspan class="f s dim">(<tspan class="mono">UNDERCROFT_ADMISSION_LLM=advisory</tspan>)</tspan></text>
-<text x="42" y="484" class="f s dim">Consulted <tspan class="f s" fill="var(--d-blue-ink,#33527d)">only for tier-1-clean candidates</tspan>, <tspan class="f s" fill="var(--d-blue-ink,#33527d)">only toward quarantine</tspan> — flagged content is never shown</text>
-<text x="42" y="499" class="f s dim">to it, so talking the classifier into "clean" bypasses nothing. A failed answer is a non-event, never</text>
-<text x="42" y="514" class="f s dim">a blocked write. The model is itself an injection target, steerable only in the safe direction.</text>
+<text x="42" y="464" class="f l ink">Tier 2 — a local model, advisory-only <tspan class="f s dim">(<tspan class="mono">UNDERCROFT_ADMISSION_LLM=advisory</tspan>)</tspan></text>
+<text x="42" y="484" class="f s dim">Consulted <tspan class="f s" fill="var(--d-blue-ink,#33527d)">only for tier-1-clean candidates</tspan>, <tspan class="f s" fill="var(--d-blue-ink,#33527d)">only toward quarantine</tspan> — flagged content is never</text>
+<text x="42" y="499" class="f s dim">shown to it: talking the classifier into "clean" bypasses nothing. A failed answer is a non-event,</text>
+<text x="42" y="514" class="f s dim">never a blocked write. The model is itself an injection target, steerable only in the safe direction.</text>
 
 <!-- lands -->
 <rect x="616" y="440" width="260" height="88" rx="10" fill="var(--d-green-bg,#f1faf4)" stroke="var(--d-green,#2e7d4f)" stroke-width="1.5"/>
@@ -99,10 +99,10 @@
 <!-- Quarantine -->
 <rect x="24" y="560" width="852" height="106" rx="10" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)" stroke-width="1.6"/>
 <text x="42" y="586" class="f l" fill="var(--d-amber-ink,#8d5a1d)">The quarantine wing — reserved, sealed, and outside every answer</text>
-<text x="42" y="606" class="f s dim">The drawer keeps its verbatim content, sealed like any other; signal codes, offsets and the intended destination ride in metadata. Hard-excluded from</text>
-<text x="42" y="621" class="f s dim">retrieval except a reviewer's explicitly named scope — it can neither answer nor crowd. The wing refuses forged residents (a caller cannot aim a save</text>
-<text x="42" y="636" class="f s dim">here), quarantined drawers are not editable (the reviewer rules on exactly what the screen saw), and a flagged UPDATE diverts while the original</text>
-<text x="42" y="651" class="f s dim">drawer keeps its previous content.</text>
+<text x="42" y="606" class="f s dim">The drawer keeps its verbatim content, sealed like any other; signal codes, offsets and the intended destination ride in metadata. Hard-excluded</text>
+<text x="42" y="621" class="f s dim">from retrieval except a reviewer's explicitly named scope — it can neither answer nor crowd. The wing refuses forged residents (a caller cannot aim</text>
+<text x="42" y="636" class="f s dim">a save here), quarantined drawers are not editable (the reviewer rules on exactly what the screen saw), and a flagged UPDATE diverts while the</text>
+<text x="42" y="651" class="f s dim">original drawer keeps its previous content.</text>
 
 <line x1="230" y1="666" x2="230" y2="694" stroke="var(--d-green,#2e7d4f)" stroke-width="1.6"/>
 <path d="M230 694 l-5 -8 h10 z" fill="var(--d-green,#2e7d4f)"/>
@@ -120,6 +120,6 @@
 <text x="482" y="740" class="f s dim">Rides the attested-forgetting path (C3.2): heads before/after, the</text>
 <text x="482" y="755" class="f s dim">tombstone interval, content fingerprints — verifiable by third parties.</text>
 
-<text x="42" y="792" class="f s dim">Every ruling is a chain record with the verdict inside its tag's canonical — the review trail is as tamper-evident as the data. Detection is heuristic and says so:</text>
-<text x="42" y="804" class="f s dim">markerless poison passes, prose about injection can trip — which is exactly why a signal quarantines for a human and never rejects.</text>
+<text x="42" y="792" class="f s dim">Every ruling is a chain record with the verdict inside its tag's canonical — the review trail is as tamper-evident as the data. Detection is heuristic</text>
+<text x="42" y="804" class="f s dim">and says so: markerless poison passes, prose about injection can trip — which is exactly why a signal quarantines for a human and never rejects.</text>
 </svg>
