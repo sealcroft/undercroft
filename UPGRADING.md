@@ -73,6 +73,63 @@ or when they could never be presented.
 
 ## 1.6.0 (unreleased)
 
+### with admission screening on, an import or save carrying an invalid declaration is refused instead of quarantined (O170)
+
+**Who is affected:** anyone running with `UNDERCROFT_ADMISSION=quarantine` who
+imports records built by hand or by another tool, and anyone whose vault
+already holds a row an older binary let through. Vaults with screening off
+(the default) are affected only by the last case below, where a legacy row
+exists.
+
+**What happens:** the store now checks a write's whole declaration BEFORE the
+screen rewrites it, instead of only its wing and room:
+- the id's shape;
+- a supplied vector's finiteness and dimension;
+- `filed_at`, the content length and the kind;
+- whether `supersedes` names the drawer itself — its declared id, the id its
+  wing, room, source and chunk derive, or its review-queue id.
+
+A record that fails any of these is refused whatever the screen would have
+said. Before, a flagged record with such a declaration was quarantined, or
+refused with a message quoting the review-queue id.
+
+**Symptoms to expect:**
+- `undercroft import` and a sealed-bundle restore exit 1 with
+  `importing records N-M (this batch is one transaction …)`, caused by
+  `drawer id "…" is not a derived drawer id`, `filed_at … is in the future` or
+  `drawer … cannot supersede itself — its supersedes link names …`. A batch is
+  one transaction, so none of it is written; batches before it are.
+- `POST /v1/vaults/{id}/import` answers **400** naming the record, where it
+  answered 200 counting it `quarantined`. Records before it in the body are
+  already imported. The orchestrator's tenant migration fails on that 400 and
+  removes its partial copy at the destination.
+- `/v1` save and MCP `undercroft_save` refuse a save whose `supersedes` names
+  the id the save is filed under, where a flagged one used to be quarantined.
+- A refusal message now quotes the id the caller declared, never the
+  review-queue id.
+- `admission allow` refuses a queue row an older binary filed with such a
+  declaration. The message names the row and ends `… save it with a valid
+  declaration, then deny this row`.
+- **A vault holding such a legacy row cannot re-import its own export.** On the
+  old binary the row re-entered the queue; now the import refuses it. The same
+  applies to a tenant migration and a backup restore. The row is either a queue
+  row whose `supersedes` names the id it would be allowed under, or an ordinary
+  drawer whose `supersedes` names the id its own wing, room, source and chunk
+  derive, which a dedup refresh could write. `dedup` refuses the same row.
+
+**What to do:**
+- For a refused import, the message names the record and the field: fix the
+  record and import again.
+- For a legacy queue row, review it as the message says: read it back naming
+  the `quarantine-pending` wing, save its content with a valid declaration if
+  you mean to keep it, then `admission deny` the row. Do this before exporting
+  the vault.
+- For a legacy ordinary drawer, read it back, save the content again without
+  the self-naming link, and delete the old drawer.
+
+`config check` cannot detect this: it is a property of the data being written,
+not of a declaration.
+
 ### `undercroft --read-only dedup --apply` now exits 1, even on a vault with no duplicates (O167)
 
 **Who is affected:** anyone whose script runs `dedup --apply` together with

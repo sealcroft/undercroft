@@ -798,6 +798,24 @@ Consequences that are binding, not advisory:
   and shared, so `upsert_many`'s own loop and `dedup`'s dry-run preview
   inherit it) and from `write_drawer_stmts` (the BOUNDARY), which is the
   `resolve_search_policy`/`verified_meta_admits` shape one level over.
+  **It validated the wing and the room ALONE until O170 (2026-09-16)**, while
+  every other declaration check sat in `write_drawer_stmts`, behind the same
+  rewrite: a malformed id was quarantined because the id guard saw the 32-hex
+  queue id; the vector and `filed_at` refusals formatted the queue id, so a
+  400 told the caller the screen's verdict, the tier-2 advisor's included; the
+  self-supersession guard compared the link with the rewritten id; and the
+  advisor was shown writes the boundary then refused. Every check that is a
+  pure function of the candidate now lives in that function — names, a
+  stated vector's finiteness and dimension, the id's shape, `filed_at`,
+  content length, kind, and supersession against all three filing slots
+  (declared, recipe, queue: `admission::filing_ids`, the one derivation the
+  diversion, the allow and the import unwrap share). `screen_and_divert`
+  takes the vector and its three callers state `Some` or `None`;
+  `upsert_many` validates a whole batch before screening any row;
+  `import_unwrap_screened` refuses a malformed id before re-deriving it;
+  `admission_allow` validates the whole restored declaration; and
+  `write_drawer_stmts` keeps only the reserved-wing guard, a count a gate
+  pins.
   Two things that unit found and its filing had not: `validate_name(value,
   what)` **discarded `what`** at all 44 call sites, so no refusal anywhere
   in the tree could name its field — the gate was unreachable, not merely
@@ -2003,8 +2021,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (886 run,
-                                      # 4 #[ignore]d = 890 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (898 run,
+                                      # 4 #[ignore]d = 902 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2126,7 +2144,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (508 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (512 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (156 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (137 checks; weaviate
@@ -3285,15 +3303,28 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   own gate ("a refusal that names the field") was unreachable until the
   parameter was wired up. A parameter that is accepted and dropped is a
   promise the signature makes and the body breaks.
-  Applied backwards, as a rule here must be: it **reclassifies exactly one**
-  decision, the one it was written for. It **confirms three** that already got
-  the order right — `import_stamp` re-stamps `added_by` before the screen
-  reads it, `update_drawer` re-stamps for the same reason one level over, and
-  `import_unwrap_screened` unwraps a reserved-wing claim before screening. It
-  **does not touch A28**, which asks *which copy* a decision reads rather than
-  *in what order*, and conflating the two would be the mistake the versioning
-  doctrine above records. Four decisions is a thin history and this is the
-  rule's first real application; that is stated rather than implied.
+  Applied backwards, as a rule here must be — and **its first application
+  was run over the wrong set** (ROADMAP O170, 2026-09-16). This paragraph
+  said the rule "reclassifies exactly one decision" and "confirms three",
+  having run it over the FIELD O30's filing named, the wing. The step it
+  guards rewrites more than the wing: a diversion also replaces `drawer.id`,
+  and an allow and an import unwrap re-derive one. Run over every field the
+  rewrite touches, it reclassifies **three**: O30's own closure, which left
+  the id-shape guard (`4a4ef2c`) and the non-finite guard (`3444da6`), both
+  2026-08-05, behind the rewrite that `validate_declaration` (`bea1520`,
+  2026-08-13) was added to precede, with the `filed_at` refusal beside them;
+  the self-supersession guard, which reproduced O30's deny-only trap through
+  a different field; and `import_unwrap_screened`, which confirms the rule
+  for the wing and broke it for the id, re-deriving that before any guard
+  looked. It still **confirms two** — `import_stamp` re-stamps `added_by`
+  before the screen reads it, and `update_drawer` re-stamps for the same
+  reason one level over — and still **does not touch A28**, which asks
+  *which copy* a decision reads rather than *in what order*, and conflating
+  the two would be the mistake the versioning doctrine above records. The
+  lesson is the rule's own, one level up: **a backwards test is only as wide
+  as the set it is run over, and that set is every field the rewriting step
+  touches, never the field a filing names.** Two applications, O30 and O170,
+  are its whole history, and the second corrected the first.
 
 ## Definition of done — every unit, no exceptions
 

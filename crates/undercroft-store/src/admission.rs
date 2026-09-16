@@ -11,7 +11,10 @@
 //! * a flagged save is DIVERTED — re-filed sealed into the reserved
 //!   [`QUARANTINE_WING`] with its signal codes and intended destination
 //!   in metadata (codes and offsets only; nothing content-derived) —
-//!   never rejected and never silently dropped;
+//!   never rejected and never silently dropped. A save whose DECLARATION
+//!   is invalid is refused before the screen runs, flagged or not
+//!   (`validate_declaration`, ROADMAP O170), so the verdict never decides
+//!   whether a bad declaration is accepted;
 //! * quarantined drawers are excluded from every search that does not
 //!   explicitly scope to the quarantine wing (the reviewer's own view),
 //!   enforced through the same pre-candidate machinery as the trust
@@ -59,30 +62,266 @@ fn now_rfc3339() -> String {
         .expect("rfc3339 now")
 }
 
-/// The destination a write DECLARES, through the one path-traversal guard.
+/// The two ids one declaration files under: the ordinary recipe's, and the
+/// review-queue id the screen would divert it to (ROADMAP O170).
+///
+/// Both are functions of where the write was AIMED, so a row already in the
+/// reserved wing answers from its `intended_wing`/`intended_room` — which is
+/// what makes this the one derivation for the diversion, for its inverse in
+/// [`VaultStore::admission_allow`], and for the import unwrap. Three copies of
+/// the recipe call used to sit in those three places.
+pub(crate) struct FilingIds {
+    /// `ids::drawer_id` over the aimed-at wing, room, source and chunk.
+    pub(crate) recipe: String,
+    /// `ids::quarantine_drawer_id` over the same four components.
+    pub(crate) quarantine: String,
+}
+
+/// The [`FilingIds`] of `drawer`.
+///
+/// A reserved-wing drawer with no recorded destination falls back to its own
+/// wing and room rather than inventing one — [`save_event`]'s rule. Every
+/// caller that derives an id from such a row refuses it first.
+pub(crate) fn filing_ids(drawer: &Drawer) -> FilingIds {
+    let m = &drawer.meta;
+    let (wing, room) = if m.wing == QUARANTINE_WING {
+        (
+            m.intended_wing.as_deref().unwrap_or(&m.wing),
+            m.intended_room.as_deref().unwrap_or(&m.room),
+        )
+    } else {
+        (m.wing.as_str(), m.room.as_str())
+    };
+    let source = m.source_file.as_deref().unwrap_or("(direct)");
+    FilingIds {
+        recipe: undercroft_core::ids::drawer_id(wing, room, source, m.chunk_index),
+        quarantine: undercroft_core::ids::quarantine_drawer_id(wing, room, source, m.chunk_index),
+    }
+}
+
+/// Everything a write DECLARES that can be judged from the candidate alone,
+/// judged once — at the door and at the boundary.
 ///
 /// It exists because the order was wrong (ROADMAP O30). `write_drawer_stmts`
-/// validates `meta.wing`/`meta.room` at the write choke point, which is where
-/// CLAUDE.md puts it so no write path can forget — but the admission screen
-/// runs BEFORE that, and the screen is the step that **rewrites the fields
-/// validation reads**: [`VaultStore::admission_divert`] moves the declared
-/// wing into `intended_wing` and writes the reserved constant into
-/// `meta.wing`. So a write declaring an invalid wing was not refused at the
-/// door; it was screened, and if the content tripped the detector it was
-/// DIVERTED — after which the choke point validated the reserved constant,
-/// which is always valid, and the row landed in the review queue carrying an
-/// invalid declaration nothing had ever checked.
+/// validates at the write choke point, which is where CLAUDE.md puts it so no
+/// write path can forget — but the admission screen runs BEFORE that, and the
+/// screen is the step that **rewrites the fields validation reads**:
+/// [`VaultStore::admission_divert`] moves the declared wing into
+/// `intended_wing`, writes the reserved constant into `meta.wing`, and
+/// replaces `drawer.id` with the quarantine id. So a write declaring an
+/// invalid wing was not refused at the door; it was screened, and if the
+/// content tripped the detector it was DIVERTED — after which the choke point
+/// validated values the store had chosen, and the row landed in the review
+/// queue carrying a declaration nothing had ever checked.
 ///
-/// Both write paths had it: `write_drawer` screens at the choke point,
-/// `upsert_many` screens in its own batch loop because it owns its
-/// transaction. Validating here — inside the shared screening step, in front
-/// of the rewrite — is one implementation for both, and is the reason this
-/// is not two call sites.
-pub(crate) fn validate_declaration(meta: &undercroft_core::DrawerMeta) -> Result<(), StoreError> {
+/// **O30 fixed that for the wing and the room and left every other field
+/// behind the rewrite (ROADMAP O170).** The id-shape guard saw the 32-hex
+/// quarantine id and passed a malformed declaration; the vector and `filed_at`
+/// refusals formatted the quarantine id, so a 400 told the caller the screen's
+/// verdict; the self-supersession guard compared the link with the rewritten
+/// id; and the tier-2 advisor was shown writes the boundary then refused. So
+/// every check that is a pure function of the candidate lives here, and the
+/// two checks that read database state — the reserved-wing guard and the
+/// receipt lookup — stay in `write_drawer_stmts`.
+///
+/// Called in front of the rewrite by [`VaultStore::screen_and_divert`]'s
+/// `Apply` arm, so the batch path that owns its own transaction inherits it,
+/// and again by `write_drawer_stmts` as the boundary, with the vector that
+/// will be stored. `vector` is `None` where no vector exists yet (the batch
+/// path embeds after screening, a `dedup` dry run writes nothing, an allow
+/// reuses a stored one) — every caller states which.
+pub(crate) fn validate_declaration(
+    drawer: &Drawer,
+    vector: Option<&[f32]>,
+) -> Result<(), StoreError> {
+    let meta = &drawer.meta;
     undercroft_core::validate_name(&meta.wing, "wing")
         .map_err(|e| StoreError::Invalid(e.to_string()))?;
     undercroft_core::validate_name(&meta.room, "room")
         .map_err(|e| StoreError::Invalid(e.to_string()))?;
+    if let Some(embedding) = vector {
+        // The non-finite door, closed HERE rather than at one caller.
+        //
+        // It was closed at `upsert_external` alone, on the reasoning that
+        // "the caller-supplied path was the one door". There are three:
+        // `save_with_dedup_vec` (reached by a `dedup_threshold` in a `/v1`
+        // save body) and BOTH arms of `import_record` (reached by every
+        // backup restore and the orchestrator's tenant migration) took a
+        // caller's vector with no finiteness check — and `import_record`'s
+        // non-external arm means an ORDINARY hash vault is reachable.
+        //
+        // `1e39` is an unremarkable finite JSON number, and `1e39_f64 as f32`
+        // is `f32::INFINITY` (float→float `as` overflows to infinity;
+        // saturation is a float→int rule). One such component poisons the
+        // whole row at rest: `quantize_embedding` takes `max_abs = inf` ⇒
+        // `scale = inf` ⇒ every `v/scale` is NaN ⇒ every byte quantizes to 0,
+        // and dequantize returns `0.0 * inf` = NaN for EVERY component. That
+        // row then joins the training draw, and NaN centroids make every
+        // drawer encode to the same code — corpus-wide retrieval collapse
+        // from a single record, which is precisely the bound L2 normalization
+        // is documented to provide and cannot, because NaN/x is NaN.
+        //
+        // It sat in `write_drawer` until 2026-08-05, one function above the
+        // statements, and its own comment admitted `upsert_many` did not
+        // inherit it. Since then it has been reached from the statement level
+        // both paths share, so every write path inherits it, including the
+        // batch that owns its own transaction — and since O170 from the door
+        // as well, so the refusal names the id the caller declared.
+        if let Some(bad) = embedding.iter().position(|x| !x.is_finite()) {
+            return Err(StoreError::Invalid(format!(
+                "embedding for {:?} has a non-finite component at index {bad} \
+                 (NaN or infinity) — refused: non-finite arithmetic escapes the \
+                 normalization bound that keeps one vector from corrupting the \
+                 shared index structures every other drawer is scored against",
+                drawer.id
+            )));
+        }
+        // The at-rest embedding frame is `[0x02, 'Q', scale, i8 × dim]` and
+        // is told apart from a legacy f32 blob by its LENGTH not being a
+        // multiple of four — which holds for every dimension except those
+        // ≡ 2 (mod 4), where `6 + dim` IS a multiple of four and the frame
+        // reads back as garbage floats with no error. Refused here, at the
+        // one door every write path passes, rather than stored and misread
+        // (ROADMAP O123; found by the round's doc read of `EMB_MAGIC`).
+        if (6 + embedding.len()).is_multiple_of(4) {
+            return Err(StoreError::Invalid(format!(
+                "embedding for {:?} has dimension {}, which the at-rest frame cannot store \
+                 unambiguously (a dimension 2 modulo 4 makes the quantized frame a multiple \
+                 of four bytes, indistinguishable from a legacy f32 blob); use an embedder \
+                 whose dimension is not 2 modulo 4",
+                drawer.id,
+                embedding.len()
+            )));
+        }
+    }
+    // What a caller may DECLARE about a drawer, decided in the one function
+    // the door and the boundary share — because both import surfaces
+    // deserialize a whole `Drawer` out of a payload, so every field in one is
+    // a claim until something checks it.
+    //
+    // The id first. A drawer id is DERIVED
+    // ([`undercroft_core::ids::drawer_id`] — 32 hex characters), never
+    // declared, and it is an AAD COMPONENT: content seals under `{id}`,
+    // the embedding under `{id}/emb`, token matrices under `{id}/tok`,
+    // FDE rows under `fde/{id}/tok`. The native import branch took the
+    // payload's id verbatim, so a record filed as `id = "fde/<hex>"` had
+    // its token matrix sealed under exactly another drawer's FDE domain
+    // — the cross-artifact separation the AAD exists to provide, broken
+    // by unvalidated input. No legitimate id contains a `/`, or anything
+    // but lowercase hex, so the shape closes it for every write path at
+    // once instead of at the surface someone remembers.
+    //
+    // Deliberately a SHAPE check and not a recipe check
+    // (`id == drawer_id(wing, room, source, chunk_index)`): a
+    // dedup-refreshed drawer legitimately keeps the MATCHED drawer's id
+    // while taking the incoming drawer's metadata, so a stored id need
+    // not re-derive from its own meta, and a recipe check would refuse
+    // to re-import any vault that had ever deduped. What remains open
+    // and is stated rather than hidden: a well-formed id may still name
+    // an existing drawer, and an import replacing that row wholesale is
+    // what a restore IS.
+    if !crate::is_drawer_id(&drawer.id) {
+        return Err(StoreError::Invalid(format!(
+            "drawer id {:?} is not a derived drawer id (32 lowercase hex \
+             characters) — refused: the id is an AEAD associated-data \
+             component, so a declared one can seal a drawer's bytes under \
+             another drawer's artifact domain",
+            drawer.id
+        )));
+    }
+    // `meta.filed_at` is under the drawer HMAC and is the RETENTION clock
+    // (`retention::expired_in` dates every drawer off it, deliberately
+    // reading the covered copy rather than the clear column) and the
+    // recency clock (`recency_boost`). The HMAC proves the value has not
+    // changed SINCE the write; it says nothing about whether it was ever
+    // true, and both import surfaces let the payload choose it. A record
+    // dating itself 2099 was therefore permanently exempt from every
+    // declared retention policy and never appeared in a sweep report,
+    // while `recency_boost` clamps at zero so it also ranked at maximum
+    // recency forever. An unparseable value was worse than either: it
+    // fails `expired_in`, so ONE imported record disabled the whole
+    // vault's retention sweep.
+    //
+    // The honest rule is not to clear it — a migration must carry when a
+    // drawer was filed, or every restore silently resets its own
+    // retention clock and a policy can be laundered by exporting and
+    // importing. It is that a drawer cannot have been filed at a time
+    // that has not happened. A past value travels verbatim; a future one
+    // is refused, because no path can honour it.
+    //
+    // The tolerance is for clock skew between two hosts, not for
+    // declarations: a restore from a machine whose clock runs a little
+    // fast must not fail mid-batch. Its cost is stated and bounded — a
+    // payload buys at most one day of youth, against the unbounded
+    // exemption it could buy before.
+    match OffsetDateTime::parse(&meta.filed_at, &Rfc3339) {
+        Err(e) => {
+            return Err(StoreError::Invalid(format!(
+                "filed_at {:?} on {:?} is not an RFC3339 timestamp ({e}) — \
+                 refused: it is the retention clock, and a drawer that cannot \
+                 be dated can neither be swept nor reported as exempt",
+                meta.filed_at, drawer.id
+            )));
+        }
+        Ok(t) if t - OffsetDateTime::now_utc() > crate::FILED_AT_MAX_SKEW => {
+            return Err(StoreError::Invalid(format!(
+                "filed_at {:?} on {:?} is in the future — refused: a drawer \
+                 cannot have been filed at a time that has not happened, and \
+                 filed_at is the retention clock, so a future one is a \
+                 permanent exemption from every declared policy",
+                meta.filed_at, drawer.id
+            )));
+        }
+        Ok(_) => {}
+    }
+    // Same reasoning for the size bound: it was enforced only by
+    // `undercroft remember`, so the declared maximum was a property of
+    // one entry point rather than of the vault.
+    undercroft_core::validate_content_len(&drawer.content)
+        .map_err(|e| StoreError::Invalid(e.to_string()))?;
+    // A declared kind must come from the closed vocabulary — rejected,
+    // never coerced, where no surface can forget. Absence is always valid.
+    // `Invalid`, not `CorruptRow`: nothing here is corrupt — a caller
+    // handed us a value the vocabulary does not contain, which is an
+    // input error and must reach a REST surface as 400, not 500.
+    if let Some(k) = meta.kind.as_deref() {
+        undercroft_core::validate_kind(k).map_err(|e| StoreError::Invalid(e.to_string()))?;
+    }
+    // A drawer cannot supersede itself, and "itself" is every id this
+    // declaration can be filed under — not only `drawer.id`, which is the
+    // field the diversion rewrites (ROADMAP O170). Comparing that one field
+    // made the verdict split three ways: a link to the declared id was
+    // refused when the content was clean and quarantined when it was
+    // flagged, then could never be allowed; a link to the queue id was filed
+    // when clean and refused NAMING the queue id when flagged; and a link to
+    // the recipe id under another declared id — what a dedup refresh
+    // produces, keeping the matched id and taking the incoming meta — passed
+    // everywhere, though the plain save refuses the same declaration.
+    //
+    // The message names the declared id and never the link, so it reads the
+    // same whatever the screen would have said. Caller input, so 400:
+    // `CorruptRow` reached `/v1` as a 500 saying the vault was corrupt
+    // (ROADMAP C13/E7).
+    if let Some(named) = meta.supersedes.as_deref() {
+        let slot = if named == drawer.id {
+            Some("its own id")
+        } else {
+            let ids = filing_ids(drawer);
+            if named == ids.recipe {
+                Some("the id its wing, room, source and chunk derive")
+            } else if named == ids.quarantine {
+                Some("the review-queue id the admission screen files it under")
+            } else {
+                None
+            }
+        };
+        if let Some(slot) = slot {
+            return Err(StoreError::Invalid(format!(
+                "drawer {} cannot supersede itself — its supersedes link names {slot}",
+                drawer.id
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -251,9 +490,15 @@ impl VaultStore {
     /// cannot grow a third copy of the decision.
     ///
     /// [`Screen`]: crate::Screen
+    ///
+    /// `vector` is the embedding the write will store, or `None` where the
+    /// caller has none yet — stated at every call site, the `Screen`
+    /// argument's precedent applied to the vector (ROADMAP O170), and pinned by
+    /// `screen_and_divert_states_the_vector_at_every_call_site`.
     pub(crate) fn screen_and_divert(
         &self,
         drawer: &Drawer,
+        vector: Option<&[f32]>,
         screen: crate::Screen,
     ) -> Result<Option<Drawer>, StoreError> {
         match screen {
@@ -277,9 +522,11 @@ impl VaultStore {
             // and the caller's own declaration is never seen again. That is
             // ROADMAP O30, and it compounded — the row landed in the review
             // queue and `admission_allow` was then refused on the way back
-            // out, so it could be denied but never allowed.
+            // out, so it could be denied but never allowed. Since O170 the
+            // WHOLE declaration is validated here, the id included, and before
+            // the tier-2 advisor is consulted.
             crate::Screen::Apply => {
-                validate_declaration(&drawer.meta)?;
+                validate_declaration(drawer, vector)?;
                 Ok(self.admission_divert(drawer))
             }
         }
@@ -441,28 +688,20 @@ impl VaultStore {
                 Some(false) | None => return None,
             }
         }
-        // The wing the write was AIMED at, captured BEFORE any mutation and
-        // held in a local. Deliberately not read back out of
-        // `d.meta.intended_wing` with a fallback: a future reordering of the
-        // mutations below would then quietly fall back to the reserved
-        // constant and restore the collision with every test still green.
-        let origin_wing = drawer.meta.wing.clone();
+        // The queue id, derived from the candidate as the caller declared it,
+        // BEFORE any mutation. Keyed on the ORIGIN wing, in its own id space:
+        // passing `QUARANTINE_WING` substituted a constant for one of the four
+        // components the recipe is injective over, so two diversions
+        // differing only in wing became one row. Derived from `drawer` rather
+        // than read back out of the clone, so a future reordering of the
+        // mutations below cannot quietly key it on the reserved constant.
+        let queue_id = filing_ids(drawer).quarantine;
         let mut d = drawer.clone();
         d.meta.intended_wing = Some(d.meta.wing.clone());
         d.meta.intended_room = Some(d.meta.room.clone());
         d.meta.admission_signals = signals;
         d.meta.wing = QUARANTINE_WING.to_string();
-        let source = d.meta.source_file.as_deref().unwrap_or("(direct)");
-        // Keyed on the ORIGIN wing, in its own id space. Passing
-        // `QUARANTINE_WING` here substituted a constant for one of the four
-        // components the recipe is injective over, so two diversions
-        // differing only in wing became one row.
-        d.id = undercroft_core::ids::quarantine_drawer_id(
-            &origin_wing,
-            &d.meta.room,
-            source,
-            d.meta.chunk_index,
-        );
+        d.id = queue_id;
         Some(d)
     }
 
@@ -624,13 +863,27 @@ impl VaultStore {
         restored.meta.intended_wing = None;
         restored.meta.intended_room = None;
         restored.meta.admission_signals = Vec::new();
-        let source = restored.meta.source_file.as_deref().unwrap_or("(direct)");
-        restored.id = undercroft_core::ids::drawer_id(
-            &restored.meta.wing,
-            &restored.meta.room,
-            source,
-            restored.meta.chunk_index,
-        );
+        // The inverse of the diversion: the recipe id of where the row was
+        // aimed, from the same derivation the diversion used.
+        restored.id = filing_ids(&d).recipe;
+        // The WHOLE declaration, not only the destination (ROADMAP O170). A
+        // row queued before the screen validated everything can carry a link
+        // naming the very id it would be allowed under — a flagged save
+        // declaring `supersedes` equal to its own id was diverted, and the
+        // boundary then compared the link with the queue id. Re-filing it hit
+        // `cannot supersede itself` with nothing saying which row, why, or
+        // what to do; the same shape as the destination refusal above, so the
+        // same answer. No vector: the stored one was checked when it was
+        // written.
+        validate_declaration(&restored, None).map_err(|e| {
+            StoreError::Invalid(format!(
+                "{id} cannot be allowed: {e}. The row was queued before the \
+                 screen validated its whole declaration, so re-filing it as \
+                 declared is refused — read the drawer back naming the \
+                 {QUARANTINE_WING} wing, save it with a valid declaration, \
+                 then deny this row"
+            ))
+        })?;
         let restored_id = restored.id.clone();
         // Straight to the write path, NOT through `upsert`: the content
         // still trips the screen (that is why it was here), and the

@@ -3988,7 +3988,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**226** of the **240** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**228** of the **242** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4168,6 +4168,360 @@ identities.
 MINOR since O149: `PATCH /admin/tenants/{id}` and its CLI mirror are new
 capability, backward compatible. The rest of the section is PATCH work — no
 documented contract moves.
+
+### O170 — CLOSED 2026-09-16: a flagged write was quarantined on a declaration the store refused when the same write was clean — every check the candidate alone can settle now runs in front of the screen
+
+**Filed and ruled 2026-09-14, recorded rather than built.** The diagrams say the
+declaration is validated before the screen rewrites it:
+`architecture/diagrams/write-path.svg` ("at the write choke point: validate the
+declaration, then screen"), `architecture/platform-views/04-write-path.html`
+("checked before any rewrite") and `07-admission-control.html` ("checked before
+the screen"). The code validates only the wing and room there:
+`admission::validate_declaration(meta)` runs in `screen_and_divert`'s `Apply`
+arm, in front of `admission_divert`. Every other declaration check — the
+non-finite and dimension-mod-4 vector refusals, `is_drawer_id`, the `filed_at`
+parse and `FILED_AT_MAX_SKEW`, `validate_content_len`, `validate_kind`, and the
+self-supersession guard — runs in `write_drawer_stmts`, after `admission_divert`
+has rewritten `drawer.id` to `ids::quarantine_drawer_id(...)` and, on a hash
+vault, after `write_drawer`'s diverted branch has replaced the caller's vector
+with a re-embed.
+
+**Traced by reading, and wider than filed.**
+
+- **A malformed id is quarantined when the content trips the screen**, and
+  refused when it does not. `fde/<hex>`, uppercase or 31 characters, through
+  `import_record` or through `parse_import_line` → `upsert_batched` →
+  `upsert_many`, on either vault kind: `is_drawer_id` sees the 32-hex
+  quarantine id and passes.
+- **A non-finite or `1e39` caller vector is quarantined on a hash vault**,
+  through `import_record`'s matching-dimension arm, because the diverted branch
+  re-embeds; on an external vault the caller's vector is kept and still
+  refused.
+- **`admission_allow` re-derives `drawer_id` and re-embeds**, so the malformed
+  declaration is silently corrected on the way out.
+- **A screen-verdict oracle in refusal text.** The `filed_at`, non-finite and
+  dimension-mod-4 refusals format `drawer.id`, which on the flagged path is the
+  quarantine id — an unkeyed public recipe. A 400 therefore tells the caller
+  whether the content tripped the screen, the tier-2 advisor's verdict
+  included, and leaves no row, chain record or rate count either way.
+- **Self-supersession has three verdict-dependent forms**, because the guard
+  compares `supersedes` with `drawer.id`, the rewritten id on the diverted
+  path: (a) equal to the declared id — quarantined, then un-allowable; (b)
+  equal to the record's own quarantine id — clean content lands and flagged
+  content is refused naming the quarantine id, the oracle again; (c) equal to
+  the recipe id under a different declared id — un-allowable, and its only
+  producer is a dedup refresh, which keeps the matched id and takes the
+  incoming meta, i.e. a declaration the plain save already refuses. Form (a)
+  is reachable on `/v1` save and MCP `undercroft_save`, which build
+  `Drawer::new(..)` from `next_append_index` with a caller `supersedes`, and
+  `next_append_index` reads `sqlite_sequence`.
+- **`import_unwrap_screened` re-derives the id** of a record claiming the
+  reserved wing before any id guard, even with admission off.
+- **The tier-2 advisor sees writes that will be refused**:
+  `admission_divert` calls `assess(&drawer.content)` on tier-1-clean
+  candidates after only the wing and room checks.
+
+#### RULED 2026-09-14 by a three-lens panel plus an adversarial refuter
+
+**Prior rulings found.** O30's RULE — validate the caller's declaration before
+the screen, because the screen rewrites the fields validation reads — is
+UPHELD as best practice (validate before transforming; mediate completely
+before any side effect, an advisor egress included), and so are the A25 and
+C15/M13 placements that keep the guards at `write_drawer_stmts` so
+`upsert_many` inherits them: the boundary stays, a door is added. **O30's
+closure scope, and `CLAUDE.md`'s backwards application of it, are REFUTED.**
+`git log -S` dates the id-shape guard to `4a4ef2c` and the non-finite guard to
+`3444da6`, both 2026-08-05, while `validate_declaration` arrived in `bea1520` on
+2026-08-13 — so both already sat behind the same rewrite when O30 closed.
+`import_unwrap_screened` confirms the rule for the wing and violates it for the
+id, and the self-supersession guard reproduces O30's deny-only trap through a
+different field. The backwards test was run over the field the filing named,
+not over every field the rewriting step touches.
+
+**Direction, by doctrine.** Breadth plus doctrine means the documents lead:
+`CLAUDE.md`'s invariant that a guard runs before any step that rewrites the
+field it guards, O30's fix shape, `UPGRADING.md` 1.1.0's refused-not-quarantined
+precedent, `write_drawer`'s own comment, and `write_drawer_stmts`' own
+classification of the id as a declaration. `74d4b9e` (2026-09-04) widened a
+previously true ordering line to more fields; it did not invent the promise.
+
+**Ruling: B, completed.** Every check that is a pure function of the candidate
+moves into ONE function, `admission::validate_declaration(drawer, vector)`,
+called at the door (`screen_and_divert`'s `Apply` arm) and at the boundary
+(`write_drawer_stmts`), and the two sibling rewrites —
+`import_unwrap_screened`'s id re-derivation and `admission_allow`'s restore —
+are closed in the same unit. PATCH-class, shipping in `1.6.0`, with an
+`UPGRADING.md` entry saying `config check` cannot detect it. No product choice
+remains, so nothing escalates.
+
+**Rejected:**
+
+- *(A) Narrow the documents and file the asymmetry* — narrows a broad, older
+  promise to fit an implementation that breaks it, and knowingly keeps the
+  oracle, queue rows that could never be drawers, and tier-2 egress of writes
+  that will be refused.
+- *(B) as briefed* — id shape, kind and finiteness in the `Apply` arm with the
+  embedding passed. Incomplete: `upsert_many` embeds after its screening loop
+  and `dedup`'s dry run screens a stored drawer, so neither has a vector; it
+  misses `filed_at`, content length, dimension mod 4, all three supersession
+  forms and the unwrap id rewrite.
+- *A separate `validate_vector` in `write_drawer` only* — the class this tree
+  keeps losing is a second path calling `screen_and_divert` directly, which is
+  `upsert_many` (O30's closure finding #2). A vector parameter on
+  `screen_and_divert` makes every caller state it, `None` staying a greppable
+  decision: `Screen::Bypass(reason)`'s precedent applied to the vector.
+- *Supersession equality against the declared id only, plus an allow check* —
+  leaves form (b), the trace-free oracle, and form (c).
+- *(C) The checks at each caller* — three copies of one security decision, the
+  shape R5 and O30 removed.
+- *(D) Keep the order and refuse at allow* — recreates O30's deny-only trap;
+  after a diversion `PendingAdmission` holds no declared id and no vector.
+- *Boundary checks that name the declared id* — treats the symptom: the advisor
+  is still consulted and the verdicts still split.
+- *Preserve the declared id and vector through the diversion* — impossible for
+  the id, which must be domain-separated or a diverted row overwrites the
+  drawer it screened.
+- *Skip the boundary supersession check for diverted rows* — leaves a queue row
+  naming itself as superseded, and breaks one function at door and boundary.
+
+#### Implementation spec, condensed
+
+One unit on its own branch, in `crates/undercroft-store` — a security-verdict
+change on the write path, never half-landed.
+
+1. `admission.rs`: `pub(crate) struct FilingIds { recipe, quarantine }` and
+   `filing_ids(drawer)`, taking the origin wing and room from
+   `intended_wing`/`intended_room` when the drawer sits in the reserved wing,
+   the source from `source_file` or `(direct)`, and `chunk_index`; route the
+   three existing derivations (`admission_divert`, `admission_allow`,
+   `import_unwrap_screened`) through it byte-identically.
+2. `validate_declaration(drawer: &Drawer, vector: Option<&[f32]>)`, with blocks
+   MOVED verbatim from `write_drawer_stmts`: the names; if a vector, the
+   non-finite then the dimension-mod-4 refusal; `is_drawer_id`; the `filed_at`
+   refusals (`FILED_AT_MAX_SKEW` becomes `pub(crate)`); `validate_content_len`;
+   `validate_kind`; and a NEW supersession-slot check refusing `supersedes`
+   equal to `drawer.id`, the recipe id or the quarantine id. Checks that read
+   database state or the path — the reserved-wing guard, the receipt lookup —
+   stay in `write_drawer_stmts`.
+3. `screen_and_divert(&self, drawer, vector, screen)`: `Apply` validates before
+   `admission_divert`; `Bypass` is unchanged.
+4. `write_drawer` passes `Some(&embedding)`; its diverted re-embed is not
+   changed here.
+5. `write_drawer_stmts` calls `validate_declaration(drawer, Some(embedding))`
+   in place of the moved blocks and drops the now-unreachable
+   `Some(old_id) if old_id == drawer.id` arm.
+6. `upsert_many`: under `admission_quarantine`, a validation pre-pass over the
+   whole batch before the screening loop, then
+   `screen_and_divert(d, None, Screen::Apply)`.
+7. `manage.rs` `dedup`: `screen_and_divert(keep, None, Screen::Apply)`.
+8. `import_unwrap_screened`'s reserved-wing arm refuses a non-derived id before
+   re-deriving.
+9. `admission_allow` keeps its intended wing/room loop verbatim, then runs
+   `validate_declaration(&restored, None)` with a refusal naming the row and
+   telling the operator to read it back, save it somewhere valid and deny it.
+
+No surface code changes. Effects: CLI `undercroft import` and every sealed
+bundle restore exit 1 on such a batch; `/v1` import answers 400 rather than
+200-quarantined; the orchestrator's `migrate_tenant` removes the partial copy on
+that 400; `/v1` save and MCP `undercroft_save` refuse a flagged
+self-supersession rather than quarantining it; `admission allow` names the
+refusal for a legacy row. Governance in the same unit: `CHANGELOG`,
+`UPGRADING.md`, `CLAUDE.md`'s guard-ordering invariant corrected with the
+backwards application above, and the diagrams left exactly as they are —
+they become true when this lands, so narrowing them first is refused.
+
+#### Gates and counterfactuals the unit owes
+
+Store tests beside `an_invalid_declaration_is_refused_before_the_screen_can_divert_it`,
+each with a premise arm (a valid POISON declaration diverts; each invalid one
+is refused with admission off): **T1** a flagged import with a malformed id is
+refused, not quarantined; **T2** the same for a non-finite vector, the external
+arm's message naming the declared id and never the quarantine id; **T3** no
+invalid write reaches a counting advisor stub, with a batch arm pinning the
+pre-pass; **T4** the refusal string is byte-identical across admission off, on
+with POISON and on with a suspicious stub, and never contains the quarantine
+id; **T5** a supersession naming any filing slot is refused; **T6** a legacy
+queue row that would supersede its allowed id says why; **T7** a reserved-wing
+claim with a malformed id is refused on import; **T8** `filing_ids` matches the
+derivations it replaces. The M13 structural arm is rewritten to find the guard
+literal once, inside `validate_declaration`; a new
+`screen_and_divert_states_the_vector_at_every_call_site` pins three calls
+(`Some(` in `write_drawer`, `None` in `upsert_many` and `dedup`); a new
+`write_drawer_stmts_holds_only_state_dependent_refusals` pins the measured
+count of `StoreError::Invalid(` left there. A `tenant.rs` test beside
+`an_import_declaring_an_invalid_wing_is_refused_even_when_the_screen_would_divert_it`,
+an MCP save test, and an e2e import check with a fresh-binary premise. Must
+stay green unchanged: `a_queue_row_whose_destination_never_validated_says_why_it_cannot_be_allowed`,
+`a_declared_drawer_id_is_refused_on_every_import_surface`,
+`every_caller_supplied_vector_door_refuses_a_non_finite_component`,
+`admission_divert_has_exactly_one_caller` and the O31 round trip.
+
+**Counterfactuals**, each by a saved reverse patch chained with `&&` and
+confirmed landed: restore the names-only validator, and T1–T5 and both source
+gates fail; remove only the quarantine-slot comparison, and T4's supersession
+row and T5's quarantine arm fail — the counterfactual that proves the oracle
+closure, and the one every lens's own design would have passed. Real corpus:
+the LoCoMo feed mined into 16 wings with admission on, three hand-built
+poisoned records imported through the CLI and through `/v1`, queue depth and
+refusal texts measured. No PQ, FDE or keyed draw is involved, so one green run
+is a measurement.
+
+#### Residuals
+
+Each owes an entry of its own, and none is filed here:
+
+- `admission_allow` on an EXTERNAL vault files a ZERO vector: it calls
+  `self.embedder.embed`, and `ExternalEmbedder::embed` returns zeros.
+- `write_drawer`'s diverted non-external branch re-embeds content the diversion
+  did not change — a second forward pass, and a second plaintext POST under a
+  served embedder — and silently replaces a caller vector.
+- A diversion discards a well-formed declared id that does not re-derive from
+  its meta, so same-bundle supersession links and agent-held ids stop resolving
+  after allow — an identity-and-lifetime ruling.
+- The save arms embed before the door (`upsert_screened`), and `/v1` save and
+  MCP never call `validate_content_len`, so oversized content is still embedded
+  before it is refused.
+
+Stated, not owed: the tier-2 advisor's plaintext POST with no egress record is
+carried by O167's tier-2 advisor subsection; once a batch passes the pre-pass
+its rows can still reach the advisor before a state-dependent refusal rolls it
+back; and every trace above was established by reading, not execution.
+
+#### BUILT 2026-09-16
+
+**Built as ruled, steps 1–9, in `crates/undercroft-store`.** The admission
+module now has three pieces:
+- `admission::filing_ids` routes the three derivations it replaces;
+- `admission::validate_declaration(drawer, vector)` holds the moved blocks,
+  their comments edited only where they named their old home, plus the new
+  supersession-slot check;
+- `screen_and_divert` takes the vector.
+
+Each caller states which vector it screens with. `write_drawer` passes
+`Some(embedding.as_slice())`, and `upsert_many` passes `None` behind a
+whole-batch pre-pass. `dedup` passes `None` too.
+
+Three more changes complete the unit:
+- `write_drawer_stmts` keeps only the reserved-wing guard.
+- `import_unwrap_screened` refuses a malformed id before it re-derives one.
+- `admission_allow` validates the restored declaration and gives the named
+  refusal.
+
+No surface code changed.
+
+**Two decisions the spec left to the build:**
+- **The slot message.** The new slot refusal names the DECLARED id and the kind
+  of slot, never the link. Naming the link would put the queue id into a
+  refusal of a declaration that names it, and T4 requires every refusal to be
+  byte-identical across screen verdicts and free of the queue id.
+- **Step 8 is a SHAPE check, not a recipe check.** "Refuses a non-derived id"
+  is built as `is_drawer_id`. Queue rows written before round-four #7
+  domain-tagged the quarantine recipe carry
+  `drawer_id(QUARANTINE_WING, room, source, chunk)`. That id is well-formed and
+  does not re-derive under the current recipe, so a recipe check would refuse
+  their legitimate restore. T7's premise arm pins that such an id still round
+  trips.
+
+**The trace, re-derived at the integrated tree by running T1–T7 before the fix
+(`8a77f75`).** All seven failed, each for the reason the ruling names. One
+trace had MOVED since the ruling:
+- **O167** (PR #193) made the diverted branch keep the caller's vector on every
+  vault. A flagged non-finite vector on a hash vault was therefore no longer
+  quarantined. It was refused at the boundary, naming the queue id (`fe44bf66…`
+  for `notes/r/test.md/0` in T2's run): the oracle on both vault kinds, rather
+  than a quarantine on one.
+- **Two of the ruling's four residuals were closed by O167 before this build.**
+  `admission_allow` reuses the quarantined row's stored vector, so an external
+  vault no longer gets a zero one. The diverted branch no longer re-embeds. The
+  other two are filed as **O197** and **O198**, as O171's ruling requires.
+
+**Gates:**
+- **Store tests.** T1–T8 are
+  `a_flagged_import_with_a_malformed_id_is_refused_not_quarantined`,
+  `a_flagged_import_with_a_non_finite_vector_is_refused_naming_the_declared_id`,
+  `no_invalid_write_reaches_the_admission_advisor`,
+  `a_refusal_reads_the_same_whatever_the_screen_would_have_said`,
+  `a_supersession_naming_any_filing_slot_is_refused`,
+  `a_legacy_queue_row_that_would_supersede_its_allowed_id_says_why`,
+  `a_reserved_wing_claim_with_a_malformed_id_is_refused_on_import` and
+  `filing_ids_matches_the_derivations_it_replaces`.
+- **Source gates.**
+  - `screen_and_divert_states_the_vector_at_every_call_site` sits in
+    `remote.rs` beside the custody gate. It reuses that gate's masking reader
+    and function attribution, and has its own premise probe.
+  - `write_drawer_stmts_holds_only_state_dependent_refusals` pins one refusal.
+  - The M13 arm is rewritten: the guard appears once in `validate_declaration`
+    and in neither write function, and the boundary passes `Some(embedding)`.
+- **Surface tests.** MCP has
+  `a_save_superseding_its_own_id_is_refused_even_when_the_screen_would_divert_it`,
+  and `/v1` has
+  `an_import_declaring_a_malformed_id_is_refused_even_when_the_screen_would_divert_it`.
+- **e2e.** Four checks: a fixture probe, the derived-id premise, the malformed
+  refusal, and an empty queue.
+- **The ruling's must-stay-green list** is green in the full store run: 385
+  passed, 0 failed, 4 ignored.
+
+**Counterfactuals.** Each ran on a container copy of the tree, and its marker
+was verified present before any test ran.
+- **The tree before the fix:** T1–T7 fail. T8 and the source gates name code
+  that did not exist.
+- **The two surface tests against HEAD's store sources:** both fail. MCP
+  answered `save quarantined pending review`, and `/v1` answered 200 with
+  `"quarantined":1`. Their O30 precedents stay green on both trees.
+- **CF-src.** The fixed tree's compiled source gates, read against HEAD's
+  production sources, fail on their substantive assertions:
+  - 9 refusals in `write_drawer_stmts`, against 1;
+  - `write_drawer`'s screen call states no vector;
+  - 0 non-finite guards in `validate_declaration`.
+
+  **The first run of this counterfactual fired two of the three on PREMISE
+  asserts, and that was my defect.** The premises assumed the fixed function's
+  size and refusal count, so on the old tree they reported a broken reader
+  instead of the defect. Each premise now recognises its window by code the
+  function holds on both trees, and the re-run fires on the substance.
+- **CF1, a names-only door with the new boundary kept:** T1–T4 fail. **T5
+  stays green, and that is the diagnostic, not a pass.** T5 pins the SLOT SET,
+  which the widened boundary enforces too, so the door's share of the
+  supersession checks is pinned by T4's byte-identity rows.
+- **CF2, the queue-slot comparison removed:** T4 and T5 fail, and everything
+  else stays green. This is the oracle-closure counterfactual.
+- **CF3, the batch pre-pass removed:** T3 alone fails, because the valid first
+  row is shown to the advisor.
+- **CF4, the unwrap's shape refusal removed:** T7 alone fails.
+- **CF5, the allow's whole-declaration check removed:** T6 alone fails.
+
+No PQ, FDE or keyed draw is involved, so one green run is a measurement.
+
+**Real corpus.** The LoCoMo feed was mined into 16 wings with admission on,
+giving 1,361 drawers once a poisoned seed was added. Both binaries ran the same
+script, and a premise checked that the two binaries differ in the refusal text.
+- **Cost:** mining took 1,303 ms on the new binary and 1,412 ms on the old one.
+  A screened import of the whole export took 272 ms against 273, so the
+  pre-pass is not measurable at this size. The queue held only the seed.
+- **The new binary:** three hand-poisoned records (a malformed id, a 2099
+  `filed_at`, and a `supersedes` naming the record's own id) were each refused,
+  through `undercroft import` (exit 1) and `/v1` import (400). Every message
+  names the declared id `7f559f…`, and the queue stays at 0.
+- **The old binary:** the malformed-id and self-supersession records were
+  quarantined (exit 0, 200). Both landed in ONE queue slot, so the second
+  replaced the first. The 2099 record was refused, and in the `/v1` reply the
+  record label says `id=7f559f…` while the message names `ee8939…`, the queue
+  id. That one line is the oracle.
+
+**Battery:** OK at this tree, every suite exiting 0 (`.battery/battery-o170.out`):
+- `test`: 898 passed and 4 ignored over 20 targets;
+- `e2e`: 512;
+- `orchestrator-e2e`: 156;
+- `e2e-telemetry`: 57;
+- `backends-e2e`: 137;
+- `obs-config`: 13;
+- `site`: 7;
+- `tls-pins`: 13;
+- `lint` and `arch-check` clean, and all 20 preflights passing.
+
+The published figures moved with it: cargo 886 → 898 (902 compiled), e2e
+508 → 512, and the landing tiles to 898 and 875. The house page's test tile
+follows through `tests/house-figures.sh --update`.
 
 ### O189 — CLOSED 2026-09-16: the other two diagram sets, checked for O188's spill — 22 lines reworded, the PDFs rebuilt, and a pinned per-glyph standard that only openly licensed faces feed, calibrated in a renderer and gated
 
@@ -16425,224 +16779,6 @@ fixture can also reuse O162's, which already holds an `Open` section.
 - The `migrate_tenant` edges above wait on a read of that function.
 - The handover pointers are gitignored and corrected by hand, not by the gate.
 
-### O170 — RULED 2026-09-14 and not yet built: a flagged write is quarantined on a declaration the store refuses when the same write is clean
-
-**Filed and ruled 2026-09-14, recorded rather than built.** The diagrams say the
-declaration is validated before the screen rewrites it:
-`architecture/diagrams/write-path.svg` ("at the write choke point: validate the
-declaration, then screen"), `architecture/platform-views/04-write-path.html`
-("checked before any rewrite") and `07-admission-control.html` ("checked before
-the screen"). The code validates only the wing and room there:
-`admission::validate_declaration(meta)` runs in `screen_and_divert`'s `Apply`
-arm, in front of `admission_divert`. Every other declaration check — the
-non-finite and dimension-mod-4 vector refusals, `is_drawer_id`, the `filed_at`
-parse and `FILED_AT_MAX_SKEW`, `validate_content_len`, `validate_kind`, and the
-self-supersession guard — runs in `write_drawer_stmts`, after `admission_divert`
-has rewritten `drawer.id` to `ids::quarantine_drawer_id(...)` and, on a hash
-vault, after `write_drawer`'s diverted branch has replaced the caller's vector
-with a re-embed.
-
-**Traced by reading, and wider than filed.**
-
-- **A malformed id is quarantined when the content trips the screen**, and
-  refused when it does not. `fde/<hex>`, uppercase or 31 characters, through
-  `import_record` or through `parse_import_line` → `upsert_batched` →
-  `upsert_many`, on either vault kind: `is_drawer_id` sees the 32-hex
-  quarantine id and passes.
-- **A non-finite or `1e39` caller vector is quarantined on a hash vault**,
-  through `import_record`'s matching-dimension arm, because the diverted branch
-  re-embeds; on an external vault the caller's vector is kept and still
-  refused.
-- **`admission_allow` re-derives `drawer_id` and re-embeds**, so the malformed
-  declaration is silently corrected on the way out.
-- **A screen-verdict oracle in refusal text.** The `filed_at`, non-finite and
-  dimension-mod-4 refusals format `drawer.id`, which on the flagged path is the
-  quarantine id — an unkeyed public recipe. A 400 therefore tells the caller
-  whether the content tripped the screen, the tier-2 advisor's verdict
-  included, and leaves no row, chain record or rate count either way.
-- **Self-supersession has three verdict-dependent forms**, because the guard
-  compares `supersedes` with `drawer.id`, the rewritten id on the diverted
-  path: (a) equal to the declared id — quarantined, then un-allowable; (b)
-  equal to the record's own quarantine id — clean content lands and flagged
-  content is refused naming the quarantine id, the oracle again; (c) equal to
-  the recipe id under a different declared id — un-allowable, and its only
-  producer is a dedup refresh, which keeps the matched id and takes the
-  incoming meta, i.e. a declaration the plain save already refuses. Form (a)
-  is reachable on `/v1` save and MCP `undercroft_save`, which build
-  `Drawer::new(..)` from `next_append_index` with a caller `supersedes`, and
-  `next_append_index` reads `sqlite_sequence`.
-- **`import_unwrap_screened` re-derives the id** of a record claiming the
-  reserved wing before any id guard, even with admission off.
-- **The tier-2 advisor sees writes that will be refused**:
-  `admission_divert` calls `assess(&drawer.content)` on tier-1-clean
-  candidates after only the wing and room checks.
-
-#### RULED 2026-09-14 by a three-lens panel plus an adversarial refuter
-
-**Prior rulings found.** O30's RULE — validate the caller's declaration before
-the screen, because the screen rewrites the fields validation reads — is
-UPHELD as best practice (validate before transforming; mediate completely
-before any side effect, an advisor egress included), and so are the A25 and
-C15/M13 placements that keep the guards at `write_drawer_stmts` so
-`upsert_many` inherits them: the boundary stays, a door is added. **O30's
-closure scope, and `CLAUDE.md`'s backwards application of it, are REFUTED.**
-`git log -S` dates the id-shape guard to `4a4ef2c` and the non-finite guard to
-`3444da6`, both 2026-08-05, while `validate_declaration` arrived in `bea1520` on
-2026-08-13 — so both already sat behind the same rewrite when O30 closed.
-`import_unwrap_screened` confirms the rule for the wing and violates it for the
-id, and the self-supersession guard reproduces O30's deny-only trap through a
-different field. The backwards test was run over the field the filing named,
-not over every field the rewriting step touches.
-
-**Direction, by doctrine.** Breadth plus doctrine means the documents lead:
-`CLAUDE.md`'s invariant that a guard runs before any step that rewrites the
-field it guards, O30's fix shape, `UPGRADING.md` 1.1.0's refused-not-quarantined
-precedent, `write_drawer`'s own comment, and `write_drawer_stmts`' own
-classification of the id as a declaration. `74d4b9e` (2026-09-04) widened a
-previously true ordering line to more fields; it did not invent the promise.
-
-**Ruling: B, completed.** Every check that is a pure function of the candidate
-moves into ONE function, `admission::validate_declaration(drawer, vector)`,
-called at the door (`screen_and_divert`'s `Apply` arm) and at the boundary
-(`write_drawer_stmts`), and the two sibling rewrites —
-`import_unwrap_screened`'s id re-derivation and `admission_allow`'s restore —
-are closed in the same unit. PATCH-class, shipping in `1.6.0`, with an
-`UPGRADING.md` entry saying `config check` cannot detect it. No product choice
-remains, so nothing escalates.
-
-**Rejected:**
-
-- *(A) Narrow the documents and file the asymmetry* — narrows a broad, older
-  promise to fit an implementation that breaks it, and knowingly keeps the
-  oracle, queue rows that could never be drawers, and tier-2 egress of writes
-  that will be refused.
-- *(B) as briefed* — id shape, kind and finiteness in the `Apply` arm with the
-  embedding passed. Incomplete: `upsert_many` embeds after its screening loop
-  and `dedup`'s dry run screens a stored drawer, so neither has a vector; it
-  misses `filed_at`, content length, dimension mod 4, all three supersession
-  forms and the unwrap id rewrite.
-- *A separate `validate_vector` in `write_drawer` only* — the class this tree
-  keeps losing is a second path calling `screen_and_divert` directly, which is
-  `upsert_many` (O30's closure finding #2). A vector parameter on
-  `screen_and_divert` makes every caller state it, `None` staying a greppable
-  decision: `Screen::Bypass(reason)`'s precedent applied to the vector.
-- *Supersession equality against the declared id only, plus an allow check* —
-  leaves form (b), the trace-free oracle, and form (c).
-- *(C) The checks at each caller* — three copies of one security decision, the
-  shape R5 and O30 removed.
-- *(D) Keep the order and refuse at allow* — recreates O30's deny-only trap;
-  after a diversion `PendingAdmission` holds no declared id and no vector.
-- *Boundary checks that name the declared id* — treats the symptom: the advisor
-  is still consulted and the verdicts still split.
-- *Preserve the declared id and vector through the diversion* — impossible for
-  the id, which must be domain-separated or a diverted row overwrites the
-  drawer it screened.
-- *Skip the boundary supersession check for diverted rows* — leaves a queue row
-  naming itself as superseded, and breaks one function at door and boundary.
-
-#### Implementation spec, condensed
-
-One unit on its own branch, in `crates/undercroft-store` — a security-verdict
-change on the write path, never half-landed.
-
-1. `admission.rs`: `pub(crate) struct FilingIds { recipe, quarantine }` and
-   `filing_ids(drawer)`, taking the origin wing and room from
-   `intended_wing`/`intended_room` when the drawer sits in the reserved wing,
-   the source from `source_file` or `(direct)`, and `chunk_index`; route the
-   three existing derivations (`admission_divert`, `admission_allow`,
-   `import_unwrap_screened`) through it byte-identically.
-2. `validate_declaration(drawer: &Drawer, vector: Option<&[f32]>)`, with blocks
-   MOVED verbatim from `write_drawer_stmts`: the names; if a vector, the
-   non-finite then the dimension-mod-4 refusal; `is_drawer_id`; the `filed_at`
-   refusals (`FILED_AT_MAX_SKEW` becomes `pub(crate)`); `validate_content_len`;
-   `validate_kind`; and a NEW supersession-slot check refusing `supersedes`
-   equal to `drawer.id`, the recipe id or the quarantine id. Checks that read
-   database state or the path — the reserved-wing guard, the receipt lookup —
-   stay in `write_drawer_stmts`.
-3. `screen_and_divert(&self, drawer, vector, screen)`: `Apply` validates before
-   `admission_divert`; `Bypass` is unchanged.
-4. `write_drawer` passes `Some(&embedding)`; its diverted re-embed is not
-   changed here.
-5. `write_drawer_stmts` calls `validate_declaration(drawer, Some(embedding))`
-   in place of the moved blocks and drops the now-unreachable
-   `Some(old_id) if old_id == drawer.id` arm.
-6. `upsert_many`: under `admission_quarantine`, a validation pre-pass over the
-   whole batch before the screening loop, then
-   `screen_and_divert(d, None, Screen::Apply)`.
-7. `manage.rs` `dedup`: `screen_and_divert(keep, None, Screen::Apply)`.
-8. `import_unwrap_screened`'s reserved-wing arm refuses a non-derived id before
-   re-deriving.
-9. `admission_allow` keeps its intended wing/room loop verbatim, then runs
-   `validate_declaration(&restored, None)` with a refusal naming the row and
-   telling the operator to read it back, save it somewhere valid and deny it.
-
-No surface code changes. Effects: CLI `undercroft import` and every sealed
-bundle restore exit 1 on such a batch; `/v1` import answers 400 rather than
-200-quarantined; the orchestrator's `migrate_tenant` removes the partial copy on
-that 400; `/v1` save and MCP `undercroft_save` refuse a flagged
-self-supersession rather than quarantining it; `admission allow` names the
-refusal for a legacy row. Governance in the same unit: `CHANGELOG`,
-`UPGRADING.md`, `CLAUDE.md`'s guard-ordering invariant corrected with the
-backwards application above, and the diagrams left exactly as they are —
-they become true when this lands, so narrowing them first is refused.
-
-#### Gates and counterfactuals the unit owes
-
-Store tests beside `an_invalid_declaration_is_refused_before_the_screen_can_divert_it`,
-each with a premise arm (a valid POISON declaration diverts; each invalid one
-is refused with admission off): **T1** a flagged import with a malformed id is
-refused, not quarantined; **T2** the same for a non-finite vector, the external
-arm's message naming the declared id and never the quarantine id; **T3** no
-invalid write reaches a counting advisor stub, with a batch arm pinning the
-pre-pass; **T4** the refusal string is byte-identical across admission off, on
-with POISON and on with a suspicious stub, and never contains the quarantine
-id; **T5** a supersession naming any filing slot is refused; **T6** a legacy
-queue row that would supersede its allowed id says why; **T7** a reserved-wing
-claim with a malformed id is refused on import; **T8** `filing_ids` matches the
-derivations it replaces. The M13 structural arm is rewritten to find the guard
-literal once, inside `validate_declaration`; a new
-`screen_and_divert_states_the_vector_at_every_call_site` pins three calls
-(`Some(` in `write_drawer`, `None` in `upsert_many` and `dedup`); a new
-`write_drawer_stmts_holds_only_state_dependent_refusals` pins the measured
-count of `StoreError::Invalid(` left there. A `tenant.rs` test beside
-`an_import_declaring_an_invalid_wing_is_refused_even_when_the_screen_would_divert_it`,
-an MCP save test, and an e2e import check with a fresh-binary premise. Must
-stay green unchanged: `a_queue_row_whose_destination_never_validated_says_why_it_cannot_be_allowed`,
-`a_declared_drawer_id_is_refused_on_every_import_surface`,
-`every_caller_supplied_vector_door_refuses_a_non_finite_component`,
-`admission_divert_has_exactly_one_caller` and the O31 round trip.
-
-**Counterfactuals**, each by a saved reverse patch chained with `&&` and
-confirmed landed: restore the names-only validator, and T1–T5 and both source
-gates fail; remove only the quarantine-slot comparison, and T4's supersession
-row and T5's quarantine arm fail — the counterfactual that proves the oracle
-closure, and the one every lens's own design would have passed. Real corpus:
-the LoCoMo feed mined into 16 wings with admission on, three hand-built
-poisoned records imported through the CLI and through `/v1`, queue depth and
-refusal texts measured. No PQ, FDE or keyed draw is involved, so one green run
-is a measurement.
-
-#### Residuals
-
-Each owes an entry of its own, and none is filed here:
-
-- `admission_allow` on an EXTERNAL vault files a ZERO vector: it calls
-  `self.embedder.embed`, and `ExternalEmbedder::embed` returns zeros.
-- `write_drawer`'s diverted non-external branch re-embeds content the diversion
-  did not change — a second forward pass, and a second plaintext POST under a
-  served embedder — and silently replaces a caller vector.
-- A diversion discards a well-formed declared id that does not re-derive from
-  its meta, so same-bundle supersession links and agent-held ids stop resolving
-  after allow — an identity-and-lifetime ruling.
-- The save arms embed before the door (`upsert_screened`), and `/v1` save and
-  MCP never call `validate_content_len`, so oversized content is still embedded
-  before it is refused.
-
-Stated, not owed: the tier-2 advisor's plaintext POST with no egress record is
-carried by O167's tier-2 advisor subsection; once a batch passes the pre-pass
-its rows can still reach the advisor before a state-dependent refusal rolls it
-back; and every trace above was established by reading, not execution.
-
 ### O171 — RULED 2026-09-14 and not yet built: a residual a closed entry calls "filed" is not a filing, and seven such items are owed an entry
 
 **Filed and ruled 2026-09-14, recorded rather than built.** Code comments and
@@ -17562,6 +17698,69 @@ it would flag most long lines.
 **Gate:** a textfit arm that prices a synthetic line of repeated maximal pairs past the budget and
 fails it, behind a premise arm that fires on today's kerning-blind implementation. Calibration's P-A
 condition 1 remains the check against real text.
+
+### O197 — a diversion discards a well-formed declared id that does not re-derive from its metadata, so references to it stop resolving after an allow
+
+**Filed 2026-09-16 from O170's ruling, which named it a residual owed an entry
+(O171's rule). Established by reading, not executed.**
+
+A record may legitimately carry an id that is not the recipe of its own
+metadata: a dedup refresh keeps the MATCHED drawer's id while taking the
+incoming metadata, and a restore carries that id verbatim. The write path
+checks the id's SHAPE for exactly that reason. The admission screen does not
+keep it:
+- **The diversion** derives the queue id from the metadata (`filing_ids`).
+- **The queue row** records no declared id.
+- **`admission_allow`** re-files the row under the recipe id.
+
+So such a record, flagged on import and then allowed, comes back under a
+DIFFERENT id from the one it was exported under. Anything that held the old id
+stops resolving: a supersession link from another drawer in the same bundle,
+an agent-held id, or a KG fact's source drawer id.
+
+**Why it is a ruling, not a fix.** Preserving the declared id through the queue
+needs somewhere to hold it. `meta` is unsealed and inventoried
+(`a_sealed_vault_exposes_metadata_but_never_content`), and inside the sealed
+frame it is an on-disk format change. It also needs a rule for what `allow`
+does when a different drawer already holds that id. Keeping the id on the
+queue row itself is impossible, because a diverted row must be domain-separated
+or it overwrites the drawer it screened (round-four #7). This is an
+identity-and-lifetime question: *what holds a reference to this id, and for how
+long?*
+
+**Gate:** a bundle holding a dedup-refreshed drawer and a second drawer whose
+`supersedes` names it, imported into a screening vault that flags the first and
+then allowed. After the allow, the link resolves, or the unit says in writing
+why it cannot. **Premise:** the same bundle into a non-screening vault resolves
+the link.
+
+### O198 — the save arms embed content before the door refuses it, and `/v1` save and MCP never check the content length
+
+**Filed 2026-09-16 from O170's ruling, which named it a residual owed an entry
+(O171's rule). Established by reading, not executed.**
+
+`upsert_screened` calls `self.embedder.embed(&drawer.content)` and only then
+reaches `write_drawer`, where `screen_and_divert` validates the declaration. So
+content the door will refuse, oversized content included, is embedded first.
+Under a served embedder (`UNDERCROFT_EMBEDDER=http`) that is a plaintext POST
+of a write the store then refuses. `save_with_dedup` does the same before its
+scan. Beyond that, `/v1` save and MCP `undercroft_save` never call
+`validate_content_len` themselves; they rely on the store's refusal, which
+arrives after the embed. `undercroft remember` checks the length first.
+
+It is arriving text, so O167's custody rule does not make it an egress owing a
+record. The cost is a forward pass, and a POST to the endpoint, spent on a
+write that cannot land.
+
+**Shape:** run `admission::validate_declaration(drawer, None)` before the embed
+in `upsert_screened` and `save_with_dedup`. The door then repeats it with the
+vector, which is cheap. Alternatively, give the two surfaces the same length
+check `remember` has. The first shape covers every save arm at once and is the
+one that cannot be forgotten by the next surface.
+
+**Gate:** a save of content past `MAX_CONTENT_BYTES` through `/v1` and MCP,
+under a counting embedder, is refused with zero embed calls. **Counterfactual:**
+the embed-first order counts one.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 
