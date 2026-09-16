@@ -2,12 +2,12 @@
 <title id="t">Reading a date the writer already wrote</title>
 <desc id="d">An era marker typed beside a year outranks the calendar the caller declared. Field order takes four signals strongest-first: declared, demonstrated by an unambiguous date in the same text, implied by the language per CLDR, then day-first as a documented default. Script and numeral system are never treated as evidence.</desc>
 <style>
-  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .f { font-family: "DejaVu Sans", "Noto Sans", sans-serif; }
   .h { font-size: 17px; font-weight: 600; }
   .l { font-size: 13.5px; font-weight: 600; }
   .b { font-size: 12px; }
   .s { font-size: 11px; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .mono { font-family: "DejaVu Sans Mono", monospace; font-size: 11px; }
   .ink { fill: var(--d-ink,#14202b); }
   .dim { fill: var(--d-dim,#55697a); }
   .white { fill: var(--d-card,#ffffff); }
@@ -25,7 +25,7 @@
 <rect width="900" height="856" fill="var(--d-bg,#fbfcfd)"/>
 
 <text x="28" y="38" class="f h ink">Reading a date the writer already wrote</text>
-<text x="28" y="58" class="f b dim">Four read-time declarations, and one signal that outranks every one of them. Dates are read live, so a fix reaches existing vaults with no migration.</text>
+<text x="28" y="58" class="f b dim">Four read-time declarations, and one signal that outranks all of them. Dates are read live, so a fix reaches existing vaults with no migration.</text>
 
 <rect x="24" y="76" width="852" height="146" rx="10" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)" stroke-width="1.8"/>
 <text x="42" y="102" class="f l" fill="var(--d-amber-ink,#8d5a1d)">The marker beside the year outranks the calendar the caller declared</text>
@@ -56,7 +56,7 @@
 
 <rect x="42" y="382" width="382" height="52" rx="6" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.4"/>
 <text x="56" y="402" class="f s" fill="var(--d-blue-ink,#33527d)">3 · implied by the language, per CLDR</text>
-<text x="56" y="420" class="f s dim">Arabic is d/M/y in every territory. English splits, so it implies nothing.</text>
+<text x="56" y="420" class="f s dim">Arabic is d/M/y in every territory. English splits: no order implied.</text>
 
 <text x="56" y="446" class="f s dim">4 · else day-first — a documented default, not a confident reading</text>
 
@@ -70,8 +70,8 @@
 
 <rect x="472" y="358" width="386" height="76" rx="7" fill="var(--d-violet-bg,#f6f3fb)" stroke="var(--d-violet,#6b4fa8)" stroke-width="1.4"/>
 <text x="486" y="378" class="f b" fill="var(--d-violet-ink,#523a86)">a different calendar — the whole date converts</text>
-<text x="486" y="397" class="f s dim">Hijri, Umm al-Qura — the Saudi CIVIL calendar printed on documents,</text>
-<text x="486" y="412" class="f s dim">deliberately not the tabular variant, which is wrong by a day or two.</text>
+<text x="486" y="397" class="f s dim">Hijri, Umm al-Qura — Saudi CIVIL calendar printed on documents,</text>
+<text x="486" y="412" class="f s dim">deliberately not the tabular one, which is wrong by a day or two.</text>
 <text x="486" y="428" class="f s dim">Jalali turns at the vernal equinox, so no offset reaches it either.</text>
 
 <rect x="24" y="466" width="852" height="76" rx="9" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.5"/>

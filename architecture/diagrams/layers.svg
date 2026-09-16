@@ -2,12 +2,12 @@
 <title id="t">Undercroft deployment layers and trust boundaries</title>
 <desc id="d">Callers reach the engine over MCP or HTTP; the engine holds the store and knowledge graph. Below the dashed at-rest line, a sealed vault holds its content, embeddings, token matrices and PQ artifacts as AEAD ciphertext, each under a distinct AAD domain, while wing, room, source path and other metadata stay in clear; an hmac-only vault keeps content and vectors in plaintext beside a full-text index, and both levels HMAC-tag each drawer and record each drawer write on the audit chain. An optional orchestrator routes tenants, and remote vector backends are untrusted accelerators: an index push sends each drawer's at-rest content, ciphertext from a sealed vault, beside its embedding, wing and room, which the backend reads in clear; it refuses an hmac-only vault unless --allow-plaintext is passed, and is recorded on the audit chain; every candidate a backend returns is re-verified locally.</desc>
 <style>
-  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .f { font-family: "DejaVu Sans", "Noto Sans", sans-serif; }
   .h { font-size: 17px; font-weight: 600; }
   .l { font-size: 13.5px; font-weight: 600; }
   .b { font-size: 12px; }
   .s { font-size: 11px; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .mono { font-family: "DejaVu Sans Mono", monospace; font-size: 11px; }
   .ink { fill: var(--d-ink,#14202b); }
   .dim { fill: var(--d-dim,#55697a); }
   @media (prefers-color-scheme: dark) {
@@ -71,7 +71,7 @@
 <rect x="658" y="284" width="200" height="66" rx="6" fill="var(--d-red-bg,#fdf3f3)" stroke="var(--d-red,#b5453a)"/>
 <text x="672" y="302" class="f b" fill="var(--d-red-ink,#94382f)">remote vector backends</text>
 <text x="672" y="316" class="f s dim">untrusted, re-verified on read</text>
-<text x="672" y="330" class="f s dim">sealed: ciphertext + clear vectors</text>
+<text x="672" y="330" class="f s dim">sealed: ciphertext, clear vectors</text>
 <text x="672" y="344" class="f s dim">hmac-only: refused by default</text>
 
 <path d="M320 360 L320 380" stroke="var(--d-teal,#12897e)" stroke-width="1.8" marker-end="url(#a)"/>
@@ -98,7 +98,7 @@
 
 <rect x="24" y="526" width="852" height="56" rx="8" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)"/>
 <text x="42" y="549" class="f b ink">Default posture: local-first and offline. No telemetry deps compiled in, no external API, deterministic embedder.</text>
-<text x="42" y="568" class="f s dim">Outward paths are opt-ins — UNDERCROFT_LLM_URL, UNDERCROFT_EMBED_URL, UNDERCROFT_OTLP_ENDPOINT, a remote index URL — each TLS or loopback via undercroft-net.</text>
+<text x="42" y="568" class="f s dim">Outward paths are opt-ins (UNDERCROFT_LLM_URL, _EMBED_URL, _OTLP_ENDPOINT, a remote index URL), each TLS or loopback via undercroft-net.</text>
 
 <defs><marker id="a" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--d-line2,#8fa3b4)"/></marker></defs>
 </svg>

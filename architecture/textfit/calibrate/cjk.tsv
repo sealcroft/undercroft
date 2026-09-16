@@ -1,0 +1,17 @@
+# The one declared exception to "every face calibration renders is embedded": CJK (ROADMAP O189,
+# V3 of the font-version ruling). textfit.py prices CJK at one em by rule and no face in the advance
+# table covers it, so calibration names this family explicitly in every stack and lets the pinned
+# render image supply it. A face is identified by the pair (collection sha256, PostScript name),
+# never by its family: fontconfig chose a different face of the same collection when the family
+# was left to it.
+#
+#   family      the family every stack names, after the embedded script faces.
+#   psname      the PostScript name CDP reports for a glyph drawn from this face.
+#   collection  the file's basename in the render image, as fc-list reports it.
+#   sha256      that file's digest. The render image is pinned by digest, so this moves only
+#               when that pin moves; calibrate.sh records fc-list and the judges compare.
+#
+# Two rows, because a stack at weight 600 or 700 selects the Bold collection and 400 the Regular.
+family	psname	collection	sha256
+Noto Sans CJK SC	NotoSansCJKsc-Regular	NotoSansCJK-Regular.ttc	b76b0433203017ca80401b2ee0dd69350349871c4b19d504c34dbdd80541690a
+Noto Sans CJK SC	NotoSansCJKsc-Bold	NotoSansCJK-Bold.ttc	faa5f3656a78b2e2d450d27fe8382c778bc2b6bb5ea29c986664a6a435056ceb

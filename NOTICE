@@ -103,3 +103,63 @@ The SIL Open Font License permits this redistribution and requires the
 licence to travel with the fonts, which is what those files are for. The
 fonts are bundled with the website only; no Undercroft binary contains or
 links them.
+
+--------------------------------------------------------------------------
+
+Fonts the diagrams name, are measured against, and embed
+
+Every font list in this tree names only openly licensed fonts; no font file
+is shipped for them, and a reader without them sees their own system's
+generic family (ROADMAP O189). Three artifacts are derived from font files,
+and those fonts are acknowledged here as a courtesy:
+
+  architecture/textfit/advances.tsv — a table of per-character advance
+  widths generated from the fonts below, so the text-fit gate can check that
+  a line fits without a font engine. It holds numbers, no glyph outlines.
+
+  architecture/pdf/*.pdf — rendered by librsvg; each PDF embeds subsets of
+  the fonts it uses.
+
+  assets/brand/undercroft-social-1280x640.png — rendered by librsvg.
+
+  DejaVu Sans, DejaVu Sans Mono and DejaVu Serif 2.37
+    Copyright (c) 2003 by Bitstream, Inc. All Rights Reserved. Glyphs
+    imported from Arev fonts are Copyright (c) 2006 by Tavmjong Bah.
+    DejaVu changes are in the public domain. Bitstream Vera Fonts License.
+
+  Noto Sans and Noto Serif
+    Copyright 2015 Google LLC. SIL Open Font License 1.1.
+  Noto Sans Arabic
+    Copyright 2015-2020 Google LLC. SIL Open Font License 1.1.
+  Noto Sans Thai
+    Copyright 2016 Google Inc. SIL Open Font License 1.1.
+  Noto Looped Thai
+    Copyright 2020 Google LLC. SIL Open Font License 1.1.
+  Noto Sans Devanagari
+    Copyright 2015 Google Inc. SIL Open Font License 1.1.
+  Noto Sans Math
+    Copyright 2018 Google LLC. SIL Open Font License 1.1.
+  Noto Sans CJK
+    Copyright 2014-2021 Adobe. SIL Open Font License 1.1.
+
+The advance table takes its maximum over two releases of the Noto faces
+above (ROADMAP O189): the ones Debian packages, whose notices are listed
+above, and Noto monthly release 23.7.1, fetched by hand by digest from
+github.com/notofonts/notofonts.github.io and never stored in this tree.
+That release carries these notices:
+
+  Noto Sans and Noto Serif (23.7.1)
+    Copyright 2022 The Noto Project Authors
+    (https://github.com/notofonts/latin-greek-cyrillic).
+    SIL Open Font License 1.1.
+  Noto Sans Arabic (23.7.1)
+    Copyright 2022 The Noto Project Authors
+    (https://github.com/notofonts/arabic). SIL Open Font License 1.1.
+  Noto Sans Thai and Noto Looped Thai (23.7.1)
+    Copyright 2022 The Noto Project Authors
+    (https://github.com/notofonts/thai). SIL Open Font License 1.1.
+  Noto Sans Devanagari (23.7.1)
+    Copyright 2022 The Noto Project Authors
+    (https://github.com/notofonts/devanagari). SIL Open Font License 1.1.
+  Noto Sans Math (23.7.1)
+    Copyright 2022 Google LLC. SIL Open Font License 1.1.

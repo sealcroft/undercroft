@@ -1715,9 +1715,15 @@ Consequences that are binding, not advisory:
   CDN, faces that appear in NO other file in this tree — the landing page and
   the whole vendored set are IBM Plex + GFS Didot. So "vendor them, as O2 did"
   was the wrong repair; it would have added three families the product does
-  not use, for an unpublished directory. They are **system stacks** now,
-  matching the governed `architecture/index.html` beside them, which is the
-  precedent that actually governs a file in this directory (ROADMAP O78).
+  not use, for an unpublished directory. They were **system stacks**, matching
+  the governed `architecture/index.html` beside them (ROADMAP O78), until the
+  maintainer ruled on 2026-09-15 that **no proprietary font is named anywhere
+  in the tree** (O189). Every font list, in both diagram sets, the consoles,
+  the site and the brand assets, now names only openly licensed faces:
+  `"DejaVu Sans", "Noto Sans", sans-serif`, `"DejaVu Sans Mono", monospace`
+  and `"DejaVu Serif", "Noto Serif", serif`, or the IBM Plex and GFS Didot the
+  site vendors. No font file is shipped for this, and the `fonts are openly
+  licensed` preflight holds the rule.
   **`diagrams/` remains the authority** — this set is a second description of
   the same system. **Its published COUNTS are gated** since 2026-08-31 (ROADMAP
   O74, ruled *depend on the diagrams, they represent the facts we have now*):
@@ -1764,14 +1770,35 @@ Consequences that are binding, not advisory:
   2-accent budget, and the geometry rules a renderer would otherwise be needed
   to catch — no diagonal connector, none passing behind a non-endpoint box, no
   label mask painted over by a later node — and, since O188, **every `<text>`
-  fits the box that holds it**. That arm is an ESTIMATE (characters × size ×
-  an advance in em, since a stdlib checker has no font engine), and it exists
-  because the geometry arms read rects and lines and never a text's width:
-  113 lines spilled out of their boxes under a green gate, seen by the
-  maintainer on the rendered page. Monospace is gated at 0.60 em, the widest
-  common face — Consolas, which the Windows pane renders, is 0.55, so a line
-  drawn to fit there spills on a Mac — while the proportional 0.56 is an
-  average, not a bound, and says so. It carries a **premise probe**: the
+  fits the box that holds it**. It exists because the geometry arms read rects
+  and lines and never a text's width: 113 lines spilled out of their boxes
+  under a green gate, seen by the maintainer on the rendered page. Since O189
+  the width comes from `architecture/textfit/textfit.py`, the ONE fit
+  implementation both diagram sets share. It reads a per-glyph advance table
+  generated from the openly licensed faces the ruling names: the per-glyph
+  maximum of DejaVu and Noto over two Noto releases, Debian's and notofonts'
+  monthly release 23.7.1, Arabic priced by positional form, and the fallback
+  faces a renderer really uses. **Every font file is pinned by sha256** in
+  `architecture/textfit/fonts.tsv`, because a version string is not an
+  identity (Debian's and Alpine's DejaVu 2.37 are different files), and
+  `textfit/pins.py` fails `arch-check` when the table's header and its pins
+  disagree. What the table cannot price it refuses: a line a shaper can
+  recompose (O194), a character some modelled reader draws with no face — the
+  readers are `textfit/readers.py`, ONE model the generator and the
+  calibration share (O189, panel 2) — an unassigned codepoint in the CJK
+  blocks, and any run on a Python whose Unicode version is not the table's.
+  CJK is priced at 1.05 em, one em plus the largest default-on kern the
+  declared CJK faces' own tables carry. The 4-unit padding is its declared
+  error budget, which the table's own kerning can in principle exceed (O196),
+  and it is
+  calibrated in headless Chromium with every face EMBEDDED from the pinned
+  files (`architecture/textfit/calibrate/`) — the image's digest pins the
+  shaper and never pinned the fonts, which an unversioned `apk add` had
+  supplied. A newer Noto is not covered yet (O193). It replaced
+  two flat estimates that failed: 0.56 em flagged 83 lines and missed 3 real
+  spills, and 0.60 em was called a monospace bound while DejaVu Sans Mono
+  advances 0.60205. One font environment is not "fits": the Windows pane
+  found 4 spills where DejaVu found 22. It carries a **premise probe**: the
   geometry checks must fail on a known-bad fixture before any clean result is
   believed. **`rx` is the discriminator between a node and a zone** (6 vs 8) —
   a first version treated every large stroked rect as a node and reported 96
@@ -2309,7 +2336,7 @@ own teardown was the place it had not been applied. Gated by the
 `destructive compose scope` preflight, which requires every compose teardown
 in `tests/` to name the project it destroys; `tests/tls-pins.sh`'s two scoped
 teardowns are the accepted shape. Logs land in `.battery/` (gitignored).
-**`bash tests/battery.sh --preflight-only` runs the nineteen host-side preflights
+**`bash tests/battery.sh --preflight-only` runs the twenty host-side preflights
 and no suite**, which is what CI invokes. **A count the battery cannot trust is never compared to a published figure, and there are TWO ways to earn that (O97/O103): the suite EXITED NON-ZERO — `cargo test` aborts at the first failing target, so a numeric, replay-free count arrives over a fraction of them — or the reader disowned it with a `PREMISE FAILURE` marker. `count_untrustworthy` is the one place that question is answered, because it used to be answered twice and differently: the cargo arm guarded on the marker, the shell arm stripped it with a trailing `.*`, and neither looked at the exit code. It fails either way — a gate that cannot measure must not report clean — and the verdict names WHICH cause, because the message was written for a replay and told the reader to re-run a failure that was deterministic. (This sentence said "seven" while
 the tree ran eight, and nothing could say so — and then "ten" while the tree
 ran eleven, which the gate caught inside the very unit that caused it.
@@ -2334,7 +2361,7 @@ code — including the post-run comparison of each suite's MEASURED check count
 against the figure `CLAUDE.md` publishes for it. That comparison needs a RUN
 and therefore cannot be a preflight, so until M13 it ran nowhere on a pull
 request and a leg dropping from 370 checks to 3 was green. The flag skips the
-nineteen preflights because the dedicated `preflight` job already runs them
+twenty preflights because the dedicated `preflight` job already runs them
 once. **The shared readers — `test_summary`, `suite_summary`,
 `declare_suite_counts`, `suite_count` — are deliberately defined OUTSIDE the
 skipped block**, and that is not tidiness: with them inside, `--no-preflight`

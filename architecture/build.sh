@@ -60,8 +60,16 @@ if [ "$MODE" = build ]; then
   # the SVG.
   command -v rsvg-convert >/dev/null 2>&1 || {
     apt-get -qq update >/dev/null 2>&1
-    apt-get -qq install -y librsvg2-bin python3 fonts-noto-core fonts-noto-cjk >/dev/null 2>&1
+    apt-get -qq install -y librsvg2-bin python3 fonts-dejavu-core fonts-noto-core fonts-noto-cjk >/dev/null 2>&1
   }
+
+  # Text fit before anything renders (ROADMAP O189): a rebuild must not bake a
+  # spill into a PDF, and the same arm runs in --check below. DejaVu is installed
+  # because the diagrams name it first; only openly licensed faces are named.
+  # The pins go first: a table whose header disagrees with gen_advances.sh or
+  # fonts.tsv is not the standard those files pin, so nothing is measured with it.
+  python3 textfit/pins.py
+  python3 textfit/textfit.py diagrams/*.svg
 
   mkdir -p pdf .flat
 
@@ -98,6 +106,14 @@ PY
   done
 
   rm -rf .flat
+fi
+
+# ── Text fit, verify mode (ROADMAP O189) ───────────────────────────────────
+# The rebuild ran this before rendering; --check runs it here, so arch-check
+# fails on a spilling diagram without writing anything.
+if [ "$MODE" = check ]; then
+  python3 textfit/pins.py
+  python3 textfit/textfit.py diagrams/*.svg
 fi
 
 # ── PDF coverage, both modes ────────────────────────────────────────────────

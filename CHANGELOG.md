@@ -7,6 +7,97 @@ its CLI mirror `tenant-repoint` are additive — nothing that worked before
 behaves differently because they exist. Everything else in this section is a
 fix whose only observable change is that a defect is gone.
 
+### text in the architecture diagrams fits its boxes under a pinned, measured standard, and only openly licensed fonts are named (O189)
+
+In the 11 diagrams under `architecture/diagrams/`, lines of text ran past the
+boxes that hold them, and how many depended on the font: four in the Windows
+browser, 22 in DejaVu Sans, and the committed PDFs, set in Noto Sans, cut two
+of those lines off mid-word at the page edge. The lines were reworded, keeping
+every fact each one states. Two rewordings corrected a fact: the irregular
+table holds 201 *pairs*, and German's example is now `gehen/ging`, because
+`Mann/Männer` is reached by a suffix rule rather than by the table.
+
+A line now fits when it fits under the widest advance any of the named faces
+gives each character, and a check measures that instead of estimating it.
+- `architecture/textfit/advances.tsv` is the standard: DejaVu Sans and Noto
+  Sans in both weights, DejaVu Sans Mono, DejaVu Serif and Noto Serif, and the
+  Noto faces a renderer falls back to for Arabic, Thai, Devanagari and
+  mathematical arrows. Arabic is priced by the positional form its joining
+  context forces, and a ligature at its widest reading.
+- It is the maximum over two releases of those Noto faces: the ones Debian
+  bookworm packages, and notofonts' monthly release 23.7.1. Every file is
+  pinned by sha256 in `architecture/textfit/fonts.tsv`, because a version
+  string does not identify a file. `gen_advances.sh` regenerates the table by
+  hand, byte for byte the same on every run, fetching the 23.7.1 files by
+  digest and refusing any file, package or shaping feature it cannot vouch for.
+- `textfit.py` is the one checker both diagram sets use, run by `build.sh`
+  before a rebuild renders anything and again under `--check`, so `arch-check`
+  fails on a spilling diagram; `platform-views/check.py` uses it in place of
+  its 0.56 and 0.60 em estimates. It fails on anything it cannot price. It
+  refuses a line a shaper could recompose into a precomposed glyph wider than
+  its parts, and it refuses to run on a Python whose Unicode version differs
+  from the table's. It matches a ligature across a character a face classes as
+  a mark, and prices the zero-width joiners in every column. `textfit/pins.py`,
+  also run by `arch-check`, fails when the table's header disagrees with the
+  pins that made it. Every arm must catch its own known-bad fixture before a
+  clean result is believed.
+
+A character is priced only where every reader the standard models can draw it.
+`architecture/textfit/readers.py` holds those readers for each font release:
+a DejaVu-first and a Noto-first font list, each followed by the Arabic, Thai or
+Looped Thai, Devanagari and Math faces, in every weight and style a column uses.
+- A reader draws a character with the first face in its list that has it, and
+  that face's width counts.
+- Where some reader has no face for a character, the table leaves it unpriced and
+  the check refuses the line. Hebrew, Armenian and a few mathematical symbols one
+  Noto release lacks are refused, not measured against a font that reader never
+  has. No diagram uses them today.
+- Chinese and Japanese characters are priced at 1.05 em: one em, plus the widest
+  gap the declared CJK font's kerning opens, read from the font's own tables. An
+  unassigned character in those blocks is refused.
+
+The calibration harness in `architecture/textfit/calibrate/` checks this
+against headless Chromium. A run now fails when:
+- a rendered character is in no font the browser reports, which is a box;
+- the CJK font draws a character outside the CJK blocks;
+- the browser draws with a face the reader model did not predict.
+
+The standard was calibrated against that browser on 2026-09-16, with every font
+embedded from the pinned files. Over 4,053 fixture strings and 450 groups of CJK
+characters, in 20 passes per font release, no render came out more than 0.02 px
+wider than the table prices it, and no character advanced more than 0.02 px past
+one em with kerning off. Over the 1,789 lines of today's diagrams, on both
+releases and on the newest upstream Noto release as a canary, the widest a render
+ran past the table was 0.08 px, against the 4-unit budget — 1.50 px on the canary,
+on one mathematical arrow. Nothing was flagged by the table or by a render, and
+every one of the 44 known-bad fixtures the judges plant was caught.
+
+Noto's 2025.05.01 release is not covered. It widens the Arabic letter heh and
+the Arabic digits, the minus sign and the mathematical arrows, and the
+generator cannot model it yet; for a reader with those fonts the widest
+under-read measured on today's diagrams is 1.5 px, on one arrow.
+
+No proprietary font is named anywhere in the tree any more, a decision the
+maintainer made on 2026-09-15. Every font list now names openly licensed faces
+and then a generic family, and no font file is shipped for them: the
+architecture diagrams and pages, the platform views, the three consoles served
+at `/ui` and `/monitor`, the brand SVGs, the site's stylesheet and landing-page
+fallbacks, and the Mermaid diagrams. A reader without those faces sees their
+own system's generic family. The Mermaid SVGs were re-rendered through
+`docs/diagrams/mermaid-config.json` with a digest-pinned recipe, live Mermaid
+in the book uses the IBM Plex Sans it already loads, and the social preview
+image was re-rendered. A new preflight, `fonts are openly licensed`, holds the
+rule with an allowlist, making twenty. `NOTICE` acknowledges every font the
+table and the PDFs derive from, both Noto releases included.
+
+Filed from this work: O190, the Mermaid SVGs have no drift gate; O191, a stale
+architecture PDF passes `build.sh --check`; O192, a vector backend that never
+becomes ready leaves no diagnostics in CI; O193, a slot for current Noto
+releases; O194, pricing a recomposable spelling instead of refusing it; O195,
+a reader model that is declared rather than observed; O196, positive kerning
+in the table's own faces, which a few maximal pairs could push past the 4-unit
+error budget.
+
 ### drawers a served embedder or advisor is sent from storage are recorded, and three paths stop sending them (O167)
 
 With `UNDERCROFT_EMBEDDER=http`, several operations sent the embeddings

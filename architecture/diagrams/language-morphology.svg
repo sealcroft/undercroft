@@ -2,12 +2,12 @@
 <title id="t">How a language is resolved and what it admits</title>
 <desc id="d">Language is resolved by declaration first, else by the drawer's own closed-class function words; a query written in a script that names one language adds that language beside the resolved one rather than replacing it. Five pairwise morphology rules then feed the lexical morph channel, which admits a drawer without claiming the drawer said the word.</desc>
 <style>
-  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .f { font-family: "DejaVu Sans", "Noto Sans", sans-serif; }
   .h { font-size: 17px; font-weight: 600; }
   .l { font-size: 13.5px; font-weight: 600; }
   .b { font-size: 12px; }
   .s { font-size: 11px; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .mono { font-family: "DejaVu Sans Mono", monospace; font-size: 11px; }
   .ink { fill: var(--d-ink,#14202b); }
   .dim { fill: var(--d-dim,#55697a); }
   .white { fill: var(--d-card,#ffffff); }
@@ -56,7 +56,7 @@
 <text x="614" y="195" class="f s dim">one language. Cyrillic → Russian and</text>
 <text x="614" y="210" class="f s dim">Devanagari → Hindi, labelled approximate.</text>
 <text x="614" y="233" class="f s" fill="var(--d-violet-ink,#523a86)">Joins as a SECOND inflecting language;</text>
-<text x="614" y="248" class="f s" fill="var(--d-violet-ink,#523a86)">never replaces 1 or 2, never feeds suffixes.</text>
+<text x="614" y="248" class="f s" fill="var(--d-violet-ink,#523a86)">never replaces 1 or 2, nor feeds suffixes.</text>
 
 <text x="42" y="274" class="f s dim">Read per candidate, not per query: a vault may hold several languages, and the drawer is the unit that has one.</text>
 
@@ -85,14 +85,14 @@
 <rect x="552" y="338" width="158" height="80" rx="7" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)" stroke-width="1.6"/>
 <text x="564" y="358" class="f mono" fill="var(--d-amber-ink,#8d5a1d)">ar_root_family</text>
 <text x="564" y="376" class="f s dim">144 roots × 20 patterns</text>
-<text x="564" y="391" class="f s dim">= 2859 forms. Two words</text>
-<text x="564" y="406" class="f s dim">meet only if ONE root fits.</text>
+<text x="564" y="391" class="f s dim">= 2859 forms. A pair</text>
+<text x="564" y="406" class="f s dim">meets only via ONE root.</text>
 
 <rect x="722" y="338" width="136" height="80" rx="7" fill="var(--d-card2,#f7f9fb)" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.2"/>
 <text x="734" y="358" class="f mono ink">IRREGULAR</text>
-<text x="734" y="376" class="f s dim">201 forms no rule</text>
-<text x="734" y="391" class="f s dim">over shape can reach:</text>
-<text x="734" y="406" class="f s dim">go/went, Mann/Männer</text>
+<text x="734" y="376" class="f s dim">201 pairs no rule</text>
+<text x="734" y="391" class="f s dim">over shape reaches:</text>
+<text x="734" y="406" class="f s dim">go/went, gehen/ging</text>
 
 <rect x="42" y="430" width="404" height="74" rx="7" fill="var(--d-red-bg,#fdf2f1)" stroke="var(--d-red,#b5453a)" stroke-width="1.4"/>
 <text x="58" y="450" class="f l" fill="var(--d-red-ink,#993a30)">Why not a stemmer</text>
@@ -103,8 +103,8 @@
 <rect x="458" y="430" width="400" height="74" rx="7" fill="var(--d-amber-bg,#fdf6ee)" stroke="var(--d-amber,#b5762a)" stroke-width="1.4"/>
 <text x="474" y="450" class="f l" fill="var(--d-amber-ink,#8d5a1d)">Why Arabic needed its own table</text>
 <text x="474" y="468" class="f s dim">An ALLOWLIST: a form the table cannot generate matches nothing.</text>
-<text x="474" y="483" class="f s dim">Subsequence rules failed three times — بيت→بيوت and يجب→يجيب</text>
-<text x="474" y="497" class="f s dim">are the same string operation, and no rule over shape separates them.</text>
+<text x="474" y="483" class="f s dim">Three subsequence rules failed: بيت→بيوت and يجب→يجيب</text>
+<text x="474" y="497" class="f s dim">are the same string operation; no rule over shape separates them.</text>
 
 <rect x="24" y="534" width="852" height="122" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
 <text x="42" y="560" class="f l ink">3 · three channels, and only two of them are a claim about words</text>

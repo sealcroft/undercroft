@@ -2,12 +2,12 @@
 <title id="t">From text to tokens</title>
 <desc id="d">Text passes through a six-stage retrieval fold and then a script-aware split. Delimiting scripts yield whole words; scripts that attach without a delimiter yield bigrams flagged as n-grams and refused the exact match channel; Han yields unigrams because a character is a morpheme.</desc>
 <style>
-  .f { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .f { font-family: "DejaVu Sans", "Noto Sans", sans-serif; }
   .h { font-size: 17px; font-weight: 600; }
   .l { font-size: 13.5px; font-weight: 600; }
   .b { font-size: 12px; }
   .s { font-size: 11px; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+  .mono { font-family: "DejaVu Sans Mono", monospace; font-size: 11px; }
   .ink { fill: var(--d-ink,#14202b); }
   .dim { fill: var(--d-dim,#55697a); }
   .white { fill: var(--d-card,#ffffff); }
@@ -25,7 +25,7 @@
 <rect width="900" height="776" fill="var(--d-bg,#fbfcfd)"/>
 
 <text x="28" y="38" class="f h ink">From text to tokens — the fold, then the split</text>
-<text x="28" y="58" class="f b dim">The query and the drawer take exactly this path. Stored bytes are never folded: the promise is verbatim, so this produces comparison keys only.</text>
+<text x="28" y="58" class="f b dim">The query and the drawer take exactly this path. Stored bytes are never folded: the promise is verbatim, so this yields comparison keys only.</text>
 
 <rect x="24" y="76" width="852" height="256" rx="10" fill="var(--d-card,#ffffff)" stroke="var(--d-line,#c9d4dd)" stroke-width="1.5"/>
 <text x="42" y="102" class="f l ink">1 · the fold</text>
@@ -73,7 +73,7 @@
 
 <rect x="42" y="258" width="404" height="58" rx="7" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.4"/>
 <text x="58" y="278" class="f l" fill="var(--d-green-ink,#22603c)">Conflations, each pinned by test</text>
-<text x="58" y="299" class="f mono dim">على/علي · كتابة/كتابه · Masse/Maße · πότε/ποτέ · все/всё</text>
+<text x="58" y="299" class="f mono dim">على/علي, كتابة/كتابه, Masse/Maße, πότε/ποτέ, все/всё</text>
 
 <rect x="458" y="258" width="400" height="58" rx="7" fill="var(--d-red-bg,#fdf2f1)" stroke="var(--d-red,#b5453a)" stroke-width="1.4"/>
 <text x="474" y="278" class="f l" fill="var(--d-red-ink,#993a30)">Deliberately NOT stripped</text>
@@ -84,7 +84,7 @@
 <text x="42" y="374" class="f l ink">2 · the split</text>
 <text x="130" y="374" class="f mono dim">script::segment</text>
 <text x="600" y="374" class="f s dim">the script decides, and the script alone</text>
-<text x="42" y="394" class="f s dim">Splitting on “not alphanumeric” finds no boundary at all in Han, Kana, Hangul, Arabic, Khmer, Thai, Lao or Myanmar — a whole clause became one token.</text>
+<text x="42" y="394" class="f s dim">Splitting on “not alphanumeric” finds no boundary in Han, Kana, Hangul, Arabic, Khmer, Thai, Lao or Myanmar — a whole clause became one token.</text>
 
 <rect x="42" y="408" width="266" height="188" rx="8" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.6"/>
 <text x="58" y="432" class="f l" fill="var(--d-blue-ink,#33527d)">delimiting</text>

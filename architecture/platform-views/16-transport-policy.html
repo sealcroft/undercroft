@@ -12,9 +12,9 @@
       --color-ink:    #d9f0ea;
       --color-muted:  #7fa39c;
       --color-accent: #35e0c2;
-      --font-sans:  -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      --font-serif: Georgia, "Times New Roman", serif;
-      --font-mono:  ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      --font-sans:  "DejaVu Sans", "Noto Sans", sans-serif;
+      --font-serif: "DejaVu Serif", "Noto Serif", serif;
+      --font-mono:  "DejaVu Sans Mono", monospace;
     }
     body {
       font-family: var(--font-sans);
@@ -58,11 +58,11 @@
       <!-- ============ ZONES (drawn first) ============ -->
       <rect x="80" y="128" width="272" height="344" rx="8" fill="rgba(217,240,234,0.02)" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
       <rect x="176" y="132" width="80" height="12" rx="2" fill="#04080a"/>
-      <text x="216" y="141" fill="rgba(217,240,234,0.40)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.14em">THIS HOST</text>
+      <text x="216" y="141" fill="rgba(217,240,234,0.40)" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.14em">THIS HOST</text>
 
       <rect x="832" y="32" width="304" height="504" rx="8" fill="rgba(201,169,97,0.03)" stroke="rgba(201,169,97,0.40)" stroke-width="0.8" stroke-dasharray="4,4"/>
       <rect x="912" y="36" width="144" height="12" rx="2" fill="#04080a"/>
-      <text x="984" y="45" fill="rgba(201,169,97,0.80)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.14em">OTHER TRUST DOMAINS</text>
+      <text x="984" y="45" fill="rgba(201,169,97,0.80)" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.14em">OTHER TRUST DOMAINS</text>
 
       <!-- ============ ARROWS (before boxes) ============ -->
       <!-- engine -> net -->
@@ -82,103 +82,103 @@
 
       <!-- ============ ARROW LABELS (mask + gap) ============ -->
       <rect x="344" y="192" width="96" height="12" rx="2" fill="#04080a"/>
-      <text x="392" y="201" fill="#35e0c2" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">ALL OUTBOUND</text>
+      <text x="392" y="201" fill="#35e0c2" font-size="8" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.06em">ALL OUTBOUND</text>
 
       <rect x="344" y="412" width="96" height="12" rx="2" fill="#04080a"/>
-      <text x="392" y="421" fill="#35e0c2" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.06em">PURE /v1 CLIENT</text>
+      <text x="392" y="421" fill="#35e0c2" font-size="8" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.06em">PURE /v1 CLIENT</text>
 
       <!-- ============ NODES ============ -->
       <!-- engine -->
       <rect x="96" y="160" width="240" height="104" rx="6" fill="#04080a"/>
       <rect x="96" y="160" width="240" height="104" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
       <rect x="104" y="166" width="44" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
-      <text x="126" y="175" fill="rgba(217,240,234,0.80)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">BINARY</text>
-      <text x="216" y="200" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">undercroft (engine)</text>
-      <text x="216" y="218" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">embed · llm · index · OTLP hops</text>
-      <text x="216" y="232" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">agent_from_env, or rustls_config_from_env</text>
-      <text x="216" y="246" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">for the one hop that is not HTTP</text>
+      <text x="126" y="175" fill="rgba(217,240,234,0.80)" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.08em">BINARY</text>
+      <text x="216" y="200" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif" text-anchor="middle">undercroft (engine)</text>
+      <text x="216" y="218" fill="#7fa39c" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">embed · llm · index · OTLP hops</text>
+      <text x="216" y="232" fill="#5c7f79" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">agent_from_env, or rustls_config_from_env</text>
+      <text x="216" y="246" fill="#5c7f79" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">for the one hop that is not HTTP</text>
 
       <!-- orchestrator -->
       <rect x="96" y="352" width="240" height="104" rx="6" fill="#04080a"/>
       <rect x="96" y="352" width="240" height="104" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
       <rect x="104" y="358" width="44" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
-      <text x="126" y="367" fill="rgba(217,240,234,0.80)" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">BINARY</text>
-      <text x="216" y="392" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">undercroft-orchestrator</text>
-      <text x="216" y="410" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">engine hop · OTLP hop</text>
-      <text x="216" y="424" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">its own config check runs the</text>
-      <text x="216" y="438" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">same resolvers serve does</text>
+      <text x="126" y="367" fill="rgba(217,240,234,0.80)" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.08em">BINARY</text>
+      <text x="216" y="392" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif" text-anchor="middle">undercroft-orchestrator</text>
+      <text x="216" y="410" fill="#7fa39c" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">engine hop · OTLP hop</text>
+      <text x="216" y="424" fill="#5c7f79" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">its own config check runs the</text>
+      <text x="216" y="438" fill="#5c7f79" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">same resolvers serve does</text>
 
       <!-- undercroft-net (FOCAL) -->
       <rect x="448" y="232" width="272" height="120" rx="6" fill="#04080a"/>
       <rect x="448" y="232" width="272" height="120" rx="6" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1.2"/>
       <rect x="456" y="238" width="44" height="12" rx="2" fill="transparent" stroke="rgba(53,224,194,0.50)" stroke-width="0.8"/>
-      <text x="478" y="247" fill="#35e0c2" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle" letter-spacing="0.08em">POLICY</text>
-      <text x="584" y="272" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">undercroft-net</text>
-      <text x="584" y="290" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">TLS or loopback — nothing else, no override</text>
-      <text x="584" y="304" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">a declared pin REPLACES the public roots</text>
-      <text x="584" y="318" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">a pin that does not parse refuses to start</text>
-      <text x="584" y="332" fill="#5c7f79" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">is_loopback asks the transport's own URL parser</text>
+      <text x="478" y="247" fill="#35e0c2" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.08em">POLICY</text>
+      <text x="584" y="272" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif" text-anchor="middle">undercroft-net</text>
+      <text x="584" y="290" fill="#7fa39c" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">TLS or loopback — nothing else, no override</text>
+      <text x="584" y="304" fill="#7fa39c" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">a declared pin REPLACES the public roots</text>
+      <text x="584" y="318" fill="#5c7f79" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">a pin that does not parse refuses to start</text>
+      <text x="584" y="332" fill="#5c7f79" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">is_loopback asks the transport's own URL parser</text>
 
       <!-- served embedder -->
       <rect x="848" y="64" width="272" height="72" rx="6" fill="#04080a"/>
       <rect x="848" y="64" width="272" height="72" rx="6" fill="rgba(217,240,234,0.03)" stroke="rgba(217,240,234,0.30)" stroke-width="1"/>
-      <text x="984" y="88" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Served embedder</text>
-      <text x="984" y="106" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">UNDERCROFT_EMBED_URL · reads drawer plaintext</text>
-      <text x="984" y="122" fill="#c9a961" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">pin: UNDERCROFT_EMBED_CA</text>
+      <text x="984" y="88" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif" text-anchor="middle">Served embedder</text>
+      <text x="984" y="106" fill="#7fa39c" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">UNDERCROFT_EMBED_URL · reads drawer plaintext</text>
+      <text x="984" y="122" fill="#c9a961" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">pin: UNDERCROFT_EMBED_CA</text>
 
       <!-- LLM runtime -->
       <rect x="848" y="160" width="272" height="72" rx="6" fill="#04080a"/>
       <rect x="848" y="160" width="272" height="72" rx="6" fill="rgba(217,240,234,0.03)" stroke="rgba(217,240,234,0.30)" stroke-width="1"/>
-      <text x="984" y="184" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">LLM runtime</text>
-      <text x="984" y="202" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">UNDERCROFT_LLM_URL · refine, the tier-2 advisor</text>
-      <text x="984" y="218" fill="#c9a961" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">pin: UNDERCROFT_LLM_CA</text>
+      <text x="984" y="184" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif" text-anchor="middle">LLM runtime</text>
+      <text x="984" y="202" fill="#7fa39c" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">UNDERCROFT_LLM_URL · refine, the tier-2 advisor</text>
+      <text x="984" y="218" fill="#c9a961" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">pin: UNDERCROFT_LLM_CA</text>
 
       <!-- remote vector index -->
       <rect x="848" y="256" width="272" height="72" rx="6" fill="#04080a"/>
       <rect x="848" y="256" width="272" height="72" rx="6" fill="rgba(217,240,234,0.03)" stroke="rgba(217,240,234,0.30)" stroke-width="1"/>
-      <text x="984" y="280" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">Remote vector index</text>
-      <text x="984" y="298" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">ureq ×4 · pgvector: rustls + tokio_postgres::Config</text>
-      <text x="984" y="314" fill="#c9a961" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">pin: UNDERCROFT_INDEX_CA — one answer, all five</text>
+      <text x="984" y="280" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif" text-anchor="middle">Remote vector index</text>
+      <text x="984" y="298" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">ureq ×4 · pgvector: rustls + tokio_postgres::Config</text>
+      <text x="984" y="314" fill="#c9a961" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">pin: UNDERCROFT_INDEX_CA — one answer, all five</text>
 
       <!-- engine /v1, the fleet hop -->
       <rect x="848" y="352" width="272" height="72" rx="6" fill="#04080a"/>
       <rect x="848" y="352" width="272" height="72" rx="6" fill="rgba(217,240,234,0.03)" stroke="rgba(217,240,234,0.30)" stroke-width="1"/>
-      <text x="984" y="376" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">An engine's /v1 (the fleet hop)</text>
-      <text x="984" y="394" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">orchestrator → engine: bearer + minted assertion</text>
-      <text x="984" y="410" fill="#c9a961" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">pin: UNDERCROFT_ORCH_ENGINE_CA</text>
+      <text x="984" y="376" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif" text-anchor="middle">An engine's /v1 (the fleet hop)</text>
+      <text x="984" y="394" fill="#7fa39c" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">orchestrator → engine: bearer + minted assertion</text>
+      <text x="984" y="410" fill="#c9a961" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">pin: UNDERCROFT_ORCH_ENGINE_CA</text>
 
       <!-- tempo-tls -->
       <rect x="848" y="448" width="272" height="72" rx="6" fill="#04080a"/>
       <rect x="848" y="448" width="272" height="72" rx="6" fill="rgba(217,240,234,0.03)" stroke="rgba(217,240,234,0.30)" stroke-width="1"/>
-      <text x="984" y="472" fill="#d9f0ea" font-size="12" font-weight="600" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" text-anchor="middle">OTLP traces (tempo-tls)</text>
-      <text x="984" y="490" fill="#7fa39c" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">UNDERCROFT_OTLP_ENDPOINT · metadata-only spans</text>
-      <text x="984" y="506" fill="#c9a961" font-size="9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" text-anchor="middle">pin: UNDERCROFT_OTLP_CA · the policed ureq agent</text>
+      <text x="984" y="472" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif" text-anchor="middle">OTLP traces (tempo-tls)</text>
+      <text x="984" y="490" fill="#7fa39c" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">UNDERCROFT_OTLP_ENDPOINT · metadata-only spans</text>
+      <text x="984" y="506" fill="#c9a961" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">pin: UNDERCROFT_OTLP_CA · the policed ureq agent</text>
 
       <!-- ============ CALLOUT ============ -->
       <line x1="100" y1="568" x2="100" y2="656" stroke="rgba(217,240,234,0.18)" stroke-width="1.2"/>
-      <text x="124" y="582" fill="#5c7f79" font-size="7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" letter-spacing="0.14em">ASK WHAT A GATE CAN SEE</text>
-      <text x="124" y="606" fill="#d9f0ea" font-size="15" font-style="italic" font-family="Georgia, 'Times New Roman', serif">Three gates hold this picture, each on a different observable: one scans source for a second HTTP client's builder,</text>
-      <text x="124" y="628" fill="#d9f0ea" font-size="15" font-style="italic" font-family="Georgia, 'Times New Roman', serif">one reads the dependency edge out of Cargo.lock, one matches a bare read of any *_CA variable —</text>
-      <text x="124" y="650" fill="#d9f0ea" font-size="15" font-style="italic" font-family="Georgia, 'Times New Roman', serif">because the defects that shaped this crate each moved an observable the previous gate could not see.</text>
+      <text x="124" y="582" fill="#5c7f79" font-size="7" font-family="'DejaVu Sans Mono', monospace" letter-spacing="0.14em">ASK WHAT A GATE CAN SEE</text>
+      <text x="124" y="606" fill="#d9f0ea" font-size="15" font-style="italic" font-family="'DejaVu Serif', 'Noto Serif', serif">Three gates hold this picture, each on a different observable: one scans source for a second HTTP client's builder,</text>
+      <text x="124" y="628" fill="#d9f0ea" font-size="15" font-style="italic" font-family="'DejaVu Serif', 'Noto Serif', serif">one reads the dependency edge out of Cargo.lock, one matches a bare read of any *_CA variable —</text>
+      <text x="124" y="650" fill="#d9f0ea" font-size="15" font-style="italic" font-family="'DejaVu Serif', 'Noto Serif', serif">because the defects that shaped this crate each moved an observable the previous gate could not see.</text>
 
       <!-- ============ LEGEND ============ -->
       <line x1="80" y1="744" x2="1136" y2="744" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
-      <text x="80" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" letter-spacing="0.14em">LEGEND</text>
+      <text x="80" y="764" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace" letter-spacing="0.14em">LEGEND</text>
 
       <rect x="172" y="756" width="16" height="10" rx="2" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1"/>
-      <text x="196" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">FOCAL · THE ONE POLICY</text>
+      <text x="196" y="764" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace">FOCAL · THE ONE POLICY</text>
 
       <rect x="364" y="756" width="16" height="10" rx="2" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
-      <text x="388" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">BINARY</text>
+      <text x="388" y="764" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace">BINARY</text>
 
       <rect x="452" y="756" width="16" height="10" rx="2" fill="rgba(217,240,234,0.03)" stroke="rgba(217,240,234,0.30)" stroke-width="1"/>
-      <text x="476" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">EXTERNAL ENDPOINT</text>
+      <text x="476" y="764" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace">EXTERNAL ENDPOINT</text>
 
       <line x1="620" y1="761" x2="652" y2="761" stroke="#35e0c2" stroke-width="1.2"/>
-      <text x="660" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">BUILT BY THE POLICY</text>
+      <text x="660" y="764" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace">BUILT BY THE POLICY</text>
 
       <line x1="812" y1="761" x2="844" y2="761" stroke="#c9a961" stroke-width="1.2"/>
-      <text x="852" y="764" fill="#7fa39c" font-size="8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace">TLS OR LOOPBACK, CA-PINNABLE</text>
+      <text x="852" y="764" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace">TLS OR LOOPBACK, CA-PINNABLE</text>
     </svg>
   </div>
 </body>
