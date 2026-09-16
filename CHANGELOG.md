@@ -29,6 +29,14 @@ serves, and warns that the egress went unaudited. `UPGRADING.md` has the entry.
 Before the fix the refused run sent one request and failed in SQLite. An e2e
 check drives the CLI.
 
+That test was flaky when it first merged, and `main`'s CI went red on it. The
+stub never read request bodies, and the vendored HTTP server closes a
+connection whose body went unread, so the client's reused connection sometimes
+met EOF (117 failures in 200 runs). The stub now reads each body, as do the
+three other loopback stubs in the tests that had the same shape. Looped
+afterwards, every `refine` test passed 200 of 200 runs, and the
+`undercroft-llm` suite 100 of 100.
+
 **Corrected:** `CLAUDE.md` said the read-only warn-and-serve "reaches the CLI
 as well as `/v1`". A read-only server refuses `POST …/refine` before dispatch,
 dry run included, so no path ever took it to `/v1`.

@@ -739,8 +739,15 @@ mod tests {
         let received = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let counter = received.clone();
         std::thread::spawn(move || {
-            for req in s2.incoming_requests() {
+            for mut req in s2.incoming_requests() {
                 counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                // Consume the body before answering. The vendored tiny_http
+                // ENDS a connection whose request body went unread (ROADMAP
+                // O114), and the client reuses its pooled keep-alive
+                // connection, so back-to-back requests met `Unexpected EOF`
+                // at random — 117 failures in 200 runs of the O184 test, which
+                // passed its single battery run and went red after merge.
+                let _ = std::io::Read::read_to_end(req.as_reader(), &mut Vec::new());
                 let body =
                     serde_json::json!({ "message": { "role": "assistant", "content": reply } });
                 let _ = req.respond(

@@ -328,7 +328,11 @@ mod tests {
         let handle = std::thread::spawn(move || {
             for request in server.incoming_requests() {
                 counter.fetch_add(1, Ordering::SeqCst);
-                let req = request;
+                let mut req = request;
+                // Consume the body first: the vendored tiny_http ends a connection
+                // whose body went unread (ROADMAP O114), and a client reusing it
+                // meets EOF at random (O184's post-merge flake).
+                let _ = std::io::Read::read_to_end(req.as_reader(), &mut Vec::new());
                 let resp = tiny_http::Response::from_string(body).with_header(
                     tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
                         .unwrap(),
