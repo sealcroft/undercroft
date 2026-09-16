@@ -1038,7 +1038,11 @@ fn stub_llm(reply: &'static str) -> (String, std::sync::Arc<tiny_http::Server>) 
     let port = server.server_addr().to_ip().unwrap().port();
     let s2 = server.clone();
     std::thread::spawn(move || {
-        for req in s2.incoming_requests() {
+        for mut req in s2.incoming_requests() {
+            // Consume the body first: the vendored tiny_http ends a connection
+            // whose body went unread (ROADMAP O114), and a client reusing it
+            // meets EOF at random (O184's post-merge flake).
+            let _ = std::io::Read::read_to_end(req.as_reader(), &mut Vec::new());
             let body = serde_json::json!({ "message": { "role": "assistant", "content": reply } });
             let _ = req.respond(
                 tiny_http::Response::from_string(body.to_string()).with_header(

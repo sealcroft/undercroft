@@ -4259,6 +4259,28 @@ against a counting loopback extractor, through the fixed binary:
 The figures moved: cargo 898 → 899 (903 compiled), e2e 512 → 513, and the
 landing tiles to 899 and 876.
 
+**Post-merge defect, and it is mine (2026-09-16).** The gate test was FLAKY,
+and `ci` went red on `main` after the merge (`8447a60`, run 35134049314,
+`suite (test)`). The dry-run arm met `Network Error: Unexpected EOF` on one
+request, so the stub counted 2 where the test expects 3.
+- **Cause:** the loopback stub never read the request body. The vendored
+  `tiny_http` ends a connection whose body went unread (O114). The client
+  reuses its pooled keep-alive connection, so a request sent back-to-back on a
+  connection the server is closing meets EOF.
+- **Measured on `main`:** 117 failures in 200 runs of this test. The O95 test
+  on the same stub failed 0 in 200, since its fact writes space the requests
+  apart.
+- **The miss:** the unit ran the test once per build. Definition of done
+  item 2 says to run a test with a timing-dependent premise in a loop before
+  believing a green, and that was not done.
+- **The fix:** the stub consumes each body before answering. With it, each of
+  the 10 `refine` tests passed 200 of 200 looped runs.
+- **The sibling sweep:** three more loopback stubs answered without reading
+  the body: `tests/cli.rs`'s `stub_llm`, and `undercroft-llm`'s embeddings
+  `serve` and chat `stub_server`. None had failed on record, but each was
+  exposed to the same race. All three now read the body, and `undercroft-llm`'s
+  whole suite passed 100 of 100 looped runs afterwards.
+
 ### O170 — CLOSED 2026-09-16: a flagged write was quarantined on a declaration the store refused when the same write was clean — every check the candidate alone can settle now runs in front of the screen
 
 **Filed and ruled 2026-09-14, recorded rather than built.** The diagrams say the
