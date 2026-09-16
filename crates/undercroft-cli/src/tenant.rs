@@ -4449,6 +4449,62 @@ mod tests {
         );
     }
 
+    /// ROADMAP O170, on the route every `/v1` restore and the orchestrator's
+    /// tenant migration take: a flagged record declaring a malformed id is a
+    /// 400, not a 200 counting it quarantined, and the refusal never names the
+    /// queue id — which would tell the caller the screen's verdict.
+    #[test]
+    fn an_import_declaring_a_malformed_id_is_refused_even_when_the_screen_would_divert_it() {
+        let mut s = surface(false);
+        let mut store = VaultStore::open(s.tenancy.manager.unlock("acme").unwrap()).unwrap();
+        store.set_admission(true);
+        s.tenancy.stores.insert("acme".to_string(), store);
+        let pending = |s: &mut Surface| {
+            s.tenancy
+                .stores
+                .get_mut("acme")
+                .expect("cached")
+                .admission_pending()
+                .unwrap()
+                .len()
+        };
+
+        // PREMISE: the same content under its derived id is DIVERTED here.
+        let good = Drawer::new("ops", "r", POISON.into(), None, 51, "export");
+        let (code, body) = s.call(
+            "POST",
+            "/v1/vaults/acme/import",
+            Some(&format!("{}\n", json!({ "drawer": good }))),
+        );
+        assert_eq!(code, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["quarantined"], json!(1), "premise: the screen diverts");
+        let queued = pending(&mut s);
+
+        let mut bad = Drawer::new("ops", "r", POISON.into(), None, 52, "export");
+        bad.id = format!("fde/{}", bad.id);
+        let slot = undercroft_core::ids::quarantine_drawer_id("ops", "r", "(direct)", 52);
+        let (code, body) = s.call(
+            "POST",
+            "/v1/vaults/acme/import",
+            Some(&format!("{}\n", json!({ "drawer": bad }))),
+        );
+        assert_eq!(
+            code, 400,
+            "a malformed declaration is a bad request: {body}"
+        );
+        assert!(body.contains("not a derived drawer id"), "{body}");
+        assert!(
+            !body.contains(&slot),
+            "the refusal names the queue id, i.e. the screen's verdict: {body}"
+        );
+        assert_eq!(
+            pending(&mut s),
+            queued,
+            "a refused declaration must not reach the operator's review queue"
+        );
+    }
+
     /// C6: an imported token artifact is filed under the id the row LANDED
     /// under, and an id that is not a drawer id is refused outright.
     ///

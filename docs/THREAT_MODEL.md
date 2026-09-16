@@ -213,8 +213,14 @@ point, **and** at the admission screen in front of it, because a diversion
 rewrites the very fields the guard reads: it moves the declared wing into
 `intended_wing` and puts the reserved quarantine constant in its place, so
 until 2026-08-13 an invalidly-declared write whose content tripped the
-detector was quarantined rather than refused (ROADMAP O30). A guard at the
-choke point is necessary and was not sufficient. This is the
+detector was quarantined rather than refused (ROADMAP O30). The other
+declaration checks stayed behind that rewrite until 2026-09-16 (ROADMAP O170).
+That included the drawer id's shape, and the id is an AAD component, so the
+shape check is part of the cross-artifact separation above. It also included
+a caller's vector, `filed_at` and supersession. So a flagged record with a
+malformed id was quarantined, and a refusal quoted the review-queue id, which
+told the caller the screen's verdict. All of those checks now run at the screen
+as well. A guard at the choke point is necessary and was not sufficient. This is the
 property that makes vault-per-customer multi-tenancy defensible; every
 competitor surveyed in [SECURITY_COMPARISON.md](https://sealcroft.com/undercroft/docs/security-comparison.html)
 isolates tenants with a metadata filter.

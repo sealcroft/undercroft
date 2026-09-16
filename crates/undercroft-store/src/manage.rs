@@ -1436,16 +1436,19 @@ impl VaultStore {
                     // the diverted copy), so the preview costs a screen and
                     // no mutation.
                     //
-                    // The `?` is O30's declaration check reaching a third
-                    // caller, and it is inert here by construction rather
-                    // than by luck: `keep` is a drawer read back out of this
-                    // store, so its wing and room already passed the write
-                    // choke point. It propagates anyway — a preview that
-                    // swallowed a refusal would be previewing something the
-                    // apply path would not do, which is the defect the two
-                    // comments above this one describe.
+                    // The `?` is the declaration check (O30, and since O170 the
+                    // whole declaration) reaching a third caller. `keep` is a
+                    // drawer read back out of this store, so its declaration
+                    // passed the write choke point of the binary that wrote it;
+                    // a row an older binary let through can still refuse here,
+                    // and `--apply` refuses it identically. It propagates — a
+                    // preview that swallowed a refusal would be previewing
+                    // something the apply path would not do, which is the
+                    // defect the two comments above this one describe. No
+                    // vector: a preview stores nothing, and the survivor's
+                    // stored one was checked when it was written.
                     diverted = self
-                        .screen_and_divert(keep, crate::Screen::Apply)?
+                        .screen_and_divert(keep, None, crate::Screen::Apply)?
                         .is_some();
                 }
                 if !diverted {

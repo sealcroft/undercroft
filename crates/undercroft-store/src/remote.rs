@@ -2158,6 +2158,117 @@ mod tests {
         out
     }
 
+    /// **O170: every production call of `screen_and_divert` STATES the vector
+    /// it screens with — `Some(..)` or `None` — and the calls are exactly the
+    /// three the ruling names.**
+    ///
+    /// The vector parameter exists so a caller cannot forget it: the batch
+    /// path embeds after screening and a `dedup` preview stores nothing, so
+    /// both say `None`, and the choke point says which vector it will store.
+    /// A fourth caller is the class this tree keeps losing — a second path
+    /// into the screen — so a new call fails here until someone adds its row.
+    #[test]
+    fn screen_and_divert_states_the_vector_at_every_call_site() {
+        let needle = concat!("screen_and", "_divert(");
+        // Each call's enclosing function and its SECOND argument, whitespace
+        // removed. `code` is already masked, so a string or a comment naming
+        // the function is blank here.
+        let second_args = |code: &str| -> Vec<(String, String)> {
+            let bodies = fn_bodies(code);
+            let bytes = code.as_bytes();
+            let mut out = Vec::new();
+            for (at, _) in code.match_indices(needle) {
+                if code[..at].trim_end().ends_with("fn") {
+                    continue;
+                }
+                let (mut depth, mut args, mut cur) = (0usize, Vec::new(), String::new());
+                for &c in &bytes[at + needle.len()..] {
+                    match c {
+                        b'(' | b'[' | b'{' => {
+                            depth += 1;
+                            cur.push(c as char);
+                        }
+                        b')' | b']' | b'}' if depth == 0 => break,
+                        b')' | b']' | b'}' => {
+                            depth -= 1;
+                            cur.push(c as char);
+                        }
+                        b',' if depth == 0 => args.push(std::mem::take(&mut cur)),
+                        c if c.is_ascii_whitespace() => {}
+                        _ => cur.push(c as char),
+                    }
+                }
+                args.push(cur);
+                let owner = bodies
+                    .iter()
+                    .filter(|(_, r)| r.contains(&at))
+                    .min_by_key(|(_, r)| r.len())
+                    .map(|(n, _)| n.clone())
+                    .unwrap_or_else(|| panic!("a call at byte {at} is inside no function"));
+                out.push((owner, args.get(1).cloned().unwrap_or_default()));
+            }
+            out
+        };
+
+        // PREMISE, before any clean result is believed: a nested argument
+        // stays one argument, a comment and a string are not calls, and a
+        // definition is not a call.
+        let probe = mask_code(concat!(
+            "impl S {\n",
+            "    fn a(&self) { let x = self.screen_and_divert(d, Some(v.as_slice()), s); }\n",
+            "    fn b(&self) {\n        // self.screen_and_divert(d, s)\n",
+            "        let t = \"screen_and_divert(d, s)\";\n",
+            "        self.screen_and_divert(f(g, h), None, s);\n    }\n",
+            "    fn screen_and_divert(&self, d: &D, v: Option<&[f32]>, s: S) {}\n",
+            "}\n",
+        ));
+        assert_eq!(
+            second_args(&blank_test_items(&probe)),
+            vec![
+                ("a".to_string(), "Some(v.as_slice())".to_string()),
+                ("b".to_string(), "None".to_string()),
+            ],
+            "premise: the reader finds calls, and only calls, with their arguments"
+        );
+
+        let mut dirs = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+        let mut found: Vec<(String, String)> = Vec::new();
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).expect("the crate's own sources are readable") {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    dirs.push(path);
+                    continue;
+                }
+                if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                    continue;
+                }
+                let masked = mask_code(&std::fs::read_to_string(&path).unwrap());
+                found.extend(second_args(&blank_test_items(&masked)));
+            }
+        }
+        for (owner, vector) in &found {
+            assert!(
+                vector == "None" || vector.starts_with("Some("),
+                "`{owner}` calls the screen without stating a vector (`{vector}`)"
+            );
+        }
+        found.sort();
+        assert_eq!(
+            found,
+            vec![
+                ("dedup_groups".to_string(), "None".to_string()),
+                ("upsert_many".to_string(), "None".to_string()),
+                (
+                    "write_drawer".to_string(),
+                    "Some(embedding.as_slice())".to_string()
+                ),
+            ],
+            "the screen's callers moved: a new one owes a row here and a reason \
+             for the vector it states"
+        );
+    }
+
     /// How a call handles a drawer's text on its way to an embedder or advisor.
     enum Custody {
         /// Stored text leaves and this record says so; `proven_by` names the

@@ -7,6 +7,80 @@ its CLI mirror `tenant-repoint` are additive — nothing that worked before
 behaves differently because they exist. Everything else in this section is a
 fix whose only observable change is that a defect is gone.
 
+### a write the screen flags is refused on the same declaration a clean write is refused on, and no refusal names the review-queue id (O170)
+
+With admission screening on, the store checked most of a write's declaration
+only after the screen had rewritten it. A diversion moves the declared wing
+into `intended_wing` and replaces the drawer's id with its review-queue id, and
+until now only the wing and room names were checked before that. So:
+- **A malformed id was quarantined instead of refused.** A record declaring
+  `fde/<hex>`, an uppercase id or a 31-character one was refused when its
+  content was clean and filed in the review queue when the content tripped
+  the screen. This reached `undercroft import`, every sealed-bundle restore and
+  `/v1` import.
+- **A refusal told the caller the screen's verdict.** Refusing a non-finite
+  vector or an unusable `filed_at` quoted the drawer's id, which on a flagged
+  write was already the queue id. That id comes from a public recipe, so a 400
+  revealed whether the content tripped the screen, the tier-2 advisor's opinion
+  included, and left no row, chain record or rate count behind.
+- **A self-supersession split by verdict.** A drawer declaring that it
+  supersedes its own id was refused when clean and quarantined when flagged, and
+  `admission allow` then refused it without naming the row or the reason. A link
+  naming its own queue id was filed when clean, and a link naming its recipe id
+  under a different declared id (what a dedup refresh produces) passed either
+  way.
+- **The import unwrap replaced a malformed id.** A record claiming the review
+  wing had its id re-derived before any check looked at it, with screening off
+  as well as on.
+- **The tier-2 advisor was shown writes the store then refused.**
+
+`admission::validate_declaration` now holds every check the candidate alone can
+settle, and it runs before the screen as well as at the write boundary. It
+covers:
+- the names;
+- a stated vector's finiteness and dimension;
+- the id's shape, `filed_at` and the content length;
+- the kind;
+- a supersession link, checked against the declared id, the recipe id and the
+  queue id.
+
+`admission::filing_ids` is now the one derivation of the recipe and queue ids,
+shared by the diversion, the allow and the import unwrap. Around it:
+- `undercroft import` and bundle restores validate a whole batch before
+  screening any row, so a valid row ahead of an invalid one is no longer shown
+  to the advisor.
+- The import unwrap refuses a malformed id before re-deriving it. The check is
+  on the id's shape, so a queue row written under the older quarantine recipe
+  still restores.
+- `admission allow` refuses a queue row an older binary let through. The
+  message names the row and the reason, and says what to do: read the row back,
+  save it with a valid declaration, then deny it.
+
+**What a script sees** (`UPGRADING.md` has the details):
+- `undercroft import` and a bundle restore exit 1 on a batch holding such a
+  record.
+- `/v1` import answers 400 where it answered 200 with `quarantined`.
+- `/v1` save and MCP `undercroft_save` refuse a flagged save whose `supersedes`
+  names its own id.
+- `admission allow` and `dedup` refuse a legacy row whose link names its own
+  recipe or queue id.
+
+**How it is checked:**
+- Eight store tests, T1–T8, all but T8 run and failing on the tree before the
+  fix.
+- Two source gates. One requires every caller of the screen to state the vector
+  it screens with; the other pins `write_drawer_stmts` to its one
+  database-dependent refusal.
+- The rewritten M13 arm.
+- An MCP test and a `/v1` test, each failing against the old store.
+- Four e2e checks.
+- Isolated counterfactuals, one for each piece.
+
+**Filed** from the ruling's residuals, each as its own entry: O197 (a diversion
+discards a well-formed declared id that does not re-derive from its metadata)
+and O198 (the save arms embed content before the door refuses it). The ruling's
+two other residuals were closed by O167 before this build.
+
 ### text in the architecture diagrams fits its boxes under a pinned, measured standard, and only openly licensed fonts are named (O189)
 
 In the 11 diagrams under `architecture/diagrams/`, lines of text ran past the
@@ -422,7 +496,8 @@ checks only the declared wing and room, so a malformed id with flagged
 content is quarantined rather than refused, and a refusal that quotes the
 rewritten id tells the caller its content tripped the screen. The ruling
 moves every check that depends only on the candidate into
-`admission::validate_declaration`, in front of the rewrite. **O171**: a
+`admission::validate_declaration`, in front of the rewrite; it was built later
+in this release (see its own section above). **O171**: a
 sentence inside a closed entry that calls something filed is not a filing;
 seven such residuals are owed an open entry, of which O174 files one, and a
 preflight will require a code comment that claims a filing to name an open
