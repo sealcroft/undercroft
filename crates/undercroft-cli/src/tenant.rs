@@ -3025,6 +3025,8 @@ impl Tenancy {
         let store = self.store_for(id)?;
         let mut imported = 0u64;
         let mut quarantined = 0u64;
+        let mut created = 0u64;
+        let mut unchanged = 0u64;
         // Every store-guard refusal below names WHICH record failed, the
         // way a parse error already named its line. Six refusal classes
         // arrived on this path with this branch (reserved wing, bad kind,
@@ -3056,6 +3058,16 @@ impl Tenancy {
                 .map_err(|e| at(n, store_err(e)))?;
             if out.quarantined {
                 quarantined += 1;
+            }
+            // The three landings the import door decides, so this surface
+            // answers the question the CLI answers (ROADMAP O215). A record
+            // the vault already held byte for byte wrote nothing, and a
+            // tenant migration re-run is now a no-op rather than a rewrite of
+            // every row it just wrote.
+            if out.unchanged {
+                unchanged += 1;
+            } else if out.created {
+                created += 1;
             }
             if let Some((model, packed)) = tok {
                 // Re-sealed under this vault's key; restore skips the
@@ -3089,6 +3101,13 @@ impl Tenancy {
             200,
             Body::Json(json!({
                 "imported": imported,
+                // What those records DID to the vault (ROADMAP O215): a
+                // record whose row the vault already held byte for byte is
+                // `unchanged` and wrote nothing. Additive, so a caller
+                // reading `imported` alone sees what it always saw.
+                "new": created,
+                "replaced": imported - created - unchanged,
+                "unchanged": unchanged,
                 // How many of those the admission screen diverted: counted
                 // in `imported` (they were written) but NOT retrievable
                 // where the payload aimed them. Always 0 while screening is

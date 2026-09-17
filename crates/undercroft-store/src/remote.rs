@@ -2265,7 +2265,7 @@ mod tests {
             found,
             vec![
                 ("dedup_groups".to_string(), "None".to_string()),
-                ("upsert_many".to_string(), "None".to_string()),
+                ("upsert_many_held".to_string(), "None".to_string()),
                 (
                     "write_drawer".to_string(),
                     "Some(embedding.as_slice())".to_string()
@@ -2357,12 +2357,13 @@ mod tests {
             ("upsert", "upsert_screened(", Arriving("the caller's drawer on its way in")),
             ("upsert_screened", "embed_declared(", Arriving("the caller's drawer on its way in")),
             ("upsert_external", "write_drawer(", Arriving("the caller's drawer and the caller's vector")),
-            ("upsert_many", "embed_declared(", Arriving("a batch of the caller's drawers")),
-            ("upsert_many", "screen_and_divert(", Arriving("a batch of the caller's drawers")),
+            ("upsert_many_held", "embed_declared(", Arriving("a batch of the caller's drawers, or the vectors the vault already holds for them")),
+            ("upsert_many_held", "screen_and_divert(", Arriving("a batch of the caller's drawers")),
             ("save_with_dedup", "embed_declared(", Arriving("the incoming drawer")),
             ("save_with_dedup_vec", "write_drawer(", Arriving("the incoming content, refreshing a match in place or inserted")),
             ("import_record", "write_drawer(", Arriving("an imported record — the importer's text on its way in")),
             ("import_record", "upsert_screened(", Arriving("an imported record — the importer's text on its way in")),
+            ("import_record", "upsert_screened_with(", Arriving("an imported record whose content this vault already holds: only its metadata moved, so the stored vector is reused and no embedder is asked (ROADMAP O215)")),
             ("update_drawer", "upsert_screened(", Arriving("the caller's replacement content")),
             ("diary_write", "upsert_screened(", Arriving("the agent's diary entry")),
             ("search_page", "self.embedder.embed(", Query("the caller's query")),

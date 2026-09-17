@@ -2107,6 +2107,11 @@ pub struct SaveOutcome {
     /// aimed while the drawer sits in quarantine under another id — the
     /// dishonesty the typed update outcome fixed one level up.
     pub quarantined: bool,
+    /// True when an IMPORT found this record already in the vault, byte for
+    /// byte and field for field, and therefore wrote nothing (ROADMAP O215).
+    /// Always false on a save: a save that changes nothing is still a write,
+    /// and the chain records it.
+    pub unchanged: bool,
 }
 
 /// What the manifest's rollback anchor was found to be, relative to the
@@ -2183,6 +2188,57 @@ pub struct BulkOutcome {
     /// How many of the batch the admission screen diverted. Always 0
     /// while screening is off, so the default write contract is unchanged.
     pub quarantined: usize,
+}
+
+/// What one imported record did to the vault (ROADMAP O215).
+///
+/// Three states rather than two, because "already here" and "already here and
+/// identical" are different answers: the first must be RESTORED, the second
+/// costs nothing. The shipped importer had neither — it asked whether the TEXT
+/// existed anywhere in the vault and dropped the record if it did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportLanding {
+    /// No row held this id; the record was written.
+    New,
+    /// A row held this id and the record differed from it; it was rewritten.
+    Replaced,
+    /// A row held this id with byte-equal content and equal covered
+    /// metadata, so nothing was written and nothing was embedded.
+    Unchanged,
+}
+
+/// What a whole import did, counted by [`ImportLanding`].
+///
+/// `new + replaced + unchanged` is the number of records the import decided
+/// on, which is what a manifest's declared drawer count is comparable with.
+/// O140 ruled the alternative out one surface over: a count of records
+/// PROCESSED is not an answer, because the write is an upsert and two records
+/// landing on one row counted two.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ImportOutcome {
+    /// Records whose id the vault did not hold.
+    pub new: usize,
+    /// Records that rewrote a row the vault already held.
+    pub replaced: usize,
+    /// Records the vault already held, byte for byte and field for field.
+    pub unchanged: usize,
+    /// How many written records the admission screen diverted.
+    pub quarantined: usize,
+}
+
+impl ImportOutcome {
+    /// Records this import decided on — every record it was handed.
+    pub fn records(&self) -> usize {
+        self.new + self.replaced + self.unchanged
+    }
+
+    /// Fold another batch's outcome in, for a caller importing in chunks.
+    pub fn absorb(&mut self, other: ImportOutcome) {
+        self.new += other.new;
+        self.replaced += other.replaced;
+        self.unchanged += other.unchanged;
+        self.quarantined += other.quarantined;
+    }
 }
 
 /// What a search declares — every field a declaration, none inferred. Each
@@ -4632,7 +4688,7 @@ impl VaultStore {
         if self.external_dim.is_some() {
             return Err(StoreError::ExternalVault);
         }
-        let embedding = self.embed_declared(&[drawer])?.remove(0);
+        let embedding = self.embed_declared(&[(drawer, None)])?.remove(0);
         self.screened_write(drawer, embedding)
     }
 
@@ -4655,15 +4711,28 @@ impl VaultStore {
     /// embedded would still POST the valid rows ahead of an invalid one for a
     /// batch the store then refuses. Validating again at the choke point is
     /// cheap and is what that point is for; this door makes it the second
-    /// check rather than the first. `vector` is `None` here because no vector
+    /// check rather than the first. `vector` is `None` there because no vector
     /// exists yet.
-    fn embed_declared(&self, drawers: &[&Drawer]) -> Result<Vec<Vec<f32>>, StoreError> {
-        for d in drawers {
+    ///
+    /// A row may arrive with a vector the vault ALREADY holds — the import
+    /// door's "the content did not move, only its metadata did" case (ROADMAP
+    /// O215), on `admission_allow`'s precedent (O167). Such a row is validated
+    /// like every other and then embeds nothing: re-deriving a vector from
+    /// content the vault has not changed is a forward pass, and under a served
+    /// embedder a plaintext POST, for an answer already on disk.
+    fn embed_declared(
+        &self,
+        drawers: &[(&Drawer, Option<Vec<f32>>)],
+    ) -> Result<Vec<Vec<f32>>, StoreError> {
+        for (d, _) in drawers {
             crate::admission::validate_declaration(d, None)?;
         }
         Ok(drawers
             .iter()
-            .map(|d| self.embedder.embed(&d.content))
+            .map(|(d, held)| match held {
+                Some(v) => v.clone(),
+                None => self.embedder.embed(&d.content),
+            })
             .collect())
     }
 
@@ -4704,6 +4773,7 @@ impl VaultStore {
             created: landed.is_new,
             deduped: false,
             quarantined: landed.diverted_to.is_some(),
+            unchanged: false,
         })
     }
 
@@ -4751,6 +4821,7 @@ impl VaultStore {
                     created: landed.is_new,
                     deduped: false,
                     quarantined: landed.diverted_to.is_some(),
+                    unchanged: false,
                 })
             }
         }
@@ -5136,6 +5207,28 @@ impl VaultStore {
     /// [`BulkOutcome`] — how many ids were new AND how many the screen
     /// diverted. Refused on external vaults.
     pub fn upsert_many(&mut self, drawers: &[Drawer]) -> Result<BulkOutcome, StoreError> {
+        self.upsert_many_held(drawers, None)
+    }
+
+    /// [`upsert_many`](Self::upsert_many) with the vector for some rows
+    /// ALREADY IN HAND — the import door's third outcome (ROADMAP O215),
+    /// where the vault holds this drawer's content unchanged and only its
+    /// metadata moved. `held`, when given, is one entry per drawer in the
+    /// batch's own order; `None` there means embed it.
+    ///
+    /// Crate-private, and the `held` slice never comes from a caller: it is
+    /// read out of the vault by [`Self::import_verdict`]. A vector a PAYLOAD
+    /// supplies still travels the ordinary way, through `import_record`, so
+    /// that it meets the boundary's non-finite and dimension refusals as it
+    /// always has.
+    pub(crate) fn upsert_many_held(
+        &mut self,
+        drawers: &[Drawer],
+        held: Option<&[Option<Vec<f32>>]>,
+    ) -> Result<BulkOutcome, StoreError> {
+        if let Some(v) = held {
+            assert_eq!(v.len(), drawers.len(), "one held slot per drawer");
+        }
         if self.external_dim.is_some() {
             return Err(StoreError::ExternalVault);
         }
@@ -5247,7 +5340,13 @@ impl VaultStore {
         // refused before any of it is embedded (ROADMAP O198). With screening
         // off, nothing above validated anything, and every row of the batch
         // used to be embedded ahead of the refusal.
-        let refs: Vec<&Drawer> = drawers.iter().collect();
+        let refs: Vec<(&Drawer, Option<Vec<f32>>)> = match held {
+            // The import door's reused vectors, in the batch's own order
+            // (ROADMAP O215): a row whose content the vault already holds
+            // embeds nothing.
+            Some(v) => drawers.iter().zip(v.iter().cloned()).collect(),
+            None => drawers.iter().map(|d| (d, None)).collect(),
+        };
         let embeddings = self.embed_declared(&refs)?;
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let mut created = 0usize;
@@ -5328,7 +5427,7 @@ impl VaultStore {
         if self.external_dim.is_some() {
             return Err(StoreError::ExternalVault);
         }
-        let embedding = self.embed_declared(&[drawer])?.remove(0);
+        let embedding = self.embed_declared(&[(drawer, None)])?.remove(0);
         self.save_with_dedup_vec(drawer, embedding, threshold)
     }
 
@@ -5419,6 +5518,7 @@ impl VaultStore {
                     created: false,
                     deduped: false,
                     quarantined: true,
+                    unchanged: false,
                 });
             }
             self.emit_write_event(&refreshed, true);
@@ -5427,6 +5527,7 @@ impl VaultStore {
                 created: false,
                 deduped: true,
                 quarantined: false,
+                unchanged: false,
             })
         } else {
             let landed = self.write_drawer(drawer, embedding, Screen::Apply)?;
@@ -5441,6 +5542,7 @@ impl VaultStore {
                 created: landed.is_new,
                 deduped: false,
                 quarantined: landed.diverted_to.is_some(),
+                unchanged: false,
             })
         }
     }
@@ -5510,6 +5612,98 @@ impl VaultStore {
         Ok(())
     }
 
+    /// What one imported record does to the vault it lands in, and the vector
+    /// the vault already holds for it when only its metadata moved.
+    ///
+    /// **The four outcomes are the whole of ROADMAP O215's ruling.** A record
+    /// the vault does not hold is written. A record whose row is byte-equal in
+    /// content AND in covered metadata is a no-op, so a repeat restore costs
+    /// nothing. A record whose content the vault holds unchanged while its
+    /// metadata moved — a drawer refiled into another wing, a `kind` declared
+    /// since — is written with the vector the vault already has, because
+    /// re-deriving it is a forward pass, and under a served embedder a
+    /// plaintext POST, for an answer on disk. Everything else is written and
+    /// embedded.
+    ///
+    /// **It reads the drawer, never the `fp` column**, and that is the ruling
+    /// too. `fp` is HMAC over `match_key(content)` — NFC-folded, so it answers
+    /// CANONICAL equality and would call a record whose verbatim bytes differ
+    /// a no-op, against the one promise this store makes about content. And it
+    /// is outside the drawer HMAC and outside `mirror_drift`, so an offline
+    /// writer who plants one value would suppress a chosen restore for ever
+    /// with `verify` reporting clean (A28). `get` verifies the tag before it
+    /// answers, and `WritePathLookup` is the witness whose own doc names this
+    /// use, so no read record is written.
+    ///
+    /// **A row whose HMAC FAILS is `Replaced`, never an error.** A restore is
+    /// the remedy for a tampered row: a door that propagated `Integrity` here
+    /// would abort on precisely the row it was called to repair.
+    pub(crate) fn import_verdict(
+        &self,
+        drawer: &Drawer,
+    ) -> Result<(ImportLanding, Option<Vec<f32>>), StoreError> {
+        let existing = match self.get(&drawer.id, Read::Internal(InternalRead::WritePathLookup)) {
+            Ok(row) => row,
+            Err(StoreError::Integrity(_)) | Err(StoreError::CorruptRow { .. }) => {
+                return Ok((ImportLanding::Replaced, None))
+            }
+            Err(e) => return Err(e),
+        };
+        let Some(existing) = existing else {
+            return Ok((ImportLanding::New, None));
+        };
+        if existing.content != drawer.content {
+            return Ok((ImportLanding::Replaced, None));
+        }
+        if existing.meta == drawer.meta_at_rest() {
+            return Ok((ImportLanding::Unchanged, None));
+        }
+        // The content is the vault's own; only the filing moved. A vector we
+        // cannot read back is not a reason to refuse — embed it instead.
+        Ok((
+            ImportLanding::Replaced,
+            self.stored_embedding(&drawer.id).ok(),
+        ))
+    }
+
+    /// Import a batch of drawers: the door BOTH import surfaces enter, and the
+    /// one place the four outcomes above are decided (ROADMAP O215).
+    ///
+    /// It exists because the decision cannot live anywhere else. Not at the
+    /// CLI call site: `import_unwrap_screened` is private and REWRITES the id,
+    /// and the screen can divert a record to a quarantine id, so the id a
+    /// record lands under is unknowable there — which is how the shipped CLI
+    /// came to answer "is this text anywhere in the vault?" instead. Not in
+    /// `write_drawer_stmts`, which holds only state-dependent refusals. And
+    /// not in `upsert_many`, whose other callers are `mine` and the transcript
+    /// sweep: a no-op rule there would silently make RE-MINING a no-op too,
+    /// which nobody asked for and which would erase the evidence of a re-mine.
+    pub fn import_many(&mut self, drawers: &[Drawer]) -> Result<ImportOutcome, StoreError> {
+        let mut out = ImportOutcome::default();
+        let mut write: Vec<Drawer> = Vec::with_capacity(drawers.len());
+        let mut held: Vec<Option<Vec<f32>>> = Vec::with_capacity(drawers.len());
+        for d in drawers {
+            // Unwrapped FIRST, because the unwrap is what decides the id this
+            // record lands under, and the verdict is about that row.
+            let d = Self::import_unwrap_screened(d)?;
+            match self.import_verdict(&d)? {
+                (ImportLanding::Unchanged, _) => out.unchanged += 1,
+                (_, vector) => {
+                    write.push(d);
+                    held.push(vector);
+                }
+            }
+        }
+        let bulk = self.upsert_many_held(&write, Some(&held))?;
+        out.new = bulk.created;
+        out.replaced = write.len() - bulk.created;
+        out.quarantined = bulk.quarantined;
+        // Stated rather than hidden: for a row the screen DIVERTED, `created`
+        // describes the quarantine row's newness, not the row the record aimed
+        // at. `quarantined` is what an operator reads for those.
+        Ok(out)
+    }
+
     /// Import one drawer, the inverse of a migration export. On an external
     /// vault a `vector` is required (dimension-checked). On a normal vault a
     /// matching-dimension `vector` is preserved verbatim; otherwise the
@@ -5522,6 +5716,9 @@ impl VaultStore {
     /// Returns the typed [`SaveOutcome`] rather than a bare "was the id
     /// new", so an importer can report a diverted record instead of
     /// counting it as imported.
+    /// A record the vault already holds byte for byte writes nothing and is
+    /// reported `unchanged` (ROADMAP O215); one whose content is unchanged
+    /// while its metadata moved is written with the vector the vault holds.
     pub fn import_record(
         &mut self,
         drawer: &Drawer,
@@ -5557,7 +5754,23 @@ impl VaultStore {
             created: l.is_new,
             deduped: false,
             quarantined: l.diverted_to.is_some(),
+            unchanged: false,
         };
+        // The same four outcomes the batch door decides, so the two import
+        // surfaces answer the same question (ROADMAP O215). A record the vault
+        // already holds byte for byte writes nothing here either — and this is
+        // the surface a tenant migration drives, where a re-run used to rewrite
+        // every row it had just written.
+        let (landing, held) = self.import_verdict(drawer)?;
+        if landing == ImportLanding::Unchanged {
+            return Ok(SaveOutcome {
+                id: drawer.id.clone(),
+                created: false,
+                deduped: false,
+                quarantined: false,
+                unchanged: true,
+            });
+        }
         match self.external_dim {
             Some(dim) => {
                 let v = vector.ok_or(StoreError::ExternalVault)?;
@@ -5573,7 +5786,13 @@ impl VaultStore {
                 Some(v) if v.len() == self.embedder.dimension() => {
                     self.write_drawer(drawer, v, Screen::Apply).map(landed)
                 }
-                _ => self.upsert_screened(drawer),
+                // Only the metadata moved, so the vector the vault holds is
+                // this content's own: reuse it rather than asking a model for
+                // an answer already on disk (O167's precedent).
+                _ => match held {
+                    Some(v) => self.upsert_screened_with(drawer, v),
+                    None => self.upsert_screened(drawer),
+                },
             },
         }
     }
@@ -24037,6 +24256,172 @@ mod tests {
             );
             assert_eq!(s.stats().unwrap().records, 0, "and nothing landed");
         }
+    }
+
+    // ---- ROADMAP O215: an import restores the vault the export described ----
+
+    /// **A restore keeps every distinct drawer, including ones filed under the
+    /// same text** (ROADMAP O215). The importer asked whether the TEXT existed
+    /// anywhere in the vault and dropped the record if it did, so a vault
+    /// holding one text in two wings restored as one drawer and the other id
+    /// stopped resolving — while `verify` reported OK, because a dangling
+    /// supersession and an unreceipted fact are legitimate states.
+    ///
+    /// Counterfactual (`83abab5`): the second id is absent and the row count
+    /// is 1.
+    #[test]
+    fn a_restore_keeps_every_distinct_drawer_that_shares_its_text() {
+        const TEXT: &str = "the harbour inspection is booked for thursday";
+        let (_d, mut src) = store(SecurityLevel::Sealed);
+        let a = drawer("team-a", "r", TEXT, 0);
+        let b = drawer("team-b", "r", TEXT, 0);
+        src.upsert(&a).unwrap();
+        src.upsert(&b).unwrap();
+        let payload = src.export_all().unwrap();
+        assert_eq!(payload.len(), 2, "premise: two records, one text");
+        assert_ne!(a.id, b.id, "premise: two ids");
+
+        let (_d2, mut dest) = store(SecurityLevel::Sealed);
+        let out = dest.import_many(&payload).unwrap();
+        assert_eq!(
+            (out.new, out.replaced, out.unchanged),
+            (2, 0, 0),
+            "both records are new to this vault"
+        );
+        for id in [&a.id, &b.id] {
+            assert!(
+                dest.get(id, Read::Internal(InternalRead::Verification))
+                    .unwrap()
+                    .is_some(),
+                "the id {id} must resolve after a restore"
+            );
+        }
+        assert!(dest.verify().unwrap().ok());
+    }
+
+    /// **The four outcomes the ruling names, each measured** (ROADMAP O215):
+    /// a record the vault lacks is written; one it holds byte for byte writes
+    /// nothing at all; one whose METADATA moved is written with the vector the
+    /// vault already holds, asking no embedder; one whose content differs, and
+    /// one whose row fails its HMAC, are written and embedded.
+    ///
+    /// The last two arms are what falsified the shape three lenses proposed:
+    /// "content equal" is not "no-op", and a door that propagated `Integrity`
+    /// would abort on the very row a restore exists to repair.
+    #[test]
+    fn an_import_writes_what_moved_skips_what_did_not_and_repairs_what_is_broken() {
+        use crate::egress_doubles::{count, reset, same_vector, served_store};
+        const TEXT: &str = "the turbines were serviced on tuesday";
+        let (_d, mut s, calls) = served_store(SecurityLevel::Sealed);
+        let d = drawer("notes", "r", TEXT, 0);
+
+        // 1 — new.
+        reset(&calls);
+        let out = s.import_many(std::slice::from_ref(&d)).unwrap();
+        assert_eq!((out.new, out.replaced, out.unchanged), (1, 0, 0));
+        assert_eq!(count(&calls), 1, "a new record is embedded");
+        let held = s.stored_embedding(&d.id).unwrap();
+        let writes = s.stats().unwrap().writes;
+
+        // 2 — unchanged: no write, no embed, no chain record.
+        reset(&calls);
+        let out = s.import_many(std::slice::from_ref(&d)).unwrap();
+        assert_eq!((out.new, out.replaced, out.unchanged), (0, 0, 1));
+        assert_eq!(count(&calls), 0, "a no-op asks no embedder");
+        assert_eq!(s.stats().unwrap().writes, writes, "and writes nothing");
+
+        // 3 — the content is the vault's own; only the filing moved.
+        let mut moved = d.clone();
+        moved.meta.kind = Some("decision".into());
+        reset(&calls);
+        let out = s.import_many(std::slice::from_ref(&moved)).unwrap();
+        assert_eq!((out.new, out.replaced, out.unchanged), (0, 1, 0));
+        assert_eq!(
+            count(&calls),
+            0,
+            "the stored vector is reused, not re-derived"
+        );
+        assert!(
+            same_vector(&s.stored_embedding(&d.id).unwrap(), &held),
+            "and it is the same vector"
+        );
+        assert_eq!(
+            s.get(&d.id, Read::Internal(InternalRead::Verification))
+                .unwrap()
+                .unwrap()
+                .meta
+                .kind
+                .as_deref(),
+            Some("decision"),
+            "the metadata that moved is restored"
+        );
+
+        // 4 — the content differs.
+        let mut edited = d.clone();
+        edited.content = format!("{TEXT}, and again on friday");
+        reset(&calls);
+        let out = s.import_many(std::slice::from_ref(&edited)).unwrap();
+        assert_eq!((out.new, out.replaced, out.unchanged), (0, 1, 0));
+        assert_eq!(count(&calls), 1, "new content is embedded");
+
+        // 5 — a row whose HMAC fails is REPAIRED, not an error.
+        s.conn
+            .execute(
+                "UPDATE drawers SET tag = ?1 WHERE id = ?2",
+                params![vec![0u8; 32], d.id],
+            )
+            .unwrap();
+        assert!(
+            !s.verify().unwrap().ok(),
+            "premise: the row is now tampered"
+        );
+        reset(&calls);
+        let out = s
+            .import_many(std::slice::from_ref(&d))
+            .expect("a restore repairs a tampered row instead of aborting on it");
+        assert_eq!((out.new, out.replaced, out.unchanged), (0, 1, 0));
+        assert_eq!(count(&calls), 1);
+        assert!(s.verify().unwrap().ok(), "and the vault verifies again");
+    }
+
+    /// **Both import surfaces answer the same question** (ROADMAP O215).
+    /// `/v1` imports record by record through `import_record`, and it consults
+    /// the same verdict the batch door does: the second import of a record the
+    /// vault already holds writes nothing and asks no embedder, and a
+    /// metadata-only change is rewritten with the vector already stored.
+    ///
+    /// The surfaces disagreeing is how this defect existed at all — one of
+    /// them decided for itself.
+    #[test]
+    fn the_per_record_import_surface_answers_what_the_batch_door_answers() {
+        use crate::egress_doubles::{count, reset, same_vector, served_store};
+        let (_d, mut s, calls) = served_store(SecurityLevel::Sealed);
+        let d = drawer("notes", "r", "the lock gates are inspected monthly", 0);
+
+        reset(&calls);
+        let first = s.import_record(&d, None, IMPORT_SURFACE).unwrap();
+        assert!(first.created && !first.unchanged);
+        assert_eq!(count(&calls), 1, "premise: a new record is embedded");
+        let held = s.stored_embedding(&d.id).unwrap();
+
+        reset(&calls);
+        let again = s.import_record(&d, None, IMPORT_SURFACE).unwrap();
+        assert!(
+            again.unchanged && !again.created,
+            "a record the vault already holds writes nothing: {again:?}"
+        );
+        assert_eq!(count(&calls), 0, "and asks no embedder");
+
+        let mut moved = d.clone();
+        moved.meta.kind = Some("procedure".into());
+        reset(&calls);
+        let out = s.import_record(&moved, None, IMPORT_SURFACE).unwrap();
+        assert!(
+            !out.unchanged && !out.created,
+            "the row is rewritten: {out:?}"
+        );
+        assert_eq!(count(&calls), 0, "with the vector the vault holds");
+        assert!(same_vector(&s.stored_embedding(&d.id).unwrap(), &held));
     }
 
     /// **A dedup save is judged on the declaration it was given, whether or not
