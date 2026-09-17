@@ -6909,7 +6909,12 @@ impl VaultStore {
     /// audit record and the exported file corroborate each other; the
     /// recipient string (public by construction) records who could read
     /// a sealed bundle, `""` records a plaintext export.
-    pub fn audit_export(
+    ///
+    /// Crate-private since ROADMAP O176: every surface records an export
+    /// through [`record_export`](Self::record_export), which decides the
+    /// posture first, so no surface can reach this writer without that
+    /// decision.
+    pub(crate) fn audit_export(
         &mut self,
         surface: &str,
         counts: &undercroft_vault::bundle::ManifestCounts,
@@ -6934,6 +6939,44 @@ impl VaultStore {
         tx.commit()?;
         self.vault.anchor_manifest(&head, writes)?;
         Ok(())
+    }
+
+    /// **The one export recording step, for every surface** (ROADMAP O176).
+    /// Returns whether a chain record was written.
+    ///
+    /// A writable handle appends the `egress/export` record through
+    /// [`audit_export`](Self::audit_export). A read-only handle cannot, so
+    /// it serves the export and SAYS the egress went unaudited — the replica
+    /// precedent `refine` follows too. The decision reads the HANDLE's
+    /// posture, not a process flag: `/v1` used to branch on the server's
+    /// `--read-only` inline while the CLI called the writer unconditionally,
+    /// so `undercroft --read-only export` failed inside SQLite at the audit
+    /// record — on the surface an operator reaches first during an
+    /// incident, where exporting the evidence is the obvious first move.
+    pub fn record_export(
+        &mut self,
+        surface: &str,
+        counts: &undercroft_vault::bundle::ManifestCounts,
+        payload_sha256: &str,
+        recipient: Option<&str>,
+    ) -> Result<bool, StoreError> {
+        if self.read_only {
+            undercroft_obs::diag_warn!(
+                "export served read-only on {surface}; egress not chain-audited ({} drawer(s), \
+                 {} fact(s), {} entit(ies), {} tunnel(s), {})",
+                counts.drawers,
+                counts.kg_triples,
+                counts.kg_entities,
+                counts.tunnels,
+                match recipient {
+                    Some(r) => format!("sealed to {r}"),
+                    None => "unsealed".to_string(),
+                }
+            );
+            return Ok(false);
+        }
+        self.audit_export(surface, counts, payload_sha256, recipient)?;
+        Ok(true)
     }
 
     /// **The distillation egress** — one `egress/refine` record per run,
@@ -15522,6 +15565,55 @@ mod tests {
             .unwrap();
         assert_eq!(n, 1);
         assert!(s.verify().unwrap().ok());
+    }
+
+    /// ROADMAP O176 — the one recording step decides the posture from the
+    /// HANDLE. A writable handle records exactly one `egress/export`; a
+    /// read-only handle serves (no error) and records nothing, where calling
+    /// the writer directly fails inside SQLite — which is what the CLI did.
+    #[test]
+    fn a_read_only_export_is_served_unaudited_and_a_writable_one_is_recorded() {
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
+        let mut rw = VaultStore::open(vault).unwrap();
+        rw.upsert(&drawer("w", "r", "words that leave", 0)).unwrap();
+        let counts = undercroft_vault::bundle::ManifestCounts {
+            drawers: 1,
+            ..Default::default()
+        };
+        let exports = |s: &VaultStore| -> i64 {
+            s.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM audit WHERE record_id = 'egress/export'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        assert!(rw.record_export("test", &counts, "d1", None).unwrap());
+        assert_eq!(exports(&rw), 1, "a writable handle records the egress");
+        let writes = rw.chain_state().unwrap();
+        drop(rw);
+
+        let mut ro = VaultStore::open_read_only(
+            mgr.unlock_as("test", undercroft_vault::Access::ReadOnly)
+                .unwrap(),
+            Box::new(HashEmbedder),
+        )
+        .unwrap();
+        assert!(ro.is_read_only(), "premise: the handle is read-only");
+        // Premise: the writer itself cannot record on this handle — the
+        // defect's own shape, one call below the fix.
+        assert!(
+            ro.audit_export("test", &counts, "d2", None).is_err(),
+            "premise: a read-only handle refuses the audit write"
+        );
+        assert!(!ro
+            .record_export("test", &counts, "d2", Some("pq1recipient"))
+            .expect("a read-only export is served, not refused"));
+        assert_eq!(exports(&ro), 1, "nothing was recorded read-only");
+        assert_eq!(ro.chain_state().unwrap(), writes, "the chain did not move");
     }
 
     /// `UNDERCROFT_READ_AUDIT` parses its two modes or REFUSES to open —

@@ -3028,7 +3028,13 @@ fn run(cli: Cli) -> Result<()> {
             // finished bytes; unconditional because the builder always
             // frames one, where the `if let` this replaces had a silent
             // no-record branch that could never be taken.
-            store.audit_export(
+            //
+            // Through the ONE recording step (ROADMAP O176): under
+            // `--read-only` this called the writer unconditionally and failed
+            // inside SQLite, so the export an operator reaches for first
+            // during an incident could not be taken at all. A read-only
+            // handle now serves it and warns that it went unaudited.
+            store.record_export(
                 "cli",
                 &manifest.counts,
                 &manifest.payload_sha256,

@@ -7,6 +7,38 @@ its CLI mirror `tenant-repoint` are additive — nothing that worked before
 behaves differently because they exist. Everything else in this section is a
 fix whose only observable change is that a defect is gone.
 
+### an export under `--read-only` is served and says it went unaudited, on the CLI and on `/v1` (O176)
+
+`undercroft --read-only export` failed inside SQLite: the CLI called the
+audit writer unconditionally, so the export an operator reaches for first
+during an incident could not be taken. The entry said a read-only `/v1`
+export already warned and served. Executed, it failed too, at its first
+drawer: reading a token artifact ran `CREATE TABLE IF NOT EXISTS`, which a
+read-only connection refuses even when the table exists.
+
+**What changed:**
+- **One recording step.** `VaultStore::record_export` decides from the
+  handle's own posture. A writable handle appends the `egress/export` record;
+  a read-only one serves the export and warns, naming the counts and the
+  recipient. Both surfaces call it, and the writer behind it is
+  crate-private.
+- **The export read path reads.** `token_artifact` asks whether the table
+  exists on a read-only handle instead of creating it, as the search-side
+  callers already did.
+- **The egress diagram** no longer says a read-only CLI export is refused.
+
+**Tests:**
+- Two store tests: the posture decision, with the writer's own failure as
+  its premise, and the read-only artifact read with and without the table.
+- Ten e2e checks through both surfaces.
+- Against the `0d1c290` binary, seven of the ten fail, including every
+  read-only arm on both surfaces.
+- Removing either fix alone fails its test.
+
+**Real corpus:** 680 drawers. The read-only CLI export matches the
+writable one record for record and appends nothing. Its sealed bundle
+imports into a second vault, and `/v1` on a read-only server answers 200.
+
 ### a key source the palace contradicts is refused before anything is written, and `--read-only` writes no key and no vault (O204)
 
 A passphrase declared over a palace keyed by `master.key` used to write a
