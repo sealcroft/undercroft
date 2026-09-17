@@ -46,7 +46,7 @@
 
     <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="storage-layout-title storage-layout-desc">
       <title id="storage-layout-title">Undercroft on-disk storage layout</title>
-      <desc id="storage-layout-desc">A palace directory holds the master key file, or none when a passphrase is declared, a backups directory of verify-gated copies, and one directory per vault carrying the MAC'd manifest that is the rollback anchor, an optional staged manifest from an unfinished key rotation, and the SQLite database; inside the database seventeen tables and, on an hmac-only vault, one full-text virtual table are grouped by what protects them — the drawer table with sealed content and clear metadata, the sealed derived indexes, the HMAC-tagged operator policy rows, the blinded knowledge graph, the append-only audit chain with its committed head, the navigation tunnels, and the meta table that holds the keycheck marker, the embedder identity and the sealed graph secret.</desc>
+      <desc id="storage-layout-desc">An installation directory holds the master key file, or the Argon2id salt file instead when a passphrase is declared, a backups directory of verify-gated copies, and one directory per vault carrying the MAC'd manifest that is the rollback anchor, an optional staged manifest from an unfinished key rotation, and the SQLite database; inside the database seventeen tables and, on an hmac-only vault, one full-text virtual table are grouped by what protects them — the drawer table with sealed content and clear metadata, the sealed derived indexes, the HMAC-tagged operator policy rows, the blinded knowledge graph, the append-only audit chain with its committed head, the navigation tunnels, and the meta table that holds the keycheck marker, the embedder identity and the sealed graph secret.</desc>
       <defs>
         <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7fa39c"/></marker>
         <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#35e0c2"/></marker>
@@ -94,7 +94,7 @@
       <text x="118" y="103" fill="rgba(127,163,156,0.90)" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.08em">KEY</text>
       <text x="208" y="124" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif" text-anchor="middle">master.key</text>
       <text x="208" y="140" fill="#7fa39c" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">mode 0600 · fsynced at creation</text>
-      <text x="208" y="154" fill="#5c7f79" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">absent under a declared passphrase</text>
+      <text x="208" y="154" fill="#5c7f79" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">kdf.salt instead, under a passphrase</text>
 
       <!-- backups/ -->
       <rect x="96" y="184" width="224" height="64" rx="6" fill="#04080a"/>

@@ -1295,10 +1295,19 @@ fn passphrase() -> Result<Option<String>> {
     undercroft_store::resolve_passphrase(raw.as_deref()).map_err(|e| anyhow::anyhow!(e))
 }
 
-fn manager(cli: &Cli) -> Result<VaultManager> {
+/// Open the installation under a STATED posture (ROADMAP O204).
+///
+/// The manager used to be opened read-write for every command, one call
+/// before `open_store_as` passed the posture to the unlock — so
+/// `--read-only` wrote key material into an empty directory, re-created a
+/// deleted `master.key` during an incident, and `--read-only init`, `vault
+/// create` and `vault rotate` wrote manifests or deleted a staging file
+/// before anything refused. The posture is an argument so a call site
+/// cannot forget it.
+fn manager(cli: &Cli, posture: Posture) -> Result<VaultManager> {
     let dir = data_dir(cli);
     let pw = passphrase()?;
-    VaultManager::open(&dir, pw.as_deref())
+    VaultManager::open_as(&dir, pw.as_deref(), posture.access())
         .with_context(|| format!("opening palace at {}", dir.display()))
 }
 
@@ -1317,6 +1326,15 @@ fn manager(cli: &Cli) -> Result<VaultManager> {
 enum Posture {
     ReadWrite,
     ReadOnly,
+}
+
+impl Posture {
+    fn access(self) -> undercroft_vault::Access {
+        match self {
+            Posture::ReadWrite => undercroft_vault::Access::ReadWrite,
+            Posture::ReadOnly => undercroft_vault::Access::ReadOnly,
+        }
+    }
 }
 
 impl Cli {
@@ -1345,7 +1363,7 @@ fn open_store(cli: &Cli, vault: &str) -> Result<VaultStore> {
 }
 
 fn open_store_as(cli: &Cli, vault: &str, posture: Posture) -> Result<VaultStore> {
-    let mgr = manager(cli)?;
+    let mgr = manager(cli, posture)?;
     // The posture reaches the UNLOCK, not only the store open. Unlocking is
     // not passive: it deletes a `vault.json.next` it cannot authenticate, so
     // a read-only process that stated its posture only one call later had
@@ -1887,6 +1905,17 @@ const EXIT_FAILURE: u8 = 1;
 /// what a MAC *is*, the engine has no evidence separating the two, and the
 /// message it already printed ("possible tampering") has always said so. The
 /// exit code now agrees with the message instead of contradicting it.
+///
+/// **Where the key FILES contradict the declaration, the engine refuses
+/// before it derives anything, and that is exit 1** (ROADMAP O204): a
+/// passphrase declared over an installation holding `master.key` and no
+/// `kdf.salt`, the reverse, or key material missing under existing vaults.
+/// Those are `VaultError::Key`, which is deliberately not in this set — no
+/// `KeyError` is a verdict about stored evidence, since nothing has been
+/// verified. The stated cost still covers an installation holding BOTH files: the
+/// declared one is used, the files are no evidence of which is right, and a
+/// MAC failure under it stays exit 2, as does `KeyOpensNoVault`, the create
+/// refusal that is the same finding.
 fn integrity_verdict(e: &anyhow::Error) -> bool {
     use undercroft_store::StoreError as S;
     use undercroft_vault::VaultError as V;
@@ -1908,11 +1937,18 @@ fn integrity_verdict(e: &anyhow::Error) -> bool {
                     // same self-contradiction, one file too many rather
                     // than one too few.
                     | S::DatabaseAmbiguous { .. }
-                    | S::Vault(V::ManifestTampered | V::CorruptManifest(_))
+                    | S::Vault(
+                        V::ManifestTampered
+                            | V::CorruptManifest(_)
+                            | V::KeyOpensNoVault { .. }
+                    )
             );
         }
         if let Some(v) = link.downcast_ref::<V>() {
-            return matches!(v, V::ManifestTampered | V::CorruptManifest(_));
+            return matches!(
+                v,
+                V::ManifestTampered | V::CorruptManifest(_) | V::KeyOpensNoVault { .. }
+            );
         }
         false
     })
@@ -1983,7 +2019,7 @@ fn main() -> std::process::ExitCode {
 fn run(cli: Cli) -> Result<()> {
     match &cli.command {
         Command::Init { level } => {
-            let mgr = manager(&cli)?;
+            let mgr = manager(&cli, cli.posture())?;
             if mgr.exists("default") {
                 println!(
                     "{}",
@@ -2070,7 +2106,7 @@ fn run(cli: Cli) -> Result<()> {
         },
         Command::Vault { action } => match action {
             VaultAction::Create { name, level } => {
-                let mgr = manager(&cli)?;
+                let mgr = manager(&cli, cli.posture())?;
                 let v = mgr.create(name, (*level).into())?;
                 println!(
                     "{}",
@@ -2084,7 +2120,7 @@ fn run(cli: Cli) -> Result<()> {
                 );
             }
             VaultAction::List => {
-                let mgr = manager(&cli)?;
+                let mgr = manager(&cli, cli.posture())?;
                 let vaults = mgr.list()?;
                 // Vaults whose own stored evidence contradicts itself.
                 // Collected rather than raised inline so the listing
@@ -2199,7 +2235,7 @@ fn run(cli: Cli) -> Result<()> {
                 }
             }
             VaultAction::Rotate { name } => {
-                let mgr = manager(&cli)?;
+                let mgr = manager(&cli, cli.posture())?;
                 let candidate = mgr.rotation_candidate(name)?;
                 let mut store = open_store(&cli, name)?;
                 let report = store.rotate_keys(candidate)?;
@@ -3073,11 +3109,12 @@ fn run(cli: Cli) -> Result<()> {
             if let Ok(n) = store.warm_embedding_cache() {
                 undercroft_obs::diag_info!("warmed embedding cache: {n} vector(s)");
             }
-            let mut tenancy = tenant::Tenancy::new(manager(&cli)?, embedder_factory(), *read_only)?
-                // `/v1` must know which vault the `/mcp` handle above holds:
-                // rotating or deleting it from under a second live handle is
-                // the one thing two handles in one process cannot survive.
-                .with_mcp_vault(vault.clone());
+            let mut tenancy =
+                tenant::Tenancy::new(manager(&cli, posture)?, embedder_factory(), *read_only)?
+                    // `/v1` must know which vault the `/mcp` handle above holds:
+                    // rotating or deleting it from under a second live handle is
+                    // the one thing two handles in one process cannot survive.
+                    .with_mcp_vault(vault.clone());
             if let Some(reranker) = reranker_factory()? {
                 tenancy = tenancy.with_reranker(reranker);
             }
@@ -4011,14 +4048,16 @@ fn run(cli: Cli) -> Result<()> {
                     let stamp = time::OffsetDateTime::now_utc()
                         .format(&time::format_description::well_known::Rfc3339)?
                         .replace([':', '.'], "-");
-                    let src = root.join("vaults").join(vault);
-                    let dst = root.join("backups").join(format!("{vault}-{stamp}"));
+                    let src = root.join(undercroft_vault::VAULTS_DIR).join(vault);
+                    let dst = root
+                        .join(undercroft_vault::BACKUPS_DIR)
+                        .join(format!("{vault}-{stamp}"));
                     copy_dir(&src, &dst)?;
-                    prune_backups(&root.join("backups"), vault, 10)?;
+                    prune_backups(&root.join(undercroft_vault::BACKUPS_DIR), vault, 10)?;
                     println!("Backup created: {}", dst.display());
                 }
                 BackupAction::List => {
-                    let dir = root.join("backups");
+                    let dir = root.join(undercroft_vault::BACKUPS_DIR);
                     let mut names: Vec<String> = match std::fs::read_dir(&dir) {
                         Ok(rd) => rd
                             .filter_map(|e| e.ok())
@@ -4035,7 +4074,7 @@ fn run(cli: Cli) -> Result<()> {
                     }
                 }
                 BackupAction::Restore { name, force } => {
-                    let src = root.join("backups").join(name);
+                    let src = root.join(undercroft_vault::BACKUPS_DIR).join(name);
                     if !src.join("vault.json").exists() {
                         bail!("no backup named {name}");
                     }
@@ -4059,7 +4098,7 @@ fn run(cli: Cli) -> Result<()> {
                     // run at such a timestamp — luck, not coverage, which is
                     // why the arm below now pins the shape instead.
                     let vault_name = read_backup_vault_id(&src)?;
-                    let dst = root.join("vaults").join(&vault_name);
+                    let dst = root.join(undercroft_vault::VAULTS_DIR).join(&vault_name);
                     if dst.exists() && !force {
                         bail!(
                             "vault '{vault_name}' exists; pass --force to overwrite it with the backup"
@@ -4178,9 +4217,11 @@ SQLite reported: {}"
             println!("Checking every UNDERCROFT_* declaration in this environment.");
             println!(
                 "Nothing is opened: no vault, no database, no socket, no outbound call.
+A declared data directory is stat'ed for its key material, never read.
 "
             );
-            let (fatal, warned, validated, accepted) = config_check::run(*verbose);
+            let (fatal, warned, validated, accepted) =
+                config_check::run(*verbose, cli.data_dir.as_deref());
             if validated + accepted == 0 {
                 println!("  (no UNDERCROFT_* variables are declared here)");
             }

@@ -396,7 +396,22 @@ Consequences that are binding, not advisory:
   orphans every committed frame in a hot `-wal`, silently — a read-only open
   reports it on `unhealed`, and two files refuse as an integrity verdict on
   both postures. `database_exists` knows both names, or upgrade day would
-  read every older vault as A33's missing database;** keys.rs: master key + HKDF;
+  read every older vault as A33's missing database;** keys.rs: master key + HKDF
+  — **and the master key is created only where nothing refers to one (O204)**:
+  `master_key` surveys the root by stat alone (`survey`, errors propagated,
+  a symlinked key file counts), `plan` classifies it — the declared file
+  present loads, the OTHER file alone is `SourceMismatch`, neither under any
+  `vaults/` or `backups/` entry is `MaterialMissing`, both exit 1 as no
+  `KeyError` is an integrity verdict — and only then is a key read, derived
+  or written, by one private exclusive writer. With BOTH files present the
+  declared one is used and every open warns; the undeclared key is never
+  tried, because a file an offline writer can plant proves nothing and the
+  trial would steer a passphrase deployment towards it. `VaultManager::open_as`
+  carries the posture: read-only creates nothing, holds no key in a fresh
+  installation, refuses `create`/`delete`/`rotation_candidate`, and unlocks
+  read-only whatever it is asked; `create` refuses as `KeyOpensNoVault`
+  (exit 2) when the key opens none of the installation's manifests, the door a
+  split installation was minted through;
   seal.rs: AEAD + HMAC; lib.rs: VaultManager/Vault + manifest-as-rollback-
   anchor + pure chain arithmetic + key rotation primitives
   (rotation_candidate, byte-exact reseal_at_rest, two-phase
@@ -2050,8 +2065,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (900 run,
-                                      # 4 #[ignore]d = 904 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (922 run,
+                                      # 4 #[ignore]d = 926 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2173,7 +2188,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (513 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (525 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (156 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (137 checks; weaviate
@@ -3783,7 +3798,9 @@ unwritten because a half-correct verdict is worse than a known-wrong one.
   directions on BOTH axes, so a new variable does not compile until someone
   classifies it; `undercroft config check` runs every declaration through the
   resolver that will run at start-up, opening nothing, so an upgrade fails in
-  a pipeline instead of at a restart.
+  a pipeline instead of at a restart. Since O204 it also stats a DECLARED data
+  directory through the key classifier a start runs — only a declared one,
+  because a CI runner's own home is a verdict about nothing.
   **The second axis exists because "I ran no parse" and "there is no parse to
   run" are different claims that READ IDENTICALLY (O52).** `check_one` falls
   to a catch-all rendering an unknown name as `Accepted` — printed as *"no

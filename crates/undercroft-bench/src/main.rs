@@ -4075,7 +4075,7 @@ fn run_pqpage_synth(
     use rusqlite::{params, Connection};
     use std::collections::HashMap;
     use undercroft_store::pq::ProductQuantizer;
-    use undercroft_vault::keys::{derive_vault_key, load_or_create_master, new_vault_salt};
+    use undercroft_vault::keys::{derive_vault_key, master_key, new_vault_salt};
     use undercroft_vault::seal::{open_content, seal_content};
 
     fn splitmix(state: &mut u64) -> u64 {
@@ -4137,7 +4137,9 @@ fn run_pqpage_synth(
 
     // Real derived key + real seal/open code path.
     let dir = tempfile::TempDir::new()?;
-    let master = load_or_create_master(dir.path(), None)?;
+    let master = master_key(dir.path(), None, undercroft_vault::Access::ReadWrite)?
+        .key
+        .ok_or_else(|| anyhow::anyhow!("a writable open of a fresh directory holds a key"))?;
     let salt = new_vault_salt();
     let enc = derive_vault_key(&master, &salt, "spike", "enc");
 

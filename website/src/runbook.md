@@ -196,6 +196,12 @@ Only return the server to read-write once `verify` is clean.
 - **Lock down the store.** `master.key` should be `0600` and the vault
   directory `0700` (owner-only). Anything that can write the vault DB
   out-of-band can tamper; anything that can read `master.key` can forge.
+- **Back up the key material too.** `backup create` copies the vault, not
+  `master.key` or `kdf.salt`, and a backup opens only under this installation's key.
+  Never delete either file to silence a message: the engine refuses a key
+  source the installation contradicts rather than writing a new key (ROADMAP O204),
+  and an installation an older release left holding both files may have vaults under
+  each.
 - **Add OS-level file-integrity monitoring** (auditd / a tripwire) on the vault
   directory — Undercroft catches tamper on *read*; FIM catches the *write*.
 - **Keep telemetry alerting on.** `PalaceTamperDetected` fires within a scrape

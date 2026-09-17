@@ -7,6 +7,82 @@ its CLI mirror `tenant-repoint` are additive — nothing that worked before
 behaves differently because they exist. Everything else in this section is a
 fix whose only observable change is that a defect is gone.
 
+### a key source the palace contradicts is refused before anything is written, and `--read-only` writes no key and no vault (O204)
+
+A passphrase declared over a palace keyed by `master.key` used to write a
+`kdf.salt`, derive a key no vault was sealed under, and exit 2, "possible
+tampering". The reverse wrote a random `master.key`. `init` exited 0 over
+either, which is how the team-server recipe's `init && exec` hid the cause,
+and `config check` exited 0. Ruled by a three-lens panel and a refuter; the
+record is in O204.
+
+**Measured by probes on a release build of `460b21a`**, beyond the filed case:
+- **A split palace:** on a passphrase palace, `vault create` without the
+  passphrase exited 0 and sealed the new vault under a fresh `master.key`.
+  The stray salt that `UPGRADING.md` called harmless did the same in the
+  other direction. Afterwards no single declaration opened every vault.
+- **`--read-only` wrote:** a key and `vaults/` into an empty directory, a new
+  `master.key` over a palace whose key was deleted, and manifests through
+  `init` and `vault create`. `vault rotate` deleted a torn `vault.json.next`
+  before SQLite refused.
+- A deleted key file was silently replaced, then reported as tampering.
+
+**What the engine does now:**
+- **One classifier, stat only.** It looks at the declared source, which key
+  files exist, what `vaults/` and `backups/` hold, and the posture, and runs
+  before a key is read, derived or written.
+  - Declared file absent, other present: `SourceMismatch`, exit 1.
+  - Neither present, anything referring to a key: `MaterialMissing`, exit 1.
+  - Nothing there: created under a writable posture, and nothing at all under
+    a read-only one.
+  - Both present: the declared one is used, with a warning at every open.
+    The undeclared key is never tried against the manifests, because a file
+    an offline writer can plant proves nothing.
+- **Messages give both readings.** "Unset the passphrase" appears only behind
+  "if the palace was set up without one", and no message advises deleting a
+  key file or prints key material.
+- **One writer.** The key file is created exclusively, owner-only from
+  creation on Unix, by a private function only the classifier's witness
+  reaches.
+- **`vault create` and `POST /v1/vaults` refuse a split.** When the key opens
+  none of the palace's vaults, the create exits 2, answers 409 `integrity`,
+  and creates nothing: it is the finding a search of those vaults reports.
+- **The posture reaches the manager.** `VaultManager::open_as` sits beside
+  `open`. Under read-only, `create`, `delete` and `rotation_candidate` refuse
+  before any effect, and an unlock is read-only whatever its caller asked.
+- **`config check` examines a declared data directory** through the same
+  classifier. It prints `REFUSES data directory` wherever a writable start refuses,
+  warns on both files, and never prints `ok` for an absent or undeclared
+  directory.
+
+**Unchanged:** a wrong passphrase on the right palace is still exit 2.
+
+**Tests:** 22 new — a classifier table, both directions end to end,
+stat-error propagation, a dangling key symlink, the exclusive writer, the
+message rules, a source gate on the writer, the create check across split,
+tampered and non-vault entries, the read-only manager, the `config check`
+agreement with the start, and seven CLI tests through the binary; 12 e2e
+checks, including the `/v1` 409. **Counterfactuals:**
+- all seven CLI tests fail against the baseline binary;
+- each piece of the fix removed alone fails the tests that guard it and
+  leaves the rest green: the classifier, the create check, the manager's
+  posture, the `config check` verdict, and the exit class.
+
+**Filed from the ruling:** O210 (a crash inside the key write leaves a short
+key), O211 (Argon2id on every manager open), O212 (`backup` and `bundle
+keygen` under `--read-only`) and O213 (a freshly initialised vault opened
+read-only reads as tampering).
+
+**Corrected:**
+- The systemd guidance to run `init` by hand now uses the unit's user, data
+  directory and environment file; without them it opened a different palace
+  or keyed one differently.
+- `UPGRADING.md` and `resolve_passphrase`'s doc said `vault status` printed
+  `master.key`. Only `init` ever printed a key source.
+- `UPGRADING.md` no longer calls the stray salt harmless, makes its
+  "remove the passphrase" remedy conditional, and says `backup create` copies
+  no key material.
+
 ### relations between open ROADMAP entries are declared in the entries, and a comment that says "filed" must cite an open one (O169, O171)
 
 Two ruled units, built together because both add an arm to the

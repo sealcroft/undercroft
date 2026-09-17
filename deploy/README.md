@@ -14,7 +14,11 @@
   engine can read, and the engine pins it with `UNDERCROFT_INDEX_CA`.
 - `undercroft-server.service` — the same server as a hardened systemd unit.
   It does not run `init` yet (ROADMAP O200): run `undercroft init` once
-  before enabling it.
+  before enabling it, as the `undercroft` user with
+  `UNDERCROFT_HOME=/var/lib/undercroft` and the variables from
+  `/etc/undercroft/server.env` (the passphrase among them), or it initialises
+  a different palace, or one keyed differently (`docs/remote-server.md` has
+  the command).
 - `undercroft-daemon.service` — per-user auto-save daemon (periodic
   `undercroft daemon run` sweep of `~/.claude/projects`).
 - `server.env.example` — environment template; copy to `.env` / 

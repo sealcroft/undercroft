@@ -131,12 +131,15 @@ pub fn chain_next(mac_key: &SecretKey, prev_head: &[u8], record_tag: &[u8]) -> [
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::keys::{derive_vault_key, load_or_create_master, new_vault_salt};
+    use crate::keys::{derive_vault_key, master_key, new_vault_salt};
     use tempfile::tempdir;
 
     fn keys() -> (SecretKey, SecretKey) {
         let dir = tempdir().unwrap();
-        let master = load_or_create_master(dir.path(), None).unwrap();
+        let master = master_key(dir.path(), None, crate::Access::ReadWrite)
+            .unwrap()
+            .key
+            .unwrap();
         let salt = new_vault_salt();
         (
             derive_vault_key(&master, &salt, "v", "enc"),

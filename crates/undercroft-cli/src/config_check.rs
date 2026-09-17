@@ -15,6 +15,11 @@
 //! outbound call. A CI job can run it against the deployment's real
 //! environment and fail there rather than at restart.
 //!
+//! Beyond the environment it reads the CA pins a declaration names, and,
+//! since ROADMAP O204, it STATS a declared data directory for its key files
+//! and its vaults — the same survey and classifier a start runs — without
+//! reading a key, deriving one or creating anything.
+//!
 //! **The classification is the inventory's, not a second copy.**
 //! `ENGINE_ENV_VARS` carries `(name, ConfigClass, Parse)` and is counted
 //! against the code in both directions on both axes, so a variable this
@@ -22,6 +27,7 @@
 //! no parse for cannot either.
 
 use crate::parity::{ConfigClass, ENGINE_ENV_VARS};
+use std::path::Path;
 
 /// What checking one declaration found.
 enum Finding {
@@ -51,7 +57,7 @@ enum Finding {
 /// exactly the `Parse::Opaque` half of `ENGINE_ENV_VARS`, counted against
 /// this code in both directions — so the number an operator reads as "not
 /// checked" cannot quietly grow when someone adds a knob and forgets its arm.
-pub fn run(verbose: bool) -> (usize, usize, usize, usize) {
+pub fn run(verbose: bool, data_dir: Option<&Path>) -> (usize, usize, usize, usize) {
     let mut fatal = 0usize;
     let mut warned = 0usize;
     let mut validated = 0usize;
@@ -98,7 +104,123 @@ pub fn run(verbose: bool) -> (usize, usize, usize, usize) {
             }
         }
     }
+    // The data-directory arm is not a declaration, so it moves neither `validated`
+    // nor `accepted`; it can only add a refusal or a warning.
+    let declared = undercroft_store::resolve_passphrase(
+        std::env::var("UNDERCROFT_PASSPHRASE").ok().as_deref(),
+    );
+    match data_dir_line(data_dir, declared.as_ref().map(|p| p.as_deref()).ok()) {
+        DataDirLine::Ok(what) => println!("  ok      {what}"),
+        DataDirLine::Absent(what) => println!("  absent  {what}"),
+        DataDirLine::Skipped(why) => println!("  skipped {why}"),
+        DataDirLine::Warn(why) => {
+            warned += 1;
+            println!("  warn    {why}");
+        }
+        DataDirLine::Refuses(why) => {
+            fatal += 1;
+            println!("  REFUSES {why}");
+        }
+    }
     (fatal, warned, validated, accepted)
+}
+
+/// What the data-directory arm found (ROADMAP O204).
+#[derive(Debug)]
+enum DataDirLine {
+    /// A writable start accepts the key material as declared.
+    Ok(String),
+    /// The directory does not exist; a first start creates it. Never `ok`.
+    Absent(String),
+    /// Not examined, and why. Never `ok`.
+    Skipped(String),
+    /// Both key files are present: a start proceeds with the declared one.
+    Warn(String),
+    /// A writable start refuses — the engine's own message.
+    Refuses(String),
+}
+
+/// The data-directory arm: would a writable start accept this directory's key
+/// material under the declared key source?
+///
+/// **Why this command, which opens nothing, stats a directory.** O204's
+/// refusals are decided by `undercroft_vault::keys::plan` from which key
+/// files exist and whether anything refers to a key — before a byte is read
+/// or a key derived. A stat opens nothing, so O154's reasons for keeping
+/// model loads out of here (cost, weights, loading) do not apply, and the
+/// model-path note in `PREFLIGHT_EXEMPT` says existence is the wrong question
+/// for a model; for an installation it is exactly the question the start asks, and
+/// this arm asks it through the SAME classifier.
+///
+/// **Only a DECLARED directory** (`--data-dir` or `UNDERCROFT_HOME`). A CI
+/// job pre-flights the deployment's environment on another machine; the
+/// engine's fallback there would be the runner's own home, and a verdict
+/// about that directory is a verdict about nothing. Undeclared is not a
+/// finding, as the per-variable loop already says.
+///
+/// `passphrase` is the RESOLVED declaration, `None` inside when unset; the
+/// outer `None` means it does not resolve, which the per-variable loop has
+/// already refused, so the key source is unknown here.
+fn data_dir_line(dir: Option<&Path>, passphrase: Option<Option<&str>>) -> DataDirLine {
+    use undercroft_vault::keys::{self, KeyPlan, KeySource};
+    let Some(dir) = dir else {
+        return DataDirLine::Skipped(
+            "data directory — not examined: no data directory is declared (--data-dir or \
+             UNDERCROFT_HOME), so no key material was checked"
+                .into(),
+        );
+    };
+    let shown = dir.display();
+    let Some(passphrase) = passphrase else {
+        return DataDirLine::Skipped(format!(
+            "data directory {shown} — not examined: UNDERCROFT_PASSPHRASE does not resolve, so the key \
+             source a start would use is unknown"
+        ));
+    };
+    let declared = KeySource::declared(passphrase);
+    match std::fs::symlink_metadata(dir) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return DataDirLine::Absent(format!(
+                "data directory {shown} — does not exist; a first start creates it, with {}",
+                declared.file()
+            ))
+        }
+        Err(e) => {
+            return DataDirLine::Refuses(format!(
+                "data directory {shown} — not examined: {e}; a start refuses on the same error"
+            ))
+        }
+    }
+    let survey = match keys::survey(dir) {
+        Ok(s) => s,
+        Err(e) => {
+            return DataDirLine::Refuses(format!(
+                "data directory {shown} — not examined: {e}; a start refuses on the same error"
+            ))
+        }
+    };
+    match keys::plan(declared, &survey, undercroft_vault::Access::ReadWrite) {
+        Ok(KeyPlan::Load {
+            other_present: false,
+        }) => DataDirLine::Ok(format!(
+            "data directory {shown} — {} present, as declared (whether it opens each vault is its \
+             manifest's MAC, which this command does not read)",
+            declared.file()
+        )),
+        Ok(KeyPlan::Load {
+            other_present: true,
+        }) => DataDirLine::Warn(format!(
+            "data directory {shown} — {}",
+            keys::both_present_warning(declared)
+        )),
+        Ok(KeyPlan::Create(_)) | Ok(KeyPlan::NoKey) => DataDirLine::Ok(format!(
+            "data directory {shown} — no key material yet and nothing refers to a key; a first start \
+             creates {}",
+            declared.file()
+        )),
+        Err(e) => DataDirLine::Refuses(format!("data directory {shown} — {e}")),
+    }
 }
 
 /// One declaration, through the resolver that will run at start-up.
@@ -799,5 +921,142 @@ mod tests {
             "the ConfigClass claim disagrees with what the resolver actually does:\n{}",
             wrong.join("\n")
         );
+    }
+
+    /// ROADMAP O204 — the data-directory arm refuses exactly where a writable start
+    /// refuses, because both ask `undercroft_vault::keys::plan`; it warns on
+    /// both files, and it never says `ok` for a directory it did not examine
+    /// or that does not exist.
+    #[test]
+    fn the_data_directory_arm_refuses_exactly_where_a_writable_start_does() {
+        use undercroft_vault::{keys, Access, SecurityLevel, VaultManager};
+        const PW: Option<&str> = Some("correct horse");
+
+        fn installation(pw: Option<&str>) -> tempfile::TempDir {
+            let dir = tempfile::tempdir().unwrap();
+            VaultManager::open(dir.path(), pw)
+                .unwrap()
+                .create("default", SecurityLevel::Sealed)
+                .unwrap();
+            dir
+        }
+        #[derive(Debug, PartialEq)]
+        enum Kind {
+            Ok,
+            Absent,
+            Warn,
+            Refuses,
+        }
+        let kind = |l: &DataDirLine| match l {
+            DataDirLine::Ok(_) => Kind::Ok,
+            DataDirLine::Absent(_) => Kind::Absent,
+            DataDirLine::Warn(_) => Kind::Warn,
+            DataDirLine::Refuses(_) => Kind::Refuses,
+            DataDirLine::Skipped(w) => panic!("a declared directory was skipped: {w}"),
+        };
+
+        let absent_parent = tempfile::tempdir().unwrap();
+        let empty = tempfile::tempdir().unwrap();
+        let by_file = installation(None);
+        let by_file_then_pw = installation(None);
+        let by_pw_then_none = installation(PW);
+        let lost_key = installation(None);
+        std::fs::remove_file(lost_key.path().join(keys::MASTER_KEY_FILE)).unwrap();
+        let both = installation(None);
+        std::fs::write(both.path().join(keys::KDF_SALT_FILE), [1u8; keys::SALT_LEN]).unwrap();
+        let unreadable = tempfile::tempdir().unwrap();
+        std::fs::write(
+            unreadable.path().join(undercroft_vault::VAULTS_DIR),
+            b"file",
+        )
+        .unwrap();
+
+        let rows: Vec<(&str, std::path::PathBuf, Option<&str>, Kind, &str)> = vec![
+            (
+                "absent",
+                absent_parent.path().join("installation"),
+                None,
+                Kind::Absent,
+                "first start creates",
+            ),
+            (
+                "empty",
+                empty.path().to_path_buf(),
+                PW,
+                Kind::Ok,
+                "creates kdf.salt",
+            ),
+            (
+                "agrees",
+                by_file.path().to_path_buf(),
+                None,
+                Kind::Ok,
+                "master.key present",
+            ),
+            (
+                "filed case",
+                by_file_then_pw.path().to_path_buf(),
+                PW,
+                Kind::Refuses,
+                "is declared",
+            ),
+            (
+                "reverse",
+                by_pw_then_none.path().to_path_buf(),
+                None,
+                Kind::Refuses,
+                "is not declared",
+            ),
+            (
+                "lost key",
+                lost_key.path().to_path_buf(),
+                None,
+                Kind::Refuses,
+                "is missing",
+            ),
+            (
+                "both files",
+                both.path().to_path_buf(),
+                None,
+                Kind::Warn,
+                "both master.key and kdf.salt",
+            ),
+            (
+                "unreadable",
+                unreadable.path().to_path_buf(),
+                None,
+                Kind::Refuses,
+                "not examined",
+            ),
+        ];
+        for (label, dir, pw, want, text) in rows {
+            let line = data_dir_line(Some(&dir), Some(pw));
+            let got = kind(&line);
+            assert_eq!(got, want, "{label}: {line:?}");
+            let shown = format!("{line:?}");
+            assert!(shown.contains(text), "{label}: {shown}");
+            assert!(
+                shown.contains(&dir.display().to_string()),
+                "{label}: the line names the directory it examined"
+            );
+            // The one implementation: the start answers the same question.
+            let start = VaultManager::open_as(&dir, pw, Access::ReadWrite);
+            assert_eq!(
+                got == Kind::Refuses,
+                start.is_err(),
+                "{label}: the pre-flight and the start disagree ({:?})",
+                start.err()
+            );
+        }
+
+        // Not examined is said, never implied.
+        assert!(matches!(
+            data_dir_line(None, Some(None)),
+            DataDirLine::Skipped(_)
+        ));
+        assert!(matches!(
+            data_dir_line(Some(by_file.path()), None),
+            DataDirLine::Skipped(_)
+        ));
     }
 }

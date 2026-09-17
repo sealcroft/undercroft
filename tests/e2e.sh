@@ -1197,9 +1197,12 @@ check "at the run, not just check" 1 "names no passphrase"            -- \
 check "whitespace-only too"       1 "names no passphrase"             -- \
   env UNDERCROFT_PASSPHRASE="   " "$BIN" config-check
 # ...and a real one passes, so the three above are not passing because the
-# variable is refused unconditionally.
+# variable is refused unconditionally. On an EMPTY data directory: since
+# ROADMAP O204 `config check` also stats the declared data directory, and the suite's
+# own installation is keyed by master.key, so a passphrase over it now refuses —
+# correctly, and checked in its own block at the end of this suite.
 check "a real passphrase passes"  0 "This environment starts"         -- \
-  env UNDERCROFT_PASSPHRASE="correct horse" "$BIN" config-check
+  env UNDERCROFT_HOME="$(mktemp -d)" UNDERCROFT_PASSPHRASE="correct horse" "$BIN" config-check
 # The MINTING side runs the same resolver now. It always refused an empty
 # value while the ENFORCING side accepted it — one decision, two inline
 # copies, opposite answers.
@@ -2879,6 +2882,62 @@ rest_body "/v1 stats: a healthy embed does not count" '"embed_failures":1' -- \
 rest_body "/ui reads embed failures" 's.embed_failures' -- http://127.0.0.1:18998/ui
 kill "$EF_SRV" 2>/dev/null; wait "$EF_SRV" 2>/dev/null
 kill "$EF_STUB" 2>/dev/null; wait "$EF_STUB" 2>/dev/null
+
+# ---------------------------------------------------------------------------
+# ROADMAP O204 — the declared key source against the key material the installation
+# holds, and the posture reaching the manager. Before the fix a passphrase
+# over a key-file installation wrote a kdf.salt and reported "possible tampering"
+# (exit 2), `init` exited 0 over it, `config check` exited 0, and
+# `--read-only` wrote key material into an empty directory.
+# ---------------------------------------------------------------------------
+KS_HOME="$(mktemp -d)"
+ks()  { env -u UNDERCROFT_PASSPHRASE -u UNDERCROFT_MCP_HTTP_TOKEN -u UNDERCROFT_ASSERTION_SECRET \
+          UNDERCROFT_HOME="$KS_HOME" "$BIN" "$@"; }
+ksp() { env -u UNDERCROFT_MCP_HTTP_TOKEN -u UNDERCROFT_ASSERTION_SECRET \
+          UNDERCROFT_HOME="$KS_HOME" UNDERCROFT_PASSPHRASE="correct horse" "$BIN" "$@"; }
+check "O204: a key-file installation initialises"             0 "master.key"                        -- ks init
+check "O204: a passphrase over it refuses, exit 1"       1 "UNDERCROFT_PASSPHRASE is declared" -- ksp search note
+check "O204: and gives both readings"                    1 "set up WITHOUT a passphrase"       -- ksp search note
+check "O204: init under it refuses instead of exiting 0" 1 "nothing was written"               -- ksp init
+check "O204: config check sees it before a restart"      1 "REFUSES data directory"                    -- ksp config check
+if [ -e "$KS_HOME/kdf.salt" ]; then
+  echo "FAIL  O204: a refused passphrase wrote kdf.salt"; FAIL=$((FAIL+1))
+else
+  echo "ok    O204: no kdf.salt was written"; PASS=$((PASS+1))
+fi
+check "O204: the installation opens once the declaration goes" 0 "default"                           -- ks vault list
+KS_RO="$(mktemp -d)/installation"
+check "O204: --read-only on an empty directory lists nothing" 0 "No vaults" -- \
+  env -u UNDERCROFT_PASSPHRASE UNDERCROFT_HOME="$KS_RO" "$BIN" --read-only vault list
+check "O204: --read-only init refuses before any effect" 1 "read-only posture" -- \
+  env -u UNDERCROFT_PASSPHRASE UNDERCROFT_HOME="$KS_RO" "$BIN" --read-only init
+if [ -e "$KS_RO" ]; then
+  echo "FAIL  O204: a read-only run created the installation"; ls -la "$KS_RO" | sed 's/^/      /'; FAIL=$((FAIL+1))
+else
+  echo "ok    O204: a read-only run created nothing"; PASS=$((PASS+1))
+fi
+# /v1: a create whose key opens none of the installation's vaults is the same
+# integrity finding a search reports — 409 with the class, never 201.
+ks serve-http --host 127.0.0.1 --port 18993 >"$KS_HOME/serve.log" 2>&1 &
+KS_SRV=$!
+for _ in $(seq 1 40); do curl -sf http://127.0.0.1:18993/healthz >/dev/null 2>&1 && break; sleep 0.25; done
+rest_code "O204 /v1: a create beside a vault the key opens is 201" 201 -- \
+  -X POST http://127.0.0.1:18993/v1/vaults -H 'content-type: application/json' -d '{"id":"second"}'
+for v in default second; do
+  sed -i 's/"sealed"/"hmac-only"/' "$KS_HOME/vaults/$v/vault.json"
+done
+curl -s -o "$KS_HOME/create.json" -w '%{http_code}' -X POST http://127.0.0.1:18993/v1/vaults \
+  -H 'content-type: application/json' -d '{"id":"third"}' >"$KS_HOME/create.code"
+if [ "$(cat "$KS_HOME/create.code")" = "409" ] \
+   && grep -qF '"class":"integrity"' "$KS_HOME/create.json" \
+   && grep -qF 'opens none of the 2 vault manifest' "$KS_HOME/create.json" \
+   && [ ! -e "$KS_HOME/vaults/third" ]; then
+  echo "ok    O204 /v1: a create whose key opens no vault is a 409 integrity verdict"; PASS=$((PASS+1))
+else
+  echo "FAIL  O204 /v1: create over tampered manifests — code $(cat "$KS_HOME/create.code")"
+  sed 's/^/      /' "$KS_HOME/create.json"; FAIL=$((FAIL+1))
+fi
+kill "$KS_SRV" 2>/dev/null; wait "$KS_SRV" 2>/dev/null
 
 echo
 echo "e2e results: $PASS passed, $FAIL failed"
