@@ -177,12 +177,27 @@ impl Drawer {
         // forget: every drawer that enters a vault, by any route, keeps
         // the times written into it. Resolution needs an anchor and so waits
         // for `with_content_date`.
-        let time_mentions = crate::temporal::extract_time_mentions(&content, None);
+        //
+        // Only content a vault can hold is scanned (ROADMAP O198): every
+        // write path refuses the rest at its door, so the scan did work for a
+        // write that could not land — and it was most of that work. A `/v1`
+        // save of 200 MiB against the 100,000-byte bound spent 10.1 s here
+        // before the store refused it, on the listener's one request loop.
+        let fileable = crate::validate_content_len(&content).is_ok();
+        let time_mentions = if fileable {
+            crate::temporal::extract_time_mentions(&content, None)
+        } else {
+            Vec::new()
+        };
         // Likewise the entities named in the content. `manage.rs` already
         // re-derived these on demand for co-occurrence; recording them on the
         // drawer means the structure travels with an export and does not have
         // to be recomputed to be read.
-        let entities = crate::entity::extract_entities(&content);
+        let entities = if fileable {
+            crate::entity::extract_entities(&content)
+        } else {
+            Vec::new()
+        };
         Drawer {
             id,
             content,
@@ -331,7 +346,9 @@ impl Drawer {
         let anchor = content_date
             .as_deref()
             .and_then(crate::temporal::parse_anchor);
-        if anchor.is_some() {
+        // The same bound as `new` (ROADMAP O198): no vault holds content past
+        // it, so a rescan would resolve mentions nothing will ever read.
+        if anchor.is_some() && crate::validate_content_len(&self.content).is_ok() {
             self.meta.time_mentions = crate::temporal::extract_time_mentions(&self.content, anchor);
         }
         self.meta.content_date = content_date;
@@ -432,6 +449,50 @@ impl Drawer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ROADMAP O198: only content a vault can hold is scanned. Past the bound
+    /// every write path refuses the drawer, and the scan was most of what the
+    /// refused write cost; at the bound the text is scanned as ever. Both
+    /// scanning constructors, since `with_content_date` rescans.
+    #[test]
+    fn only_content_a_vault_can_hold_is_scanned() {
+        let text = "Yesterday Alice met Bob Smith at the Acme office on 7 May 2023.";
+        let padded = |len: usize| format!("{text} {}", "x".repeat(len - text.len() - 1));
+        let build = |len: usize| Drawer::new("w", "r", padded(len), None, 0, "test");
+        let scanned = |d: &Drawer| (d.meta.time_mentions.len(), d.meta.entities.len());
+
+        let at = build(crate::MAX_CONTENT_BYTES);
+        assert_eq!(at.content.len(), crate::MAX_CONTENT_BYTES);
+        let (mentions, entities) = scanned(&at);
+        assert!(
+            mentions > 0 && entities > 0,
+            "premise: at the bound the text is scanned ({mentions}, {entities})"
+        );
+        let dated = at.with_content_date(Some("2023-05-08".into()));
+        assert!(
+            dated
+                .meta
+                .time_mentions
+                .iter()
+                .any(|m| m.resolved.is_some()),
+            "premise: the anchor resolves a mention at the bound"
+        );
+
+        let over = build(crate::MAX_CONTENT_BYTES + 1);
+        assert_eq!(
+            scanned(&over),
+            (0, 0),
+            "Drawer::new scanned content no vault holds"
+        );
+        let over = over.with_content_date(Some("2023-05-08".into()));
+        assert_eq!(scanned(&over), (0, 0), "with_content_date rescanned it");
+        assert_eq!(
+            over.content.len(),
+            crate::MAX_CONTENT_BYTES + 1,
+            "the text is untouched"
+        );
+        assert_eq!(over.meta.content_date.as_deref(), Some("2023-05-08"));
+    }
 
     #[test]
     fn deterministic_id_same_slot() {

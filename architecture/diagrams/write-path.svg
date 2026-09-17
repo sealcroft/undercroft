@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 640" width="900" height="640" role="img" aria-labelledby="t d">
 <title id="t">Undercroft write path</title>
-<desc id="d">A drawer is normalized, has structure derived from it, is embedded, then sealed, tagged and chained inside one transaction. The manifest anchor is fsynced afterwards and lags on purpose. On a single write the PQ row, the token matrix with its FDE row, and the FTS entry follow the anchor as advisory artifacts; bulk ingest writes them inside its batch transaction.</desc>
+<desc id="d">A drawer is normalized, has structure derived from it within the content bound, has its declaration checked, is embedded, then sealed, tagged and chained inside one transaction. The manifest anchor is fsynced afterwards and lags on purpose. On a single write the PQ row, the token matrix with its FDE row, and the FTS entry follow the anchor as advisory artifacts; bulk ingest writes them inside its batch transaction.</desc>
 <style>
   .f { font-family: "DejaVu Sans", "Noto Sans", sans-serif; }
   .h { font-size: 17px; font-weight: 600; }
@@ -37,7 +37,7 @@
 <text x="340" y="98" class="f l" fill="var(--d-violet-ink,#523a86)">2 · derive, never alter</text>
 <text x="340" y="118" class="f b dim">time_mentions · entities</text>
 <text x="340" y="134" class="f b dim">content_date anchors relative dates</text>
-<text x="340" y="150" class="f s dim">extracted in new(); anchored if dated</text>
+<text x="340" y="150" class="f s dim">extracted in new(), within the bound</text>
 
 <path d="M590 115 L616 115" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 
@@ -45,7 +45,7 @@
 <text x="638" y="98" class="f l ink">3 · embed</text>
 <text x="638" y="118" class="f b dim">deterministic offline hash embedder</text>
 <text x="638" y="134" class="f b dim">by default — no model, no network</text>
-<text x="638" y="150" class="f s dim">computed before the lock is taken</text>
+<text x="638" y="150" class="f s dim">validated first, before the lock</text>
 
 <path d="M450 160 L450 176" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
 

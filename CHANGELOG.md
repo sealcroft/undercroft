@@ -7,6 +7,56 @@ its CLI mirror `tenant-repoint` are additive — nothing that worked before
 behaves differently because they exist. Everything else in this section is a
 fix whose only observable change is that a defect is gone.
 
+### a write the store refuses is refused before it is scanned or embedded (O198)
+
+A save whose content the store refuses (past the 100,000-byte bound) was
+embedded first, and its dates and entities extracted from the whole text,
+before the refusal arrived. Under a served embedder that was a plaintext POST
+of a write that could not land. The entry called the cost one forward pass.
+Measured on `serve-http` at `66337d2` with the default embedder, a 200 MiB
+`/v1` save was refused after 43.2 s at a 12.2 GB resident peak, and `/healthz`
+waited the whole time behind it.
+
+**What changed:**
+- **One door onto the embedder for writes.** `VaultStore::embed_declared`
+  validates every declaration in a batch before it embeds any of them. The
+  single save, the dedup save and the bulk path call it, so `/v1` and MCP
+  saves, updates, diary entries, imports and `mine` are judged first. The bulk
+  path embedded a whole batch before judging it when screening was off, which
+  the entry had not named.
+- **A dedup save is judged on the declaration it was given.** The refresh
+  branch used to judge the matched drawer's id instead, so an id the store
+  refuses was accepted beside a near-duplicate. No surface declares its own
+  id, so no deployment is affected.
+- **Only content a vault can hold is scanned.** `Drawer::new` and
+  `with_content_date` skip date and entity extraction past the bound, which
+  was 10.1 of the remaining 11.8 seconds.
+
+After the fix the same 200 MiB save is refused in 1.38 s at 1.26 GB, and a
+16 MiB one in 0.09 s at 112 MB (it was 2.83 s at 1,009 MB). The remainder is
+parsing the body, which O214 files beside the search query's missing bound.
+
+**Diagrams:** both write-path diagrams and the Mermaid write sequence now put
+validation before the embed.
+
+**Tests:**
+- Three store tests: every save arm refuses without embedding, the dedup
+  arms judge the declaration either way, and the door validates first
+  (source).
+- The custody gate refuses an arriving drawer embedded through a raw call.
+- A core test: past the bound neither constructor scans.
+- A CLI test through the binary: MCP, `/v1` save, update and import, and a
+  CLI import batch send nothing to a served embedder.
+- Three e2e checks: a refused 16 MiB save stays under a 200 MiB peak.
+- Each fix removed alone fails its test. The unfixed binary peaks at
+  1,023 MB in the e2e check, and one with only the scans restored at 312 MB.
+
+**Real corpus:** 680 drawers mined into eight wings, 160 `/v1` saves and 80
+dedup refreshes. Both binaries answered every valid write the same. The drive
+also found O215: CLI `import` keeps one drawer per distinct text, so the
+eight-wing export restored 85 of 680 drawers, while `/v1` import restored all
+of them.
+
 ### an export under `--read-only` is served and says it went unaudited, on the CLI and on `/v1` (O176)
 
 `undercroft --read-only export` failed inside SQLite: the CLI called the

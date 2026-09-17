@@ -133,8 +133,9 @@ sequenceDiagram
     participant DB as SQLite (one transaction)
     C->>C: normalize (verbatim-preserving) → chunk → deterministic id at construction
     C->>S: save(drawer — content, wing, room)
+    S->>S: validate the declaration (names, kind, id shape, content length)
     S->>S: embed (hash / onnx / ort / http / external vector)
-    S->>S: validate the declaration, then Screen (admission tier 1 + rate)
+    S->>S: validate again with the vector, then Screen (admission tier 1 + rate)
     Note over S: a flagged write is DIVERTED into the reserved review wing<br/>and re-enters this path with Bypass(AlreadyDiverted) — never dropped
     S->>DB: BEGIN IMMEDIATE
     S->>V: seal content + embedding (sealed vaults — AAD binds vault id + record id)

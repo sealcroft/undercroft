@@ -2119,17 +2119,24 @@ mod tests {
     }
 
     /// The calls through which a drawer's text can reach a served embedder or
-    /// the tier-2 advisor: the two embed doors, the one consultation, and the
-    /// write paths that screen (and so may consult).
-    const CUSTODY_NEEDLES: [&str; 7] = [
+    /// the tier-2 advisor: the two raw embed doors ([`RAW_EMBED_NEEDLES`]), the
+    /// write paths' validating door (ROADMAP O198), the one consultation, and
+    /// the write paths that screen (and so may consult).
+    const CUSTODY_NEEDLES: [&str; 8] = [
         "self.embedder.embed(",
         "embedder_embed(",
+        "embed_declared(",
         ".assess(",
         "write_drawer(",
         "upsert_screened(",
         "upsert_screened_with(",
         "screen_and_divert(",
     ];
+
+    /// The two embed calls that judge nothing before they embed. An arriving
+    /// DRAWER may not be embedded through either (ROADMAP O198): it goes
+    /// through `embed_declared`, which validates the declaration first.
+    const RAW_EMBED_NEEDLES: [&str; 2] = ["self.embedder.embed(", "embedder_embed("];
 
     /// Each call of a [`CUSTODY_NEEDLES`] entry in `code`, attributed to the
     /// innermost function containing it. A definition is not a call.
@@ -2279,8 +2286,11 @@ mod tests {
         },
         /// Stored text is handled and nothing leaves, for the stated reason.
         SendsNothing(&'static str),
-        /// The caller's own text on this call — a save, an import, a query.
+        /// The caller's own DRAWER on this call — a save, an import, an update.
+        /// Never through a [`RAW_EMBED_NEEDLES`] call (ROADMAP O198).
         Arriving(&'static str),
+        /// The caller's own QUERY: embedded to search, and stored nowhere.
+        Query(&'static str),
         /// A door whose own callers are each classified in this table.
         Forwards(&'static str),
     }
@@ -2345,18 +2355,18 @@ mod tests {
                 SendsNothing("runs only for a `KNOWN_EMBEDDER_UPGRADES` row, every one a hash identity, and a hash embedder names no destination"),
             ),
             ("upsert", "upsert_screened(", Arriving("the caller's drawer on its way in")),
-            ("upsert_screened", "self.embedder.embed(", Arriving("the caller's drawer on its way in")),
+            ("upsert_screened", "embed_declared(", Arriving("the caller's drawer on its way in")),
             ("upsert_external", "write_drawer(", Arriving("the caller's drawer and the caller's vector")),
-            ("upsert_many", "self.embedder.embed(", Arriving("a batch of the caller's drawers")),
+            ("upsert_many", "embed_declared(", Arriving("a batch of the caller's drawers")),
             ("upsert_many", "screen_and_divert(", Arriving("a batch of the caller's drawers")),
-            ("save_with_dedup", "self.embedder.embed(", Arriving("the incoming drawer")),
+            ("save_with_dedup", "embed_declared(", Arriving("the incoming drawer")),
             ("save_with_dedup_vec", "write_drawer(", Arriving("the incoming content, refreshing a match in place or inserted")),
             ("import_record", "write_drawer(", Arriving("an imported record — the importer's text on its way in")),
             ("import_record", "upsert_screened(", Arriving("an imported record — the importer's text on its way in")),
             ("update_drawer", "upsert_screened(", Arriving("the caller's replacement content")),
             ("diary_write", "upsert_screened(", Arriving("the agent's diary entry")),
-            ("search_page", "self.embedder.embed(", Arriving("the query")),
-            ("search_with_index", "embedder_embed(", Arriving("the query")),
+            ("search_page", "self.embedder.embed(", Query("the caller's query")),
+            ("search_with_index", "embedder_embed(", Query("the caller's query")),
             (
                 "admission_divert",
                 ".assess(",
@@ -2381,6 +2391,11 @@ mod tests {
                 "embedder_embed",
                 "self.embedder.embed(",
                 Forwards("the crate's door onto the embedder; each caller is listed here"),
+            ),
+            (
+                "embed_declared",
+                "self.embedder.embed(",
+                Forwards("the write paths' door onto the embedder, which validates every declaration first (ROADMAP O198); each caller is listed here"),
             ),
         ];
 
@@ -2456,10 +2471,83 @@ mod tests {
                     defined.contains(*proven_by),
                     "{f} / {n} records {label}, and `{proven_by}` names no function in this crate"
                 ),
-                SendsNothing(why) | Arriving(why) | Forwards(why) => {
+                SendsNothing(why) | Arriving(why) | Query(why) | Forwards(why) => {
                     assert!(!why.is_empty(), "{f} / {n}: a row states its reason")
                 }
             }
+            // ROADMAP O198: an arriving drawer reaches the embedder only after
+            // its declaration is judged. A write path that embedded it
+            // directly paid for — and, served, POSTed — a write the store then
+            // refused; classifying such a call `Arriving` is not enough.
+            if matches!(custody, Arriving(_)) {
+                assert!(
+                    !RAW_EMBED_NEEDLES.contains(n),
+                    "{f} embeds an arriving drawer through `{n}`, which judges nothing first; \
+                     call `embed_declared` so the declaration is validated before any embed"
+                );
+            }
         }
+    }
+
+    /// **ROADMAP O198: the write paths' embed door validates every declaration
+    /// before it embeds any of them.**
+    ///
+    /// The custody gate above holds WHO calls the door; this holds what the
+    /// door does, in order. Read from the masked source of `embed_declared`:
+    /// the first `validate_declaration(` comes before the first raw embed.
+    #[test]
+    fn the_write_door_validates_every_declaration_before_it_embeds() {
+        let order = |code: &str| -> Option<(usize, usize)> {
+            let bodies = fn_bodies(code);
+            let (_, body) = bodies.iter().find(|(n, _)| n == "embed_declared")?;
+            let text = &code[body.clone()];
+            Some((
+                text.find("validate_declaration(")?,
+                text.find(RAW_EMBED_NEEDLES[0])?,
+            ))
+        };
+        let validates_first = |code: &str| order(code).is_some_and(|(v, e)| v < e);
+
+        // PREMISE, both ways: the reader passes a door that validates first,
+        // and fails one that embeds first, one that validates only in a
+        // comment, and one that validates nothing.
+        let good = mask_code(concat!(
+            "impl S {\n    fn embed_declared(&self, ds: &[&D]) {\n",
+            "        for d in ds { crate::admission::validate_declaration(d, None)?; }\n",
+            "        ds.iter().map(|d| self.embedder.embed(&d.content)).collect()\n    }\n}\n",
+        ));
+        assert!(
+            validates_first(&good),
+            "premise: a door that validates first passes"
+        );
+        for bad in [
+            concat!(
+                "impl S {\n    fn embed_declared(&self, ds: &[&D]) {\n",
+                "        let v: Vec<_> = ds.iter().map(|d| self.embedder.embed(&d.content)).collect();\n",
+                "        for d in ds { crate::admission::validate_declaration(d, None)?; }\n",
+                "        v\n    }\n}\n",
+            ),
+            concat!(
+                "impl S {\n    fn embed_declared(&self, ds: &[&D]) {\n",
+                "        // validate_declaration(d, None) first\n",
+                "        ds.iter().map(|d| self.embedder.embed(&d.content)).collect()\n    }\n}\n",
+            ),
+            concat!(
+                "impl S {\n    fn embed_declared(&self, ds: &[&D]) {\n",
+                "        ds.iter().map(|d| self.embedder.embed(&d.content)).collect()\n    }\n}\n",
+            ),
+        ] {
+            assert!(
+                !validates_first(&mask_code(bad)),
+                "premise: a door that does not validate first is caught:\n{bad}"
+            );
+        }
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs");
+        let code = blank_test_items(&mask_code(&std::fs::read_to_string(path).unwrap()));
+        assert!(
+            validates_first(&code),
+            "`embed_declared` in lib.rs must call `validate_declaration` before it embeds"
+        );
     }
 }
