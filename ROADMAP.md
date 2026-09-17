@@ -3988,7 +3988,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**228** of the **242** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**234** of the **248** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4168,6 +4168,360 @@ identities.
 MINOR since O149: `PATCH /admin/tenants/{id}` and its CLI mirror are new
 capability, backward compatible. The rest of the section is PATCH work — no
 documented contract moves.
+
+### O172 — CLOSED 2026-09-17: the team-server recipe starts, reaches its Qdrant mirror over TLS behind an exported pin, and passes a declared passphrase
+
+**Filed and ruled 2026-09-14, recorded rather than built. HIGH.**
+`deploy/docker-compose.server.yml` declares `UNDERCROFT_QDRANT_URL:
+http://qdrant:6333`, which `undercroft_index::from_env` refuses at
+construction — cleartext beyond loopback, no override — and a shipped suite
+pins the refusal of that exact spelling (`tests/e2e-backends.sh`,
+`refuses cleartext`). The recipe fails before an operator could meet that:
+its command is `serve-http` with no `init`, `open_store_as` unlocks `default`,
+the unlock returns `VaultError::NotFound` when `vault.json` is absent, and
+`VaultManager::open` creates only the master key and `vaults/`. On a fresh
+volume the engine exits `vault "default" not found`, `restart: unless-stopped`
+loops, and no client ever connects. No file under `tests/` references the
+recipe. Its header also claims "the vector index never holds plaintext",
+while on a sealed vault the content arrives sealed and the embeddings are
+plaintext-derived vectors (`docs/THREAT_MODEL.md`, A5).
+
+#### RULED 2026-09-14 by a three-lens panel plus an adversarial refuter
+
+**Prior ruling found and UPHELD: the maintainer's 2026-09-12 option (b).**
+Qdrant stays in the team-server recipe, behind its own Caddy TLS terminator,
+with an exported public CA root pinned through `UNDERCROFT_INDEX_CA` and an
+explicit, documented operator `index push`. Until this entry the ruling lived
+only in gitignored files: `.handover/SESSION_START.md` ("the Qdrant
+team-server recipe MADE REAL (ruled: option b)"; "make the Qdrant recipe
+real") and the option text in
+`.handover/panel-o134-o135-o140-2026-09-12/O135-analyses.json`. It is best
+practice: the push stays an explicit operator act; the mirror stays an
+untrusted accelerator whose every candidate is HMAC-verified locally under the
+same retrieval policy; the TLS-plus-exported-pin shape is the tree's own gated
+precedent (M7, M9, M10, O63); and served consumers exist that refuse on every
+call today — MCP `undercroft_index_status` (through `open_index`),
+`GET /v1/vaults/{id}/index/status`, and `POST /v1/vaults/{id}/forget` with a
+`backend`, which calls `undercroft_index::from_env` directly, so a grep for
+`open_index` misses it. The 2026-09-12 refuter's case for removing Qdrant
+rested on provenance — the recipe predates the index transport policy — which
+shows where the sentence came from, not that (b) is wrong.
+
+**The two corrections, each refuted by evidence.**
+
+1. **"Following the `deploy/backends-tls` pattern" transfers only its Caddyfile
+   site block.** That precedent pins Caddy's root-only PKI path, readable only
+   because `backends-e2e` builds `target: builder` and runs as root. The
+   team-server engine is the runtime image, uid 10001, where that pin is
+   unreadable and refuses — M9 verbatim. The precedent that governs an ENGINE
+   in a shipped recipe is `deploy/observability`: an exporter, the exported
+   `/tls/root.crt`, and the engine gated on the exporter with
+   `service_completed_successfully`.
+2. **"A tls-pins-style check that the stack boots" is necessary and cannot
+   observe the defect.** The `ServeHttp` arm runs `open_store_as`,
+   `warm_embedding_cache`, `Tenancy::new`, the reranker and `serve_http`, and
+   builds no index; the URL is read only inside `undercroft_index::from_env`,
+   and `undercroft_net::pin_from_env` caches the resolved `Result`, a failure
+   included, for the life of the process. So `/healthz` answers 200 with the
+   cleartext URL or an unreadable pin in place. The gate must drive the index
+   path through the running server.
+
+**Rejected:**
+
+- *(a) Remove Qdrant from the recipe* — the maintainer ruled (b) with (a) in
+  front of them, and no evidence shows (b) breaks doctrine; as specified, (a)
+  carried no boot check and would have shipped the init crash-loop untouched.
+- *(c) Docs only* — leaves a recipe that crash-loops on first `up` and a URL
+  the policy refuses.
+- *(b) as literally worded* — the backends-tls pin is unreadable by uid 10001,
+  and a `/healthz` check is green over the defect.
+- *Mount `deploy/backends-tls/Caddyfile`* — four site blocks for upstreams the
+  recipe does not run, and a production recipe coupled to a test harness file.
+- *Qdrant's native TLS* — needs a certificate one-shot and Qdrant TLS config at
+  the pinned `v1.12.4`, neither verified; every HTTP hop here terminates at
+  Caddy `tls internal`. Stated as the alternative, not taken.
+- *Start the engine without waiting for the exporter* — `pin_from_env` caches a
+  refusal, so an early `index/status` or `forget` with a backend refuses until
+  restart while `/healthz` stays green; the doctrine is fail-at-start over
+  healthy-but-failing.
+- *An init guard testing for `vault.json`* — a second implementation of
+  `VaultManager::exists`, which `init` already consults
+  (`mgr.exists("default")`) before answering that the palace exists.
+- *A one-shot `undercroft-init` service* — a second engine-image service with an
+  unverified double build; the one shipped engine recipe that bootstraps does
+  it in the engine's own command.
+- *An entrypoint wrapper running `init` before every command* — silently
+  defeats `run --rm undercroft init --level hmac-only`: the wrapper's own init
+  creates a sealed default first.
+- *`serve-http` auto-creating the default vault* — new capability that picks a
+  security level on start and would create a database under `--read-only`.
+- *Converge `deploy/observability`'s `undercroft init 2>/dev/null || true` in
+  this unit* — no arm in this unit's gate can show that fix; owed separately.
+- *File the product-wide "sealed bytes only" wording separately* — a claim
+  lives on every surface that states it, and this unit rewrites that claim.
+- *Also rewrite README's "upload sealed records" and `docs/integrations.md`'s
+  "sealed content only"* — each is true as scoped, about content; editing them
+  is churn, and the second forces a Mermaid re-render. (Superseded 2026-09-14:
+  the drift sweep corrected that label and re-rendered the diagram anyway.)
+- *Widen the CA-pin preflight by listing `context:` depths* — select on the
+  PROPERTY instead, O92's lesson: a `deploy/` compose file whose `context:`
+  resolves to the repo root.
+- *Boot the server arm on the telemetry engine image* — a binary built with
+  different features than the recipe ships is a check of something else.
+
+#### Implementation spec, condensed
+
+One unit, PATCH-class, closing under the `1.6.0` section when built, with a
+`#### RULED` subsection carrying this record, the counterfactual transcripts
+and the measured CI cost.
+
+1. NEW `deploy/qdrant-tls/Caddyfile`: `auto_https disable_redirects` and one
+   site, `https://qdrant-tls` with `tls internal` and
+   `reverse_proxy qdrant:6333`, byte-identical to
+   `deploy/backends-tls/Caddyfile`'s qdrant block, its header giving the C8
+   reason and where the root lands.
+2. `deploy/docker-compose.server.yml`: a `qdrant-tls` service (`caddy:2.8`,
+   `qdrant-tls-data:/data`, no ports); a one-shot `qdrant-tls-export`
+   (`alpine:3.20`, `embed-tls-export`'s body verbatim — a bounded 60 s wait
+   for the PKI root, a copy to `/tls/root.crt`, `chmod 0644`, the private key
+   keeping 0600); and the `undercroft` service with
+   `entrypoint: ["/bin/sh", "-c"]`,
+   `command: ["undercroft init && exec undercroft serve-http --host 0.0.0.0 --port 8765"]`
+   (`&&`, never `2>/dev/null || true`, so a failed init says why),
+   `depends_on` `qdrant-tls-export: service_completed_successfully`,
+   `UNDERCROFT_QDRANT_URL: https://qdrant-tls`,
+   `UNDERCROFT_INDEX_CA: /tls/root.crt` and `qdrant-tls-data:/tls:ro`.
+3. The header rewritten, its SECURITY paragraph kept verbatim: the
+   `undercroft-data` volume is the system of record and MCP and `/v1` recall
+   never consult Qdrant; the first start creates a sealed `default` vault; an
+   OPTIONAL step runs `index push qdrant` and `index status qdrant` through
+   `exec`, each push chain-recorded as `egress/index-push`; `config check`
+   through `exec`; what Qdrant receives (sealed content, plaintext-derived
+   vectors, the wing label; an hmac-only push refused unless
+   `--allow-plaintext`); who reads it (only `undercroft search --backend
+   qdrant`); that it is a snapshot a delete reaches only through `forget` naming
+   a backend; and the transport with its residuals — the `qdrant-tls` →
+   `qdrant` hop is cleartext on the compose network, Qdrant is unauthenticated
+   to that network, the pin is read once per process.
+4. Surfaces in the same unit. `deploy/README.md`. `docs/remote-server.md`: the
+   first-start and optional-mirror steps, the orchestrated snippet's `command`
+   (still `serve-http` with no `init` at the integrated tree), and its false
+   claim that "the first `serve-http`" opens the default vault. The sealed-only
+   claim needs nothing more here: the 2026-09-14 drift sweep corrected it on
+   every surface that stated it, including `website/landing/index.html` and
+   `architecture/index.html`, whose inlined `security-keys` copy was
+   regenerated from the corrected source. An `UPGRADING.md` `1.6.0` entry for the new pulls,
+   the ordering dependency and its symptom, and what `config check` can and
+   cannot detect. `CHANGELOG`. `CLAUDE.md`'s `tls-pins` figure and prose, and
+   the `deploy/` layout. `.github/workflows/ci.yml`'s `tls-pins` comment, which
+   already names O63's telemetry engine build and must add the second,
+   default-features build with its measured time.
+5. `tests/battery.sh`, preflight `CA pins are readable by the engine`: replace
+   the `context: \.\./\.\.` selector with the property above, plus a premise
+   that the selected set holds both
+   `deploy/observability/docker-compose.observability.yml` and
+   `deploy/docker-compose.server.yml`.
+6. `crates/undercroft-cli/src/parity.rs`: a new test
+   `no_served_surface_searches_through_a_remote_mirror`, reading `mcp.rs`,
+   `tenant.rs` and `http.rs` and asserting none contains `search_with_index`,
+   with a needle premise probe — "MCP and `/v1` recall never consult the
+   mirror" as a gate rather than prose.
+
+#### Gates and counterfactuals the unit owes
+
+**Gate A, `tests/tls-pins.sh`.** A throwaway `UNDERCROFT_MCP_HTTP_TOKEN`
+exported at the TOP, before `trap cleanup EXIT` — the recipe's
+`${UNDERCROFT_MCP_HTTP_TOKEN:?…}` aborts Compose's config load for every
+subcommand, so a later export makes the trap's teardown fail silently and leak
+the throwaway volumes. A `STACKS` row for the server recipe (CA generated, uid
+10001 reads `/tls/root.crt`, the CA private key stays unreadable). O63's
+stack-generic boot steps extracted into one function called for both stacks,
+observability's six check labels byte-identical. Then, against a
+`tlspins-server` project, every wait bounded and nothing piped: B1 `/healthz`
+answers; B2 `exec -T undercroft undercroft config check` exits 0; B3
+`GET /v1/vaults/default/index/status?backend=qdrant` answers 200 with
+`remote_records` null; B4 a canary `POST …/drawers` lands, not quarantined; B5
+`index push qdrant` exits 0 printing its `Pushed {n} {kind} record(s)` line;
+B6 `index status qdrant` shows one record; B7 `/v1` index status shows remote
+and local at 1; B8 `search "mirror canary" --backend qdrant` returns the
+canary; B9 `verify` prints `VERIFY OK`; B10, a PREMISE arm, the same status
+with `UNDERCROFT_QDRANT_URL=http://qdrant:6333` exits 1 with `no override`.
+The measured count is published and compared. **Gate B**: the widened
+preflight with its file-set premise. **Gate C**: the parity test with its
+needle probe.
+
+**Counterfactuals**, each through an extra `-f` override confirmed applied with
+`docker compose … config` and chained with `&&`: CF1 cleartext restored — B2,
+B3 and B5–B8 fail while B1 `/healthz` STAYS 200, the recorded proof that a
+boot-only check is blind; CF2 the deep PKI pin — B2 and B3 fail, B1 stays 200;
+CF3 init removed on a fresh project — B1 fails and the log shows
+`vault "default" not found`; CF4 the server file's `UNDERCROFT_INDEX_CA` set to
+the PKI path — the old selector passes and the new one fails naming the
+recipe; CF5 the parity needle trips on its probe string; CF6 exporter ordering
+removed — not deterministically reproducible, argued from the cached pin
+failure and recorded as argued, not executed.
+
+#### Residuals
+
+Each of the first five owes an entry of its own, and none is filed here (filed 2026-09-17 by the build, as O199–O203, in this order):
+
+- `deploy/observability`'s `undercroft init 2>/dev/null || true;` should
+  converge on `init && exec`; gate: an init-specific failure whose log names
+  init's error rather than `serve-http`'s.
+- `deploy/undercroft-server.service` has the same missing-init defect:
+  `ExecStart` is `serve-http` and `Restart=on-failure` loops. Shape:
+  `ExecStartPre=/usr/local/bin/undercroft init`.
+- `serve-http` resolves the index pin lazily, so an unreadable
+  `UNDERCROFT_INDEX_CA` starts healthy and refuses per call. Shape: warm
+  `pin_from_env` for every declared `*_CA` at start; it can stop a running
+  deployment, so it owes an `UPGRADING.md` entry.
+- Qdrant authentication: the index client sends no credential, and nothing
+  isolates `qdrant` so only `qdrant-tls` reaches it — new capability, MINOR.
+- Mirror freshness and lifecycle: no automatic push, and a delete that is not a
+  `forget` never reaches the mirror — a memory-lifecycle decision the code does
+  not settle.
+
+Stated, not owed: the exporter body becomes a third verbatim copy, because
+`extends: file:` would couple a production recipe to the root test-harness
+file; the `tls-pins` CI job gains a second cold engine build; the header's
+snapshot and freshness prose moves no count, and Gate C holds only the
+served-surface half. Not verified by execution, and Gate A settles all four:
+the crash-loop, Caddy's `tls internal` certificate for `qdrant-tls` validating
+under the exported root in rustls, `config check` exiting 0 on the full recipe
+environment, and a push beside a live server leaving the chain clean. M10's
+measurement, "of four shipped `deploy/` stacks", omits this recipe, and a dated
+correction line under M10 is owed with the unit.
+
+#### BUILT 2026-09-17
+
+**Built as ruled, with four corrections to the spec and one defect the spec did
+not name.** Every item of the condensed spec landed:
+- `deploy/qdrant-tls/Caddyfile`;
+- the recipe's `qdrant-tls` and `qdrant-tls-export` services and its
+  `init && exec` command;
+- the rewritten header, with the SECURITY paragraph kept verbatim;
+- the surfaces (`deploy/README.md`, `docs/remote-server.md`, `UPGRADING.md`,
+  `CHANGELOG`, `CLAUDE.md`, `ci.yml`);
+- the property-selected CA-pin preflight with its file-set premise;
+- `parity::no_served_surface_searches_through_a_remote_mirror`.
+
+**Claims in the spec refuted by reading code or by execution:**
+1. *"A throwaway `UNDERCROFT_MCP_HTTP_TOKEN` exported at the TOP."* Exported,
+   it reaches the observability file too, whose engine reads the same variable
+   with a demo default that `deploy/observability/prometheus.yml` repeats as
+   its scrape credential. The engine would refuse the scrape, and O63's sixth
+   check would fail. The token is assigned at the top, before the trap, as
+   ruled, but handed to the server file alone (`token_for`). Every other file
+   gets `env -u`, which also keeps a developer's own exported token out of the
+   observability stack.
+2. *"What Qdrant receives: … the wing label."* The index record carries the
+   room too: `IndexRecord` has both fields, and the Qdrant payload sends both
+   (`undercroft-index/src/lib.rs`). The header says "wing and room labels".
+3. *"Silently defeats `run --rm undercroft init --level hmac-only`."* With
+   the entrypoint now `/bin/sh -c`, that command runs `sh -c init …` and fails.
+   The header documents
+   `run --rm --no-deps --entrypoint undercroft undercroft init --level hmac-only`,
+   measured to work: the push is then refused without `--allow-plaintext` and
+   accepted with it.
+4. *"The measured count is published."* Each arm emits exactly one check
+   whatever happens, because the battery compares passed + failed, and a
+   crash-looping engine publishes no port. So the port failure now carries the
+   engine's log, which is how CF3 shows `vault "default" not found` as ruled.
+
+**Found while building, and settled by the doctrine rather than a panel: the
+recipe dropped a declared passphrase.** `deploy/server.env.example` offers
+`UNDERCROFT_PASSPHRASE`, and the recipe passed only the variables it named, so
+`--env-file deploy/.env` never put it in the container. Verified with
+`compose config`. A declared passphrase was silently ignored, and the first
+start wrote a random `master.key`, the outcome `resolve_passphrase` exists to
+refuse. This unit is what made that reachable, because before it the recipe
+never served. Two existing rules settle the fix, so no panel was convened:
+- **The drift-direction doctrine.** The example file promised the protection,
+  so the code keeps the promise.
+- **The opaque-payload rule.** An empty passphrase refuses, so
+  `${UNDERCROFT_PASSPHRASE:-}` would stop every default start. The only
+  pass-through that leaves an undeclared passphrase unset is a key with no
+  value, measured both ways on Compose v5.5.1.
+
+The fix is `UNDERCROFT_PASSPHRASE:` with no value. Its arm
+(`a passphrase declared in the env file reaches the engine`) matches nothing
+against the pre-fix recipe. CF7, an empty value, stops the engine with the
+passphrase refusal, which is what proves the default boot keeps it unset.
+
+**Gate A: `tests/tls-pins.sh` now runs 31 checks, up from 13.** The STACKS row adds three:
+the CA exists, uid 10001 reads `/tls/root.crt`, and the CA private key stays
+unreadable. O63's boot steps are one `boot_stack` function, called for both
+stacks with observability's labels unchanged, and it adds five checks for the
+team server. B2–B10 as ruled, plus the passphrase arm, add ten. Measured locally:
+31 passed, 0 failed, 104 s end to end with both engine images already built.
+The CI cost is owed by this unit's pull request.
+
+**Counterfactuals,** each an extra `-f` file confirmed with `compose config`
+and chained with `&&`, applied through `TLSPINS_SERVER_EXTRA_COMPOSE`. A run
+with it set always exits 3 and never prints `TLS-PINS OK`.
+- **CF1, the cleartext URL restored:** 25 passed, 6 failed. `config check`,
+  both `/v1` status arms, the push, the count and the search fail, and
+  `/healthz` stays 200. The `/v1` body names the refusal: `… There is no
+  override.`
+- **CF2, the pin aimed inside Caddy's PKI tree:** 25 passed, 6 failed, the
+  same six, and `/healthz` stays 200. The `/v1` body reads `… could not be
+  read: Permission denied (os error 13)`.
+- **CF3, `init` removed on a fresh project:** 19 passed, 2 failed. No port is
+  published, the engine's log repeats `Error: vault "default" not found`, and
+  it shows as `undercroft(restarting)`.
+- **CF4, the preflight:** with the recipe's `UNDERCROFT_INDEX_CA` set to the
+  PKI path, HEAD's battery reported `ok    1 declared CA pin(s)`, and the new
+  one failed naming `deploy/docker-compose.server.yml:151`. The file was
+  restored from a copy and compared byte for byte. The file-set premise was
+  checked the same way: a copy of the new battery with the old
+  `context: ../..` selector put back failed with `the engine-recipe selector
+  did not select deploy/docker-compose.server.yml`, listing only the
+  observability file as selected.
+- **CF5, the parity needle:** a call planted in `http.rs` fails the test
+  naming the file, and a mistyped needle fails its own probe. Both files were
+  restored and compared.
+- **CF6, the exporter ordering:** argued, not executed, as ruled.
+- **CF7, an empty passphrase:** 19 passed, 2 failed, with the refusal naming
+  `UNDERCROFT_PASSPHRASE` in the log.
+
+**Gate B:** the widened preflight passes and names both recipes. **Gate C:**
+the parity test passes on a fresh compile.
+
+**Real corpus.** The LoCoMo feed was mined into eight wings of a live
+team-server stack: 680 drawers and 680 chain records. `index push qdrant` sent
+680 sealed records in about two seconds. `index status` and `/v1` both
+reported 680 remote beside 680 local, and a search through the mirror returned
+the right conversation. `/v1` and MCP answered the same query from the vault.
+`verify` (CLI) and `POST …/verify` both reported OK after the push beside the
+live server, which settles that unverified item: the chain is clean on 681
+records. A restart printed `Palace already initialized`, warmed 680 vectors
+and served the mirror status unchanged.
+
+Three documented behaviours were measured the same way:
+- The hmac-only first-start command works, and its push is refused without
+  `--allow-plaintext` and accepted with it.
+- `--read-only` on a fresh volume restarts with `vault "default" has a
+  manifest but no database …`, and serves after one writable start. The header
+  and `docs/remote-server.md` now say to start writable once.
+- **A volume set up without a passphrase and then started with one** restarts
+  with `vault manifest failed integrity verification — possible tampering`,
+  leaves a `kdf.salt` beside `master.key`, and passes `config check`.
+  `UPGRADING.md` carries the symptom and the fix, and the misreport is filed as
+  O204.
+
+The four "not verified by execution" items in the ruling's residuals are now
+settled:
+- the crash-loop, by CF3;
+- Caddy's certificate validating under the exported root in rustls, by B3–B8;
+- `config check` exiting 0 on the full recipe environment, by B2;
+- the clean chain after a push beside a live server, by B9 and the corpus.
+
+**Filed from this unit:** the ruling's five residuals as O199–O203, and O204
+from the drive. `docs/remote-server.md` and `deploy/README.md` cite O200 where
+they tell operators to run `init` by hand under systemd.
+
+**Stated, not owed:** the exporter body is now a third verbatim copy, as the
+ruling accepted, and the `tls-pins` job gains a second cold engine build.
 
 ### O184 — CLOSED 2026-09-16: a non-dry-run `--read-only refine` posted drawer plaintext before its first write failed — it now refuses before the first POST
 
@@ -12293,6 +12647,14 @@ The class M7 and M9 belong to. Measured: of four shipped `deploy/` stacks,
 runnable. A config can be flawless for a stack that cannot boot, which is
 precisely what shipped.
 
+**Corrected 2026-09-17 (O172):** that count omitted a fifth,
+`deploy/docker-compose.server.yml`, the team-server recipe, which no test
+started either and which could not start at all — it served with no `init`,
+and its Qdrant URL was one the index client refuses. The measurement listed
+the terminators it knew about rather than every compose file under
+`deploy/`, which is how a recipe with no terminator of its own was left out.
+O172 made it start, and `tests/tls-pins.sh` now boots it.
+
 `tests/tls-pins.sh` brings the REAL terminators up and reads the published pin
 **as the engine's uid**, taken from the `Dockerfile` rather than hardcoded so
 the two cannot drift. Seven checks across both stacks. Counterfactual
@@ -17090,229 +17452,6 @@ arm fails. The `prose figures` O47 total moves by every heading the unit adds.
 - Whether `HistoryScope::Agent` is per-principal is unverified, and it decides
   whether (a) exposes one agent's deletions to another.
 
-### O172 — RULED 2026-09-14 and not yet built: the team-server recipe cannot start, and the Qdrant URL it declares is one the transport policy refuses
-
-**Filed and ruled 2026-09-14, recorded rather than built. HIGH.**
-`deploy/docker-compose.server.yml` declares `UNDERCROFT_QDRANT_URL:
-http://qdrant:6333`, which `undercroft_index::from_env` refuses at
-construction — cleartext beyond loopback, no override — and a shipped suite
-pins the refusal of that exact spelling (`tests/e2e-backends.sh`,
-`refuses cleartext`). The recipe fails before an operator could meet that:
-its command is `serve-http` with no `init`, `open_store_as` unlocks `default`,
-the unlock returns `VaultError::NotFound` when `vault.json` is absent, and
-`VaultManager::open` creates only the master key and `vaults/`. On a fresh
-volume the engine exits `vault "default" not found`, `restart: unless-stopped`
-loops, and no client ever connects. No file under `tests/` references the
-recipe. Its header also claims "the vector index never holds plaintext",
-while on a sealed vault the content arrives sealed and the embeddings are
-plaintext-derived vectors (`docs/THREAT_MODEL.md`, A5).
-
-#### RULED 2026-09-14 by a three-lens panel plus an adversarial refuter
-
-**Prior ruling found and UPHELD: the maintainer's 2026-09-12 option (b).**
-Qdrant stays in the team-server recipe, behind its own Caddy TLS terminator,
-with an exported public CA root pinned through `UNDERCROFT_INDEX_CA` and an
-explicit, documented operator `index push`. Until this entry the ruling lived
-only in gitignored files: `.handover/SESSION_START.md` ("the Qdrant
-team-server recipe MADE REAL (ruled: option b)"; "make the Qdrant recipe
-real") and the option text in
-`.handover/panel-o134-o135-o140-2026-09-12/O135-analyses.json`. It is best
-practice: the push stays an explicit operator act; the mirror stays an
-untrusted accelerator whose every candidate is HMAC-verified locally under the
-same retrieval policy; the TLS-plus-exported-pin shape is the tree's own gated
-precedent (M7, M9, M10, O63); and served consumers exist that refuse on every
-call today — MCP `undercroft_index_status` (through `open_index`),
-`GET /v1/vaults/{id}/index/status`, and `POST /v1/vaults/{id}/forget` with a
-`backend`, which calls `undercroft_index::from_env` directly, so a grep for
-`open_index` misses it. The 2026-09-12 refuter's case for removing Qdrant
-rested on provenance — the recipe predates the index transport policy — which
-shows where the sentence came from, not that (b) is wrong.
-
-**The two corrections, each refuted by evidence.**
-
-1. **"Following the `deploy/backends-tls` pattern" transfers only its Caddyfile
-   site block.** That precedent pins Caddy's root-only PKI path, readable only
-   because `backends-e2e` builds `target: builder` and runs as root. The
-   team-server engine is the runtime image, uid 10001, where that pin is
-   unreadable and refuses — M9 verbatim. The precedent that governs an ENGINE
-   in a shipped recipe is `deploy/observability`: an exporter, the exported
-   `/tls/root.crt`, and the engine gated on the exporter with
-   `service_completed_successfully`.
-2. **"A tls-pins-style check that the stack boots" is necessary and cannot
-   observe the defect.** The `ServeHttp` arm runs `open_store_as`,
-   `warm_embedding_cache`, `Tenancy::new`, the reranker and `serve_http`, and
-   builds no index; the URL is read only inside `undercroft_index::from_env`,
-   and `undercroft_net::pin_from_env` caches the resolved `Result`, a failure
-   included, for the life of the process. So `/healthz` answers 200 with the
-   cleartext URL or an unreadable pin in place. The gate must drive the index
-   path through the running server.
-
-**Rejected:**
-
-- *(a) Remove Qdrant from the recipe* — the maintainer ruled (b) with (a) in
-  front of them, and no evidence shows (b) breaks doctrine; as specified, (a)
-  carried no boot check and would have shipped the init crash-loop untouched.
-- *(c) Docs only* — leaves a recipe that crash-loops on first `up` and a URL
-  the policy refuses.
-- *(b) as literally worded* — the backends-tls pin is unreadable by uid 10001,
-  and a `/healthz` check is green over the defect.
-- *Mount `deploy/backends-tls/Caddyfile`* — four site blocks for upstreams the
-  recipe does not run, and a production recipe coupled to a test harness file.
-- *Qdrant's native TLS* — needs a certificate one-shot and Qdrant TLS config at
-  the pinned `v1.12.4`, neither verified; every HTTP hop here terminates at
-  Caddy `tls internal`. Stated as the alternative, not taken.
-- *Start the engine without waiting for the exporter* — `pin_from_env` caches a
-  refusal, so an early `index/status` or `forget` with a backend refuses until
-  restart while `/healthz` stays green; the doctrine is fail-at-start over
-  healthy-but-failing.
-- *An init guard testing for `vault.json`* — a second implementation of
-  `VaultManager::exists`, which `init` already consults
-  (`mgr.exists("default")`) before answering that the palace exists.
-- *A one-shot `undercroft-init` service* — a second engine-image service with an
-  unverified double build; the one shipped engine recipe that bootstraps does
-  it in the engine's own command.
-- *An entrypoint wrapper running `init` before every command* — silently
-  defeats `run --rm undercroft init --level hmac-only`: the wrapper's own init
-  creates a sealed default first.
-- *`serve-http` auto-creating the default vault* — new capability that picks a
-  security level on start and would create a database under `--read-only`.
-- *Converge `deploy/observability`'s `undercroft init 2>/dev/null || true` in
-  this unit* — no arm in this unit's gate can show that fix; owed separately.
-- *File the product-wide "sealed bytes only" wording separately* — a claim
-  lives on every surface that states it, and this unit rewrites that claim.
-- *Also rewrite README's "upload sealed records" and `docs/integrations.md`'s
-  "sealed content only"* — each is true as scoped, about content; editing them
-  is churn, and the second forces a Mermaid re-render. (Superseded 2026-09-14:
-  the drift sweep corrected that label and re-rendered the diagram anyway.)
-- *Widen the CA-pin preflight by listing `context:` depths* — select on the
-  PROPERTY instead, O92's lesson: a `deploy/` compose file whose `context:`
-  resolves to the repo root.
-- *Boot the server arm on the telemetry engine image* — a binary built with
-  different features than the recipe ships is a check of something else.
-
-#### Implementation spec, condensed
-
-One unit, PATCH-class, closing under the `1.6.0` section when built, with a
-`#### RULED` subsection carrying this record, the counterfactual transcripts
-and the measured CI cost.
-
-1. NEW `deploy/qdrant-tls/Caddyfile`: `auto_https disable_redirects` and one
-   site, `https://qdrant-tls` with `tls internal` and
-   `reverse_proxy qdrant:6333`, byte-identical to
-   `deploy/backends-tls/Caddyfile`'s qdrant block, its header giving the C8
-   reason and where the root lands.
-2. `deploy/docker-compose.server.yml`: a `qdrant-tls` service (`caddy:2.8`,
-   `qdrant-tls-data:/data`, no ports); a one-shot `qdrant-tls-export`
-   (`alpine:3.20`, `embed-tls-export`'s body verbatim — a bounded 60 s wait
-   for the PKI root, a copy to `/tls/root.crt`, `chmod 0644`, the private key
-   keeping 0600); and the `undercroft` service with
-   `entrypoint: ["/bin/sh", "-c"]`,
-   `command: ["undercroft init && exec undercroft serve-http --host 0.0.0.0 --port 8765"]`
-   (`&&`, never `2>/dev/null || true`, so a failed init says why),
-   `depends_on` `qdrant-tls-export: service_completed_successfully`,
-   `UNDERCROFT_QDRANT_URL: https://qdrant-tls`,
-   `UNDERCROFT_INDEX_CA: /tls/root.crt` and `qdrant-tls-data:/tls:ro`.
-3. The header rewritten, its SECURITY paragraph kept verbatim: the
-   `undercroft-data` volume is the system of record and MCP and `/v1` recall
-   never consult Qdrant; the first start creates a sealed `default` vault; an
-   OPTIONAL step runs `index push qdrant` and `index status qdrant` through
-   `exec`, each push chain-recorded as `egress/index-push`; `config check`
-   through `exec`; what Qdrant receives (sealed content, plaintext-derived
-   vectors, the wing label; an hmac-only push refused unless
-   `--allow-plaintext`); who reads it (only `undercroft search --backend
-   qdrant`); that it is a snapshot a delete reaches only through `forget` naming
-   a backend; and the transport with its residuals — the `qdrant-tls` →
-   `qdrant` hop is cleartext on the compose network, Qdrant is unauthenticated
-   to that network, the pin is read once per process.
-4. Surfaces in the same unit. `deploy/README.md`. `docs/remote-server.md`: the
-   first-start and optional-mirror steps, the orchestrated snippet's `command`
-   (still `serve-http` with no `init` at the integrated tree), and its false
-   claim that "the first `serve-http`" opens the default vault. The sealed-only
-   claim needs nothing more here: the 2026-09-14 drift sweep corrected it on
-   every surface that stated it, including `website/landing/index.html` and
-   `architecture/index.html`, whose inlined `security-keys` copy was
-   regenerated from the corrected source. An `UPGRADING.md` `1.6.0` entry for the new pulls,
-   the ordering dependency and its symptom, and what `config check` can and
-   cannot detect. `CHANGELOG`. `CLAUDE.md`'s `tls-pins` figure and prose, and
-   the `deploy/` layout. `.github/workflows/ci.yml`'s `tls-pins` comment, which
-   already names O63's telemetry engine build and must add the second,
-   default-features build with its measured time.
-5. `tests/battery.sh`, preflight `CA pins are readable by the engine`: replace
-   the `context: \.\./\.\.` selector with the property above, plus a premise
-   that the selected set holds both
-   `deploy/observability/docker-compose.observability.yml` and
-   `deploy/docker-compose.server.yml`.
-6. `crates/undercroft-cli/src/parity.rs`: a new test
-   `no_served_surface_searches_through_a_remote_mirror`, reading `mcp.rs`,
-   `tenant.rs` and `http.rs` and asserting none contains `search_with_index`,
-   with a needle premise probe — "MCP and `/v1` recall never consult the
-   mirror" as a gate rather than prose.
-
-#### Gates and counterfactuals the unit owes
-
-**Gate A, `tests/tls-pins.sh`.** A throwaway `UNDERCROFT_MCP_HTTP_TOKEN`
-exported at the TOP, before `trap cleanup EXIT` — the recipe's
-`${UNDERCROFT_MCP_HTTP_TOKEN:?…}` aborts Compose's config load for every
-subcommand, so a later export makes the trap's teardown fail silently and leak
-the throwaway volumes. A `STACKS` row for the server recipe (CA generated, uid
-10001 reads `/tls/root.crt`, the CA private key stays unreadable). O63's
-stack-generic boot steps extracted into one function called for both stacks,
-observability's six check labels byte-identical. Then, against a
-`tlspins-server` project, every wait bounded and nothing piped: B1 `/healthz`
-answers; B2 `exec -T undercroft undercroft config check` exits 0; B3
-`GET /v1/vaults/default/index/status?backend=qdrant` answers 200 with
-`remote_records` null; B4 a canary `POST …/drawers` lands, not quarantined; B5
-`index push qdrant` exits 0 printing its `Pushed {n} {kind} record(s)` line;
-B6 `index status qdrant` shows one record; B7 `/v1` index status shows remote
-and local at 1; B8 `search "mirror canary" --backend qdrant` returns the
-canary; B9 `verify` prints `VERIFY OK`; B10, a PREMISE arm, the same status
-with `UNDERCROFT_QDRANT_URL=http://qdrant:6333` exits 1 with `no override`.
-The measured count is published and compared. **Gate B**: the widened
-preflight with its file-set premise. **Gate C**: the parity test with its
-needle probe.
-
-**Counterfactuals**, each through an extra `-f` override confirmed applied with
-`docker compose … config` and chained with `&&`: CF1 cleartext restored — B2,
-B3 and B5–B8 fail while B1 `/healthz` STAYS 200, the recorded proof that a
-boot-only check is blind; CF2 the deep PKI pin — B2 and B3 fail, B1 stays 200;
-CF3 init removed on a fresh project — B1 fails and the log shows
-`vault "default" not found`; CF4 the server file's `UNDERCROFT_INDEX_CA` set to
-the PKI path — the old selector passes and the new one fails naming the
-recipe; CF5 the parity needle trips on its probe string; CF6 exporter ordering
-removed — not deterministically reproducible, argued from the cached pin
-failure and recorded as argued, not executed.
-
-#### Residuals
-
-Each of the first five owes an entry of its own, and none is filed here:
-
-- `deploy/observability`'s `undercroft init 2>/dev/null || true;` should
-  converge on `init && exec`; gate: an init-specific failure whose log names
-  init's error rather than `serve-http`'s.
-- `deploy/undercroft-server.service` has the same missing-init defect:
-  `ExecStart` is `serve-http` and `Restart=on-failure` loops. Shape:
-  `ExecStartPre=/usr/local/bin/undercroft init`.
-- `serve-http` resolves the index pin lazily, so an unreadable
-  `UNDERCROFT_INDEX_CA` starts healthy and refuses per call. Shape: warm
-  `pin_from_env` for every declared `*_CA` at start; it can stop a running
-  deployment, so it owes an `UPGRADING.md` entry.
-- Qdrant authentication: the index client sends no credential, and nothing
-  isolates `qdrant` so only `qdrant-tls` reaches it — new capability, MINOR.
-- Mirror freshness and lifecycle: no automatic push, and a delete that is not a
-  `forget` never reaches the mirror — a memory-lifecycle decision the code does
-  not settle.
-
-Stated, not owed: the exporter body becomes a third verbatim copy, because
-`extends: file:` would couple a production recipe to the root test-harness
-file; the `tls-pins` CI job gains a second cold engine build; the header's
-snapshot and freshness prose moves no count, and Gate C holds only the
-served-surface half. Not verified by execution, and Gate A settles all four:
-the crash-loop, Caddy's `tls internal` certificate for `qdrant-tls` validating
-under the exported root in rustls, `config check` exiting 0 on the full recipe
-environment, and a push beside a live server leaving the chain clean. M10's
-measurement, "of four shipped `deploy/` stacks", omits this recipe, and a dated
-correction line under M10 is owed with the unit.
-
 ### O174 — how many rows at rest carry a degraded zero vector has no surface, so a restart hides every hole
 
 **Filed 2026-09-14, from a residual O122 stated and nothing filed; O171 rules
@@ -17840,6 +17979,116 @@ one that cannot be forgotten by the next surface.
 **Gate:** a save of content past `MAX_CONTENT_BYTES` through `/v1` and MCP,
 under a counting embedder, is refused with zero embed calls. **Counterfactual:**
 the embed-first order counts one.
+
+### O199 — the observability recipe's `undercroft init 2>/dev/null || true` hides why an init failed
+
+**Filed 2026-09-17 by O172, whose ruling named it; verified by reading.**
+`deploy/observability/docker-compose.observability.yml` starts the engine with
+`undercroft init 2>/dev/null || true; exec undercroft serve-http …`. An init
+that fails prints nothing, and the engine then stops on `serve-http`'s error
+instead, which names a symptom (`vault "default" not found`) rather than the
+cause. O172 moved the team-server recipe to `undercroft init && exec …`, which
+stops on init's own message. **Shape**: the same command in the observability
+recipe. **Gate**: an arm in `tests/tls-pins.sh` that makes init fail for a
+reason only init meets — a volume where `vaults/default` is a regular file, so
+`VaultManager::create` cannot make the directory — and requires the engine's
+log to carry init's error rather than `serve-http`'s.
+
+### O200 — `deploy/undercroft-server.service` serves with no `init`, so a fresh install restarts forever
+
+**Filed 2026-09-17 by O172, whose ruling named it; verified by reading.** The
+systemd unit's `ExecStart` is `undercroft serve-http --host 0.0.0.0 --port
+8765` with `Restart=on-failure`, and nothing in the unit or its install recipe
+runs `init`. On a fresh `/var/lib/undercroft` the unlock returns
+`VaultError::NotFound`, the process exits, and systemd restarts it every three
+seconds — the team-server recipe's defect before O172. `docs/remote-server.md`
+tells operators to run `undercroft init` once by hand until this lands. **Shape**:
+`ExecStartPre=/usr/local/bin/undercroft init`, which exits 0 once the default
+vault exists; `EnvironmentFile` already hands it the passphrase. **Gate**: none
+can run the unit in a container without systemd, so the gate is the unit file
+itself: a preflight that every shipped server unit or recipe running
+`serve-http` runs `init` before it, with a probe that the pre-O172 compose
+command fails it.
+
+### O201 — `serve-http` resolves a declared CA pin on first use, so an unreadable pin starts a healthy server that refuses every call
+
+**Filed 2026-09-17 by O172, whose ruling named it; verified by reading and by
+O172's CF2.** `undercroft_net::pin_from_env` resolves a `*_CA` declaration the
+first time a hop needs it and caches the result, a refusal included, for the
+life of the process. `serve-http` builds no index client at start, so an
+`UNDERCROFT_INDEX_CA` it cannot read lets the server answer `/healthz` 200
+while every `index/status` and every `forget` naming a backend refuses until a
+restart. Whether the other pins are resolved at start depends on the hop — an
+`http` embedder is built when the store opens, `refine`'s client per call — and
+the unit enumerates them rather than this entry guessing. The engine's
+doctrine prefers refusing at start to healthy-but-failing. **Shape**: resolve
+every declared `*_CA` once in `serve-http` before binding, refusing to start on
+the first that fails. It can stop a deployment
+that runs today with a pin it never uses, so it owes an `UPGRADING.md` entry.
+**Gate**: O172's CF2 inverted — the team-server recipe with its pin aimed at
+Caddy's PKI path must fail `/healthz` instead of passing it.
+
+### O202 — the team-server recipe's Qdrant accepts unauthenticated requests from anything on the compose network
+
+**Filed 2026-09-17 by O172, whose ruling named it; verified by reading.** The
+four HTTP index clients send no credential (pgvector's travels in its DSN), and
+`deploy/docker-compose.server.yml` does not isolate `qdrant` so that only
+`qdrant-tls` reaches it: every container on the project's default network can
+read and rewrite the mirror. The mirror is an untrusted accelerator, so this is
+an availability and confidentiality cost (the sealed content and the
+plaintext-derived vectors are readable there), not an integrity one — every
+candidate is re-verified. **Shape**: an API-key declaration for the index
+client, sent on every backend that supports one, plus a recipe network that
+puts `qdrant` behind `qdrant-tls` alone. New capability, so MINOR. **Gate**: a
+`backends-e2e` arm where a keyed Qdrant refuses an unkeyed push and accepts a
+keyed one, and a `tls-pins` arm where a container on the default network cannot
+reach `qdrant:6333`.
+
+### O203 — a mirror is a snapshot: nothing pushes a later save, and only `forget` reaches it on a delete
+
+**Filed 2026-09-17 by O172, whose ruling named it; a memory-lifecycle decision
+the code does not settle.** `index push` is an explicit operator act and the
+only way a drawer reaches a mirror. A save after a push is absent from it until
+the next push. A plain delete or a retention sweep (which takes no backend)
+leaves the mirrored record in place — only `forget` naming a backend removes
+it — so the mirror keeps sealed content and plaintext-derived vectors for
+drawers the vault no longer holds. Search is not affected: every candidate is
+re-loaded from the vault, and an id it no longer holds is skipped
+(`search_with_index`). What is open is the lifecycle: whether a
+delete should reach the mirror, whether a retention sweep should, and whether a
+push should prune ids the vault no longer holds. **Shape**: a ruling panel
+first; the least surprising candidate is a push that removes mirrored ids
+absent from the vault, recorded on the same `egress/index-push` record.
+**Gate**: whatever the panel rules, driven through `backends-e2e` — push,
+delete, push, and `index status` counting what remains.
+
+### O204 — a passphrase declared on an installation keyed by `master.key` is reported as tampering, and leaves a `kdf.salt` behind
+
+**Filed 2026-09-17 by O172's real-corpus drive; measured once, on a throwaway
+project.** A team-server volume first started with no passphrase holds
+`master.key`. Started again with `UNDERCROFT_PASSPHRASE` declared,
+`keys::load_or_create_master` takes the passphrase branch, finds no
+`kdf.salt`, WRITES one, and derives a key the vaults were never sealed under.
+The unlock then fails its manifest MAC and the engine exits
+`vault manifest failed integrity verification — possible tampering`. The CLI
+maps that error to exit 2 (`integrity_verdict`), the tamper verdict, for a
+configuration mistake. `restart:` repeats it,
+and `config check` exits 0, because it opens nothing. The reverse is the same
+by reading and was not executed: an installation keyed by a passphrase, started
+without one, writes a random `master.key` and fails the same way. O172's
+`UPGRADING.md` entry states the symptom and the fix, because O172 is what lets
+a declared passphrase reach this recipe's engine. **Shape**: `VaultManager::open`
+refuses, before it writes anything, when the declared key source and the key
+material on disk disagree — a passphrase with a `master.key` and no
+`kdf.salt`, or no passphrase with a `kdf.salt` and no `master.key` — naming
+both. Whether an installation holding BOTH files is refused too is part of the
+unit, since this defect writes exactly that state. It can stop a deployment
+that starts today only by luck, so it owes an `UPGRADING.md` entry, and
+`config check` can learn it from the directory without opening a vault.
+**Gate**: a CLI test that inits without a passphrase, then runs a command with
+one, and requires exit 1 naming the key source, no `kdf.salt` written, and a
+clean start once the declaration is removed; the reverse arm; and an e2e check
+of the message.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 
