@@ -4454,7 +4454,11 @@ unreadable. O63's boot steps are one `boot_stack` function, called for both
 stacks with observability's labels unchanged, and it adds five checks for the
 team server. B2–B10 as ruled, plus the passphrase arm, add ten. Measured locally:
 31 passed, 0 failed, 104 s end to end with both engine images already built.
-The CI cost is owed by this unit's pull request.
+**Measured CI cost:** the `tls-pins` job took 5 min 15 s with one engine build
+(run 35148259866, on `ec78535`) and 12 min 2 s with both (run 35166168384, on
+`ef20456`, all 19 checks green), so the second build costs about 6 min 47 s.
+It is now that run's third-slowest job, after the `ort-build` (15 min 33 s) and
+`onnx-build` (13 min 17 s) matrix legs.
 
 **Counterfactuals,** each an extra `-f` file confirmed with `compose config`
 and chained with `&&`, applied through `TLSPINS_SERVER_EXTRA_COMPOSE`. A run

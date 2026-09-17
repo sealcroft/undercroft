@@ -2224,7 +2224,8 @@ bash tests/tls-pins.sh                # CA pins readable + both stacks start (31
                                       # an unreadable pin both left /healthz at 200,
                                       # measured by counterfactual. The whole suite
                                       # measured 104 s locally with both engine images
-                                      # already built; a cold CI run pays two builds
+                                      # already built; a cold CI run pays two builds,
+                                      # measured 12 min 2 s against 5 min 15 s with one
 docker compose run --rm arch-check    # TWO verifications, one service: the
                                       # architecture reference is what
                                       # diagrams/ and its own headings derive

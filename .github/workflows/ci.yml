@@ -206,7 +206,8 @@ jobs:
       # mirror through the running server, which builds a SECOND engine image
       # with the default features that recipe ships. Those two builds are this
       # job's entire cost: the job took 5 min 15 s with the one build (run
-      # 35148259866, on `ec78535`).
+      # 35148259866, on `ec78535`) and 12 min 2 s with both (run 35166168384,
+      # on `ef20456`), so the second build costs about 6 min 47 s.
       #
       # `deploy/observability` shipped UNSTARTABLE for two releases
       # because the engine pinned a path inside Caddy's root-only PKI tree,
