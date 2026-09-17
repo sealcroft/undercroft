@@ -46,7 +46,7 @@
 
     <svg viewBox="0 0 1200 736" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="write-path-title write-path-desc">
       <title id="write-path-title">Undercroft write path</title>
-      <desc id="write-path-desc">Every save in Undercroft runs the same eight ordered steps — derive a deterministic drawer id as the drawer is built, embed it, validate the declared names and the vector at the store's write choke point, screen the content, compress it in its own frame, seal it with AAD bound to the vault, tag it with HMAC, and append to the audit chain inside the same SQLite transaction — and a save the screen flags is diverted into the quarantine wing and then sealed and chained like any other drawer, reported as quarantined with the id it actually landed under.</desc>
+      <desc id="write-path-desc">Every save in Undercroft runs the same eight ordered steps — derive a deterministic drawer id as the drawer is built, validate the declared names, kind, id shape and content length before anything is embedded, embed it, validate the declaration again with its vector at the store's write choke point and screen the content, compress it in its own frame, seal it with AAD bound to the vault, tag it with HMAC, and append to the audit chain inside the same SQLite transaction — and a save the screen flags is diverted into the quarantine wing and then sealed and chained like any other drawer, reported as quarantined with the id it actually landed under.</desc>
       <defs>
         <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7fa39c"/></marker>
         <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#35e0c2"/></marker>
@@ -112,23 +112,23 @@
       <text x="240" y="196" fill="#7fa39c" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">(wing,room,source,chunk,norm)</text>
       <text x="240" y="210" fill="#5c7f79" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">in Drawer::new, before the store</text>
 
-      <!-- 02 Embed -->
+      <!-- 02 Validate declaration -->
       <rect x="376" y="136" width="208" height="96" rx="6" fill="#04080a"/>
       <rect x="376" y="136" width="208" height="96" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
       <rect x="384" y="142" width="24" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
       <text x="396" y="151" fill="rgba(217,240,234,0.80)" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.08em">02</text>
-      <text x="480" y="178" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif" text-anchor="middle">Embed</text>
-      <text x="480" y="196" fill="#7fa39c" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">hash · onnx · ort · http · external</text>
-      <text x="480" y="210" fill="#5c7f79" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">offline by default · before the lock</text>
+      <text x="480" y="178" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif" text-anchor="middle">Validate declaration</text>
+      <text x="480" y="196" fill="#7fa39c" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">names · kind · id shape · length</text>
+      <text x="480" y="210" fill="#5c7f79" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">before the embed; vector at 04</text>
 
-      <!-- 03 Validate declaration -->
+      <!-- 03 Embed -->
       <rect x="616" y="136" width="208" height="96" rx="6" fill="#04080a"/>
       <rect x="616" y="136" width="208" height="96" rx="6" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
       <rect x="624" y="142" width="24" height="12" rx="2" fill="transparent" stroke="rgba(217,240,234,0.40)" stroke-width="0.8"/>
       <text x="636" y="151" fill="rgba(217,240,234,0.80)" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.08em">03</text>
-      <text x="720" y="178" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif" text-anchor="middle">Validate declaration</text>
-      <text x="720" y="196" fill="#7fa39c" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">names · kind · id shape · finite vec</text>
-      <text x="720" y="210" fill="#5c7f79" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">checked before any rewrite</text>
+      <text x="720" y="178" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif" text-anchor="middle">Embed</text>
+      <text x="720" y="196" fill="#7fa39c" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">hash · onnx · ort · http · external</text>
+      <text x="720" y="210" fill="#5c7f79" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">offline by default · before the lock</text>
 
       <!-- 04 Screen (FOCAL) -->
       <rect x="856" y="136" width="208" height="96" rx="6" fill="#04080a"/>

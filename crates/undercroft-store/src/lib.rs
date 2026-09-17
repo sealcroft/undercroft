@@ -4632,8 +4632,39 @@ impl VaultStore {
         if self.external_dim.is_some() {
             return Err(StoreError::ExternalVault);
         }
-        let embedding = self.embedder.embed(&drawer.content);
+        let embedding = self.embed_declared(&[drawer])?.remove(0);
         self.screened_write(drawer, embedding)
+    }
+
+    /// The write paths' one door onto the embedder: every declaration in
+    /// `drawers` is validated, and only then is any of them embedded
+    /// (ROADMAP O198). One vector per drawer, in order.
+    ///
+    /// The embed used to come first and the refusal after it, at the write
+    /// choke point, so a write the store was always going to refuse paid a
+    /// forward pass — and under a served embedder a plaintext POST — before
+    /// it was refused. The price was not one forward pass. The hash embedder
+    /// builds a token vector over the whole text, and `/v1` reads bodies up
+    /// to `undercroft_net::MAX_BODY_BYTES`, so one save of 200 MiB against a
+    /// 100,000-byte content bound was refused only after 43 s and a 12.2 GB
+    /// resident peak, measured on `serve-http` at `66337d2` — while its
+    /// single request loop left `/healthz` waiting the whole 43 s.
+    ///
+    /// A batch is judged WHOLE before anything is embedded, on `upsert_many`'s
+    /// own pre-pass precedent (ROADMAP O170): judging each drawer as it is
+    /// embedded would still POST the valid rows ahead of an invalid one for a
+    /// batch the store then refuses. Validating again at the choke point is
+    /// cheap and is what that point is for; this door makes it the second
+    /// check rather than the first. `vector` is `None` here because no vector
+    /// exists yet.
+    fn embed_declared(&self, drawers: &[&Drawer]) -> Result<Vec<Vec<f32>>, StoreError> {
+        for d in drawers {
+            crate::admission::validate_declaration(d, None)?;
+        }
+        Ok(drawers
+            .iter()
+            .map(|d| self.embedder.embed(&d.content))
+            .collect())
     }
 
     /// [`upsert_screened`](Self::upsert_screened) with the vector SUPPLIED —
@@ -5211,11 +5242,13 @@ impl VaultStore {
             diverted = vec![false; drawers.len()];
             drawers
         };
-        // Embedding is CPU work — do it before taking the write lock.
-        let embeddings: Vec<Vec<f32>> = drawers
-            .iter()
-            .map(|d| self.embedder.embed(&d.content))
-            .collect();
+        // Embedding is CPU work — do it before taking the write lock. Through
+        // the validating door, so a batch the choke point would refuse is
+        // refused before any of it is embedded (ROADMAP O198). With screening
+        // off, nothing above validated anything, and every row of the batch
+        // used to be embedded ahead of the refusal.
+        let refs: Vec<&Drawer> = drawers.iter().collect();
+        let embeddings = self.embed_declared(&refs)?;
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
         let mut created = 0usize;
         let mut anchor: Option<(String, u64)> = None;
@@ -5295,7 +5328,7 @@ impl VaultStore {
         if self.external_dim.is_some() {
             return Err(StoreError::ExternalVault);
         }
-        let embedding = self.embedder.embed(&drawer.content);
+        let embedding = self.embed_declared(&[drawer])?.remove(0);
         self.save_with_dedup_vec(drawer, embedding, threshold)
     }
 
@@ -5316,6 +5349,16 @@ impl VaultStore {
                 });
             }
         }
+        // The DECLARATION is judged before the scan, whichever branch it then
+        // takes (ROADMAP O198). The refresh branch below writes the incoming
+        // metadata under the MATCHED id, so the choke point used to judge a
+        // different candidate there than on the insert branch: a declared id
+        // the store refuses was refused when nothing matched and accepted when
+        // a near-duplicate did — O170's shape, a verdict that depends on
+        // something other than the declaration. `save_with_dedup` has already
+        // judged it before embedding; this also covers the external arm, whose
+        // vector the caller supplied, and it spares a refused write the scan.
+        crate::admission::validate_declaration(drawer, Some(&embedding))?;
         // Scan the same wing+room for the closest existing drawer. Scope
         // the statement so its borrow of `self.conn` is released before the
         // `&mut self` write below.
@@ -23881,5 +23924,184 @@ mod tests {
             "not the zero vector: {kept:?}"
         );
         assert!(same_vector(&kept, &vector), "the caller's vector: {kept:?}");
+    }
+
+    // ---- ROADMAP O198: a write the store refuses is refused before it is embedded ----
+
+    /// **Every save arm judges the declaration before it asks the embedder**
+    /// (ROADMAP O198). Each arm embedded first and was refused afterwards, at
+    /// the choke point, so a write the store would never accept still paid a
+    /// forward pass and, served, a plaintext POST. Two invalid declarations of
+    /// different kinds, so the order is proved for the whole declaration and
+    /// not for the length check alone. The batch arms put the invalid row
+    /// LAST, with screening off and on: judging row by row would embed the
+    /// valid rows ahead of it.
+    ///
+    /// Counterfactual, the embed ahead of the check (`66337d2`): each refused
+    /// single write counts 1, and each refused batch 3.
+    #[test]
+    fn no_save_arm_embeds_a_declaration_it_then_refuses() {
+        use crate::egress_doubles::{count, reset, served_store};
+        let over = "x".repeat(undercroft_core::MAX_CONTENT_BYTES + 1);
+        let invalid: [(&str, Drawer); 2] = [
+            ("oversized content", drawer("notes", "r", &over, 90)),
+            (
+                "an invalid wing",
+                drawer("notes/../etc", "r", "a short note", 91),
+            ),
+        ];
+        type Arm = fn(&mut VaultStore, &Drawer) -> Result<(), StoreError>;
+        let arms: [(&str, Arm); 5] = [
+            ("upsert_screened", |s, d| s.upsert_screened(d).map(drop)),
+            ("save_with_dedup", |s, d| {
+                s.save_with_dedup(d, 0.9).map(drop)
+            }),
+            ("import_record", |s, d| {
+                s.import_record(d, None, IMPORT_SURFACE).map(drop)
+            }),
+            ("upsert_many", |s, d| {
+                s.upsert_many(std::slice::from_ref(d)).map(drop)
+            }),
+            ("upsert_many, screened", |s, d| {
+                s.set_admission(true);
+                s.upsert_many(std::slice::from_ref(d)).map(drop)
+            }),
+        ];
+        for (arm, write) in arms {
+            // PREMISE: the counter is live on this arm — a valid declaration is
+            // embedded exactly once. Without it a zero below measures nothing.
+            let (_d, mut s, calls) = served_store(SecurityLevel::Sealed);
+            reset(&calls);
+            write(
+                &mut s,
+                &drawer("notes", "r", "a valid note about turbines", 1),
+            )
+            .unwrap_or_else(|e| panic!("premise: {arm} accepts a valid declaration: {e:?}"));
+            assert_eq!(count(&calls), 1, "premise: {arm} embeds a valid write once");
+            for (what, d) in &invalid {
+                reset(&calls);
+                let err = write(&mut s, d).expect_err(&format!("{arm}: {what} is refused"));
+                assert!(
+                    matches!(err, StoreError::Invalid(_)),
+                    "{arm}, {what}: {err:?}"
+                );
+                assert_eq!(
+                    count(&calls),
+                    0,
+                    "{arm}: {what} was embedded before it was refused"
+                );
+            }
+        }
+
+        // Update and diary: the two write doors that build the drawer inside
+        // the store. Content is the only declaration they take from a caller.
+        let (_d, mut s, calls) = served_store(SecurityLevel::Sealed);
+        let id = s
+            .upsert_screened(&drawer("notes", "r", "before", 1))
+            .unwrap()
+            .id;
+        reset(&calls);
+        let err = s.update_drawer(&id, &over, "test").unwrap_err();
+        assert!(matches!(err, StoreError::Invalid(_)), "update: {err:?}");
+        let err = s.diary_write("scribe", &over, "test").unwrap_err();
+        assert!(matches!(err, StoreError::Invalid(_)), "diary: {err:?}");
+        assert_eq!(
+            count(&calls),
+            0,
+            "an oversized update or diary entry was embedded"
+        );
+        s.update_drawer(&id, "after", "test").unwrap();
+        s.diary_write("scribe", "a short entry", "test").unwrap();
+        assert_eq!(
+            count(&calls),
+            2,
+            "premise: a valid update and entry embed once each"
+        );
+
+        // The batch arms, invalid row last.
+        for screened in [false, true] {
+            let (_d, mut s, calls) = served_store(SecurityLevel::Sealed);
+            s.set_admission(screened);
+            reset(&calls);
+            let batch = [
+                drawer("notes", "r", "first valid row", 1),
+                drawer("notes", "r", "second valid row", 2),
+                drawer("notes", "r", &over, 3),
+            ];
+            let err = s.upsert_many(&batch).unwrap_err();
+            assert!(matches!(err, StoreError::Invalid(_)), "{err:?}");
+            assert_eq!(
+                count(&calls),
+                0,
+                "screened={screened}: a batch is judged whole before any row is embedded"
+            );
+            assert_eq!(s.stats().unwrap().records, 0, "and nothing landed");
+        }
+    }
+
+    /// **A dedup save is judged on the declaration it was given, whether or not
+    /// a near-duplicate exists** (ROADMAP O198). The refresh branch writes the
+    /// incoming metadata under the MATCHED id, so the choke point judged a
+    /// different candidate there: a declared id the store refuses was refused
+    /// on an empty wing and accepted — as a refresh of another drawer — beside
+    /// a near-duplicate. Both arms, hash and external.
+    ///
+    /// Counterfactual, `66337d2`: with a match, both arms answer
+    /// `deduped: true`.
+    #[test]
+    fn a_dedup_save_is_judged_on_its_declaration_whether_or_not_it_matches() {
+        const TEXT: &str = "the turbine inspection is booked for thursday";
+        let vector = vec![0.5f32, -0.25, 0.125, 0.75, -0.5, 0.25, 0.0625, 0.375];
+        let malformed = |idx: u32| {
+            let mut d = drawer("notes", "r", TEXT, idx);
+            d.id = format!("fde/{}", d.id);
+            d
+        };
+        let hash = |seeded: bool| {
+            let (dir, mut s) = store(SecurityLevel::Sealed);
+            if seeded {
+                s.upsert(&drawer("notes", "r", TEXT, 0)).unwrap();
+            }
+            (dir, s)
+        };
+        let external = |seeded: bool| {
+            let (dir, mut s) = external_store(SecurityLevel::Sealed, 8);
+            if seeded {
+                s.upsert_external(&drawer("notes", "r", TEXT, 0), vector.clone())
+                    .unwrap();
+            }
+            (dir, s)
+        };
+        for seeded in [false, true] {
+            let (_d, mut s) = hash(seeded);
+            // PREMISE, seeded: a VALID declaration of the same text refreshes
+            // the seed, so the refusal below is not a missed match.
+            if seeded {
+                let ok = s
+                    .save_with_dedup(&drawer("notes", "r", TEXT, 5), 0.9)
+                    .unwrap();
+                assert!(ok.deduped, "premise: the hash arm matches the seed");
+            }
+            let err = s.save_with_dedup(&malformed(1), 0.9).unwrap_err();
+            assert!(
+                matches!(&err, StoreError::Invalid(m) if m.contains("fde/")),
+                "hash arm, seeded={seeded}: {err:?}"
+            );
+
+            let (_d, mut s) = external(seeded);
+            if seeded {
+                let ok = s
+                    .save_with_dedup_vec(&drawer("notes", "r", TEXT, 5), vector.clone(), 0.9)
+                    .unwrap();
+                assert!(ok.deduped, "premise: the external arm matches the seed");
+            }
+            let err = s
+                .save_with_dedup_vec(&malformed(1), vector.clone(), 0.9)
+                .unwrap_err();
+            assert!(
+                matches!(&err, StoreError::Invalid(m) if m.contains("fde/")),
+                "external arm, seeded={seeded}: {err:?}"
+            );
+        }
     }
 }

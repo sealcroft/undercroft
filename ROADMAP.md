@@ -3990,7 +3990,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**243** of the **258** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**245** of the **260** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4170,6 +4170,152 @@ identities.
 MINOR since O149: `PATCH /admin/tenants/{id}` and its CLI mirror are new
 capability, backward compatible. The rest of the section is PATCH work — no
 documented contract moves.
+
+### O198 — CLOSED 2026-09-17: a write the store refuses is refused before it is scanned or embedded, on every save arm, through one door
+
+**Filed 2026-09-16 from O170's ruling, which named it a residual owed an entry
+(O171's rule). Established by reading, not executed.**
+
+`upsert_screened` calls `self.embedder.embed(&drawer.content)` and only then
+reaches `write_drawer`, where `screen_and_divert` validates the declaration. So
+content the door will refuse, oversized content included, is embedded first.
+Under a served embedder (`UNDERCROFT_EMBEDDER=http`) that is a plaintext POST
+of a write the store then refuses. `save_with_dedup` does the same before its
+scan. Beyond that, `/v1` save and MCP `undercroft_save` never call
+`validate_content_len` themselves; they rely on the store's refusal, which
+arrives after the embed. `undercroft remember` checks the length first.
+
+It is arriving text, so O167's custody rule does not make it an egress owing a
+record. The cost is a forward pass, and a POST to the endpoint, spent on a
+write that cannot land.
+
+**Shape:** run `admission::validate_declaration(drawer, None)` before the embed
+in `upsert_screened` and `save_with_dedup`. The door then repeats it with the
+vector, which is cheap. Alternatively, give the two surfaces the same length
+check `remember` has. The first shape covers every save arm at once and is the
+one that cannot be forgotten by the next surface.
+
+**Gate:** a save of content past `MAX_CONTENT_BYTES` through `/v1` and MCP,
+under a counting embedder, is refused with zero embed calls. **Counterfactual:**
+the embed-first order counts one.
+
+#### BUILT 2026-09-17
+
+**Grounding.** A case-insensitive `rul(ed|ing)` search of this entry finds
+only its filing line, which names O170's ruling as its source. That ruling
+settles the direction: it rejected "the checks at each caller" as three copies
+of one security decision, and this entry prefers the shape that covers every
+save arm at once. The filed shape is followed. Two placement decisions are
+stated below, on O176's precedent.
+
+**Running the gate first changed the size of the defect.** The filing put the
+cost at "a forward pass, and a POST to the endpoint". Measured on `serve-http`
+at `66337d2` with the default hash embedder, a `/v1` save the store refuses
+(content past the 100,000-byte bound, in a body the 256 MiB ceiling admits):
+
+| refused save | before: time, resident peak | after: time, resident peak |
+|---|---|---|
+| 100,001 B | 0.03 s, 15.6 MB | 0.01 s, 10.8 MB |
+| 16 MiB | 2.83 s, 1,009 MB | 0.09 s, 112 MB |
+| 64 MiB | 13.2 s, 3,940 MB | 0.30 s, 424 MB |
+| 200 MiB | 43.2 s, 12,230 MB | 1.38 s, 1,259 MB |
+
+The peak is the process's `VmHWM`, so each row includes the rows above it. A
+concurrent `/healthz` waited 42.9 s behind the 200 MiB save, because the
+listener serves one request at a time. One authenticated request could stall
+the server for most of a minute, and kill it on a host with less than about
+12 GB.
+
+**The same measurement found two things the filing did not name.**
+- `upsert_many` embedded a whole batch before judging any row when screening
+  was off. Only the screened branch had O170's pre-pass. CLI `import` and
+  `mine` take that path.
+- The embed was not the only work spent on a refused write. `Drawer::new`
+  extracts dates and entities from the whole content, and `with_content_date`
+  does it again, before any door runs. With the embed moved, a 200 MiB save
+  still took 11.8 s and 3.27 GB. A scratch benchmark put 10.1 s of that in
+  `Drawer::new` and 0.85 s in normalization.
+
+**What was built.**
+- **`VaultStore::embed_declared`** is the write paths' one door onto the
+  embedder. It validates every declaration in its batch with
+  `validate_declaration(d, None)`, and only then embeds. `upsert_screened`,
+  `save_with_dedup` and `upsert_many` call it. So every write that reaches
+  them is judged before it is embedded: `/v1` save, update and import; MCP
+  save, update and diary; CLI import and mine; and refine's mirror drawers.
+- **`save_with_dedup_vec`** validates the incoming declaration, with its
+  vector, before its scan. This is the first placement decision. The refresh
+  branch writes the incoming metadata under the MATCHED id, so the choke point
+  judged a different candidate there. A declared id the store refuses was
+  accepted as a refresh beside a near-duplicate, and refused on an empty wing:
+  O170's shape, a verdict that depends on something other than the
+  declaration. It is now refused on both branches and on both arms. No surface
+  reaches it, because every surface derives the id, so no deployment is
+  affected and `UPGRADING.md` owes nothing.
+- **`Drawer::new` and `with_content_date`** scan only content within
+  `MAX_CONTENT_BYTES`. This is the second placement decision: the bound sits
+  in the constructor, the one place every caller passes, and every write door
+  refuses such a drawer anyway. A check of the normalized text at each surface
+  would also have been exact. It would have meant five copies (`/v1` save,
+  MCP's two save tools, diary and CLI mempalace import), which O170's ruling
+  rejects.
+
+**Gates.**
+- **`no_save_arm_embeds_a_declaration_it_then_refuses`** (store). Five arms
+  and two kinds of invalid declaration each, with zero embeds; update and
+  diary; and batches whose invalid row is last, screened and not. Premise:
+  each arm embeds a valid write once.
+- **`a_dedup_save_is_judged_on_its_declaration_whether_or_not_it_matches`**
+  (store). Both arms, with and without a seed. Premise: a valid declaration
+  refreshes the seed.
+- **`the_write_door_validates_every_declaration_before_it_embeds`** (store,
+  source). The door's body validates before it embeds, behind a premise probe
+  over four planted doors.
+- **`every_embed_and_advisor_call_is_classified_by_custody`** gains a `Query`
+  kind, and refuses an `Arriving` row that embeds through a raw call.
+  `embed_declared` is its new needle and row.
+- **`only_content_a_vault_can_hold_is_scanned`** (core). At the bound the text
+  is scanned; past it neither constructor scans.
+- **`a_write_the_store_refuses_reaches_no_served_embedder_on_any_surface`**
+  (CLI, through the binary). A loopback served embedder counts MCP save, `/v1`
+  save plain and with dedup, `/v1` update and import, and a CLI import batch
+  whose valid record comes first. Each surface's valid write is sent once.
+- **e2e** (3 checks). A refused 16 MiB `/v1` save names the bound, and the
+  server's peak stays under 200 MiB, behind a premise that the peak is
+  readable.
+
+**Counterfactuals**, each on a scratch copy, with the edit confirmed to land:
+- **The three arms embed directly again.** The custody gate names all three,
+  and the store test fails on its first arm.
+- **The same, with the rows re-typed `Arriving` and the door deleted.** The
+  custody gate fails, naming `upsert_screened` and the raw call.
+- **The door embeds before it validates.** The source gate and the store test
+  fail.
+- **The dedup check is removed.** The external arm, seeded, answers
+  `deduped: true` for the malformed id.
+- **Each scan guard is removed in turn.** The core test fails, naming that
+  constructor.
+- **The CLI test on the embed-first tree**, with its count assertions turned
+  into prints. MCP sent 1, the four `/v1` arms 4, and the CLI batch 2.
+- **The e2e bound.** The unfixed binary peaked at 1,023 MB and a binary with
+  only the scans restored at 312–316 MB, and both failed. The fixed binary
+  peaked at 112–116 MB.
+
+**Real corpus.** The LoCoMo feed was mined into eight wings (680 drawers),
+exported and imported. Then 160 feed lines were saved through `/v1`, half with
+a dedup threshold, and a second pass refreshed all 80. A 16 MiB save went in
+mid-stream, and a CLI import batch ended in an oversized record. Both binaries
+answered every valid write the same, `verify` passed, and four searches
+returned the same hits apart from the order of exact ties: eight identical
+copies across wings, under a vault key that is random per `init`. The
+oversized save answered 400 in 3,006 ms at a 1.04 GB peak before, and in 82 ms
+at 117 MB after. Mining took 475 ms and 480 ms.
+
+**Filed from this unit.**
+- **O214.** A search query has no bound at all, and a refused save still pays
+  to parse and normalize its body.
+- **O215.** CLI `import` drops records whose text another drawer holds. This
+  unit's corpus drive found it; this unit did not cause it.
 
 ### O176 — CLOSED 2026-09-17: an export under a read-only posture is served and says it went unaudited, on both surfaces, through one recording step
 
@@ -18690,34 +18836,6 @@ then allowed. After the allow, the link resolves, or the unit says in writing
 why it cannot. **Premise:** the same bundle into a non-screening vault resolves
 the link.
 
-### O198 — the save arms embed content before the door refuses it, and `/v1` save and MCP never check the content length
-
-**Filed 2026-09-16 from O170's ruling, which named it a residual owed an entry
-(O171's rule). Established by reading, not executed.**
-
-`upsert_screened` calls `self.embedder.embed(&drawer.content)` and only then
-reaches `write_drawer`, where `screen_and_divert` validates the declaration. So
-content the door will refuse, oversized content included, is embedded first.
-Under a served embedder (`UNDERCROFT_EMBEDDER=http`) that is a plaintext POST
-of a write the store then refuses. `save_with_dedup` does the same before its
-scan. Beyond that, `/v1` save and MCP `undercroft_save` never call
-`validate_content_len` themselves; they rely on the store's refusal, which
-arrives after the embed. `undercroft remember` checks the length first.
-
-It is arriving text, so O167's custody rule does not make it an egress owing a
-record. The cost is a forward pass, and a POST to the endpoint, spent on a
-write that cannot land.
-
-**Shape:** run `admission::validate_declaration(drawer, None)` before the embed
-in `upsert_screened` and `save_with_dedup`. The door then repeats it with the
-vector, which is cheap. Alternatively, give the two surfaces the same length
-check `remember` has. The first shape covers every save arm at once and is the
-one that cannot be forgotten by the next surface.
-
-**Gate:** a save of content past `MAX_CONTENT_BYTES` through `/v1` and MCP,
-under a counting embedder, is refused with zero embed calls. **Counterfactual:**
-the embed-first order counts one.
-
 ### O199 — the observability recipe's `undercroft init 2>/dev/null || true` hides why an init failed
 
 **Filed 2026-09-17 by O172, whose ruling named it; verified by reading.**
@@ -19005,6 +19123,88 @@ so reading it is evidence, not inference.
 
 **Gate**: P13 (`init`, then `--read-only search x`) exits 0 or 1 as ruled;
 the same after one `remember` with the database removed still exits 2.
+
+### O214 — a search query has no bound, and a refused save still pays for its whole body, on the listener's one request loop
+
+**Filed 2026-09-17 by O198's measurement, taken on the `66337d2` binary.**
+`/v1` reads every body up to `undercroft_net::MAX_BODY_BYTES` (256 MiB), a
+ceiling sized for import. Two costs survive O198:
+- **A search query has no bound at all.** `search_page` embeds the query, and
+  the lexical channels tokenize it. A 16 MiB query was served 200 in 8.0 s at
+  a 1,015 MB resident peak, and 1 MiB took 0.58 s. A `serve-http --read-only`
+  server served the same query the same way (7.6 s, 1,014 MB), because search
+  is one of its named reads. MCP `undercroft_search` reaches the same store
+  call; the CLI's argv bounds its own query.
+- **A refused save still pays for its body.** After O198 a 200 MiB `/v1` save
+  is refused in 1.38 s at a 1.26 GB peak. Reading and parsing the JSON cost
+  0.75 s and 628 MB, and the rest is normalizing text 2,000 times the content
+  bound.
+
+`serve-http` answers from one loop, so `/healthz` waits behind both (1.08 s
+at 200 MiB after O198). The engine's listener has the shape O164 records for
+the control plane.
+
+**Why it is a ruling, not a fix.**
+- **A query bound is a new documented limit.** Choosing it is a contract
+  question: the content bound's 100,000 bytes, something smaller, or a token
+  count. A caller sending a long query gets an answer today and a 400
+  afterwards. `UPGRADING.md` owes an entry, and whether the change is PATCH is
+  the versioning doctrine's question about input never documented as valid.
+- **A per-route body ceiling turns one number into a table.** Save, update and
+  search bodies would sit far below the import ceiling, on both listeners and
+  on the orchestrator's proxy, which O111 made agree.
+- **MCP stdio reads one line per request with no bound either.** Whether that
+  transport is bounded is part of the same question.
+
+**Gate:** a `/v1` search whose query is past the ruled bound answers 400,
+naming the bound, before a counting stub embedder is called, on a writable and
+on a read-only server. A save body past the ruled route ceiling is refused on
+its declared `Content-Length` before it is read. **Counterfactual:** today's
+routes, under which the query is served and the body is parsed.
+
+### O215 — CLI `import` skips a record whose text another drawer holds, so a restore loses distinct drawers and their ids
+
+**Filed 2026-09-17 by O198's real-corpus drive, measured on the `66337d2`
+binary.** `Command::Import` (`crates/undercroft-cli/src/main.rs`) skips a
+drawer record when its keyed content fingerprint is already in the payload's
+`seen` set, or `store.check_duplicate` finds the text in the vault. The key is
+the text alone: not the wing, the room or the id.
+
+The LoCoMo feed mined into eight wings holds each text in eight distinct
+drawers, 680 in all. Its export, imported into an empty vault:
+- **CLI `import`** kept 85 drawers and printed "595 duplicates skipped". A
+  drawer id from wing `w5` no longer resolved.
+- **`POST /v1/…/import`** of the same file kept all 680, and the same id
+  resolved.
+
+Mining one tree into two wings is ordinary use: `CLAUDE.md`'s id-recipe
+invariant names `mine ./docs --wing team-a` then `--wing team-b`. And CLI
+`import` is the path every sealed-bundle restore takes (`upsert_batched`). So a
+restore through the CLI narrows the vault. Every reference to a skipped drawer
+stops resolving: an agent-held id, a supersession link, a KG fact's source
+drawer, a receipt. That is the identity-lifetime question this project's
+doctrine asks first. The output does give the count, but it calls distinct
+drawers duplicates.
+
+**Why it is a ruling.** The skip is MemPalace heritage and has a purpose:
+re-importing a file into the vault it came from should not pile up copies. The
+two surfaces disagree, and which one is right is a design question:
+- key the skip on the drawer id, since a record whose id the vault holds is
+  the same drawer; re-import stays idempotent and every distinct drawer is
+  restored;
+- drop the skip and rely on ids, as `/v1` does, since `import_record` replaces
+  by id;
+- keep the content skip only for records that carry no id (the mempalace
+  format), whose id is derived at import.
+
+Whatever is ruled, both surfaces must answer the same. The change owes
+`UPGRADING.md` if a script counts on the skip.
+
+**Gate:** an export of a vault that holds one text in two wings, imported by
+the CLI into an empty vault, restores both drawers, and both ids resolve.
+Re-importing the same file into that vault adds nothing. **Premise:** the
+export holds two drawer records with the same content. **Counterfactual:**
+today's content-keyed skip, under which one drawer is lost.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 

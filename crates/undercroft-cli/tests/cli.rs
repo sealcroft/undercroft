@@ -1055,6 +1055,25 @@ fn stub_llm(reply: &'static str) -> (String, std::sync::Arc<tiny_http::Server>) 
     (format!("http://127.0.0.1:{port}"), server)
 }
 
+/// One HTTP/1.0 request to `addr`, answered as `(status, body)`. HTTP/1.0 so
+/// the server closes the connection and the whole reply can be read to EOF.
+fn raw_http(addr: &str, method: &str, path: &str, body: &str) -> (u16, String) {
+    use std::io::{Read, Write};
+    let raw = format!(
+        "{method} {path} HTTP/1.0\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    let mut s = std::net::TcpStream::connect(addr).unwrap();
+    s.write_all(raw.as_bytes()).unwrap();
+    let mut resp = String::new();
+    s.read_to_string(&mut resp).unwrap();
+    let code: u16 = resp.split_whitespace().nth(1).unwrap().parse().unwrap();
+    (
+        code,
+        resp.split("\r\n\r\n").nth(1).unwrap_or("").to_string(),
+    )
+}
+
 /// A served embedder on loopback, in Ollama's `/api/embeddings` shape, counting
 /// the requests whose body carries `mark` — so the probe embeds an open's
 /// calibration sends are never mistaken for drawer text (ROADMAP O167).
@@ -1188,6 +1207,195 @@ fn a_served_vault_records_repair_egress_and_refuses_read_only_mutations_before_s
     );
 }
 
+/// **ROADMAP O198, through the binary a user drives.** Under a served
+/// embedder, a write the store refuses — content past the 100,000-byte bound —
+/// reaches the endpoint on no surface: MCP `undercroft_save`, `/v1` save plain
+/// and with a `dedup_threshold`, `/v1` update, `/v1` import, and CLI `import`,
+/// whose batch holds a valid record AHEAD of the oversized one. Each surface's
+/// premise is a valid write that is sent exactly once. Counted at the
+/// endpoint, on requests carrying the marker.
+///
+/// Counterfactual, the embed ahead of the check (`66337d2`): every refused
+/// arm sends, and the CLI batch sends both of its records.
+#[test]
+fn a_write_the_store_refuses_reaches_no_served_embedder_on_any_surface() {
+    use std::sync::atomic::Ordering::SeqCst;
+    const MARK: &str = "quillfeather";
+    let (url, marked, _srv) = stub_embedder(MARK);
+    let sent = || marked.load(SeqCst);
+    let over = format!("{MARK} {}", "x".repeat(undercroft_core::MAX_CONTENT_BYTES));
+    let served_env = [
+        ("UNDERCROFT_EMBEDDER", "http"),
+        ("UNDERCROFT_EMBED_URL", url.as_str()),
+        ("UNDERCROFT_EMBED_API", "ollama"),
+        ("UNDERCROFT_EMBED_MODEL", "stub"),
+        ("UNDERCROFT_EMBED_DIM", "8"),
+    ];
+    let home = TempDir::new().unwrap();
+    let served = |argv: &[&str]| {
+        let mut c = cmd(&home);
+        c.envs(served_env).args(argv);
+        c
+    };
+    served(&["init"]).assert().success();
+
+    // Records a real export carries, from a home with no served embedder,
+    // with any vector removed so the importer must embed. The manifest line is
+    // dropped: its digest would refuse an edited record for another reason.
+    let src = TempDir::new().unwrap();
+    cmd(&src).args(["init"]).assert().success();
+    for n in ["one", "two"] {
+        cmd(&src)
+            .args([
+                "remember",
+                &format!("{MARK} exported note {n}"),
+                "--wing",
+                "ops",
+            ])
+            .assert()
+            .success();
+    }
+    let exported = cmd(&src).args(["export"]).output().unwrap();
+    let records: Vec<serde_json::Value> = String::from_utf8(exported.stdout)
+        .unwrap()
+        .lines()
+        .filter(|l| l.contains(MARK))
+        .map(|l| {
+            let mut v: serde_json::Value = serde_json::from_str(l).unwrap();
+            if let Some(o) = v.as_object_mut() {
+                o.remove("vector");
+            }
+            v
+        })
+        .collect();
+    assert_eq!(records.len(), 2, "premise: two drawer records exported");
+    let line = |i: usize, content: Option<&str>| -> String {
+        let mut v = records[i].clone();
+        if let Some(text) = content {
+            let d = if v.get("drawer").is_some() {
+                v.get_mut("drawer").unwrap()
+            } else {
+                &mut v
+            };
+            d["content"] = serde_json::Value::from(text);
+        }
+        format!("{v}\n")
+    };
+
+    // MCP, over stdio.
+    let mcp = |content: &str| -> String {
+        let call = serde_json::json!({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": "undercroft_save", "arguments": {"content": content, "wing": "ops"}}
+        });
+        let input = format!(
+            "{}\n{call}\n",
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#
+        );
+        let out = served(&["serve-mcp"]).write_stdin(input).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let ok = mcp(&format!("{MARK} a valid note from an agent"));
+    assert!(!ok.contains("\"isError\":true"), "premise: MCP saves: {ok}");
+    assert_eq!(sent(), 1, "premise: MCP sends a valid save once");
+    let refused = mcp(&over);
+    assert!(
+        refused.contains("\"isError\":true") && refused.contains("content too large"),
+        "MCP refuses the oversized save: {}",
+        &refused[..refused.len().min(400)]
+    );
+    assert_eq!(sent(), 1, "MCP: the refused save reached the endpoint");
+
+    // `/v1`, on a served `serve-http`.
+    let port = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().port()
+    };
+    let mut server = std::process::Command::new(assert_cmd::cargo::cargo_bin("undercroft"));
+    server
+        .env("UNDERCROFT_HOME", home.path())
+        .env_remove("UNDERCROFT_PASSPHRASE")
+        .envs(served_env)
+        .args(["serve-http", "--port", &port.to_string()])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    let mut server = server.spawn().expect("serve-http spawns");
+    let addr = format!("127.0.0.1:{port}");
+    let ready = (0..100).any(|_| {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        std::net::TcpStream::connect(&addr).is_ok()
+    });
+    assert!(ready, "premise: serve-http came up on {addr}");
+    let save = |text: &str, extra: &str| {
+        let body = serde_json::json!({"text": text, "wing": "ops"}).to_string();
+        let body = format!("{}{extra}}}", &body[..body.len() - 1]);
+        raw_http(&addr, "POST", "/v1/vaults/default/drawers", &body)
+    };
+    let (code, body) = save(&format!("{MARK} a valid note over rest"), "");
+    assert_eq!(code, 200, "premise: /v1 saves: {body}");
+    assert_eq!(sent(), 2, "premise: /v1 sends a valid save once");
+    let id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (code, body) = raw_http(&addr, "POST", "/v1/vaults/default/import", &line(0, None));
+    assert_eq!(code, 200, "premise: /v1 imports: {body}");
+    assert_eq!(sent(), 3, "premise: /v1 sends an imported record once");
+    let update = serde_json::json!({ "text": over }).to_string();
+    let arms: [(&str, (u16, String)); 4] = [
+        ("save", save(&over, "")),
+        ("save with dedup", save(&over, r#","dedup_threshold":0.9"#)),
+        (
+            "update",
+            raw_http(
+                &addr,
+                "PUT",
+                &format!("/v1/vaults/default/drawers/{id}"),
+                &update,
+            ),
+        ),
+        (
+            "import",
+            raw_http(
+                &addr,
+                "POST",
+                "/v1/vaults/default/import",
+                &line(1, Some(&over)),
+            ),
+        ),
+    ];
+    let _ = server.kill();
+    let _ = server.wait();
+    for (arm, (code, body)) in &arms {
+        assert_eq!(
+            *code,
+            400,
+            "/v1 {arm} refuses: {}",
+            &body[..body.len().min(300)]
+        );
+        assert!(body.contains("content too large"), "/v1 {arm}: {body}");
+    }
+    assert_eq!(sent(), 3, "/v1: a refused write reached the endpoint");
+
+    // CLI `import`: one batch, the valid record first.
+    let file = home.path().join("batch.ndjson");
+    std::fs::write(&file, format!("{}{}", line(1, None), line(0, Some(&over)))).unwrap();
+    served(&["import", file.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("content too large"));
+    assert_eq!(
+        sent(),
+        3,
+        "CLI import: a batch the store refuses was embedded before it was refused"
+    );
+    std::fs::write(&file, line(1, None)).unwrap();
+    served(&["import", file.to_str().unwrap()])
+        .assert()
+        .success();
+    assert_eq!(sent(), 4, "premise: CLI import sends a valid record once");
+}
+
 /// Count the `egress/refine` records the binary's own `history` prints.
 fn refine_egresses(home: &TempDir) -> usize {
     let out = cmd(home)
@@ -1295,23 +1503,12 @@ fn a_partial_refine_is_recorded_on_the_cli_and_over_v1_and_an_empty_one_is_not()
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
     assert!(ready, "premise: serve-http came up on {addr}");
-    let (code, body) = {
-        use std::io::{Read, Write};
-        let payload = r#"{"wing":"ops"}"#;
-        let raw = format!(
-            "POST /v1/vaults/default/refine HTTP/1.0\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{payload}",
-            payload.len()
-        );
-        let mut s = std::net::TcpStream::connect(&addr).unwrap();
-        s.write_all(raw.as_bytes()).unwrap();
-        let mut resp = String::new();
-        s.read_to_string(&mut resp).unwrap();
-        let code: u16 = resp.split_whitespace().nth(1).unwrap().parse().unwrap();
-        (
-            code,
-            resp.split("\r\n\r\n").nth(1).unwrap_or("").to_string(),
-        )
-    };
+    let (code, body) = raw_http(
+        &addr,
+        "POST",
+        "/v1/vaults/default/refine",
+        r#"{"wing":"ops"}"#,
+    );
     let _ = server.kill();
     let _ = server.wait();
     assert_eq!(code, 400, "the screen's refusal is caller input: {body}");

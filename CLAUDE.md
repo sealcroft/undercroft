@@ -831,6 +831,15 @@ Consequences that are binding, not advisory:
   `admission_allow` validates the whole restored declaration; and
   `write_drawer_stmts` keeps only the reserved-wing guard, a count a gate
   pins.
+  **No write path embeds a drawer before that function has judged it (O198,
+  2026-09-17).** `embed_declared` is the write paths' one door onto the
+  embedder: `upsert_screened`, `save_with_dedup` and `upsert_many` call it, it
+  judges a whole batch before embedding any row, and O167's custody gate
+  refuses an arriving drawer embedded through a raw call. The embed used to
+  come first, so a 200 MiB `/v1` save the store refused cost 43 s and a
+  12.2 GB peak on the listener's one loop. `Drawer::new` and
+  `with_content_date` scan only content within `MAX_CONTENT_BYTES`, because
+  that scan was most of what remained.
   Two things that unit found and its filing had not: `validate_name(value,
   what)` **discarded `what`** at all 44 call sites, so no refusal anywhere
   in the tree could name its field — the gate was unreachable, not merely
@@ -2069,8 +2078,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (924 run,
-                                      # 4 #[ignore]d = 928 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (929 run,
+                                      # 4 #[ignore]d = 933 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2192,7 +2201,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (535 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (538 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (156 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (137 checks; weaviate

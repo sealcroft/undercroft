@@ -2993,6 +2993,45 @@ else
   echo "FAIL  O176 /v1: egress/export count moved under a read-only server"; FAIL=$((FAIL+1))
 fi
 
+echo "== A write the store refuses is refused before it is scanned or embedded (ROADMAP O198) =="
+# `/v1` reads a body up to 256 MiB and the content bound is 100,000 bytes, so
+# what a refused save costs is what the engine does BEFORE the refusal. On
+# `66337d2` a 16 MiB save built its dates, its entities and a token vector
+# over the whole text first, with the listener's one request loop blocked
+# throughout. The check reads the server's own peak (VmHWM), which a slow
+# runner cannot move, rather than a wall-clock time, which it can.
+OB_HOME="$(mktemp -d)"
+UNDERCROFT_HOME="$OB_HOME" "$BIN" init >/dev/null 2>&1
+UNDERCROFT_HOME="$OB_HOME" "$BIN" serve-http --host 127.0.0.1 --port 18979 >"$OB_HOME/serve.log" 2>&1 &
+OB_SRV=$!
+for _ in $(seq 1 40); do curl -sf http://127.0.0.1:18979/healthz >/dev/null 2>&1 && break; sleep 0.25; done
+# PREMISE: the peak is readable. An empty reading must not pass the bound.
+OB_HWM0="$(awk '/VmHWM/{print $2}' "/proc/$OB_SRV/status" 2>/dev/null)"
+if [ -n "$OB_HWM0" ] && [ "$OB_HWM0" -gt 0 ]; then
+  echo "ok    O198 premise: the server's resident peak is readable (${OB_HWM0} kB)"; PASS=$((PASS+1))
+else
+  echo "FAIL  O198 premise: no VmHWM for the server — the bound below measures nothing"; FAIL=$((FAIL+1))
+fi
+# Words, not one run of a letter: the scans and the embedder do their work
+# per word, so a single 16 MiB token would understate what the defect cost.
+{ printf '{"wing":"w","room":"r","text":"'
+  yes 'the quick brown fox met Alice Smith near seventeen harbours on 7 May 2023 ' | tr -d '\n' | head -c 16777216
+  printf '"}'; } >"$OB_HOME/body.json"
+rest_body "O198 /v1: a 16 MiB save is refused naming the bound" 'content too large' -- \
+  -X POST http://127.0.0.1:18979/v1/vaults/default/drawers -H 'content-type: application/json' \
+  --data-binary "@$OB_HOME/body.json"
+OB_HWM1="$(awk '/VmHWM/{print $2}' "/proc/$OB_SRV/status" 2>/dev/null)"
+kill "$OB_SRV" 2>/dev/null; wait "$OB_SRV" 2>/dev/null
+# 200 MiB, placed between what each half of the fix removes, all measured with
+# this body: fixed 116 MiB; the scans alone restored 312 MiB; the embed and the
+# scans both ahead of the refusal (`66337d2`) 1,023 MiB.
+if [ -n "$OB_HWM1" ] && [ "$OB_HWM1" -lt 204800 ]; then
+  echo "ok    O198 /v1: refusing it peaked at ${OB_HWM1} kB, under 200 MiB"; PASS=$((PASS+1))
+else
+  echo "FAIL  O198 /v1: refusing a 16 MiB save peaked at ${OB_HWM1:-?} kB (bound 204800)"; FAIL=$((FAIL+1))
+fi
+rm -rf "$OB_HOME"
+
 echo
 echo "e2e results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1
