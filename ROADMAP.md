@@ -3990,7 +3990,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**245** of the **260** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**249** of the **264** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -19205,6 +19205,285 @@ the CLI into an empty vault, restores both drawers, and both ids resolve.
 Re-importing the same file into that vault adds nothing. **Premise:** the
 export holds two drawer records with the same content. **Counterfactual:**
 today's content-keyed skip, under which one drawer is lost.
+
+#### RULED 2026-09-17 by a three-lens panel (security, surface parity, agentic memory architecture) plus an adversarial refuter
+
+**The question.** What should CLI `import` do instead of dropping a record
+whose content another drawer already holds, and where does that decision live?
+
+**Prior rulings.** No `#### RULED` subsection anywhere covers this; a
+case-insensitive `rul(ed|ing)` search of this entry and of import, dedup,
+restore and identity finds none. Five prior rulings live in CODE and in
+`UPGRADING.md`, and every one is FOLLOWED:
+
+- `admission.rs:218-222` — *"a well-formed id may still name an existing
+  drawer, and an import replacing that row wholesale is what a restore IS"*.
+  Dispositive against skipping on the id.
+- `lib.rs:5165-5175` — an import rule belongs in the bulk path, never at the
+  `main.rs` call site, with the worked cost of the half-fix.
+- `lib.rs:5700-5706` — a rule that must reach both import surfaces goes where
+  both reach it.
+- `admission.rs:102-125` — a check that reads database state stays out of
+  `validate_declaration`.
+- `UPGRADING.md:399-402` (O140) — a count of records PROCESSED is not an
+  answer, because the write is an upsert. It binds the reporting half here.
+
+`ids.rs:55-70` (round-four #7) is an ANALOGY and is labelled one: it governs a
+collapsed id RECIPE, whose failure is an overwrite, where this defect drops.
+
+**What the panel established beyond the filing.**
+
+- **The skip is a write-suppression primitive.** `check_duplicate` is
+  wing-blind (`manage.rs:744-753`) and every write stamps `fp`
+  (`lib.rs:5032`), so any writer who saves text T anywhere — an agent through
+  `undercroft_save`, into its own wing — permanently suppresses the operator's
+  later restore of the genuine drawer holding T, with its id, wing, trust
+  class, supersession link and KG bindings. The operator is given a count and
+  no way to enumerate what was denied.
+- **`verify` cannot see the loss.** `VerifyReport::ok` (`lib.rs:2578-2587`)
+  counts no drawers, and `Dangling`/`Unreceipted` are legitimate by design
+  (`lib.rs:2589-2611`). A restore that kept 85 of 680 drawers, dangled every
+  supersession into the rest and stripped the receipt off every citing fact
+  prints `VERIFY OK` — and `backup create` gates on that verdict
+  (`main.rs:4046`).
+- **The store already ruled the same question the other way, in its own dedup
+  path.** `save_with_dedup_vec` judges sameness of text inside ONE wing and
+  room (`lib.rs:5368`), and when it collapses it WRITES: it keeps the matched
+  id, absorbs the matched drawer's occurrences (`lib.rs:5391-5405`) and
+  advances the chain (`lib.rs:5316-5320`, *"never a silent overwrite"*). The
+  import is wing-blind and drops. This is the strongest refutation in the
+  record and it is in-tree code, not analogy.
+- **`check_duplicate` was never a write primitive.** Six call sites: four are
+  read-only queries, and the two that decide a write — `Command::Import` and
+  `sweep_path` — were born in one diff, `7df91d3`, which moved the sweep's
+  check into that function and added the same three lines to the new import.
+  The import copy carries no comment; the sweep's carries an id-keyed comment
+  its own code contradicts.
+- **The heritage claim is unverifiable here** and is retired: what is proved
+  is that the import skip was COPIED from the sweep in `7df91d3`.
+
+**The verdict — four outcomes per record, at a new store-side import door.**
+No lens wrote it; the refuter assembled it after two of the majority's
+conditions were refuted.
+
+1. **No row at this id** — write and embed. Reported `new`.
+2. **A row at this id whose content is byte-equal and whose covered metadata
+   is equal** — skip. Reported `unchanged`; nothing is written, so a repeat
+   restore stays the cheap no-op the shipped skip provides.
+3. **A row at this id whose content is byte-equal and whose metadata differs**
+   — write, reusing the stored vector through `stored_embedding` +
+   `upsert_screened_with` (the O167 precedent), so no embedder is asked.
+   Reported `replaced`. This is the arm that makes a moved wing restorable,
+   and it is what the majority's "content equal" test would have silently
+   declined to restore.
+4. **A row whose content differs, or whose `get` answers
+   `StoreError::Integrity`** — write and embed. Reported `replaced`. The
+   integrity arm is load-bearing: a restore is the remedy for a tampered row,
+   and a door that propagated that error would abort on the one row it was
+   called to repair.
+
+**What the equality test reads.** `get(id, Read::Internal(InternalRead::
+WritePathLookup))` and a BYTE comparison of content — never the `fp` column.
+`fp` loses twice over: it is HMAC over `match_key(content)`, i.e. NFC-folded
+(`manage.rs:29`), so it answers canonical equality and would skip a record
+whose verbatim bytes differ; and it sits outside `canonical()`
+(`lib.rs:1753-1761`) and outside `mirror_drift` (`lib.rs:7788-7799`), so an
+offline writer who plants one value suppresses a chosen restore for ever with
+`verify` green (A28). The witness costs no audit record
+(`lib.rs:6865-6870`) and its doc already names this use (`lib.rs:2030-2032`).
+
+**Where it lives.** A NEW store-side import door, holding the unwrap, the
+four-way test and the batching, called by both import surfaces. Not the CLI:
+`import_unwrap_screened` is private (`lib.rs:5596`) and REWRITES the id
+(`lib.rs:5671`), and the screen can move an ordinary record to the quarantine
+id (`lib.rs:5219-5232`), so the landing id is unknowable at the call site. Not
+`write_drawer_stmts` (`admission.rs:102-125`). And not bare `upsert_many`,
+whose only caller also serves `mine` and `sweep` (`main.rs:1219`) — a point no
+lens made, and the reason "the door both surfaces enter" is something this
+unit CREATES rather than uses.
+
+**Reporting.** O140 binds: `imported` counts records processed and is not an
+answer. The line reports `new`, `replaced` and `unchanged`, from numbers both
+surfaces already hold and neither reads (`bulk.created` at `main.rs:3345`,
+`SaveOutcome.created` at `tenant.rs:3054-3076`). Eleven localized strings
+move with it (`i18n.rs:64-235`) plus the key inventory. And the manifest's own
+`counts.drawers` — parsed already (`main.rs:3241`), inside the signature
+(`bundle.rs:507-519`) — is checked as `new + replaced + unchanged ==
+counts.drawers`, refusing and saying so otherwise. O140's `held != declared`
+is NOT copied: it is valid only into an empty destination, and the CLI
+restores into arbitrary vaults.
+
+**Scope.** The transcript sweep's identical skip (`main.rs:4412`) lands in the
+SAME unit — one decision, two call sites, O170's rule — and its fix is plain
+id-idempotency, since it has no restore semantics.
+
+**Options that lost.**
+
+- **Skip on the id alone.** Refuted by `admission.rs:218-222`: a restore stops
+  restoring, and a backup over a tampered or stale row is a silent no-op.
+- **Delete the skip outright** (lens B's dissent). Correct on identity,
+  wasteful on lifetime: a repeat restore re-writes every row, doubling the
+  chain (680 to 1360 measured) and paying one plaintext POST per drawer under
+  a served embedder. Outcome 2 buys that back for free.
+- **Content skip only for the mempalace shape.** Keeps a wing-blind
+  suppression primitive alive on the one record shape that ALSO collapses ids,
+  and a mempalace record carries `metadata.wing`, so the two-wing case arises
+  inside its own scope.
+- **"Id present and content equal", as the majority wrote it.** Ships two new
+  silent defects: it declines to restore a drawer whose metadata moved, and it
+  aborts on the corrupt row it was called to repair.
+- **Deciding in `write_drawer_stmts`.** Would silence the chain record for a
+  byte-identical re-save on every surface; the no-op is a property of the
+  import OPERATION, not of a write.
+
+**Claims refuted, the brief's included.**
+
+- **The brief** led with `ui.html`'s "Lossless NDJSON" as a CLI promise. It is
+  a `/v1` client and that sentence is true of `/v1`. What binds the CLI pair
+  is `UPGRADING.md:405-407` and `:452-456`, which prescribe it as the remedy.
+- **The brief's option 3** was mis-stated: the mempalace arm never reads a
+  payload id, so the discriminator is the parse branch, not the record.
+- **Lens C:** `content_fingerprint`'s doc does NOT forbid this use — it names
+  "a caller deduplicating a batch before it reaches the store" as the reason
+  the method is public (`manage.rs:719-722`). The defect is that the
+  fingerprint answers the wrong question, not that it is misused. And its
+  "never drop the drawer" overstates `Occurrence`: dedup does collapse rows,
+  what it never drops is the record of the appearance.
+- **Lens B:** its decisive citation does not hold.
+  `upsert_many_batches_atomically` (`lib.rs:11498-11531`) asserts created
+  counts, row counts, `verify`, a search hit and a cold reopen, and NEVER
+  reads the chain height — the sentence it quotes is a comment beside an
+  assertion that does not measure it, which is this file's own first rule
+  firing inside the objection. Its "option 3 is not expressible" is
+  overstated, and its "the losslessness claims are false" mis-attributes the
+  drift: every such claim is scoped to `/v1` and none is false; what is wrong
+  is a prescribed remedy that is a silent downgrade.
+- **Lens A:** the oracle half of its placement argument is overstated — the
+  probing principal here is the operator, who can already run
+  `admission list`. The correctness half stands and is decisive.
+- **Lenses A and C** both say "one import door both surfaces enter". No such
+  door exists; `upsert_many` serves `mine` and `sweep` too.
+
+**Probes the integrator runs, because only execution settles them.** P5, the
+suppression attack measured end to end (an ordinary save denies the operator's
+restore of that id); P6, chain height and embed POSTs unchanged on a repeat
+restore under the built fix; P7, a meta-only change is restored and reported
+`replaced`; P8, a restore repairs a tampered row instead of aborting; P9,
+whether `quantize(dequantize(q)) == q`, which outcome 3 rests on and which
+nothing in this tree pins; P10, the cost of one `get` per record at O139's
+361,779-drawer scale, reported beside that entry's 1.09x baseline.
+
+**Dissent, recorded.** The parity lens ruled for deleting the skip outright
+and filing the no-op saving separately. It is overruled on the cost evidence
+and on its citation, and its substantive point — that the re-embed, not the
+chain record, is the real cost of writing — is adopted as outcome 3.
+
+**What this ruling does not cover**, each filed with its own heading: O216
+(an import replaces a quarantine-pending row by id), O217 (mempalace records
+without a chunk index collapse onto one id and are reported as imported),
+O218 (the CLI export/import pair drops vectors and token artifacts while
+`UPGRADING.md` prescribes it), O219 (a payload carrying one id twice with
+different content writes both, last wins). Also stated and unfiled: no
+`Namespace` variant records an import operation, so a no-op import leaves no
+evidence it ran.
+
+### O216 — an import can replace a quarantine-pending row by id, destroying review evidence the delete path refuses to destroy
+
+**Filed 2026-09-17 by O215's ruling panel (security lens), verified by
+reading.** `quarantine_drawer_id` is deterministic and offline-computable
+(`crates/undercroft-core/src/ids.rs:71-85`), and the reserved-wing guard fires
+only when the record DECLARES the reserved wing
+(`crates/undercroft-store/src/lib.rs:4977-4983`). So an imported record
+carrying an ordinary wing under a quarantine row's id upserts that row away:
+`ON CONFLICT(id) DO UPDATE` replaces its content, metadata and tag
+(`lib.rs:5065-5095`), and the queue entry is gone. `delete_drawer_ruled`
+refuses to destroy such a row unless the caller is the ruling path
+(`crates/undercroft-store/src/manage.rs:854-867`); the import never asks.
+
+Reachable today, and unchanged by O215's ruling: it needs a differing content,
+which every skip on the table writes through.
+
+**Shape, for a ruling**: the import door refuses a record whose id names a
+quarantine-pending row, naming the id and telling the operator to rule on it
+first. The alternative — allowing it for a restore of the queue itself — has
+to explain how a payload is told from an operator.
+
+**Gate**: an import whose record id equals a pending row's id is refused, and
+`admission list` still shows the row. **Counterfactual**: today's upsert,
+under which the row is replaced into an ordinary wing and the queue empties.
+
+### O217 — mempalace records with no chunk index collapse onto one id, and the count says they all landed
+
+**Filed 2026-09-17 by O215's ruling panel; measured by its probe P3 on the
+`83abab5` binary.** `parse_import_line`'s mempalace arm builds every record
+through `Drawer::new(wing, room, content, source_file, chunk_index, …)`
+(`crates/undercroft-cli/src/main.rs:1166-1189`) with `source_file` absent
+(so `"(direct)"`) and `chunk_index` defaulting to 0. `drawer_id` is injective
+over exactly those components (`crates/undercroft-core/src/ids.rs:32-53`), so
+three records sharing a wing and room derive ONE id, three writes land on one
+row, and the summary reports three imported. Measured: three distinct texts in,
+one row stored, "Imported 3".
+
+No option in O215's ruling touches it — the contents differ, so no content
+test fires, and the ids are equal, so every id test still writes.
+
+**Shape, for a ruling.** `CLAUDE.md`'s own invariant names the remedy for a
+record with no source to be a chunk of: a unique append index
+(`next_append_index`). Taking it means `parse_import_line`, a pure function
+today, must reach the store, which restructures the two-pass parse O139 built.
+The alternative is a refusal naming the collision. Either way the count must
+stop reporting rows that were overwritten.
+
+**Gate**: three mempalace records sharing a wing and room land as three rows
+with three ids, or are refused naming the collision; the reported count equals
+the rows. **Premise**: the same three through the native format already land
+as three. **Counterfactual**: today, one row and a count of three.
+
+### O218 — the CLI export/import pair drops every vector and token artifact, and `UPGRADING.md` prescribes it as the `/v1` substitute
+
+**Filed 2026-09-17 by O215's ruling panel (surface-parity lens), reframed by
+its refuter.** CLI `export` emits `{"drawer": …}` and nothing else
+(`crates/undercroft-cli/src/main.rs:1005-1013`), and `parse_import_line` reads
+no `vector` and no `tok` (`main.rs:1114-1196`). `/v1` export emits both
+(`crates/undercroft-cli/src/tenant.rs:2812-2815`). So a CLI round trip
+re-embeds every drawer and drops every ColBERT matrix.
+
+**The drift is not a false claim.** Every "lossless / restore is a copy, not a
+re-embed" sentence in the tree is scoped to `/v1` (`docs/PARITY.md:205-207`,
+`docs/AGENTS.md:293-294`, `ui.html:487`), and each is true of it. What is
+wrong is that `UPGRADING.md:405-407` and `:452-456` and
+`docs/MULTI_TENANCY.md:65` prescribe the CLI pair as the remedy when the `/v1`
+ceiling refuses, saying only that it has no size limit — a silent downgrade in
+a prescribed remedy. Under a served embedder it is also one plaintext POST per
+drawer, and under a moved model a different vector space.
+
+**Shape**: carry `vector` and `tok` on the CLI export and read them on import,
+as `/v1` does — or say in `UPGRADING.md` what the substitute costs. The first
+makes the two surfaces answer the same; the second is honest and cheap.
+
+**Gate**: a CLI round trip of a vault with a token artifact preserves the
+stored vectors byte for byte and the artifact, under a counting embedder that
+is never called. **Counterfactual**: today, one embed per drawer and no
+artifact.
+
+### O219 — a payload carrying one id twice with different content writes both, and which one survives is the payload's choice
+
+**Filed 2026-09-17 by O215's ruling panel (security lens); its cost stated by
+the refuter.** Nothing on either import surface detects two records sharing an
+id. Both are written, `ON CONFLICT(id) DO UPDATE` keeps the last, and the
+summary counts two. The winner is chosen by line order in an
+attacker-authored file.
+
+**Why it is a ruling.** A refusal is the obvious answer and it breaks a
+legitimate workflow: concatenating two vaults' exports that mined the same
+tree into the same wing, room and source produces same-id records honestly.
+Nothing in the tree handles or documents that merge today, so a refusal owes
+`UPGRADING.md` and an argument, and the alternative — keeping the last and
+saying so — owes a report that names the collision.
+
+**Gate**: a payload with one id twice is refused naming both lines, or lands
+once with the collision reported, as ruled. **Counterfactual**: today, silent,
+last-wins, counted twice.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 
