@@ -2347,8 +2347,8 @@ impl Namespace {
             // history is incomplete about its own deletions. Separating
             // agent-initiated from operator-attested destruction into two
             // namespaces would fix that and is a behaviour change to an agent
-            // surface — filed as an open question rather than taken on the
-            // strength of a mismatched comment.
+            // surface — filed as an open question, ROADMAP O205, rather than
+            // taken on the strength of a mismatched comment.
             Namespace::Del => true,
             // Egress: a whole-vault export, a push to a remote mirror, a
             // `refine` run that POSTs drawer text to an LLM endpoint (O79), or

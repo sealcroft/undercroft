@@ -296,10 +296,12 @@ impl VaultStore {
     /// drawer whose covered scope disagrees with its mirror is skipped with
     /// a warning and left for `verify`'s `mirror_drift` leg, which is the
     /// detector for that flip. The other direction — a flip that moves a
-    /// drawer OUT of the mirror's scope — evades the candidate SELECT and
-    /// is an availability cost the same leg reports; a sweep that scanned
-    /// every drawer's covered scope would close it at O(corpus) per policy,
-    /// which is filed with the residue rather than paid silently. An
+    /// drawer OUT of the mirror's scope — evades the candidate SELECT, so
+    /// the sweep keeps a drawer its policy says must be destroyed. That
+    /// breaks the erasure promise rather than costing availability, and the
+    /// same leg reports it. A sweep that scanned every drawer's covered
+    /// scope would close it at O(corpus) per policy; that is filed with the
+    /// residue as ROADMAP O206 rather than paid silently. An
     /// unparseable covered `filed_at` fails the sweep: a sweep must neither
     /// destroy what it cannot date nor skip it silently.
     fn expired_in(

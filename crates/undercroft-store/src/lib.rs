@@ -2472,9 +2472,9 @@ pub struct VerifyReport {
     /// discriminates because destruction is a choke point: the crate has one
     /// `DELETE FROM drawers` (`delete_drawer_ruled`) and it appends
     /// `del/{id}` in the same transaction, inherited by all three callers —
-    /// the public delete, admission deny, and `forget_with_proof`, which the
-    /// retention sweep and `delete_by_source` ride. So no live row AND no
-    /// tombstone is unreachable legitimately; it is a relabel onto a drawer
+    /// the public delete, which `delete_by_source` loops, admission deny, and
+    /// `forget_with_proof`, which the retention sweep rides. So no live row
+    /// AND no tombstone is unreachable legitimately; it is a relabel onto a drawer
     /// nothing destroyed. Enumerated from every `chain_append` call site,
     /// which is also what establishes that a label with no `/` can only be a
     /// drawer id.
@@ -2781,7 +2781,7 @@ pub struct VaultStore {
     /// figure would invite wiring `pool_div` in on the strength of a
     /// measurement of a different tier, with no stage-2 to bound the latency
     /// that follows. `pqscale` is the instrument for the PQ tier; the FDE
-    /// analogue does not exist. Filed rather than guessed.
+    /// analogue does not exist. Filed rather than guessed, as ROADMAP O208.
     pool_div: usize,
     /// Corpus size at which the PQ prefilter partitions into IVF inverted
     /// lists (`usize::MAX` ⇒ never). See `pqidx`.
@@ -7816,9 +7816,10 @@ impl VaultStore {
                 // discriminating because deletion is a choke point:
                 // `delete_drawer_ruled` holds the only `DELETE FROM drawers`
                 // in the crate and appends `del/{id}` in the SAME transaction,
-                // and its three callers (the public delete, admission deny,
-                // `forget_with_proof` — which the retention sweep and
-                // `delete_by_source` ride) all inherit it.
+                // and its three callers (the public delete, which
+                // `delete_by_source` loops, admission deny, and
+                // `forget_with_proof`, which the retention sweep rides) all
+                // inherit it.
                 //
                 // So: no live row AND no tombstone is not ordinary operation.
                 // It is a relabel onto a drawer that was never destroyed —

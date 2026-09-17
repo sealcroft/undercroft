@@ -7,6 +7,57 @@ its CLI mirror `tenant-repoint` are additive — nothing that worked before
 behaves differently because they exist. Everything else in this section is a
 fix whose only observable change is that a defect is gone.
 
+### relations between open ROADMAP entries are declared in the entries, and a comment that says "filed" must cite an open one (O169, O171)
+
+Two ruled units, built together because both add an arm to the
+`ROADMAP headings` preflight. Neither changes the engine; the only code
+change is to comments.
+
+**O169: the picking maps are dated records.** `ROADMAP.md`'s dependency map
+and diff-level pass read as a guide to picking work. They named nothing filed
+after O45, and still called O7 and O23 open, weeks after both were done. They
+are now titled as dated records, with a retirement banner, and the status log
+under them has its own heading. Two open entries that block each other, must be
+done in order, or edit the same code now each carry a line beginning with a
+bold `Relations:` marker that names the other. A new arm requires every named
+partner to be an open entry that names this one back. Six lines are seeded:
+O151 and O152, O147 and O148, and O146 before O164. The ruling's two O150
+seeds were dropped, because O150 and O157 were done the day the ruling was
+made.
+
+**O171: a sentence inside a finished entry is not a filing.** Seven items
+were called filed only in the bodies of entries that were already done:
+- five get entries of their own, O205–O209: the `del/` namespace split, a
+  retention scope escaped by a flipped mirror, a served embedder's non-finite
+  output, FDE recall at scale, and the hand-written `Shared*` model wrappers;
+- the other two were already O174 and O177.
+
+The comments that cited finished entries now cite the new ones, and the
+finished bodies say where each item went. O135's 2026-09-12 panel ruling,
+which lived only in a gitignored folder, is written into O135. A second new
+arm requires a `//` comment block in `crates/` that says "filed", or "open
+question", to name an entry whose heading is still open. At this tree it
+failed on three blocks before the fix and passes on all seven after it.
+
+**Corrected along the way:**
+- Two store comments said `delete_by_source` goes through
+  `forget_with_proof`. It loops the public delete.
+- `retention.rs` called a scope flip that escapes the sweep "an availability
+  cost". It breaks the erasure promise.
+- `fixture.rs` cited O151 for the non-finite-output item, which is O207.
+
+**Checked by** exact-row premise fixtures for both arms, and by
+counterfactuals:
+- O152's relations line deleted from the real file fails the preflight
+  naming the pair.
+- O151 moved under a release, in a scratch copy, fails for its partner.
+- A reader whose section match is broken is refused as a broken reader.
+- A citation reverted to O57 fails, naming `manage.rs`.
+- O152's heading marked finished, in a scratch copy, fails the ORT comment
+  that cites it.
+
+`CLAUDE.md` states both rules with their backwards test.
+
 ### the team-server recipe starts, reaches its Qdrant mirror over TLS, and passes a declared passphrase (O172)
 
 `deploy/docker-compose.server.yml` could not serve a single client:

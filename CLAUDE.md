@@ -3588,6 +3588,25 @@ unwritten because a half-correct verdict is worse than a known-wrong one.
   **"accepted" is not a resting state**. Nothing broken or half-baked stays a
   gap; if it is genuinely not worth fixing, that is a decision with an
   argument, written down, not a line item that quietly never moves.
+  **A sentence inside a finished entry is not a filing (ROADMAP O171).** It
+  cannot be picked, cited or shut: O9's body still read "filed rather than
+  fixed" after O142 had done the work. So anything a surface calls filed, or
+  an open question, gets its own id heading — under `Open` for work, under
+  its target release once that is fixed, under `Unversioned` for a pure
+  decision — and the comment that cites it names that id. A residual stated
+  WITH its argument for remaining is a decision and needs no heading. The
+  `ROADMAP headings` preflight holds the code-comment half: a `//` block in
+  `crates/` that says filed, or open question, must name an entry whose
+  heading is still open. It cannot see a citation of the wrong open entry, a
+  synonym, or a filing written in a ROADMAP body or in this file.
+  **Relations between open entries live in the entries too (O169):** a line
+  beginning with the bold `Relations:` marker names the partner, and the same
+  preflight requires the partner to be open and to name this entry back.
+  There is no separate dependency map; the last one went stale within five
+  days. Applied backwards, the filing rule CONFIRMS M15's O62–O65, O142's lift
+  of O9, O157's split out of O134b, O136 to O143 and O111 to O112, and
+  reclassifies the seven items O171 named plus one id-less `2.0.0` item; no
+  stated residual moves. Its history is that one application.
 - **The handover is a GOVERNANCE SURFACE that is deliberately NOT committed,
   and both halves of that are binding.**
   `.handover/` is gitignored on purpose (`.gitignore:44`, *"local only — never

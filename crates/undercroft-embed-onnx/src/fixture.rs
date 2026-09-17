@@ -169,7 +169,7 @@ pub fn vocab() -> Vec<(&'static str, u32)> {
 ///
 /// No NaN row. One was specified when this fixture was expected to carry the
 /// non-finite-output entry too; that entry is filed separately (ROADMAP
-/// O151) and its cheapest arm is `HttpEmbedder`, in a default member. An
+/// O207) and its cheapest arm is `HttpEmbedder`, in a default member. An
 /// unused NaN row here would only invite a test that silently depends on it.
 pub fn emb_row(i: usize) -> [f32; DIM] {
     if i == 0 {
