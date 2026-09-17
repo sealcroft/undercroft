@@ -21,7 +21,9 @@ docker compose -f deploy/docker-compose.server.yml --env-file deploy/.env \
 `UNDERCROFT_PASSPHRASE` in `deploy/.env` derives the master key instead of
 writing a key file. Set it before the first start and keep it set. Until 1.6.0
 the recipe did not pass it to the container, so a declared passphrase was
-ignored.
+ignored. A passphrase declared later, over a volume first started without one,
+is refused before anything is written (exit 1, naming both key files; ROADMAP
+O204) — move such a volume to a passphrase by exporting into a new one.
 
 Check the running server's declarations:
 
@@ -55,8 +57,21 @@ claude mcp add --transport http undercroft http://HOST:8765/mcp \
   `/v1` recall search the vault directly and never consult Qdrant.
 
 Systemd alternative: `deploy/undercroft-server.service`. It does not run
-`init` yet, so run `undercroft init` once before enabling it; ROADMAP O200
-tracks the fix.
+`init` yet, so run it once before enabling the unit, as the unit's user, with
+the unit's data directory and environment file — otherwise `init` creates a
+different installation, or one keyed differently from the one the unit opens:
+
+```bash
+sudo systemd-run --wait --pipe --uid=undercroft --gid=undercroft \
+  -p EnvironmentFile=/etc/undercroft/server.env \
+  -E UNDERCROFT_HOME=/var/lib/undercroft \
+  /usr/local/bin/undercroft init
+```
+
+`systemd-run` reads the environment file as root, as the unit does; the file
+is root-owned `0600`, so `sudo -u undercroft` could not source it.
+
+ROADMAP O200 tracks running it from the unit.
 
 ## The optional Qdrant mirror
 

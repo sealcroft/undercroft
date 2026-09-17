@@ -3990,7 +3990,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**239** of the **254** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**243** of the **258** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4170,6 +4170,273 @@ identities.
 MINOR since O149: `PATCH /admin/tenants/{id}` and its CLI mirror are new
 capability, backward compatible. The rest of the section is PATCH work — no
 documented contract moves.
+
+### O204 — CLOSED 2026-09-17: a key source the palace contradicts is refused before anything is written, key material is never created where a vault refers to a key, and the read-only posture reaches the manager
+
+**Filed 2026-09-17 by O172's real-corpus drive; measured once, on a throwaway
+project.** A team-server volume first started with no passphrase holds
+`master.key`. Started again with `UNDERCROFT_PASSPHRASE` declared,
+`keys::load_or_create_master` takes the passphrase branch, finds no
+`kdf.salt`, WRITES one, and derives a key the vaults were never sealed under.
+The unlock then fails its manifest MAC and the engine exits
+`vault manifest failed integrity verification — possible tampering`. The CLI
+maps that error to exit 2 (`integrity_verdict`), the tamper verdict, for a
+configuration mistake. `restart:` repeats it,
+and `config check` exits 0, because it opens nothing. The reverse is the same
+by reading, and was executed on 2026-09-17 by the ruling's probe P3 (exit 2, a
+random `master.key` written): an installation keyed by a passphrase, started
+without one, writes a random `master.key` and fails the same way. O172's
+`UPGRADING.md` entry states the symptom and the fix, because O172 is what lets
+a declared passphrase reach this recipe's engine. **Shape**: `VaultManager::open`
+refuses, before it writes anything, when the declared key source and the key
+material on disk disagree — a passphrase with a `master.key` and no
+`kdf.salt`, or no passphrase with a `kdf.salt` and no `master.key` — naming
+both. Whether an installation holding BOTH files is refused too is part of the
+unit, since this defect writes exactly that state. It can stop a deployment
+that starts today only by luck, so it owes an `UPGRADING.md` entry, and
+`config check` can learn it from the directory without opening a vault.
+**Gate**: a CLI test that inits without a passphrase, then runs a command with
+one, and requires exit 1 naming the key source, no `kdf.salt` written, and a
+clean start once the declaration is removed; the reverse arm; and an e2e check
+of the message.
+
+#### RULED 2026-09-17 by a three-lens panel (memory architecture, security, operations) plus an adversarial refuter
+
+**The question.** What the engine does when the declared key source and the key
+material on disk disagree, including when BOTH files are present; whether key
+material may be created under existing vaults; whether the read-only posture
+reaches the key and the manager; where the decision lives; the exit class;
+`config check`; and the version.
+
+**Prior rulings found.** A case-insensitive `rul(ed|ing)` search of this entry
+finds none; its shape was a proposal. Followed, as best practice:
+- **O175** (ruled 2026-09-14): an operation with an effect outside the database
+  decides its own posture first. Applied backwards to the manager it covers
+  `open`, `create`, `delete` and `rotation_candidate`, not `open` alone.
+- **O170** and `CLAUDE.md`'s guard-before-rewrite rule: the classifier runs
+  before the step that writes the palace's key state.
+- **O154** (the maintainer, 2026-09-12): `config check` opens nothing. A stat
+  opens nothing, so an arm is allowed; O155's note that CI pre-flights the
+  environment, not the filesystem, decides which directory it examines.
+- **Round-four #18**: no silent fallback between key sources.
+- **The stated cost in `integrity_verdict`**: a MAC that fails under a key
+  derived from the declared material is exit 2, because the engine has no
+  evidence separating operator error from tampering.
+
+A33 (an authenticated manifest whose database is absent is exit 2) is
+distinguished, not refuted: here nothing has been authenticated.
+
+**Probes run by the integrator** (a release binary built from `460b21a`, in a
+container; `probe.sh` and `probe2.sh` in the panel's working directory):
+- P1: the filed case, exit 2 and `kdf.salt` written. P3: the reverse, which
+  this entry recorded as not executed — exit 2 and a random `master.key`
+  written.
+- P2: `init` with a passphrase on a `master.key` palace exits 0 and writes the
+  salt, so the team-server recipe's `init && exec` hides the cause.
+- **P4: a split palace.** On a passphrase palace, `vault create other` without
+  the passphrase exits 0 and seals `other` under a new `master.key`; afterwards
+  no single declaration opens both vaults. **P15**: the same split in the other
+  direction through the stray salt `UPGRADING.md` called harmless.
+- P5, P10, P14: `--read-only` writes key material and `vaults/` on an empty
+  directory, re-creates a deleted `master.key`, and `--read-only init` and
+  `--read-only vault create` write manifests. **P11**: `--read-only vault
+  rotate` deletes a torn `vault.json.next` before SQLite refuses — A32's shape.
+- P6 and P3b: with both files present, the declared source that is the real
+  one opens with exit 0 today. P7 and P7b: a deleted key file is silently
+  replaced, then exit 2. P8: a wrong passphrase on the right source is exit 2.
+  P9: `config check` exits 0 on P1's volume.
+- P12: the global and the subcommand spelling of `serve-http --read-only` both
+  refuse a manifest with no database, so the flag propagates. P13: that
+  refusal is exit 2 on a vault `init` just created (filed as O213).
+
+**The verdict.**
+- **The files are not evidence of which source keyed the palace** — the
+  brief's premise falls: P1 and P6 hold the same files and give opposite
+  answers, and an offline writer can create either file.
+- **The line that decides the exit class**: a refusal the stat-only classifier
+  makes before any key is derived is exit 1; a MAC that fails under a key
+  derived from existing declared material is exit 2. No `KeyError` is an
+  integrity verdict.
+- **The classifier** (`undercroft-vault`, pure, over the declared source, which
+  files exist, how many entries `vaults/` and `backups/` hold, and the posture):
+  - the declared file present → load it; the other file present as well → load
+    and warn, naming both files, at every open, from inside the manager;
+  - the declared file absent and the other present → `SourceMismatch`, exit 1,
+    whether or not anything refers to the other file;
+  - neither present and anything under `vaults/` or `backups/` → `MaterialMissing`,
+    exit 1;
+  - neither present and nothing there → create the declared material under a
+    writable posture, and hold NO key under a read-only one.
+- **Presence is a stat that propagates its errors** (`symlink_metadata`, never
+  `exists`): a stat error refuses, a symlinked key file counts as present, and
+  a key file is created with `create_new` and its mode set at open, so it never
+  replaces an entry that appeared after the stat. Argon2id runs only after the
+  classifier returns. `load_or_create_master` stops being public; the one
+  writer takes a witness only the classifier constructs.
+- **Both files present: no trial of the undeclared key** (the security lens).
+  A MAC that verifies under an unauthenticated file in a directory an offline
+  writer controls proves only that the writer held that file, so a trial would
+  point a passphrase deployment's operator away from the passphrase — a
+  downgrade. The engine opens with the declared source and the MAC decides.
+- **Every refusal and warning gives both readings**, and makes "unset the
+  passphrase" conditional on the operator knowing the palace was set up
+  without one. None names key bytes, a salt or a fingerprint, and none advises
+  deleting a file.
+- **The create check.** `create` refuses when at least one manifest exists
+  under `vaults/` and the held key verifies NONE of them — the door where a
+  split palace is minted, by a wrong source or a wrong passphrase. It reads
+  each manifest's MAC directly (never through `unlock`, which deletes a torn
+  staging file), stops at the first that verifies, propagates enumeration
+  errors, and counts one tamper signal on refusal. It is an integrity verdict
+  (`VaultError::KeyOpensNoVault`, exit 2, 409 with `class: "integrity"`),
+  because `search` on the same bytes says exactly that.
+- **The posture reaches the manager in this unit**: `VaultManager::open_as`
+  beside `open`, on the `unlock`/`unlock_as` shape. Read-only creates nothing,
+  `unlock` under it is read-only whatever the caller asked, and `create`,
+  `delete` and `rotation_candidate` refuse before any effect (exit 1).
+- **`config check`** gains a palace arm after its per-variable loop. It
+  examines only a DECLARED data directory (`--data-dir` or `UNDERCROFT_HOME`),
+  runs the engine's own classifier under a writable posture, and is fatal
+  exactly where a writable start refuses. It warns when both files are present,
+  and never prints `ok` for an absent or unreadable directory.
+- **PATCH.** Every refusal fires on a state the tree already mishandles. What
+  can stop a script that runs today: `init` and `vault create` under the wrong
+  declaration (exit 0 today, splitting the palace); the three `--read-only`
+  mutating commands; P1, P3 and P7 moving from exit 2 to exit 1; and
+  `config check` exiting 1 on a refusing directory. `UPGRADING.md` says so,
+  makes the "remove the passphrase" remedy conditional, and withdraws "the
+  stray `kdf.salt` is harmless".
+
+**Options that lost.**
+- *Refuse whenever both files exist*: stops P6 and P3b, which work today, and
+  forces an operator to delete one file without knowing which is live —
+  losing `kdf.salt` loses every passphrase vault.
+- *Trial the undeclared key* (memory and operations lenses): the downgrade
+  above, and it reads key material nobody declared on every open.
+- *Proceed and only improve the message*: leaves the split (P4, P15) open.
+- *A palace-level key-check file*: a new on-disk artifact whose absence means
+  nothing on every existing palace.
+- *Decide in the manager alone*: leaves a public function that writes key
+  material with no guard.
+- *File the read-only half separately* (operations lens): its cost premise,
+  "about 40 call sites", is false — 125 references, all untouched by an
+  `open_as` beside `open` — and a posture accepted and dropped is O30's shape.
+- *The create check on "not all"*: one tampered tenant manifest would block
+  every other tenant's create, and every create in an existing split palace.
+- *`config check` over the engine's default directory*: a CI runner would
+  report its own `~/.undercroft`.
+
+**Claims refuted, the brief's included.** The files as evidence of the source
+(above). "Every CLI path reaches `manager`" (`bundle keygen`, `config check`
+and `backup list`/`restore` do not). "Fsynced, 0600" (the mode is Unix-only and
+was applied after the write). `config check` "reads only the environment" (it
+already reads the declared CA pins). "About 40 `open` call sites" (125
+references). That `Cli::posture()` misses `serve-http --read-only` (P12: the
+flag propagates). "`vault status` said `master.key`" in `UPGRADING.md` and
+`resolve_passphrase`'s doc (no `vault status` ever printed a key source; only
+`init` does). That the reverse case was not executed (P3).
+
+**Dissent.** The exit code for key material missing under existing vaults:
+the tree's definitions settle it as exit 1 ("a missing file", the class
+`CorruptKeyFile` already has), and the security lens preferred exit 2, so that
+a deleted key keeps paging as tampering. Its cost is recorded in
+`UPGRADING.md`. Nothing here overturns a maintainer ruling or is a product
+choice.
+
+**Residual, stated.** Two first starts racing under DIFFERENT declarations
+each create their own file; only a palace lock would close that.
+
+**Filed from the ruling**: O210 (a crash inside the key-file write leaves a
+short key), O211 (Argon2id on every manager open), O212 (local file effects of
+`--read-only` outside the manager) and O213 (A33 on a vault `init` just
+created). The systemd guidance to run `init` by hand without the unit's data
+directory and passphrase, and the false "`vault status` said `master.key`"
+claim, are corrected in this unit.
+
+#### BUILT 2026-09-17, as ruled
+
+**The shape.**
+- `undercroft-vault/src/keys.rs`: `survey` (stat only, errors propagated,
+  `symlink_metadata`), `plan` (the classifier, public for `config check`),
+  and `master_key`, which surveys, classifies, and only then loads, derives or
+  writes. `load_or_create_master` is gone.
+  - The one writer, `create_master`, is private and takes a `CreateWitness`
+    only `plan` constructs.
+  - It writes with `create_new` and the mode set at open, and an
+    `AlreadyExists` from a concurrent first start re-classifies once and loads.
+  - `KeyError::SourceMismatch` and `KeyError::MaterialMissing` carry messages
+    that give both readings.
+- `undercroft-vault/src/lib.rs`:
+  - `VaultManager::open_as` and `access()`, the `VAULTS_DIR` and
+    `BACKUPS_DIR` constants (the CLI's and `/v1`'s backup paths use them).
+  - `VaultError::ReadOnly` and `VaultError::KeyOpensNoVault`.
+  - The create check, `key_opens_an_existing_vault`, reads each manifest MAC
+    through `assemble` and `verify_hmac`, skips non-directories and
+    manifest-less directories, and bumps one tamper counter on refusal.
+- The CLI: `manager(cli, posture)` at all six call sites; `integrity_verdict`,
+  `vault_err` and `store_err` class `KeyOpensNoVault` as integrity (409), and
+  `ReadOnly` and the two key refusals as 409 with no class; `config check`
+  gains `data_dir_line` — the ruling's palace arm, named for the directory it
+  stats, and its messages say "data directory" and "installation", because
+  O112's hierarchy-word gate admits the word only in shapes it lists — fed
+  `cli.data_dir`.
+
+**RED before the fix.** The seven new CLI tests fail against the `460b21a`
+binary, each for the defect it names: exit 2 where 1 is wanted, a read-only
+list creating the palace, a warning that does not exist, a create that exits
+0, and `config check` exiting 0.
+
+**Isolated counterfactuals**, each piece of the fix removed alone in a
+scratch worktree; each fails the tests that guard it while the other new
+tests stay green:
+- the classifier ignoring the other file and the references fails four vault
+  tests, the `config check` agreement test and four CLI tests;
+- no create check fails the split test and two CLI tests;
+- a manager that ignores its posture fails the two read-only manager tests
+  and the read-only CLI test;
+- a `config check` that answers ok fails its agreement test and its CLI test;
+- `KeyOpensNoVault` removed from the CLI's integrity set fails the
+  exit-2/integrity parity test and two CLI tests.
+
+**Real corpus.** The LoCoMo feed mined into eight wings of a key-file palace
+and of a passphrase palace, 680 drawers each, three more vaults and a backup
+beside them.
+- Under the other declaration, `search`, `init`, `vault create`, `vault
+  list`, `--read-only stats` and `config check` all exit 1, and the palace's
+  file tree and file hashes are unchanged.
+- Under its own declaration: `verify` OK, search unchanged, `config check`
+  exits 0.
+- `--read-only vault create` and `--read-only vault rotate` exit 1 with the
+  tree unchanged; `--read-only init` on an initialised palace exits 0 and
+  writes nothing.
+- A key file planted beside the passphrase palace: the passphrase still
+  serves (with the warning), no passphrase is exit 2, `vault create` without
+  one is exit 2 with nothing created, and `config check` warns and exits 0.
+- 202 vaults under a replaced `master.key`: the create is refused, exit 2 in
+  6 ms.
+
+**Cost, measured on the same scenario against a release build of
+`460b21a`** (twice each): 20 searches 658/670 ms before, 630/650 after; 20
+`stats` over 61 vaults 69/62 before, 62/66 after. No measurable cost. The
+first `vault list` over 61 never-opened vaults takes about 10.5 s on BOTH
+builds, because a writable open creates each vault's database; that is
+existing behaviour, and O213 records the related read-only case.
+
+**Diagrams read, as the drift rule requires**: `architecture/index.html`'s
+key diagram, `06-containment-and-keys`, `10-deployment` and
+`22-storage-layout`. Only the last was wrong, saying a passphrase palace holds
+no key file where it holds `kdf.salt`; corrected.
+
+**Figures**: cargo 900 → 922 (926 compiled), e2e 513 → 525, the landing e2e
+tile 894 → 906.
+
+**Battery.** The first full run passed every suite at those figures except
+`lint`: clippy's `err_expect` refused two `.err().expect()` calls in the new
+tests, and a `cargo test` run never lints. Fixed to `expect_err`; the four lint
+invocations were re-run clean, and the full battery was run again at the final
+tree. The twenty preflights also caught the new text naming the installation
+in shapes O112's gate does not list, and the ROADMAP heading pair moving to 243
+of 258.
 
 ### O169 — CLOSED 2026-09-17: the two picking maps are dated records now, and relations between open entries are declared in the entries and gated both ways
 
@@ -18457,34 +18724,6 @@ absent from the vault, recorded on the same `egress/index-push` record.
 **Gate**: whatever the panel rules, driven through `backends-e2e` — push,
 delete, push, and `index status` counting what remains.
 
-### O204 — a passphrase declared on an installation keyed by `master.key` is reported as tampering, and leaves a `kdf.salt` behind
-
-**Filed 2026-09-17 by O172's real-corpus drive; measured once, on a throwaway
-project.** A team-server volume first started with no passphrase holds
-`master.key`. Started again with `UNDERCROFT_PASSPHRASE` declared,
-`keys::load_or_create_master` takes the passphrase branch, finds no
-`kdf.salt`, WRITES one, and derives a key the vaults were never sealed under.
-The unlock then fails its manifest MAC and the engine exits
-`vault manifest failed integrity verification — possible tampering`. The CLI
-maps that error to exit 2 (`integrity_verdict`), the tamper verdict, for a
-configuration mistake. `restart:` repeats it,
-and `config check` exits 0, because it opens nothing. The reverse is the same
-by reading and was not executed: an installation keyed by a passphrase, started
-without one, writes a random `master.key` and fails the same way. O172's
-`UPGRADING.md` entry states the symptom and the fix, because O172 is what lets
-a declared passphrase reach this recipe's engine. **Shape**: `VaultManager::open`
-refuses, before it writes anything, when the declared key source and the key
-material on disk disagree — a passphrase with a `master.key` and no
-`kdf.salt`, or no passphrase with a `kdf.salt` and no `master.key` — naming
-both. Whether an installation holding BOTH files is refused too is part of the
-unit, since this defect writes exactly that state. It can stop a deployment
-that starts today only by luck, so it owes an `UPGRADING.md` entry, and
-`config check` can learn it from the directory without opening a vault.
-**Gate**: a CLI test that inits without a passphrase, then runs a command with
-one, and requires exit 1 naming the key source, no `kdf.salt` written, and a
-clean start once the declaration is removed; the reverse arm; and an e2e check
-of the message.
-
 ### O205 — an agent cannot read back a deletion it performed, because agent and operator deletions share the fenced `del/` namespace
 
 **Filed 2026-09-17 by O171's ruling, item (a); the second half of round-four
@@ -18613,6 +18852,83 @@ planted wrapper; and a test that a reranker behind an `Arc` reaches the
 implementor's `score_batch`, counted by a fixture that records which method
 ran. Counterfactual: today's `SharedReranker`, under which the sequential
 default runs.
+
+### O210 — a crash inside a key-file write leaves a short key, and every later start refuses
+
+**Filed 2026-09-17 by O204's ruling; verified by reading, not executed.** The
+palace key writer in `crates/undercroft-vault/src/keys.rs` creates the file,
+writes the bytes, then fsyncs. A crash between the create and the write leaves
+a zero-length or short `master.key` or `kdf.salt`, and every start after it
+fails `CorruptKeyFile` with no vault ever sealed under the key. O204 made the
+create exclusive and set the mode at open, so the window is narrower and never
+overwrites, but it still exists. `write_identity`
+(`crates/undercroft-cli/src/main.rs`) has the older shape: an `exists` check
+then a plain write, and the owner-only mode applied after the bytes land.
+
+**Shape**: write the bytes to a unique temporary name in the same directory,
+fsync it, then publish it with an operation that fails if the final name
+exists (a hard link, then remove the temporary), and fsync the directory. A
+filesystem without hard links needs a stated fallback. `write_identity` takes
+the same publish step.
+
+**Gate**: a test that kills the writer between the create and the write — or
+leaves a planted short file — and shows the next start either loads a whole
+key or refuses naming the torn file, never a key that seals nothing.
+Counterfactual: today's writer, under which the short file is published.
+
+### O211 — every manager open runs Argon2id, so a passphrase palace pays 64 MiB per command and per vault
+
+**Filed 2026-09-17 by O204's ruling; verified by reading.** The CLI's
+`manager` opens a `VaultManager` per call, and each open derives the master key
+from the passphrase with Argon2id (64 MiB, t=3). `serve-http` opens it twice at
+start, `vault list` once for the list and once per vault it describes, and
+`vault rotate` twice. Nothing caches the derived key within a process.
+
+**Shape**: derive once per process and share the manager (or the key) across
+the call sites that open it, keeping the posture each caller states. The key
+stays in `SecretKey`, zeroised on drop, and is never written anywhere.
+
+**Gate**: a count of Argon2id derivations per command, under a passphrase, on
+`vault list` over three vaults and on a `serve-http` start: one each.
+Counterfactual: today's per-open derivation.
+
+### O212 — `--read-only` still writes through `backup create`, `backup restore` and `bundle keygen`
+
+**Filed 2026-09-17 by O204's ruling; verified by reading, not executed.** O204
+made the manager obey the posture. Three CLI commands write under the palace
+root without going through it: `backup create` copies a vault into `backups/`
+after a read-only verify, `backup restore --force` replaces a vault's
+directory, and `bundle keygen` writes an identity file. `--read-only`'s own
+help says it writes nothing, and O175 says a function with an effect outside
+the database decides its posture itself.
+
+**Shape, for a ruling**: `backup restore` and `bundle keygen` refuse under
+`--read-only` before any effect. `backup create` is the open question: a
+forensic copy taken read-only is exactly what an operator wants during an
+incident, which argues for O176's warn-and-serve shape rather than a refusal.
+
+**Gate**: an e2e that lists the palace before and after each command under
+`--read-only` and finds it unchanged (or, for `backup create`, changed only as
+the ruling allows, with its warning). Counterfactual: today's commands.
+
+### O213 — a vault `init` just created, opened read-only, is reported as tampering
+
+**Filed 2026-09-17 by O204's ruling; measured by its probe P13.** `init`
+writes a manifest and no database; the database appears at the first writable
+store open. A read-only open of that vault refuses `DatabaseMissing` (A33),
+which the CLI reports as exit 2, the tamper verdict — while the vault's own
+authenticated manifest records zero writes, so nothing is missing that was
+ever written. The team-server recipe's `--read-only` first start meets it,
+and `UPGRADING.md` tells operators to start writable once.
+
+**Shape, for a ruling**: when the manifest verifies and records no writes,
+a read-only open either serves the vault as empty or refuses as a posture
+error (exit 1, "start it writable once"); a manifest that records writes and
+has no database stays exit 2. The manifest's `writes` is covered by its MAC,
+so reading it is evidence, not inference.
+
+**Gate**: P13 (`init`, then `--read-only search x`) exits 0 or 1 as ruled;
+the same after one `remember` with the database removed still exits 2.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 

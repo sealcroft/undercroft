@@ -458,8 +458,10 @@ pub fn hold_vault_exclusively(dir: &std::path::Path) -> Result<VaultHold, StoreE
 /// became `None` and the palace silently fell back to writing a random key
 /// FILE — the precise opposite of what declaring a passphrase asks for. An
 /// operator whose `${SECRET}` failed to interpolate got key material on disk
-/// and no signal: `vault status` said `master.key`, and it is only wrong if
-/// you knew to look.
+/// and no signal: `init` said `master.key`, and it is only wrong if you knew
+/// to look. (This said `vault status`, which never printed a key source —
+/// corrected by ROADMAP O204, which also stopped a DECLARED passphrase being
+/// silently paired with an installation keyed by `master.key`.)
 ///
 /// Whitespace-only counts as naming no secret, but the value itself is
 /// **never trimmed** — it is opaque payload, and trimming would change the

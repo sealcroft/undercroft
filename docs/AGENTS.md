@@ -1007,7 +1007,13 @@ which answered 500 "possible tampering" while `POST …/rotate` answered 409 on
 the identical verdict. *Stated cost*: a wrong `UNDERCROFT_PASSPHRASE` derives
 a different manifest key, the MAC fails, and that is reported as an integrity
 verdict — the engine has no evidence separating the two, which is what a MAC
-is, and the message has always said "possible tampering".
+is, and the message has always said "possible tampering". **Where the key
+FILES contradict the declaration, the engine refuses before it derives
+anything, and that is exit 1** (ROADMAP O204): a passphrase over an installation
+holding `master.key` and no `kdf.salt`, the reverse, or key material missing
+under existing vaults — each names both readings and writes nothing. A
+`vault create` (or `POST /v1/vaults`) whose key opens none of the installation's
+vaults is exit 2 / 409 `integrity`, the same finding a search reports.
 
 - A **crash is never a tamper alarm** (open-time reconciliation
   fast-forwards a lagging manifest anchor); a **rollback or forged record

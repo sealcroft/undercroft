@@ -412,7 +412,8 @@ lag is observable. Design + surface:
 [docs/MULTI_TENANCY.md](https://github.com/sealcroft/undercroft/blob/main/docs/MULTI_TENANCY.md).
 
 Palace location: `$UNDERCROFT_HOME` (default `~/.undercroft`; `/data` in Docker).
-Passphrase mode: set `UNDERCROFT_PASSPHRASE` before `init` and every command.
+Passphrase mode: set `UNDERCROFT_PASSPHRASE` before `init` and every command;
+an installation refuses the key source it was not created with.
 
 ## MCP tools (38)
 

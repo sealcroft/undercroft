@@ -9,7 +9,11 @@ modification: every read verifies, `verify` audits everything.
 ## Mechanisms
 
 - **Master key**: 32-byte key file (0600) or Argon2id(passphrase, salt),
-  64 MiB / t=3. Keys zeroized on drop; never logged.
+  64 MiB / t=3. Keys zeroized on drop; never logged. Key material is created
+  only in an installation nothing refers to yet, never under a read-only open, and a
+  declaration the key files contradict is refused before anything is derived
+  (ROADMAP O204). The key files are unauthenticated, so they decide nothing
+  about which key sealed a vault; the manifest MAC does.
 - **Per-vault keys**: `HKDF-SHA256(master, vault_salt, "undercroft.v1/vault/<id>/<label>")`
   for enc / mac / manifest / sample labels. The fourth keys the PQ
   training-sample rank and is deliberately rotation-sensitive, because

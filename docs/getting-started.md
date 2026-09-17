@@ -51,7 +51,9 @@ docker run --rm -v undercroft-data:/data -v ~/.claude/projects:/convos:ro \
 Palace location: `$UNDERCROFT_HOME` (default `~/.undercroft`; `/data` in the
 image). Passphrase mode: export `UNDERCROFT_PASSPHRASE` before `init` and
 every command, and under Docker add `-e UNDERCROFT_PASSPHRASE` to every
-`docker run`, the alias included.
+`docker run`, the alias included. A passphrase declared over an installation created
+without one is refused, and so is the reverse; back up `kdf.salt` as carefully
+as `master.key`, since the passphrase cannot re-derive the key without it.
 
 ## Wire into Claude Code
 

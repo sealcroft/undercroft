@@ -69,7 +69,51 @@ pub enum VaultError {
     /// The vault id failed `validate_name`.
     #[error("invalid vault name: {0}")]
     BadName(#[from] undercroft_core::CoreError),
+    /// A manager opened read-only was asked for something that writes, or
+    /// for a key it never held (ROADMAP O204). Refused before any effect; a
+    /// posture error, never an integrity verdict.
+    #[error("refused under a read-only posture: {0}")]
+    ReadOnly(&'static str),
+    /// `create` found vault manifests in the installation and the master key
+    /// verifies NONE of them (ROADMAP O204). A vault created now would be
+    /// sealed under a key no existing vault uses — a split installation. An
+    /// integrity verdict on every surface: it is the same finding a `search`
+    /// of any of those vaults reports as tampering.
+    #[error(
+        "the master key opens none of the {manifests} vault manifest(s) here, so no vault was \
+         created: it would be sealed under a key no existing vault uses. {} (ROADMAP O204)",
+        key_opens_no_vault_reading(.declared)
+    )]
+    KeyOpensNoVault {
+        /// Vault manifests found under `vaults/`.
+        manifests: usize,
+        /// The key source this process declared.
+        declared: keys::KeySource,
+    },
 }
+
+fn key_opens_no_vault_reading(declared: &keys::KeySource) -> &'static str {
+    match declared {
+        keys::KeySource::Passphrase => {
+            "Either UNDERCROFT_PASSPHRASE is not this installation's passphrase, or this installation was \
+             set up without one and a stray kdf.salt is present (check both before changing \
+             anything), or the manifests were tampered with"
+        }
+        keys::KeySource::KeyFile => {
+            "Either this installation was set up with a passphrase and UNDERCROFT_PASSPHRASE is not \
+             declared, or master.key is not this installation's key, or the manifests were tampered \
+             with"
+        }
+    }
+}
+
+/// The installation directory holding one directory per vault.
+pub const VAULTS_DIR: &str = "vaults";
+
+/// The installation directory `undercroft backup create` copies vaults into. Each
+/// copy carries its `vault.json`, which only this installation's master key opens,
+/// so a backup refers to the key exactly as a vault does (ROADMAP O204).
+pub const BACKUPS_DIR: &str = "backups";
 
 /// How much protection a vault applies to content at rest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -814,19 +858,123 @@ impl std::fmt::Debug for Vault {
 /// Factory for vaults under one palace directory.
 pub struct VaultManager {
     root: PathBuf,
-    master: SecretKey,
+    /// `None` only for a fresh palace opened read-only: there was no key to
+    /// load and a read-only open creates none.
+    master: Option<SecretKey>,
+    declared: keys::KeySource,
+    access: Access,
 }
 
 impl VaultManager {
-    /// Open the palace at `root`, loading (or creating) the master key.
-    /// `passphrase` switches to Argon2id passphrase derivation.
+    /// Open the palace at `root` for writing, loading (or, in a fresh
+    /// installation, creating) the master key. `passphrase` switches to Argon2id
+    /// passphrase derivation.
     pub fn open(root: &Path, passphrase: Option<&str>) -> Result<Self, VaultError> {
-        let master = keys::load_or_create_master(root, passphrase)?;
-        fs::create_dir_all(root.join("vaults"))?;
+        Self::open_as(root, passphrase, Access::ReadWrite)
+    }
+
+    /// [`open`](Self::open) with the caller's posture stated (ROADMAP O204).
+    ///
+    /// The key is resolved by [`keys::master_key`], which refuses a
+    /// declaration the installation contradicts and never creates key material
+    /// where a vault or backup already refers to a key. Under
+    /// [`Access::ReadOnly`] nothing is created at all — no key, no
+    /// directory — and the manager itself refuses `create`, `delete` and
+    /// `rotation_candidate`, and unlocks read-only whatever a caller asks:
+    /// a posture decided one call later was already too late for a key file
+    /// and a staging manifest (O175's ruling, applied to the manager).
+    pub fn open_as(
+        root: &Path,
+        passphrase: Option<&str>,
+        access: Access,
+    ) -> Result<Self, VaultError> {
+        let declared = keys::KeySource::declared(passphrase);
+        let resolved = keys::master_key(root, passphrase, access)?;
+        if resolved.both_present {
+            undercroft_obs::diag_warn!("{}", keys::both_present_warning(declared));
+        }
+        if access == Access::ReadWrite {
+            fs::create_dir_all(root.join(VAULTS_DIR))?;
+        }
         Ok(Self {
             root: root.to_path_buf(),
-            master,
+            master: resolved.key,
+            declared,
+            access,
         })
+    }
+
+    /// The posture this manager was opened with.
+    pub fn access(&self) -> Access {
+        self.access
+    }
+
+    fn master(&self) -> Result<&SecretKey, VaultError> {
+        self.master.as_ref().ok_or(VaultError::ReadOnly(
+            "this data directory held no key material when it was opened read-only, so no vault key \
+             can be derived",
+        ))
+    }
+
+    fn writable(&self, what: &'static str) -> Result<(), VaultError> {
+        match self.access {
+            Access::ReadWrite => Ok(()),
+            Access::ReadOnly => Err(VaultError::ReadOnly(what)),
+        }
+    }
+
+    /// Refuse to mint a new reference to a key no existing vault uses.
+    ///
+    /// Reads each manifest's MAC directly — never through `unlock`, whose
+    /// writable form deletes a torn staging manifest — and stops at the
+    /// first that verifies. Enumeration errors propagate: a directory that
+    /// cannot be read is not an empty one. A non-directory entry is not a
+    /// vault, and a vault directory with no manifest has nothing to verify.
+    fn key_opens_an_existing_vault(&self) -> Result<(), VaultError> {
+        let dir = self.root.join(VAULTS_DIR);
+        let entries = match fs::read_dir(&dir) {
+            Ok(rd) => rd,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e.into()),
+        };
+        let mut manifests = 0usize;
+        for entry in entries {
+            let path = entry?.path();
+            if !fs::metadata(&path)?.is_dir() {
+                continue;
+            }
+            let raw = match fs::read(path.join("vault.json")) {
+                Ok(raw) => raw,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e.into()),
+            };
+            manifests += 1;
+            if self.manifest_verifies(path, &raw) {
+                return Ok(());
+            }
+        }
+        if manifests == 0 {
+            return Ok(());
+        }
+        // One tamper signal for the refusal, not one per manifest probed.
+        undercroft_obs::hmac_verify_failed("manifest");
+        Err(VaultError::KeyOpensNoVault {
+            manifests,
+            declared: self.declared,
+        })
+    }
+
+    fn manifest_verifies(&self, dir: PathBuf, raw: &[u8]) -> bool {
+        let Ok(manifest) = serde_json::from_slice::<Manifest>(raw) else {
+            return false;
+        };
+        let Ok(stored) = hex::decode(&manifest.manifest_mac_hex) else {
+            return false;
+        };
+        let Ok(vault) = self.assemble(dir, manifest) else {
+            return false;
+        };
+        verify_hmac(&vault.manifest_key, &vault.manifest.canonical(), &stored).is_ok()
     }
 
     /// The palace root: the data directory holding `vaults/` and the master
@@ -836,13 +984,13 @@ impl VaultManager {
     }
 
     fn vault_dir(&self, id: &str) -> PathBuf {
-        self.root.join("vaults").join(id)
+        self.root.join(VAULTS_DIR).join(id)
     }
 
     /// Every vault id under the palace that has a manifest, sorted.
     pub fn list(&self) -> Result<Vec<String>, VaultError> {
         let mut out = Vec::new();
-        let dir = self.root.join("vaults");
+        let dir = self.root.join(VAULTS_DIR);
         if dir.exists() {
             for entry in fs::read_dir(dir)? {
                 let entry = entry?;
@@ -861,12 +1009,18 @@ impl VaultManager {
     }
 
     /// Create a new vault. Fails if it already exists.
+    ///
+    /// Refused under a read-only posture, and refused when the installation
+    /// already holds vaults and its key opens none of them (ROADMAP O204):
+    /// that is the door a split installation is minted through.
     pub fn create(&self, id: &str, level: SecurityLevel) -> Result<Vault, VaultError> {
         undercroft_core::validate_name(id, "vault")?;
+        self.writable("creating a vault writes to the data directory")?;
         let dir = self.vault_dir(id);
         if self.exists(id) {
             return Err(VaultError::AlreadyExists(id.to_string()));
         }
+        self.key_opens_an_existing_vault()?;
         fs::create_dir_all(&dir)?;
         let salt = keys::new_vault_salt();
         let manifest = Manifest {
@@ -894,6 +1048,7 @@ impl VaultManager {
     /// else in the palace.
     pub fn delete(&self, id: &str) -> Result<bool, VaultError> {
         undercroft_core::validate_name(id, "vault")?;
+        self.writable("deleting a vault writes to the data directory")?;
         if !self.exists(id) {
             return Ok(false);
         }
@@ -917,7 +1072,14 @@ impl VaultManager {
     /// *to us*; it is not necessarily garbage to the process that is writing
     /// it right now, and a replica is exactly the role most likely to meet
     /// one mid-rotation.
+    ///
+    /// A manager opened read-only unlocks read-only whatever `access` says
+    /// (ROADMAP O204): the posture belongs to the path, not to the call.
     pub fn unlock_as(&self, id: &str, access: Access) -> Result<Vault, VaultError> {
+        let access = match self.access {
+            Access::ReadOnly => Access::ReadOnly,
+            Access::ReadWrite => access,
+        };
         let dir = self.vault_dir(id);
         let manifest_path = dir.join("vault.json");
         if !manifest_path.exists() {
@@ -986,11 +1148,12 @@ impl VaultManager {
             return Err(VaultError::CorruptManifest("bad salt length".into()));
         }
         let id = manifest.id.clone();
+        let master = self.master()?;
         Ok(Vault {
-            enc_key: derive_vault_key(&self.master, &salt, &id, "enc"),
-            mac_key: derive_vault_key(&self.master, &salt, &id, "mac"),
-            manifest_key: derive_vault_key(&self.master, &salt, &id, "manifest"),
-            sample_key: derive_vault_key(&self.master, &salt, &id, "sample"),
+            enc_key: derive_vault_key(master, &salt, &id, "enc"),
+            mac_key: derive_vault_key(master, &salt, &id, "mac"),
+            manifest_key: derive_vault_key(master, &salt, &id, "manifest"),
+            sample_key: derive_vault_key(master, &salt, &id, "sample"),
             level: manifest.level,
             id,
             dir,
@@ -1009,8 +1172,10 @@ impl VaultManager {
     /// Nothing is staged here — the store's rotation stages the manifest
     /// once it has replayed the chain under the new keys. The unlock is
     /// writable, so a torn staging manifest (`vault.json.next`) met on the
-    /// way is removed.
+    /// way is removed — which is why a manager opened read-only refuses this
+    /// before it unlocks anything (ROADMAP O204).
     pub fn rotation_candidate(&self, id: &str) -> Result<Vault, VaultError> {
+        self.writable("rotating a vault's keys writes to the data directory")?;
         let current = self.unlock(id)?;
         let mut manifest = current.manifest.clone();
         manifest.salt_hex = hex::encode(keys::new_vault_salt());
@@ -1752,5 +1917,161 @@ mod tests {
         for (a, b) in back.iter().zip(&emb) {
             assert!((a - b).abs() < 0.02, "quantized {a} vs {b}");
         }
+    }
+
+    /// ROADMAP O204 — a manager whose key opens none of the installation's vaults
+    /// cannot mint a new one. Under 1.5.2 this is how one palace came to hold
+    /// vaults under two keys (the ruling's probes P4 and P15): no single
+    /// declaration opened them all afterwards.
+    #[test]
+    fn create_refuses_to_split_a_palace_across_two_keys() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let by_pass = VaultManager::open(root, Some("correct horse")).unwrap();
+        by_pass.create("default", SecurityLevel::Sealed).unwrap();
+        // The state an earlier release left behind: a key file beside the salt.
+        std::fs::write(root.join(keys::MASTER_KEY_FILE), [9u8; KEY_LEN]).unwrap();
+
+        // Both files present: the undeclared-passphrase open succeeds (the
+        // declared source is used) and its create is refused.
+        let by_file = VaultManager::open(root, None).unwrap();
+        let err = by_file.create("other", SecurityLevel::Sealed).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                VaultError::KeyOpensNoVault {
+                    manifests: 1,
+                    declared: keys::KeySource::KeyFile
+                }
+            ),
+            "{err}"
+        );
+        assert!(
+            !root.join(VAULTS_DIR).join("other").exists(),
+            "nothing written"
+        );
+
+        // A wrong passphrase on the right source is the same split with no
+        // stray file at all.
+        let wrong = VaultManager::open(root, Some("wrong staple")).unwrap();
+        assert!(matches!(
+            wrong.create("other", SecurityLevel::Sealed),
+            Err(VaultError::KeyOpensNoVault { .. })
+        ));
+
+        // Premise: the installation's own key still creates.
+        by_pass.create("second", SecurityLevel::HmacOnly).unwrap();
+
+        // One vault the key does not open among vaults it does is not a
+        // split: the create proceeds, and that vault's own unlock is where
+        // its verdict belongs. ("None", never "not all".)
+        let vj = root.join(VAULTS_DIR).join("second").join("vault.json");
+        let tampered = String::from_utf8(std::fs::read(&vj).unwrap())
+            .unwrap()
+            .replace("hmac-only", "sealed");
+        std::fs::write(&vj, tampered).unwrap();
+        assert!(matches!(
+            by_pass.unlock("second"),
+            Err(VaultError::ManifestTampered)
+        ));
+        by_pass.create("third", SecurityLevel::Sealed).unwrap();
+
+        // Entries that are not vaults do not count, and do not block.
+        let fresh = tempdir().unwrap();
+        let mgr = VaultManager::open(fresh.path(), None).unwrap();
+        std::fs::write(fresh.path().join(VAULTS_DIR).join("notes.txt"), b"x").unwrap();
+        std::fs::create_dir_all(fresh.path().join(VAULTS_DIR).join("half")).unwrap();
+        mgr.create("first", SecurityLevel::Sealed).unwrap();
+    }
+
+    /// ROADMAP O204 — the posture reaches the manager, so a read-only
+    /// process performs none of its writes (probes P10 and P11): not a
+    /// create, not a delete, and not the staging-manifest deletion that
+    /// `rotation_candidate`'s writable unlock performs.
+    #[test]
+    fn a_read_only_manager_refuses_every_write_before_its_effect() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        VaultManager::open(root, None)
+            .unwrap()
+            .create("t", SecurityLevel::Sealed)
+            .unwrap();
+        let staging = root.join("vaults/t/vault.json.next");
+        std::fs::write(&staging, b"not a manifest").unwrap();
+
+        let ro = VaultManager::open_as(root, None, Access::ReadOnly).unwrap();
+        assert_eq!(ro.access(), Access::ReadOnly);
+        assert!(matches!(
+            ro.create("u", SecurityLevel::Sealed),
+            Err(VaultError::ReadOnly(_))
+        ));
+        assert!(!root.join("vaults/u").exists());
+        assert!(matches!(ro.delete("t"), Err(VaultError::ReadOnly(_))));
+        assert!(ro.exists("t"));
+        assert!(matches!(
+            ro.rotation_candidate("t"),
+            Err(VaultError::ReadOnly(_))
+        ));
+        assert!(staging.exists(), "rotation_candidate must not unlock first");
+        // A writable unlock REQUESTED of a read-only manager is read-only.
+        let v = ro.unlock("t").unwrap();
+        assert!(staging.exists(), "the manager's posture bounds the call's");
+        assert_eq!(v.unhealed(), [Unhealed::TornStagingManifest].as_slice());
+
+        // Counterfactual: a writable manager's rotation_candidate removes it.
+        let rw = VaultManager::open(root, None).unwrap();
+        rw.rotation_candidate("t").unwrap();
+        assert!(!staging.exists());
+    }
+
+    /// ROADMAP O204 (probe P5) — a read-only open of a directory that holds
+    /// no installation creates nothing, lists nothing and can derive nothing.
+    #[test]
+    fn a_fresh_palace_opened_read_only_is_empty_and_untouched() {
+        let parent = tempdir().unwrap();
+        let root = parent.path().join("installation");
+        for pw in [None, Some("correct horse")] {
+            let ro = VaultManager::open_as(&root, pw, Access::ReadOnly).unwrap();
+            assert!(ro.list().unwrap().is_empty());
+            assert!(!ro.exists("default"));
+            assert!(matches!(ro.unlock("default"), Err(VaultError::NotFound(_))));
+            assert!(matches!(
+                ro.create("default", SecurityLevel::Sealed),
+                Err(VaultError::ReadOnly(_))
+            ));
+            assert!(!root.exists(), "no directory, no key, no vaults/");
+        }
+        // A vault that appears after a key-less read-only open cannot be
+        // opened by that manager: it never had a key to derive from.
+        let ro = VaultManager::open_as(&root, None, Access::ReadOnly).unwrap();
+        VaultManager::open(&root, None)
+            .unwrap()
+            .create("late", SecurityLevel::Sealed)
+            .unwrap();
+        assert!(matches!(ro.unlock("late"), Err(VaultError::ReadOnly(_))));
+    }
+
+    /// ROADMAP O204 — a declaration the installation contradicts is refused at the
+    /// open, wrapped as a key error, before anything is written.
+    #[test]
+    fn open_refuses_a_contradicting_declaration() {
+        let dir = tempdir().unwrap();
+        VaultManager::open(dir.path(), None)
+            .unwrap()
+            .create("default", SecurityLevel::Sealed)
+            .unwrap();
+        for access in [Access::ReadWrite, Access::ReadOnly] {
+            let err = VaultManager::open_as(dir.path(), Some("correct horse"), access)
+                .expect_err("refused");
+            assert!(
+                matches!(err, VaultError::Key(keys::KeyError::SourceMismatch { .. })),
+                "{err}"
+            );
+        }
+        assert!(!dir.path().join(keys::KDF_SALT_FILE).exists());
+        assert!(VaultManager::open(dir.path(), None)
+            .unwrap()
+            .unlock("default")
+            .is_ok());
     }
 }

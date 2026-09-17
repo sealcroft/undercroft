@@ -1396,3 +1396,303 @@ fn cli_search_takes_a_date_window_declared_or_read_from_the_query() {
         .code(1)
         .stderr(predicates::str::contains("--when"));
 }
+
+// ---------------------------------------------------------------------------
+// ROADMAP O204 — the key source a process declares, the key material its
+// data directory holds, and the posture, through the real binary.
+// ---------------------------------------------------------------------------
+
+const PW: &str = "correct horse";
+
+fn with_pw(home: &TempDir, pw: &str) -> Command {
+    let mut c = cmd(home);
+    c.env("UNDERCROFT_PASSPHRASE", pw);
+    c
+}
+
+/// Every entry under a data directory, so "nothing was written" is checked on the
+/// whole tree rather than on the one file a test thought of.
+fn tree(root: &std::path::Path) -> Vec<String> {
+    fn walk(base: &std::path::Path, dir: &std::path::Path, out: &mut Vec<String>) {
+        if let Ok(rd) = std::fs::read_dir(dir) {
+            for e in rd.flatten() {
+                let p = e.path();
+                out.push(p.strip_prefix(base).unwrap().display().to_string());
+                if p.is_dir() {
+                    walk(base, &p, out);
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, root, &mut out);
+    out.sort();
+    out
+}
+
+/// The filed case (probe P1) and the `init` that hid it (P2): exit 1 naming
+/// the key source, no `kdf.salt` written, and a clean run once the
+/// declaration is removed. Before O204 this was exit 2, "possible
+/// tampering", with a salt left behind — and `init` exited 0.
+#[test]
+fn o204_a_passphrase_on_a_key_file_palace_refuses_and_writes_nothing() {
+    let home = TempDir::new().unwrap();
+    cmd(&home).args(["init"]).assert().success();
+    cmd(&home)
+        .args(["remember", "a note filed under the key file"])
+        .assert()
+        .success();
+    let before = tree(home.path());
+    for args in [
+        vec!["search", "note"],
+        vec!["init"],
+        vec!["vault", "list"],
+        vec!["--read-only", "search", "note"],
+    ] {
+        with_pw(&home, PW)
+            .args(&args)
+            .assert()
+            .failure()
+            .code(1)
+            .stderr(predicate::str::contains(
+                "UNDERCROFT_PASSPHRASE is declared",
+            ))
+            .stderr(predicate::str::contains("master.key"))
+            .stderr(predicate::str::contains("nothing was written"))
+            .stderr(predicate::str::contains("possible tampering").not());
+        assert_eq!(
+            tree(home.path()),
+            before,
+            "{args:?} wrote to the installation"
+        );
+    }
+    assert!(!home.path().join("kdf.salt").exists());
+    cmd(&home)
+        .args(["search", "note"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("key file"));
+}
+
+/// The reverse (probe P3), which the entry recorded as unexecuted: a
+/// passphrase installation opened without one. Exit 1, no `master.key` written.
+#[test]
+fn o204_a_passphrase_palace_opened_without_one_refuses_and_writes_nothing() {
+    let home = TempDir::new().unwrap();
+    with_pw(&home, PW).args(["init"]).assert().success();
+    with_pw(&home, PW)
+        .args(["remember", "a note filed under the passphrase"])
+        .assert()
+        .success();
+    let before = tree(home.path());
+    for args in [vec!["search", "note"], vec!["vault", "create", "other"]] {
+        cmd(&home)
+            .args(&args)
+            .assert()
+            .failure()
+            .code(1)
+            .stderr(predicate::str::contains(
+                "UNDERCROFT_PASSPHRASE is not declared",
+            ))
+            .stderr(predicate::str::contains("kdf.salt"));
+        assert_eq!(
+            tree(home.path()),
+            before,
+            "{args:?} wrote to the installation"
+        );
+    }
+    with_pw(&home, PW)
+        .args(["search", "note"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("passphrase"));
+}
+
+/// Key material missing under an existing vault (probe P7) is never
+/// replaced: exit 1 on both postures, nothing written.
+#[test]
+fn o204_missing_key_material_is_not_replaced() {
+    let home = TempDir::new().unwrap();
+    cmd(&home).args(["init"]).assert().success();
+    std::fs::remove_file(home.path().join("master.key")).unwrap();
+    let before = tree(home.path());
+    for args in [
+        vec!["search", "note"],
+        vec!["--read-only", "search", "note"],
+    ] {
+        cmd(&home)
+            .args(&args)
+            .assert()
+            .failure()
+            .code(1)
+            .stderr(predicate::str::contains("master.key is missing"));
+        assert_eq!(
+            tree(home.path()),
+            before,
+            "{args:?} wrote to the installation"
+        );
+    }
+}
+
+/// An installation an earlier release left holding BOTH files (probes P4, P6, P15):
+/// the declared source keeps working with a warning, a create under the
+/// source that opens none of the vaults is refused as an integrity verdict,
+/// and a wrong passphrase is still exit 2 — the stated cost, unchanged.
+#[test]
+fn o204_both_files_warn_and_a_split_palace_cannot_be_minted() {
+    let home = TempDir::new().unwrap();
+    cmd(&home).args(["init"]).assert().success();
+    cmd(&home)
+        .args(["remember", "a note filed under the key file"])
+        .assert()
+        .success();
+    std::fs::write(home.path().join("kdf.salt"), [3u8; 16]).unwrap();
+
+    cmd(&home)
+        .args(["search", "note"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("key file"))
+        .stderr(predicate::str::contains(
+            "holds both master.key and kdf.salt",
+        ));
+
+    // Under the passphrase the salt is loaded, the key opens nothing, and
+    // the create that would split the installation is refused.
+    with_pw(&home, PW)
+        .args(["vault", "create", "x"])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "opens none of the 1 vault manifest",
+        ));
+    assert!(!home.path().join("vaults/x").exists());
+    with_pw(&home, PW)
+        .args(["search", "note"])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("possible tampering"));
+
+    // Premise: the installation's own declaration still creates.
+    cmd(&home).args(["vault", "create", "x"]).assert().success();
+}
+
+/// A wrong passphrase on the right source stays the integrity verdict
+/// (probe P8): the engine has no evidence separating it from tampering.
+#[test]
+fn o204_a_wrong_passphrase_is_still_exit_2() {
+    let home = TempDir::new().unwrap();
+    with_pw(&home, PW).args(["init"]).assert().success();
+    with_pw(&home, "wrong staple")
+        .args(["search", "note"])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("possible tampering"));
+    with_pw(&home, "wrong staple")
+        .args(["vault", "create", "x"])
+        .assert()
+        .failure()
+        .code(2);
+    assert!(!home.path().join("master.key").exists());
+}
+
+/// `--read-only` writes nothing (probes P5, P10, P11): not a key into an
+/// empty directory, not a manifest, and not the staging-manifest deletion
+/// `vault rotate`'s writable unlock performs.
+#[test]
+fn o204_read_only_writes_nothing_through_the_manager() {
+    let parent = TempDir::new().unwrap();
+    let fresh = parent.path().join("installation");
+    for pw in [None, Some(PW)] {
+        let mut c = Command::cargo_bin("undercroft").unwrap();
+        c.env("UNDERCROFT_HOME", &fresh)
+            .env_remove("UNDERCROFT_PASSPHRASE");
+        if let Some(pw) = pw {
+            c.env("UNDERCROFT_PASSPHRASE", pw);
+        }
+        c.args(["--read-only", "vault", "list"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("No vaults"));
+        assert!(!fresh.exists(), "a read-only list created the installation");
+    }
+    let mut c = Command::cargo_bin("undercroft").unwrap();
+    c.env("UNDERCROFT_HOME", &fresh)
+        .env_remove("UNDERCROFT_PASSPHRASE")
+        .args(["--read-only", "init"])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("read-only posture"));
+    assert!(!fresh.exists(), "a read-only init created the installation");
+
+    let home = TempDir::new().unwrap();
+    cmd(&home).args(["init"]).assert().success();
+    cmd(&home)
+        .args(["remember", "x marks the spot"])
+        .assert()
+        .success();
+    let staging = home.path().join("vaults/default/vault.json.next");
+    std::fs::write(&staging, b"garbage").unwrap();
+    let before = tree(home.path());
+    for args in [
+        vec!["--read-only", "vault", "create", "other"],
+        vec!["--read-only", "vault", "rotate", "default"],
+    ] {
+        cmd(&home)
+            .args(&args)
+            .assert()
+            .failure()
+            .code(1)
+            .stderr(predicate::str::contains("read-only posture"));
+        assert_eq!(
+            tree(home.path()),
+            before,
+            "{args:?} wrote to the installation"
+        );
+    }
+    assert!(staging.exists());
+    // Counterfactual: the writable rotate removes the torn staging file.
+    cmd(&home)
+        .args(["vault", "rotate", "default"])
+        .assert()
+        .success();
+    assert!(!staging.exists());
+}
+
+/// `config check` sees the O204 refusals before a restart does, on a
+/// DECLARED data directory, and only there.
+#[test]
+fn o204_config_check_refuses_the_palace_a_start_would_refuse() {
+    let home = TempDir::new().unwrap();
+    cmd(&home).args(["init"]).assert().success();
+    with_pw(&home, PW)
+        .args(["config", "check"])
+        .assert()
+        .failure()
+        .code(1)
+        .stdout(predicate::str::contains("REFUSES data directory"))
+        .stdout(predicate::str::contains(
+            "UNDERCROFT_PASSPHRASE is declared",
+        ));
+    assert!(!home.path().join("kdf.salt").exists());
+    cmd(&home)
+        .args(["config", "check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ok      data directory"))
+        .stdout(predicate::str::contains("This environment starts."));
+    // Undeclared: not examined, and said so.
+    let mut c = Command::cargo_bin("undercroft").unwrap();
+    c.env_remove("UNDERCROFT_HOME")
+        .env_remove("UNDERCROFT_PASSPHRASE")
+        .args(["config", "check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "skipped data directory — not examined",
+        ));
+}

@@ -14,7 +14,9 @@ undercroft config check
 It runs every `UNDERCROFT_*` declaration in the current environment through
 the resolver that runs at start-up, and **opens nothing** — no vault, no
 database, no socket, no outbound call. Exit 1 means this environment would
-refuse to start; exit 0 means it starts.
+refuse to start; exit 0 means it starts. Given a declared data directory
+(`--data-dir` or `UNDERCROFT_HOME`), it also stats that directory's key files
+and vaults through the classifier a start runs (O204), reading no key.
 
 **Every one of them, including the eight `UNDERCROFT_ORCH_*` the control
 plane reads.** Three of those were a coverage gap until 1.1.0 — their parses
@@ -62,7 +64,7 @@ and no variable is exempt from this command for being a credential.
 
 It reports **validated** and **accepted** separately, and the distinction
 matters: only some variables have a parse to run. A path (a model, a tokenizer,
-the palace directory), a model name, an API key or a free-form setting such as
+the palace directory beyond its key-file check), a model name, an API key or a free-form setting such as
 a log level is validated by the thing that consumes it, and this command says
 so rather than implying it checked them. URLs and DSNs are not in that set —
 they run through the same transport policy their clients run — and neither are
@@ -103,17 +105,19 @@ affected are the ones who got it running by hand, typically by running
   first start wrote a random `master.key` to the volume.
 
 **Symptom to expect if your volume was set up without the passphrase and your
-`deploy/.env` declares one:** the engine restarts in a loop, logging
-`Error: vault manifest failed integrity verification — possible tampering`,
-and a `kdf.salt` file appears beside `master.key` on the volume. Nothing was
-tampered with: the vault was keyed by `master.key`, and the declared
-passphrase derives a different key. Measured on a throwaway project.
-ROADMAP O204 tracks reporting this as a key mismatch rather than tampering.
+`deploy/.env` declares one:** the engine restarts in a loop, and `init` itself
+exits 1 with `UNDERCROFT_PASSPHRASE is declared, but this data directory holds
+master.key and no kdf.salt … nothing was written`. Nothing was tampered with:
+the vault is keyed by `master.key`, and the declared passphrase has nothing to
+derive from. The next entry (O204) describes the refusal. A build before it
+reported this as `possible tampering` and wrote a `kdf.salt` beside
+`master.key`; see that entry if your volume holds both files.
 
 **What to do:**
-- To keep the key file you have, remove `UNDERCROFT_PASSPHRASE` from
-  `deploy/.env` (or comment it out) and start again. The stray `kdf.salt` is
-  harmless while no passphrase is declared.
+- If the volume was first started WITHOUT a passphrase, remove
+  `UNDERCROFT_PASSPHRASE` from `deploy/.env` (or comment it out) and start
+  again. Check that before changing anything: the message gives both readings
+  because the files alone cannot tell them apart.
 - To move to a passphrase, export the vault with the old configuration, start
   a new volume with the passphrase declared, and import it there.
 - An uncommented `UNDERCROFT_PASSPHRASE=` with no value now refuses to start,
@@ -125,9 +129,69 @@ ROADMAP O204 tracks reporting this as a key mismatch rather than tampering.
 unreadable `UNDERCROFT_INDEX_CA` when it runs with the engine's environment:
 `docker compose … run --rm --no-deps --entrypoint undercroft undercroft config
 check` works while the engine is down, and `docker compose … exec undercroft
-undercroft config check` while it runs. It opens nothing, so it cannot detect
-the key-file/passphrase mismatch (measured: it exits 0 on that volume) or the
-exporter's ordering.
+undercroft config check` while it runs. Since O204 it also detects the
+key-file/passphrase mismatch, because the image declares `UNDERCROFT_HOME` and
+the command stats that directory's key files. It opens nothing, so it cannot
+detect the exporter's ordering.
+
+### A key source the palace contradicts is refused before anything is written (O204)
+
+**Who is affected:** anyone whose palace and `UNDERCROFT_PASSPHRASE`
+declaration disagree, anyone whose key file is missing, and any script that
+runs `init`, `vault create` or `vault rotate` under `--read-only`. Each of these
+already failed or silently damaged the palace; what changes is how.
+
+**What happens now, measured through the binary:**
+- **A passphrase declared on a palace holding `master.key` and no `kdf.salt`,
+  or no passphrase on a palace holding `kdf.salt` and no `master.key`:** every
+  command, `init` included, exits **1** with `UNDERCROFT_PASSPHRASE is
+  declared …` or `… is not declared …`, and nothing is written. It used to exit
+  **2**, "possible tampering", after writing the other file; `init` used to
+  exit 0.
+- **The palace's key file is missing while it holds vaults or backups:** exit
+  **1**, `master.key is missing …` (or `kdf.salt is missing …`), and no new key
+  is created. It used to write a fresh key and then exit 2. A script that
+  paged on exit 2 for a deleted key file now sees exit 1.
+- **A palace holding BOTH files**, which earlier builds left behind: every open
+  prints `this data directory holds both master.key and kdf.salt; using … as
+  declared`, and proceeds with the declared one. Each vault opens under only
+  one of the two. A vault that does not open under the declared one is still
+  exit 2, `possible tampering` — the engine has no evidence to tell a wrong
+  declaration from tampering there.
+- **`vault create` (and `POST /v1/vaults`) when the key opens none of the
+  palace's vaults:** exit **2**, 409 with `"class":"integrity"`, `the palace key
+  opens none of the N vault manifest(s) here`, and no vault is created. It used
+  to exit 0 and seal the new vault under a key no other vault uses, after which
+  no single declaration opened them all. A wrong passphrase on the right palace
+  takes this path too.
+- **`--read-only`:** `init`, `vault create` and `vault rotate` exit **1** with
+  `refused under a read-only posture` before anything is written — rotate used
+  to delete a staging `vault.json.next` first. On a directory that holds no
+  palace, `--read-only vault list` answers `No vaults` and creates nothing; it
+  used to write a key and a `vaults/` directory.
+- **A wrong passphrase on a passphrase palace** is unchanged: exit 2.
+
+**What to do:**
+- **Never delete `master.key` or `kdf.salt` to silence a message.** Losing
+  `kdf.salt` loses every passphrase vault exactly as losing `master.key` loses
+  every key-file vault, and `backup create` copies neither: back both up.
+- **Probe with the new binary under `--read-only`**, with and without the
+  passphrase, to learn which declaration opens which vault. An older binary
+  writes key files even under `--read-only`.
+- Move a stray file aside (never delete it) only once ONE declaration opens
+  every vault. If different vaults open under different declarations, export
+  each with the declaration that opens it and import them into one new palace.
+- Remove the passphrase declaration only if you know the palace was set up
+  without one. The files are not evidence of that: an offline writer can
+  create either.
+
+**Detected before a restart:** `undercroft config check` now stats a DECLARED
+data directory (`--data-dir` or `UNDERCROFT_HOME`) through the classifier the
+start runs. It prints `REFUSES data directory …` and exits 1 wherever a
+writable start refuses, `warn data directory …` when both files are present, and `absent` or
+`skipped` — never `ok` — for a directory that does not exist or is not
+declared. It reads no key and derives nothing, so it cannot say whether the
+declared key opens each vault.
 
 ### `undercroft --read-only refine` without `--dry-run` now exits 1 before it sends anything (O184)
 
@@ -1339,16 +1403,21 @@ no passphrase …`.
 empty declaration became *no declaration* and the palace fell back to a random
 `master.key` on disk. Declaring a passphrase is exactly the request that **no
 key material be written to disk**, so the fallback granted the opposite of what
-was asked — and said nothing. `vault status` printed the `master.key` path, and
-that only reads as wrong if you already suspected it.
+was asked — and said nothing. `init` printed the `master.key` path, and that
+only reads as wrong if you already suspected it. (This line said `vault
+status`, which has never printed a key source; corrected 2026-09-17, O204.)
 
 The path is not hypothetical: `docs/remote-server.md` shipped
 `UNDERCROFT_PASSPHRASE: ${TENANT_PASSPHRASE}`, and Compose interpolates an
 unset shell variable to the empty string and then *sets* it in the container.
 That recipe now uses the `:?` form so it fails in Compose instead.
 
-**Fix:** set a real passphrase, or unset the variable to use the on-disk master
-key deliberately. Whitespace-only is refused too, for the same reason.
+**Fix:** unset the variable to use the on-disk master key deliberately, or set
+a real passphrase on a NEW palace. A palace created under the fallback is keyed
+by `master.key`, and since O204 a passphrase declared over it is refused (exit
+1) rather than deriving a key nothing was sealed under; move it to a passphrase
+by exporting into a new palace. Whitespace-only is refused too, for the same
+reason.
 
 **A vault created under the fallback still opens** — it has a real
 `master.key` and nothing about it changed. What changes is that the ambiguity

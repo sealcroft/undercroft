@@ -412,7 +412,7 @@ enclave execution) compose with undercroft but are not provided by it.
 | Layer (shipped) | Mechanism | Defeats |
 |---|---|---|
 | Sealing | XChaCha20-Poly1305, AAD = vault id + record/artifact id; zstd-then-encrypt | A1 read, A3 cross-vault replay |
-| Key hierarchy | master key (file 0600 or Argon2id) → HKDF-SHA256 per-vault enc/mac/manifest; zeroize-on-drop | A1, A3; limits blast radius of any single-vault compromise |
+| Key hierarchy | master key (file 0600 or Argon2id) → HKDF-SHA256 per-vault enc/mac/manifest; zeroize-on-drop; key material created only where nothing refers to a key, never under read-only, and a declaration the key files contradict refused before derivation (O204) | A1, A2, A3; limits blast radius of any single-vault compromise, and an offline writer planting or deleting a key file gets a refusal, not a new key |
 | Derived-artifact sealing | embeddings, PQ rows/pages, codebooks, token matrices, FDE, KG under distinct AAD domains; no FTS for sealed vaults | A1 (no plaintext-derived leak path) |
 | Record integrity | HMAC-SHA256 per record, verified before every return | A2 forgery, A5 result forgery |
 | Audit chain | hash chain advanced in the data transaction; MAC'd manifest anchor; open-time reconciliation (crash ≠ rollback) | A2 rollback/truncation, A7 forensics |

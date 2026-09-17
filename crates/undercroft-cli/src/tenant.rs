@@ -2122,11 +2122,11 @@ impl Tenancy {
             .format(&time::format_description::well_known::Rfc3339)
             .map_err(|e| RestError::new(500, e.to_string()))?
             .replace([':', '.'], "-");
-        let src = root.join("vaults").join(id);
+        let src = root.join(undercroft_vault::VAULTS_DIR).join(id);
         let name = format!("{id}-{stamp}");
-        let dst = root.join("backups").join(&name);
+        let dst = root.join(undercroft_vault::BACKUPS_DIR).join(&name);
         crate::copy_dir(&src, &dst).map_err(|e| RestError::new(500, e.to_string()))?;
-        crate::prune_backups(&root.join("backups"), id, 10)
+        crate::prune_backups(&root.join(undercroft_vault::BACKUPS_DIR), id, 10)
             .map_err(|e| RestError::new(500, e.to_string()))?;
         Ok((201, Body::Json(json!({ "backup": name, "vault": id }))))
     }
@@ -2139,7 +2139,7 @@ impl Tenancy {
     /// `proj-archive` share a prefix, and the manifest is authoritative.
     fn backup_list(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
         self.assert_or_401(id, req, now)?;
-        let dir = self.manager.root().join("backups");
+        let dir = self.manager.root().join(undercroft_vault::BACKUPS_DIR);
         let mut names: Vec<String> = Vec::new();
         if let Ok(rd) = std::fs::read_dir(&dir) {
             for e in rd.flatten() {
@@ -2185,7 +2185,7 @@ impl Tenancy {
         undercroft_core::validate_name(name, "backup")
             .map_err(|e| RestError::new(400, e.to_string()))?;
         let root = self.manager.root().to_path_buf();
-        let src = root.join("backups").join(name);
+        let src = root.join(undercroft_vault::BACKUPS_DIR).join(name);
         if !src.join("vault.json").exists() {
             return Err(RestError::new(404, format!("no backup named {name}")));
         }
@@ -2197,7 +2197,7 @@ impl Tenancy {
                 format!("backup '{name}' holds vault '{vault_name}', not '{id}'"),
             ));
         }
-        let dst = root.join("vaults").join(&vault_name);
+        let dst = root.join(undercroft_vault::VAULTS_DIR).join(&vault_name);
         self.stores.remove(id);
         let _hold = if dst.exists() {
             Some(
@@ -3538,8 +3538,20 @@ fn vault_err(e: undercroft_vault::VaultError) -> RestError {
         // `store_err` gives a bad HMAC: the server is working exactly as
         // designed when it refuses here, and a retry only re-detects it.
         V::ManifestTampered | V::CorruptManifest(_) => 409,
+        // ROADMAP O204. The create refusal is the same integrity finding:
+        // the master key opens none of the vaults already here.
+        V::KeyOpensNoVault { .. } => 409,
         V::AlreadyExists(_) => 409,
         V::BadName(_) => 400,
+        // Posture and key-source refusals are about the process, not the
+        // bytes: 409 with no class, like `ReadOnlyUnmigrated`. A server opens
+        // its manager at start, so a key-source refusal never reaches a
+        // request today; the arm pins the class for any path that later does.
+        V::ReadOnly(_)
+        | V::Key(
+            undercroft_vault::keys::KeyError::SourceMismatch { .. }
+            | undercroft_vault::keys::KeyError::MaterialMissing { .. },
+        ) => 409,
         _ => 500,
     };
     let err = RestError::new(code, e.to_string());
@@ -3555,7 +3567,7 @@ fn vault_err(e: undercroft_vault::VaultError) -> RestError {
     // stating different doctrines about one vault is the thing the class
     // exists to prevent.
     match &e {
-        V::ManifestTampered | V::CorruptManifest(_) => err.integrity(),
+        V::ManifestTampered | V::CorruptManifest(_) | V::KeyOpensNoVault { .. } => err.integrity(),
         _ => err,
     }
 }
@@ -3584,7 +3596,8 @@ fn store_err(e: StoreError) -> RestError {
         // are tempted to simplify that call site, this arm goes with it.
         StoreError::Vault(
             undercroft_vault::VaultError::ManifestTampered
-            | undercroft_vault::VaultError::CorruptManifest(_),
+            | undercroft_vault::VaultError::CorruptManifest(_)
+            | undercroft_vault::VaultError::KeyOpensNoVault { .. },
         ) => 409,
         // Three more verdicts about the vault's own state rather than about
         // the request, and none is transient: a manifest whose database is
@@ -3617,7 +3630,8 @@ fn store_err(e: StoreError) -> RestError {
         | StoreError::DatabaseAmbiguous { .. }
         | StoreError::Vault(
             undercroft_vault::VaultError::ManifestTampered
-            | undercroft_vault::VaultError::CorruptManifest(_),
+            | undercroft_vault::VaultError::CorruptManifest(_)
+            | undercroft_vault::VaultError::KeyOpensNoVault { .. },
         ) => err.integrity(),
         _ => err,
     }
@@ -3842,6 +3856,16 @@ mod tests {
                 || S::Vault(V::CorruptManifest("truncated".into())),
                 true,
             ),
+            (
+                "Vault(KeyOpensNoVault)",
+                || {
+                    S::Vault(V::KeyOpensNoVault {
+                        manifests: 1,
+                        declared: undercroft_vault::keys::KeySource::KeyFile,
+                    })
+                },
+                true,
+            ),
             // The variant the old test omitted. A manifest describing a
             // database that is not there is stored evidence contradicting
             // itself (R4/A33).
@@ -3908,6 +3932,37 @@ mod tests {
                 false,
             ),
             ("AlreadyExists", || V::AlreadyExists("acme".into()), false),
+            // ROADMAP O204: the create refusal is an integrity verdict; the
+            // posture refusal and the two key-source refusals are not.
+            (
+                "KeyOpensNoVault",
+                || V::KeyOpensNoVault {
+                    manifests: 2,
+                    declared: undercroft_vault::keys::KeySource::Passphrase,
+                },
+                true,
+            ),
+            ("ReadOnly", || V::ReadOnly("creating a vault"), false),
+            (
+                "Key(SourceMismatch)",
+                || {
+                    V::Key(undercroft_vault::keys::KeyError::SourceMismatch {
+                        declared: undercroft_vault::keys::KeySource::Passphrase,
+                        references: 1,
+                    })
+                },
+                false,
+            ),
+            (
+                "Key(MaterialMissing)",
+                || {
+                    V::Key(undercroft_vault::keys::KeyError::MaterialMissing {
+                        declared: undercroft_vault::keys::KeySource::KeyFile,
+                        references: 1,
+                    })
+                },
+                false,
+            ),
         ];
         for (name, build, expected) in vault_cases {
             let cli = crate::integrity_verdict(&anyhow::Error::from(build()));
@@ -3917,6 +3972,18 @@ mod tests {
                 "{name}: the CLI says {cli} and /v1 says {rest} about the same bytes"
             );
             assert_eq!(cli, *expected, "{name}: verdict moved");
+            // Every O204 refusal is 409, never the 500 the catch-all gives:
+            // none of them is transient, and a retry only re-detects it.
+            if [
+                "KeyOpensNoVault",
+                "ReadOnly",
+                "Key(SourceMismatch)",
+                "Key(MaterialMissing)",
+            ]
+            .contains(name)
+            {
+                assert_eq!(vault_err(build()).code, 409, "{name}: status");
+            }
         }
     }
     const SECRET: &[u8] = b"orchestrator-shared-secret";
