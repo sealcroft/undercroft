@@ -2884,19 +2884,15 @@ impl Tenancy {
         let framed = String::from_utf8(framed)
             .map_err(|e| RestError::new(500, format!("payload not UTF-8: {e}")))?;
         // Every whole-vault egress leaves a chain record binding the
-        // export's manifest digest. A read-only replica must not write,
-        // so it serves the export and SAYS the egress went unaudited —
-        // the replica precedent: warn and serve.
-        if self.read_only {
-            undercroft_obs::diag_warn!("export served read-only; egress not chain-audited");
-        } else {
-            let counts = manifest.counts.clone();
-            let digest = manifest.payload_sha256.clone();
-            let store = self.store_for(id)?;
-            store
-                .audit_export("http", &counts, &digest, None)
-                .map_err(store_err)?;
-        }
+        // export's manifest digest, through the ONE recording step both
+        // surfaces call (ROADMAP O176). It reads the HANDLE's posture: a
+        // read-only store serves the export and says the egress went
+        // unaudited. This branch used to live here, on the process flag,
+        // while the CLI had none.
+        let store = self.store_for(id)?;
+        store
+            .record_export("http", &manifest.counts, &manifest.payload_sha256, None)
+            .map_err(store_err)?;
         Ok((200, Body::Ndjson(framed)))
     }
 

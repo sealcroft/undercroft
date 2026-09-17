@@ -418,7 +418,17 @@ impl VaultStore {
     /// that carries them makes restore a copy instead of a recompute.
     /// `None` when the drawer has no stored matrix.
     pub fn token_artifact(&self, id: &str) -> Result<Option<(String, Vec<u8>)>, StoreError> {
-        self.late_schema()?;
+        // R1, on the export path (ROADMAP O176): `late_schema` is `CREATE
+        // TABLE IF NOT EXISTS`, which a `query_only` connection refuses even
+        // when the table exists — so a read-only server's `/v1` export failed
+        // at its first drawer with "attempt to write a readonly database".
+        // A read-only store asks whether the table is there; absent, no
+        // drawer carries an artifact.
+        if self.may_build_indexes() {
+            self.late_schema()?;
+        } else if !self.table_exists("drawer_tok")? {
+            return Ok(None);
+        }
         let row: Option<(String, Vec<u8>)> = self
             .conn
             .query_row(
@@ -730,6 +740,69 @@ mod tests {
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", SecurityLevel::HmacOnly).unwrap();
         (dir, VaultStore::open(vault).unwrap())
+    }
+
+    /// ROADMAP O176 — reading a token artifact is a read. On a read-only
+    /// handle it ran `CREATE TABLE IF NOT EXISTS`, which `query_only`
+    /// refuses even when the table exists, so a read-only server's `/v1`
+    /// export failed at its first drawer. Both states are read now: a vault
+    /// that never stored a matrix answers `None`, and one that did answers
+    /// the artifact.
+    #[test]
+    fn a_read_only_handle_reads_token_artifacts_without_writing() {
+        use undercroft_core::embed::HashEmbedder;
+        use undercroft_vault::Access;
+        let ro = |mgr: &VaultManager| {
+            VaultStore::open_read_only(
+                mgr.unlock_as("test", Access::ReadOnly).unwrap(),
+                Box::new(HashEmbedder),
+            )
+            .unwrap()
+        };
+        let dir = tempfile::TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
+        let mut rw = VaultStore::open(vault).unwrap();
+        let id = rw
+            .upsert_screened(&undercroft_core::Drawer::new(
+                "w",
+                "r",
+                "a note with no matrix yet".into(),
+                Some("test.md".into()),
+                0,
+                "test",
+            ))
+            .unwrap()
+            .id;
+        drop(rw);
+
+        // No `drawer_tok` table at all: read-only answers None.
+        let s = ro(&mgr);
+        assert!(s.is_read_only(), "premise: the handle is read-only");
+        assert!(
+            !s.table_exists("drawer_tok").unwrap(),
+            "premise: no table yet"
+        );
+        assert_eq!(s.token_artifact(&id).unwrap(), None);
+        assert!(
+            !s.table_exists("drawer_tok").unwrap(),
+            "a read-only read created nothing"
+        );
+        drop(s);
+
+        // With an artifact stored, read-only returns it.
+        let packed = undercroft_core::late::quantize_tokens(&[0.5, -0.25, 0.125, 1.0], 2);
+        let mut rw = VaultStore::open(mgr.unlock("test").unwrap()).unwrap();
+        rw.import_token_artifact(&id, "probe-model", &packed)
+            .unwrap();
+        drop(rw);
+        let s = ro(&mgr);
+        let (model, got) = s
+            .token_artifact(&id)
+            .expect("a read-only handle reads an existing artifact")
+            .expect("the artifact is there");
+        assert_eq!(model, "probe-model");
+        assert_eq!(got, packed);
     }
 
     /// One wing floods the corpus; a second holds a handful of drawers. The

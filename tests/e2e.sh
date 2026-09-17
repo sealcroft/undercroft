@@ -2939,6 +2939,60 @@ else
 fi
 kill "$KS_SRV" 2>/dev/null; wait "$KS_SRV" 2>/dev/null
 
+# ---------------------------------------------------------------------------
+# ROADMAP O176 — an export under a read-only posture is served and says it
+# went unaudited, on BOTH surfaces, through the one recording step. The CLI
+# used to call the audit writer unconditionally, so `--read-only export`
+# failed inside SQLite and no export could be taken at all.
+# ---------------------------------------------------------------------------
+EX_HOME="$(mktemp -d)"
+ex() { env -u UNDERCROFT_PASSPHRASE -u UNDERCROFT_MCP_HTTP_TOKEN -u UNDERCROFT_ASSERTION_SECRET \
+         UNDERCROFT_HOME="$EX_HOME" "$BIN" "$@"; }
+ex_exports() { ex history --subject egress/export --limit 1000 | grep -oE '^[0-9]+ record' | grep -oE '^[0-9]+'; }
+ex init >/dev/null 2>&1
+ex remember "an incident note worth exporting" >/dev/null 2>&1
+EX_N0="$(ex_exports)"
+# Premise: a writable export records exactly one egress.
+check "O176: a writable export succeeds" 0 "undercroft_manifest" -- ex export
+EX_N1="$(ex_exports)"
+if [ -n "$EX_N0" ] && [ "$EX_N1" = "$((EX_N0 + 1))" ]; then
+  echo "ok    O176: premise: a writable export appends exactly one egress/export"; PASS=$((PASS+1))
+else
+  echo "FAIL  O176: premise: egress/export count went ${EX_N0:-?} -> ${EX_N1:-?}"; FAIL=$((FAIL+1))
+fi
+check "O176: a read-only export exits 0 with the payload"  0 "undercroft_manifest"          -- ex --read-only export
+check "O176: and says the egress went unaudited"           0 "egress not chain-audited"     -- ex --read-only export
+ex bundle keygen --out "$EX_HOME/recipient.key" >"$EX_HOME/keygen.out" 2>&1
+EX_TO="$(sed -n 's/^Recipient (shareable): //p' "$EX_HOME/keygen.out")"
+check "O176: a sealed read-only export is written"         0 "Sealed bundle written"        -- \
+  ex --read-only export --to "$EX_TO" --out "$EX_HOME/incident.bundle"
+check "O176: and names what left and to whom"              0 "sealed to $EX_TO"              -- \
+  ex --read-only export --to "$EX_TO" --out "$EX_HOME/incident2.bundle"
+EX_N2="$(ex_exports)"
+if [ "$EX_N2" = "$EX_N1" ] && [ -s "$EX_HOME/incident.bundle" ]; then
+  echo "ok    O176: read-only exports appended no chain record"; PASS=$((PASS+1))
+else
+  echo "FAIL  O176: egress/export count went ${EX_N1:-?} -> ${EX_N2:-?} under --read-only"; FAIL=$((FAIL+1))
+fi
+# /v1 on a read-only server goes through the SAME step: its warning carries
+# the counts, which the inline copy it replaced never printed.
+ex serve-http --read-only --host 127.0.0.1 --port 18992 >"$EX_HOME/serve.log" 2>&1 &
+EX_SRV=$!
+for _ in $(seq 1 40); do curl -sf http://127.0.0.1:18992/healthz >/dev/null 2>&1 && break; sleep 0.25; done
+rest_body "O176 /v1: a read-only server serves the export" 'undercroft_manifest' -- \
+  http://127.0.0.1:18992/v1/vaults/default/export
+kill "$EX_SRV" 2>/dev/null; wait "$EX_SRV" 2>/dev/null
+if grep -qF 'export served read-only on http; egress not chain-audited (1 drawer(s)' "$EX_HOME/serve.log"; then
+  echo "ok    O176 /v1: the served export went through the shared recording step"; PASS=$((PASS+1))
+else
+  echo "FAIL  O176 /v1: no shared-step warning in the server log"; sed 's/^/      /' "$EX_HOME/serve.log" | tail -5; FAIL=$((FAIL+1))
+fi
+if [ "$(ex_exports)" = "$EX_N1" ]; then
+  echo "ok    O176 /v1: the read-only served export appended no chain record"; PASS=$((PASS+1))
+else
+  echo "FAIL  O176 /v1: egress/export count moved under a read-only server"; FAIL=$((FAIL+1))
+fi
+
 echo
 echo "e2e results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

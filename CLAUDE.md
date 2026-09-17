@@ -1049,9 +1049,13 @@ Consequences that are binding, not advisory:
   own `LIKE` all stop matching in silence,
   read/egress auditing (the consultation-filed gap, closed 2026-08-04:
   **exports chain-audited unconditionally on every surface** —
-  `audit_export`, one `egress/export` record binding surface + recipient
-  + counts + the export's own manifest digest; read-only replicas warn
-  and serve; **and `refine` is an egress too, since O79** —
+  `record_export`, the one step both surfaces call, with `audit_export`
+  crate-private behind it, one `egress/export` record binding surface +
+  recipient + counts + the export's own manifest digest; a read-only
+  handle warns and serves on both surfaces, deciding from the HANDLE's
+  posture (O176: the CLI called the writer unconditionally and failed
+  inside SQLite, and a read-only `/v1` export failed at `token_artifact`'s
+  schema write, which no one had executed); **and `refine` is an egress too, since O79** —
   `audit_refine`, one `egress/refine` per run binding surface +
   destination host (credentials stripped) + model + scope + counts +
   `dry_run`. It read the whole corpus verbatim, POSTed each drawer's
@@ -2065,8 +2069,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (922 run,
-                                      # 4 #[ignore]d = 926 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (924 run,
+                                      # 4 #[ignore]d = 928 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2188,7 +2192,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (525 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (535 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (156 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (137 checks; weaviate

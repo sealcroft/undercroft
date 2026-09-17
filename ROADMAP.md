@@ -4171,6 +4171,123 @@ MINOR since O149: `PATCH /admin/tenants/{id}` and its CLI mirror are new
 capability, backward compatible. The rest of the section is PATCH work — no
 documented contract moves.
 
+### O176 — CLOSED 2026-09-17: an export under a read-only posture is served and says it went unaudited, on both surfaces, through one recording step
+
+**Filed 2026-09-14 from the drift sweep. Both paths read, neither executed.**
+
+**The CLI path.** `Command::Export` (`crates/undercroft-cli/src/main.rs`)
+opens through `open_store`, so `--read-only` yields `open_read_only`.
+`build_export_payload` reads under `InternalRead::ExportAudited` and writes
+nothing. Then, unconditionally, `VaultStore::audit_export("cli", …)`
+(`crates/undercroft-store/src/lib.rs`) opens a transaction and calls
+`chain_append`, whose first statement is `INSERT INTO audit` — refused by the
+read-only connection. Its `?` aborts before the bundle or the NDJSON is
+written, so the operator gets SQLite's refusal and no export.
+
+**The `/v1` path.** `Tenancy::export` (`crates/undercroft-cli/src/tenant.rs`)
+builds the payload, then branches on `self.read_only`: a read-only server logs `export served
+read-only; egress not chain-audited` and answers 200, and a writable one calls
+`audit_export("http", …)`.
+
+**Which side is wrong.** `CLAUDE.md` states that exports are chain-audited on
+every surface and that read-only replicas warn and serve; `refine`'s
+`record_egress` applies that precedent "in as many words as `/v1`'s export
+path uses it", on both surfaces because it lives in the one implementation. The
+doctrine and two paths agree, so by the drift-direction rule the CLI is the
+drift. It is also the surface an operator reaches first during an incident,
+where exporting the evidence is the obvious first move.
+
+**Fix shape.** One recording step both export surfaces call, on `refine`'s
+precedent, branching on `VaultStore::is_read_only()` — the handle's own
+posture — rather than on the process flag `/v1` reads today. On a read-only
+handle it warns, naming the counts and any recipient, and serves; otherwise it
+calls `audit_export`. `/v1`'s inline branch goes, so the decision exists once.
+
+**Gate.** An `e2e` check: `undercroft --read-only export <vault>` exits 0,
+emits the payload, prints the not-chain-audited warning, and leaves the
+`history` record count unchanged. Premise arm: the same export without
+`--read-only` appends exactly one `egress/export`. Counterfactual: remove the
+read-only branch and the check fails with a non-zero exit carrying SQLite's
+refusal, which is the tree as it stands. A second check drives
+`GET …/export` on `serve-http --read-only`, so the `/v1` arm is proved to pass
+through the shared step rather than a surviving copy.
+
+#### BUILT 2026-09-17
+
+**Grounding.** A case-insensitive `rul(ed|ing)` search of this entry finds
+none. The drift direction is the doctrine's: two paths and `CLAUDE.md` agree
+that a read-only export warns and serves. The filed shape is followed, with one
+placement decision stated here rather than left implicit: the shared step is
+`VaultStore::record_export`, beside the writer, not a CLI-crate helper on
+`refine`'s precedent. `refine`'s helper lives in the CLI only because `refine`
+does; the posture belongs to the handle, and a store-level door is reachable
+from both surfaces.
+
+**A claim in this entry was false, and executing the gate is what showed it.**
+The entry said, by reading, that a read-only `/v1` export "warns and serves".
+Run against the `0d1c290` binary, it answered `sqlite error: attempt to write a
+readonly database` at its first drawer: `token_artifact` called
+`late_schema()`, a `CREATE TABLE IF NOT EXISTS` that a `query_only` connection
+refuses even when the table exists. R1 had put that guard on every search-side
+caller and not on this export-side one. So neither surface could take an
+export read-only, and the entry's own second check could not have passed on
+the fix it prescribed.
+
+**The shape.**
+- `VaultStore::record_export(surface, counts, digest, recipient) ->
+  Result<bool, _>`: a read-only handle warns, naming the surface, the counts
+  and the recipient or "unsealed", and returns `false`; a writable one calls
+  `audit_export` and returns `true`.
+- `audit_export` is `pub(crate)`, so no surface can reach the writer without
+  the posture decision.
+- The CLI's `export` and `/v1`'s `export` both call `record_export`; `/v1`'s
+  inline branch on the process flag is gone.
+- `token_artifact` takes R1's shape: a writable handle ensures the schema; a
+  read-only one asks whether `drawer_tok` exists and answers `None` when it
+  does not.
+- The egress diagram (`18-egress-paths`) said a read-only CLI export "is
+  refused before it writes"; it now names the one recording step.
+
+**Tests.**
+- `a_read_only_export_is_served_unaudited_and_a_writable_one_is_recorded`:
+  one record writable, none read-only, the chain height unchanged. Its premise
+  arm shows the writer itself failing on the read-only handle.
+- `a_read_only_handle_reads_token_artifacts_without_writing`: `None` with no
+  table (and no table created), and the stored artifact when one exists.
+- Ten e2e checks through the binary: a writable export records exactly one
+  `egress/export`; `--read-only export`, plain and sealed, exits 0 with the
+  payload, names what left and to whom, and records nothing; and
+  `GET …/export` on `serve-http --read-only` answers 200, logs the shared
+  step's warning (which carries counts the removed inline copy never
+  printed), and records nothing.
+
+**RED and counterfactuals.**
+- The e2e block against the `0d1c290` release binary: 7 of 10 fail. All four
+  CLI read-only arms exit 1; the `/v1` export returns the SQLite error. The
+  three that pass there are the writable premise pair and the `/v1`
+  no-record arm, which a failed export passes by construction and which is
+  why the served-payload arm sits beside it.
+- In a scratch worktree, removing the `token_artifact` guard fails its test at
+  the read-only read, and removing `record_export`'s read-only branch fails
+  its test with SQLite's refusal; each leaves the other green.
+
+**Real corpus.** The LoCoMo feed mined into eight wings (680 drawers), plus a
+fact and an entity.
+- The CLI's `--read-only export` exited 0 in 11 ms against 33 ms writable,
+  with 683 lines whose records match the writable export's byte for byte
+  apart from the manifest's timestamp.
+- The read-only sealed bundle (761,450 bytes) imported into a second vault.
+- `/v1` on a read-only server answered 200 in 35 ms with 683 lines.
+- The `egress/export` count moved only for the writable export, and `verify`
+  stayed OK.
+
+**Drift check.** Export is reachable from the CLI and `/v1` only: it is in
+`OPERATOR_ONLY`, so not on MCP, and the orchestrator reaches it through `/v1`.
+Both surfaces are covered.
+
+**Figures:** cargo 922 → 924 (928 compiled), e2e 525 → 535, the landing e2e
+tile 906 → 916.
+
 ### O204 — CLOSED 2026-09-17: a key source the palace contradicts is refused before anything is written, key material is never created where a vault refers to a key, and the read-only posture reaches the manager
 
 **Filed 2026-09-17 by O172's real-corpus drive; measured once, on a throwaway
@@ -18216,47 +18333,6 @@ moves O79's and O95's tag tests, so it is its own unit. **Gate**: a non-dry-run
 `refine` against a loopback extractor stub, under a served embedder pointed at a
 counting loopback stub, records that endpoint with the number of mirror drawers
 it sent.
-
-### O176 — `undercroft --read-only export` fails inside SQLite at the audit record, while `/v1` export on a read-only server warns and serves
-
-**Filed 2026-09-14 from the drift sweep. Both paths read, neither executed.**
-
-**The CLI path.** `Command::Export` (`crates/undercroft-cli/src/main.rs`)
-opens through `open_store`, so `--read-only` yields `open_read_only`.
-`build_export_payload` reads under `InternalRead::ExportAudited` and writes
-nothing. Then, unconditionally, `VaultStore::audit_export("cli", …)`
-(`crates/undercroft-store/src/lib.rs`) opens a transaction and calls
-`chain_append`, whose first statement is `INSERT INTO audit` — refused by the
-read-only connection. Its `?` aborts before the bundle or the NDJSON is
-written, so the operator gets SQLite's refusal and no export.
-
-**The `/v1` path.** `Tenancy::export` (`crates/undercroft-cli/src/tenant.rs`)
-builds the payload, then branches on `self.read_only`: a read-only server logs `export served
-read-only; egress not chain-audited` and answers 200, and a writable one calls
-`audit_export("http", …)`.
-
-**Which side is wrong.** `CLAUDE.md` states that exports are chain-audited on
-every surface and that read-only replicas warn and serve; `refine`'s
-`record_egress` applies that precedent "in as many words as `/v1`'s export
-path uses it", on both surfaces because it lives in the one implementation. The
-doctrine and two paths agree, so by the drift-direction rule the CLI is the
-drift. It is also the surface an operator reaches first during an incident,
-where exporting the evidence is the obvious first move.
-
-**Fix shape.** One recording step both export surfaces call, on `refine`'s
-precedent, branching on `VaultStore::is_read_only()` — the handle's own
-posture — rather than on the process flag `/v1` reads today. On a read-only
-handle it warns, naming the counts and any recipient, and serves; otherwise it
-calls `audit_export`. `/v1`'s inline branch goes, so the decision exists once.
-
-**Gate.** An `e2e` check: `undercroft --read-only export <vault>` exits 0,
-emits the payload, prints the not-chain-audited warning, and leaves the
-`history` record count unchanged. Premise arm: the same export without
-`--read-only` appends exactly one `egress/export`. Counterfactual: remove the
-read-only branch and the check fails with a non-zero exit carrying SQLite's
-refusal, which is the tree as it stands. A second check drives
-`GET …/export` on `serve-http --read-only`, so the `/v1` arm is proved to pass
-through the shared step rather than a surviving copy.
 
 ### O177 — the engine's refuse-to-bind check and `undercroft_config::addr_is_loopback` disagree on `::1`, and O160 recorded them as byte-identical
 
