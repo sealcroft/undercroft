@@ -7,6 +7,99 @@ its CLI mirror `tenant-repoint` are additive — nothing that worked before
 behaves differently because they exist. Everything else in this section is a
 fix whose only observable change is that a defect is gone.
 
+### the team-server recipe starts, reaches its Qdrant mirror over TLS, and passes a declared passphrase (O172)
+
+`deploy/docker-compose.server.yml` could not serve a single client:
+- **It never started on a fresh volume.** Its command was `serve-http` with no
+  `init`, so the engine exited `vault "default" not found` and
+  `restart: unless-stopped` repeated that forever. No file under `tests/`
+  referenced the recipe.
+- **Its Qdrant URL was one the engine refuses.** `http://qdrant:6333` is
+  cleartext beyond loopback, which the index client refuses at construction
+  with no override, because a push carries plaintext-derived embeddings. So
+  every `index push`, every `index/status` and every `forget` naming the
+  backend failed, while `/healthz` answered 200.
+- **A passphrase in `deploy/.env` never reached the engine.** The recipe
+  passed only the variables it named, and it did not name this one, so a
+  declared passphrase was dropped and the first start wrote a random
+  `master.key` to the volume. Found while building this unit: the ruling did
+  not name it, and the project's doctrine settled the fix (the example file
+  promised it, and an optional secret has to stay unset when absent).
+
+The recipe now runs `undercroft init && exec undercroft serve-http …`, reaches
+Qdrant at `https://qdrant-tls` through a new Caddy terminator
+(`deploy/qdrant-tls/`), and pins that terminator's CA with
+`UNDERCROFT_INDEX_CA`. A `qdrant-tls-export` one-shot copies the public root to
+a path the engine's uid can read, and the engine waits for it to finish. The
+passphrase is declared with no value, so it reaches the engine when set and
+stays unset otherwise. The header now says what the mirror holds: sealed
+content, plaintext-derived vectors, and the wing and room labels. It also says
+that MCP and `/v1` recall never consult the mirror, and what the transport
+still leaves open. A new parity test holds that last claim for the served
+surfaces. `UPGRADING.md` has the entry, including the restart loop a volume
+set up without the passphrase meets once `deploy/.env` declares one.
+
+**Checked by:**
+- `tests/tls-pins.sh`, which now boots the recipe with its default-features
+  engine and drives the index path through the running server: `config
+  check`, `/v1` index status before and after a push, a canary saved through
+  `/v1`, `index push` and `index status`, a search through the mirror,
+  `verify`, a premise arm that the old URL is refused, and an arm that a
+  passphrase in the env file reaches the engine. The suite went from 13 checks
+  to 31. It shares one boot function with the observability stack, whose six
+  check labels are unchanged.
+- The CA-pin preflight, which now selects a `deploy/` compose file by whether
+  its build context RESOLVES to the repo root. It matched the spelling
+  `context: ../..`, which the team-server recipe does not use (`context: ..`),
+  so that recipe was never scanned. A premise requires both engine recipes in
+  the selected set.
+- `parity::no_served_surface_searches_through_a_remote_mirror`, over
+  `mcp.rs`, `tenant.rs` and `http.rs`, with a probe for its needle.
+
+**Counterfactuals, each run through the suite itself** with an extra compose
+file, confirmed applied with `compose config`. A hook in the suite applies the
+file, and a run with the hook set always exits 3 and never prints
+`TLS-PINS OK`.
+- The cleartext URL restored: `config check`, both `/v1` status arms, the push,
+  the count and the search fail, and `/healthz` stays 200. This is the recorded
+  proof that a boot-only check could not see the defect.
+- The pin aimed inside Caddy's PKI tree: the same six fail, and `/healthz`
+  stays 200.
+- `init` removed: the engine never publishes a port, and the failure shows its
+  log, `vault "default" not found`, repeating.
+- An empty passphrase: the engine never starts, and its log names
+  `UNDERCROFT_PASSPHRASE`.
+- The passphrase arm against the pre-fix recipe matches nothing.
+- The CA-pin preflight: with the recipe's pin aimed at the PKI tree, the old
+  selector reports `ok` and the new one fails naming the recipe.
+- The parity test fails on a planted call in `http.rs`, and on a mistyped
+  needle.
+- The exporter ordering is argued rather than executed: the engine caches a
+  refused pin for its lifetime, so an early call would keep refusing.
+
+**Driven on a real corpus:** the LoCoMo feed mined into eight wings (680
+drawers), pushed as 680 sealed records in about two seconds, counted 680/680 on
+both status surfaces, and found through the mirror. `/v1` and MCP searches
+answered from the vault, `verify` was clean on 681 chain records after a push
+beside the live server, and a restart found the vault and served it. The
+documented `init --level hmac-only` start works, and its push is refused
+without `--allow-plaintext`.
+
+**Filed from this unit:** O199–O203, which the ruling named as residuals, and
+O204, found by the drive: a passphrase declared on a volume keyed by
+`master.key` reports "possible tampering".
+
+**Corrected:**
+- The recipe's header said "the vector index never holds plaintext". The index
+  holds plaintext-derived vectors.
+- `deploy/README.md` said content is "sealed client-side … before it ever
+  reaches Qdrant". That holds only for a sealed vault, and only for the content.
+- `docs/remote-server.md`'s orchestrated snippet ran `serve-http` with no
+  `init`, and its text said "the first `serve-http`" opens the default vault.
+  It does not.
+- The recipe's `--read-only` comment offered a command that fails on a fresh
+  volume. It now says to start writable once first.
+
 ### a read-only `refine` refuses before it sends a drawer, unless it is a dry run (O184)
 
 `undercroft --read-only refine` without `--dry-run` used to POST drawers to the

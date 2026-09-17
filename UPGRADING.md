@@ -73,6 +73,62 @@ or when they could never be presented.
 
 ## 1.6.0 (unreleased)
 
+### the team-server recipe runs `init`, reaches Qdrant over TLS, and passes a declared passphrase (O172)
+
+**Who is affected:** anyone running `deploy/docker-compose.server.yml`. Until
+this release the recipe could not start on a fresh volume, so the operators
+affected are the ones who got it running by hand, typically by running
+`undercroft init` in the container first.
+
+**What changes:**
+- **Two more images and one more volume.** The recipe now pulls `caddy:2.8`
+  (the `qdrant-tls` terminator) and `alpine:3.20` (the `qdrant-tls-export`
+  one-shot), and creates `qdrant-tls-data`.
+- **The engine waits for the exporter.** It starts only after
+  `qdrant-tls-export` has copied Caddy's CA root and exited 0. If Caddy never
+  writes its CA, the exporter exits 1 after 60 seconds and the engine does not
+  start: `up` reports that `qdrant-tls-export` did not complete successfully,
+  and the exporter's log reads `qdrant-tls-export: … never appeared after 60s`.
+- **The engine's entrypoint is `/bin/sh -c`.** Its command runs `undercroft init
+  && exec undercroft serve-http …`. `init` exits 0 when the default vault
+  exists, so an existing volume is served as before. A one-off command through
+  `run` now needs `--entrypoint undercroft`, for example
+  `docker compose … run --rm --no-deps --entrypoint undercroft undercroft init --level hmac-only`.
+  Commands through `exec` are unchanged.
+- **The Qdrant URL is `https://qdrant-tls`, pinned by `UNDERCROFT_INDEX_CA`.**
+  The old `http://qdrant:6333` was refused by the engine on every index call,
+  so nothing that worked stops working.
+- **`UNDERCROFT_PASSPHRASE` in `deploy/.env` now reaches the engine.** The
+  recipe did not pass it before, so a declared passphrase was ignored and the
+  first start wrote a random `master.key` to the volume.
+
+**Symptom to expect if your volume was set up without the passphrase and your
+`deploy/.env` declares one:** the engine restarts in a loop, logging
+`Error: vault manifest failed integrity verification — possible tampering`,
+and a `kdf.salt` file appears beside `master.key` on the volume. Nothing was
+tampered with: the vault was keyed by `master.key`, and the declared
+passphrase derives a different key. Measured on a throwaway project.
+ROADMAP O204 tracks reporting this as a key mismatch rather than tampering.
+
+**What to do:**
+- To keep the key file you have, remove `UNDERCROFT_PASSPHRASE` from
+  `deploy/.env` (or comment it out) and start again. The stray `kdf.salt` is
+  harmless while no passphrase is declared.
+- To move to a passphrase, export the vault with the old configuration, start
+  a new volume with the passphrase declared, and import it there.
+- An uncommented `UNDERCROFT_PASSPHRASE=` with no value now refuses to start,
+  naming the variable. Comment the line out instead.
+- A `--read-only` server needs one writable start first. On a fresh volume it
+  refuses with `vault "default" has a manifest but no database`.
+
+`config check` detects the empty passphrase, a cleartext Qdrant URL and an
+unreadable `UNDERCROFT_INDEX_CA` when it runs with the engine's environment:
+`docker compose … run --rm --no-deps --entrypoint undercroft undercroft config
+check` works while the engine is down, and `docker compose … exec undercroft
+undercroft config check` while it runs. It opens nothing, so it cannot detect
+the key-file/passphrase mismatch (measured: it exits 0 on that volume) or the
+exporter's ordering.
+
 ### `undercroft --read-only refine` without `--dry-run` now exits 1 before it sends anything (O184)
 
 **Who is affected:** anyone whose script runs `refine` with `--read-only` and

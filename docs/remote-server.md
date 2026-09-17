@@ -7,6 +7,28 @@ cp deploy/server.env.example deploy/.env    # set UNDERCROFT_MCP_HTTP_TOKEN
 docker compose -f deploy/docker-compose.server.yml --env-file deploy/.env up -d
 ```
 
+The first start runs `undercroft init` before it serves, which sets up the
+master key and creates a **sealed** `default` vault on the `undercroft-data`
+volume; later starts find that vault and serve it. Until 1.6.0 the recipe
+served without `init`, so a fresh volume exited `vault "default" not found` and
+restarted forever. For another level, create the vault before the first `up`:
+
+```bash
+docker compose -f deploy/docker-compose.server.yml --env-file deploy/.env \
+  run --rm --no-deps --entrypoint undercroft undercroft init --level hmac-only
+```
+
+`UNDERCROFT_PASSPHRASE` in `deploy/.env` derives the master key instead of
+writing a key file. Set it before the first start and keep it set. Until 1.6.0
+the recipe did not pass it to the container, so a declared passphrase was
+ignored.
+
+Check the running server's declarations:
+
+```bash
+docker compose -f deploy/docker-compose.server.yml exec undercroft undercroft config check
+```
+
 Clients:
 
 ```bash
@@ -23,17 +45,55 @@ claude mcp add --transport http undercroft http://HOST:8765/mcp \
   at the source — `$(tr -d '\n' < /run/secrets/token)`. Leading and internal
   whitespace are fine; they are presentable.
 - `--read-only` exposes recall without write access (see the compose file).
+  Start the server writable once first: `init` writes only the vault's
+  manifest, and a read-only server refuses a vault whose database the first
+  writable open has not created yet.
 - `/healthz` is unauthenticated for probes.
 - Plain HTTP: terminate TLS in a reverse proxy for anything beyond a
   trusted network.
-- Backing store: the palace volume is the system of record. `index push`
-  sends Qdrant sealed content from a sealed vault, beside the drawer ids, the
-  embeddings and the wing/room labels in the clear; an hmac-only vault's push
-  is refused unless `index push --allow-plaintext`. Every result is
-  re-verified locally, and each push appends an `egress/index-push` audit
-  record.
+- Backing store: the `undercroft-data` volume is the system of record. MCP and
+  `/v1` recall search the vault directly and never consult Qdrant.
 
-Systemd alternative: `deploy/undercroft-server.service`.
+Systemd alternative: `deploy/undercroft-server.service`. It does not run
+`init` yet, so run `undercroft init` once before enabling it; ROADMAP O200
+tracks the fix.
+
+## The optional Qdrant mirror
+
+The recipe also runs Qdrant, behind its own TLS terminator (`qdrant-tls`).
+Nothing is sent to it until an operator pushes, and only
+`undercroft search --backend qdrant` reads it:
+
+```bash
+docker compose -f deploy/docker-compose.server.yml exec undercroft undercroft index push qdrant
+docker compose -f deploy/docker-compose.server.yml exec undercroft undercroft index status qdrant
+docker compose -f deploy/docker-compose.server.yml exec undercroft undercroft search "query" --backend qdrant
+```
+
+- **What Qdrant receives:** each drawer's id and at-rest content (sealed on a
+  sealed vault), its decrypted embedding, and its wing and room labels in the
+  clear. An embedding is derived from the plaintext. An hmac-only vault's
+  push is refused unless `index push --allow-plaintext`, because its at-rest
+  content is the plaintext.
+- **What comes back:** candidate ids only. Each one is re-loaded from the
+  vault, HMAC-verified and filtered by the vault's own retrieval policy before
+  it is returned.
+- **Every push appends an `egress/index-push` audit record**, a partly failed
+  one included.
+- **It is a snapshot.** A later save is not mirrored until the next push, and
+  a delete reaches Qdrant only through `forget` naming a backend.
+- **Transport:** the engine refuses cleartext http to any non-loopback host,
+  with no override, because the embeddings are plaintext-derived. So it
+  reaches Qdrant at `https://qdrant-tls` and pins the terminator's internal CA
+  with `UNDERCROFT_INDEX_CA`. The `qdrant-tls-export` one-shot copies that
+  public root to `/tls/root.crt`, where the engine's uid can read it; the CA
+  private key stays where it is. Until 1.6.0 the recipe declared
+  `http://qdrant:6333`, which the engine refused on every index call.
+- **Residuals:** the hop from `qdrant-tls` to `qdrant` is cleartext on the
+  compose network; Qdrant accepts unauthenticated requests from anything on
+  that network; and the engine reads the pin once per process, so a pin that
+  becomes unreadable is not noticed until a restart. `/healthz` answers 200
+  either way, because serving builds no index.
 
 ## Multi-tenant REST surface (`/v1`)
 
@@ -315,7 +375,11 @@ Undercroft per tenant:
 services:
   undercroft:
     image: undercroft:latest
-    command: ["serve-http", "--host", "0.0.0.0", "--port", "8765"]
+    # `init` first: `serve-http` alone does not create the default vault, and
+    # on a fresh volume it exits `vault "default" not found`. `init` exits 0
+    # once the vault exists, and `&&` stops on any other failure.
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["undercroft init && exec undercroft serve-http --host 0.0.0.0 --port 8765"]
     environment:
       # Master key material — inject from your secret store, never bake in.
       # Same interpolation hazard as the assertion secret below, and the
@@ -341,7 +405,7 @@ volumes:
 ```
 
 Bootstrap is non-interactive: with `UNDERCROFT_PASSPHRASE` set, `undercroft
-init` (or the first `serve-http`, which opens the default vault) derives the
+init`, which the command above runs on every start, derives the
 master key via Argon2id (64 MiB, t=3) from the passphrase and a random salt
 it persists at `/data/kdf.salt` (`0600`). No key material is written, so the
 passphrase must be supplied on every start — no TTY, no prompt, and the key

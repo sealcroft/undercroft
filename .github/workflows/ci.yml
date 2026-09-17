@@ -139,7 +139,9 @@ jobs:
         #                    type-checked `--features telemetry` since O84,
         #                    and `tls-pins` boots a telemetry engine image
         #                    (O63) but asserts only /healthz and a healthy
-        #                    scrape target — so without this leg the gating
+        #                    scrape target there (its O172 arms drive the
+        #                    default-features team-server image, not this
+        #                    one) — so without this leg the gating
         #                    or a counter could stop WORKING on `main` with
         #                    every check green
         #   backends-e2e     five live vector DBs over TLS
@@ -199,8 +201,13 @@ jobs:
       # Two halves. Pin readability needs no cargo and no image build: three
       # small public images and a permission question. Since ROADMAP O63 the
       # suite also brings the whole observability deployment up and proves it
-      # boots, which BUILDS the engine image (`UNDERCROFT_FEATURES=telemetry`)
-      # — that one build is this job's entire cost.
+      # boots, which BUILDS the engine image (`UNDERCROFT_FEATURES=telemetry`).
+      # Since O172 it also boots the team-server recipe and drives its Qdrant
+      # mirror through the running server, which builds a SECOND engine image
+      # with the default features that recipe ships. Those two builds are this
+      # job's entire cost: the job took 5 min 15 s with the one build (run
+      # 35148259866, on `ec78535`) and 12 min 2 s with both (run 35166168384,
+      # on `ef20456`), so the second build costs about 6 min 47 s.
       #
       # `deploy/observability` shipped UNSTARTABLE for two releases
       # because the engine pinned a path inside Caddy's root-only PKI tree,

@@ -1,0 +1,31 @@
+# The TLS terminator for the team-server recipe's Qdrant mirror
+# (deploy/docker-compose.server.yml).
+#
+# Since 2026-08-05 `undercroft-index` refuses cleartext http to any
+# non-loopback host, with no override (ROADMAP C8). Every push carries
+# EMBEDDINGS, and an embedding is plaintext-derived data: the sealed-vault
+# invariant seals vectors at rest for exactly that reason, so shipping them in
+# clear over a network is the same exposure one hop out. `qdrant` is a
+# compose-network host, not loopback, so the recipe declared a URL the engine
+# refused on every call until ROADMAP O172 put this terminator in front of it.
+#
+# The site block is byte-identical to the qdrant block in
+# deploy/backends-tls/Caddyfile, which is the test harness's terminator. That
+# file is not mounted here: it proxies four upstreams this recipe does not run,
+# and a production recipe should not depend on a test-harness file.
+#
+# Caddy's internal CA issues the certificate. The root lands on the
+# `qdrant-tls-data` volume at /data/caddy/pki/authorities/local/root.crt,
+# where only root can read it, because the same tree holds the CA PRIVATE key.
+# The engine runs as uid 10001, so the recipe's `qdrant-tls-export` one-shot
+# copies the PUBLIC root to /data/root.crt (0644). The engine mounts the
+# volume read-only at /tls and pins /tls/root.crt with UNDERCROFT_INDEX_CA. A
+# declared pin REPLACES the public roots rather than adding to them.
+{
+	auto_https disable_redirects
+}
+
+https://qdrant-tls {
+	tls internal
+	reverse_proxy qdrant:6333
+}

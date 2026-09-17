@@ -1776,6 +1776,54 @@ mod tests {
         }
     }
 
+    /// **No served surface searches through a remote mirror** (ROADMAP O172).
+    ///
+    /// The team-server recipe tells its operators that MCP and `/v1` recall
+    /// never consult the Qdrant mirror: the vault is the system of record, the
+    /// mirror is a snapshot a push refreshes, and only `undercroft search
+    /// --backend` reads it. That sentence was prose. This makes it a gate over
+    /// the three files that serve a client — the MCP tools, the `/v1` routes
+    /// and the HTTP transport both of those run on — so a served route that
+    /// starts answering from the mirror fails the build, and the recipe's
+    /// description has to be revisited in the same change.
+    ///
+    /// Scope, stated: it holds the served-surface half of the claim only. It
+    /// says nothing about how fresh a mirror is, or about the CLI, which reads
+    /// the mirror on purpose.
+    #[test]
+    fn no_served_surface_searches_through_a_remote_mirror() {
+        let needle = "search_with_index";
+        // PREMISE, twice, because a needle that matches nothing leaves this
+        // test green having looked at nothing. It must match a call written
+        // out by hand here, which catches a mistyped needle, and a real call
+        // in the CLI's `search --backend` arm, which catches a renamed function.
+        const PROBE: &str = "let hits = store.search_with_index(index.as_mut(), q, &opts)?;";
+        assert!(
+            PROBE.contains(needle),
+            "the needle {needle:?} does not match its own probe"
+        );
+        assert!(
+            include_str!("main.rs").contains(needle),
+            "the needle {needle:?} no longer names the remote search the CLI \
+             calls, so this gate cannot see a served surface calling it either"
+        );
+
+        let served = [
+            ("mcp.rs", include_str!("mcp.rs")),
+            ("tenant.rs", include_str!("tenant.rs")),
+            ("http.rs", include_str!("http.rs")),
+        ];
+        for (file, src) in served {
+            assert!(
+                !src.contains(needle),
+                "{file} names {needle}: a served surface would answer recall \
+                 from a remote mirror, which deploy/docker-compose.server.yml \
+                 and docs/remote-server.md tell operators never happens. A \
+                 mirror is a snapshot, refreshed only by `index push`."
+            );
+        }
+    }
+
     /// **Every `UNDERCROFT_*` the code reads is in the inventory, and every
     /// inventory entry is read by the code.**
     ///

@@ -1,9 +1,7 @@
-# Undercroft remote team server — MCP over HTTP, backed by a central Qdrant.
+# Undercroft remote team server — MCP over HTTP, with an optional Qdrant mirror.
 #
-# One command stands up a shared memory service a whole team's AI clients
-# connect to. Unlike the MemPalace server, drawer content reaches
-# Qdrant SEALED (encrypted client-side inside the undercroft container);
-# the vector index never holds plaintext.
+# One command stands up a shared memory service that a whole team's AI clients
+# connect to.
 #
 #   1. cp deploy/server.env.example deploy/.env  &&  edit deploy/.env
 #      (at minimum set UNDERCROFT_MCP_HTTP_TOKEN to a long random secret)
@@ -11,6 +9,44 @@
 #   3. connect a client:
 #      claude mcp add --transport http undercroft http://YOUR_HOST:8765/mcp \
 #        --header "Authorization: Bearer $UNDERCROFT_MCP_HTTP_TOKEN"
+#
+# The first start runs `undercroft init`, which sets up the master key and
+# creates a SEALED `default` vault on the `undercroft-data` volume. Later
+# starts find that vault and serve it.
+# To choose another level, create the vault before the first `up`:
+#   docker compose -f deploy/docker-compose.server.yml --env-file deploy/.env \
+#     run --rm --no-deps --entrypoint undercroft undercroft init --level hmac-only
+# If UNDERCROFT_PASSPHRASE is set in deploy/.env, the master key is derived from
+# it and no key file is written. It must then be supplied on every start.
+#
+# Check the declarations the running server was started with:
+#   docker compose -f deploy/docker-compose.server.yml exec undercroft undercroft config check
+#
+# THE QDRANT MIRROR IS OPTIONAL, AND NOTHING THE CLIENTS DO READS IT. The
+# `undercroft-data` volume is the system of record: MCP and /v1 recall search
+# the vault directly and never consult Qdrant. To mirror the vault:
+#   docker compose -f deploy/docker-compose.server.yml exec undercroft undercroft index push qdrant
+#   docker compose -f deploy/docker-compose.server.yml exec undercroft undercroft index status qdrant
+# Every push appends an `egress/index-push` record to the vault's audit chain.
+#
+#   * What Qdrant receives: each drawer's id and at-rest content (sealed on a
+#     sealed vault), its embedding (decrypted), and its wing and room labels in
+#     the clear. An embedding is derived from the plaintext. An hmac-only
+#     vault's at-rest content IS the plaintext, so its push is refused unless
+#     `index push --allow-plaintext` is passed.
+#   * Who reads it: `undercroft search --backend qdrant`, run through `exec`.
+#     Every candidate it offers is re-loaded from the vault, HMAC-verified and
+#     filtered by the vault's own retrieval policy before it is returned.
+#   * What it holds is a snapshot. A later save is not mirrored until the next
+#     push, and a delete reaches Qdrant only through `forget` naming a backend.
+#   * How it is reached: over TLS through `qdrant-tls`. The engine refuses
+#     cleartext http to any non-loopback host, with no override, because the
+#     embeddings are plaintext-derived. The engine pins the terminator's
+#     internal CA, exported by `qdrant-tls-export`. Residuals: the hop from
+#     `qdrant-tls` to `qdrant` is cleartext on the compose network; Qdrant
+#     accepts unauthenticated requests from anything on that network; and the
+#     engine reads the pin once per process, so a pin that becomes unreadable
+#     is not noticed until a restart.
 #
 # SECURITY: this exposes plaintext HTTP on :8765. For anything beyond a
 # trusted private network, put a TLS-terminating reverse proxy in front
@@ -32,30 +68,92 @@ services:
     restart: unless-stopped
     volumes:
       - qdrant-storage:/qdrant/storage
-    # Not published to the host: only the undercroft service reaches it over
-    # the internal compose network.
+    # Not published to the host. Only `qdrant-tls` needs to reach it, but
+    # nothing on the compose network is kept out (see the header).
+
+  # TLS in front of Qdrant (ROADMAP O172). The site block is the one
+  # deploy/backends-tls/Caddyfile carries for its own qdrant.
+  qdrant-tls:
+    image: caddy:2.8
+    restart: unless-stopped
+    depends_on:
+      - qdrant
+    volumes:
+      - ./qdrant-tls/Caddyfile:/etc/caddy/Caddyfile:ro
+      - qdrant-tls-data:/data
+
+  # Export Caddy's PUBLIC CA root to a path the engine can read.
+  #
+  # Caddy writes its whole PKI as root, with `root.crt` at 0600 inside
+  # directories at 0700, because the same tree holds the CA PRIVATE key. The
+  # engine runs as uid 10001, so a pin aimed inside that tree cannot be read
+  # and the engine refuses it (ROADMAP M7, M9). Only the certificate is copied;
+  # the private key keeps its 0600 and never moves.
+  qdrant-tls-export:
+    image: alpine:3.20
+    depends_on:
+      - qdrant-tls
+    volumes:
+      - qdrant-tls-data:/tls
+    # BOUNDED wait: Caddy generates the CA lazily, and an unbounded poll for
+    # a file that may never appear is a hang, not a wait.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        src=/tls/caddy/pki/authorities/local/root.crt
+        i=0
+        while [ ! -s "$$src" ]; do
+          i=$$((i + 1))
+          if [ "$$i" -gt 60 ]; then
+            echo "qdrant-tls-export: $$src never appeared after 60s" >&2
+            exit 1
+          fi
+          sleep 1
+        done
+        cp "$$src" /tls/root.crt
+        chmod 0644 /tls/root.crt
+        echo "qdrant-tls-export: published the public CA root as /tls/root.crt (0644)"
 
   undercroft:
     build:
       context: ..
     restart: unless-stopped
+    # `service_completed_successfully`, not a bare list entry. A bare entry
+    # waits only for the container to START, and the engine caches the pin it
+    # resolves, a refusal included, for the life of the process. Starting
+    # before the root exists would leave a server that answers /healthz and
+    # refuses every mirror call until it is restarted.
     depends_on:
-      - qdrant
-    command:
-      - serve-http
-      - --host
-      - "0.0.0.0"
-      - --port
-      - "8765"
-      # Uncomment to expose recall without write access:
-      # - --read-only
+      qdrant-tls-export:
+        condition: service_completed_successfully
+    # `init` first, then serve. `init` exits 0 when the default vault already
+    # exists, and `&&` means a failed init stops here and prints its own error.
+    # Without it, `serve-http` exits with `vault "default" not found` on a
+    # fresh volume and `restart: unless-stopped` repeats that forever.
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["undercroft init && exec undercroft serve-http --host 0.0.0.0 --port 8765"]
+    # To expose recall without write access, change the command above to end
+    # in `serve-http --host 0.0.0.0 --port 8765 --read-only`. Start it
+    # writable once first: `init` writes only the vault's manifest, the first
+    # writable open creates its database, and a read-only server refuses a
+    # vault whose database does not exist yet.
     environment:
       UNDERCROFT_MCP_HTTP_TOKEN: ${UNDERCROFT_MCP_HTTP_TOKEN:?set UNDERCROFT_MCP_HTTP_TOKEN in deploy/.env}
-      UNDERCROFT_QDRANT_URL: http://qdrant:6333
+      # No value on purpose. Compose passes UNDERCROFT_PASSPHRASE from
+      # deploy/.env (or the shell) when it is set there, and leaves it unset
+      # in the container otherwise. `${UNDERCROFT_PASSPHRASE:-}` would pass an
+      # EMPTY value when it is not set, and the engine refuses an empty
+      # passphrase rather than silently writing a key file.
+      UNDERCROFT_PASSPHRASE:
+      UNDERCROFT_QDRANT_URL: https://qdrant-tls
+      # The PUBLIC root that `qdrant-tls-export` publishes. Never a path under
+      # /tls/caddy/pki: this container cannot read that tree.
+      UNDERCROFT_INDEX_CA: /tls/root.crt
     ports:
       - "8765:8765"
     volumes:
       - undercroft-data:/data
+      - qdrant-tls-data:/tls:ro
     healthcheck:
       test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8765 && printf 'GET /healthz HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q 200 <(head -1 <&3)"]
       interval: 30s
@@ -65,4 +163,5 @@ services:
 
 volumes:
   qdrant-storage:
+  qdrant-tls-data:
   undercroft-data:

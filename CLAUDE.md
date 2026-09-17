@@ -1641,6 +1641,22 @@ Consequences that are binding, not advisory:
   `promtool` and `amtool` lifted from the pinned Prometheus/Alertmanager
   images onto debian. Pinning matters — a check that runs a different
   version than the deployment is a check of something else
+- `deploy/docker-compose.server.yml` + `deploy/qdrant-tls/` — the team-server
+  recipe (ROADMAP O172): the default-features engine behind one bearer,
+  started as `undercroft init && exec undercroft serve-http …`, with an
+  OPTIONAL Qdrant mirror behind its own Caddy terminator and an exported,
+  pinned CA root. **It could not start until O172**: it served with no `init`,
+  so a fresh volume crash-looped, and its Qdrant URL was cleartext beyond
+  loopback, which the index client refuses — while `/healthz` answered 200,
+  because serving builds no index and the pin is resolved, and a refusal
+  cached, on first use. That is why `tests/tls-pins.sh` drives the index path
+  THROUGH the running server rather than stopping at a boot check.
+  `UNDERCROFT_PASSPHRASE` is declared with NO VALUE there: Compose passes it
+  when `deploy/.env` sets it and leaves it unset otherwise, where
+  `${…:-}` would pass an empty payload and refuse to start. The recipe had not
+  named it at all, so a declared passphrase was dropped. MCP and `/v1` recall
+  never consult the mirror, which
+  `parity::no_served_surface_searches_through_a_remote_mirror` holds
 - `architecture/DIAGRAM_LESSONS.md` — **read it before changing any diagram, in
   any of the three sets**: which file is each set's source, the standards a change
   keeps (text fit included, O188), how width is estimated and measured, the fix
@@ -1877,13 +1893,21 @@ Consequences that are binding, not advisory:
   `tests/e2e-orchestrator.sh`, `tests/obs-config.sh` — end-to-end and
   config suites (run in Docker)
 - `tests/tls-pins.sh` — every shipped CA pin is READABLE by the identity
-  that pins it (ROADMAP M7/M9/M10). **Host-side, not in Docker**, because it
+  that pins it (ROADMAP M7/M9/M10), and both shipped engine recipes BOOT
+  (O63, O172). **Host-side, not in Docker**, because it
   DRIVES docker: it brings the real Caddy terminators up under throwaway
   compose projects and reads their volumes as the ENGINE's uid, taken from
   the `Dockerfile` so the two cannot drift. Two things it learned the hard
   way are encoded in it: a private project name does **not** scope a
   published PORT (hence `--no-deps`), and its first version ran `down -v` on
-  the REAL projects and destroyed a live stack
+  the REAL projects and destroyed a live stack. A third arrived with O172:
+  the team-server file needs a bearer to LOAD, `down` included, while the
+  observability file's Prometheus repeats that variable's demo default — so
+  the token is handed to the server file alone (`token_for`), never
+  exported. Its teardowns stay literal `docker compose -p …` lines, because
+  the teardown-scope preflight cannot see through a wrapper.
+  `TLSPINS_SERVER_EXTRA_COMPOSE` applies one more file to the team-server
+  boot, for counterfactuals, and a run with it set always exits 3
 - `docs/AGENTS.md` — the scenario-driven agent implementation guide
   (published as docs/agents.html); its tool/route/env reference must be
   kept in sync when the MCP surface, `/v1` routes, or `UNDERCROFT_*`
@@ -2026,8 +2050,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (899 run,
-                                      # 4 #[ignore]d = 903 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (900 run,
+                                      # 4 #[ignore]d = 904 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2155,7 +2179,7 @@ docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 ch
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (137 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
                                       # answers HTTP before its Raft leader exists)
-bash tests/tls-pins.sh                # CA pins readable + the stack starts (13 checks).
+bash tests/tls-pins.sh                # CA pins readable + both stacks start (31 checks).
                                       # Every shipped pin, read as the ENGINE's uid.
                                       # Host-side
                                       # because it DRIVES docker: it brings the real
@@ -2189,7 +2213,19 @@ bash tests/tls-pins.sh                # CA pins readable + the stack starts (13 
                                       # an EPHEMERAL host port with `!override` —
                                       # Compose MERGES list keys, so an override that
                                       # merely restates `ports:` appends and the
-                                      # collision survives untouched
+                                      # collision survives untouched.
+                                      # **Since ROADMAP O172 it boots the TEAM-SERVER
+                                      # recipe as well**, on the default-features
+                                      # engine that recipe ships, and drives the index
+                                      # path through the running server: config check,
+                                      # /v1 index status, a push, a search through the
+                                      # mirror, verify. A boot check alone is blind
+                                      # there — the recipe's cleartext Qdrant URL and
+                                      # an unreadable pin both left /healthz at 200,
+                                      # measured by counterfactual. The whole suite
+                                      # measured 104 s locally with both engine images
+                                      # already built; a cold CI run pays two builds,
+                                      # measured 12 min 2 s against 5 min 15 s with one
 docker compose run --rm arch-check    # TWO verifications, one service: the
                                       # architecture reference is what
                                       # diagrams/ and its own headings derive

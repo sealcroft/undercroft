@@ -1361,16 +1361,36 @@ echo "ok    all $COMPOSE_N compose files declare a project name"
 # inside a root-only PKI tree — for services running the ENGINE image, which
 # is the only consumer with a non-root uid. The same deep path appears in
 # dev/test recipes that run as root and are fine; narrowing on the image is
-# what keeps this from failing them. It does NOT prove the stack starts; that
-# needs a real bring-up, which is filed (ROADMAP M7) with its argument rather
-# than pretended here.
+# what keeps this from failing them. It does NOT prove a stack starts; that
+# needs a real bring-up, which `tests/tls-pins.sh` does (ROADMAP O63, O172).
+#
+# **The selector is a PROPERTY, not a spelling (ROADMAP O172).** It matched
+# the literal `context: ../..`, which is how `deploy/observability` reaches the
+# repo root. `deploy/docker-compose.server.yml` reaches the same root as
+# `context: ..`, so the team-server recipe was never scanned at all. A file is
+# now selected when it lives under `deploy/` and a `context:` in it RESOLVES to
+# the repo root, whatever the spelling — O92's lesson, that a list of known
+# spellings looks exhaustive until someone writes the one missing from it. The
+# root `docker-compose.yml` stays out: its engine services are test harnesses
+# that build the root-run builder stage.
 echo "═══ preflight: CA pins are readable by the engine ═══"
 CA_FAIL=0
 CA_SEEN=0
-for f in $(git ls-files '*docker-compose*.yml' 'deploy/**/*.yml' 2>/dev/null); do
+CA_FILES=""
+CA_ROOT="$(pwd -P)"
+for f in $(git ls-files 'deploy/*docker-compose*.yml' 'deploy/**/*.yml' 2>/dev/null); do
   [ -f "$f" ] || continue
   # Only services that BUILD the engine image from this repo run as uid 10001.
-  grep -q 'context: \.\./\.\.' "$f" || continue
+  CA_BUILDS=""
+  while IFS= read -r ctx; do
+    [ -z "$ctx" ] && continue
+    case "$ctx" in /*) CA_CTX="$ctx" ;; *) CA_CTX="$(dirname "$f")/$ctx" ;; esac
+    if [ "$(cd "$CA_CTX" 2>/dev/null && pwd -P)" = "$CA_ROOT" ]; then CA_BUILDS=1; fi
+  done <<EOF
+$(sed -nE 's/^[[:space:]]*context:[[:space:]]*["'\'']?([^"'\''#[:space:]]+).*/\1/p' "$f")
+EOF
+  [ -n "$CA_BUILDS" ] || continue
+  CA_FILES="$CA_FILES $f"
   while IFS= read -r line; do
     case "$line" in *"#"*) continue ;; esac
     CA_SEEN=$((CA_SEEN + 1))
@@ -1398,13 +1418,31 @@ if [ "$CA_SEEN" -eq 0 ]; then
   echo "BATTERY FAILED — preflight"
   exit 1
 fi
+# PREMISE, on the FILE SET. A pin count above zero is satisfied by one file,
+# which is how the team-server recipe went unscanned beside a passing count.
+# Both shipped engine recipes must be among the files selected, so a selector
+# that loses either one fails here instead of reporting clean.
+for CA_WANT in deploy/observability/docker-compose.observability.yml \
+               deploy/docker-compose.server.yml; do
+  case " $CA_FILES " in
+    *" $CA_WANT "*) ;;
+    *)
+      echo "FAIL  the engine-recipe selector did not select $CA_WANT."
+      echo "      It builds the engine image from the repo root, so a CA pin in it"
+      echo "      is read by uid 10001, and this scan did not look at it."
+      echo "      Selected:${CA_FILES:- nothing}"
+      echo ""
+      echo "BATTERY FAILED — preflight"
+      exit 1 ;;
+  esac
+done
 if [ "$CA_FAIL" -ne 0 ]; then
   echo ""
   echo "BATTERY FAILED — preflight"
   exit 1
 fi
 echo "ok    $CA_SEEN declared CA pin(s) on engine services, none inside a"
-echo "      root-only PKI tree"
+echo "      root-only PKI tree, across:$CA_FILES"
 
 # ── preflight: a destructive compose teardown names the project it destroys ─
 # ROADMAP M12. A compose teardown carrying the volumes flag removes every
