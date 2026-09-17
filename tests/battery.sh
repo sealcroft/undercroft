@@ -1259,6 +1259,256 @@ echo "ok    all $RM_H2_N ROADMAP level-2 headings are sections (${#RM_PROSE_SECT
 echo "      + release shape, both directions), in their one order with every version"
 echo "      once; no fence holds a heading; entry subsections stay '####'"
 
+# **Relations between open entries are declared, and both ends agree
+# (ROADMAP O169).** The dependency map that used to carry them was a second
+# copy of what the entries say, and it went stale within five days; no count
+# or set gate can see a wrong relation cell. So an open entry that blocks,
+# follows or shares code with another carries a line beginning with the bold
+# `Relations:` marker naming the other, and this arm checks the declared edges
+# for CONSISTENCY: every named id is an entry under `## Open`, and it names
+# this one back. It says nothing about COMPLETENESS — a relation neither entry
+# declares is invisible to it, which only reading at filing time finds.
+#
+# A declared line rather than any mention, because open entries mention each
+# other for things that are not relations. Lines outside `## Open` are
+# ignored, so a finished entry keeps its history. It relies on
+# `roadmap_fences` above having refused every heading-shaped line inside a
+# fence, so it stays line-based and does not model fences itself.
+#
+# Rows are `kind|line|from|to`, then one `premise|<open entries>|<lines>` row.
+# The program sits in a single-quoted shell string: no apostrophe anywhere in
+# it, and CI runs mawk, so no intervals and no IGNORECASE.
+roadmap_relations() { awk '
+  function ids_on(s,   out, rest, at, pre, post, tok) {
+    out = ""; rest = s
+    while (match(rest, /[ACMORTU][0-9]+[a-z]?/)) {
+      at = RSTART; tok = substr(rest, RSTART, RLENGTH)
+      pre = (at > 1) ? substr(rest, at - 1, 1) : " "
+      post = substr(rest, at + RLENGTH, 1)
+      if (pre !~ /[A-Za-z0-9_]/ && post !~ /[A-Za-z0-9_]/) out = out " " tok
+      rest = substr(rest, at + RLENGTH)
+    }
+    return out
+  }
+  /^## / { top = $0; cur = ""; next }
+  /^### [A-Z][0-9]+[a-z]? / {
+    cur = ""
+    if (top ~ /^## Open /) { cur = $2; open[cur] = 1; nopen++ }
+    next
+  }
+  /^### / { cur = ""; next }
+  cur != "" && /^\*\*Relations:\*\*/ {
+    nlines++
+    k = split(ids_on($0), got, " ")
+    for (i = 1; i <= k; i++) {
+      npairs++; pf[npairs] = cur; pt[npairs] = got[i]; pl[npairs] = NR
+      named[cur SUBSEP got[i]] = 1
+    }
+  }
+  END {
+    for (i = 1; i <= npairs; i++) {
+      if (!(pt[i] in open)) print "relation-names-no-open-entry|" pl[i] "|" pf[i] "|" pt[i]
+      else if (!((pt[i] SUBSEP pf[i]) in named)) print "relation-not-reciprocal|" pl[i] "|" pf[i] "|" pt[i]
+    }
+    print "premise|" (nopen + 0) "|" (nlines + 0)
+  }
+' "$1"; }
+# PREMISE, as an EXACT row set on a fixture that holds an `## Open` section:
+# a one-sided pair, a partner under a release section, an id that exists
+# nowhere, a reciprocal pair, a suffixed id, an identifier that merely
+# contains an id, an ordinary mention, and a relations line inside a finished
+# entry under a release section, which must stay silent.
+RL_FIX="$(mktemp)"
+printf '%s\n' \
+  '## 1.9.9 — released 2099-01-01' '' \
+  '### O9010 — CLOSED 2099-01-01: probe' '' 'body with a gate.' '' \
+  '**Relations:** shares a diff surface with O9001 — a finished entry keeps its history.' '' \
+  '## Open — releasable work' '' \
+  '### O9001 — a probe that names one partner' '' \
+  '**Relations:** sequenced before O9002 — the second waits on the first.' '' \
+  '### O9002 — a probe that names nobody back' '' 'plain body that mentions O9001 in prose.' '' \
+  '### O9003 — a probe that names finished and absent entries' '' \
+  '**Relations:** sequenced after O9010 — the partner sits under a release.' \
+  '**Relations:** shares a diff surface with O9099 — the partner exists nowhere.' '' \
+  '### O9004 — a reciprocal probe' '' \
+  '**Relations:** shares a diff surface with O9005 — see `XO9001Y` and `O9002bc`.' '' \
+  '### O9005 — the other half' '' \
+  '**Relations:** shares a diff surface with O9004 — the same file.' '' \
+  '### O9006a — a suffixed probe' '' \
+  '**Relations:** sequenced with O9004 — a suffix is part of the id.' '' \
+  '### A non-id section' '' \
+  '**Relations:** shares a diff surface with O9001 — outside any entry.' > "$RL_FIX"
+RL_WANT='relation-not-reciprocal|13|O9001|O9002
+relation-names-no-open-entry|21|O9003|O9010
+relation-names-no-open-entry|22|O9003|O9099
+relation-not-reciprocal|34|O9006a|O9004
+premise|6|6'
+RL_GOT=$(roadmap_relations "$RL_FIX"); rm -f "$RL_FIX"
+if [ "$RL_GOT" != "$RL_WANT" ]; then
+  echo "FAIL  premise: the relations reader did not produce the exact rows its fixture"
+  echo "      requires (ROADMAP O169). Wanted (<) against got (>):"
+  diff <(printf '%s\n' "$RL_WANT") <(printf '%s\n' "$RL_GOT") | sed 's/^/        /'
+  echo ""; echo "BATTERY FAILED — preflight"; exit 1
+fi
+RL_ROWS=$(roadmap_relations ROADMAP.md)
+RL_PREMISE=$(printf '%s\n' "$RL_ROWS" | grep '^premise|' || true)
+RL_OPEN=$(printf '%s' "$RL_PREMISE" | cut -d'|' -f2)
+RL_LINES=$(printf '%s' "$RL_PREMISE" | cut -d'|' -f3)
+# The real file has had open entries for its whole life, and relations lines
+# since O169 seeded them, so zero of either is the READER failing.
+if [ "${RL_OPEN:-0}" -lt 1 ] || [ "${RL_LINES:-0}" -lt 1 ]; then
+  echo "FAIL  the relations reader examined ${RL_OPEN:-0} open entr(y/ies) and"
+  echo "      ${RL_LINES:-0} relations line(s) in ROADMAP.md. The file holds both, so"
+  echo "      this is the reader failing, not a tree with nothing to check (ROADMAP O169)."
+  echo ""; echo "BATTERY FAILED — preflight"; exit 1
+fi
+RL_BAD=$(printf '%s\n' "$RL_ROWS" | grep -v '^premise|' | grep . || true)
+if [ -n "$RL_BAD" ]; then
+  echo "FAIL  a declared relation between open ROADMAP entries does not hold (ROADMAP O169)."
+  echo "      Edit BOTH entries: each names the other on its own relations line, and a"
+  echo "      partner that is no longer an open entry is described in prose instead."
+  while IFS='|' read -r kind line from to; do
+    [ -z "$kind" ] && continue
+    case "$kind" in
+      relation-names-no-open-entry) echo "        ROADMAP.md:$line  $from names $to, which is not an entry under '## Open'" ;;
+      relation-not-reciprocal)      echo "        ROADMAP.md:$line  $from names $to, and $to does not name $from back" ;;
+      *)                            echo "        ROADMAP.md:$line  $kind ($from, $to): a row kind this handler does not describe" ;;
+    esac
+  done <<< "$RL_BAD"
+  echo ""; echo "BATTERY FAILED — preflight"; exit 1
+fi
+echo "ok    $RL_LINES relations line(s) across $RL_OPEN open entries, every one naming an"
+echo "      open entry that names it back"
+
+# **A comment that says "filed" names an open entry (ROADMAP O171).** A
+# sentence inside a finished entry is not a filing: it cannot be picked, cited
+# or shut, and the comments that pointed at such sentences cited entries that
+# were already done. So a comment block in `crates/` that claims something was
+# filed, or is an open question, must name at least one entry whose heading
+# is still open. The unit is a maximal run of `//` lines, joined, because a
+# citation breaks across lines. It does NOT see a citation of the wrong open
+# entry, a synonym such as "deferred" or "tracked", or a filing written in
+# ROADMAP bodies or CLAUDE.md, which stay unscanned by ruling.
+#
+# An id is open when a level-3 heading carries it and no heading for that id
+# starts its title with a finished status: closed, superseded, moved or
+# refuted, in either case. Same apostrophe and mawk rules as above.
+roadmap_heading_status() { awk '
+  /^### [A-Z][0-9]+[a-z]? / {
+    id = $2; t = $0
+    sub(/^### [A-Z][0-9]+[a-z]? +(—|-)+ */, "", t)
+    w = tolower(t); sub(/[^a-z].*/, "", w)
+    if (w == "closed" || w == "superseded" || w == "moved" || w == "refuted") done[id] = 1
+    seen[id] = 1
+  }
+  END { for (id in seen) print id "|" ((id in done) ? "done" : "open") }
+' "$1"; }
+filing_citations() { awk '
+  function ids_on(s,   out, rest, at, pre, post, tok) {
+    out = ""; rest = s
+    while (match(rest, /[ACMORTU][0-9]+[a-z]?/)) {
+      at = RSTART; tok = substr(rest, RSTART, RLENGTH)
+      pre = (at > 1) ? substr(rest, at - 1, 1) : " "
+      post = substr(rest, at + RLENGTH, 1)
+      if (pre !~ /[A-Za-z0-9_]/ && post !~ /[A-Za-z0-9_]/) out = out " " tok
+      rest = substr(rest, at + RLENGTH)
+    }
+    return out
+  }
+  function judge(   low, phrase, k, i, cited, anyopen, st) {
+    if (blk == "") return
+    low = tolower(blk)
+    phrase = ""
+    if (match(low, /filed (rather than|separately|as an open question|with the residue|for )/)) phrase = substr(blk, RSTART, RLENGTH)
+    else if (match(low, /open question/)) phrase = substr(blk, RSTART, RLENGTH)
+    if (phrase != "") {
+      triggers++
+      k = split(ids_on(blk), got, " ")
+      cited = ""; anyopen = 0
+      for (i = 1; i <= k; i++) {
+        st = (got[i] in status) ? status[got[i]] : "no-heading"
+        if (st == "open") anyopen = 1
+        cited = cited " " got[i] "=" st
+      }
+      if (!anyopen) print "filing-cites-no-open-entry|" bfile ":" bline "|" phrase "|" (cited == "" ? " none" : cited)
+    }
+    blk = ""
+  }
+  FNR == NR { split($0, kv, "|"); status[kv[1]] = kv[2]; headings++; next }
+  FNR == 1 { judge() }
+  {
+    line = $0
+    if (line ~ /^[ \t]*\/\//) {
+      sub(/^[ \t]*\/\/[\/!]?[ \t]*/, "", line)
+      if (blk == "") { bfile = FILENAME; bline = FNR; blk = line } else blk = blk " " line
+      next
+    }
+    judge()
+  }
+  END { judge(); print "premise|" (headings + 0) "|" (triggers + 0) }
+' "$@"; }
+# PREMISE on fixtures: a cross-line block citing only a finished entry fires,
+# the same block citing an open one is silent, a filing with no id fires, and
+# `filed under`, `filed_at` and `filed as` a key stay silent.
+FC_DIR="$(mktemp -d)"
+printf '%s\n' \
+  '### O9020 — CLOSED 2099-01-01: probe' \
+  '### O9021 — an open probe' \
+  '### O9022 — superseded framing, kept' \
+  '### O9021 — MOVED to the section above' \
+  '### O9023 — RULED 2099-01-01 and not yet built: an open probe' > "$FC_DIR/roadmap.md"
+printf '%s\n' \
+  'fn a() {}' \
+  '    /// The residual is' \
+  '    /// filed' \
+  '    /// separately (ROADMAP O9020).' \
+  'fn b() {}' \
+  '// The same, filed rather than fixed, in O9023.' \
+  'fn c() {}' \
+  '//! An open question with no entry at all.' \
+  'fn d() {}' \
+  '// filed under the wing, then filed_at is read,' \
+  '// and the row is filed as `fde/<hex>`.' \
+  'fn e() {}' \
+  '// Filed for 2.0.0 as O9022 and O9021.' > "$FC_DIR/probe.rs"
+roadmap_heading_status "$FC_DIR/roadmap.md" > "$FC_DIR/status"
+FC_WANT="filing-cites-no-open-entry|$FC_DIR/probe.rs:2|filed separately| O9020=done
+filing-cites-no-open-entry|$FC_DIR/probe.rs:8|open question| none
+filing-cites-no-open-entry|$FC_DIR/probe.rs:13|Filed for | O9022=done O9021=done
+premise|4|4"
+FC_GOT=$(filing_citations "$FC_DIR/status" "$FC_DIR/probe.rs"); rm -rf "$FC_DIR"
+if [ "$FC_GOT" != "$FC_WANT" ]; then
+  echo "FAIL  premise: the filing-citation reader did not produce the exact rows its"
+  echo "      fixture requires (ROADMAP O171). Wanted (<) against got (>):"
+  diff <(printf '%s\n' "$FC_WANT") <(printf '%s\n' "$FC_GOT") | sed 's/^/        /'
+  echo ""; echo "BATTERY FAILED — preflight"; exit 1
+fi
+FC_STATUS="$(mktemp)"
+roadmap_heading_status ROADMAP.md > "$FC_STATUS"
+FC_ROWS=$(filing_citations "$FC_STATUS" $(git ls-files -- 'crates/*.rs')); rm -f "$FC_STATUS"
+FC_PREMISE=$(printf '%s\n' "$FC_ROWS" | grep '^premise|' || true)
+FC_HEAD=$(printf '%s' "$FC_PREMISE" | cut -d'|' -f2)
+FC_TRIG=$(printf '%s' "$FC_PREMISE" | cut -d'|' -f3)
+if [ "${FC_HEAD:-0}" -lt 100 ] || [ "${FC_TRIG:-0}" -lt 1 ]; then
+  echo "FAIL  the filing-citation reader parsed ${FC_HEAD:-0} ROADMAP id heading(s) and"
+  echo "      found ${FC_TRIG:-0} filing comment(s) in crates/. The tree holds hundreds of"
+  echo "      the first and several of the second, so the reader failed (ROADMAP O171)."
+  echo ""; echo "BATTERY FAILED — preflight"; exit 1
+fi
+FC_BAD=$(printf '%s\n' "$FC_ROWS" | grep -v '^premise|' | grep . || true)
+if [ -n "$FC_BAD" ]; then
+  echo "FAIL  a comment says something was filed, and names no open ROADMAP entry"
+  echo "      (ROADMAP O171). A sentence inside a finished entry is not a filing: give the"
+  echo "      item its own entry under '## Open' and cite that id in the comment."
+  while IFS='|' read -r kind where phrase cited; do
+    [ -z "$kind" ] && continue
+    echo "        $where  \"$phrase\" — cites:$cited"
+  done <<< "$FC_BAD"
+  echo ""; echo "BATTERY FAILED — preflight"; exit 1
+fi
+echo "ok    $FC_TRIG filing comment(s) in crates/ each cite an open ROADMAP entry"
+echo "      (ids read from $FC_HEAD headings)"
+
 # ── preflight: every compose file DECLARES its project name ────────────────
 # Undeclared, Compose derives the project from the DIRECTORY, so every
 # container, image, volume and network inherits whatever the clone is called.
