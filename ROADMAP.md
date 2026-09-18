@@ -3990,7 +3990,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**249** of the **264** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**252** of the **267** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -18562,6 +18562,13 @@ DESTINATION decides). **Note the interaction with O140's new destination
 holdings check**: the collision case is now caught, but a clean release of a
 reviewed-but-unruled queue is not, because the counts agree.
 
+**The release is not confined to `migrate_tenant`** (found by O216's panel,
+measured by its probe P3). A plain `import` of a vault's OWN export, with the
+screen off, unwraps each queue record to its recipe id and writes it there as
+an ordinary drawer, while the pending row stays at its queue id — so the text
+is retrievable and still awaiting a ruling at once. Whatever is ruled here
+has to answer that arm too.
+
 **Relations:** shares a diff surface with O147 — both fixes edit `migrate_tenant` in `crates/undercroft-orchestrator/src/proxy.rs`: one conditions its closing source delete, the other refuses before the export or forces `keep_source` in that same branch.
 
 ### O166 — a vault holding Hebrew keeps cosine vectors from before Hebrew's reclassification, until a forced repair
@@ -19495,6 +19502,229 @@ to explain how a payload is told from an operator.
 `admission list` still shows the row. **Counterfactual**: today's upsert,
 under which the row is replaced into an ordinary wing and the queue empties.
 
+#### RULED 2026-09-18 by a three-lens panel (agentic memory architecture, security, software engineering and surface parity) plus an adversarial refuter
+
+**The question.** What must an import do with a record whose id names a row
+that is quarantine-pending in the destination vault, and where does that
+decision live?
+
+**Prior rulings.** A case-insensitive `rul(ed|ing)` search of this entry and
+of every entry it and the lenses name (O215, O148, O219, O30, O170, O31, A28)
+finds no `#### RULED` subsection on this question. Seven prior rulings live in
+code and in finished entries:
+
+- **Pending evidence is not deletable except by a ruling** —
+  `PendingEvidence` and `delete_drawer_ruled`
+  (`crates/undercroft-store/src/manage.rs:36-49`, `:854-866`); the bulk
+  destroyers pre-flight it (`:920-945`). FOLLOWED: it settles that the record
+  is refused.
+- **Pending evidence is not editable** — `update_drawer`
+  (`manage.rs:1017-1037`, C3.3 phase 2), "the reviewer must rule on exactly
+  what the screen saw". FOLLOWED, and it is the closer analogy: an import
+  that replaces a row is an edit of it.
+- **Presence in the reserved wing means the screen put it there and nobody
+  has ruled** (`admission.rs:40`, `lib.rs:5045`). FOLLOWED.
+- **Which copy decides "pending."** `is_quarantine_pending`
+  (`manage.rs:955-971`) reads the clear column for DESTRUCTION callers, so an
+  unreadable row stays actionable; `is_quarantine_pending_for_read`
+  (`:973-999`) reads either copy for content-returning reads and says of
+  itself that it is the opposite of what destruction needs. The clear
+  column's reason is FOLLOWED on the one arm where the covered copy cannot be
+  read; `_for_read` is NOT applied, by its own doc.
+- **O215** — "an import replacing that row wholesale is what a restore IS"
+  (`admission.rs:217-222`, written there as an open residual and adopted by
+  O215) and "a restore repairs a row whose HMAC fails". FOLLOWED for every
+  row that is not pending. Pending rows are carved out, which O215's own
+  record left to this entry ("What this ruling does not cover"); this is not
+  a revision of O215.
+- **O30 / O170** — a check's verdict must not depend on whether the screen
+  diverted the write. FOLLOWED: it decides placement.
+- **The queue-restore unwrap** (`lib.rs:5728-5745`, O31) — refusing
+  reserved-wing records outright broke every legitimate restore, so the
+  destination's detector decides. FOLLOWED: the check keys on the id AFTER
+  the unwrap, and a genuine queue record, which unwraps to its recipe id,
+  never meets it.
+
+O31's no-`UPGRADING.md` precedent is the eighth, and it is refuted below.
+
+**Measured before ruling**, on the release binary at `4ff51ab`. The working
+files are in the session's scratchpad and are material, not record.
+- **CLI, one record** (id Q, wing `notes`). With clean text and the screen
+  on: `0 new, 1 replaced`, `admission list` empty, `verify` OK. With the
+  screen OFF and the ORIGINAL poisoned text: the same, and the unruled text
+  is now retrievable in `notes/inbox`. So the filing's "needs a differing
+  content" is wrong — that case is O215's third outcome.
+- **`/v1` `POST …/import`**: 200, `"replaced":1`, queue empty.
+- **The orchestrator's tenant plane**, found by the security lens and missed
+  by the brief. A tenant's poisoned `POST /t/drawers` answers 202 carrying
+  the queue id. The same tenant is refused `GET /t/drawers/Q` (403) and
+  `DELETE` (400), and `POST /t/import` of a hand-built ordinary-wing record
+  under Q answers 200 `"replaced":1`. The operator's queue is then empty and
+  the tenant reads its planted text back at Q. **The agent whose write was
+  diverted erases its own evidence, and no operator is involved.** `import`
+  is on the tenant allowlist (`crates/undercroft-orchestrator/src/proxy.rs:205`),
+  and the proxy's only import fence scans values for the reserved wing's name
+  (`proxy.rs:351-377`), which an ordinary-wing record never carries.
+- **P1, the in-batch case**, found by two lenses. One CLI chunk holding a
+  genuine queue record followed by an ordinary record declaring its queue id,
+  into an EMPTY vault with the screen on, reports `1 quarantined` beside an
+  empty queue. `import_many` takes every verdict before `upsert_many_held`
+  writes (`lib.rs:5685-5697`), so the second verdict ran before Q existed.
+  `/v1` commits each record before judging the next
+  (`crates/undercroft-cli/src/tenant.rs:3052-3087`), so a door alone would
+  answer this payload differently on the two surfaces.
+- **P2.** An ordinary drawer whose clear `wing` is flipped offline TO the
+  reserved wing is listed by `admission list` with no destination, `allow`
+  answers "not in the quarantine wing", `drawer delete` refuses it with
+  advice to use `allow`/`deny`, and **`drawer update` is the one exit**: it
+  succeeds and `mirror drift` returns to 0.
+- **P3.** A pending row with a zeroed tag makes `admission list` fail for the
+  whole queue and `deny` fail on `Integrity`. Re-importing the genuine
+  exported queue record with the screen ON repairs it through the diversion
+  (`verify` OK). With the screen off it lands at its recipe id and the broken
+  row stays.
+
+**The verdict.**
+1. **Refused at the import door.** One store predicate, reached by
+   `import_many` and `import_record` through `import_verdict`, after
+   `import_unwrap_screened` and before the verdict's other outcomes, the
+   screen and any embed. It is NOT gated on `UNDERCROFT_ADMISSION`: the rows
+   raise the fence, not the flag, and the screen-off case is the proof.
+2. **The covered copy decides.** If the row `import_verdict`'s `get` returns
+   carries the reserved wing in its HMAC-covered `meta.wing`, the record is
+   refused. The clear column decides only on the arm where that `get` fails
+   `Integrity` or `CorruptRow`.
+3. **A pending row whose tag fails refuses as `Integrity`** (exit 2; `/v1`
+   409, class `integrity`), naming the remedy P3 measured: re-import its
+   genuine queue record with `UNDERCROFT_ADMISSION=quarantine` declared.
+4. **A readable pending row refuses as `Invalid`** (exit 1; 400), naming the
+   id, that it awaits a ruling, `admission allow`/`deny`, and that a record
+   exported from the queue restores as exported.
+5. **Refused where met.** A CLI chunk writes nothing; `/v1` stops at the
+   record and names it. That is the contract every store refusal on import
+   already has (`crates/undercroft-cli/src/main.rs:1251-1256`,
+   `tenant.rs:3035-3050`).
+6. **A batch-local arm in `upsert_many_held`.** After the screen and before
+   `embed_declared`, a row the screen did not divert is refused when its id
+   equals the landing id of a row diverted EARLIER in the same batch. It
+   reads no state and costs no embed. On `mine` and the transcript sweep it
+   cannot fire, because the domain tag keeps recipe ids and queue ids apart
+   (`crates/undercroft-core/src/ids.rs:15-23`). It makes the CLI answer P1's
+   payload as `/v1` does.
+7. **PATCH, with an `UPGRADING.md` entry.** A vault this defect already hit
+   exports an ordinary row under a queue id, and a restore of that export
+   into a vault still holding the row now stops. `config check` cannot see
+   data; `admission list` is the detector. Nothing shipped can tell whether
+   the erasure already happened: `verify` answered OK after it in every
+   probe.
+
+**Options that lost.**
+- **A door plus a clear-column boundary in `write_drawer_stmts`** (lenses A
+  and C). The boundary refuses every non-diverted write onto a row whose
+  CLEAR column reads reserved, which closes P2's one exit, `drawer update`,
+  and a re-mine of that id, and leaves the row stuck — the outcome
+  `is_quarantine_pending`'s own doc warns against. It would also exempt
+  diverted writes, so the forged record with flagged text would be answered
+  differently from the same record with clean text (O30/O170's shape). The
+  in-batch finding that motivated it is adopted as verdict 6, which reads no
+  state.
+- **The door alone** (lens B). The CLI and `/v1` would answer P1's payload
+  differently.
+- **A boundary reading the covered copy.** A verified `get` on every write
+  to an existing row, paid by every re-mine, to close a cross-process race
+  (below).
+- **Either copy decides** (lenses A and C). It refuses P2's flipped row,
+  which the tag proves ordinary, with advice `allow` and `deny` cannot
+  follow: O30's trap, in a message.
+- **The clear column alone.** An offline flip AWAY from the reserved wing
+  lets the import replace the row, and the rewrite heals the `mirror_drift`
+  that was the only trace of the flip (A28).
+- **`Invalid` for the tag-broken arm** (lens A). Every door that reads the
+  row first propagates `Integrity` — forget, update, `quarantined`,
+  `admission_pending` — and `EXIT_INTEGRITY`'s doc says exit 1 invites a
+  retry that cannot succeed.
+- **Pre-flight the whole import before its first write** (lens A). CLI pass
+  1 only parses (`main.rs:3348-3354`), so a pre-flight is a new store pass
+  and a second contract for one refusal class. If import atomicity is wanted,
+  it is a question for every store refusal, not for this one.
+- **Skip the record and report it.** It breaks the manifest check
+  (`new + replaced + unchanged == counts.drawers`), would receipt KG facts
+  over the pending content (`kg.rs:2604-2615`), and lets a crafted bundle
+  report success.
+- **Allow it "for a restore of the queue itself"** (the filing's
+  alternative). No such payload exists: a genuine queue record claims the
+  reserved wing and is unwrapped off the queue id, so the queue already has
+  its own restore path, and P3 shows that path repairs a broken row.
+- **No `UPGRADING.md` entry** (lens B, citing O31). O31's test was "no
+  payload any version of this engine has ever emitted", and the export of a
+  vault this defect already hit fails it.
+
+**Claims refuted, the brief's included.**
+- **The brief** omitted the tenant plane, and read the screen-off release as
+  the harm: with the screen off ANY write releases content, so what is
+  specific here is the erased queue entry. It called `import_record` the
+  verdict function (it is `import_verdict`); said whole-batch validation
+  precedes the screen (only with the screen on — otherwise `embed_declared`
+  validates); listed rotation and repair as writes through
+  `write_drawer_stmts` (both issue raw `UPDATE`s); paraphrased the destruction
+  fence as "an unreadable row stays deletable" (not when its clear column
+  reads reserved); and named "an older binary's allow" as a possible producer
+  (`6f88dc4`, which introduced admission, already re-derived the id).
+- **The filing**: "needs a differing content" (the screen-off case has the
+  same content); its line numbers are stale (the reserved-wing guard is at
+  `lib.rs:5048`, the upsert near `:5114`).
+- **Lens A**: its boundary regresses P2's exit; it applied `_for_read`
+  against that function's own doc; it chose `Invalid` while its own forget
+  citation propagates `Integrity`; its "this defect is the only door that
+  clears a tampered pending row" misses the queue-restore door P3 measured;
+  and its "pass 1 already reads everything, so a pre-flight is free" — pass 1
+  reads the file, not the store.
+- **Lens B**: it missed the in-batch case, so its "a boundary would be dead
+  code for import" is false; and its orchestrator gate cannot run as written,
+  because that suite's engines declare no `UNDERCROFT_ADMISSION` and nothing
+  diverts there.
+- **Lens C**: it shares lens A's boundary miss; its class-preservation
+  citation is `tenant.rs:3040-3042` and governs the wrapper, not the store;
+  and its per-record `SELECT wing` is unnecessary under verdict 2.
+
+**Residuals, stated.**
+- **A cross-process race.** The door's `get` runs before `BEGIN IMMEDIATE`,
+  so a SECOND process diverting onto the exact declared id inside that window
+  is not seen. `serve-http` answers from one loop, so a tenant cannot race its
+  own save against its own import; it needs an operator's CLI import of an
+  attacker-authored file, timed against a diversion onto a precomputed id.
+- **A row with its clear column flipped away AND a broken tag** comes back
+  `Replaced`. It needs an offline writer, who can delete the row outright.
+- **Substitution by diversion is not closed** (O220). A flagged record
+  carrying the pending row's FILING, under any other id, passes this door and
+  re-diverts onto the queue id, replacing the content under review — and a
+  tenant reaches it through `/t/import`. This ruling stops erasure and
+  unruled release by id. It does not stop substitution, and no surface may
+  say it does.
+
+**Dissent, recorded.** Lenses A and C ruled for a door plus a boundary; they
+are overruled on P2's measured regression, and their in-batch finding is
+adopted as verdict 6. Lens A ruled for a whole-import pre-flight; overruled
+on the second-contract cost. Lens B ruled for the door alone and no
+`UPGRADING.md` entry; overruled on P1 and on O31's own test.
+
+**Escalated to the maintainer, not decided here.** MCP classes `import` as
+operator-only, "the operator's restore path"
+(`crates/undercroft-cli/src/parity.rs`), while the orchestrator's tenant
+plane offers it to the token its screen polices. Whether the tenant plane
+should offer import is a question of what a surface offers, filed as O222.
+The engine door closes this defect on every surface either way. (Answered
+the same day: import is both a tenant and an operator capability — O222's
+own `#### RULED`.)
+
+**What remains, each filed.** O220 (substitution by diversion); O221 (queue
+rows no ruling door can act on — a tag-broken pending row fails
+`admission list` for the whole queue, and a row flipped to the reserved wing
+is advised toward doors that cannot act on it); O222 (the tenant plane's
+import, for the maintainer). O148 gains the plain-import arm of its release,
+and O219 a note on the in-batch sub-case verdict 6 refuses. O215's P10 stays
+owed.
+
 ### O217 — mempalace records with no chunk index collapse onto one id, and the count says they all landed
 
 **Filed 2026-09-17 by O215's ruling panel; measured by its probe P3 on the
@@ -19567,6 +19797,116 @@ saying so — owes a report that names the collision.
 **Gate**: a payload with one id twice is refused naming both lines, or lands
 once with the collision reported, as ruled. **Counterfactual**: today, silent,
 last-wins, counted twice.
+
+### O220 — a flagged record carrying a pending row's filing re-diverts onto its queue id and replaces the content under review
+
+**Filed 2026-09-18 by O216's ruling panel (security lens and refuter),
+established by reading.** The screen derives a diverted row's id from the
+record's FILING — wing, room, source and chunk — and never from its declared
+id (`admission::filing_ids`, `admission_divert` in
+`crates/undercroft-store/src/admission.rs`). A record whose filing matches a
+pending row's, flagged by the destination's screen, is written through
+`Screen::Bypass(AlreadyDiverted)` onto that row's queue id, and
+`ON CONFLICT(id) DO UPDATE` replaces its content and signals. The reviewer
+then rules on the text the screen saw second, and the first text is gone —
+with no ruling, against `update_drawer`'s "the reviewer must rule on exactly
+what the screen saw".
+
+It is reachable by a tenant through `/t/import`: the 202 from its own
+diverted save carries the queue id, and the chunk index is recoverable
+offline by enumerating `quarantine_drawer_id` over the filing the tenant
+chose. It is reachable by an operator re-mining a file whose flagged chunk
+changed. O216's door keys on the id a record lands under when it is NOT
+diverted, so it cannot see this.
+
+**Why it is a ruling.** The same convergence is what makes a queue restore
+idempotent, and what O216's probe P3 measured repairing a pending row whose
+tag no longer verifies: both land on an existing pending row through the
+diversion, with the same content. Refusing every diversion onto a pending
+row breaks both. Refusing only when the content differs keeps them, and
+must then say what a re-mine of an edited file does with its new flagged
+text.
+
+**Relations:** shares a diff surface with O221 — both decide what a diversion through `admission_divert` and `write_drawer_stmts` may do to an existing pending row: this one when the content differs, the other when the row it lands on no longer verifies.
+
+**Gate**: a flagged record under a fresh id carrying a pending row's filing,
+with different text, leaves the pending row's content and signals
+byte-identical, or is handled as ruled. **Premise**: the same record with the
+pending row's own text converges as today. **Counterfactual**: today, the text
+under review is replaced.
+
+### O221 — a queue row no ruling door can act on: one whose tag fails, and one flipped into the reserved wing
+
+**Filed 2026-09-18 by O216's ruling panel; measured by its probes P2 and P3 on
+the `4ff51ab` binary.**
+- **A pending row whose tag fails** makes `admission list` fail for the WHOLE
+  queue, because `admission_pending` propagates `get`'s error
+  (`crates/undercroft-store/src/admission.rs`). `allow` and `deny` fail on
+  `Integrity` through `quarantined`, `drawer delete` refuses it on the clear
+  column, and, by reading, `repair` aborts on it
+  (`crates/undercroft-store/src/manage.rs:1600-1603`). The one remedy measured
+  is re-importing the genuine queue record with the screen on, which
+  converges onto the row through the diversion. With the screen off there is
+  none.
+- **An ordinary row whose clear `wing` was flipped offline to the reserved
+  wing** is listed with no destination, `allow` answers "not in the quarantine
+  wing", and `drawer delete` refuses it with advice to use `allow`/`deny`,
+  neither of which can act on it. `drawer update` is the one exit, and nothing
+  says so.
+
+**Shape.** `admission list` should report an unverifiable row rather than fail
+on it; the delete fence's advice should match what the ruling doors can do;
+and whether an operator may deny a pending row that fails verification is a
+question of what destroying unverifiable evidence means.
+
+**Relations:** shares a diff surface with O220 — both decide what a diversion through `admission_divert` and `write_drawer_stmts` may do to an existing pending row, and the one remedy measured here is a diversion onto one.
+
+**Gate**: with one pending row's tag zeroed, `admission list` lists the others
+and reports that row; the delete refusal on a row flipped to the reserved wing
+names the exit that works. **Counterfactual**: today's whole-queue failure,
+and advice no door can follow.
+
+### O222 — import is ruled a tenant AND an operator capability, and the orchestrator's operator plane does not offer it yet
+
+**Filed 2026-09-18 by O216's ruling panel and escalated to the maintainer: a
+question of what a surface offers, which a panel does not decide.** `import`
+is on the orchestrator's tenant allowlist
+(`crates/undercroft-orchestrator/src/proxy.rs:205`), so the token whose writes
+the screen diverts may also write records under ids it chooses. MCP classes
+import as operator-only, "the operator's restore path"
+(`crates/undercroft-cli/src/parity.rs`). O216 closes the erasure that reach
+enabled, at the engine door and for every surface, so this is not a hole
+that fix leaves open. It is the question of whether a tenant should hold a
+restore capability at all, and what `docs/MULTI_TENANCY.md` then says.
+
+**Options, for the maintainer.** Keep it: a tenant restores its own backups,
+and the remaining reach through it is the substitution filed separately. Or
+move it to the admin plane, where `migrate_tenant` already drives import, and
+say what a tenant uses instead.
+
+#### RULED 2026-09-18 by the maintainer
+
+Asked with both options above, the maintainer answered: *"have both Tenant
+capabilities and Operator capabilities"*. So import is BOTH: `/t/import` stays
+on the tenant allowlist, and the fleet operator gets it too. Neither option
+as written — the question offered keep-or-move, and the ruling is keep-and-add.
+
+**What that leaves as work, found by reading.** The operator plane does not
+offer import today: `OPS_ROUTES`
+(`crates/undercroft-orchestrator/src/proxy.rs`) holds verify, repair,
+supersessions, forget, verify-forgetting, admission, retention and trust, and
+no import. On a fleet `/v1` is the operator's only door (the reason O14 put
+verify-forgetting there), so an operator reaches import only indirectly,
+through `migrate_tenant`. The build adds `("POST", "import")` to `OPS_ROUTES`,
+exercises it positively in `orchestrator-e2e` beside the other ops routes, and
+documents both planes in `docs/MULTI_TENANCY.md`. Whether `GET …/export` joins
+it is part of that build's reading. The tenant plane refuses an export that
+carries queue rows, and an operator's export would not.
+
+**Gate**: an operator imports into a tenant's vault through the ops plane; the
+tenant plane's import still serves, and still refuses a record naming a row
+awaiting a ruling (O216). **Counterfactual**: today, the ops plane refuses
+import with a named 404, as it does any route outside `OPS_ROUTES`.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 
