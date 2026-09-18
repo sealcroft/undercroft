@@ -246,7 +246,7 @@ POST   /v1/vaults/{id}/repair           (the REMEDIATION half of verify; a write
 POST   /v1/vaults/{id}/anchor           (tighten the manifest rollback anchor; a write)
 POST   /v1/vaults/{id}/rotate           (re-key the vault; sole-writer contract)
 GET    /v1/vaults/{id}/export           (decrypted NDJSON: {drawer, vector} per line)
-POST   /v1/vaults/{id}/import           (NDJSON body, at most 256 MiB — 413 above, never a prefix; returns {imported, quarantined})
+POST   /v1/vaults/{id}/import           (NDJSON body, at most 256 MiB — 413 above, never a prefix; returns {imported, quarantined, new, replaced, unchanged}; 400 on a record naming a row awaiting an admission ruling, 409 if that row fails its HMAC)
 
 ── not under /v1 ────────────────────────────────────────────────────────
 GET    /ui                              (vault admin console; unauthenticated static page)
