@@ -75,6 +75,36 @@ or when they could never be presented.
 
 ## 1.6.0 (unreleased)
 
+### An import that would replace a row awaiting an admission ruling is refused (O216)
+
+**Who is affected:** anyone restoring an export taken from a vault in which
+this defect already fired, into a vault that still holds the queue row it
+fired on. No other payload any version of this engine emits can meet the
+refusal: a record exported from the review queue keeps the reserved wing, is
+unwrapped off the queue id, and restores through the screen as before.
+
+**Symptom:** `undercroft import` exits 1, or `/v1` and `/t/import` answer 400,
+with `imported record <id> names a drawer awaiting an admission ruling in this
+vault — refused`. Nothing in that batch was written. When the pending row also
+fails its HMAC, the answer is the integrity verdict instead — exit 2, `/v1`
+409 — saying the row awaits a ruling and does not verify.
+
+**Cause:** until this release, an import record declaring an ordinary wing
+under a queue row's id replaced that row, so review evidence left the queue
+with no ruling. The export of such a vault carries the replaced row as an
+ordinary drawer under the queue id.
+
+**Fix:** rule on the pending row first — `undercroft admission allow <id>` or
+`admission deny <id>` — then re-run the import; rows it already wrote report
+`unchanged`. For the integrity case, re-import the row's genuine exported
+queue record with `UNDERCROFT_ADMISSION=quarantine` declared, which repairs it
+through the screen. `undercroft config check` cannot detect this, because it
+depends on data rather than on a declaration; `undercroft admission list` is
+the detector. **Nothing shipped can tell whether the erasure already happened
+in a vault**: `verify` answered OK after it in every probe, and the audit chain
+records a diversion as an ordinary drawer write, so no replay can tell a queue
+row an import replaced from one a re-mine rewrote.
+
 ### `undercroft import` restores every record, reports what each one did, and checks the manifest's count (O215)
 
 **Who is affected:** anyone who parses `undercroft import`'s summary line, and

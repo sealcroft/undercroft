@@ -784,7 +784,21 @@ Consequences that are binding, not advisory:
   no-op. The CLI used to decide instead, by asking whether the TEXT existed
   anywhere in the vault — wing-blind, so a restore of a vault holding one text
   in eight wings kept 85 of 680 drawers while `verify` said OK, and any writer
-  who saved that text first could deny the restore),
+  who saved that text first could deny the restore. **One record it refuses
+  before any outcome (O216): one naming a row that awaits an admission
+  ruling.** Pending evidence was neither deletable nor editable except by
+  `allow`/`deny`, and the import was the door left open — through
+  `/t/import`, the agent whose save was diverted could erase its own
+  evidence, the 202 having handed it the queue id. The HMAC-covered wing
+  decides, the clear column only where the row fails its tag (then the
+  refusal is `Integrity`), and it is checked after a queue record's unwrap
+  and before the screen, reading no admission setting. A batch-local arm in
+  `upsert_many_held` refuses an unscreened row landing on an id the same
+  batch just diverted, because the door's verdicts all precede the batch's
+  writes. A clear-column boundary in `write_drawer_stmts` was REJECTED: it
+  would strand an ordinary row whose clear column was flipped to the
+  reserved wing, which `drawer update` is the one door able to heal.
+  What it does not stop is substitution by diversion — O220),
   whole-vault export/import (typed records: drawers + KG
   entities/facts/tunnels; a receipt is RE-DERIVED at the destination from the
   drawer it just imported, never re-keyed from the traveling value — this line
@@ -2094,8 +2108,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (933 run,
-                                      # 4 #[ignore]d = 937 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (937 run,
+                                      # 4 #[ignore]d = 941 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2217,8 +2231,8 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (542 checks)
-docker compose run --rm orchestrator-e2e  # two engines + orchestrator (156 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (547 checks)
+docker compose run --rm orchestrator-e2e  # two engines + orchestrator (159 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (137 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it

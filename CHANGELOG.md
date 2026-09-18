@@ -7,6 +7,50 @@ its CLI mirror `tenant-repoint` are additive — nothing that worked before
 behaves differently because they exist. Everything else in this section is a
 fix whose only observable change is that a defect is gone.
 
+### an import can no longer replace a row awaiting an admission ruling (O216)
+
+A queue id is deterministic and computable offline, and the reserved-wing
+guard fired only when a record DECLARED the reserved wing. So an import record
+declaring an ordinary wing under a queue row's id replaced that row: the review
+queue emptied, the row read as an ordinary drawer, and `verify` answered OK.
+With the screen off, the original flagged text came back retrievable with no
+ruling at all. Measured on all three import surfaces — CLI `import`, `/v1`
+`POST …/import`, and the orchestrator's tenant plane, where **the agent whose
+save the screen had diverted could erase its own evidence**: the 202 reply
+handed it the queue id, `GET` and `DELETE` of that id were refused, and
+`POST /t/import` of a hand-built record under it answered 200. No operator was
+involved.
+
+Ruled by a three-lens panel and an adversarial refuter; the record is O216's
+`#### RULED`. Pending review evidence was already neither deletable nor
+editable except through `admission allow`/`deny`; the import was the one door
+left open.
+
+**What changed:**
+- **The import door refuses such a record**, on both import functions and so
+  on every surface: exit 1 / `/v1` 400, naming the id and telling the operator
+  to rule on it first. It is checked after a queue record's unwrap and before
+  the screen, so a genuine restore of the queue — whose records keep the
+  reserved wing — never meets it, and the refusal cannot depend on whether the
+  screen would divert the record. It reads no admission setting: the rows
+  raise the fence, not the flag.
+- **The HMAC-covered wing decides**, not the clear column: an offline flip of
+  that column cannot let an import replace the row and heal the only trace of
+  the flip. Only where the row fails its HMAC does the clear column decide,
+  and then the refusal is the integrity verdict — exit 2 / 409 — naming the
+  remedy: re-import the genuine queue record with the screen on, which repairs
+  it.
+- **One CLI batch cannot replace the row it just diverted.** A queue record
+  that re-diverts onto its id, followed in the same chunk by an ordinary
+  record declaring that id, reported "1 quarantined" over an empty queue,
+  because every verdict is taken before the batch writes. `/v1`, which commits
+  record by record, already refused it; the batch now does too.
+
+**What it does not close**, filed rather than implied: a flagged record
+carrying a pending row's FILING under any other id still re-diverts onto the
+queue id and replaces the text under review (O220). This change stops erasure
+and unruled release by id; it does not stop substitution.
+
 ### an import restores every distinct drawer, and a repeat restore writes nothing (O215)
 
 `undercroft import` dropped any record whose text another drawer already held,

@@ -657,7 +657,16 @@ write path at all.
   operator act (`undercroft admission …`, `GET /v1/vaults/<id>/admission`),
   not an agent one. The wing refuses forged residents (aiming a save at
   it is a typed 400, never a 500), and quarantine-pending drawers are
-  not editable. Updates are screened on the UPDATING surface, so an
+  not editable — **nor replaceable by an import** (ROADMAP O216). A
+  queue id is deterministic and a diverted save's 202 names it, so an
+  import record declaring an ordinary wing under that id replaced the
+  row and emptied the queue with `verify` OK; through the orchestrator's
+  `/t/import`, the agent whose save was diverted could erase its own
+  evidence. The import door refuses it on every surface, reading the
+  HMAC-covered wing. What that leaves, stated: a flagged record carrying
+  the pending row's FILING under another id still re-diverts onto the
+  queue id and replaces the text under review (O220 — substitution, not
+  erasure). Updates are screened on the UPDATING surface, so an
   untrusted surface cannot ride a trusted writer's standing.
   Deployment-trusted surfaces bypass by declaration
   (`UNDERCROFT_ADMIT_TRUSTED_SOURCES`). A diverted save **says so on

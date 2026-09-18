@@ -232,6 +232,18 @@ identity rather than `cli`/`rest` — accepting someone else's bytes
 wholesale is a distinct act from writing your own, and declaring a save
 surface trusted must not silently extend that trust to bundle contents.
 
+A third property is newer (ROADMAP O216): **an import never replaces a row
+awaiting an admission ruling.** A diverted save's 202 names the queue id, and
+the data-plane fence scans an import only for the reserved wing's NAME, so a
+record declaring an ordinary wing under that id reached the engine and
+replaced the row — the agent whose save was diverted could erase its own
+evidence through `/t/import`. The engine refuses it now, 400 naming the id
+(409 when the row fails its HMAC), on every surface. What remains, stated
+rather than implied: a flagged record carrying the pending row's filing under
+another id still re-diverts onto it and replaces the text under review
+(O220). Import stays a tenant capability by the maintainer's ruling, and is
+to become an operator one too: the ops plane does not offer it yet (O222).
+
 ### §5 — Cosine dedup-refresh on the write path — deliberately NOT the default
 
 The reference makes an automatic cosine-≥0.95 dedup-refresh part of the
@@ -554,7 +566,7 @@ records land on one row. The mapping flip is a compare-and-set, so two
 concurrent migrations cannot both move one tenant. The import half is admission-screened like any other write — a
 migration used to be a re-admission of the whole corpus past the screen,
 because every export line carries a `vector` and a caller-supplied vector
-reached the raw writer (§4). The e2e suite (`tests/e2e-orchestrator.sh`, 156 checks,
+reached the raw writer (§4). The e2e suite (`tests/e2e-orchestrator.sh`, 159 checks,
 `docker compose run --rm orchestrator-e2e`) exercises the whole story
 against two live engine instances, including the source engine provably
 losing the vault after migration and a read replica converging on the

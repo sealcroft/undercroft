@@ -219,7 +219,9 @@ pub(crate) fn validate_declaration(
     // to re-import any vault that had ever deduped. What remains open
     // and is stated rather than hidden: a well-formed id may still name
     // an existing drawer, and an import replacing that row wholesale is
-    // what a restore IS.
+    // what a restore IS — except a row awaiting an admission ruling,
+    // which the import door refuses (`import_verdict`, ROADMAP O216),
+    // since that is a state this pure check cannot see.
     if !crate::is_drawer_id(&drawer.id) {
         return Err(StoreError::Invalid(format!(
             "drawer id {:?} is not a derived drawer id (32 lowercase hex \

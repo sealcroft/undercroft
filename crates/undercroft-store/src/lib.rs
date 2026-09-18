@@ -5335,6 +5335,38 @@ impl VaultStore {
             diverted = vec![false; drawers.len()];
             drawers
         };
+        // A row the screen did not divert may not land on the id a row the
+        // screen diverted EARLIER IN THIS BATCH just took (ROADMAP O216).
+        //
+        // The import door refuses a record naming a row that awaits a ruling,
+        // but it takes every verdict before this function writes anything, so
+        // a queue record that re-diverts onto its queue id, followed in the
+        // same chunk by an ordinary record declaring that id, passed it: the
+        // second verdict ran before the row existed. Measured, into an empty
+        // vault: "1 quarantined" beside an empty queue. `/v1` commits each
+        // record before judging the next, so its door refused the same payload
+        // — and the two surfaces must answer it alike.
+        //
+        // It reads no state and costs no embed. On `mine` and the transcript
+        // sweep it cannot fire: diverted ids are domain-tagged, ordinary ones
+        // are not (`ids::quarantine_drawer_id`), so the two never collide.
+        // A diversion landing on a row an EARLIER ordinary record wrote is a
+        // different question — the queue's convergence (ROADMAP O220).
+        if diverted.iter().any(|&d| d) {
+            let mut queued: std::collections::HashSet<&str> = std::collections::HashSet::new();
+            for (d, &was) in drawers.iter().zip(diverted.iter()) {
+                if was {
+                    queued.insert(d.id.as_str());
+                } else if queued.contains(d.id.as_str()) {
+                    return Err(StoreError::Invalid(format!(
+                        "record {} would replace the drawer this same batch just diverted \
+                         to the admission review queue under that id — refused: review \
+                         evidence is replaced only by a ruling (`admission allow`/`deny`)",
+                        d.id
+                    )));
+                }
+            }
+        }
         // Embedding is CPU work — do it before taking the write lock. Through
         // the validating door, so a batch the choke point would refuse is
         // refused before any of it is embedded (ROADMAP O198). With screening
@@ -5638,6 +5670,30 @@ impl VaultStore {
     /// **A row whose HMAC FAILS is `Replaced`, never an error.** A restore is
     /// the remedy for a tampered row: a door that propagated `Integrity` here
     /// would abort on precisely the row it was called to repair.
+    ///
+    /// **Except a row awaiting an admission ruling, which no import replaces
+    /// (ROADMAP O216).** Pending review evidence is neither deletable nor
+    /// editable except through `admission allow`/`deny`, and an import that
+    /// upserts over it is both: it rewrote the row into an ordinary wing, the
+    /// queue emptied, and `verify` answered OK. The orchestrator's tenant plane
+    /// made that reachable by the very agent whose write the screen had
+    /// diverted — its 202 carried the queue id — with no operator involved.
+    ///
+    /// Three decisions the ruling made, each load-bearing:
+    /// - **Here, after the unwrap and before the screen.** Both import surfaces
+    ///   reach this function first, so the refusal cannot depend on whether the
+    ///   screen would divert the record (O30/O170), and a genuine queue record —
+    ///   which claims the reserved wing and is unwrapped to its recipe id —
+    ///   never meets it. It reads no admission setting: the rows raise the
+    ///   fence, not the flag.
+    /// - **The HMAC-covered `meta.wing` decides**, not the clear column (A28):
+    ///   a column flipped away from the reserved wing must not let an import
+    ///   replace the row and heal the only trace of the flip. A column flipped
+    ///   TO it over an ordinary row is repaired as before, because the tag
+    ///   proves the row ordinary and neither ruling door can act on it.
+    /// - **Only where the row cannot be read does the clear column decide**,
+    ///   the destruction callers' rule (`is_quarantine_pending`), and the answer
+    ///   is `Integrity`: every door that reads such a row refuses it that way.
     pub(crate) fn import_verdict(
         &self,
         drawer: &Drawer,
@@ -5645,13 +5701,33 @@ impl VaultStore {
         let existing = match self.get(&drawer.id, Read::Internal(InternalRead::WritePathLookup)) {
             Ok(row) => row,
             Err(StoreError::Integrity(_)) | Err(StoreError::CorruptRow { .. }) => {
-                return Ok((ImportLanding::Replaced, None))
+                if self.is_quarantine_pending(&drawer.id)? {
+                    return Err(StoreError::Integrity(format!(
+                        "{} (it awaits an admission ruling and its tag does not verify, so \
+                         an import may not replace it and `admission allow`/`deny` cannot \
+                         rule on it; re-import its genuine exported queue record with \
+                         UNDERCROFT_ADMISSION=quarantine declared, which repairs it through \
+                         the screen)",
+                        drawer.id
+                    )));
+                }
+                return Ok((ImportLanding::Replaced, None));
             }
             Err(e) => return Err(e),
         };
         let Some(existing) = existing else {
             return Ok((ImportLanding::New, None));
         };
+        if existing.meta.wing == crate::admission::QUARANTINE_WING {
+            return Err(StoreError::Invalid(format!(
+                "imported record {id} names a drawer awaiting an admission ruling in this \
+                 vault — refused: an import may not replace review evidence. Rule on it \
+                 first with `admission allow {id}` or `admission deny {id}`. A record \
+                 exported from the review queue keeps the reserved wing and restores \
+                 through the screen, so a genuine restore never meets this refusal",
+                id = drawer.id
+            )));
+        }
         if existing.content != drawer.content {
             return Ok((ImportLanding::Replaced, None));
         }
@@ -24422,6 +24498,277 @@ mod tests {
         );
         assert_eq!(count(&calls), 0, "with the vector the vault holds");
         assert!(same_vector(&s.stored_embedding(&d.id).unwrap(), &held));
+    }
+
+    // ---- ROADMAP O216: an import never replaces a row awaiting a ruling ----
+
+    /// A record declaring the ORDINARY wing `notes` under `id` — the shape a
+    /// payload author builds from a queue id the screen handed back.
+    fn o216_forged(id: &str, text: &str) -> Drawer {
+        let mut d = drawer("notes", "inbox", text, 0);
+        d.id = id.to_string();
+        d
+    }
+
+    /// **An import never replaces a row awaiting an admission ruling, on
+    /// either import function, whether or not the screen is on and whatever
+    /// the record says** (ROADMAP O216). The row is seeded by a REAL diversion,
+    /// never by SQL, because a SQL-seeded row carries an ordinary covered wing
+    /// and would pass for the wrong reason.
+    ///
+    /// The flagged-text arm with the screen on is what pins the refusal in
+    /// FRONT of the screen: the forged record shares the pending row's filing,
+    /// so a check after the screen would see a diversion converging onto the
+    /// row and let it through.
+    ///
+    /// Counterfactual (`4ff51ab`): every arm answers `replaced` and the queue
+    /// empties.
+    #[test]
+    fn an_import_never_replaces_a_row_awaiting_a_ruling() {
+        use crate::egress_doubles::{count, reset, served_store};
+        const CLEAN: &str = "a perfectly ordinary note about herons";
+        let (_d, mut s, calls) = served_store(SecurityLevel::Sealed);
+        s.set_admission(true);
+        let out = s
+            .upsert_screened(&drawer("notes", "inbox", O170_POISON, 0))
+            .unwrap();
+        assert!(out.quarantined, "premise: the save is diverted");
+        let q = out.id.clone();
+        let pending = |s: &VaultStore| -> Vec<String> {
+            s.admission_pending()
+                .unwrap()
+                .into_iter()
+                .map(|p| p.id)
+                .collect()
+        };
+        assert_eq!(pending(&s), vec![q.clone()], "premise: Q awaits a ruling");
+        let before = s
+            .get(&q, Read::Internal(InternalRead::Verification))
+            .unwrap()
+            .unwrap();
+        let writes = s.stats().unwrap().writes;
+
+        for screen in [true, false] {
+            s.set_admission(screen);
+            for text in [CLEAN, O170_POISON] {
+                let forged = o216_forged(&q, text);
+                reset(&calls);
+                let batch = s.import_many(std::slice::from_ref(&forged)).unwrap_err();
+                let single = s.import_record(&forged, None, IMPORT_SURFACE).unwrap_err();
+                for err in [batch, single] {
+                    assert!(
+                        matches!(&err, StoreError::Invalid(m)
+                            if m.contains(&q) && m.contains("awaiting an admission ruling")),
+                        "screen={screen}, text={text:?}: {err:?}"
+                    );
+                }
+                assert_eq!(count(&calls), 0, "refused before anything is embedded");
+                assert_eq!(
+                    pending(&s),
+                    vec![q.clone()],
+                    "the row still awaits a ruling"
+                );
+                let now = s
+                    .get(&q, Read::Internal(InternalRead::Verification))
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(now.content, before.content, "its content is untouched");
+                assert_eq!(now.meta, before.meta, "and so is everything the screen saw");
+                assert_eq!(s.stats().unwrap().writes, writes, "and no write happened");
+            }
+        }
+
+        // PREMISE: the same forged shape over an ORDINARY row is a restore,
+        // and is still written — the refusal is about the row, not the record.
+        s.set_admission(false);
+        let ordinary = drawer("notes", "inbox", "the heron nests by the weir", 7);
+        s.upsert(&ordinary).unwrap();
+        let out = s
+            .import_many(&[o216_forged(&ordinary.id, CLEAN)])
+            .expect("a restore over an ordinary row is written");
+        assert_eq!((out.new, out.replaced, out.unchanged), (0, 1, 0));
+
+        // CONTROL: a record exported FROM the queue restores as exported. It
+        // claims the reserved wing, is unwrapped off the queue id, and with the
+        // screen on converges back onto it — here and in a fresh vault.
+        s.set_admission(true);
+        let queue_record = s
+            .export_all()
+            .unwrap()
+            .into_iter()
+            .find(|d| d.id == q)
+            .expect("the export carries the queue row");
+        assert_eq!(queue_record.meta.wing, crate::admission::QUARANTINE_WING);
+        let out = s
+            .import_many(std::slice::from_ref(&queue_record))
+            .expect("a genuine queue record never meets the refusal");
+        assert_eq!(out.quarantined, 1);
+        assert_eq!(pending(&s), vec![q.clone()]);
+        let (_d2, mut fresh) = store(SecurityLevel::Sealed);
+        fresh.set_admission(true);
+        fresh
+            .import_many(std::slice::from_ref(&queue_record))
+            .unwrap();
+        assert_eq!(pending(&fresh), vec![q.clone()], "the queue id converges");
+    }
+
+    /// **The HMAC-covered wing decides what is pending; the clear column only
+    /// where the row cannot be read** (ROADMAP O216, verdicts 2 and 3).
+    ///
+    /// - A clear column flipped AWAY from the reserved wing does not let an
+    ///   import replace the row — a clear-only check would, and the rewrite
+    ///   would heal the `mirror_drift` that was the only trace of the flip.
+    /// - A clear column flipped TO it over an ordinary row is repaired as any
+    ///   tampered row is: the tag proves the row ordinary, and refusing would
+    ///   point at `allow`/`deny`, neither of which can act on it.
+    /// - A pending row whose tag fails refuses as `Integrity`, and the genuine
+    ///   queue record, screen on, repairs it.
+    #[test]
+    fn the_covered_wing_decides_what_an_import_may_not_replace() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        s.set_admission(true);
+        let q = s
+            .upsert_screened(&drawer("notes", "inbox", O170_POISON, 0))
+            .unwrap()
+            .id;
+        let queue_record = s
+            .export_all()
+            .unwrap()
+            .into_iter()
+            .find(|d| d.id == q)
+            .unwrap();
+        let flip = |s: &VaultStore, id: &str, wing: &str| {
+            s.conn
+                .execute(
+                    "UPDATE drawers SET wing = ?1 WHERE id = ?2",
+                    params![wing, id],
+                )
+                .unwrap();
+        };
+
+        // Flipped away: still refused, and the drift stays visible.
+        flip(&s, &q, "notes");
+        assert!(
+            !s.verify().unwrap().ok(),
+            "premise: the flip is mirror drift"
+        );
+        let err = s
+            .import_many(&[o216_forged(&q, "a clean note")])
+            .unwrap_err();
+        assert!(matches!(err, StoreError::Invalid(_)), "{err:?}");
+        assert!(!s.verify().unwrap().ok(), "the drift is not healed");
+        flip(&s, &q, crate::admission::QUARANTINE_WING);
+        assert!(s.verify().unwrap().ok(), "premise: restored");
+
+        // Flipped TO the reserved wing over an ordinary row: not refused.
+        let ordinary = drawer("notes", "inbox", "the heron nests by the weir", 3);
+        s.upsert(&ordinary).unwrap();
+        flip(&s, &ordinary.id, crate::admission::QUARANTINE_WING);
+        assert!(!s.verify().unwrap().ok(), "premise: drift");
+        // A COST, pinned rather than hidden (ROADMAP O221): the identical
+        // record is O215's no-op, because the covered copy matches, so the
+        // flipped column is left as it was. If this starts writing, O221
+        // closed it — record that, do not absorb it.
+        let out = s
+            .import_many(std::slice::from_ref(&ordinary))
+            .expect("an ordinary row the tag vouches for is never refused");
+        assert_eq!((out.replaced, out.unchanged), (0, 1));
+        assert!(
+            !s.verify().unwrap().ok(),
+            "cost: the drift is left in place"
+        );
+        let mut newer = ordinary.clone();
+        newer.content = "the heron nests by the weir, again this spring".into();
+        let out = s
+            .import_many(std::slice::from_ref(&newer))
+            .expect("a changed record over it is a restore");
+        assert_eq!(out.replaced, 1);
+        assert!(s.verify().unwrap().ok(), "and the rewrite heals the column");
+
+        // A pending row whose tag fails: `Integrity`, then the remedy.
+        s.conn
+            .execute(
+                "UPDATE drawers SET tag = ?1 WHERE id = ?2",
+                params![vec![0u8; 32], q],
+            )
+            .unwrap();
+        let err = s
+            .import_many(&[o216_forged(&q, "a clean note")])
+            .unwrap_err();
+        assert!(
+            matches!(&err, StoreError::Integrity(m) if m.contains("awaits an admission ruling")),
+            "{err:?}"
+        );
+        let err = s
+            .import_record(&o216_forged(&q, "a clean note"), None, IMPORT_SURFACE)
+            .unwrap_err();
+        assert!(matches!(err, StoreError::Integrity(_)), "{err:?}");
+        s.import_many(std::slice::from_ref(&queue_record))
+            .expect("the genuine queue record repairs it through the screen");
+        assert!(s.verify().unwrap().ok(), "and the vault verifies again");
+        assert_eq!(s.admission_pending().unwrap().len(), 1);
+    }
+
+    /// **One CLI batch cannot replace the row it just diverted** (ROADMAP
+    /// O216, verdict 6). The import door takes every verdict before the batch
+    /// writes, so a queue record that re-diverts onto its id, followed by an
+    /// ordinary record declaring that id, passed it and reported
+    /// "1 quarantined" over an empty queue. `/v1` judges record by record, so
+    /// its door refused the same payload; the batch arm makes the two agree.
+    /// It must never fire on a re-mine, whose diverted and ordinary ids live in
+    /// different id spaces.
+    ///
+    /// Counterfactual: without the arm, the batch succeeds and the queue is
+    /// empty.
+    #[test]
+    fn a_batch_cannot_replace_the_row_it_just_diverted() {
+        use crate::egress_doubles::{count, reset, served_store};
+        let (_s0, mut src) = store(SecurityLevel::Sealed);
+        src.set_admission(true);
+        let q = src
+            .upsert_screened(&drawer("notes", "inbox", O170_POISON, 0))
+            .unwrap()
+            .id;
+        let queue_record = src
+            .export_all()
+            .unwrap()
+            .into_iter()
+            .find(|d| d.id == q)
+            .unwrap();
+        let payload = [queue_record.clone(), o216_forged(&q, "a clean note")];
+
+        let (_d, mut s, calls) = served_store(SecurityLevel::Sealed);
+        s.set_admission(true);
+        reset(&calls);
+        let err = s.import_many(&payload).unwrap_err();
+        assert!(
+            matches!(&err, StoreError::Invalid(m) if m.contains(&q) && m.contains("same batch")),
+            "{err:?}"
+        );
+        assert_eq!(count(&calls), 0, "refused before anything is embedded");
+        assert_eq!(s.stats().unwrap().records, 0, "and the batch wrote nothing");
+
+        // `/v1`'s answer to the same payload, record by record.
+        let first = s.import_record(&payload[0], None, IMPORT_SURFACE).unwrap();
+        assert!(first.quarantined && first.id == q, "{first:?}");
+        let err = s
+            .import_record(&payload[1], None, IMPORT_SURFACE)
+            .unwrap_err();
+        assert!(matches!(err, StoreError::Invalid(_)), "{err:?}");
+        assert_eq!(s.admission_pending().unwrap().len(), 1);
+
+        // Inert on a re-mine: a flagged chunk and its clean neighbour, twice.
+        let (_d3, mut m) = store(SecurityLevel::Sealed);
+        m.set_admission(true);
+        let chunks = [
+            drawer("docs", "r", O170_POISON, 0),
+            drawer("docs", "r", "the lock gates are inspected monthly", 1),
+        ];
+        for pass in 0..2 {
+            let out = m.upsert_many(&chunks).unwrap();
+            assert_eq!(out.quarantined, 1, "pass {pass}");
+        }
+        assert_eq!(m.admission_pending().unwrap().len(), 1, "one queue row");
     }
 
     /// **A dedup save is judged on the declaration it was given, whether or not
