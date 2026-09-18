@@ -769,7 +769,23 @@ Consequences that are binding, not advisory:
   keyed receipt over the superseded content's fingerprint in separate
   columns — the kg source_fp/receipt_tag shape one level up, the receipt
   re-keyed on rotation while the fingerprint does not move; five verdicts
-  via `verify_supersessions`; superseding NEVER deletes), whole-vault export/import (typed records: drawers + KG
+  via `verify_supersessions`; superseding NEVER deletes),
+  **the import door** (`import_many` + `import_verdict`, ROADMAP O215 — the
+  one place both import surfaces decide what an incoming record DOES to the
+  vault, in four outcomes: a record the vault lacks is written, one it holds
+  byte for byte writes nothing, one whose metadata moved is written with the
+  vector the vault already holds, and one whose content differs — or whose row
+  fails its HMAC — is written and embedded, because a restore is the remedy for
+  a tampered row. It reads the drawer through `get`, never the `fp` column,
+  which is NFC-folded and outside HMAC coverage. It is its own door because
+  none of the alternatives could hold it: the CLI cannot know the landing id, a
+  boundary check may not read database state, and `upsert_many` also serves
+  `mine` and the sweep, where a no-op rule would silently make re-mining a
+  no-op. The CLI used to decide instead, by asking whether the TEXT existed
+  anywhere in the vault — wing-blind, so a restore of a vault holding one text
+  in eight wings kept 85 of 680 drawers while `verify` said OK, and any writer
+  who saved that text first could deny the restore),
+  whole-vault export/import (typed records: drawers + KG
   entities/facts/tunnels; a receipt is RE-DERIVED at the destination from the
   drawer it just imported, never re-keyed from the traveling value — this line
   said "receipts re-key from the traveling fp" until 2026-09-09 and that
@@ -2078,8 +2094,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (929 run,
-                                      # 4 #[ignore]d = 933 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (933 run,
+                                      # 4 #[ignore]d = 937 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2201,7 +2217,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (538 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (542 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (156 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (137 checks; weaviate

@@ -62,7 +62,7 @@ fn lookup(lang: &str, key: &str) -> Option<&'static str> {
             "Swept {files} transcript(s): {filed} message drawer(s) filed, {skipped} already present"
         ),
         ("en", "imported-summary") => msg!(
-            "Imported {n} drawer(s) into vault '{vault}' ({skipped} duplicates skipped)"
+            "Imported {n} record(s) into vault '{vault}' ({new} new, {replaced} replaced, {unchanged} unchanged)"
         ),
         // ------------------------------------------------------- Deutsch
         ("de", "palace-initialized") => msg!("Palast initialisiert unter {path}"),
@@ -81,7 +81,7 @@ fn lookup(lang: &str, key: &str) -> Option<&'static str> {
             "{files} Transkript(e) durchsucht: {filed} Nachrichten-Schublade(n) abgelegt, {skipped} bereits vorhanden"
         ),
         ("de", "imported-summary") => msg!(
-            "{n} Schublade(n) in Tresor '{vault}' importiert ({skipped} Duplikate übersprungen)"
+            "{n} Datensatz/Datensätze in Tresor '{vault}' importiert ({new} neu, {replaced} ersetzt, {unchanged} unverändert)"
         ),
         // ------------------------------------------------------- Español
         ("es", "palace-initialized") => msg!("Palacio inicializado en {path}"),
@@ -100,7 +100,7 @@ fn lookup(lang: &str, key: &str) -> Option<&'static str> {
             "{files} transcripción(es) barridas: {filed} cajón(es) de mensajes archivados, {skipped} ya presentes"
         ),
         ("es", "imported-summary") => msg!(
-            "{n} cajón(es) importados a la bóveda '{vault}' ({skipped} duplicados omitidos)"
+            "{n} registro(s) importados a la bóveda '{vault}' ({new} nuevos, {replaced} reemplazados, {unchanged} sin cambios)"
         ),
         // ------------------------------------------------------ Français
         ("fr", "palace-initialized") => msg!("Palais initialisé dans {path}"),
@@ -119,7 +119,7 @@ fn lookup(lang: &str, key: &str) -> Option<&'static str> {
             "{files} transcription(s) balayées : {filed} tiroir(s) de messages classés, {skipped} déjà présents"
         ),
         ("fr", "imported-summary") => msg!(
-            "{n} tiroir(s) importés dans le coffre '{vault}' ({skipped} doublons ignorés)"
+            "{n} enregistrement(s) importés dans le coffre '{vault}' ({new} nouveaux, {replaced} remplacés, {unchanged} inchangés)"
         ),
         // ------------------------------------------------------ Italiano
         ("it", "palace-initialized") => msg!("Palazzo inizializzato in {path}"),
@@ -138,7 +138,7 @@ fn lookup(lang: &str, key: &str) -> Option<&'static str> {
             "{files} trascrizione/i esaminate: {filed} cassetto/i di messaggi archiviati, {skipped} già presenti"
         ),
         ("it", "imported-summary") => msg!(
-            "{n} cassetto/i importati nella cassaforte '{vault}' ({skipped} duplicati saltati)"
+            "{n} record importati nella cassaforte '{vault}' ({new} nuovi, {replaced} sostituiti, {unchanged} invariati)"
         ),
         // ----------------------------------------------------- Português
         ("pt", "palace-initialized") => msg!("Palácio inicializado em {path}"),
@@ -157,7 +157,7 @@ fn lookup(lang: &str, key: &str) -> Option<&'static str> {
             "{files} transcrição(ões) varridas: {filed} gaveta(s) de mensagens arquivadas, {skipped} já presentes"
         ),
         ("pt", "imported-summary") => msg!(
-            "{n} gaveta(s) importadas para o cofre '{vault}' ({skipped} duplicatas ignoradas)"
+            "{n} registro(s) importados para o cofre '{vault}' ({new} novos, {replaced} substituídos, {unchanged} inalterados)"
         ),
         // ------------------------------------------------------- Русский
         ("ru", "palace-initialized") => msg!("Дворец инициализирован в {path}"),
@@ -176,7 +176,7 @@ fn lookup(lang: &str, key: &str) -> Option<&'static str> {
             "Транскриптов просмотрено: {files}; сохранено ящиков-сообщений: {filed}, уже имелось: {skipped}"
         ),
         ("ru", "imported-summary") => msg!(
-            "Импортировано ящиков в хранилище '{vault}': {n} (пропущено дубликатов: {skipped})"
+            "Импортировано записей в хранилище '{vault}': {n} (новых: {new}, заменено: {replaced}, без изменений: {unchanged})"
         ),
         // -------------------------------------------------------- 中文
         ("zh", "palace-initialized") => msg!("记忆宫殿已在 {path} 初始化"),
@@ -195,7 +195,7 @@ fn lookup(lang: &str, key: &str) -> Option<&'static str> {
             "已扫描 {files} 份对话记录：归档 {filed} 条消息抽屉，{skipped} 条已存在"
         ),
         ("zh", "imported-summary") => msg!(
-            "已向保险库 '{vault}' 导入 {n} 个抽屉（跳过 {skipped} 个重复项）"
+            "已向保险库 '{vault}' 导入 {n} 条记录（新增 {new} 条，替换 {replaced} 条，未变 {unchanged} 条）"
         ),
         // ------------------------------------------------------- 한국어
         ("ko", "palace-initialized") => msg!("궁전이 {path} 에 초기화되었습니다"),
@@ -214,7 +214,7 @@ fn lookup(lang: &str, key: &str) -> Option<&'static str> {
             "대화 기록 {files}건 스캔: 메시지 서랍 {filed}개 보관, {skipped}개는 이미 존재"
         ),
         ("ko", "imported-summary") => msg!(
-            "금고 '{vault}' 로 서랍 {n}개 가져옴 (중복 {skipped}개 건너뜀)"
+            "금고 '{vault}' 로 레코드 {n}개 가져옴 (신규 {new}개, 교체 {replaced}개, 변경 없음 {unchanged}개)"
         ),
         // -------------------------------------------------------- हिन्दी
         ("hi", "palace-initialized") => msg!("महल {path} पर आरंभ किया गया"),
@@ -233,7 +233,7 @@ fn lookup(lang: &str, key: &str) -> Option<&'static str> {
             "{files} प्रतिलेख स्कैन किए गए: {filed} संदेश-दराज रखे गए, {skipped} पहले से मौजूद"
         ),
         ("hi", "imported-summary") => msg!(
-            "तिजोरी '{vault}' में {n} दराज आयात किए गए ({skipped} डुप्लिकेट छोड़े गए)"
+            "तिजोरी '{vault}' में {n} रिकॉर्ड आयात किए गए ({new} नए, {replaced} प्रतिस्थापित, {unchanged} अपरिवर्तित)"
         ),
         _ => None,
     }

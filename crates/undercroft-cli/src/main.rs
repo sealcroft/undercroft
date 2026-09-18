@@ -1229,6 +1229,37 @@ fn upsert_batched(
     Ok(total)
 }
 
+/// [`upsert_batched`] for an IMPORT: the same bounded chunks through the
+/// store's import door, which decides what each record does to the vault
+/// (ROADMAP O215).
+///
+/// A separate helper rather than a flag on the one above, because the two
+/// answer different questions. `mine` and the transcript sweep produce
+/// drawers this vault is filing for the first time, and a re-run is a no-op
+/// by identity; an import carries records another vault already filed, and
+/// whether one is new, moved or already here is a question only the row it
+/// names can answer.
+fn import_batched(
+    store: &mut undercroft_store::VaultStore,
+    drawers: &[Drawer],
+) -> Result<undercroft_store::ImportOutcome> {
+    let mut total = undercroft_store::ImportOutcome::default();
+    for (c, chunk) in drawers.chunks(INGEST_BATCH).enumerate() {
+        // The same range context `upsert_batched` gives, and for the same
+        // reason: a batch is one transaction, so the failing record is not
+        // individually identifiable here.
+        let out = store.import_many(chunk).with_context(|| {
+            let first = c * INGEST_BATCH + 1;
+            let last = first + chunk.len() - 1;
+            format!(
+                "importing records {first}-{last} (this batch is one transaction, so none of it was written; records before it were)"
+            )
+        })?;
+        total.absorb(out);
+    }
+    Ok(total)
+}
+
 /// The line every bulk ingest prints when the screen diverted part of the
 /// batch. `undercroft import` printed "imported 500" while an arbitrary
 /// number of those drawers sat in `quarantine-pending` — unretrievable by
@@ -3308,11 +3339,9 @@ fn run(cli: Cli) -> Result<()> {
                         .unwrap_or_default(),
                 );
             }
-            let mut skipped = 0usize;
             let mut kg_facts = 0usize;
             let mut kg_entities = 0usize;
             let mut tunnels = 0usize;
-            let mut seen: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
             let mut batch: Vec<Drawer> = Vec::new();
             let mut kg_batch: Vec<undercroft_store::TripleExport> = Vec::new();
             let mut entity_batch: Vec<(String, String)> = Vec::new();
@@ -3330,20 +3359,15 @@ fn run(cli: Cli) -> Result<()> {
             // corpus used to sit in `batch` before the first write; it held
             // 2,002 MB importing a 467.7 MB bundle (O138 measured it, and
             // took the OTHER buffers out).
-            let mut imported = 0usize;
-            let mut bulk = undercroft_store::BulkOutcome::default();
+            let mut landed = undercroft_store::ImportOutcome::default();
             let flush = |store: &mut undercroft_store::VaultStore,
                          batch: &mut Vec<Drawer>,
-                         imported: &mut usize,
-                         bulk: &mut undercroft_store::BulkOutcome|
+                         landed: &mut undercroft_store::ImportOutcome|
              -> Result<()> {
                 if batch.is_empty() {
                     return Ok(());
                 }
-                *imported += batch.len();
-                let out = upsert_batched(store, batch)?;
-                bulk.created += out.created;
-                bulk.quarantined += out.quarantined;
+                landed.absorb(import_batched(store, batch)?);
                 batch.clear();
                 Ok(())
             };
@@ -3354,24 +3378,26 @@ fn run(cli: Cli) -> Result<()> {
                     ImportRecord::Entity(name, etype) => entity_batch.push((name, etype)),
                     ImportRecord::Tunnel(f, to_w, l) => tunnel_batch.push((f, to_w, l)),
                     ImportRecord::Drawer(drawer) => {
-                        // ROADMAP O138: the in-payload dedup set holds the
-                        // store's own keyed fingerprint, not a clone of every
-                        // drawer's content. Same question, same recipe as the
-                        // `check_duplicate` on the next line.
-                        let fp = store.content_fingerprint(&drawer.content);
-                        if seen.contains(&fp) || store.check_duplicate(&drawer.content)?.is_some() {
-                            skipped += 1;
-                            continue;
-                        }
-                        seen.insert(fp);
+                        // Every record goes to the door; the STORE decides
+                        // what each one does to the vault (ROADMAP O215).
+                        //
+                        // This loop used to decide instead, by asking whether
+                        // the drawer's TEXT existed anywhere in the vault and
+                        // dropping the record if it did — so a restore of a
+                        // vault holding one text in eight wings kept one of
+                        // the eight, and seven ids stopped resolving. The
+                        // question an import has to answer is about the ROW
+                        // this record names, and only the store can answer it:
+                        // the id a record lands under is re-derived behind a
+                        // private unwrap, and the screen can move it again.
                         batch.push(*drawer);
                         if batch.len() >= INGEST_BATCH {
-                            flush(&mut store, &mut batch, &mut imported, &mut bulk)?;
+                            flush(&mut store, &mut batch, &mut landed)?;
                         }
                     }
                 }
             }
-            flush(&mut store, &mut batch, &mut imported, &mut bulk)?;
+            flush(&mut store, &mut batch, &mut landed)?;
             // KG and tunnel records go after drawers so receipts can bind
             // against drawers arriving in the same payload.
             for (name, etype) in &entity_batch {
@@ -3391,13 +3417,42 @@ fn run(cli: Cli) -> Result<()> {
                 fill(
                     tr("imported-summary"),
                     &[
-                        ("n", imported.to_string()),
+                        ("n", landed.records().to_string()),
                         ("vault", vault.clone()),
-                        ("skipped", skipped.to_string()),
+                        ("new", landed.new.to_string()),
+                        ("replaced", landed.replaced.to_string()),
+                        ("unchanged", landed.unchanged.to_string()),
                     ]
                 )
             );
-            report_quarantined(bulk.quarantined);
+            report_quarantined(landed.quarantined);
+            // **The manifest's own count, checked** (ROADMAP O215). A restore
+            // that silently keeps fewer drawers than the payload declared is
+            // the failure this unit exists to end, and `/v1`'s migration has
+            // judged it since O140 (`DestinationDiverged`) while the CLI —
+            // the path `UPGRADING.md` prescribes when that route's ceiling
+            // refuses — judged nothing.
+            //
+            // Against RECORDS DECIDED, never rows held: the CLI restores into
+            // vaults that already hold drawers, where O140's `held !=
+            // declared` would fire on every legitimate restore. The count is
+            // inside the manifest's signature, so a payload cannot move it
+            // without breaking attestation.
+            if let Some(m) = &manifest {
+                let declared = m.counts.drawers as usize;
+                if declared > 0 && landed.records() != declared {
+                    bail!(
+                        "the payload declares {declared} drawer(s) and this import decided on \
+                         {} ({} new, {} replaced, {} unchanged) — the vault may now hold fewer \
+                         drawers than the export did; nothing was rolled back, so compare the \
+                         two before deleting the source",
+                        landed.records(),
+                        landed.new,
+                        landed.replaced,
+                        landed.unchanged
+                    );
+                }
+            }
             if kg_facts + kg_entities + tunnels > 0 {
                 println!(
                     "knowledge graph: {kg_facts} fact(s) (receipts re-keyed), \
@@ -4392,10 +4447,9 @@ fn sweep_path(
         return Ok((0, 0, 0));
     }
     let mut filed = 0usize;
-    let mut skipped = 0usize;
+    let mut created = 0usize;
     let mut screened = 0usize;
     let mut batch: Vec<Drawer> = Vec::new();
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for file in &files {
         let Ok(text) = std::fs::read_to_string(file) else {
             continue;
@@ -4406,14 +4460,17 @@ fn sweep_path(
             // multi-party conversation does not collapse to two roles.
             let content = format!("{}: {}", undercroft_core::convo::label(&msg), msg.text);
             let normalized = normalize_content(&content);
-            // One drawer per message, keyed by (file, line) — re-sweeps
-            // are no-ops for already-filed messages. The in-batch set
-            // covers duplicates not yet flushed to the store.
-            if seen.contains(&normalized) || store.check_duplicate(&normalized)?.is_some() {
-                skipped += 1;
-                continue;
-            }
-            seen.insert(normalized.clone());
+            // One drawer per message, keyed by (file, line): a re-sweep
+            // derives the same id and upserts the same row, so it is a no-op
+            // by IDENTITY and needs no content test.
+            //
+            // It had one, and the comment above described the fix while the
+            // code did the opposite (ROADMAP O215): the check asked whether
+            // this TEXT existed anywhere in the vault, so every repeated
+            // message in a transcript — "ok", "thanks", a repeated system
+            // turn — was dropped on the first sweep and every sweep after.
+            // `skipped` is now what it says: messages whose drawer the vault
+            // already held, counted from the ids the store found new.
             batch.push(
                 Drawer::new(
                     wing,
@@ -4430,14 +4487,20 @@ fn sweep_path(
             );
             filed += 1;
             if batch.len() >= INGEST_BATCH {
-                screened += upsert_batched(store, &batch)?.quarantined;
+                let out = upsert_batched(store, &batch)?;
+                screened += out.quarantined;
+                created += out.created;
                 batch.clear();
             }
         }
     }
-    screened += upsert_batched(store, &batch)?.quarantined;
+    let out = upsert_batched(store, &batch)?;
+    screened += out.quarantined;
+    created += out.created;
     report_quarantined(screened);
-    Ok((files.len(), filed, skipped))
+    // "Already present" is the messages whose drawer the vault held before
+    // this sweep — every message it saw, less the ids the store found new.
+    Ok((files.len(), created, filed.saturating_sub(created)))
 }
 
 fn expand_home(path: &str) -> PathBuf {

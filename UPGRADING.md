@@ -75,6 +75,43 @@ or when they could never be presented.
 
 ## 1.6.0 (unreleased)
 
+### `undercroft import` restores every record, reports what each one did, and checks the manifest's count (O215)
+
+**Who is affected:** anyone who parses `undercroft import`'s summary line, and
+anyone whose corpus holds the same text in more than one place.
+
+**What changes:**
+
+- **Every record is restored.** The importer used to drop a record whose TEXT
+  another drawer already held — anywhere in the vault, in any wing. A vault
+  holding one text in eight wings restored as one drawer, and the ids of the
+  other seven stopped resolving: measured, 85 of 680 drawers, while `verify`
+  reported OK. A restore now keeps every distinct drawer, so **a vault that was
+  restored this way before will hold more rows than it did**, and a corpus
+  sized on the old numbers is bigger. Nothing is lost that used to be kept.
+- **The summary line changed**, in all ten languages. It read
+  `Imported {n} drawer(s) into vault '{v}' ({k} duplicates skipped)` and now
+  reads `Imported {n} record(s) into vault '{v}' ({a} new, {b} replaced,
+  {c} unchanged)`. **A script matching "duplicates skipped" stops matching.**
+  The numbers are what the records DID: `unchanged` is a record the vault
+  already held byte for byte, which writes nothing and asks no embedder, so a
+  repeat restore is still the cheap no-op it always was.
+- **A payload whose manifest declares more drawers than the import decided on
+  is refused, exit 1**, naming both numbers. `/v1`'s migration has judged this
+  since O140; the CLI — the path this file prescribes when that route's size
+  ceiling refuses — judged nothing.
+- **`/v1` import answers three more keys**: `new`, `replaced` and `unchanged`,
+  beside the `imported` it always returned. Additive.
+- **`undercroft transcript sweep` keeps repeated messages.** It carried the
+  same text-keyed skip, so a transcript in which any message repeated — "ok",
+  "thanks", a repeated system turn — lost every repeat. Its summary's "already
+  present" is now counted from the ids the store found new, which is what the
+  wording always claimed.
+
+**`undercroft config check` cannot detect this**, and it is not a
+configuration: it is what the command does with a payload. The observable is
+the summary line and the row count after a restore.
+
 ### the team-server recipe runs `init`, reaches Qdrant over TLS, and passes a declared passphrase (O172)
 
 **Who is affected:** anyone running `deploy/docker-compose.server.yml`. Until

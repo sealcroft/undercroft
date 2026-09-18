@@ -7,6 +7,59 @@ its CLI mirror `tenant-repoint` are additive — nothing that worked before
 behaves differently because they exist. Everything else in this section is a
 fix whose only observable change is that a defect is gone.
 
+### an import restores every distinct drawer, and a repeat restore writes nothing (O215)
+
+`undercroft import` dropped any record whose text another drawer already held,
+anywhere in the vault. A vault holding one text in eight wings restored as one
+drawer and seven ids stopped resolving — measured, 85 of 680 — while `verify`
+reported OK, because a dangling supersession link and an unreceipted fact are
+legitimate states. The tree's own largest measured restore had published the
+loss twice as a performance figure: "262,048 imported, 99,731 skipped".
+
+Ruled by a three-lens panel and an adversarial refuter; the record is O215's
+`#### RULED`. The panel established that the skip was reachable as a
+write-suppression primitive — the duplicate lookup is wing-blind, so an
+ordinary save of a text denies the operator's later restore of the genuine
+drawer holding it — and that the store's own dedup path had already ruled the
+question the other way, by scoping sameness to one wing and room and writing
+rather than dropping.
+
+**What changed:**
+- **One import door in the store**, which both surfaces enter, deciding four
+  outcomes per record: a record the vault lacks is written; one it holds byte
+  for byte writes nothing; one whose metadata moved is written with the vector
+  the vault already holds, asking no embedder; one whose content differs — or
+  whose row fails its HMAC — is written and embedded, because a restore is the
+  remedy for a tampered row.
+- **Equality is read through the drawer, never the `fp` column**, which is
+  NFC-folded (so it answers canonical, not byte, equality) and sits outside
+  HMAC coverage (so an offline writer could suppress a restore with `verify`
+  clean).
+- **The report says what happened**: `N record(s) (A new, B replaced, C
+  unchanged)`, in ten languages, and the manifest's own declared count is
+  checked — a payload declaring more drawers than the import decided on is
+  refused. `/v1` import answers `new`, `replaced` and `unchanged` beside
+  `imported`.
+- **The transcript sweep** carried the same skip under a comment describing the
+  fix, so every repeated message in a transcript was lost. It now lets the id
+  decide, which is what its comment always claimed.
+
+**Measured**, one 680-drawer corpus in eight wings: the restore keeps 680 and
+both probe ids resolve (was 85, ids gone); a repeat restore reports 680
+unchanged in 17 ms and leaves the chain height where it was.
+
+**Tests:** two store tests covering all four outcomes, one CLI test through the
+binary (restore fidelity, the no-op repeat, the suppression attack, and the
+manifest refusal), four e2e checks. Five counterfactuals, each firing on its
+own arm; against a faithful reproduction of the shipped skip the headline gate
+reports one drawer dropped.
+
+**Filed, not fixed:** O216 (an import can replace a quarantine-pending row by
+id), O217 (mempalace records without a chunk index collapse onto one id — the
+new report makes it legible: "1 new, 2 replaced" for one row), O218 (the CLI
+export/import pair drops vectors and token artifacts), O219 (one id twice in a
+payload, last wins).
+
 ### a write the store refuses is refused before it is scanned or embedded (O198)
 
 A save whose content the store refuses (past the 100,000-byte bound) was

@@ -3032,6 +3032,56 @@ else
 fi
 rm -rf "$OB_HOME"
 
+echo "== A restore keeps every distinct drawer, and a repeat writes nothing (ROADMAP O215) =="
+# The importer asked whether a drawer's TEXT existed anywhere in the vault and
+# dropped the record if it did — so a vault holding one text in two wings
+# restored as ONE drawer and the other id stopped resolving, while `verify`
+# said OK, because a dangling supersession is a legitimate state. Measured on
+# `83abab5`: an eight-wing export of 680 drawers restored 85.
+#
+# The fixture files one text in two wings on purpose. Every other import
+# fixture in this suite uses unique lines — `tests/e2e.sh` says so a few
+# hundred lines up — which is exactly why nothing here has ever seen this.
+RS_SRC="$(mktemp -d)"; RS_DEST="$(mktemp -d)"; RS_FILE="$(mktemp)"
+UNDERCROFT_HOME="$RS_SRC" "$BIN" init >/dev/null 2>&1
+for w in team-a team-b; do
+  UNDERCROFT_HOME="$RS_SRC" "$BIN" remember "the harbour inspection is booked for thursday" \
+    --wing "$w" --room r >/dev/null
+done
+UNDERCROFT_HOME="$RS_SRC" "$BIN" export > "$RS_FILE"
+RS_IDS="$(grep -o '"id":"[0-9a-f]\{32\}"' "$RS_FILE" | cut -d'"' -f4 | sort -u)"
+# PREMISE: two records, one text, two ids — or the arms below measure nothing.
+if [ "$(wc -l < "$RS_FILE")" -ge 3 ] && [ "$(wc -w <<<"$RS_IDS")" -eq 2 ]; then
+  echo "ok    O215 premise: the export holds two ids for one text"; PASS=$((PASS+1))
+else
+  echo "FAIL  O215 premise: the fixture does not hold two records with one text"; FAIL=$((FAIL+1))
+fi
+UNDERCROFT_HOME="$RS_DEST" "$BIN" init >/dev/null 2>&1
+RS_OUT="$(UNDERCROFT_HOME="$RS_DEST" "$BIN" import "$RS_FILE" 2>&1)"
+if grep -q "2 new, 0 replaced, 0 unchanged" <<<"$RS_OUT"; then
+  echo "ok    O215: a restore reports both records as new"; PASS=$((PASS+1))
+else
+  echo "FAIL  O215: a restore did not report two new records"; echo "$RS_OUT" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+RS_RESOLVED=0
+for id in $RS_IDS; do
+  UNDERCROFT_HOME="$RS_DEST" "$BIN" drawer get "$id" >/dev/null 2>&1 && RS_RESOLVED=$((RS_RESOLVED+1))
+done
+if [ "$RS_RESOLVED" -eq 2 ]; then
+  echo "ok    O215: both source ids resolve in the restored vault"; PASS=$((PASS+1))
+else
+  echo "FAIL  O215: $RS_RESOLVED of 2 source ids resolve after the restore"; FAIL=$((FAIL+1))
+fi
+RS_CHAIN="$(UNDERCROFT_HOME="$RS_DEST" "$BIN" stats | grep '^writes:')"
+RS_AGAIN="$(UNDERCROFT_HOME="$RS_DEST" "$BIN" import "$RS_FILE" 2>&1)"
+if grep -q "0 new, 0 replaced, 2 unchanged" <<<"$RS_AGAIN" \
+   && [ "$(UNDERCROFT_HOME="$RS_DEST" "$BIN" stats | grep '^writes:')" = "$RS_CHAIN" ]; then
+  echo "ok    O215: a repeat restore writes nothing and appends no chain record"; PASS=$((PASS+1))
+else
+  echo "FAIL  O215: a repeat restore was not a no-op"; echo "$RS_AGAIN" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+rm -rf "$RS_SRC" "$RS_DEST" "$RS_FILE"
+
 echo
 echo "e2e results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

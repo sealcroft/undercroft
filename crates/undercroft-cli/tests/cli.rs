@@ -1396,6 +1396,139 @@ fn a_write_the_store_refuses_reaches_no_served_embedder_on_any_surface() {
     assert_eq!(sent(), 4, "premise: CLI import sends a valid record once");
 }
 
+/// **ROADMAP O215, through the binary an operator restores with.** A vault
+/// holding one text in two wings exports two records with two ids; the CLI
+/// kept ONE of them and the other id stopped resolving, while `verify` said
+/// OK. Here: both land, a repeat restore writes nothing and asks no embedder,
+/// an ordinary save of the same text cannot suppress the restore, and a
+/// payload whose manifest declares more drawers than the import decided on is
+/// refused.
+///
+/// Counterfactual (`83abab5`): the first import reports "1 duplicate skipped",
+/// `drawer get` on the second id exits non-zero, and the suppression arm loses
+/// both.
+#[test]
+fn a_restore_keeps_every_drawer_and_a_repeat_restore_writes_nothing() {
+    use std::sync::atomic::Ordering::SeqCst;
+    const MARK: &str = "thornwick";
+    let text = format!("{MARK} the harbour inspection is booked for thursday");
+    let (url, marked, _srv) = stub_embedder(MARK);
+    let sent = || marked.load(SeqCst);
+    let served_env = [
+        ("UNDERCROFT_EMBEDDER", "http"),
+        ("UNDERCROFT_EMBED_URL", url.as_str()),
+        ("UNDERCROFT_EMBED_API", "ollama"),
+        ("UNDERCROFT_EMBED_MODEL", "stub"),
+        ("UNDERCROFT_EMBED_DIM", "8"),
+    ];
+
+    // The source: one text, two wings, two ids — the corpus `mine --wing a`
+    // then `--wing b` produces, which the id recipe is injective over.
+    let src = TempDir::new().unwrap();
+    cmd(&src).args(["init"]).assert().success();
+    for wing in ["team-a", "team-b"] {
+        cmd(&src)
+            .args(["remember", &text, "--wing", wing, "--room", "r"])
+            .assert()
+            .success();
+    }
+    let exported = cmd(&src).args(["export"]).output().unwrap();
+    let payload = String::from_utf8(exported.stdout).unwrap();
+    let ids: Vec<String> = payload
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter_map(|v| {
+            let d = v.get("drawer").cloned().unwrap_or(v);
+            let content = d.get("content")?.as_str()?.to_string();
+            if !content.contains(MARK) {
+                return None;
+            }
+            Some(d.get("id")?.as_str()?.to_string())
+        })
+        .collect();
+    assert_eq!(
+        ids.len(),
+        2,
+        "premise: two records share one text:\n{payload}"
+    );
+    assert_ne!(ids[0], ids[1], "premise: and carry different ids");
+    let file = src.path().join("export.ndjson");
+    std::fs::write(&file, &payload).unwrap();
+
+    let dest = TempDir::new().unwrap();
+    let served = |home: &TempDir, argv: &[&str]| {
+        let mut c = cmd(home);
+        c.envs(served_env).args(argv);
+        c
+    };
+    served(&dest, &["init"]).assert().success();
+    let before = sent();
+    served(&dest, &["import", file.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("2 new, 0 replaced, 0 unchanged"));
+    assert_eq!(sent(), before + 2, "each restored record was embedded once");
+    for id in &ids {
+        served(&dest, &["drawer", "get", id]).assert().success();
+    }
+    let chain = |home: &TempDir| {
+        let out = served(home, &["stats"]).output().unwrap();
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .find(|l| l.starts_with("writes:"))
+            .unwrap_or_default()
+            .to_string()
+    };
+    let height = chain(&dest);
+
+    // The repeat: nothing to write, nothing to embed, nothing to record.
+    let before = sent();
+    served(&dest, &["import", file.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("0 new, 0 replaced, 2 unchanged"));
+    assert_eq!(sent(), before, "a no-op restore asks no embedder");
+    assert_eq!(chain(&dest), height, "and appends no chain record");
+
+    // Suppression: an ordinary save of the same text, in another wing, must
+    // not decide what a later restore may land.
+    let held = TempDir::new().unwrap();
+    served(&held, &["init"]).assert().success();
+    served(&held, &["remember", &text, "--wing", "scratch"])
+        .assert()
+        .success();
+    served(&held, &["import", file.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("2 new"));
+    for id in &ids {
+        served(&held, &["drawer", "get", id]).assert().success();
+    }
+
+    // The manifest's own count is checked: a payload declaring more drawers
+    // than the import decided on is refused, naming both numbers.
+    let mut lines = payload.lines();
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(lines.next().expect("a manifest line")).unwrap();
+    assert!(
+        manifest.get("undercroft_manifest").is_some(),
+        "premise: the export opens with a manifest"
+    );
+    manifest["undercroft_manifest"]["counts"]["drawers"] = serde_json::json!(3);
+    let lying = src.path().join("lying.ndjson");
+    std::fs::write(
+        &lying,
+        format!("{manifest}\n{}\n", lines.collect::<Vec<_>>().join("\n")),
+    )
+    .unwrap();
+    let fresh = TempDir::new().unwrap();
+    served(&fresh, &["init"]).assert().success();
+    served(&fresh, &["import", lying.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("declares 3 drawer(s)"));
+}
+
 /// Count the `egress/refine` records the binary's own `history` prints.
 fn refine_egresses(home: &TempDir) -> usize {
     let out = cmd(home)
