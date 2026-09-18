@@ -495,6 +495,22 @@ const OPS_ROUTES: &[(&str, &str)] = &[
     // below could not say so, because the capability was missing from the
     // hand-written universe it counted against, which is the defect O67 is.
     ("POST", "kg/authority"),
+    // **Whole-corpus movement, by the maintainer's ruling** (ROADMAP O222,
+    // 2026-09-18): import is a tenant AND an operator capability, and so is
+    // export. Both were deliberately absent from this plane from 2026-08-05,
+    // on the reason that `migrate` judges its copy against the source and a
+    // bare egress or ingest does not. That stays true and is stated rather
+    // than hidden: these two are the operator's OWN payload, not a judged
+    // move — `migrate` remains the path that checks a copy end to end. What
+    // answers the rest of the old reason is on the engine side of the relay:
+    // an export is chain-audited unconditionally (`egress/export`, binding
+    // the surface, the counts and the manifest's digest), and an import
+    // reports what each record DID (O215), refuses a record naming a row
+    // awaiting review (O216), and keeps every version of text under review
+    // (O220). Unlike the tenant plane's export, this one is not refused for
+    // carrying queue rows: an operator restoring a vault restores its queue.
+    ("GET", "export"),
+    ("POST", "import"),
 ];
 
 /// **What the ops plane deliberately does NOT reach, and why.**
@@ -528,17 +544,11 @@ pub(crate) const OPS_DELIBERATELY_ABSENT: &[(&str, &str)] = &[
         "search",
         "content belongs to the tenant's own token, not the admin bearer",
     ),
-    // Whole-corpus movement. `migrate` is the supported path and it judges
-    // the copy against the source's own snapshot end to end; a bare export or
-    // import through the ops plane would be the same egress with none of that.
-    (
-        "export",
-        "use `migrate`, which judges the copy against the source; a bare egress has no such check",
-    ),
-    (
-        "import",
-        "use `migrate`, which judges the copy against the source; a bare ingest has no such check",
-    ),
+    // `export` and `import` were here from 2026-08-05 to 2026-09-18, on the
+    // reason that `migrate` judges its copy against the source and a bare
+    // egress or ingest does not. The maintainer ruled both an operator
+    // capability (ROADMAP O222); the rows moved to `OPS_ROUTES`, which says
+    // how the rest of that reason is answered and what stays true of it.
     // Distillation calls an LLM and WRITES facts. It is a content-producing
     // operation, not an operator one, and it needs `UNDERCROFT_LLM_*` on the
     // engine host anyway.
@@ -591,6 +601,10 @@ pub(crate) fn ops_alias(op: &str) -> Option<(&'static str, &'static str)> {
         "backup-create" => ("POST", "backups"),
         "backups" => ("GET", "backups"),
         "backup-restore" => ("POST", "backups/restore"),
+        // ROADMAP O222 — whole-corpus movement for the operator; see the
+        // `OPS_ROUTES` rows.
+        "export" => ("GET", "export"),
+        "import" => ("POST", "import"),
         _ => return None,
     })
 }
@@ -2740,6 +2754,8 @@ mod tests {
             "backup-create",
             "backups",
             "backup-restore",
+            "export",
+            "import",
             // `index-status` was here for one day. It left with its
             // OPS_ROUTES row when O83 closed: `VectorIndex::status` creates
             // nothing on any of the five backends, so the capability went
@@ -2899,6 +2915,33 @@ mod tests {
             reachable.len(),
             absent.len()
         );
+        // **Capabilities ruled onto BOTH planes, each with its reason** — the
+        // one deliberate exception to "exactly one part" below, counted both
+        // ways so it cannot grow by accident. Whole-corpus movement is a
+        // tenant AND an operator capability by the maintainer's ruling
+        // (ROADMAP O222, 2026-09-18): a tenant moves its own vault with its
+        // own token, the operator any tenant's with the admin bearer, and the
+        // two answers to "who may drive it" are the ruling rather than a
+        // drift — the engine applies one import door and one export audit to
+        // both.
+        let both_planes: &[(&str, &str)] = &[
+            (
+                "export",
+                "ROADMAP O222: a tenant AND an operator capability",
+            ),
+            (
+                "import",
+                "ROADMAP O222: a tenant AND an operator capability",
+            ),
+        ];
+        for (cap, why) in both_planes {
+            assert!(
+                reachable.contains(cap) && data.contains(cap) && !why.is_empty(),
+                "{cap} is listed as ruled onto both planes but is not on both — \
+                 remove the row, or put the capability back"
+            );
+        }
+        let on_both = |cap: &str| both_planes.iter().any(|(c, _)| *c == cap);
         // **A THREE-WAY partition, and every capability lands in exactly
         // one part.** Before O67 there were two parts and a hand-written
         // universe, so a capability in none of them was simply not looked at.
@@ -2915,7 +2958,7 @@ mod tests {
                 "{cap} is both reachable on the ops plane and recorded absent from it"
             );
             assert!(
-                !(r && d),
+                !(r && d) || on_both(cap),
                 "{cap} is on the ops plane AND the tenant data plane. That is not a tidiness complaint: the two carry different tokens, and a capability reachable with an admin bearer and a tenant token has two different answers to who may drive it"
             );
         }

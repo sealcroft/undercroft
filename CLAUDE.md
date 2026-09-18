@@ -2239,7 +2239,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
 docker compose run --rm e2e           # e2e UI/UX suite against the release binary (550 checks)
-docker compose run --rm orchestrator-e2e  # two engines + orchestrator (160 checks)
+docker compose run --rm orchestrator-e2e  # two engines + orchestrator (162 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (137 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it

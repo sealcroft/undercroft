@@ -4171,6 +4171,104 @@ MINOR since O149: `PATCH /admin/tenants/{id}` and its CLI mirror are new
 capability, backward compatible. The rest of the section is PATCH work — no
 documented contract moves.
 
+### O222 — CLOSED 2026-09-18: import and export are tenant AND operator capabilities; the operator plane carries both
+
+**Filed 2026-09-18 by O216's ruling panel and escalated to the maintainer: a
+question of what a surface offers, which a panel does not decide.** `import`
+is on the orchestrator's tenant allowlist
+(`crates/undercroft-orchestrator/src/proxy.rs:205`), so the token whose writes
+the screen diverts may also write records under ids it chooses. MCP classes
+import as operator-only, "the operator's restore path"
+(`crates/undercroft-cli/src/parity.rs`). O216 closes the erasure that reach
+enabled, at the engine door and for every surface, so this is not a hole
+that fix leaves open. It is the question of whether a tenant should hold a
+restore capability at all, and what `docs/MULTI_TENANCY.md` then says.
+
+**Options, for the maintainer.** Keep it: a tenant restores its own backups,
+and the remaining reach through it is the substitution filed separately. Or
+move it to the admin plane, where `migrate_tenant` already drives import, and
+say what a tenant uses instead.
+
+#### RULED 2026-09-18 by the maintainer
+
+Asked with both options above, the maintainer answered: *"have both Tenant
+capabilities and Operator capabilities"*. So import is BOTH: `/t/import` stays
+on the tenant allowlist, and the fleet operator gets it too. Neither option
+as written — the question offered keep-or-move, and the ruling is keep-and-add.
+
+**What that leaves as work, found by reading.** The operator plane does not
+offer import today: `OPS_ROUTES`
+(`crates/undercroft-orchestrator/src/proxy.rs`) holds verify, repair,
+supersessions, forget, verify-forgetting, admission, retention and trust, and
+no import. On a fleet `/v1` is the operator's only door (the reason O14 put
+verify-forgetting there), so an operator reaches import only indirectly,
+through `migrate_tenant`. The build adds `("POST", "import")` to `OPS_ROUTES`,
+exercises it positively in `orchestrator-e2e` beside the other ops routes, and
+documents both planes in `docs/MULTI_TENANCY.md`. Whether `GET …/export` joins
+it is part of that build's reading. The tenant plane refuses an export that
+carries queue rows, and an operator's export would not.
+
+**Gate**: an operator imports into a tenant's vault through the ops plane; the
+tenant plane's import still serves, and still refuses a record naming a row
+awaiting a ruling (O216). **Counterfactual**: today, the ops plane refuses
+import with a named 404, as it does any route outside `OPS_ROUTES`.
+
+#### RULED 2026-09-18 by the maintainer, a second time: import AND export, on the operator plane
+
+**The first record above was mine and it was wrong in one place.** It filed
+"add `("POST", "import")` to `OPS_ROUTES`" as the remaining work, having read
+`OPS_ROUTES` and not the table beside it. `OPS_DELIBERATELY_ABSENT`
+(`crates/undercroft-orchestrator/src/proxy.rs`) had recorded bare `export` and
+`import` as deliberately absent from the ops plane since `4a4ef2c`
+(2026-08-05). Its reason: `migrate` judges its copy against the source, and a
+bare egress or ingest does not. So the maintainer's "both" had two readings:
+- operators already hold import, on the engine's CLI and `/v1` and through
+  `migrate` on the fleet — no code;
+- or the ops plane gains it, overturning that boundary.
+
+The first record picked the second reading without knowing the boundary
+existed. It was found when the build started, reading the code before
+editing, and the question went back to the maintainer before anything was
+built.
+
+**The maintainer's answer, among three options (keep the boundary; add
+import; add import and export): "Add import and export."** The 2026-08-05
+boundary is therefore overturned for both, by the maintainer, on a question of
+what a surface offers. Its reason is answered rather than dropped:
+- **What stays true, stated:** an ops import is not judged against a source.
+  It carries the operator's own payload, and `migrate` remains the path that
+  checks a copy end to end.
+- **What the engine now answers on both planes:**
+  - an export is chain-audited unconditionally (`egress/export`, binding the
+    surface, the counts and the manifest digest);
+  - an import reports what each record did (O215);
+  - an import refuses a record naming a row awaiting review (O216);
+  - an import keeps every version of text under review (O220).
+- **One deliberate difference from the tenant plane:** the ops export is not
+  refused for carrying queue rows. An operator restoring a vault restores its
+  queue.
+
+#### BUILT 2026-09-18, as ruled
+
+- `OPS_ROUTES` gains `("GET", "export")` and `("POST", "import")`, and
+  `ops_alias` gains `export` and `import`. Both rows leave
+  `OPS_DELIBERATELY_ABSENT`, and a comment in their place names the ruling.
+- **The three-way partition gate**
+  (`every_operator_capability_is_reachable_or_recorded_as_absent`) forbade a
+  capability on both the ops plane and the tenant data plane, because "the
+  two carry different tokens" and would give two answers to who may drive it.
+  - That is exactly what this ruling decides, for these two capabilities.
+  - The gate therefore gains a `both_planes` list, with a reason per row,
+    counted both ways: a listed capability must really be on both planes.
+  - Any other capability on both planes still fails. The first run failed on
+    exactly this assertion, before the list existed.
+- **Gates:** two `orchestrator-e2e` checks on the ops plane. `…/ops/export`
+  returns the tenant's corpus with its manifest, and `…/ops/import` takes that
+  payload back.
+- **Stated, not built:** the `ops` CLI takes the payload as `--body`, as every
+  other op does, so a large corpus is bounded by the argument length the shell
+  allows. The HTTP route is not bounded that way, and neither is `migrate`.
+
 ### O220 — CLOSED 2026-09-18: text awaiting an admission ruling changes only by a ruling; each distinct flagged text for a filing keeps its own queue row
 
 **Filed 2026-09-18 by O216's ruling panel (security lens and refuter),
@@ -20203,48 +20301,6 @@ Related, and in prose since O220 closed: O220's slot rule treats a pending row t
 and reports that row; the delete refusal on a row flipped to the reserved wing
 names the exit that works. **Counterfactual**: today's whole-queue failure,
 and advice no door can follow.
-
-### O222 — import is ruled a tenant AND an operator capability, and the orchestrator's operator plane does not offer it yet
-
-**Filed 2026-09-18 by O216's ruling panel and escalated to the maintainer: a
-question of what a surface offers, which a panel does not decide.** `import`
-is on the orchestrator's tenant allowlist
-(`crates/undercroft-orchestrator/src/proxy.rs:205`), so the token whose writes
-the screen diverts may also write records under ids it chooses. MCP classes
-import as operator-only, "the operator's restore path"
-(`crates/undercroft-cli/src/parity.rs`). O216 closes the erasure that reach
-enabled, at the engine door and for every surface, so this is not a hole
-that fix leaves open. It is the question of whether a tenant should hold a
-restore capability at all, and what `docs/MULTI_TENANCY.md` then says.
-
-**Options, for the maintainer.** Keep it: a tenant restores its own backups,
-and the remaining reach through it is the substitution filed separately. Or
-move it to the admin plane, where `migrate_tenant` already drives import, and
-say what a tenant uses instead.
-
-#### RULED 2026-09-18 by the maintainer
-
-Asked with both options above, the maintainer answered: *"have both Tenant
-capabilities and Operator capabilities"*. So import is BOTH: `/t/import` stays
-on the tenant allowlist, and the fleet operator gets it too. Neither option
-as written — the question offered keep-or-move, and the ruling is keep-and-add.
-
-**What that leaves as work, found by reading.** The operator plane does not
-offer import today: `OPS_ROUTES`
-(`crates/undercroft-orchestrator/src/proxy.rs`) holds verify, repair,
-supersessions, forget, verify-forgetting, admission, retention and trust, and
-no import. On a fleet `/v1` is the operator's only door (the reason O14 put
-verify-forgetting there), so an operator reaches import only indirectly,
-through `migrate_tenant`. The build adds `("POST", "import")` to `OPS_ROUTES`,
-exercises it positively in `orchestrator-e2e` beside the other ops routes, and
-documents both planes in `docs/MULTI_TENANCY.md`. Whether `GET …/export` joins
-it is part of that build's reading. The tenant plane refuses an export that
-carries queue rows, and an operator's export would not.
-
-**Gate**: an operator imports into a tenant's vault through the ops plane; the
-tenant plane's import still serves, and still refuses a record naming a row
-awaiting a ruling (O216). **Counterfactual**: today, the ops plane refuses
-import with a named 404, as it does any route outside `OPS_ROUTES`.
 
 ### O223 — a vault's own export restored into that vault rewrites every row, because the import stamp moves `added_by`
 

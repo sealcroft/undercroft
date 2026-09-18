@@ -334,6 +334,21 @@ body_has "ops trust list"    'assignments' -- "${ADMIN[@]}" "$O/admin/tenants/$O
 # fleet operator has — which is the entire justification for the routes.
 body_has "ops backup create" '"backup"'  -- -X POST "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/backups"
 body_has "ops backup list"   '"backups"' -- "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/backups"
+# ROADMAP O222: whole-corpus movement is an operator capability too, by the
+# maintainer's ruling — export and import on this plane, beside the tenant's
+# own. The round trip is the operator's own payload, re-imported whole.
+# To a FILE, not a shell variable: `$(…)` strips the trailing newline, and
+# the manifest's payload digest covers those bytes, so a re-import of the
+# stripped text is — correctly — refused as not matching its own manifest.
+OPS_EXPORT="$(mktemp)"
+curl -s "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/export" -o "$OPS_EXPORT"
+if grep -qF '"undercroft_manifest"' "$OPS_EXPORT" && grep -qF 'turbines' "$OPS_EXPORT"; then
+  ok "ops export returns the tenant's corpus with its manifest"
+else
+  fail "ops export returns the tenant's corpus with its manifest" "$(head -c 300 "$OPS_EXPORT")"
+fi
+body_has "ops import takes the operator's payload" '"imported":' -- -X POST "${ADMIN[@]}" \
+  --data-binary @"$OPS_EXPORT" "$O/admin/tenants/$OPS_ID/ops/import"
 # The tenant plane must REFUSE them, and name the plane that holds them
 # rather than 404ing as though the capability did not exist.
 code_is  "backups are not on the tenant data plane" 404 -- \
