@@ -365,8 +365,12 @@ admin plane for scripted use, over a closed vocabulary of operations:
 `admission-rule`, `trust`, `trust-set`, `retention`, `retention-set`,
 `retention-sweep`, `forget`, `verify-forgetting`, `authority`,
 `backup-create`, `backups`, `backup-restore` (a maintenance-window
-operation: the engine answers 409 while the vault is in use). Drawer reads
-and key rotation are deliberately NOT among them.
+operation: the engine answers 409 while the vault is in use), and — since
+ROADMAP O222, by the maintainer's ruling that whole-corpus movement is a
+tenant AND an operator capability — `export` and `import` (the operator's
+own payload, passed as the body; `migrate` stays the path that judges a
+copy against its source). Drawer reads and key rotation are deliberately NOT
+among them.
 
 `anchor` is the one worth knowing about if you run a long-lived server:
 read-audit records append without advancing the manifest anchor, and only a

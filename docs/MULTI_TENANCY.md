@@ -243,7 +243,7 @@ rather than implied until O220 closed it: a flagged record carrying the
 pending row's filing under another id re-diverted onto it and replaced the
 text under review — now each distinct flagged text keeps its own queue slot.
 Import stays a tenant capability by the maintainer's ruling, and is
-to become an operator one too: the ops plane does not offer it yet (O222).
+an operator one too: the ops plane carries export and import since O222.
 
 ### §5 — Cosine dedup-refresh on the write path — deliberately NOT the default
 
@@ -451,7 +451,7 @@ sequenceDiagram
 | `POST /admin/tenants/{id}/rotate` | admin | mint a fresh tenant token and revoke the old one in the same statement; the new token appears once, in the response |
 | `POST /admin/tenants/{id}/migrate` | admin | live migration (below) |
 | `PATCH /admin/tenants/{id}` | admin | re-point a tenant at an instance that **already holds its vault**, moving no data — the completion of a by-hand move. The destination is asked whether it holds the vault and the re-point is refused if it cannot answer, because the mapping is what every tenant request follows |
-| `GET`/`POST /admin/tenants/{id}/ops/<subpath>` | admin | the **operator plane**: attested forgetting **and the verification of what it mints**, retention policy + sweep, wing trust, admission review, verify **and `repair`**, anchor tightening, supersession receipts, the authority tier, and backups (create, list, and a restore the engine answers with 409 while the vault is in use) — forwarded to the tenant's engine over a closed vocabulary (`OPS_ROUTES` in `proxy.rs`). Deliberately admin-only: a tenant token must not rule on the admission queue that screened its own writes, nor assign the trust its wings are floored by. `POST …/ops/verify-forgetting` arrived in 1.1.0 (O14) and closes the half `forget` had been missing: a fleet could produce a right-to-erasure receipt through this plane and had no door anywhere to verify one. `POST …/ops/authority` arrived in 1.2.0 (O67) for the same reason one capability over: the golden-values tier is `OPERATOR_ONLY` on the engine, so the data plane correctly refuses it — and it was on no ops route either, which left it drivable from **no door at all** in a fleet |
+| `GET`/`POST /admin/tenants/{id}/ops/<subpath>` | admin | the **operator plane**: attested forgetting **and the verification of what it mints**, retention policy + sweep, wing trust, admission review, verify **and `repair`**, anchor tightening, supersession receipts, the authority tier, backups (create, list, and a restore the engine answers with 409 while the vault is in use), and — since O222, by the maintainer's ruling — whole-vault **export and import**, which the tenant plane also carries (an operator's export is chain-audited like any other and, unlike the tenant's, is not refused for carrying queue rows; `migrate` remains the path that judges a copy against its source) — forwarded to the tenant's engine over a closed vocabulary (`OPS_ROUTES` in `proxy.rs`). Deliberately admin-only: a tenant token must not rule on the admission queue that screened its own writes, nor assign the trust its wings are floored by. `POST …/ops/verify-forgetting` arrived in 1.1.0 (O14) and closes the half `forget` had been missing: a fleet could produce a right-to-erasure receipt through this plane and had no door anywhere to verify one. `POST …/ops/authority` arrived in 1.2.0 (O67) for the same reason one capability over: the golden-values tier is `OPERATOR_ONLY` on the engine, so the data plane correctly refuses it — and it was on no ops route either, which left it drivable from **no door at all** in a fleet |
 | `ANY /t/<subpath>` | data | tenant-token-routed proxy onto `/v1/vaults/{vault}/<subpath>`, over a closed allowlist of whole shapes (`data_subpath_ok`): drawers, one drawer, search, stats, stats/history, export, import — and, since 1.2.0 (O67), the tenant's own `taxonomy` and knowledge-graph READS (`kg/stats`, `kg/entities`, `kg/query`, `kg/timeline`, `kg/receipts`, `kg/canonical/{key}`). Those seven were reachable from NEITHER plane and answered a bare `unknown route`, which reads as a capability the product does not have. Since 1.2.0 (O68) it also carries the further capabilities the engine already exposes to agents over MCP: `kg/rel`, `index/status`, `dedup`, `tunnels` (+ `{tid}`, `{tid}/drawers`), `diary` (+ `agents`), `wake-up`, `closets` and `hallways`; `drawers` carries the filtered `DELETE …?source=` and one drawer carries `check-duplicate` |
 
 The admin plane sits behind `UNDERCROFT_ORCH_ADMIN_TOKEN`; every auth
@@ -567,7 +567,7 @@ records land on one row. The mapping flip is a compare-and-set, so two
 concurrent migrations cannot both move one tenant. The import half is admission-screened like any other write — a
 migration used to be a re-admission of the whole corpus past the screen,
 because every export line carries a `vector` and a caller-supplied vector
-reached the raw writer (§4). The e2e suite (`tests/e2e-orchestrator.sh`, 160 checks,
+reached the raw writer (§4). The e2e suite (`tests/e2e-orchestrator.sh`, 162 checks,
 `docker compose run --rm orchestrator-e2e`) exercises the whole story
 against two live engine instances, including the source engine provably
 losing the vault after migration and a read replica converging on the

@@ -3,9 +3,25 @@
 ## Unreleased — 1.6.0
 
 MINOR: new capability, backward compatible. `PATCH /admin/tenants/{id}` and
-its CLI mirror `tenant-repoint` are additive — nothing that worked before
+its CLI mirror `tenant-repoint` are additive, and so are the operator plane's
+`…/ops/export` and `…/ops/import` with their `ops` aliases (O222) — nothing that worked before
 behaves differently because they exist. Everything else in this section is a
 fix whose only observable change is that a defect is gone.
+
+### a fleet operator can export and import a tenant's vault (O222)
+
+The maintainer ruled whole-corpus movement a tenant AND an operator
+capability. The tenant plane already carried export and import; the operator
+plane had excluded both since 2026-08-05, pointing operators at `migrate`,
+which judges its copy against the source. Both are now operator routes too —
+`GET …/admin/tenants/{id}/ops/export` and `POST …/ops/import`, and
+`undercroft-orchestrator ops <tenant> export|import`. `migrate` stays the path
+that checks a copy end to end; these two carry the operator's own payload.
+The engine side answers the rest of the old reason: every export is
+chain-audited, and every import reports what each record did, refuses a
+record naming a row awaiting review, and keeps each version of text under
+review. An operator's export is not refused for carrying queue rows, as a
+tenant's is: restoring a vault restores its queue.
 
 ### text awaiting an admission ruling changes only by a ruling (O220)
 
