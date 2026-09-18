@@ -642,6 +642,27 @@ pub(crate) fn content_fp(content: &str) -> Vec<u8> {
 /// as another.
 const CONTENT_FP_DOMAIN: &[u8] = b"kgcontentfp";
 
+/// Domain for the keyed text digest a queue version slot is derived over
+/// (ROADMAP O220). Its own tag, so it can never equal a receipt fingerprint.
+const QUEUE_VERSION_DOMAIN: &[u8] = b"queueversion";
+
+/// The keyed digest of `content` that `ids::quarantine_version_id` takes
+/// (ROADMAP O220): HMAC under the STORED KG secret, on every security level.
+///
+/// Deliberately NOT [`keyed_fp_of_digest`], which returns the UNKEYED digest
+/// below `Sealed` — a queue id sits in a clear column on every vault, so an
+/// unkeyed content digest there would confirm a guessed text to an offline
+/// reader. And the stored secret, never a vault key: rotation re-seals it
+/// and never regenerates it, so the slot does not move on a rotation.
+pub(crate) fn queue_version_key(secret: &[u8; 32], content: &str) -> [u8; 32] {
+    let digest = content_fp(content);
+    let mut buf = Vec::with_capacity(QUEUE_VERSION_DOMAIN.len() + 8 + digest.len());
+    buf.extend_from_slice(QUEUE_VERSION_DOMAIN);
+    buf.extend_from_slice(&(digest.len() as u64).to_le_bytes());
+    buf.extend_from_slice(&digest);
+    keyed(secret, &buf)
+}
+
 /// Marker byte on a KEYED fingerprint, which is what makes the at-rest
 /// migration idempotent.
 ///

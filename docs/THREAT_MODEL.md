@@ -663,10 +663,15 @@ write path at all.
   row and emptied the queue with `verify` OK; through the orchestrator's
   `/t/import`, the agent whose save was diverted could erase its own
   evidence. The import door refuses it on every surface, reading the
-  HMAC-covered wing. What that leaves, stated: a flagged record carrying
-  the pending row's FILING under another id still re-diverts onto the
-  queue id and replaces the text under review (O220 — substitution, not
-  erasure). Updates are screened on the UPDATING surface, so an
+  HMAC-covered wing. **Nor replaceable by a later diversion** (ROADMAP
+  O220): the queue id is a function of the filing, so a second flagged
+  text for the same filing — a re-mine of an edited file, two flagged
+  updates of one drawer (an agent alone, over MCP), a restore — replaced
+  the text under review, and an `allow` released whatever the row held
+  when it ran. Each distinct flagged text now takes its own slot, keyed
+  with the stored KG secret; equal text converges; a backstop inside the
+  write transaction refuses a raced write. What remains, stated: a ruling
+  still binds the id and not the text (O225). Updates are screened on the UPDATING surface, so an
   untrusted surface cannot ride a trusted writer's standing.
   Deployment-trusted surfaces bypass by declaration
   (`UNDERCROFT_ADMIT_TRUSTED_SOURCES`). A diverted save **says so on

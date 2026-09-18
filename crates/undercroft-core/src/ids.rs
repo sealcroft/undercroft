@@ -22,6 +22,12 @@ pub const ID_RECIPE: &str = "sha256/wing|room|source|chunk|v1";
 /// quarantined copy. The two spaces must not meet.
 const QUARANTINE_DOMAIN: &str = "quarantine";
 
+/// Domain tag for a SECOND queue slot of one filing (ROADMAP O220): the slot
+/// a different flagged text takes when the filing's queue row already holds
+/// pending text. Distinct from [`QUARANTINE_DOMAIN`] so the two queue spaces
+/// cannot meet either.
+const QUARANTINE_VERSION_DOMAIN: &str = "quarantine-version";
+
 /// The one implementation of the recipe. `domain` is prefixed when present
 /// and contributes NOTHING when absent, so [`drawer_id`] is byte-identical
 /// to what it hashed before this parameter existed — a drawer id is a
@@ -30,6 +36,21 @@ const QUARANTINE_DOMAIN: &str = "quarantine";
 /// rename (see `CLAUDE.md`'s identifier invariant). Pinned by
 /// `the_ordinary_recipe_has_not_moved`.
 fn id_over(domain: Option<&str>, wing: &str, room: &str, source: &str, chunk_index: u32) -> String {
+    id_over_with(domain, wing, room, source, chunk_index, None)
+}
+
+/// [`id_over`] with an optional trailing component, which contributes
+/// NOTHING when absent — so every recipe built on `id_over` is byte-identical
+/// to what it hashed before this existed. Only [`quarantine_version_id`]
+/// passes one.
+fn id_over_with(
+    domain: Option<&str>,
+    wing: &str,
+    room: &str,
+    source: &str,
+    chunk_index: u32,
+    extra: Option<&[u8]>,
+) -> String {
     let mut h = Sha256::new();
     if let Some(d) = domain {
         h.update(d.as_bytes());
@@ -42,6 +63,11 @@ fn id_over(domain: Option<&str>, wing: &str, room: &str, source: &str, chunk_ind
     h.update(chunk_index.to_le_bytes());
     h.update([0x1f]);
     h.update(crate::normalize::NORMALIZE_VERSION.to_le_bytes());
+    if let Some(x) = extra {
+        h.update([0x1f]);
+        h.update((x.len() as u64).to_le_bytes());
+        h.update(x);
+    }
     let digest = h.finalize();
     hex::encode(&digest[..16])
 }
@@ -83,6 +109,38 @@ pub fn quarantine_drawer_id(
     )
 }
 
+/// The queue slot for one DISTINCT flagged text of a filing (ROADMAP O220).
+///
+/// [`quarantine_drawer_id`] is a function of the filing alone, so a second,
+/// different flagged text for the same filing landed on the same row and
+/// `ON CONFLICT(id) DO UPDATE` replaced the text a reviewer had not ruled on.
+/// A pending row's text now never changes except by a ruling: a different
+/// text takes this slot instead, and equal text converges onto it.
+///
+/// `keyed_text` is the caller's KEYED digest of the content — never the
+/// content, never an unkeyed digest. An id sits in a clear column, so an
+/// unkeyed content digest there would confirm a guessed text to an offline
+/// reader; and the key must be a STORED secret rotation never regenerates,
+/// or the slot would move on every rotation (CLAUDE.md's identifier rule).
+/// Keyed per vault, so this id does not survive a move between vaults: an
+/// import re-derives it, as the graph's keyed ids already do.
+pub fn quarantine_version_id(
+    intended_wing: &str,
+    room: &str,
+    source: &str,
+    chunk_index: u32,
+    keyed_text: &[u8],
+) -> String {
+    id_over_with(
+        Some(QUARANTINE_VERSION_DOMAIN),
+        intended_wing,
+        room,
+        source,
+        chunk_index,
+        Some(keyed_text),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,6 +174,28 @@ mod tests {
     /// derive the id of the drawer it was screening and overwrite it; and
     /// the id must also differ from the OLD recipe's output, or the fix
     /// would silently agree with the defect.
+    /// **The version slot's recipe, pinned to a literal derived OUTSIDE this
+    /// crate** (ROADMAP O220) — re-implemented in Python's hashlib over the
+    /// same framing, so a refactor that moved it fails here rather than
+    /// passing because the code agrees with itself. The key is a fixed
+    /// 0..32 byte string: a real slot is keyed per vault, so no literal id
+    /// from a store could ever be pinned.
+    #[test]
+    fn the_version_slot_recipe_is_pinned_and_keeps_its_own_space() {
+        let key: Vec<u8> = (0u8..32).collect();
+        let qv = quarantine_version_id("notes", "inbox", "test.md", 0, &key);
+        assert_eq!(qv, "0e372ed4582490a484bb9a5cd34cec10");
+        assert_ne!(qv, quarantine_drawer_id("notes", "inbox", "test.md", 0));
+        assert_ne!(qv, drawer_id("notes", "inbox", "test.md", 0));
+        let mut other = key.clone();
+        other[0] ^= 1;
+        assert_ne!(
+            qv,
+            quarantine_version_id("notes", "inbox", "test.md", 0, &other),
+            "a different text is a different slot"
+        );
+    }
+
     #[test]
     fn a_quarantine_id_shares_no_space_with_an_ordinary_one() {
         assert_ne!(

@@ -945,7 +945,14 @@ Consequences that are binding, not advisory:
   agent whose write was diverted can neither read the evidence back nor
   delete it; allow/deny chain-audited
   with the verdict inside the ruling tag; operator surfaces only, never
-  MCP; default off = byte-identical write contract; **deny is receipted**
+  MCP; default off = byte-identical write contract; **a pending row's text
+  changes only by a ruling (O220)** — the queue id is a function of the
+  filing, so a second flagged text for one filing (an edited re-mine, two
+  flagged updates of one drawer, a restore) replaced the first; each
+  distinct text now takes its own slot, `ids::quarantine_version_id` keyed
+  with the STORED `kg_secret` (never a vault key, never unkeyed), chosen at
+  the door with a batch-local map and backstopped inside the write
+  transaction, and equal text converges; **deny is receipted**
   — it destroys through `forget_with_proof` and hands back the
   attestation; **updates are screened on the UPDATING surface** —
   `update_drawer` re-stamps `added_by` before the screen so an untrusted
@@ -2108,8 +2115,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (937 run,
-                                      # 4 #[ignore]d = 941 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (943 run,
+                                      # 4 #[ignore]d = 947 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2231,8 +2238,8 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (547 checks)
-docker compose run --rm orchestrator-e2e  # two engines + orchestrator (159 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (550 checks)
+docker compose run --rm orchestrator-e2e  # two engines + orchestrator (160 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (137 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it

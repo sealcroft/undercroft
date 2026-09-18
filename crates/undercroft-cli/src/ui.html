@@ -1382,7 +1382,7 @@ async function loadAdmission() {
     const r = await api("GET", opsPath("admission"), { vault: v });
     const rows = (r.pending || []).map(p => {
       const sig = (p.signals || []).map(s => esc(s.code) + "@" + s.offset).join(" ");
-      return "<tr><td class='kv'>" + esc(p.id) + "</td>" +
+      return "<tr><td class='kv'>" + esc(p.id) + "<br>" + esc(p.source_file) + "#" + esc(String(p.chunk_index)) + "</td>" +
         "<td><span class='pill wing'>" + esc(p.intended_wing) + "</span>/" + esc(p.intended_room) + "</td>" +
         "<td class='kv'>" + sig + "</td><td class='kv'>" + esc(p.filed_at) + "</td>" +
         "<td><button class='ctl' data-adm-allow='" + esc(p.id) + "'>✓ ALLOW</button> " +

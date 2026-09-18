@@ -7,6 +7,45 @@ its CLI mirror `tenant-repoint` are additive — nothing that worked before
 behaves differently because they exist. Everything else in this section is a
 fix whose only observable change is that a defect is gone.
 
+### text awaiting an admission ruling changes only by a ruling (O220)
+
+A diverted drawer's queue id is a function of its filing — wing, room, source,
+chunk — so a second flagged text for the same filing landed on the same queue
+row and replaced the text a reviewer had not ruled on. `verify` answered OK
+throughout, and because a ruling binds the id rather than the text, an `allow`
+released whatever the row held when it ran. Measured on four routes: a
+re-mine of an edited file whose chunk still flags; two flagged updates of one
+drawer, which an agent does alone over MCP; an import carrying the row's
+filing under a fresh id, which a tenant reaches through `/t/import`; and an
+ordinary restore of a vault holding an allowed flagged drawer and a pending
+update of it, which lost the allowed text entirely. `mine --mode convos`
+rewrote one queue row on every run as a transcript's open tail chunk grew.
+
+Ruled by a three-lens panel and an adversarial refuter; the record is O220's
+`#### RULED`. Refusing the second text lost on evidence: the tree rules that a
+flagged write is never rejected, and a growing transcript would have refused
+every re-mine until someone ruled.
+
+**What changed:**
+- **Each distinct flagged text for a filing keeps its own queue row.** The
+  filing's queue id is unchanged — nothing migrates — and a different text
+  takes a version slot derived over the filing and a digest of the text keyed
+  with the vault's stored KG secret, so the id confirms nothing to an offline
+  reader and does not move on a key rotation. Equal text converges, so an
+  unchanged re-mine adds nothing.
+- **`admission list`, `/v1` `…/admission` and the admin console show each
+  row's filing** (`source_file`, `chunk_index`), so versions of one filing
+  read as siblings.
+- **A raced write is refused.** The slot is chosen before the write
+  transaction, so a backstop inside it refuses a diverted write whose slot
+  another writer filled with a different text meanwhile; retrying converges.
+
+**What it does not close**, filed: a ruling still binds the queue id and not
+the text, so an id vacated and re-occupied can release text no reviewer read
+(O225); allowing an older row overwrites newer content at the drawer's
+ordinary id (O224); a convergence with equal text still replaces the row's
+covered declaration (O226).
+
 ### an import can no longer replace a row awaiting an admission ruling (O216)
 
 A queue id is deterministic and computable offline, and the reserved-wing
