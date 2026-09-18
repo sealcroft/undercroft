@@ -4171,6 +4171,293 @@ MINOR since O149: `PATCH /admin/tenants/{id}` and its CLI mirror are new
 capability, backward compatible. The rest of the section is PATCH work — no
 documented contract moves.
 
+### O220 — CLOSED 2026-09-18: text awaiting an admission ruling changes only by a ruling; each distinct flagged text for a filing keeps its own queue row
+
+**Filed 2026-09-18 by O216's ruling panel (security lens and refuter),
+established by reading.** The screen derives a diverted row's id from the
+record's FILING — wing, room, source and chunk — and never from its declared
+id (`admission::filing_ids`, `admission_divert` in
+`crates/undercroft-store/src/admission.rs`). A record whose filing matches a
+pending row's, flagged by the destination's screen, is written through
+`Screen::Bypass(AlreadyDiverted)` onto that row's queue id, and
+`ON CONFLICT(id) DO UPDATE` replaces its content and signals. The reviewer
+then rules on the text the screen saw second, and the first text is gone —
+with no ruling, against `update_drawer`'s "the reviewer must rule on exactly
+what the screen saw".
+
+It is reachable by a tenant through `/t/import`: the 202 from its own
+diverted save carries the queue id, and the chunk index is recoverable
+offline by enumerating `quarantine_drawer_id` over the filing the tenant
+chose. It is reachable by an operator re-mining a file whose flagged chunk
+changed. O216's door keys on the id a record lands under when it is NOT
+diverted, so it cannot see this.
+
+**Why it is a ruling.** The same convergence is what makes a queue restore
+idempotent, and what O216's probe P3 measured repairing a pending row whose
+tag no longer verifies: both land on an existing pending row through the
+diversion, with the same content. Refusing every diversion onto a pending
+row breaks both. Refusing only when the content differs keeps them, and
+must then say what a re-mine of an edited file does with its new flagged
+text.
+
+**Relations:** shares a diff surface with O221 — both decide what a diversion through `admission_divert` and `write_drawer_stmts` may do to an existing pending row: this one when the content differs, the other when the row it lands on no longer verifies.
+
+**Gate**: a flagged record under a fresh id carrying a pending row's filing,
+with different text, leaves the pending row's content and signals
+byte-identical, or is handled as ruled. **Premise**: the same record with the
+pending row's own text converges as today. **Counterfactual**: today, the text
+under review is replaced.
+
+**Relations:** sequenced before O219 — this ruling makes two records that unwrap to one ordinary id legitimate in a restore (both land in the queue, in their own slots), so whatever `import_many` and `import_record` come to do with one id twice must not refuse that pair.
+
+#### RULED 2026-09-18 by a three-lens panel (agentic memory architecture, security, software engineering and surface parity) plus an adversarial refuter
+
+**The question.** When a diversion lands on a queue id that already holds a
+pending row, what must happen — and where does that decision live?
+
+**Measured before ruling**, on the `1d74544` code (working files in the
+session scratchpad's `o220/`, material rather than record):
+- **A re-mine of an edited file** whose chunk still flags: queue row Q keeps
+  its id and its text changes; the queue shows one row; `verify` OK.
+- **An import under a fresh id carrying Q's filing**: re-diverts onto Q and
+  replaces the text; the fresh id never exists.
+- **P-update**: two flagged `drawer update` calls on one ordinary drawer — the
+  second replaces the first's queue row. This is the route an agent drives
+  alone through MCP's update tool, with no import and no enumeration.
+- **P-tail**: the transcript sweep files per message, so its flagged row is
+  byte-stable across cycles and converges. `mine --mode convos` does not: the
+  open tail chunk (800 bytes) re-diverts onto one queue id with text growing
+  83 → 162 → 241 bytes across three runs.
+- **P-restore**: a vault holding an ALLOWED flagged drawer and a pending
+  flagged update of it, restored into a screening vault through the CLI or
+  `/v1`: both divert onto one queue id, the update replaces the allowed text,
+  and zero rows hold that text afterwards. `verify` OK.
+
+**Prior rulings found and their disposition.**
+- **A flagged write is "never rejected and never silently dropped"** — the
+  module doc (`crates/undercroft-store/src/admission.rs:11-15`), backed by
+  `manage.rs:1014-1016` and `docs/AGENTS.md`. The brief cited the narrower
+  destination-screening sentence (`admission.rs:650-658`); this is the
+  general ruling. FOLLOWED: it is best practice for a heuristic screen, whose
+  false positive must not hard-fail a legitimate write. An attempt to refute
+  it for this case ("a refusal is loud and ends at the ruling") failed on
+  P-tail: a growing chunk never re-presents the frozen text, so every later
+  re-mine would be refused until someone ruled.
+- **Pending evidence is not editable** (`update_drawer`, O216). FOLLOWED — and
+  it is what the ruling protects.
+- **Deterministic convergence** (`admission.rs:596-603`, O31). FOLLOWED for
+  equal text.
+- **Round-four #7**: two diversions sharing one queue slot was a defect,
+  closed by giving distinct filings distinct slots, with no migration.
+  FOLLOWED by analogy — distinct TEXTS for one filing get distinct slots — and
+  the ordinary queue id does not move.
+- **O215**: no write-suppression primitive; re-mining is never made a no-op;
+  equality is verbatim bytes through `get`, never `fp`; a restore repairs a
+  tampered row. FOLLOWED.
+- **O216** verdicts 2, 3 and 6, and **O222** (the maintainer's ruling that a
+  tenant keeps import, so the engine must close this). FOLLOWED.
+- **The identity doctrine**. FOLLOWED — see the id recipe below.
+No `#### RULED` subsection existed in O220, O219, O221 or O197.
+
+**The verdict — (b): a readable pending row's content never changes except by
+a ruling; a second, different flagged text for one filing gets its own queue
+slot; equal text converges and writes, as today.**
+1. **The slot rule, at the door**, in order. (i) If the version slot `Qv`
+   derived from this filing and this text holds a pending row with this text,
+   converge there — first, so a re-mine after the ordinary slot was ruled on
+   cannot duplicate the text. (ii) Otherwise use the ordinary queue id `Q0`
+   when it is free, holds a pending row with equal text, cannot be read
+   (`Integrity`/`CorruptRow` — O216's P3 remedy), or holds a row whose covered
+   wing is NOT reserved (replaced, as today, which re-quarantines residue an
+   erasure import left there). (iii) Otherwise use `Qv`.
+2. **Equality** is byte-equal `content` from `get(id, WritePathLookup)`, and
+   "pending" is the HMAC-covered `meta.wing` being the reserved wing — never
+   `fp`, the clear column, or mere existence. Metadata is excluded: `filed_at`
+   is stamped at construction, and `added_by` and the signals vary.
+3. **The id recipe.** `Q0` is unchanged, so every existing queue id stays
+   byte-identical and nothing migrates. `Qv` is a new domain-tagged recipe over
+   the four filing components and `NORMALIZE_VERSION` plus
+   `HMAC(kg_secret, domain ‖ sha256(content))`, computed directly — NOT
+   through `keyed_fp_of_digest`, which returns the unkeyed digest on vaults
+   that are not sealed. Keyed because an unkeyed content digest in a clear id
+   is a confirmation oracle; keyed with `kg_secret` because it is stored,
+   re-sealed by rotation and never regenerated, where a vault key would move
+   the id on every rotation. `Qv` does not survive a move between vaults — an
+   import re-derives it with the destination's secret — the same trade the
+   graph's keyed ids already make.
+4. **Where it lives**: inside `admission_divert`, the one place a queue id is
+   derived, because `write_drawer` reports the id the door chose and the
+   `dedup` dry run sees only the door. A **batch-local map** of the landings
+   diverted earlier in the same batch (O216's `queued` set, extended to id and
+   content) is consulted before the database, or two versions in one CLI
+   chunk would both see `Q0` free. And a **boundary backstop** in
+   `write_drawer_stmts`, on the diverted arm only and inside the
+   transaction: an existing row whose covered wing is reserved and whose
+   content differs refuses as `Invalid`, naming the id as raced and
+   retryable — the door runs before `BEGIN IMMEDIATE`, so without it two
+   processes can both choose `Q0` and one version is silently lost. The
+   state-dependent-refusal gate moves from one to two, with its reason.
+5. **Self-supersession is checked against the chosen slot**, since
+   `validate_declaration` knows only the declared id, the recipe id and `Q0`.
+6. **Rulings on two versions** are independent: each restores to the one
+   ordinary id and the later allow wins there; a deny destroys only its row;
+   the list stays in arrival order. `PendingAdmission` gains `source_file`
+   and `chunk_index` so a reviewer sees which rows are versions of one filing
+   — reporting surface for a fix, so PATCH by the 2026-09-08 ruling, on every
+   renderer.
+7. **PATCH, and `UPGRADING.md` is not owed**: nothing that runs today stops;
+   the only new refusal is a raced write, which a retry converges. The
+   CHANGELOG says the queue now holds one row per distinct flagged text.
+
+**Options that lost.**
+- **(a) refuse a diversion whose text differs** (lenses B and C). It breaks
+  the never-rejected ruling above, and P-tail and P-restore measured what
+  that costs: every re-mine of a growing transcript refused until someone
+  rules, aborting its batch and every batch after it in the run; an ordinary
+  restore of a vault with an allowed drawer and a pending update of it
+  refused; a plantable write-suppression primitive, the class O215 ruled a
+  defect; and a one-bit exact-match oracle on the update surfaces (refused
+  versus 202), where under (b) the update replies carry only the drawer id.
+- **(c) replace and move the old text elsewhere**: moving the OLD row changes
+  an id the chain, the first writer's 202 and the queue already hold (A10).
+- **(d) keep the old row and drop the new write**: the second text is lost
+  behind a reply that says it was quarantined.
+- **A generation counter instead of a keyed slot**: a ruling leaves holes, a
+  walk stops at a hole and duplicates text, and it cannot tell what a broken
+  slot holds.
+- **Lens A's step (iii) as written**, which sent a non-pending row at `Q0` to
+  `Qv`: overruled for the smaller change that also re-quarantines residue.
+- **"Equal text writes nothing"** (lens B): O215 ruled that making re-mining a
+  no-op "would erase the evidence of a re-mine".
+- **A boundary-only placement** (lens B): the boundary can neither choose nor
+  report the landing id, and the dry-run preview would stop telling the truth.
+
+**Claims refuted, the brief's included.**
+- **The brief**: its "bound" was wrong — clean text also diverts, through the
+  destination-name screen, the declared rate screen (every import is stamped
+  `import`, so an importer can trip its own rate) and the tier-2 advisor; it
+  missed the two-update route and the restore route; it understated the harm
+  (an `allow` releases whatever the row holds when it runs, and the ruling
+  binds no content); it cited the narrow never-lost sentence; ruling 2 is not
+  universal (a queue row from before round-four #7 restores onto a new id);
+  "door before any embed" holds on the batch path only; its caller list
+  omitted `upsert_external`, `save_with_dedup_vec` and the `dedup` preview.
+- **Lens A**: the sweep daemon does not stall — P-tail measured it byte-stable;
+  its step (iii) is overruled; it missed the `/v1` count oracle below.
+- **Lens B**: "equal writes nothing" (O215); "the refusal ends at the ruling"
+  (P-tail); its k-reads cost applies to a counter scan, not a keyed slot (at
+  most two reads); "readable from `sqlite_sequence`" overstates the attacker —
+  offline enumeration of the public recipe is the real vector.
+- **Lens C**: its objections to (b) target a variant where the new slot
+  replaces `Q0`, not the ruled design; its round-trip objection lands harder
+  on (a), which refuses the same restore; it missed P-restore.
+
+**Residuals, stated.**
+- **The `/v1` import counts leak one bit**: a diverted record counts `new` when
+  it took a fresh version slot and `replaced` when it converged. Narrow — an
+  exact-match guess — and stated rather than closed.
+- **A stale ruling after an id is vacated and re-occupied** is closed by
+  neither option: filed as O225.
+
+**Dissent, recorded.** Lenses B and C ruled for (a); overruled on the
+never-rejected ruling, P-tail, P-restore, the O215 precedent and the oracle.
+Lens A's step (iii) and lens B's boundary-only placement and no-op arm are
+overruled.
+
+**What remains, each filed.** O224 (allowing an older queue row overwrites
+newer content at the ordinary id — exists today, and (b) makes it more
+frequent), O225 (a ruling binds no content), O226 (a convergence with equal
+content still replaces the covered declaration). **The build is owed**, with
+its gate: `Q0` seeded by a real diversion; a different text through two
+updates, `import_record`, `import_many`, a re-mine, both
+`save_with_dedup_vec` branches and `upsert_external` leaves `Q0` byte-identical
+(content, tag, signals, `filed_at`, queue position) and lands at `Qv`; an
+unchanged re-mine twice keeps the queue length; the P-restore pair keeps both
+texts on the CLI and `/v1`; a post-ruling re-mine does not duplicate; P3
+still repairs; a planted ordinary row at `Q0` is still replaced; a simulated
+race is refused with the row intact; a `Qv` arm in
+`no_durable_reference_moves_on_a_key_rotation`; recipes pinned with a fixed
+secret, never a literal id. Surfaces: CLI mine (edited file and a convos
+tail) and import, `/v1` PUT twice and import, MCP update twice, and
+`/t/drawers` PUT twice and `/t/import` on the screening engine.
+
+#### BUILT 2026-09-18, as ruled
+
+**Built to the ruling above, option (b).**
+- `ids::quarantine_version_id` is the version slot's recipe. It sits on the
+  one recipe body (`id_over_with`), whose trailing component contributes
+  nothing when absent, so every existing id is byte-identical. It is pinned to
+  a literal re-derived in Python over the same framing.
+- `kg::queue_version_key` is the keyed text digest: a direct HMAC under the
+  stored KG secret on every security level, and not `keyed_fp_of_digest`.
+- `VaultStore::queue_slot` applies the slot order (version slot holding this
+  text, then the filing's queue id when free, equal, unreadable or not
+  pending, then the version slot). It reads the covered wing and verbatim
+  content through `get`, and runs in `screen_and_divert` immediately after
+  `admission_divert`, its only caller. `refuse_self_supersession_of_slot`
+  checks a declared link against the chosen slot.
+- `upsert_many_held` keeps a map of the slots the batch has taken, with their
+  text, and re-slots a diverted row whose slot an earlier row filled with
+  different text.
+- `write_drawer_stmts` refuses a diverted write onto a slot that now holds a
+  different pending text (`queue_row_raced`), inside the transaction, on the
+  diverted arm only. `write_drawer_stmts_holds_only_state_dependent_refusals`
+  counts two refusals, with a premise naming the second.
+- `PendingAdmission` gains `source_file` and `chunk_index`. The CLI's
+  `admission list` prints them (its hand-projection row forced this) and so
+  does the admin console; `/v1` serializes them whole.
+
+**Measured**, release binaries at `1d74544` and at this tree.
+- The four routes the ruling measured each keep both texts.
+- **A real corpus**: the LoCoMo feed mined into eight wings with the screen on,
+  plus a file of three flagged chunks — 752 records, 24 queued.
+  - An unchanged re-mine: 93 ms on both binaries, and the queue stays at 24.
+  - The flagged file edited and re-mined into one wing: the shipped binary kept
+    24 rows and three first texts were gone (21 of 24 left); this tree holds 27
+    rows and all 24 first texts.
+  - Timing was within noise (89 → 82 ms), as a lookup on diverted rows only
+    should be.
+
+**Gates.**
+- `a_different_flagged_text_takes_its_own_slot_on_every_diverting_path`
+  (store). Q0 is seeded by a real diversion. A different text through a save,
+  `import_record`, `import_many`, a re-mine and a dedup save each takes a slot.
+  Equal text converges. An unchanged re-mine keeps the length. Q0's tag, queue
+  position and declaration are byte-identical. Two flagged `update_drawer`
+  calls on one drawer are two rows, and the drawer keeps its text.
+- `a_restore_keeps_an_allowed_text_and_its_pending_update` (store): the
+  P-restore pair through both import functions keeps both texts.
+- `a_ruling_leaves_no_duplicate_and_a_planted_row_is_replaced` (store): a
+  re-mine after a deny converges on the surviving version, and an ordinary row
+  planted at a queue id is replaced by the diversion.
+- `a_raced_diversion_is_refused_by_the_backstop` (store): a raw diverted write
+  of equal text converges, and a different one is refused naming the race.
+- `a_queue_version_slot_survives_a_key_rotation` (rotate): the same text after
+  a rotation re-derives to the row it named before.
+- `the_version_slot_recipe_is_pinned_and_keeps_its_own_space` (core).
+- Three `e2e` checks: a CLI re-mine of an edited file keeps both rows and the
+  first text; two `/v1` PUTs of one drawer are two rows. One
+  `orchestrator-e2e` check: two tenant PUTs through `/t/drawers/{id}` on the
+  screening engine are two rows on the operator's queue, each naming its
+  filing.
+
+**Counterfactuals**, each on a scratch copy with the edit confirmed to land.
+- Removing the slot rule fails four tests.
+- Checking the filing's id before the version slot fails the
+  no-duplicate-after-ruling test.
+- Removing the batch map fails the restore test.
+- Removing the backstop fails the race test.
+- Routing an unreadable row to a version slot fails O216's covered-wing test,
+  whose repair arm is P3.
+- In the backstop counterfactual the refusal-count gate stayed green, and that
+  green has its reason: it counts refusals present in the source, and the
+  disabled one still is. The race test is what sees it.
+
+**What this unit did not touch**, each with its own entry: O224, O225, O226.
+The external-vault save (`upsert_external`) reaches the same door and is
+covered structurally rather than by its own arm, because the door is the one
+function every diverting path calls.
+
 ### O216 — CLOSED 2026-09-18: an import can no longer replace a row awaiting an admission ruling, on any surface
 
 **Filed 2026-09-17 by O215's ruling panel (security lens), verified by
@@ -19875,7 +20162,7 @@ saying so — owes a report that names the collision.
 once with the collision reported, as ruled. **Counterfactual**: today, silent,
 last-wins, counted twice.
 
-**Relations:** sequenced after O220 — once that ruling is built, a restore may legitimately carry two records that unwrap to one ordinary id (an allowed drawer and a pending update of it), so the rule written here for one id twice in a payload must not refuse that pair.
+A constraint from O220, in prose since it closed: a restore may legitimately carry two records that unwrap to one ordinary id (an allowed drawer and a pending update of it), and each lands in its own queue slot, so the rule written here for one id twice in a payload must not refuse that pair.
 
 **One sub-case is refused since O216, and it is not this entry's question.**
 A record the screen diverts EARLIER in one CLI batch, followed by an
@@ -19883,216 +20170,6 @@ unscreened record whose id equals the row it just landed on, is refused by
 the batch-local arm O216's ruling adds to `upsert_many_held`, so the CLI
 answers that payload as `/v1` does. Two ordinary records sharing an id — the
 case above — are untouched by it.
-
-### O220 — a flagged record carrying a pending row's filing re-diverts onto its queue id and replaces the content under review
-
-**Filed 2026-09-18 by O216's ruling panel (security lens and refuter),
-established by reading.** The screen derives a diverted row's id from the
-record's FILING — wing, room, source and chunk — and never from its declared
-id (`admission::filing_ids`, `admission_divert` in
-`crates/undercroft-store/src/admission.rs`). A record whose filing matches a
-pending row's, flagged by the destination's screen, is written through
-`Screen::Bypass(AlreadyDiverted)` onto that row's queue id, and
-`ON CONFLICT(id) DO UPDATE` replaces its content and signals. The reviewer
-then rules on the text the screen saw second, and the first text is gone —
-with no ruling, against `update_drawer`'s "the reviewer must rule on exactly
-what the screen saw".
-
-It is reachable by a tenant through `/t/import`: the 202 from its own
-diverted save carries the queue id, and the chunk index is recoverable
-offline by enumerating `quarantine_drawer_id` over the filing the tenant
-chose. It is reachable by an operator re-mining a file whose flagged chunk
-changed. O216's door keys on the id a record lands under when it is NOT
-diverted, so it cannot see this.
-
-**Why it is a ruling.** The same convergence is what makes a queue restore
-idempotent, and what O216's probe P3 measured repairing a pending row whose
-tag no longer verifies: both land on an existing pending row through the
-diversion, with the same content. Refusing every diversion onto a pending
-row breaks both. Refusing only when the content differs keeps them, and
-must then say what a re-mine of an edited file does with its new flagged
-text.
-
-**Relations:** shares a diff surface with O221 — both decide what a diversion through `admission_divert` and `write_drawer_stmts` may do to an existing pending row: this one when the content differs, the other when the row it lands on no longer verifies.
-
-**Gate**: a flagged record under a fresh id carrying a pending row's filing,
-with different text, leaves the pending row's content and signals
-byte-identical, or is handled as ruled. **Premise**: the same record with the
-pending row's own text converges as today. **Counterfactual**: today, the text
-under review is replaced.
-
-**Relations:** sequenced before O219 — this ruling makes two records that unwrap to one ordinary id legitimate in a restore (both land in the queue, in their own slots), so whatever `import_many` and `import_record` come to do with one id twice must not refuse that pair.
-
-#### RULED 2026-09-18 by a three-lens panel (agentic memory architecture, security, software engineering and surface parity) plus an adversarial refuter
-
-**The question.** When a diversion lands on a queue id that already holds a
-pending row, what must happen — and where does that decision live?
-
-**Measured before ruling**, on the `1d74544` code (working files in the
-session scratchpad's `o220/`, material rather than record):
-- **A re-mine of an edited file** whose chunk still flags: queue row Q keeps
-  its id and its text changes; the queue shows one row; `verify` OK.
-- **An import under a fresh id carrying Q's filing**: re-diverts onto Q and
-  replaces the text; the fresh id never exists.
-- **P-update**: two flagged `drawer update` calls on one ordinary drawer — the
-  second replaces the first's queue row. This is the route an agent drives
-  alone through MCP's update tool, with no import and no enumeration.
-- **P-tail**: the transcript sweep files per message, so its flagged row is
-  byte-stable across cycles and converges. `mine --mode convos` does not: the
-  open tail chunk (800 bytes) re-diverts onto one queue id with text growing
-  83 → 162 → 241 bytes across three runs.
-- **P-restore**: a vault holding an ALLOWED flagged drawer and a pending
-  flagged update of it, restored into a screening vault through the CLI or
-  `/v1`: both divert onto one queue id, the update replaces the allowed text,
-  and zero rows hold that text afterwards. `verify` OK.
-
-**Prior rulings found and their disposition.**
-- **A flagged write is "never rejected and never silently dropped"** — the
-  module doc (`crates/undercroft-store/src/admission.rs:11-15`), backed by
-  `manage.rs:1014-1016` and `docs/AGENTS.md`. The brief cited the narrower
-  destination-screening sentence (`admission.rs:650-658`); this is the
-  general ruling. FOLLOWED: it is best practice for a heuristic screen, whose
-  false positive must not hard-fail a legitimate write. An attempt to refute
-  it for this case ("a refusal is loud and ends at the ruling") failed on
-  P-tail: a growing chunk never re-presents the frozen text, so every later
-  re-mine would be refused until someone ruled.
-- **Pending evidence is not editable** (`update_drawer`, O216). FOLLOWED — and
-  it is what the ruling protects.
-- **Deterministic convergence** (`admission.rs:596-603`, O31). FOLLOWED for
-  equal text.
-- **Round-four #7**: two diversions sharing one queue slot was a defect,
-  closed by giving distinct filings distinct slots, with no migration.
-  FOLLOWED by analogy — distinct TEXTS for one filing get distinct slots — and
-  the ordinary queue id does not move.
-- **O215**: no write-suppression primitive; re-mining is never made a no-op;
-  equality is verbatim bytes through `get`, never `fp`; a restore repairs a
-  tampered row. FOLLOWED.
-- **O216** verdicts 2, 3 and 6, and **O222** (the maintainer's ruling that a
-  tenant keeps import, so the engine must close this). FOLLOWED.
-- **The identity doctrine**. FOLLOWED — see the id recipe below.
-No `#### RULED` subsection existed in O220, O219, O221 or O197.
-
-**The verdict — (b): a readable pending row's content never changes except by
-a ruling; a second, different flagged text for one filing gets its own queue
-slot; equal text converges and writes, as today.**
-1. **The slot rule, at the door**, in order. (i) If the version slot `Qv`
-   derived from this filing and this text holds a pending row with this text,
-   converge there — first, so a re-mine after the ordinary slot was ruled on
-   cannot duplicate the text. (ii) Otherwise use the ordinary queue id `Q0`
-   when it is free, holds a pending row with equal text, cannot be read
-   (`Integrity`/`CorruptRow` — O216's P3 remedy), or holds a row whose covered
-   wing is NOT reserved (replaced, as today, which re-quarantines residue an
-   erasure import left there). (iii) Otherwise use `Qv`.
-2. **Equality** is byte-equal `content` from `get(id, WritePathLookup)`, and
-   "pending" is the HMAC-covered `meta.wing` being the reserved wing — never
-   `fp`, the clear column, or mere existence. Metadata is excluded: `filed_at`
-   is stamped at construction, and `added_by` and the signals vary.
-3. **The id recipe.** `Q0` is unchanged, so every existing queue id stays
-   byte-identical and nothing migrates. `Qv` is a new domain-tagged recipe over
-   the four filing components and `NORMALIZE_VERSION` plus
-   `HMAC(kg_secret, domain ‖ sha256(content))`, computed directly — NOT
-   through `keyed_fp_of_digest`, which returns the unkeyed digest on vaults
-   that are not sealed. Keyed because an unkeyed content digest in a clear id
-   is a confirmation oracle; keyed with `kg_secret` because it is stored,
-   re-sealed by rotation and never regenerated, where a vault key would move
-   the id on every rotation. `Qv` does not survive a move between vaults — an
-   import re-derives it with the destination's secret — the same trade the
-   graph's keyed ids already make.
-4. **Where it lives**: inside `admission_divert`, the one place a queue id is
-   derived, because `write_drawer` reports the id the door chose and the
-   `dedup` dry run sees only the door. A **batch-local map** of the landings
-   diverted earlier in the same batch (O216's `queued` set, extended to id and
-   content) is consulted before the database, or two versions in one CLI
-   chunk would both see `Q0` free. And a **boundary backstop** in
-   `write_drawer_stmts`, on the diverted arm only and inside the
-   transaction: an existing row whose covered wing is reserved and whose
-   content differs refuses as `Invalid`, naming the id as raced and
-   retryable — the door runs before `BEGIN IMMEDIATE`, so without it two
-   processes can both choose `Q0` and one version is silently lost. The
-   state-dependent-refusal gate moves from one to two, with its reason.
-5. **Self-supersession is checked against the chosen slot**, since
-   `validate_declaration` knows only the declared id, the recipe id and `Q0`.
-6. **Rulings on two versions** are independent: each restores to the one
-   ordinary id and the later allow wins there; a deny destroys only its row;
-   the list stays in arrival order. `PendingAdmission` gains `source_file`
-   and `chunk_index` so a reviewer sees which rows are versions of one filing
-   — reporting surface for a fix, so PATCH by the 2026-09-08 ruling, on every
-   renderer.
-7. **PATCH, and `UPGRADING.md` is not owed**: nothing that runs today stops;
-   the only new refusal is a raced write, which a retry converges. The
-   CHANGELOG says the queue now holds one row per distinct flagged text.
-
-**Options that lost.**
-- **(a) refuse a diversion whose text differs** (lenses B and C). It breaks
-  the never-rejected ruling above, and P-tail and P-restore measured what
-  that costs: every re-mine of a growing transcript refused until someone
-  rules, aborting its batch and every batch after it in the run; an ordinary
-  restore of a vault with an allowed drawer and a pending update of it
-  refused; a plantable write-suppression primitive, the class O215 ruled a
-  defect; and a one-bit exact-match oracle on the update surfaces (refused
-  versus 202), where under (b) the update replies carry only the drawer id.
-- **(c) replace and move the old text elsewhere**: moving the OLD row changes
-  an id the chain, the first writer's 202 and the queue already hold (A10).
-- **(d) keep the old row and drop the new write**: the second text is lost
-  behind a reply that says it was quarantined.
-- **A generation counter instead of a keyed slot**: a ruling leaves holes, a
-  walk stops at a hole and duplicates text, and it cannot tell what a broken
-  slot holds.
-- **Lens A's step (iii) as written**, which sent a non-pending row at `Q0` to
-  `Qv`: overruled for the smaller change that also re-quarantines residue.
-- **"Equal text writes nothing"** (lens B): O215 ruled that making re-mining a
-  no-op "would erase the evidence of a re-mine".
-- **A boundary-only placement** (lens B): the boundary can neither choose nor
-  report the landing id, and the dry-run preview would stop telling the truth.
-
-**Claims refuted, the brief's included.**
-- **The brief**: its "bound" was wrong — clean text also diverts, through the
-  destination-name screen, the declared rate screen (every import is stamped
-  `import`, so an importer can trip its own rate) and the tier-2 advisor; it
-  missed the two-update route and the restore route; it understated the harm
-  (an `allow` releases whatever the row holds when it runs, and the ruling
-  binds no content); it cited the narrow never-lost sentence; ruling 2 is not
-  universal (a queue row from before round-four #7 restores onto a new id);
-  "door before any embed" holds on the batch path only; its caller list
-  omitted `upsert_external`, `save_with_dedup_vec` and the `dedup` preview.
-- **Lens A**: the sweep daemon does not stall — P-tail measured it byte-stable;
-  its step (iii) is overruled; it missed the `/v1` count oracle below.
-- **Lens B**: "equal writes nothing" (O215); "the refusal ends at the ruling"
-  (P-tail); its k-reads cost applies to a counter scan, not a keyed slot (at
-  most two reads); "readable from `sqlite_sequence`" overstates the attacker —
-  offline enumeration of the public recipe is the real vector.
-- **Lens C**: its objections to (b) target a variant where the new slot
-  replaces `Q0`, not the ruled design; its round-trip objection lands harder
-  on (a), which refuses the same restore; it missed P-restore.
-
-**Residuals, stated.**
-- **The `/v1` import counts leak one bit**: a diverted record counts `new` when
-  it took a fresh version slot and `replaced` when it converged. Narrow — an
-  exact-match guess — and stated rather than closed.
-- **A stale ruling after an id is vacated and re-occupied** is closed by
-  neither option: filed as O225.
-
-**Dissent, recorded.** Lenses B and C ruled for (a); overruled on the
-never-rejected ruling, P-tail, P-restore, the O215 precedent and the oracle.
-Lens A's step (iii) and lens B's boundary-only placement and no-op arm are
-overruled.
-
-**What remains, each filed.** O224 (allowing an older queue row overwrites
-newer content at the ordinary id — exists today, and (b) makes it more
-frequent), O225 (a ruling binds no content), O226 (a convergence with equal
-content still replaces the covered declaration). **The build is owed**, with
-its gate: `Q0` seeded by a real diversion; a different text through two
-updates, `import_record`, `import_many`, a re-mine, both
-`save_with_dedup_vec` branches and `upsert_external` leaves `Q0` byte-identical
-(content, tag, signals, `filed_at`, queue position) and lands at `Qv`; an
-unchanged re-mine twice keeps the queue length; the P-restore pair keeps both
-texts on the CLI and `/v1`; a post-ruling re-mine does not duplicate; P3
-still repairs; a planted ordinary row at `Q0` is still replaced; a simulated
-race is refused with the row intact; a `Qv` arm in
-`no_durable_reference_moves_on_a_key_rotation`; recipes pinned with a fixed
-secret, never a literal id. Surfaces: CLI mine (edited file and a convos
-tail) and import, `/v1` PUT twice and import, MCP update twice, and
-`/t/drawers` PUT twice and `/t/import` on the screening engine.
 
 ### O221 — a queue row no ruling door can act on: one whose tag fails, and one flipped into the reserved wing
 
@@ -20120,7 +20197,7 @@ on it; the delete fence's advice should match what the ruling doors can do;
 and whether an operator may deny a pending row that fails verification is a
 question of what destroying unverifiable evidence means.
 
-**Relations:** shares a diff surface with O220 — both decide what a diversion through `admission_divert` and `write_drawer_stmts` may do to an existing pending row, and the one remedy measured here is a diversion onto one.
+Related, and in prose since O220 closed: O220's slot rule treats a pending row that cannot be read as replaceable, which is what keeps the one remedy measured here working.
 
 **Gate**: with one pending row's tag zeroed, `admission list` lists the others
 and reports that row; the delete refusal on a row flipped to the reserved wing

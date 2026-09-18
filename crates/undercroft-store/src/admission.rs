@@ -54,6 +54,13 @@ pub struct PendingAdmission {
     pub signals: Vec<undercroft_core::admission::AdmissionSignal>,
     /// When the write was diverted (RFC 3339).
     pub filed_at: String,
+    /// The source the write was filed from (`(direct)` for an API save) —
+    /// with `chunk_index`, the FILING, so a reviewer can see which rows are
+    /// versions of one filing (ROADMAP O220: a second, different flagged text
+    /// for a filing takes its own queue slot rather than replacing the first).
+    pub source_file: String,
+    /// The chunk of that source the write was filed as.
+    pub chunk_index: u32,
 }
 
 fn now_rfc3339() -> String {
@@ -83,6 +90,19 @@ pub(crate) struct FilingIds {
 /// wing and room rather than inventing one — [`save_event`]'s rule. Every
 /// caller that derives an id from such a row refuses it first.
 pub(crate) fn filing_ids(drawer: &Drawer) -> FilingIds {
+    let (wing, room, source) = aimed_filing(drawer);
+    let m = &drawer.meta;
+    FilingIds {
+        recipe: undercroft_core::ids::drawer_id(wing, room, source, m.chunk_index),
+        quarantine: undercroft_core::ids::quarantine_drawer_id(wing, room, source, m.chunk_index),
+    }
+}
+
+/// The wing, room and source a drawer's filing was AIMED at — from
+/// `intended_*` for a row already in the reserved wing. One derivation for
+/// [`filing_ids`] and [`filing_version_id`], so the two cannot disagree about
+/// which filing a row belongs to.
+fn aimed_filing(drawer: &Drawer) -> (&str, &str, &str) {
     let m = &drawer.meta;
     let (wing, room) = if m.wing == QUARANTINE_WING {
         (
@@ -92,11 +112,53 @@ pub(crate) fn filing_ids(drawer: &Drawer) -> FilingIds {
     } else {
         (m.wing.as_str(), m.room.as_str())
     };
-    let source = m.source_file.as_deref().unwrap_or("(direct)");
-    FilingIds {
-        recipe: undercroft_core::ids::drawer_id(wing, room, source, m.chunk_index),
-        quarantine: undercroft_core::ids::quarantine_drawer_id(wing, room, source, m.chunk_index),
+    (wing, room, m.source_file.as_deref().unwrap_or("(direct)"))
+}
+
+/// The version slot of `drawer`'s filing for the text `keyed_text` was
+/// derived from (ROADMAP O220; see [`VaultStore::queue_slot`]).
+pub(crate) fn filing_version_id(drawer: &Drawer, keyed_text: &[u8]) -> String {
+    let (wing, room, source) = aimed_filing(drawer);
+    undercroft_core::ids::quarantine_version_id(
+        wing,
+        room,
+        source,
+        drawer.meta.chunk_index,
+        keyed_text,
+    )
+}
+
+/// What a queue id holds, from a diversion's point of view (ROADMAP O220).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum QueueRow {
+    /// No row at this id.
+    Free,
+    /// A pending row holding exactly this text.
+    SameText,
+    /// A pending row holding a different text — which only a ruling may change.
+    DifferentText,
+    /// A row whose tag or seal fails: replaceable, as O215 and O216 ruled.
+    Unreadable,
+    /// A row whose covered wing is not the reserved one.
+    NotPending,
+}
+
+/// A declared supersession link may not name the queue slot the write lands
+/// in (ROADMAP O220). `validate_declaration` refuses a link equal to the
+/// declared id, the recipe id and the filing's queue id, and cannot know a
+/// version slot, which depends on the vault's state and secret.
+pub(crate) fn refuse_self_supersession_of_slot(
+    declared: &Drawer,
+    diverted: &Drawer,
+) -> Result<(), StoreError> {
+    if diverted.meta.supersedes.as_deref() == Some(diverted.id.as_str()) {
+        return Err(StoreError::Invalid(format!(
+            "drawer {:?} declares that it supersedes {:?}, the review-queue slot it \
+             would land in — a drawer cannot supersede itself",
+            declared.id, diverted.id
+        )));
     }
+    Ok(())
 }
 
 /// Everything a write DECLARES that can be judged from the candidate alone,
@@ -529,8 +591,73 @@ impl VaultStore {
             // the tier-2 advisor is consulted.
             crate::Screen::Apply => {
                 validate_declaration(drawer, vector)?;
-                Ok(self.admission_divert(drawer))
+                let Some(mut diverted) = self.admission_divert(drawer) else {
+                    return Ok(None);
+                };
+                // The queue SLOT is chosen here, beside the one derivation of a
+                // queue id, and nowhere else (ROADMAP O220). `admission_divert`
+                // derives the filing's queue id; this decides whether that row
+                // may take the text, or whether it already holds a different
+                // text a reviewer has not ruled on — in which case the text
+                // takes its own version slot rather than replacing it.
+                diverted.id = self.queue_slot(&diverted)?;
+                refuse_self_supersession_of_slot(drawer, &diverted)?;
+                Ok(Some(diverted))
             }
+        }
+    }
+
+    /// Which queue row a diverted drawer lands on (ROADMAP O220).
+    ///
+    /// A pending row's text never changes except by a ruling, because a ruling
+    /// binds the ID and `admission_allow` releases whatever the row holds when
+    /// it runs. The order is the ruling's:
+    /// 1. the version slot for THIS text, when it already holds this text —
+    ///    first, so a re-mine after the filing's first row was ruled on cannot
+    ///    open a duplicate;
+    /// 2. the filing's queue id, when it is free, holds this same text, cannot
+    ///    be read (a restore is the remedy for a tampered row, O216's P3), or
+    ///    holds a row that is not pending (replaced, as it always was);
+    /// 3. otherwise the version slot.
+    ///
+    /// Equality is the verbatim content through the HMAC-verified `get`, and
+    /// "pending" is the COVERED wing — never `fp`, never the clear column.
+    /// Metadata is not compared: `filed_at` is stamped at construction and the
+    /// signals and `added_by` legitimately differ between re-mines.
+    pub(crate) fn queue_slot(&self, diverted: &Drawer) -> Result<String, StoreError> {
+        let version = self.version_slot(diverted)?;
+        if self.queue_row(&version, &diverted.content)? == QueueRow::SameText {
+            return Ok(version);
+        }
+        let filing = filing_ids(diverted).quarantine;
+        Ok(match self.queue_row(&filing, &diverted.content)? {
+            QueueRow::DifferentText => version,
+            _ => filing,
+        })
+    }
+
+    /// The version slot for `diverted`'s own text — keyed with the STORED KG
+    /// secret (`kg::queue_version_key`), so it is stable across a rotation and
+    /// confirms nothing to an offline reader.
+    pub(crate) fn version_slot(&self, diverted: &Drawer) -> Result<String, StoreError> {
+        let key = crate::kg::queue_version_key(&self.kg_secret()?, &diverted.content);
+        Ok(filing_version_id(diverted, &key))
+    }
+
+    /// What the row at `id` means to a diversion carrying `content`.
+    pub(crate) fn queue_row(&self, id: &str, content: &str) -> Result<QueueRow, StoreError> {
+        match self.get(
+            id,
+            crate::Read::Internal(crate::InternalRead::WritePathLookup),
+        ) {
+            Ok(None) => Ok(QueueRow::Free),
+            Ok(Some(d)) if d.meta.wing != QUARANTINE_WING => Ok(QueueRow::NotPending),
+            Ok(Some(d)) if d.content == content => Ok(QueueRow::SameText),
+            Ok(Some(_)) => Ok(QueueRow::DifferentText),
+            Err(StoreError::Integrity(_)) | Err(StoreError::CorruptRow { .. }) => {
+                Ok(QueueRow::Unreadable)
+            }
+            Err(e) => Err(e),
         }
     }
 
@@ -802,6 +929,12 @@ impl VaultStore {
                 intended_room: d.meta.intended_room.clone().unwrap_or_default(),
                 signals: d.meta.admission_signals.clone(),
                 filed_at: d.meta.filed_at.clone(),
+                source_file: d
+                    .meta
+                    .source_file
+                    .clone()
+                    .unwrap_or_else(|| "(direct)".to_string()),
+                chunk_index: d.meta.chunk_index,
             });
         }
         // ROADMAP O50: one record for this door, through the one recording

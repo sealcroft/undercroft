@@ -2870,12 +2870,14 @@ fn run(cli: Cli) -> Result<()> {
                     for p in pending {
                         let codes: Vec<&str> = p.signals.iter().map(|s| s.code.as_str()).collect();
                         println!(
-                            "  {}  → {}/{}  [{}]  filed {}",
+                            "  {}  → {}/{}  [{}]  filed {}  from {}#{}",
                             p.id,
                             p.intended_wing,
                             p.intended_room,
                             codes.join(", "),
-                            p.filed_at
+                            p.filed_at,
+                            p.source_file,
+                            p.chunk_index
                         );
                     }
                 }
