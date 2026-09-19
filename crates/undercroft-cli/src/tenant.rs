@@ -3600,7 +3600,9 @@ fn store_err(e: StoreError) -> RestError {
         // request: an HMAC that does not verify, or an attestation that
         // does not describe what this vault did. 409, never 5xx — the
         // server is working exactly as designed when it says so.
-        StoreError::Integrity(_) | StoreError::Attestation(_) => 409,
+        StoreError::Integrity(_)
+        | StoreError::IntegrityFinding(_)
+        | StoreError::Attestation(_) => 409,
         // The same verdict one layer down. A tampered or unparseable
         // manifest reached every store-backed route as a 500 "internal
         // error" — the one class that tells an operator to retry and page
@@ -3640,6 +3642,7 @@ fn store_err(e: StoreError) -> RestError {
     let err = RestError::new(code, e.to_string());
     match &e {
         StoreError::Integrity(_)
+        | StoreError::IntegrityFinding(_)
         | StoreError::Attestation(_)
         | StoreError::DatabaseMissing { .. }
         | StoreError::DatabaseAmbiguous { .. }
@@ -3856,6 +3859,12 @@ mod tests {
         type VaultCase = (&'static str, fn() -> undercroft_vault::VaultError, bool);
         let store_cases: &[StoreCase] = &[
             ("Integrity", || S::Integrity("record".into()), true),
+            // O230/O232: a verdict that compared no HMAC, in the same family.
+            (
+                "IntegrityFinding",
+                || S::IntegrityFinding("key rotation refused".into()),
+                true,
+            ),
             (
                 "Attestation",
                 || S::Attestation("forged signature".into()),

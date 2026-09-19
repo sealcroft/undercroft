@@ -94,7 +94,13 @@ stateDiagram-v2
   under exactly one key generation. Audit tags of superseded content are
   preserved verbatim (their plaintext is gone by design); the chain over
   them is what rotates. Remote-index copies hold old-key ciphertext
-  afterwards — re-run `index push`.
+  afterwards — re-run `index push`. **A rotation refuses a vault that
+  `verify` fails on a leg it would rewrite** — a record whose HMAC fails,
+  a broken audit chain, a tampered receipt, a policy row that is not its
+  newest assignment — because re-keying recomputes every tag from the
+  current columns and would make the tampering authentic (ROADMAP O232).
+  Run `undercroft verify` first. What a rotation by an earlier binary
+  re-keyed cannot be told apart any more: the old key was the only witness.
 - **Encrypted export bundles** (`undercroft export --to <recipient>`): a
   backup or migration file never exists in plaintext. Since C3.4 the
   recipient identity is **hybrid post-quantum** — X25519 **and**

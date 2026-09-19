@@ -2347,3 +2347,142 @@ fn a_retention_sweep_destroys_a_drawer_flipped_out_of_its_scope_and_says_so() {
         .success()
         .stdout(predicate::str::contains("Destroyed: 0 drawer(s)."));
 }
+
+/// ROADMAP O230 + O232, through the surfaces an operator drives. An older,
+/// validly tagged retention row written back over a newer one listed its old
+/// lifespan with `VERIFY OK`, and a key rotation over it — or over any
+/// tampering `verify` reported — re-tagged it into authentic data. Now
+/// `verify` names the replay, the readers refuse it, and the rotation refuses
+/// on the CLI (exit 2) and on `/v1` (409, class `integrity`) with nothing
+/// re-tagged. Re-declaring the policy is the way out, after which both clear.
+#[test]
+fn a_replayed_policy_row_is_named_and_a_rotation_over_it_refuses() {
+    let home = TempDir::new().unwrap();
+    cmd(&home).args(["init"]).assert().success();
+    // A vault the server holds on `/v1` alone: `default` is also its `/mcp`
+    // vault, and a co-resident rotation is refused before any check runs.
+    cmd(&home)
+        .args(["vault", "create", "second"])
+        .assert()
+        .success();
+    cmd(&home)
+        .args(["retention", "set", "w", "--days", "30", "--vault", "second"])
+        .assert()
+        .success();
+    let db = home.path().join("vaults/second/vault.db");
+    let old: (u32, Vec<u8>, String) = rusqlite_open(&db)
+        .query_row(
+            "SELECT max_age_days, tag, assigned_at FROM retention_policy",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    cmd(&home)
+        .args([
+            "retention",
+            "set",
+            "w",
+            "--days",
+            "365",
+            "--vault",
+            "second",
+        ])
+        .assert()
+        .success();
+    rusqlite_open(&db)
+        .execute(
+            "UPDATE retention_policy SET max_age_days = ?1, tag = ?2, assigned_at = ?3",
+            rusqlite::params![old.0, old.1, old.2],
+        )
+        .unwrap();
+
+    cmd(&home)
+        .args(["verify", "--vault", "second"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains(
+            "retention/w: row is not the newest declaration in the chain",
+        ));
+    cmd(&home)
+        .args(["retention", "list", "--vault", "second"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("integrity verdict"));
+    cmd(&home)
+        .args(["retention", "sweep", "--dry-run", "--vault", "second"])
+        .assert()
+        .code(2);
+    let tag_before: Vec<u8> = rusqlite_open(&db)
+        .query_row("SELECT tag FROM retention_policy", [], |r| r.get(0))
+        .unwrap();
+    cmd(&home)
+        .args(["vault", "rotate", "second"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("key rotation refused"))
+        .stderr(predicate::str::contains("retention/w"));
+    let tag_after: Vec<u8> = rusqlite_open(&db)
+        .query_row("SELECT tag FROM retention_policy", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(tag_before, tag_after, "a refused rotation re-tags nothing");
+
+    // The same on `/v1`.
+    let port = {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        l.local_addr().unwrap().port()
+    };
+    let mut server = std::process::Command::new(assert_cmd::cargo::cargo_bin("undercroft"))
+        .env("UNDERCROFT_HOME", home.path())
+        .env_remove("UNDERCROFT_PASSPHRASE")
+        .args(["serve-http", "--port", &port.to_string()])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("serve-http spawns");
+    let addr = format!("127.0.0.1:{port}");
+    let ready = (0..100).any(|_| {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        std::net::TcpStream::connect(&addr).is_ok()
+    });
+    assert!(ready, "premise: serve-http came up on {addr}");
+    let rotate = raw_http(&addr, "POST", "/v1/vaults/second/rotate", "");
+    let listed = raw_http(&addr, "GET", "/v1/vaults/second/retention", "");
+    let verified = raw_http(&addr, "POST", "/v1/vaults/second/verify", "");
+    let _ = server.kill();
+    let _ = server.wait();
+    assert_eq!(rotate.0, 409, "{rotate:?}");
+    assert!(
+        rotate.1.contains("\"class\":\"integrity\"") && rotate.1.contains("key rotation refused"),
+        "{rotate:?}"
+    );
+    assert_eq!(listed.0, 409, "{listed:?}");
+    assert!(listed.1.contains("\"class\":\"integrity\""), "{listed:?}");
+    assert_eq!(verified.0, 200, "{verified:?}");
+    assert!(verified.1.contains("\"ok\":false"), "{verified:?}");
+
+    // The way out: re-declaring writes a fresh matching record.
+    cmd(&home)
+        .args([
+            "retention",
+            "set",
+            "w",
+            "--days",
+            "365",
+            "--vault",
+            "second",
+        ])
+        .assert()
+        .success();
+    cmd(&home)
+        .args(["verify", "--vault", "second"])
+        .assert()
+        .success();
+    cmd(&home)
+        .args(["vault", "rotate", "second"])
+        .assert()
+        .success();
+    cmd(&home)
+        .args(["verify", "--vault", "second"])
+        .assert()
+        .success();
+}

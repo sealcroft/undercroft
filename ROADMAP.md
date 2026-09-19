@@ -581,6 +581,14 @@ the operator's own rotation re-keyed the chain over it, which nothing here or
 anywhere else can undo. The trade is a narrow ambiguity against a **certain**
 false alarm on the routine path.
 
+**Revised 2026-09-19 by O230/O232's ruling, beside the sentence rather than in
+its place.** "Nothing … can undo" is true after the fact and was taken as the
+whole of it: a rotation re-keyed the chain over an inserted row because it
+never checked the chain first. Since O232 `rotate_keys` refuses a vault whose
+chain does not replay to its committed head, so an unrotated vault's broken
+replay can no longer be carried into a clean one. The residual stands for
+every rotation run by an earlier binary.
+
 **Gate executed 2026-08-11**, all three arms plus two the entry did not ask
 for. Unit: `a_key_rotation_makes_the_replay_unavailable_never_the_attestation_forged`
 (forget.rs) — premise (unrotated → `Verified`), arm 1 (rotated genuine →
@@ -3990,7 +3998,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**261** of the **276** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**265** of the **280** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4170,6 +4178,398 @@ identities.
 MINOR since O149: `PATCH /admin/tenants/{id}` and its CLI mirror are new
 capability, backward compatible. The rest of the section is PATCH work — no
 documented contract moves.
+
+### O230 — CLOSED 2026-09-19: an older policy row written back offline no longer passes `verify` or governs the sweep and the trust floor
+
+**Filed 2026-09-19 by O206's ruling panel (the security lens and the
+refuter); measured on O206's build.** A `retention_policy` or `wing_trust`
+row carries a tag the vault's key recomputes and a chain record whose id
+exists, and the policy leg checks exactly those two things (O94). A row copied
+out of the file earlier and written back later satisfies both, so:
+- **Retention**: `retention set w --days 30`, then `--days 365`, then the
+  30-day row restored with sqlite3: `retention list` reads 30 days and
+  `verify` answers `policy drift: 0`, `VERIFY OK`. A sweep then destroys
+  drawers the operator's current policy keeps — a deletion laundered through a
+  keyed sweep, which is what the policy tag exists to prevent. Restoring a
+  LONGER row hides drawers instead.
+- **Trust**: `trust set w2 trusted`, then `quarantined`, then the trusted row
+  restored: `trust list` reads `trusted`, `verify` answers OK, and the floor
+  that kept the wing out of a `standard` search is lifted.
+
+**O94's sentence is refuted here.** It says the discarded comparison of a
+row's tag with its chain record's "caught nothing … except an insider who
+already holds the vault key". Within one key epoch it caught a keyless replay
+of an older, validly tagged row, and nothing catches that now.
+
+**Why it needs a panel.** Comparing the row's `assigned_at` with the newest
+chain record's `at` is the obvious shape, and `audit.at` sits outside the chain
+hash (`chain_next_hex` takes the tag alone), so an offline writer can rewrite
+both. The chain-covered evidence is the TAG sequence, which rotation preserves
+verbatim while re-tagging the row, which is why O94 dropped the comparison in
+the first place.
+
+Decided and built together with O232, in prose now that both are done: the
+check this entry needs holds across a rotation only if `rotate_keys` stops
+re-tagging `wing_trust` and `retention_policy` rows it has not matched against
+their chain records.
+
+**Gate**: the two replays above make `verify` fail, and the sweep and the
+trust floor refuse to act on the replayed row, on a rotated vault as well as
+an unrotated one. **Counterfactual**: today's leg, under which both answer OK.
+
+#### RULED 2026-09-19 by a three-lens panel (agentic memory architecture, security, software engineering) plus an adversarial refuter — together with O232
+
+**The questions.** How is a replayed older policy row detected (O230), what a
+key rotation checks before it re-tags (O232), what reads do, how vaults rotated
+before the fix are stated, and whether the two are one unit. Working files are
+in the session scratchpad's `o230-panel/` (the brief, three lens answers, the
+integrator's probes, the refuter's report) — material, never the record.
+
+**Measured before ruling**, on the release binary built from `d938e62`'s tree,
+through the CLI (details in `probes.md` there):
+- **P1**: a 30-day retention row replayed over 365 lists 30 days with `VERIFY
+  OK`; a `trusted` row replayed over `quarantined` lists `trusted` with
+  `VERIFY OK`.
+- **Rotation launders (O232)**: a flipped `trust` column, an edited drawer
+  `meta_json` and the P1 replay — `VERIFY FAILED` and `trust list` refusing
+  before `vault rotate`; `VERIFY OK`, the wing read `trusted` and the forged
+  field authentic after.
+- **P2**: an `audit` row deleted — `audit chain: BROKEN` before a rotation,
+  `ok` and `VERIFY OK` after.
+- **P3**: an hmac-only vault's `content` column edited — `hmac failures: 1`
+  before, `VERIFY OK` after, and `search` returned the forged text.
+- **P4**: a quarantined drawer's clear and covered wing edited to `team` —
+  `hmac failures: 1` before, `VERIFY OK` after, and `search` returned the
+  diverted injection text.
+- **P1r**: `trust/secret` relabelled `read/x` and the trust row deleted —
+  `VERIFY OK` and the floor gone, TODAY. Two UPDATEs defeat O94's deletion arm.
+- **A drawer version replay**: after `drawer update` corrected "1111" to
+  "2222", the old row written back reads "1111" with `VERIFY OK` (filed below).
+- **The release question, by `git log -S`**: the policy re-tag in rotation and
+  the rotation's own audit record first appear in the same commit, `55af8d1`
+  (2026-08-06), an ancestor of `v1.0.0`; no released build re-tagged a policy
+  row without writing a `rotate/` record.
+
+**Prior rulings found and their disposition.**
+- **O94's closure** ("the discarded tag comparison caught nothing … except an
+  insider who already holds the vault key", and "that table has no index on
+  `record_id`"). REFUTED twice: within one key epoch the comparison catches a
+  keyless replay (P1), and `idx_audit_record_id` exists. REVISED beside O94.
+- **O13's residual** ("the operator's own rotation re-keyed the chain over it,
+  which nothing … can undo"). REVISED beside O13: it cannot be undone after the
+  fact, and it can be REFUSED before it.
+- **O206 ruling 2** (a policy row failing its tag refuses the whole sweep).
+  FOLLOWED, and extended to a replayed row: a replayed lifespan is a tampered
+  lifespan.
+- **O206 ruling 4** (a deleted retention row is reported in `policy_drift` and
+  the sweep proceeds, exit 2). FOLLOWED: there is no policy left to act on.
+- **The 2026-09-08 versioning ruling** and O206's "`config check` cannot see
+  data" precedent. FOLLOWED: PATCH.
+
+**Options, their costs, and why each lost.**
+- **(C)** compare `assigned_at` with `audit.at`: `at` is outside the chain
+  hash; one UPDATE defeats it.
+- **(B)** re-attestation records per policy row at each rotation: a new
+  namespace, a `fenced_from_agent` ruling and records on every rotation, and it
+  detects nothing (A) misses while labels are honest. The software-engineering
+  lens's induction holds: within a key epoch the only validly tagged rows for
+  a key are the one the rotation produced and each in-epoch assignment; with
+  none there is nothing to replay, with one the newest record falls after the
+  boundary; rows from an older epoch fail `verify_tag` — provided every
+  rotation since the fix checked first, which is O232.
+- **(A)+(B) with a key-derived boundary** (the agentic-memory lens):
+  REFUTED — `meta.keycheck` holds the full keycheck in clear, so an attacker
+  can spell `rotate/{kc16}`, and the rotation tag binds counts stored nowhere,
+  so no reader can authenticate a `rotate/` record.
+- **(D) generation markers probed by tag** (the security lens): immune to a
+  relabel for REPLAY, but with the row gone there is no `(key, g)` to probe and
+  the key universe still comes from labels, so P1r stays open; it costs a new
+  column, a canonical v2, a `READ_SCHEMA` row, downgrade breakage, an
+  `audit(tag)` index on every write and read record, and re-attestation.
+- **Label authentication** — folding `record_id` into each chain step — is
+  what closes every relabel variant at once (the newest record, the boundary,
+  P1r, `orphan_labels`). It complements (A) rather than replacing it, since P1
+  needs no relabel, and it changes the chain arithmetic, so it is its own entry
+  (O233).
+- **For O232**: R1 (refuse unless the whole `verify` passes) blocks rotation
+  for good over an orphan label, which the append-only trail can never clear;
+  R3 (re-tag only what verifies) cannot carry a chain mismatch across a re-key,
+  so a refusal must exist anyway, and it leaves rows under a destroyed key.
+
+**The splits, settled by evidence.**
+1. **Detection: (A)**, because every variant still trusts a label somewhere
+   and (A) is the only one whose remaining trust is the label itself, which
+   O233 closes.
+2. **Legacy rows** (a row whose newest record precedes the last rotation):
+   STATED, not reported. Under (A), after the first fixed rotation `verify`
+   cannot tell a row that rotation checked from one a pre-fix rotation
+   laundered, so a field would name checked rows as unchecked; and it would
+   report a policy-only slice of a residual that covers every tag-carrying
+   table and the chain, reading as complete when it is not.
+3. **Order**: O232's refusal first, then O230; `rotation_blockers` consumes
+   `policy_drift` wholesale, so O230's findings reach it with no rework.
+
+**Ruling — O230.**
+1. **One pure decision function** of (the row, the newest chain record for its
+   key, the boundary) → an optional finding, in `retention.rs` beside
+   `retention_policy_drift`, with the trust half moved there from `verify`:
+   - the row's tag fails under the current key → `{key}: row does not verify`
+     (unchanged);
+   - a row with no record → `… declared in no chain record` (unchanged);
+   - the key's newest record is a `retention-clear/` and a row exists →
+     `retention/{rest}: row present, cleared later in the chain` — at any seq,
+     so it also catches a pre-fix laundering;
+   - the newest record is an assignment NEWER than the boundary and its tag is
+     not the row's → `trust/{w}: row is not the newest assignment in the
+     chain` / `retention/{rest}: row is not the newest declaration in the
+     chain`;
+   - the newest record is older than the boundary → no finding (the stated
+     residual);
+   - a record with no row → the existing "row is gone" strings.
+2. **The boundary is `MAX(seq)` over `rotate/`.**
+3. **One gatherer** for `verify` and the readers, on case-sensitive, indexed
+   predicates — `record_id = ?` newest-first for a key, and half-open range
+   scans (`>= 'trust/' AND < 'trust0'`, likewise `retention/`,
+   `retention-clear/`, `rotate/`) for the key universe and the boundary. It
+   replaces `policy_chain_latest`'s case-insensitive `LIKE`, which cannot use
+   the BINARY index and would let two gatherers disagree over `ROTATE/x`.
+4. **Reads fail closed.** `wing_trusts()` refuses on any finding and on a
+   deleted trust row — the floor, `recent`, `list_drawers` and `trust list`
+   with it — and `retention_policies()` refuses on any finding, so the sweep
+   and `retention list` refuse. A deleted retention row stays report-only
+   (O206 ruling 4). The way out is the operator's: `trust set` /
+   `retention set|clear` writes a fresh matching record.
+5. **The relabel variants are pinned as named costs** (a relabel of the newest
+   record, or of a later record to `rotate/`, and P1r), citing O233.
+
+**Ruling — O232** (recorded in O232 too).
+1. **Inside `rotate_keys`**, right after the vault-id check and before any
+   schema DDL or `save_manifest_pending`: one `self.verify()`, refused on
+   `VerifyReport::rotation_blockers()` — record HMAC failures, `!chain_ok`,
+   tampered supersession or fact receipts, and every policy finding. Not on
+   mirror drift, orphan labels, `SourceChanged`/`Dangling`/`Unreceipted`, or
+   an O231 row: a rotation leaves each exactly as detectable.
+2. **In the integrity family**: exit 2 on the CLI, 409 with `class:
+   "integrity"` on `/v1`. The message names up to ten findings, the remedy for
+   each leg, and `undercroft verify`. No `--force`: an override that launders
+   is the defect.
+3. **`verify` and phases 1–3 run in ONE `BEGIN IMMEDIATE`** under a guard that
+   rolls back on every early return, so the bytes checked are the bytes
+   re-tagged, and a refused rotation on a long-lived `/v1` handle leaves no
+   transaction open.
+
+**Residual, stated** in CHANGELOG, `UPGRADING.md`, `docs/security.md`, the
+threat model and beside O13: whatever was tampered when a rotation by any
+earlier binary ran is authentic now — every tag-carrying table, both receipt
+kinds, the chain, and on an hmac-only vault the content. The old key was the
+only witness. Remedy: re-declare each policy to its intended value; compare
+drawers against a backup taken before that rotation.
+
+**One unit, one pull request, two commits** (O232, then O230); they close
+together. **PATCH**, with two `UPGRADING.md` entries: a scheduled rotation now
+exits 2 / 409 on a vault that fails those legs; floored reads, `trust list`,
+`retention list` and the sweep refuse on a replayed row, and trust reads on a
+deleted row. `verify` is the detector; `config check` opens no vault.
+
+**Revised by the integrator, with the refuter's own evidence: the error
+variant.** The ruling reused `StoreError::Integrity`, whose message is
+"integrity failure on record {0} — HMAC mismatch", and the refuter's third
+sibling finds that text already false at existing sites and false at every new
+site here — a broken chain, a replay and a deleted row are not HMAC
+mismatches. So the new sites mint a new variant IN THE SAME FAMILY,
+`StoreError::IntegrityFinding`, whose message states the finding, added to the
+CLI's exit-2 set and `/v1`'s 409/`integrity` class, which the cross-surface
+test holds identical. The class the ruling chose is kept; only the false text
+is not repeated. The existing sites are O235's.
+
+**Claims refuted.**
+- The brief's: "an edited sealed blob fails at the re-seal" holds for sealed
+  vaults only (P3); "a chain mismatch is not re-tagged" is false (P2); it
+  never said that `meta.keycheck` is stored in clear.
+- The O232 filing omitted hmac-only content and the receipt re-key and wrongly
+  excluded the chain.
+- The agentic-memory lens's unmovable boundary; the security lens's "(D) is
+  immune to relabelling" (true for replay only).
+- **My own, reported as mine**: I wrote `VerifyReport::rotation_blockers`
+  while the panel was sitting, and the brief described the branch as filings
+  and tests only — acting ahead of the ruling. The method matches what was
+  ruled, and nothing else was built before this record.
+- **My red tests**: their premises read through `retention_policies()` and
+  `wing_trusts()`, which refuse once this ruling is built, so they would have
+  failed at the premise and not the verdict; and the O232 test asserted no
+  refusal, no unchanged tag and no absent staging file. All corrected in the
+  build.
+- Three stale doc comments: `VerifyReport.policy_drift`'s ("a row whose tag no
+  longer matches the chain's"), the trust half's ("must match the assignment
+  that recorded it") and `policy_chain_latest`'s ("Seq only, and NOT the
+  tag"), which (A) makes false.
+
+**Probes owed by the build**: the relabel costs on the fixed build (expected
+`VERIFY OK`, pinning them); `EXPLAIN QUERY PLAN` on the equality and range
+probes; floored search ms/q at ~10⁵ audit rows before and after; rotation wall
+time and peak RSS with the pre-check on a real corpus; a refused rotation
+leaves every tag byte-identical, no `vault.json.next`, and a `/v1` handle that
+can still `trust set`; a vault rotated by 1.5.2 verifies OK under the fixed
+binary; a control that a rotated, untouched vault still verifies.
+
+**Filed from this ruling**: O233 (label authentication), O234 (replay of an
+older drawer or fact version), O235 (`StoreError::Integrity`'s message).
+
+#### BUILT 2026-09-19, as ruled, after O232
+
+**The decision.** `retention::policy_finding(key, noun, row, evidence)` is the
+one pure function; `PolicyEvidence` carries the key's newest record (seq and
+tag), its newest `retention-clear/` seq, and the boundary. Its arms are the
+ruling's six, with the strings ruled: `row does not verify`, `… in no chain
+record`, `row present, cleared later in the chain`, `row is not the newest
+assignment|declaration in the chain`, `… in the chain, row is gone`, and no
+finding for a row whose newest record predates the boundary.
+
+**The one gatherer.** `retention_policy_scan` and `trust_policy_scan` read each
+table once and ask `newest_record` (`record_id = ?` newest-first),
+`rotation_boundary` (`MAX(seq)` over the half-open `rotate/` range) and
+`chain_keys` (the half-open range of a namespace's labels) — `prefix_range`
+derives each range from `Namespace::prefix`, so no spelling is restated.
+`verify` calls `trust_policy_drift` and `retention_policy_drift`, both thin
+views of the scans; `policy_chain_latest` and its `LIKE` are gone; the trust
+half left `verify` for `retention.rs`, as ruled. `wing_trusts()` refuses any
+finding, deletion included; `retention_policies()` refuses any finding but a
+deleted row, which stays report-only; both through `refuse_on_findings`, which
+keeps `Integrity` for a failed tag and raises `IntegrityFinding` for the rest.
+The stale doc on `VerifyReport.policy_drift` is corrected, and the O94 and O13
+revisions stand beside those entries.
+
+**Tests** (manage.rs): the four replay tests, their premises now read raw rows
+by SQL and a `no_flip` premise asserts each replayed row verifies under the
+key; `a_deleted_trust_row_refuses_the_floor`; `a_rotation_refuses_over_a_replayed_policy_row`;
+and `a_relabelled_record_hides_a_replay_and_that_is_a_stated_cost`, which pins
+both relabel variants as O233's costs. The replay tests also assert the readers
+refuse, a floored `search` refuses, and a dry sweep refuses. The CLI test drives
+`verify` (exit 2 naming the finding), `retention list` and a dry sweep (exit 2),
+and `/v1` (`GET …/retention` 409 `integrity`, `POST …/verify` 200 `ok:false`),
+then the way out: re-declaring clears `verify` and the rotation succeeds.
+
+**Counterfactuals, each failing its target.** CF-A (no comparison with the
+newest record) fails the four replay tests and the cost test at its premise;
+CF-B (no clear arm) fails the cleared-row test alone; CF-C (the boundary
+ignored) fails `a_rotation_is_not_policy_drift` and the rotation reference
+gate — O94's false alarm on every rotated vault — plus the post-rotation
+replay test at its control and the second cost arm, since the boundary is what
+that relabel exploits; CF-D (the trust reader not refusing) fails both trust
+reader tests.
+
+**Probes.** `EXPLAIN QUERY PLAN` on a vault with 102,003 audit rows: the
+equality probe `SEARCH audit USING INDEX idx_audit_record_id (record_id=?)`,
+both range probes `USING COVERING INDEX`, and the replaced `LIKE` a full
+`SCAN audit`. The trust check's cost, measured as `trust list` (a cheap open
+plus `wing_trusts()`) over 30 interleaved rounds on that vault: 51 ms before,
+53 ms after. A warm floored search at that size costs several seconds of full
+scan, so a warm search pair could not attribute it and was not used. The
+relabel costs are pinned by the unit test rather than re-run on the binary.
+Legacy vaults: see O232's BUILT record — no false alarm.
+
+### O232 — CLOSED 2026-09-19: a key rotation refuses a vault it would launder, instead of turning detected tampering into authentic data
+
+**Filed 2026-09-19 while grounding O230; measured on `d938e62`.**
+`rotate_keys` (`crates/undercroft-store/src/rotate.rs`) recomputes every tag
+from the row's current columns under the NEXT key — drawers over `meta_json`
+and the re-sealed content, graph entities and facts, tunnels, `wing_trust`,
+`retention_policy`, and the facts' receipt tags — and never checks a row's
+existing tag under the current key first. Neither the CLI's `vault rotate` nor
+`POST /v1/vaults/{id}/rotate` runs `verify` before it. A sealed blob that was
+edited fails at the re-seal, because its AEAD open fails; a plain column or
+`meta_json` edited offline is carried into a fresh, valid tag.
+
+Measured: a wing classed `quarantined` flipped to `trusted` in the clear
+`trust` column, one drawer's covered `added_by` edited in `meta_json`, and an
+older retention row replayed (O230). Before `vault rotate`, `verify` FAILED
+with one HMAC failure and `trust/secret: row does not verify`, and `trust
+list` refused on the HMAC mismatch. After it, `verify` answered `VERIFY OK`,
+`trust list` read `secret trusted` — the floor that kept that wing out of a
+`standard` search was gone — and the forged `added_by` was authentic. The
+rotation destroyed the evidence `verify` had reported, and it is the
+operation the docs recommend running routinely.
+
+Decided and built together with O230, in prose now that both are done: a
+replay check on `wing_trust` and `retention_policy` holds across a rotation
+only if `rotate_keys` refuses to re-tag a row that does not match its chain
+record.
+
+**Why it is a ruling.** The obvious shape is that a rotation refuses a vault
+that does not verify, through the one `verify`. What it should refuse on is the
+question: a failing tag and a policy row that does not match its chain record
+are laundered; mirror drift, an orphan label and a chain mismatch are not
+re-tagged by rotation at all, and refusing on them would block a security
+operation over conditions the rotation cannot make worse. Whether the check is
+the whole `verify` or the tag-carrying legs alone, and what an operator does
+with a vault that fails it, is the panel's.
+
+**Gate**: each of the three tampers above makes `vault rotate` and `POST
+…/rotate` refuse before anything is re-tagged, naming the rows, and `verify`
+still fails afterwards. **Counterfactual**: today, the rotation succeeds and
+`verify` answers OK.
+
+#### RULED 2026-09-19 by the panel recorded under O230 (three lenses plus an adversarial refuter)
+
+The full record — measurements, prior rulings, options, splits and the error
+variant's revision — is O230's `#### RULED 2026-09-19`. This entry's half:
+`rotate_keys` itself runs one `verify()` right after its vault-id check,
+inside one `BEGIN IMMEDIATE` with phases 1–3 and a guard that rolls back on
+every early return, and refuses in the integrity family on
+`VerifyReport::rotation_blockers()`: record HMAC failures, `!chain_ok`,
+tampered supersession or fact receipts, and every policy finding — never on
+mirror drift, orphan labels, `SourceChanged`/`Dangling`/`Unreceipted` or an
+O231 row. No `--force`. Built first; O230's findings reach it through
+`policy_drift`.
+
+**This entry's filing was wrong in three places**, found by the panel and
+measured: a rotation DOES launder a chain mismatch (P2), an edited content
+column on an hmac-only vault (P3), and a keyless re-key of both receipt kinds.
+The ruling's refusal set covers all three.
+
+#### BUILT 2026-09-19, as ruled
+
+`rotate_keys` opens `RotationTx` — one `BEGIN IMMEDIATE`, rolled back by its
+`Drop` on every exit that did not commit — right after the vault-id check, runs
+`self.verify()` inside it, and refuses with `StoreError::IntegrityFinding` when
+`VerifyReport::rotation_blockers()` is non-empty; the schema DDL, phase 1, the
+staging of `vault.json.next` and phase 3 all run inside the same transaction,
+which `rotation.commit()` ends before the manifest is promoted. Phase 3 writes
+through the open transaction instead of opening its own. `rotation_blockers`
+destructures `VerifyReport` with no `..`, and lists record HMAC failures,
+`!chain_ok`, tampered supersession and fact receipts, and every policy
+finding; `rotation_refusal` names up to ten and the remedy for each kind.
+`IntegrityFinding` joined the CLI's exit-2 set and `/v1`'s 409/`integrity`
+class, and both pinned tests (`the_cli_exit_2_set_and_v1s_integrity_class_are_one_set`,
+`the_integrity_verdict_set_is_pinned_on_this_surface`). The admin console shows
+a refused rotation in its rotate report.
+
+**Tests.** `a_rotation_never_launders_a_tampered_row` (rotate.rs): a flipped
+trust class and an edited drawer `meta_json`, detected first; the rotation
+refuses as an integrity verdict naming both, every tag byte-identical, no
+`vault.json.next`, the handle still writes, and `verify` and the floor still
+refuse. `a_rotation_refuses_over_a_replayed_policy_row` (manage.rs, with O230).
+The CLI test `a_replayed_policy_row_is_named_and_a_rotation_over_it_refuses`
+drives `vault rotate` (exit 2) and `POST …/rotate` (409, `class: integrity`) on
+a vault the server holds on `/v1` alone — `default` is its `/mcp` vault, whose
+co-resident refusal answers first. `e2e` gains five checks: a trust column
+flipped by a same-length byte edit, `verify` reporting it, `vault rotate`
+refusing at exit 2, the flip still reported afterwards, and `/v1` refusing with
+409 `integrity`.
+
+**Counterfactuals.** CF-E (the refusal disabled) fails both rotation tests;
+CF-F (the guard never rolls back) fails the laundering test with "cannot start a
+transaction within a transaction" when the handle next writes — the long-lived
+`/v1` hazard the refuter named; CF-G (`IntegrityFinding` dropped from `/v1`'s
+integrity class) fails the CLI test and the cross-surface set test. The `e2e`
+block on the `d938e62` tree: the two premises pass and the three verdict checks
+fail.
+
+**Probes.** At 102,000 sealed drawers a rotation took 2.58 s → 3.22 s wall at
+136 MB peak RSS both ways — the pre-check is one `verify`. A vault rotated
+twice by the pre-fix binary, with a policy re-declared between, verifies OK
+under the fixed binary, lists its policies and rotates cleanly: no false alarm
+on legacy vaults. The laundering probes P2, P3 and P4 are the ruling's.
 
 ### O206 — CLOSED 2026-09-19: a retention sweep reads each drawer's scope from its covered meta, so a flipped mirror no longer hides a drawer from its policy
 
@@ -14007,6 +14407,16 @@ two do not, except an insider who already holds the vault key. `seq` is still
 read, for the clear-ordering rule alone. A fifth test now guards the rotation
 case at unit speed rather than leaving it to a container.
 
+**Revised 2026-09-19 by O230/O232's ruling, beside these paragraphs rather
+than in their place.** Two claims above are wrong. "Caught nothing the other
+two do not" — within one key epoch the tag comparison catches a keyless replay
+of an older, validly tagged row (O230, measured), and nothing caught it once
+the comparison went. "That table has no index on `record_id`" —
+`idx_audit_record_id` exists. The comparison returns under O230, bounded to
+records newer than the last rotation, so it no longer alarms on a rotated
+vault; the rotation that would otherwise re-tag an uncompared row refuses
+first (O232).
+
 **The exposure, measured rather than argued.** Three drawers in a wing classed
 `quarantined`, one in an open wing, one query under a `standard` floor:
 
@@ -21191,39 +21601,6 @@ so they are checked in the same transaction.
 unless the destination still holds what the operator named. **Counterfactual**:
 today, no override exists.
 
-### O230 — an older, validly tagged policy row replayed offline passes `verify` and governs the sweep and the trust floor
-
-**Filed 2026-09-19 by O206's ruling panel (the security lens and the
-refuter); measured on O206's build.** A `retention_policy` or `wing_trust`
-row carries a tag the vault's key recomputes and a chain record whose id
-exists, and the policy leg checks exactly those two things (O94). A row copied
-out of the file earlier and written back later satisfies both, so:
-- **Retention**: `retention set w --days 30`, then `--days 365`, then the
-  30-day row restored with sqlite3: `retention list` reads 30 days and
-  `verify` answers `policy drift: 0`, `VERIFY OK`. A sweep then destroys
-  drawers the operator's current policy keeps — a deletion laundered through a
-  keyed sweep, which is what the policy tag exists to prevent. Restoring a
-  LONGER row hides drawers instead.
-- **Trust**: `trust set w2 trusted`, then `quarantined`, then the trusted row
-  restored: `trust list` reads `trusted`, `verify` answers OK, and the floor
-  that kept the wing out of a `standard` search is lifted.
-
-**O94's sentence is refuted here.** It says the discarded comparison of a
-row's tag with its chain record's "caught nothing … except an insider who
-already holds the vault key". Within one key epoch it caught a keyless replay
-of an older, validly tagged row, and nothing catches that now.
-
-**Why it needs a panel.** Comparing the row's `assigned_at` with the newest
-chain record's `at` is the obvious shape, and `audit.at` sits outside the chain
-hash (`chain_next_hex` takes the tag alone), so an offline writer can rewrite
-both. The chain-covered evidence is the TAG sequence, which rotation preserves
-verbatim while re-tagging the row, which is why O94 dropped the comparison in
-the first place.
-
-**Gate**: the two replays above make `verify` fail, and the sweep and the
-trust floor refuse to act on the replayed row, on a rotated vault as well as
-an unrotated one. **Counterfactual**: today's leg, under which both answer OK.
-
 ### O231 — `verify` skips a drawer whose tag verifies and whose covered meta does not parse, and answers OK
 
 **Filed 2026-09-19 by O206's ruling; established by reading.**
@@ -21242,6 +21619,72 @@ leg of its own projected on all four renderers.
 
 **Gate**: a drawer re-tagged over an unparseable `meta_json` makes `verify`
 fail and names it. **Counterfactual**: today, `VERIFY OK`.
+
+### O233 — an audit label is outside the chain hash, so one relabel defeats every check that finds a record by its label
+
+**Filed 2026-09-19 by O230/O232's ruling; measured on `d938e62`.**
+`chain_append` folds only a record's TAG into the head (`chain_next_hex(&head,
+tag)`); `record_id` and `at` sit beside it unauthenticated, and the rotation's
+own record binds counts stored nowhere, so no reader can authenticate a
+`rotate/` label either. Every check that locates a record by its label is
+therefore one UPDATE deep. Measured (P1r): `trust set secret quarantined`,
+then `UPDATE audit SET record_id='read/x' WHERE record_id='trust/secret'` and
+`DELETE FROM wing_trust` — `verify` answered `policy drift: 0`, `VERIFY OK`,
+and the quarantine floor was gone. The same move defeats O230's comparison (a
+replay plus a relabel of the newer record), moves O230's rotation boundary (a
+later record relabelled `rotate/`), and hides a record from `orphan_labels`,
+which resolves only `kg/`, `kg-entity/` and bare labels.
+
+**Shape**: fold the label into each chain step — a versioned chain whose step
+covers `record_id` as well as the tag — with a migration that carries O232's
+residual for the history before it; the head values a forgetting attestation
+carries move with it, which O13's verdicts must absorb. A panel's question,
+because it changes the chain arithmetic every verifier replays.
+
+**Gate**: P1r and both O230 relabel costs make `verify` fail. **Counterfactual**:
+today, `VERIFY OK`.
+
+### O234 — an older, validly tagged version of a drawer or a fact written back offline passes `verify`
+
+**Filed 2026-09-19 by O230/O232's ruling; measured for drawers on `d938e62`.**
+A drawer upsert, a fact's validity window closing, an authority change and an
+entity re-tag each rewrite the row's tag in place and append the new tag to the
+chain (`lib.rs` drawer write, `kg.rs` window close, authority, entity); no leg
+compares a row's CURRENT tag with its newest chain record, and `orphan_labels`
+never flags a row that is present after a newer `del/{id}`. Measured: after
+`drawer update` corrected "the account number is 1111" to "… 2222 (corrected)",
+the earlier row's `meta_json`, `content`, `embedding` and `tag` written back with
+sqlite3 read "1111" again, with `hmac failures: 0`, `audit chain: ok`, `VERIFY
+OK`. By reading, the same restores an ended or demoted canonical fact, and a
+drawer destroyed by `forget` written back resurrects it beside its own
+tombstone.
+
+**Shape**: O230's comparison, extended to every table that appends its row's
+tag to the chain — a row's tag must equal its newest record's tag above the
+last rotation, and a row present after a newer `del/{id}` is a finding — on the
+one gatherer O230 builds. A panel's question for its cost: `verify` walks the
+drawers already, and the reads that return content would pay a per-row chain
+probe. It shares O233's label residual.
+
+**Gate**: an update-then-restore and a forget-then-restore each make `verify`
+fail. **Counterfactual**: today, `VERIFY OK`.
+
+### O235 — `StoreError::Integrity` says "HMAC mismatch" at sites where no HMAC was compared
+
+**Filed 2026-09-19 by O230/O232's ruling; established by reading.** The
+variant's message is `integrity failure on record {0} — HMAC mismatch`, and it
+is minted at 42 sites, among them the chain reconciliation's rollback verdict
+and the CLI's manifest checks, where the finding is a chain or anchor mismatch
+rather than a failed tag. No test asserts the text. O230/O232 added
+`StoreError::IntegrityFinding` in the same family for their own sites rather
+than repeat the false text.
+
+**Shape**: each site states what it found — the existing HMAC sites keep their
+wording, the others move to `IntegrityFinding` or to a message of their own —
+with the family's exit 2 / 409 `integrity` class unchanged.
+
+**Gate**: every `Integrity` mint site's message names what was compared, pinned
+by a source count. **Counterfactual**: today's single message.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 

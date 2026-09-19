@@ -46,7 +46,7 @@
 
     <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="key-rotation-title key-rotation-desc">
       <title id="key-rotation-title">Undercroft key rotation sequence</title>
-      <desc id="key-rotation-desc">An operator rotates a vault's keys in two phases: the store asks the vault for a rotation candidate with a fresh salt and four new subkeys, stages the new manifest durably as vault.json.next, then in one database transaction re-seals every artifact under the new keys, re-tags the policy rows, re-keys the audit chain over the preserved historical bytes, appends a rotate record and flips the keycheck marker; only after that commit is the staged manifest promoted over vault.json. A crash between the commit and the promotion is reconciled at the next open, where the database keycheck decides whether the staged manifest is adopted or discarded, and the read-only role reports rather than heals. Identifiers, blind columns, fingerprints and audit record ids never move; tags, receipts and sealed bytes must.</desc>
+      <desc id="key-rotation-desc">An operator rotates a vault's keys in two phases: the store asks the vault for a rotation candidate with a fresh salt and four new subkeys, then opens one database transaction and runs verify inside it first, refusing and re-tagging nothing when a record tag, the audit chain, a receipt or a policy row fails, because re-keying would make that tampering authentic; otherwise it stages the new manifest durably as vault.json.next and, in the same transaction, re-seals every artifact under the new keys, re-tags the policy rows, re-keys the audit chain over the preserved historical bytes, appends a rotate record and flips the keycheck marker; only after that commit is the staged manifest promoted over vault.json. A crash between the commit and the promotion is reconciled at the next open, where the database keycheck decides whether the staged manifest is adopted or discarded, and the read-only role reports rather than heals. Identifiers, blind columns, fingerprints and audit record ids never move; tags, receipts and sealed bytes must.</desc>
       <defs>
         <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7fa39c"/></marker>
         <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#35e0c2"/></marker>
@@ -76,18 +76,20 @@
       <line x1="160" y1="152" x2="392" y2="152" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
       <!-- 2 store -> vault: candidate -->
       <line x1="404" y1="184" x2="640" y2="184" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
-      <!-- 3 store -> manifest: stage .next -->
-      <line x1="404" y1="216" x2="880" y2="216" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
-      <!-- 4 store -> db: BEGIN -->
-      <line x1="404" y1="248" x2="1080" y2="248" stroke="#35e0c2" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
-      <!-- 5 store self: reseal every artifact -->
-      <path d="M 404,280 H 440 V 300 H 412" fill="none" stroke="#35e0c2" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
-      <!-- 6 store -> db: re-tag policy rows -->
-      <line x1="404" y1="328" x2="1080" y2="328" stroke="#35e0c2" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
-      <!-- 7 store -> db: re-key the chain, rotate/ record, flip keycheck -->
-      <line x1="404" y1="360" x2="1080" y2="360" stroke="#35e0c2" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
-      <!-- 8 store -> db: COMMIT -->
-      <line x1="404" y1="392" x2="1080" y2="392" stroke="#35e0c2" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <!-- 3 store -> db: BEGIN IMMEDIATE — opened BEFORE the check (O232) -->
+      <line x1="404" y1="216" x2="1080" y2="216" stroke="#35e0c2" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <!-- 4 store self: verify, refusing on what a rotation would launder -->
+      <path d="M 404,240 H 440 V 258 H 412" fill="none" stroke="#35e0c2" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <!-- 5 store -> manifest: stage .next -->
+      <line x1="404" y1="288" x2="880" y2="288" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- 6 store self: reseal every artifact -->
+      <path d="M 404,308 H 440 V 326 H 412" fill="none" stroke="#35e0c2" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <!-- 7 store -> db: re-tag policy rows -->
+      <line x1="404" y1="352" x2="1080" y2="352" stroke="#35e0c2" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <!-- 8 store -> db: re-key the chain, rotate/ record, flip keycheck -->
+      <line x1="404" y1="376" x2="1080" y2="376" stroke="#35e0c2" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
+      <!-- 9 store -> db: COMMIT -->
+      <line x1="404" y1="400" x2="1080" y2="400" stroke="#35e0c2" stroke-width="1.2" marker-end="url(#arrow-accent)"/>
       <!-- 9 store -> manifest: promote -->
       <line x1="404" y1="424" x2="880" y2="424" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
       <!-- 10 store -> operator: report (return, dashed) -->
@@ -104,23 +106,26 @@
       <rect x="428" y="164" width="188" height="12" rx="2" fill="#04080a"/>
       <text x="522" y="173" fill="#7fa39c" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.06em">rotation_candidate: fresh salt, 4 keys</text>
 
-      <rect x="520" y="196" width="244" height="12" rx="2" fill="#04080a"/>
-      <text x="642" y="205" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.06em">stage vault.json.next · fsync + dir sync</text>
+      <rect x="612" y="196" width="256" height="12" rx="2" fill="#04080a"/>
+      <text x="740" y="205" fill="#35e0c2" font-size="8" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.06em">BEGIN IMMEDIATE — from the check to COMMIT</text>
 
-      <rect x="640" y="228" width="200" height="12" rx="2" fill="#04080a"/>
-      <text x="740" y="237" fill="#35e0c2" font-size="8" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.06em">BEGIN — one transaction for it all</text>
+      <rect x="448" y="243" width="340" height="12" rx="2" fill="#04080a"/>
+      <text x="618" y="252" fill="#35e0c2" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.06em">verify first · refuse, re-tag nothing: tag · chain · receipt · policy</text>
 
-      <rect x="452" y="284" width="308" height="12" rx="2" fill="#04080a"/>
-      <text x="606" y="293" fill="#35e0c2" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.06em">reseal all: content · emb · tok · pq · fde · kg words + secret</text>
+      <rect x="520" y="268" width="244" height="12" rx="2" fill="#04080a"/>
+      <text x="642" y="277" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.06em">stage vault.json.next · fsync + dir sync</text>
 
-      <rect x="616" y="308" width="248" height="12" rx="2" fill="#04080a"/>
-      <text x="740" y="317" fill="#35e0c2" font-size="8" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.06em">re-tag wing_trust and retention_policy rows</text>
+      <rect x="452" y="311" width="308" height="12" rx="2" fill="#04080a"/>
+      <text x="606" y="320" fill="#35e0c2" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.06em">reseal all: content · emb · tok · pq · fde · kg words + secret</text>
 
-      <rect x="576" y="340" width="328" height="12" rx="2" fill="#04080a"/>
-      <text x="740" y="349" fill="#35e0c2" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.06em">re-key chain over PRESERVED tags · rotate/ record · flip keycheck</text>
+      <rect x="616" y="332" width="248" height="12" rx="2" fill="#04080a"/>
+      <text x="740" y="341" fill="#35e0c2" font-size="8" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.06em">re-tag wing_trust and retention_policy rows</text>
 
-      <rect x="700" y="372" width="80" height="12" rx="2" fill="#04080a"/>
-      <text x="740" y="381" fill="#35e0c2" font-size="8" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.06em">COMMIT</text>
+      <rect x="576" y="356" width="328" height="12" rx="2" fill="#04080a"/>
+      <text x="740" y="365" fill="#35e0c2" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.06em">re-key chain over PRESERVED tags · rotate/ record · flip keycheck</text>
+
+      <rect x="700" y="380" width="80" height="12" rx="2" fill="#04080a"/>
+      <text x="740" y="389" fill="#35e0c2" font-size="8" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.06em">COMMIT</text>
 
       <rect x="544" y="404" width="196" height="12" rx="2" fill="#04080a"/>
       <text x="642" y="413" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.06em">promote .next over vault.json</text>

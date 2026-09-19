@@ -42,7 +42,7 @@
 //! one legacy row stopping every policy), and a row whose tag fails is
 //! named wherever it sits.
 
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime};
 
@@ -263,33 +263,17 @@ impl VaultStore {
 
     /// Every declared policy, tag-verified on the way out — a flipped
     /// `max_age_days` is an integrity error here, never a silently
-    /// different lifespan.
+    /// different lifespan. **And checked against the chain (ROADMAP O230)**:
+    /// an older, validly tagged row written back offline verifies too, so a
+    /// row that is not its key's newest declaration, or that is present after
+    /// a newer clear, refuses as well — the sweep and `retention list` with
+    /// it, because a replayed lifespan is a tampered lifespan. A row DELETED
+    /// behind the store stays report-only here (O206): there is no policy
+    /// left to act on, and `verify` and the sweep's `policy_drift` name it.
     pub fn retention_policies(&self) -> Result<Vec<RetentionPolicy>, StoreError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT wing, room, max_age_days, tag, assigned_at
-             FROM retention_policy ORDER BY wing, room",
-        )?;
-        let rows: Vec<(String, String, u32, Vec<u8>, String)> = stmt
-            .query_map([], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
-            })?
-            .collect::<Result<_, _>>()?;
-        let mut out = Vec::with_capacity(rows.len());
-        for (wing, room, days, tag, at) in rows {
-            self.vault
-                .verify_tag(
-                    retention_canonical(&wing, &room, days, &at).as_slice(),
-                    &tag,
-                )
-                .map_err(|_| StoreError::Integrity(format!("retention/{wing}/{room}")))?;
-            out.push(RetentionPolicy {
-                wing,
-                room,
-                max_age_days: days,
-                assigned_at: at,
-            });
-        }
-        Ok(out)
+        let (rows, findings) = self.retention_policy_scan()?;
+        refuse_on_findings(&findings, |f| !f.gone)?;
+        Ok(rows)
     }
 
     /// Run (or preview) a sweep: every declared policy contributes the
@@ -472,67 +456,353 @@ impl VaultStore {
 
     /// The retention half of `verify`'s policy-drift leg (ROADMAP O94),
     /// sorted — ONE implementation, which `verify` and the sweep both call
-    /// (ROADMAP O206). A row that does not verify, a row no chain record
-    /// declared, and a declaration whose row is gone with no NEWER
-    /// `retention-clear/` record. The sweep needs the last of these most: a
-    /// policy row deleted offline is a scope nothing enforces any more, and
-    /// a sweep that reads only the rows present answered clean beside it.
+    /// (ROADMAP O206), deciding through [`policy_finding`] (ROADMAP O230).
+    /// The sweep needs a deleted row most: a policy row deleted offline is a
+    /// scope nothing enforces any more, and a sweep that reads only the rows
+    /// present answered clean beside it.
     pub(crate) fn retention_policy_drift(&self) -> Result<Vec<String>, StoreError> {
-        let latest = self.policy_chain_latest()?;
-        let mut drift = Vec::new();
-        let mut seen: Vec<String> = Vec::new();
-        {
-            let mut stmt = self.conn.prepare(concat!(
-                "SELECT wing, room, max_age_days, tag, assigned_at ",
-                "FROM retention_policy ORDER BY wing, room",
-            ))?;
-            let rows: Vec<(String, String, u32, Vec<u8>, String)> = stmt
-                .query_map([], |r| {
-                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
-                })?
-                .collect::<Result<_, _>>()?;
-            for (wing, room, days, tag, at) in rows {
-                let rest = if room.is_empty() {
-                    wing.clone()
-                } else {
-                    format!("{wing}/{room}")
-                };
-                let key = format!("retention/{rest}");
-                seen.push(key.clone());
-                if self
-                    .vault
-                    .verify_tag(
-                        retention_canonical(&wing, &room, days, &at).as_slice(),
-                        &tag,
-                    )
-                    .is_err()
-                {
-                    drift.push(format!("{key}: row does not verify"));
-                    continue;
-                }
-                if !latest.contains_key(&key) {
-                    drift.push(format!("{key}: declared in no chain record"));
-                }
-            }
-        }
-        for (key, seq) in latest.iter() {
-            let Some(rest) = key.strip_prefix("retention/") else {
-                continue;
-            };
-            if seen.contains(key) {
-                continue;
-            }
-            // Cleared is the legitimate absence, and only when the clear
-            // is NEWER — an older one belongs to a policy since redeclared.
-            let cleared = latest
-                .get(&format!("retention-clear/{rest}"))
-                .is_some_and(|cseq| cseq > seq);
-            if !cleared {
-                drift.push(format!("{key}: declared in the chain, row is gone"));
-            }
-        }
+        let mut drift: Vec<String> = self
+            .retention_policy_scan()?
+            .1
+            .into_iter()
+            .map(|f| f.text)
+            .collect();
         drift.sort();
         Ok(drift)
+    }
+
+    /// The trust half of the same leg, moved here from `verify` so both
+    /// halves decide through [`policy_finding`] (ROADMAP O230), sorted.
+    pub(crate) fn trust_policy_drift(&self) -> Result<Vec<String>, StoreError> {
+        let mut drift: Vec<String> = self
+            .trust_policy_scan()?
+            .1
+            .into_iter()
+            .map(|f| f.text)
+            .collect();
+        drift.sort();
+        Ok(drift)
+    }
+
+    /// Every `retention_policy` row with the evidence about it, and every
+    /// finding — rows present and declarations whose row is gone. The ONE
+    /// scan `verify`, the sweep and `retention_policies` share.
+    pub(crate) fn retention_policy_scan(
+        &self,
+    ) -> Result<(Vec<RetentionPolicy>, Vec<PolicyFinding>), StoreError> {
+        let boundary = self.rotation_boundary()?;
+        let mut stmt = self.conn.prepare(concat!(
+            "SELECT wing, room, max_age_days, tag, assigned_at ",
+            "FROM retention_policy ORDER BY wing, room",
+        ))?;
+        let rows: Vec<(String, String, u32, Vec<u8>, String)> = stmt
+            .query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })?
+            .collect::<Result<_, _>>()?;
+        let mut kept = Vec::with_capacity(rows.len());
+        let mut findings = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for (wing, room, days, tag, at) in rows {
+            let rest = if room.is_empty() {
+                wing.clone()
+            } else {
+                format!("{wing}/{room}")
+            };
+            let key = Namespace::Retention.record(&rest);
+            let verifies = self
+                .vault
+                .verify_tag(
+                    retention_canonical(&wing, &room, days, &at).as_slice(),
+                    &tag,
+                )
+                .is_ok();
+            let evidence = PolicyEvidence {
+                newest: self.newest_record(&key)?,
+                newest_clear: self
+                    .newest_record(&Namespace::RetentionClear.record(&rest))?
+                    .map(|r| r.seq),
+                boundary,
+            };
+            let row = RowState {
+                verifies,
+                tag: &tag,
+            };
+            if let Some(f) = policy_finding(&key, PolicyNoun::Retention, Some(row), &evidence) {
+                findings.push(f);
+            }
+            seen.insert(key);
+            kept.push(RetentionPolicy {
+                wing,
+                room,
+                max_age_days: days,
+                assigned_at: at,
+            });
+        }
+        for key in self.chain_keys(Namespace::Retention)? {
+            if seen.contains(&key) {
+                continue;
+            }
+            let rest = &key[Namespace::Retention.prefix().len()..];
+            let evidence = PolicyEvidence {
+                newest: self.newest_record(&key)?,
+                newest_clear: self
+                    .newest_record(&Namespace::RetentionClear.record(rest))?
+                    .map(|r| r.seq),
+                boundary,
+            };
+            if let Some(f) = policy_finding(&key, PolicyNoun::Retention, None, &evidence) {
+                findings.push(f);
+            }
+        }
+        Ok((kept, findings))
+    }
+
+    /// The same scan for `wing_trust` (ROADMAP O230), shared by `verify` and
+    /// [`VaultStore::wing_trusts`]. Trust has no clear: no
+    /// `DELETE FROM wing_trust` exists in this crate, so a row that is gone
+    /// has no legitimate path.
+    pub(crate) fn trust_policy_scan(&self) -> Result<TrustScan, StoreError> {
+        let boundary = self.rotation_boundary()?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT wing, trust, tag, assigned_at FROM wing_trust ORDER BY wing")?;
+        let rows: Vec<(String, String, Vec<u8>, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+            .collect::<Result<_, _>>()?;
+        let mut kept = Vec::with_capacity(rows.len());
+        let mut findings = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for (wing, trust, tag, at) in rows {
+            let key = Namespace::Trust.record(&wing);
+            let verifies = self
+                .vault
+                .verify_tag(
+                    crate::manage::wing_trust_canonical(&wing, &trust, &at).as_slice(),
+                    &tag,
+                )
+                .is_ok();
+            let evidence = PolicyEvidence {
+                newest: self.newest_record(&key)?,
+                newest_clear: None,
+                boundary,
+            };
+            let row = RowState {
+                verifies,
+                tag: &tag,
+            };
+            if let Some(f) = policy_finding(&key, PolicyNoun::Trust, Some(row), &evidence) {
+                findings.push(f);
+            }
+            seen.insert(key);
+            kept.push((wing, trust));
+        }
+        for key in self.chain_keys(Namespace::Trust)? {
+            if seen.contains(&key) {
+                continue;
+            }
+            let evidence = PolicyEvidence {
+                newest: self.newest_record(&key)?,
+                newest_clear: None,
+                boundary,
+            };
+            if let Some(f) = policy_finding(&key, PolicyNoun::Trust, None, &evidence) {
+                findings.push(f);
+            }
+        }
+        Ok((kept, findings))
+    }
+
+    /// The newest audit record carrying exactly this label — an indexed
+    /// equality on `record_id` (`idx_audit_record_id`), newest first.
+    fn newest_record(&self, record_id: &str) -> Result<Option<ChainRecord>, StoreError> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT seq, tag FROM audit WHERE record_id = ?1 ORDER BY seq DESC LIMIT 1",
+                [record_id],
+                |r| {
+                    Ok(ChainRecord {
+                        seq: r.get(0)?,
+                        tag: r.get(1)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
+    /// The newest rotation's place in the chain — the boundary O230's
+    /// comparison stops at. A half-open range on `record_id` rather than a
+    /// `LIKE`: SQLite's `LIKE` is case-insensitive and cannot use the BINARY
+    /// index, so it would scan the whole trail on every floored search and
+    /// could disagree with an equality about `ROTATE/x`.
+    fn rotation_boundary(&self) -> Result<Option<i64>, StoreError> {
+        let (lo, hi) = prefix_range(Namespace::Rotate);
+        Ok(self.conn.query_row(
+            "SELECT MAX(seq) FROM audit WHERE record_id >= ?1 AND record_id < ?2",
+            [lo.as_str(), hi.as_str()],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// Every distinct label a namespace's records carry, by the same range.
+    fn chain_keys(&self, ns: Namespace) -> Result<Vec<String>, StoreError> {
+        let (lo, hi) = prefix_range(ns);
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT record_id FROM audit \
+             WHERE record_id >= ?1 AND record_id < ?2 ORDER BY record_id",
+        )?;
+        let keys = stmt
+            .query_map([lo.as_str(), hi.as_str()], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        Ok(keys)
+    }
+}
+
+/// How a READER of a policy table refuses (ROADMAP O230): a failed tag keeps
+/// its HMAC-mismatch verdict, naming the key as before; any other finding
+/// the reader acts on is an integrity verdict that states itself.
+pub(crate) fn refuse_on_findings(
+    findings: &[PolicyFinding],
+    acts_on: impl Fn(&PolicyFinding) -> bool,
+) -> Result<(), StoreError> {
+    if let Some(f) = findings.iter().find(|f| f.tag_fails) {
+        let key = f.text.split(':').next().unwrap_or_default();
+        return Err(StoreError::Integrity(key.to_string()));
+    }
+    let named: Vec<&str> = findings
+        .iter()
+        .filter(|f| acts_on(f))
+        .map(|f| f.text.as_str())
+        .collect();
+    if named.is_empty() {
+        return Ok(());
+    }
+    Err(StoreError::IntegrityFinding(format!(
+        "{} — the policy tables disagree with the audit chain that recorded them; \
+         run `undercroft verify`, then re-declare the policy (`trust set`, \
+         `retention set` or `retention clear`) to write a fresh matching record",
+        named.join("; ")
+    )))
+}
+
+/// A namespace's labels as a half-open range: `prefix` up to the same string
+/// with its closing `/` replaced by the next byte, `0`.
+fn prefix_range(ns: Namespace) -> (String, String) {
+    let lo = ns.prefix().to_string();
+    let hi = format!("{}0", &lo[..lo.len() - 1]);
+    (lo, hi)
+}
+
+/// Every `wing_trust` row as `(wing, trust)`, and every finding.
+pub(crate) type TrustScan = (Vec<(String, String)>, Vec<PolicyFinding>);
+
+/// One audit record's place in the chain and its tag.
+pub(crate) struct ChainRecord {
+    seq: i64,
+    tag: Vec<u8>,
+}
+
+/// What the chain holds about one policy key, gathered by the one gatherer.
+pub(crate) struct PolicyEvidence {
+    /// The newest assignment (`trust/…`) or declaration (`retention/…`).
+    newest: Option<ChainRecord>,
+    /// The newest `retention-clear/…` for the same key, by seq.
+    newest_clear: Option<i64>,
+    /// The newest rotation's seq; records before it predate the key epoch.
+    boundary: Option<i64>,
+}
+
+/// A policy row as the decision sees it.
+pub(crate) struct RowState<'a> {
+    verifies: bool,
+    tag: &'a [u8],
+}
+
+/// Which table a key belongs to: the finding names it in that table's words.
+#[derive(Clone, Copy)]
+pub(crate) enum PolicyNoun {
+    Trust,
+    Retention,
+}
+
+/// A policy finding, and whether it is a failed tag (an HMAC mismatch) or a
+/// row that verifies and still disagrees with the chain.
+pub(crate) struct PolicyFinding {
+    /// The row fails its tag under the current key.
+    pub(crate) tag_fails: bool,
+    /// The row is gone while the chain still declares it.
+    pub(crate) gone: bool,
+    /// `verify`'s line for it.
+    pub(crate) text: String,
+}
+
+/// **The one policy decision** (ROADMAP O230): `verify`'s policy leg, the
+/// trust floor and the retention sweep all ask it, so they cannot disagree.
+///
+/// A row that verifies under the current key is not enough, and was all the
+/// leg checked: a row copied out of the file earlier and written back
+/// verifies too, and its record id exists. So a row must also be the one its
+/// NEWEST chain record assigned — its tag equal to that record's tag, which
+/// is the row's own tag at the moment it was written — whenever that record
+/// is NEWER than the last rotation. Older than the boundary, the row was
+/// re-tagged by that rotation and nothing in the chain carries its new tag;
+/// since O232 every rotation verifies before it re-tags, so such a row is the
+/// checked latest assignment re-tagged, and rows an earlier binary's rotation
+/// laundered are the stated residual. A row present after a NEWER
+/// `retention-clear/` is a cleared policy written back, at any seq. The
+/// comparison is O94's, which that entry dropped because it alarmed on every
+/// rotated vault; bounded by the rotation it no longer does.
+///
+/// **Known cost, stated (ROADMAP O233)**: every lookup finds a record by its
+/// label, and `record_id` is outside the chain hash, so relabelling the newer
+/// record, or a later one as `rotate/`, hides a replay.
+pub(crate) fn policy_finding(
+    key: &str,
+    noun: PolicyNoun,
+    row: Option<RowState<'_>>,
+    evidence: &PolicyEvidence,
+) -> Option<PolicyFinding> {
+    let (verb, noun_word) = match noun {
+        PolicyNoun::Trust => ("assigned", "assignment"),
+        PolicyNoun::Retention => ("declared", "declaration"),
+    };
+    let cleared_after = match (&evidence.newest, evidence.newest_clear) {
+        (Some(a), Some(c)) => c > a.seq,
+        (None, Some(_)) => true,
+        _ => false,
+    };
+    let finding = |text: String, tag_fails: bool, gone: bool| {
+        Some(PolicyFinding {
+            tag_fails,
+            gone,
+            text,
+        })
+    };
+    match row {
+        Some(r) if !r.verifies => finding(format!("{key}: row does not verify"), true, false),
+        Some(_) if cleared_after => finding(
+            format!("{key}: row present, cleared later in the chain"),
+            false,
+            false,
+        ),
+        Some(r) => match &evidence.newest {
+            None => finding(format!("{key}: {verb} in no chain record"), false, false),
+            Some(a) if evidence.boundary.is_none_or(|b| a.seq > b) && a.tag != r.tag => finding(
+                format!("{key}: row is not the newest {noun_word} in the chain"),
+                false,
+                false,
+            ),
+            Some(_) => None,
+        },
+        None => match &evidence.newest {
+            Some(_) if !cleared_after => finding(
+                format!("{key}: {verb} in the chain, row is gone"),
+                false,
+                true,
+            ),
+            _ => None,
+        },
     }
 }
 

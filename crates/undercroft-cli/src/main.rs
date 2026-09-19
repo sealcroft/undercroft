@@ -1957,6 +1957,9 @@ fn integrity_verdict(e: &anyhow::Error) -> bool {
             return matches!(
                 s,
                 S::Integrity(_)
+                    // A verdict that compared no HMAC (O230, O232): a
+                    // replayed or deleted policy row, a refused rotation.
+                    | S::IntegrityFinding(_)
                     | S::Attestation(_)
                     // A manifest that describes a database which is not
                     // there is stored evidence contradicting itself, and
@@ -5028,6 +5031,7 @@ mod tests {
         use undercroft_vault::VaultError as V;
         for e in [
             anyhow::Error::from(S::Integrity("record".into())),
+            anyhow::Error::from(S::IntegrityFinding("key rotation refused".into())),
             anyhow::Error::from(S::Attestation("forged signature".into())),
             anyhow::Error::from(S::Vault(V::ManifestTampered)),
             anyhow::Error::from(S::Vault(V::CorruptManifest("truncated".into()))),

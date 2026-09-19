@@ -568,22 +568,17 @@ impl VaultStore {
 
     /// Every assigned wing trust class, tag-verified on the way out — a
     /// flipped `trust` column is an integrity error here, never a silently
-    /// different retrieval scope.
+    /// different retrieval scope. **And checked against the chain (ROADMAP
+    /// O230)**: an older `trusted` row written back over a later
+    /// `quarantined` one verifies too, and a row deleted behind the store
+    /// lifted the floor with nothing failing — so a row that is not its
+    /// wing's newest assignment, and an assignment whose row is gone, refuse
+    /// here as well, and the trust floor, `recent`, `list_drawers` and
+    /// `trust list` refuse with them, exactly as a flip already made them.
     pub fn wing_trusts(&self) -> Result<Vec<(String, String)>, StoreError> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT wing, trust, tag, assigned_at FROM wing_trust ORDER BY wing")?;
-        let rows: Vec<(String, String, Vec<u8>, String)> = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
-            .collect::<Result<_, _>>()?;
-        let mut out = Vec::with_capacity(rows.len());
-        for (wing, trust, tag, at) in rows {
-            self.vault
-                .verify_tag(wing_trust_canonical(&wing, &trust, &at).as_slice(), &tag)
-                .map_err(|_| StoreError::Integrity(format!("trust/{wing}")))?;
-            out.push((wing, trust));
-        }
-        Ok(out)
+        let (rows, findings) = self.trust_policy_scan()?;
+        crate::retention::refuse_on_findings(&findings, |_| true)?;
+        Ok(rows)
     }
 
     /// Resolve a trust floor into the clause the candidate machinery
@@ -4454,6 +4449,294 @@ mod tests {
             !r.ok(),
             "a stale clear must not excuse a row deleted after it: {:?}",
             r.policy_drift
+        );
+    }
+
+    /// A policy row as an offline writer copies it out of the file: every
+    /// column, the tag included (ROADMAP O230).
+    fn policy_row(s: &VaultStore, table: &str, wing: &str) -> Vec<rusqlite::types::Value> {
+        let sql = match table {
+            "retention_policy" => {
+                "SELECT wing, room, max_age_days, tag, assigned_at FROM retention_policy \
+                 WHERE wing = ?1"
+            }
+            _ => "SELECT wing, trust, tag, assigned_at FROM wing_trust WHERE wing = ?1",
+        };
+        s.conn
+            .query_row(sql, [wing], |r| {
+                (0..r.as_ref().column_count())
+                    .map(|i| r.get::<_, rusqlite::types::Value>(i))
+                    .collect()
+            })
+            .unwrap()
+    }
+
+    /// ...and writes it back later, whole.
+    fn replay_row(s: &VaultStore, table: &str, row: &[rusqlite::types::Value]) {
+        let marks = vec!["?"; row.len()].join(", ");
+        s.conn
+            .execute(
+                &format!("INSERT OR REPLACE INTO {table} VALUES ({marks})"),
+                rusqlite::params_from_iter(row),
+            )
+            .unwrap();
+    }
+
+    /// **An OLDER, validly tagged retention row written back offline fails
+    /// verify (ROADMAP O230).** The leg checked that the row's tag recomputes
+    /// under the current key and that a record for it exists — and a row
+    /// copied out of the file earlier satisfies both, so a 30-day policy
+    /// replayed over a 365-day one read `VERIFY OK` while the sweep destroyed
+    /// what the current policy keeps.
+    /// A column of a policy row, read raw — the premises below must not go
+    /// through `retention_policies`/`wing_trusts`, which refuse a replayed
+    /// row once O230 is built and would fail the test at its premise.
+    fn raw(s: &VaultStore, sql: &str) -> rusqlite::types::Value {
+        s.conn.query_row(sql, [], |r| r.get(0)).unwrap()
+    }
+
+    /// The row verifies under the current key — it is a REPLAY, not a flip.
+    fn no_flip(r: &crate::VerifyReport) {
+        assert!(
+            !r.policy_drift
+                .iter()
+                .any(|p| p.ends_with("row does not verify")),
+            "premise: the replayed row verifies under the key: {:?}",
+            r.policy_drift
+        );
+    }
+
+    #[test]
+    fn a_replayed_older_retention_row_fails_verify() {
+        let (_d, mut s) = store();
+        s.set_retention("pacific", None, 30).unwrap();
+        let old = policy_row(&s, "retention_policy", "pacific");
+        s.set_retention("pacific", None, 365).unwrap();
+        assert!(s.verify().unwrap().ok(), "premise: clean before the replay");
+        replay_row(&s, "retention_policy", &old);
+        assert_eq!(
+            raw(&s, "SELECT max_age_days FROM retention_policy"),
+            30.into(),
+            "premise: the old row is back"
+        );
+        let r = s.verify().unwrap();
+        no_flip(&r);
+        assert!(!r.ok(), "a replayed older retention row must fail verify");
+        assert_eq!(
+            r.policy_drift,
+            vec!["retention/pacific: row is not the newest declaration in the chain".to_string()]
+        );
+        // The readers refuse it too: the sweep and `retention list` ride this.
+        assert!(
+            matches!(s.retention_policies(), Err(StoreError::IntegrityFinding(m))
+                if m.contains("not the newest declaration")),
+            "a replayed lifespan must not drive a sweep"
+        );
+        assert!(s.retention_sweep(true).is_err());
+    }
+
+    /// The trust half: a `trusted` row replayed over a later `quarantined`
+    /// one lifts the floor, and read `VERIFY OK` (ROADMAP O230). Now `verify`
+    /// names it and the floor refuses, exactly as it does for a flip.
+    #[test]
+    fn a_replayed_older_trust_row_fails_verify() {
+        let (_d, mut s) = store();
+        s.upsert(&drawer("pacific", "r", "a quarantined drawer", 0))
+            .unwrap();
+        s.set_wing_trust("pacific", "trusted").unwrap();
+        let old = policy_row(&s, "wing_trust", "pacific");
+        s.set_wing_trust("pacific", "quarantined").unwrap();
+        assert!(s.verify().unwrap().ok(), "premise: clean before the replay");
+        replay_row(&s, "wing_trust", &old);
+        assert_eq!(
+            raw(&s, "SELECT trust FROM wing_trust"),
+            "trusted".to_string().into(),
+            "premise: the old row is back"
+        );
+        let r = s.verify().unwrap();
+        no_flip(&r);
+        assert!(!r.ok(), "a replayed older trust row must fail verify");
+        assert_eq!(
+            r.policy_drift,
+            vec!["trust/pacific: row is not the newest assignment in the chain".to_string()]
+        );
+        assert!(matches!(
+            s.wing_trusts(),
+            Err(StoreError::IntegrityFinding(_))
+        ));
+        let floored = crate::SearchOptions {
+            min_trust: Some("standard".into()),
+            limit: 5,
+            ..Default::default()
+        };
+        assert!(
+            s.search("quarantined drawer", &floored).is_err(),
+            "a floored search must refuse rather than serve under a replayed floor"
+        );
+    }
+
+    /// A CLEARED policy's row written back: the chain's newest word on the
+    /// policy is the clear, and a row present beside it is a replay
+    /// (ROADMAP O230).
+    #[test]
+    fn a_cleared_retention_row_written_back_fails_verify() {
+        let (_d, mut s) = store();
+        s.set_retention("pacific", Some("r"), 30).unwrap();
+        let old = policy_row(&s, "retention_policy", "pacific");
+        s.clear_retention("pacific", Some("r")).unwrap();
+        assert!(s.verify().unwrap().ok(), "premise: a clear is not drift");
+        replay_row(&s, "retention_policy", &old);
+        assert_eq!(
+            raw(&s, "SELECT COUNT(*) FROM retention_policy"),
+            1.into(),
+            "premise: it is back"
+        );
+        let r = s.verify().unwrap();
+        no_flip(&r);
+        assert_eq!(
+            r.policy_drift,
+            vec!["retention/pacific/r: row present, cleared later in the chain".to_string()]
+        );
+        assert!(matches!(
+            s.retention_policies(),
+            Err(StoreError::IntegrityFinding(_))
+        ));
+    }
+
+    /// A replay INSIDE the key epoch a rotation began: the row the rotation
+    /// re-tagged, copied out, then written back over a later assignment. It
+    /// verifies under the current key, so only its place in the chain can
+    /// tell it apart (ROADMAP O230's gate: "on a rotated vault as well").
+    #[test]
+    fn a_replay_after_a_rotation_fails_verify() {
+        let (d, mut s) = store();
+        s.set_retention("pacific", None, 30).unwrap();
+        let mgr = VaultManager::open(d.path(), None).unwrap();
+        let candidate = mgr.rotation_candidate("m").unwrap();
+        s.rotate_keys(candidate).unwrap();
+        // The control: a rotated, untouched vault verifies (O94's lesson).
+        assert!(s.verify().unwrap().ok(), "premise: a rotation is not drift");
+        let rotated = policy_row(&s, "retention_policy", "pacific");
+        s.set_retention("pacific", None, 365).unwrap();
+        assert!(s.verify().unwrap().ok(), "premise: clean before the replay");
+        replay_row(&s, "retention_policy", &rotated);
+        assert_eq!(
+            raw(&s, "SELECT max_age_days FROM retention_policy"),
+            30.into(),
+            "premise: the rotated 30-day row is back"
+        );
+        let r = s.verify().unwrap();
+        no_flip(&r);
+        assert!(
+            !r.ok(),
+            "a replay inside the post-rotation epoch must fail verify"
+        );
+    }
+
+    /// A trust row DELETED behind the store lifted the floor with nothing
+    /// failing but `verify` (O94). Now the reader refuses it, and a floored
+    /// search with it (ROADMAP O230).
+    #[test]
+    fn a_deleted_trust_row_refuses_the_floor() {
+        let (_d, mut s) = store();
+        s.upsert(&drawer("pacific", "r", "a quarantined drawer", 0))
+            .unwrap();
+        s.set_wing_trust("pacific", "quarantined").unwrap();
+        s.conn.execute("DELETE FROM wing_trust", []).unwrap();
+        assert!(
+            matches!(s.wing_trusts(), Err(StoreError::IntegrityFinding(m))
+                if m.contains("row is gone")),
+            "a deleted assignment must refuse, never read as no floor"
+        );
+        let floored = crate::SearchOptions {
+            min_trust: Some("standard".into()),
+            limit: 5,
+            ..Default::default()
+        };
+        assert!(s.search("quarantined drawer", &floored).is_err());
+        // And the operator's way out: re-declaring writes a matching record.
+        s.set_wing_trust("pacific", "quarantined").unwrap();
+        assert!(s.wing_trusts().is_ok() && s.verify().unwrap().ok());
+    }
+
+    /// A rotation over a replayed policy row refuses (ROADMAP O230 + O232):
+    /// the rotation would re-tag the replay into the new epoch, where the
+    /// comparison can no longer reach it.
+    #[test]
+    fn a_rotation_refuses_over_a_replayed_policy_row() {
+        let (d, mut s) = store();
+        s.set_retention("pacific", None, 30).unwrap();
+        let old = policy_row(&s, "retention_policy", "pacific");
+        s.set_retention("pacific", None, 365).unwrap();
+        replay_row(&s, "retention_policy", &old);
+        let mgr = VaultManager::open(d.path(), None).unwrap();
+        let candidate = mgr.rotation_candidate("m").unwrap();
+        let err = s.rotate_keys(candidate).expect_err("must refuse");
+        assert!(
+            matches!(&err, StoreError::IntegrityFinding(m)
+                if m.contains("policy retention/pacific: row is not the newest declaration")),
+            "{err}"
+        );
+        assert!(
+            !s.verify().unwrap().ok(),
+            "and the replay is still reported"
+        );
+    }
+
+    /// **Stated costs, pinned (ROADMAP O233).** Every O230 lookup finds a
+    /// record by its label, and `record_id` is outside the chain hash, so an
+    /// offline writer who also RELABELS hides a replay: the newer assignment
+    /// relabelled into a namespace no leg resolves, or a later record
+    /// relabelled `rotate/` so the boundary moves past the assignment. Both
+    /// answer OK today and are pinned here so their disappearance — O233's
+    /// label authentication — is recorded rather than absorbed.
+    #[test]
+    fn a_relabelled_record_hides_a_replay_and_that_is_a_stated_cost() {
+        // (1) The newer declaration relabelled away.
+        let (_d, mut s) = store();
+        s.set_retention("pacific", None, 30).unwrap();
+        let old = policy_row(&s, "retention_policy", "pacific");
+        s.set_retention("pacific", None, 365).unwrap();
+        replay_row(&s, "retention_policy", &old);
+        assert!(
+            !s.verify().unwrap().ok(),
+            "premise: the replay alone is caught"
+        );
+        s.conn
+            .execute(
+                "UPDATE audit SET record_id = 'read/x' WHERE seq = \
+                 (SELECT MAX(seq) FROM audit WHERE record_id = 'retention/pacific')",
+                [],
+            )
+            .unwrap();
+        assert!(
+            s.verify().unwrap().ok(),
+            "COST (O233): a relabel of the newer record hides the replay"
+        );
+
+        // (2) A later record relabelled `rotate/`: the boundary moves past it.
+        let (_d2, mut s2) = store();
+        s2.set_retention("pacific", None, 30).unwrap();
+        let old = policy_row(&s2, "retention_policy", "pacific");
+        s2.set_retention("pacific", None, 365).unwrap();
+        s2.set_wing_trust("elsewhere", "trusted").unwrap();
+        replay_row(&s2, "retention_policy", &old);
+        assert!(
+            !s2.verify().unwrap().ok(),
+            "premise: the replay alone is caught"
+        );
+        // The trust record is relabelled `rotate/…` and the trust row removed
+        // with it, so nothing else notices the relabel.
+        s2.conn
+            .execute(
+                "UPDATE audit SET record_id = 'rotate/x' WHERE record_id = 'trust/elsewhere'",
+                [],
+            )
+            .unwrap();
+        s2.conn.execute("DELETE FROM wing_trust", []).unwrap();
+        assert!(
+            s2.verify().unwrap().ok(),
+            "COST (O233): a record relabelled `rotate/` moves the boundary past the replay"
         );
     }
 
