@@ -823,8 +823,15 @@ straight, each carrying what it actually is.
   HMAC-tagged, chain-audited, and enforced by an **explicit sweep**
   through the same attested path, never on a timer and never at open.
   The clock is the HMAC-covered `meta.filed_at`, tag-verified per
-  drawer, so a flipped clear column can neither launder a deletion nor
-  hide a drawer from its declared retention. Honest boundary: a third
+  drawer, and since ROADMAP O206 so is the scope: the sweep walks every
+  drawer and reads its wing and room from the covered meta, where it
+  used to draw candidates from the clear mirror and so kept any drawer
+  whose mirror had been flipped out of the policy. So a flipped clear
+  column can neither launder a deletion nor hide a drawer from its
+  declared retention. A row whose tag fails is named wherever it sits
+  and destroyed nowhere; the sweep answers `ok: false` (200 on `/v1`,
+  exit 2 on the CLI and the orchestrator) and still destroys everything
+  it could decide. Honest boundary: a third
   party verifies the operator's *signature*, not the replay — the chain
   step is keyed. **A `sig` field is not by itself evidence of one**, and
   saying so is 1.1.0's correction: verification runs against `sender`,

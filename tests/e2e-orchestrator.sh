@@ -357,6 +357,7 @@ body_has "ops trust assign"  '"trust":"trusted"' -- -X POST "${ADMIN[@]}"   -d '
 body_has "ops retention list" 'policies'   -- "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/retention"
 body_has "ops retention set" '"days":3650' -- -X POST "${ADMIN[@]}"   -d '{"wing":"w","days":3650}' "$O/admin/tenants/$OPS_ID/ops/retention"
 body_has "ops retention sweep" 'destroyed' -- -X POST "${ADMIN[@]}"   -d '{}' "$O/admin/tenants/$OPS_ID/ops/retention/sweep"
+body_has "O206: a clean tenant sweeps ok" '"ok":true' -- -X POST "${ADMIN[@]}"   -d '{"dry_run":true}' "$O/admin/tenants/$OPS_ID/ops/retention/sweep"
 # **ROADMAP O14 — the plane that MINTS a receipt can now CHECK one.**
 # `forget` has been forwardable since this table was written; verifying what
 # it returns was reachable from nowhere in a fleet, because the engine had no
@@ -599,6 +600,21 @@ if [ "$CODE" -eq 2 ] && grep -q '"ok":false' <<<"$OUT"; then
   ok "tampered vault: ops verify exits 2 on a 200 + ok:false"
 else
   fail "tampered vault: ops verify exits 2 on a 200 + ok:false" "exit $CODE" "$OUT"
+fi
+# ROADMAP O206: a retention sweep over the same forged tenant still runs,
+# names the row it cannot verify wherever it sits, and answers 200 carrying
+# `ok:false` — which this plane turns into exit 2 with no code of its own.
+# Before O206 a sweep never looked at a row outside its policy's mirror
+# scope, so the forged row here passed unnamed at exit 0.
+"$ORCH" --db "$UNDERCROFT_ORCH_DB" ops "$HOT_ID" retention-set \
+  --body '{"wing":"archive","days":3650}' >/dev/null 2>&1
+OUT="$("$ORCH" --db "$UNDERCROFT_ORCH_DB" ops "$HOT_ID" retention-sweep \
+  --body '{"dry_run":true}' 2>&1)"; CODE=$?
+if [ "$CODE" -eq 2 ] && grep -q '"ok":false' <<<"$OUT" \
+   && grep -q '"unverifiable":\[{"id":"[0-9a-f]\{32\}"' <<<"$OUT"; then
+  ok "O206: ops retention-sweep names an unverifiable row and exits 2"
+else
+  fail "O206: ops retention-sweep names an unverifiable row and exits 2" "exit $CODE" "$OUT"
 fi
 
 # ---- arm 2: the verdict that arrives as a classed 4xx ----------------------

@@ -1486,6 +1486,22 @@ async function setRetention() {
 
 async function sweepRetention() {
   const v = state.vault;
+  // Every list a sweep reports, by hand and before the operator confirms
+  // (ROADMAP O206): what it would destroy, and what it could not decide or
+  // would not destroy — the rows that make `ok` false.
+  const summary = s => {
+    const lines = [(s.dry_run ? "DRY RUN — nothing destroyed" : "destroyed " + s.destroyed + " drawer(s)") +
+      (s.ok ? " · clean" : " · NOT CLEAN — an integrity verdict; run verify")];
+    for (const p of s.policies || [])
+      lines.push("  " + p.wing + (p.room ? "/" + p.room : "") + " (> " + p.max_age_days + " day(s)): " +
+        (p.expired || []).length + " expired");
+    for (const u of s.unverifiable || []) lines.push("  UNVERIFIABLE " + u.id + " — " + u.reason);
+    for (const w of s.withheld || []) lines.push("  WITHHELD " + w.id + " (" + w.wing + "/" + w.room + ") — " + w.reason);
+    for (const m of s.mirror_drift || []) lines.push("  MIRROR " + m);
+    for (const d of s.policy_drift || []) lines.push("  POLICY " + d);
+    if (s.attestation) lines.push("  receipt: " + (s.attestation.drawers || []).length + " drawer(s) attested");
+    return lines.join("\n") + "\n\n" + JSON.stringify(s, null, 2);
+  };
   // Preview first, always: a sweep destroys, and the operator should see
   // the id list before it does, not in the receipt afterwards.
   let preview;
@@ -1493,16 +1509,29 @@ async function sweepRetention() {
     preview = await api("POST", opsPath("retention/sweep"), { vault: v, body: { dry_run: true } });
   } catch (e) { toast("sweep preview failed — " + e.message, true); return; }
   $("retReport").style.display = "block";
-  $("retReport").textContent = "DRY RUN\n" + JSON.stringify(preview, null, 2);
-  if (!preview.destroyed) { toast("nothing has aged out"); return; }
+  $("retReport").textContent = summary(preview);
+  // The DISTINCT ids the preview would destroy. This gated on
+  // `preview.destroyed`, which a dry run always reports as 0, so the console
+  // answered "nothing has aged out" and could never sweep (O206); and a sum
+  // of the per-policy lists would count a drawer twice when a wing policy
+  // and a room policy both cover it.
+  const doomed = new Set((preview.policies || []).flatMap(p => p.expired || [])).size;
+  if (!doomed) {
+    toast(preview.ok ? "nothing has aged out" : "nothing to destroy, and the sweep is NOT CLEAN — read the report", !preview.ok);
+    return;
+  }
   const ok = await guard("SWEEP RETENTION",
-    "Destroys " + preview.destroyed + " drawer(s) that have aged past their declared policy, " +
-    "through the attested-forgetting path. There is no undo.", "sweep");
+    "Destroys " + doomed + " drawer(s) that have aged past their declared policy, " +
+    "through the attested-forgetting path. There is no undo." +
+    (preview.ok ? "" : " The preview is NOT CLEAN: it names rows it cannot verify or will not destroy, " +
+      "or destroys over mirror drift — read the report first."), "sweep");
   if (!ok) return;
   try {
     const r = await api("POST", opsPath("retention/sweep"), { vault: v, body: { dry_run: false } });
-    $("retReport").textContent = JSON.stringify(r, null, 2);
-    toast("swept " + r.destroyed + " drawer(s)");
+    $("retReport").textContent = summary(r);
+    // A 200 carrying `ok: false` is an integrity verdict, not a success.
+    if (r.ok) toast("swept " + r.destroyed + " drawer(s)");
+    else toast("swept " + r.destroyed + " drawer(s) — the sweep is NOT CLEAN; run verify", true);
     loadRetention();
   } catch (e) { toast("sweep failed — " + e.message, true); }
 }

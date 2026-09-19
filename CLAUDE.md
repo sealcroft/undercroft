@@ -1014,7 +1014,17 @@ Consequences that are binding, not advisory:
   wing refused; the clock is the HMAC-covered `meta.filed_at`,
   tag-verified per drawer, never the clear column — a flipped column can
   neither launder a deletion through a keyed sweep nor hide a drawer
-  from its declared retention),
+  from its declared retention. **The SCOPE is covered too since O206**:
+  candidates came from the clear `wing`/`room` mirror, so a mirror
+  flipped OUT of a policy kept its drawer silently; the sweep now walks
+  every drawer once through `walk_covered` — the ONE streaming walker
+  `verify`'s first two legs ride, tag over the at-rest bytes, nothing
+  decrypted — and matches every policy in memory. What it cannot decide
+  it names and never destroys (`unverifiable` from anywhere in the vault,
+  `withheld` for an undatable member or one the pending-evidence fence
+  refuses), it reports drift on what it destroyed and a deleted policy row
+  (the retention half of the policy leg, one function), and any of those
+  makes `ok` false: 200 on `/v1`, exit 2 on the CLI and the orchestrator),
   management surface (manage.rs — incl. **deployment-assigned wing trust**:
   `undercroft_core::TRUST_VOCAB` closed vocabulary assigned by the operator
   only, never over MCP; HMAC-tagged + audited, flip = integrity failure;
@@ -2134,8 +2144,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (962 run,
-                                      # 4 #[ignore]d = 966 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (968 run,
+                                      # 4 #[ignore]d = 972 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2257,8 +2267,8 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (562 checks)
-docker compose run --rm orchestrator-e2e  # two engines + orchestrator (165 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (569 checks)
+docker compose run --rm orchestrator-e2e  # two engines + orchestrator (167 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (157 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it

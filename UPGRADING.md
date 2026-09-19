@@ -75,6 +75,43 @@ or when they could never be presented.
 
 ## 1.6.0 (unreleased)
 
+### a retention sweep reads each drawer's scope from its covered meta, and exits 2 when it cannot account for every row (O206)
+
+**Who is affected:** a scheduled `undercroft retention sweep`, a script
+reading `POST /v1/vaults/{id}/retention/sweep`, and `undercroft-orchestrator
+ops <tenant> retention-sweep`, on a vault whose database has been edited
+behind the engine, or that holds a legacy row with an unreadable clock.
+
+**Symptom:**
+- A sweep now destroys expired drawers whose clear `wing`/`room` column
+  names another scope. It used to keep them.
+- A sweep exits 2 (CLI and orchestrator), or answers 200 with `"ok": false`
+  (`/v1`), where it used to exit 0, when it meets any of: a drawer whose
+  record HMAC fails, anywhere in the vault (`unverifiable`); a drawer it
+  withholds (`withheld`, with the reason); mirror drift on a drawer it
+  destroyed or withheld (`mirror_drift`); a policy row deleted behind the
+  store (`policy_drift`). A dry run answers the same way.
+- A sweep that used to ABORT — 409 / exit 2 on a tampered row inside a
+  policy's scope, or an error on a drawer whose covered `filed_at` does not
+  parse — now destroys everything else and names those rows. The receipt for
+  what it did destroy is printed before the exit.
+- The cost is one walk of every drawer per sweep, where it was a walk of each
+  policy's scope. Nothing is decrypted; measured at 102,000 sealed drawers,
+  a dry sweep went from 0.03 s to 0.21 s at the same 11 MB peak.
+
+**Cause:** the sweep took its candidates from the clear `wing`/`room` mirror,
+so an offline flip of that column hid a drawer from its declared retention.
+This partly supersedes 1.5.2's O120 note: a drawer whose covered scope is the
+policy's is now destroyed even when its mirror disagrees, and the drift goes
+into the report rather than a warning.
+
+**Fix:** read the rows the report names. `undercroft verify` is the detector
+to run before upgrading, and `undercroft retention sweep --dry-run` shows what
+a sweep will do without destroying anything. A withheld drawer whose clear
+`wing` names the review queue is healed by re-saving its own content with
+`drawer update`. `config check` cannot detect any of this, because it depends
+on data.
+
 ### `search --backend` on a vault with no mirror now exits 1 instead of answering an empty page (O185)
 
 **Who is affected:** a script that runs `undercroft search … --backend <b>`

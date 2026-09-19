@@ -3990,7 +3990,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**259** of the **274** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**261** of the **276** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4170,6 +4170,322 @@ identities.
 MINOR since O149: `PATCH /admin/tenants/{id}` and its CLI mirror are new
 capability, backward compatible. The rest of the section is PATCH work — no
 documented contract moves.
+
+### O206 — CLOSED 2026-09-19: a retention sweep reads each drawer's scope from its covered meta, so a flipped mirror no longer hides a drawer from its policy
+
+**Filed 2026-09-17 by O171's ruling, item (c); verified by reading.**
+`expired_in` (`crates/undercroft-store/src/retention.rs`) draws its candidates
+from the clear `wing`/`room` mirror columns, then reads the covered
+`meta.wing`/`meta.room` for every decision (O120). An offline
+`UPDATE drawers SET wing = …` that moves a drawer OUT of the mirror's scope
+therefore never becomes a candidate, and the sweep keeps a drawer its declared
+retention says must be destroyed. `verify`'s `mirror_drift` leg reports the
+flip. The code comment and O120 called this "an availability cost", and it is
+not one: what is lost is the erasure promise a retention policy makes, which
+is an integrity property. Both are corrected in this unit to say so.
+
+**Shapes, for a ruling panel:**
+- one walk of every drawer's covered scope per sweep, O(corpus) per policy;
+- a sweep that refuses while `mirror_drift` is non-empty, so a flip stops the
+  sweep instead of slipping past it;
+- narrowing the promise, with an argument, to "drawers whose mirror agrees".
+
+**Gate**: a store test that flips one expired drawer's `wing` mirror out of
+the policy's scope and sweeps; the drawer is destroyed, or the sweep refuses
+naming the drift, whichever the panel rules. Counterfactual: today's
+candidate SELECT, under which the drawer survives and the sweep reports clean.
+
+#### RULED 2026-09-19 by a three-lens panel (agentic memory architecture, security, software engineering) plus an adversarial refuter
+
+**The question.** How does a retention sweep find every drawer its policies
+cover when the clear `wing`/`room` mirror can be flipped offline, what does it
+do with a row it cannot verify, and what does it report? Working files are in
+the session scratchpad's `o206-panel/` (the brief, three lens answers, the
+refuter's report) and its drive scripts — material, never the record.
+
+**Measured before ruling**, on the `129c789` release binary, through the CLI:
+- **The defect, at 10,200 drawers** (the LoCoMo feed mined into 120 wings,
+  sealed, re-dated to 2020 by export and import): `retention set w1 --days
+  30`, one `w1` drawer's clear `wing` set to `w2` with sqlite3. The sweep
+  printed `84 expired`, destroyed 84, exited 0 and named nothing; the flipped
+  drawer survived with its covered wing still `w1`. `verify` reported
+  `MIRROR: … column wing="w2" but the covered meta says "w1"`.
+- **The same at 102,000 drawers**: dry sweep 0.03 s at 11 MB peak RSS;
+  destroying sweep 1.28 s at 12 MB; `verify`, whose drawer leg is the walk
+  shape (a) needs, 0.46 s at **122 MB** — it collected every row, content
+  included, into one `Vec` before checking any.
+- **P4**: a quarantine-pending row whose clear `wing` was flipped offline
+  from the reserved wing to `notes` is destroyed by an operator's `drawer
+  delete` (exit 0, row gone), where the unflipped row is refused. Filed as
+  evidence into O221, below.
+
+**Prior rulings found and their disposition.**
+- **O120** — the covered copy decides a sweep's membership. FOLLOWED, and
+  extended to candidate generation.
+- **A28** — a clear mirror never decides an exclusion. FOLLOWED; it is what
+  decides the split below.
+- **O171 item (c)** — the cost is the erasure promise, not availability.
+  FOLLOWED.
+- **The drift-direction doctrine.** The promise is stated broadly, in
+  `docs/THREAT_MODEL.md` ("a flipped clear column can neither launder a
+  deletion nor hide a drawer from its declared retention"),
+  `docs/CONSULTATION_REVIEW.md`, `architecture/index.html`'s "Destruction is
+  receipted", the `retention.rs` module doc and `CLAUDE.md`. The documents
+  lead, so the code keeps the promise and shape (c) loses.
+- **O216 verdict 2** ("the covered copy decides; the clear column decides only
+  on the arm where that `get` fails"). FOLLOWED, read at its scope: it rules
+  `import_verdict`'s question, its prior-rulings list FOLLOWED the clear-column
+  destruction fence, and its "What remains" hands the row flipped into the
+  reserved wing to O221. It does not rule the destruction fence, so this unit
+  does not move that fence.
+- **The destruction fence's clear-column rationale** (`manage.rs`, above
+  `is_quarantine_pending`: the fence and `admission list` must never
+  disagree). FOLLOWED; revising it is O221's.
+- **The module doc's "an unparseable covered `filed_at` FAILS the sweep"**.
+  REVISED in the open: its principle, never destroy what cannot be dated and
+  never skip it silently, is kept by withholding and naming the row, and
+  failing added only the cost that one legacy row stops every policy. The
+  write path already refuses such a value, so the arm is reachable from a
+  legacy row alone.
+- **O94's sentence that the discarded tag comparison "caught nothing …
+  except an insider who already holds the vault key"**. REFUTED: within one
+  key epoch it caught a keyless replay of an older, validly tagged policy row,
+  and nothing catches that today. Filed as O230 with the refutation, not
+  revised here.
+- **The 2026-09-08 versioning ruling** (surface that reports a silent defect
+  is a fix). FOLLOWED: PATCH.
+- `runbook.md`'s "preserve evidence first" is an operator's incident step, not
+  an engine rule; it was weighed and is answered by the dry run below.
+
+**Options, their costs, and why each lost.**
+- **(b) refuse while any mirror drift exists** pays for the same walk and
+  enforces less. The drift leg also compares `kind` and `supersedes`, so one
+  flipped `kind` in a wing with no policy would stop every sweep — a lever an
+  offline writer does not have today.
+- **(c) narrow the promise** to drawers whose mirror agrees: the documents
+  make the promise broadly, and narrowing it hands the offline writer the
+  lever O206 is about.
+- **(d) candidates from `json_extract(meta_json, '$.wing')` beside the
+  mirror** closes a mirror-only flip and nothing else: a row with both copies
+  rewritten fails its tag, is a candidate for no policy, and escapes in
+  silence. It is also a second parser deciding scope beside serde, and a scan
+  per policy.
+- **Refusing the whole sweep on an unverifiable row**, today's behaviour when
+  the mirror happens to place it in scope: each row's tag is independent, so
+  one bad row cannot make another's decision unsound, and refusing turns one
+  escape into all of them.
+- **Changing the destruction fence to read the covered copy** (the security
+  lens): outside O206. It breaks the fence's stated invariant that it never
+  disagrees with the review queue, and O216 assigns that row to O221.
+
+**The split, settled by evidence.** The agentic-memory lens would WITHHOLD a
+covered member whose mirror disagrees, to keep the only trace of the offline
+write; the software-engineering and security lenses would DESTROY it and
+report the drift. **Destroy.** Withholding because the mirror disagrees lets
+the mirror decide an exclusion, which is O206's defect with a report beside
+it (A28). The covered copy is authenticated, and it proves the drawer is in
+scope and past its age; no production path writes a mirror column alone. The
+promise is that a flip cannot "hide a drawer from its declared retention", and
+a withheld drawer outlives its retention because of the flip. And the
+evidence argument fails on its own terms: its remedy, `forget <id>`, erases
+the trace as well, and withholding on any drift, `kind` included, gives an
+offline writer a per-drawer extension through a column unrelated to scope.
+What survives of it is that an operator should see the drift before anything
+is destroyed, and the dry run gives exactly that once drift makes it answer
+`ok: false`. The lens's dissent is recorded here.
+
+**Ruling.**
+1. **One covered walk per sweep, streamed.** `SELECT id, meta_json, content,
+   tag, wing, room, kind, supersedes FROM drawers ORDER BY seq`, read row by
+   row and never collected; the tag checked over the at-rest bytes, nothing
+   decrypted. ONE per-row function yields `Verified{meta, drift}`,
+   `TagFailed` or `MetaUnparseable`, and `verify`'s first two legs ride it,
+   keeping their verdict exactly — including its silent skip of an
+   unparseable covered meta, which is filed as O231 rather than moved here.
+   Membership is the covered `meta.wing`, and `meta.room` where the policy
+   names a room; age is the covered `filed_at`; every policy is matched in
+   memory, so the walk runs once per sweep, not once per policy. No mirror
+   prefilter. The dry run and the destroying run share the one path.
+2. **An unverifiable row is reported from anywhere and destroyed nowhere.**
+   A row whose tag fails, or whose covered meta does not parse, is listed in
+   `unverifiable` wherever it sits, because once the tag fails both copies of
+   its scope are the attacker's and a report scoped by either reinstates the
+   escape. The sweep proceeds with every row it could decide. A policy row that
+   fails its tag still refuses the whole sweep, as pinned today.
+3. **Two members are withheld, never destroyed, and named with the exit that
+   works**: one whose covered `filed_at` does not parse, and one for which
+   `is_quarantine_pending` — the fence itself, never a copy — is true, i.e. a
+   drawer whose covered scope is the policy's while its clear `wing` was
+   flipped into the reserved wing. The exit for the second is to re-save its
+   own content with `drawer update` and sweep again; `update_drawer` keeps the
+   stored meta, so `filed_at` survives. Without this split the walk would hand
+   that row to `forget_with_proof`, whose fence refuses the whole call — a
+   hostage the fix itself would create. Invariant: `expired` never holds a
+   withheld id, and `destroyed` equals the distinct union of `expired`, which
+   equals the attestation's drawers. The distinct set is built in policy order
+   as today, each policy's list in `seq` order.
+4. **What the sweep reports.** `RetentionSweep` gains, always serialized:
+   `ok` (false when any list below is non-empty); `unverifiable: [{id,
+   reason}]`; `withheld: [{id, wing, room, reason}]`; `mirror_drift`, the
+   exact `verify` strings, for destroyed and withheld members only, so a
+   flip's one trace survives the destruction that removes it from the vault;
+   and `policy_drift`, the retention half of `verify`'s policy leg, extracted
+   into one function both call, so a policy row deleted offline no longer
+   leaves a sweep answering clean. `ok` is a serialized top-level field,
+   because that is what the orchestrator's `is_integrity_verdict` reads.
+   - **CLI**: prints the projection, writes `--out` or prints the JSON with the
+     attestation as today, then exits 2 when `!ok`, dry run included.
+   - **`/v1`**: 200 with the whole JSON; a 409 would strand the receipt for
+     what was destroyed.
+   - **Orchestrator ops plane**: no code change; `ops … retention-sweep`
+     exits 2 on the body's `ok: false`.
+   - **Admin console**: its sweep button could never destroy, because it gated
+     on `preview.destroyed`, which a dry run always reports as 0. It gates on
+     the distinct count of the preview's `expired` ids, shows `ok`,
+     `withheld`, `unverifiable` and both drift lists before the guard, and
+     presents a 200 carrying `ok: false` as an integrity verdict. It gets its
+     own `HAND_PROJECTED` rows for `RetentionSweep` and `RetentionSweepEntry`.
+5. **PATCH**, with an `UPGRADING.md` entry: sweeps now destroy drawers whose
+   clear `wing`/`room` names another scope, which partly supersedes 1.5.2's
+   O120 note; a sweep that aborted on a tampered or legacy row now destroys
+   the clean set and answers 200 with `ok: false`, exit 2; a scheduled sweep
+   exits 2 where drift, tampering or a deleted policy row exists; the cost
+   moves from O(scope) to O(corpus) per sweep. The detectors are `verify` and
+   `retention sweep --dry-run`; `config check` cannot see data.
+
+**Claims refuted.**
+- The brief's: its cost was time only (the memory figure above is what shapes
+  the walk); it named three surfaces for the promise where there are five; it
+  missed that today's sweep can never reach the fence, since the mirror SELECT
+  cannot return a row whose clear wing is the reserved one; it missed the dead
+  console button, the deleted-policy sibling and the superseded O120 upgrade
+  note; it cited `_for_read`'s doc for the fence's rationale; and O206's own
+  entry priced shape (a) as a walk per policy.
+- The software-engineering lens: gating the console on the SUM of `expired`
+  double-counts a drawer covered by a wing policy and a room policy; and its
+  `ok` ignored drift on destroyed drawers, which would let the flip's one trace
+  vanish at exit 0 with `verify` then green and `backup create` proceeding.
+- The security lens: O216 verdict 2 does not rule the destruction fence (above).
+- The agentic-memory lens: today the fence does not refuse the reserved-wing
+  flip with a 400; the sweep never reaches it, so it is a silent escape.
+- All three lenses on a two-way `Relations:` line between O206 and O221: the
+  preflight requires both partners open, and O206 closes in this unit, so the
+  relation is prose in O221.
+
+**Probes owed by the build**, run by the integrator:
+1. Walk wall time and peak RSS at 10⁵ sealed drawers; 10⁶ is a long run and
+   needs the maintainer's go.
+2. On a real corpus, through the CLI, `/v1` and the orchestrator ops plane: a
+   flip out of scope; a flip into the reserved wing, with the counterfactual
+   that a walk without the split refuses the whole sweep; a zeroed tag in an
+   unrelated wing; a double flip (mirror and `meta_json`); a deleted policy
+   row.
+3. The console before and after, in the Preview pane.
+4. `drawer update` with identical content on the withheld row: the mirror
+   heals, `filed_at` is kept, and the next sweep destroys it.
+
+**What remains.** O230 (a replayed older policy row, trust and retention),
+O231 (`verify` skips an unparseable covered meta in silence), and O221's two
+additions.
+
+#### BUILT 2026-09-19, as ruled
+
+**The walk.** `VaultStore::walk_covered` (`lib.rs`) reads `id, meta_json,
+content, tag, wing, room, kind, supersedes` in `seq` order through
+`rows.next()`, borrowing each row's bytes rather than copying them, and yields
+`CoveredRow::{Verified{id, meta, drift}, TagFailed, MetaUnparseable}`; the
+mirror comparison lives there alone. `verify`'s first two legs ride it with
+their verdict unchanged, including the silent skip O231 files.
+`policy_chain_latest` is the one pass over `audit` the policy leg reads, and
+`retention_policy_drift` (`retention.rs`) is its retention half, called by
+`verify` and by the sweep.
+
+**The sweep.** `retention_sweep` resolves the policies (a policy row that
+fails its tag still refuses the whole sweep), then the policy drift, then —
+only when a policy exists, since with none there is no scope any row could
+belong to — one walk matching every policy on the covered `meta.wing`,
+`meta.room` and `filed_at`. A tag failure or unparseable meta goes to
+`unverifiable`; a member whose covered `filed_at` does not parse goes to
+`withheld`; each past-age member is then asked `is_quarantine_pending` — the
+fence's own function — and withheld if it says yes, with the reason naming
+`drawer update`. `expired` never holds a withheld id and the distinct set is
+built in policy order as before. `RetentionSweep` gains `ok`, `unverifiable`,
+`withheld`, `mirror_drift` and `policy_drift`, with `RetentionUnverifiable`
+and `RetentionWithheld` for the entries. The CLI prints every list, then the
+JSON with the attestation as before, then exits 2 when `!ok`, dry run
+included. `/v1` and the orchestrator ops plane are unchanged in code: the
+first serializes the whole report at 200, and the second already exits 2 on a
+200 body carrying `"ok": false`. The admin console's `sweepRetention` renders
+every list before its guard, gates on the distinct ids of the preview's
+`expired` lists, and reports a 200 with `ok: false` as a failure.
+`parity.rs` gains six `HAND_PROJECTED` rows — the two new structs on the CLI,
+all four sweep structs on the console — and its field-extractor premise moves
+from three fields to two, because `RetentionUnverifiable` is a real two-field
+report and padding it to clear a threshold would be the gate deciding the
+struct.
+
+**Tests.** Five store tests in `retention.rs`: the O206 gate (a wing flip and
+a room flip, dry run first, both destroyed, the drift in the report, `verify`
+green after); an unverifiable row from anywhere (a zeroed tag in a wing no
+policy covers, and a double flip of the mirror and `meta_json`); a member
+flipped into the review queue (withheld, the rest swept, then `update_drawer`
+heals the mirror, keeps the covered `filed_at`, and the next sweep destroys
+it — the ruling's probe 4); an undatable legacy member (a tag recomputed with
+the vault's key over a rewritten `filed_at`); and a policy row deleted
+offline (with a clear as the legitimate absence). The O120 test now pins that
+a drawer flipped INTO a scope is no member, so the sweep stays `ok` and
+`verify` names the drift, and `retention_is_declared_swept_and_attested`
+pins `ok` on a clean vault. One CLI integration test drives the real binary
+through mine, export, import, a flip, a dry run (exit 2), a sweep (exit 2,
+the flipped drawer gone, the attestation printed) and a clean re-sweep (exit
+0). `e2e` gains seven checks: a same-length byte edit flips two drawers'
+clear ROOM (a premise check that both drifted and both tags hold), the CLI dry
+run counts and names them at exit 2, `/v1` destroys them at 200 with
+`ok:false` and the receipt, `verify` is green after, the next sweep is clean,
+and a drawer no policy covers survives. `orchestrator-e2e` gains two: the
+forged tenant's sweep names its unverifiable row and `ops … retention-sweep`
+exits 2, and a clean tenant's sweep answers `"ok":true`.
+
+**Counterfactuals, each failing its target.**
+- CF1, candidates whose mirror disagrees skipped (the mirror deciding
+  membership): the gate test fails, and so does the review-queue test, whose
+  member is drifted too.
+- CF2, a tag-failing row dropped silently: the unverifiable test alone.
+- CF3, the fence split removed: the review-queue test alone, at the sweep's
+  `unwrap` — `forget_with_proof` refused the whole call.
+- CF4, an undatable member failing the sweep (the old arm): that test alone.
+- CF5, the sweep ignoring policy drift: that test alone.
+- CF6, the CLI never exiting 2: the CLI test, "code=0, wanted 2".
+- The console rows: one field read as `s["policy_drift"]` fails
+  `every_hand_projected_report_field_reaches_the_cli` naming the field.
+- The e2e block on the `129c789` binary: four of seven fail. The three that
+  pass on both are the premise (it checks the fixture), the clean re-sweep and
+  the survivor (post-state checks that hold when nothing was destroyed); each
+  has its own reason and none is evidence the defect is gone.
+
+**Probes run.**
+- **Scale, at 102,000 sealed drawers** (the LoCoMo feed in 1,200 copies,
+  re-dated by export and import; one `w1` drawer's clear `wing` flipped):
+
+  | | `129c789` | this build |
+  |---|---|---|
+  | dry sweep | 0.03 s, 11 MB, exit 0, 84 expired | 0.21 s, 11 MB, exit 2, 85 expired, the drift named |
+  | `verify` | 0.46 s, 122 MB | 0.34 s, 25 MB |
+  | destroying sweep | 1.28 s, 12 MB, exit 0, flipped kept | 1.50 s, 12 MB, exit 2, flipped destroyed |
+
+  The walk costs about 1.8 µs a drawer and streams; 10⁶ was not run, being a
+  long run that needs the maintainer's go.
+- **Real corpus, 10,200 drawers in 120 wings**: the defect as filed, above.
+- **The console, in the Preview pane**, over a loopback server forwarded to
+  the host's loopback only, with one clean and one flipped expired drawer: on
+  `129c789` the preview listed one expired id and the console answered
+  "nothing has aged out", with no guard; on this build it summarised the
+  preview as NOT CLEAN with the MIRROR line, and the guard read "Destroys 2
+  drawer(s) … The preview is NOT CLEAN". The guard was cancelled.
+- The probes not run through every surface — the reserved-wing flip, a
+  double flip and a deleted policy row — are pinned at the store, where the
+  report is built, and reach the surfaces through the fields the e2e arms
+  exercise.
 
 ### O185 — CLOSED 2026-09-19: a search asks whether the mirror exists and never creates one; with no mirror it refuses
 
@@ -12163,6 +12479,11 @@ rather than paid silently.
 availability cost. The sweep keeps a drawer its policy says must be
 destroyed, which breaks the erasure promise. "Filed here" was not a filing
 either; the item is O206, and the code comment in `retention.rs` says both.
+
+**O206 closed that residue on 2026-09-19**: the sweep reads scope from the
+covered copy over one walk of every drawer, so a flip out of the scope is
+destroyed with its drift in the report, and a flip into it is no member. The
+`diag_warn!` this entry added went with the candidate SELECT it guarded.
 
 ### O121 — CLOSED 2026-09-07: `UNDERCROFT_RERANKER` was classed `Tunes` while a bad value stops the process
 
@@ -20396,30 +20717,6 @@ corrected both comments when it filed this entry.
 `verify` after both reports no orphan label. Counterfactual: the pre-split
 namespace, under which the agent's history omits its own deletion.
 
-### O206 — a wing or room mirror flipped OUT of a retention scope escapes the sweep, and that breaks the erasure promise
-
-**Filed 2026-09-17 by O171's ruling, item (c); verified by reading.**
-`expired_in` (`crates/undercroft-store/src/retention.rs`) draws its candidates
-from the clear `wing`/`room` mirror columns, then reads the covered
-`meta.wing`/`meta.room` for every decision (O120). An offline
-`UPDATE drawers SET wing = …` that moves a drawer OUT of the mirror's scope
-therefore never becomes a candidate, and the sweep keeps a drawer its declared
-retention says must be destroyed. `verify`'s `mirror_drift` leg reports the
-flip. The code comment and O120 called this "an availability cost", and it is
-not one: what is lost is the erasure promise a retention policy makes, which
-is an integrity property. Both are corrected in this unit to say so.
-
-**Shapes, for a ruling panel:**
-- one walk of every drawer's covered scope per sweep, O(corpus) per policy;
-- a sweep that refuses while `mirror_drift` is non-empty, so a flip stops the
-  sweep instead of slipping past it;
-- narrowing the promise, with an argument, to "drawers whose mirror agrees".
-
-**Gate**: a store test that flips one expired drawer's `wing` mirror out of
-the policy's scope and sweeps; the drawer is destroyed, or the sweep refuses
-naming the drift, whichever the panel rules. Counterfactual: today's
-candidate SELECT, under which the drawer survives and the sweep reports clean.
-
 ### O207 — a served embedder that answers a non-finite component fails a write the degrade contract says must not fail
 
 **Filed 2026-09-17 by O171's ruling, item (d); established by reading both
@@ -20726,6 +21023,23 @@ and reports that row; the delete refusal on a row flipped to the reserved wing
 names the exit that works. **Counterfactual**: today's whole-queue failure,
 and advice no door can follow.
 
+**Added 2026-09-19 by O206's ruling, in prose because O206 is done.**
+- **The reverse flip destroys review evidence (P4, measured on `129c789`).**
+  A pending row whose clear `wing` was flipped offline from the reserved wing
+  to `notes` is destroyed by an operator's `drawer delete` — exit 0, the row
+  gone, a plain `del/` tombstone — where the unflipped row is refused. The
+  destruction fence (`is_quarantine_pending`) reads the clear column, so the
+  flip lifts it. MCP is not affected: its by-id fence is `_for_read`, which
+  refuses when either copy names the queue.
+- **O206's retention sweep meets the forward flip.** A drawer whose covered
+  scope is a policy's and whose clear `wing` names the queue is withheld by
+  the sweep, through the fence's own function, with `drawer update` as the
+  exit the reason names — because handed to `forget_with_proof` the fence
+  would refuse the whole sweep. O206's panel judged that changing the fence to
+  read the covered copy where the row is readable (the shape of O216's verdict
+  2) is this entry's decision, not O206's; if this entry rules it, the sweep's
+  withheld arm and its advice follow.
+
 ### O223 — a vault's own export restored into that vault rewrites every row, because the import stamp moves `added_by`
 
 **Filed 2026-09-18 by O216's real-corpus drive, measured on the `4ff51ab`
@@ -20876,6 +21190,58 @@ so they are checked in the same transaction.
 **Gate**: as ruled; if an override is added, it is refused on every surface
 unless the destination still holds what the operator named. **Counterfactual**:
 today, no override exists.
+
+### O230 — an older, validly tagged policy row replayed offline passes `verify` and governs the sweep and the trust floor
+
+**Filed 2026-09-19 by O206's ruling panel (the security lens and the
+refuter); measured on O206's build.** A `retention_policy` or `wing_trust`
+row carries a tag the vault's key recomputes and a chain record whose id
+exists, and the policy leg checks exactly those two things (O94). A row copied
+out of the file earlier and written back later satisfies both, so:
+- **Retention**: `retention set w --days 30`, then `--days 365`, then the
+  30-day row restored with sqlite3: `retention list` reads 30 days and
+  `verify` answers `policy drift: 0`, `VERIFY OK`. A sweep then destroys
+  drawers the operator's current policy keeps — a deletion laundered through a
+  keyed sweep, which is what the policy tag exists to prevent. Restoring a
+  LONGER row hides drawers instead.
+- **Trust**: `trust set w2 trusted`, then `quarantined`, then the trusted row
+  restored: `trust list` reads `trusted`, `verify` answers OK, and the floor
+  that kept the wing out of a `standard` search is lifted.
+
+**O94's sentence is refuted here.** It says the discarded comparison of a
+row's tag with its chain record's "caught nothing … except an insider who
+already holds the vault key". Within one key epoch it caught a keyless replay
+of an older, validly tagged row, and nothing catches that now.
+
+**Why it needs a panel.** Comparing the row's `assigned_at` with the newest
+chain record's `at` is the obvious shape, and `audit.at` sits outside the chain
+hash (`chain_next_hex` takes the tag alone), so an offline writer can rewrite
+both. The chain-covered evidence is the TAG sequence, which rotation preserves
+verbatim while re-tagging the row, which is why O94 dropped the comparison in
+the first place.
+
+**Gate**: the two replays above make `verify` fail, and the sweep and the
+trust floor refuse to act on the replayed row, on a rotated vault as well as
+an unrotated one. **Counterfactual**: today's leg, under which both answer OK.
+
+### O231 — `verify` skips a drawer whose tag verifies and whose covered meta does not parse, and answers OK
+
+**Filed 2026-09-19 by O206's ruling; established by reading.**
+`walk_covered` yields `CoveredRow::MetaUnparseable` for a row whose record HMAC
+verifies while its `meta_json` does not parse as `DrawerMeta`, and `verify`
+counts it and reports it in no leg, on the argument that the decode path
+reports a corrupt row on every read. So `verify` answers OK over a row every
+read refuses — and `backup create` gates on that verdict. The row needs the
+vault key to reach (the tag covers `meta_json`), so it is a legacy or a
+defect-written row rather than an offline writer's. O206's sweep already names
+it as `unverifiable`; `verify` kept its verdict exactly, because changing a
+verify leg is a four-renderer change O206 did not rule.
+
+**Shape**: report it, either in `bad_records` with a distinct reason or in a
+leg of its own projected on all four renderers.
+
+**Gate**: a drawer re-tagged over an unparseable `meta_json` makes `verify`
+fail and names it. **Counterfactual**: today, `VERIFY OK`.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 

@@ -2255,3 +2255,95 @@ fn o204_config_check_refuses_the_palace_a_start_would_refuse() {
             "skipped data directory — not examined",
         ));
 }
+
+/// ROADMAP O206, through the surface an operator drives. A retention sweep
+/// took its candidates from the clear `wing` mirror, so one offline
+/// `UPDATE drawers SET wing = …` moved a drawer out of its policy's scope and
+/// the sweep destroyed the rest and exited 0. Membership is the HMAC-covered
+/// copy now: the dry run names the drift and exits 2 before anything is
+/// destroyed, the real sweep destroys the flipped drawer too, prints the
+/// attestation, and exits 2 because the report carries drift; the next sweep
+/// is clean and exits 0.
+#[test]
+fn a_retention_sweep_destroys_a_drawer_flipped_out_of_its_scope_and_says_so() {
+    let src = TempDir::new().unwrap();
+    cmd(&src).args(["init"]).assert().success();
+    let docs = TempDir::new().unwrap();
+    std::fs::write(docs.path().join("a.md"), "an old note about trains").unwrap();
+    std::fs::write(docs.path().join("b.md"), "an old note about boats").unwrap();
+    cmd(&src)
+        .args(["mine", docs.path().to_str().unwrap(), "--wing", "w1"])
+        .assert()
+        .success();
+    // Re-date both drawers through export and import: the clock is the
+    // covered `filed_at`, and only an import may carry an older one.
+    let out = cmd(&src).args(["export"]).assert().success();
+    let export = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    let mut old = String::new();
+    for line in export.lines().filter(|l| l.contains("\"drawer\"")) {
+        let at = line.find("\"filed_at\":\"").expect("filed_at") + "\"filed_at\":\"".len();
+        let end = at + line[at..].find('"').unwrap();
+        old.push_str(&line[..at]);
+        old.push_str("2020-01-01T00:00:00Z");
+        old.push_str(&line[end..]);
+        old.push('\n');
+    }
+    assert_eq!(old.lines().count(), 2, "PREMISE: two drawers exported");
+    let file = docs.path().join("old.jsonl");
+    std::fs::write(&file, old).unwrap();
+    let home = TempDir::new().unwrap();
+    cmd(&home).args(["init"]).assert().success();
+    cmd(&home)
+        .args(["import", file.to_str().unwrap()])
+        .assert()
+        .success();
+    cmd(&home)
+        .args(["retention", "set", "w1", "--days", "30"])
+        .assert()
+        .success();
+    let db = home.path().join("vaults/default/vault.db");
+    let conn = rusqlite_open(&db);
+    let flipped: String = conn
+        .query_row("SELECT id FROM drawers ORDER BY seq LIMIT 1", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    conn.execute(
+        "UPDATE drawers SET wing = 'elsewhere' WHERE id = ?1",
+        [&flipped],
+    )
+    .unwrap();
+    drop(conn);
+    let count = |id: &str| -> i64 {
+        rusqlite_open(&db)
+            .query_row("SELECT COUNT(*) FROM drawers WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .unwrap()
+    };
+
+    cmd(&home)
+        .args(["retention", "sweep", "--dry-run"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("w1 (> 30 day(s)): 2 expired"))
+        .stdout(predicate::str::contains(format!("MIRROR: {flipped}")))
+        .stdout(predicate::str::contains("NOT CLEAN"));
+    assert_eq!(count(&flipped), 1, "a dry run destroys nothing");
+
+    cmd(&home)
+        .args(["retention", "sweep"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("Destroyed: 2 drawer(s)."))
+        .stdout(predicate::str::contains(format!("MIRROR: {flipped}")))
+        .stdout(predicate::str::contains("\"attestation\""))
+        .stdout(predicate::str::contains("\"ok\": false"));
+    assert_eq!(count(&flipped), 0, "the flipped drawer escaped the sweep");
+
+    cmd(&home)
+        .args(["retention", "sweep"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Destroyed: 0 drawer(s)."));
+}
