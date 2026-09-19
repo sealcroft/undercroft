@@ -782,7 +782,9 @@ Export recipes and all measured tables:
 accelerators**: from a sealed vault they hold sealed content, beside the
 drawer ids, embeddings and wing/room labels in the clear (an hmac-only
 vault's push is refused unless `index push --allow-plaintext`), and every
-candidate is re-verified and decrypted locally. They pay off only at very
+candidate is re-verified and decrypted locally — repeats dropped and capped at
+the distinct ids asked for (O186). A search never creates a mirror: through a
+backend nothing has been pushed to, it exits 1 naming `index push` (O185). They pay off only at very
 large corpora — measure before adopting. After a key rotation, re-run
 `index push`.
 

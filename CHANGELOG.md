@@ -23,6 +23,18 @@ record naming a row awaiting review, and keeps each version of text under
 review. An operator's export is not refused for carrying queue rows, as a
 tenant's is: restoring a vault restores its queue.
 
+### `search --backend` no longer creates a remote collection; with no mirror it refuses (O185)
+
+A search through a remote backend called `ensure` first, and `ensure` is the
+CREATE on every real backend. So searching a vault nothing had pushed made an
+empty collection on operator infrastructure — from a read, and from a
+`--read-only` handle alike — and then answered "no memories matched" for a
+vault that may hold the answer. A search now asks whether the mirror exists,
+through a new non-creating `VectorIndex::exists` that is the first half of
+every backend's `status` (so the check O83 proved per backend has one
+implementation, and a search pays no count), and an absent mirror is refused —
+exit 1 — naming `undercroft index push <backend>`.
+
 ### a remote mirror that repeats ids, or floods more than it was asked for, gets one hit per drawer (O186)
 
 `search --backend` hydrated every candidate a mirror returned, with no seen-set
