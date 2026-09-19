@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 806" width="900" height="806" role="img" aria-labelledby="t d">
 <title id="t">The write-path defense: screened at the door, ruled by a human, receipted on the way out</title>
-<desc id="d">A save arrives from a surface which stamps added_by. Deployment-trusted surfaces bypass by declaration. Everything else passes the deterministic tier-1 detector (seven signal classes including fixture similarity, the declared rate screen, and the declared DESTINATION when a wing or room name itself trips) and optionally an advisory-only LLM tier. Clean writes land where they aimed; flagged writes divert sealed into the quarantine wing, excluded from retrieval, where a human allows (re-files) or denies (destroys through attested forgetting, returning a receipt). Every ruling is chain-audited.</desc>
+<desc id="d">A save arrives from a surface which stamps added_by. Deployment-trusted surfaces bypass by declaration. Everything else passes the deterministic tier-1 detector (seven signal classes including fixture similarity, the declared rate screen, and the declared DESTINATION when a wing or room name itself trips) and optionally an advisory-only LLM tier. Clean writes land where they aimed; flagged writes divert sealed into the quarantine wing, excluded from retrieval, where a human allows (re-files, unless the destination was written or deleted after the text was queued) or denies (destroys through attested forgetting, returning a receipt). Every ruling is chain-audited.</desc>
 <style>
   .f { font-family: "DejaVu Sans", "Noto Sans", sans-serif; }
   .h { font-size: 17px; font-weight: 600; }
@@ -112,8 +112,8 @@
 <!-- Rulings -->
 <rect x="24" y="698" width="412" height="72" rx="10" fill="var(--d-green-bg,#f1faf4)" stroke="var(--d-green,#2e7d4f)" stroke-width="1.5"/>
 <text x="42" y="722" class="f l" fill="var(--d-green-ink,#22623d)">allow — re-filed where it was headed</text>
-<text x="42" y="740" class="f s dim">The human ruling IS the override: the content still trips the screen,</text>
-<text x="42" y="755" class="f s dim">so the re-file goes straight to the write path, never back through it.</text>
+<text x="42" y="740" class="f s dim">The human ruling IS the override, never re-screened — but refused</text>
+<text x="42" y="755" class="f s dim">when the destination moved since the text was queued (O224).</text>
 
 <rect x="464" y="698" width="412" height="72" rx="10" fill="var(--d-red-bg,#fdf1ef)" stroke="var(--d-red,#a83b2f)" stroke-width="1.5"/>
 <text x="482" y="722" class="f l" fill="var(--d-red-ink,#993a30)">deny — destroyed, with a receipt</text>

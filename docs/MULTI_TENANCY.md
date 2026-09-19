@@ -567,7 +567,7 @@ records land on one row. The mapping flip is a compare-and-set, so two
 concurrent migrations cannot both move one tenant. The import half is admission-screened like any other write — a
 migration used to be a re-admission of the whole corpus past the screen,
 because every export line carries a `vector` and a caller-supplied vector
-reached the raw writer (§4). The e2e suite (`tests/e2e-orchestrator.sh`, 162 checks,
+reached the raw writer (§4). The e2e suite (`tests/e2e-orchestrator.sh`, 165 checks,
 `docker compose run --rm orchestrator-e2e`) exercises the whole story
 against two live engine instances, including the source engine provably
 losing the vault after migration and a read replica converging on the

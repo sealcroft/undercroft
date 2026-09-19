@@ -75,6 +75,46 @@ or when they could never be presented.
 
 ## 1.6.0 (unreleased)
 
+### `admission allow` refuses a row whose destination has been written or deleted since it was queued (O224)
+
+**Who is affected:** anyone with `UNDERCROFT_ADMISSION=quarantine` who rules
+on the review queue, and above all a script that allows every row. Three kinds
+of row can meet the refusal:
+- a row whose destination drawer was written or deleted after the text was
+  queued;
+- a queued UPDATE of an existing drawer that was queued before this release —
+  such a row records nothing about its destination, so its allow proceeds
+  only where nothing would be replaced;
+- a queued update restored from an export into ANOTHER vault, for the same
+  reason: what its destination held where it was queued cannot be known
+  there. Restoring a vault's own export into that vault keeps each row's
+  record.
+
+A queued NEW save, whose destination nothing holds, is not affected.
+
+**Symptom:** `undercroft admission allow <id>` exits 1, and `/v1` `POST
+…/admission` and the orchestrator's ops plane answer 400, with `<id> cannot be
+allowed: its destination <drawer> has been written since this text was queued
+…`, `… has been deleted …`, or `… this row records no destination state …`.
+Nothing was written and no ruling was recorded; the row stays queued. Retrying
+does not clear it. When the destination fails its HMAC, the answer is the
+integrity verdict instead — exit 2, `/v1` 409.
+
+**Cause:** until this release an allow re-filed the queued text over whatever
+its destination held, so a flagged update parked before a clean one reverted
+the drawer when allowed, and a drawer deleted — or forgotten — in between came
+back, failing its own erasure receipt as tampered.
+
+**Fix:** `undercroft admission list` shows each row's `destination` state
+before you rule. To keep what the destination holds, `admission deny <id>`. To
+apply the queued text anyway, read it (`drawer get <id>`), deny the row, and
+save the text again (`drawer update <drawer> …`, or re-mine its source): it
+queues against the destination as it is now and then allows. A script that
+allows every row should allow only rows whose state is `absent`, `unchanged`,
+`applied` or `unrecorded-absent`, and hand the rest to a person.
+`undercroft config check` cannot detect this, because it depends on data rather
+than on a declaration; `admission list` is the detector.
+
 ### An import that would replace a row awaiting an admission ruling is refused (O216)
 
 **Who is affected:** anyone restoring an export taken from a vault in which

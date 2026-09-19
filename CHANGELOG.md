@@ -23,6 +23,63 @@ record naming a row awaiting review, and keeps each version of text under
 review. An operator's export is not refused for carrying queue rows, as a
 tenant's is: restoring a vault restores its queue.
 
+### an allow no longer replaces or re-creates what the screen never saw (O224)
+
+`admission allow` re-filed a queued text at its drawer's id with a write that
+replaces whatever the id holds, and nothing compared the drawer with its state
+when the text was queued. Measured on the `1.6.0` tree before this change,
+with `verify` answering OK every time:
+- **A flagged update parked before a clean one reverted the drawer when it
+  was allowed.** An agent does this alone over MCP: park a flagged update, wait
+  for a legitimate clean update, and the reviewer's allow puts the parked text
+  back.
+- **A re-mine of a file edited back to clean text** was reverted to the file's
+  older flagged text, so the vault disagreed with the file.
+- **A drawer deleted after its flagged update was queued came back.** After a
+  `forget`, the operator's genuine erasure receipt then failed
+  `verify-forgetting` with "still exists" — the tamper verdict, from a
+  routine ruling.
+- **Two queued versions of one drawer allowed newest first** left the older
+  text in place.
+
+Ruled by a three-lens panel and an adversarial refuter; the record is O224's
+`#### RULED`, which also revises O220's "the later allow wins" — it ordered
+rulings, not submissions.
+
+**What changed:**
+- **A queue row records what its destination held when the text was queued:**
+  nothing, or a digest of its verbatim content keyed with the vault's stored
+  KG secret, so it confirms nothing to an offline reader and does not move on
+  a key rotation. The field is new in the row's covered metadata; every
+  existing row stays byte-identical.
+- **An allow whose destination has been written or deleted since is refused**
+  — exit 1, `/v1` 400 — with nothing written, naming the queue row, the
+  destination and what to do: deny to keep the destination; to apply the text
+  anyway, read it, deny the row, and save it again, which queues it against the
+  destination as it is now. The check runs again inside the allow's write
+  transaction, so a write landing in between is refused too. An unreadable
+  destination is the integrity verdict (exit 2, 409).
+- **`admission list`, `/v1` `…/admission` and the admin console show each
+  row's `destination_id` and `destination` state** — `absent`, `unchanged`,
+  `applied`, `unrecorded-absent` (an allow proceeds) or `changed`, `deleted`,
+  `unrecorded-occupied`, `unreadable` (it is refused) — so a reviewer sees it
+  before ruling. One unreadable destination no longer fails the whole list.
+- **Re-queuing the same text keeps the row's record**, so re-submitting a
+  parked text, or restoring the vault's own backup, does not turn a moved
+  destination into an unchanged one.
+- **Of two queued versions of one drawer, the first allow applies** and the
+  other is refused until it is denied and saved again.
+
+**What an operator may meet** (UPGRADING.md): a row queued before this release
+records nothing, so its allow proceeds only where nothing would be replaced —
+a pending update of an existing drawer is refused until denied and saved
+again. So is every pending update restored into another vault, because what
+its destination held where it was queued cannot be known there.
+
+**Filed from it:** O227 (a restore or migration leaves restored pending updates
+un-allowable as they stand), O228 (what an erasure owes pending rows naming its
+target), O229 (an override on `allow` — the maintainer's).
+
 ### text awaiting an admission ruling changes only by a ruling (O220)
 
 A diverted drawer's queue id is a function of its filing — wing, room, source,
@@ -58,9 +115,9 @@ every re-mine until someone ruled.
 
 **What it does not close**, filed: a ruling still binds the queue id and not
 the text, so an id vacated and re-occupied can release text no reviewer read
-(O225); allowing an older row overwrites newer content at the drawer's
-ordinary id (O224); a convergence with equal text still replaces the row's
-covered declaration (O226).
+(O225); a convergence with equal text still replaces the row's covered
+declaration (O226). Allowing an older row overwrote newer content at the
+drawer's ordinary id; that is O224, closed in this release (above).
 
 ### an import can no longer replace a row awaiting an admission ruling (O216)
 

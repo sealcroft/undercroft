@@ -670,8 +670,17 @@ write path at all.
   the text under review, and an `allow` released whatever the row held
   when it ran. Each distinct flagged text now takes its own slot, keyed
   with the stored KG secret; equal text converges; a backstop inside the
-  write transaction refuses a raced write. What remains, stated: a ruling
-  still binds the id and not the text (O225). Updates are screened on the UPDATING surface, so an
+  write transaction refuses a raced write. **Nor re-filed over what the
+  screen never saw** (ROADMAP O224): an allow replaced whatever its
+  destination held, so a flagged update an agent parked over MCP before a
+  clean one reverted the drawer when a reviewer allowed it, and a drawer
+  forgotten in between came back and failed its own erasure receipt as
+  tampered. A queue row now records what its destination held when the text
+  was queued — a digest keyed with the stored KG secret, so it confirms
+  nothing to an offline reader — and an allow over a destination written or
+  deleted since is refused, checked again inside the write transaction;
+  `admission list` shows the state before anyone rules. What remains, stated:
+  a ruling still binds the id and not the text (O225). Updates are screened on the UPDATING surface, so an
   untrusted surface cannot ride a trusted writer's standing.
   Deployment-trusted surfaces bypass by declaration
   (`UNDERCROFT_ADMIT_TRUSTED_SOURCES`). A diverted save **says so on

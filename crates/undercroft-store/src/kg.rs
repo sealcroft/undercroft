@@ -663,6 +663,33 @@ pub(crate) fn queue_version_key(secret: &[u8; 32], content: &str) -> [u8; 32] {
     keyed(secret, &buf)
 }
 
+/// Domain for the keyed digest a queue row records of its destination
+/// (ROADMAP O224). Its own tag, so it never equals a version-slot key or a
+/// receipt fingerprint of the same text.
+const QUEUE_DESTINATION_DOMAIN: &[u8] = b"queuedestination";
+
+/// The keyed digest of what the drawer at `dest_id` holds, recorded on a
+/// review-queue row when its text is queued and compared when it is allowed
+/// (ROADMAP O224): HMAC under the STORED KG secret, on every security level.
+///
+/// Keyed for the reason [`queue_version_key`] is, and more sharply: this
+/// digest OUTLIVES the content it describes, since that content is later
+/// replaced or forgotten, so an unkeyed one would confirm a guessed text that
+/// is no longer on disk. The stored secret, never a vault key, so a rotation
+/// moves nothing. The destination id is bound too: a queue row compared at an
+/// id other than the one it recorded refuses instead of passing.
+pub(crate) fn queue_destination_key(secret: &[u8; 32], dest_id: &str, content: &str) -> [u8; 32] {
+    let digest = content_fp(content);
+    let mut buf =
+        Vec::with_capacity(QUEUE_DESTINATION_DOMAIN.len() + 16 + dest_id.len() + digest.len());
+    buf.extend_from_slice(QUEUE_DESTINATION_DOMAIN);
+    buf.extend_from_slice(&(dest_id.len() as u64).to_le_bytes());
+    buf.extend_from_slice(dest_id.as_bytes());
+    buf.extend_from_slice(&(digest.len() as u64).to_le_bytes());
+    buf.extend_from_slice(&digest);
+    keyed(secret, &buf)
+}
+
 /// Marker byte on a KEYED fingerprint, which is what makes the at-rest
 /// migration idempotent.
 ///

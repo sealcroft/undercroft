@@ -391,8 +391,8 @@ lifecycle, stats, a live monitor, a knowledge-graph browser, one-click HMAC
 + chain verification, key rotation, a taxonomy-driven drawer browser with
 verbatim view/edit/delete, search, export/import, and an **ops** tab
 carrying the operator plane the agent surface deliberately lacks —
-the admission review queue (allow re-files, deny destroys with a receipt,
-both audited), wing-trust assignment, retention, and attested forgetting.
+the admission review queue (allow re-files unless the destination moved
+since the text was queued, deny destroys with a receipt, both audited), wing-trust assignment, retention, and attested forgetting.
 Credentials stay in the browser tab (assertions are minted client-side via
 WebCrypto), and destructive operations require typing the target's name.
 

@@ -27,6 +27,28 @@ pub struct Occurrence {
     pub filed_at: String,
 }
 
+/// What a review-queue row's destination held when the screen queued its
+/// text (ROADMAP O224): the precondition an `admission allow` checks, so a
+/// ruling cannot replace content written after the text was queued, nor
+/// re-create a drawer deleted since.
+///
+/// Recorded by the admission screen alone, and a keyed digest rather than
+/// content: `meta_json` is unsealed, and the digest outlives the content it
+/// describes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum QueuedAgainst {
+    /// No drawer held the destination id when the text was queued.
+    Absent,
+    /// A drawer held it: the keyed digest of that drawer's verbatim content,
+    /// as 64 lowercase hex characters.
+    Held(String),
+    /// Nothing is known about it: the text arrived as a queue record restored
+    /// from an export, or the destination could not be read when it was
+    /// queued. An allow then proceeds only where nothing would be replaced.
+    Unrecorded,
+}
+
 /// Everything recorded about a drawer beside its content: where it is
 /// filed, where it came from, when, by whom, and what the engine derived.
 /// Covered by the drawer's HMAC except `entities` and every
@@ -129,6 +151,13 @@ pub struct DrawerMeta {
     /// The room a diverted drawer was aimed at before admission control moved it to the review wing; restored by an `allow` ruling.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intended_room: Option<String>,
+    /// What the destination held when the screen queued this text (ROADMAP
+    /// O224) — the state an `allow` requires it still to hold, so a ruling
+    /// never replaces or re-creates what the screen never saw. Written by the
+    /// screen alone and present only while quarantined; `None` on a row
+    /// queued before it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queued_against: Option<QueuedAgainst>,
     /// Entity names extracted from the content. Emptied at rest (`meta_at_rest`) and read live instead, so plaintext-derived words never sit unsealed in `meta_json`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub entities: Vec<String>,
@@ -223,6 +252,7 @@ impl Drawer {
                 admission_signals: Vec::new(),
                 intended_wing: None,
                 intended_room: None,
+                queued_against: None,
                 entities,
                 occurrences: Vec::new(),
             },
