@@ -133,6 +133,19 @@ pub trait VectorIndex {
     /// where the three HTTP-404 backends (qdrant, chroma, weaviate) rely on
     /// a 404, and pgvector asks `to_regclass`.
     fn status(&mut self, collection: &str) -> Result<Option<u64>, IndexError>;
+
+    /// Whether `collection` exists, WITHOUT creating it and without counting
+    /// it (ROADMAP O185) — the first half of [`status`](Self::status), which
+    /// every implementation answers as `exists` then `count`, so the
+    /// non-creating question O83 proved per backend has one implementation.
+    ///
+    /// Its own method because a search needs the answer and not the count: a
+    /// search called [`ensure`](Self::ensure), the CREATE, and `status` would
+    /// have put a second round trip and an exact count in front of every
+    /// query for an answer the search never reads. Same contract as `status`:
+    /// never create, and never report absent for a backend that merely could
+    /// not be reached.
+    fn exists(&mut self, collection: &str) -> Result<bool, IndexError>;
 }
 
 /// The declared trust root for a self-signed backend terminator, as a PIN:
@@ -388,11 +401,15 @@ pub mod qdrant {
 
         /// Probed against qdrant 1.x: absent -> 404, present -> 200.
         fn status(&mut self, collection: &str) -> Result<Option<u64>, IndexError> {
-            let url = format!("{}/collections/{collection}", self.base);
-            if super::get_or_absent(&self.agent, &url)?.is_none() {
+            if !self.exists(collection)? {
                 return Ok(None);
             }
             self.count(collection).map(Some)
+        }
+
+        fn exists(&mut self, collection: &str) -> Result<bool, IndexError> {
+            let url = format!("{}/collections/{collection}", self.base);
+            Ok(super::get_or_absent(&self.agent, &url)?.is_some())
         }
 
         fn count(&mut self, collection: &str) -> Result<u64, IndexError> {
@@ -568,22 +585,34 @@ pub mod chroma {
         /// `get_or_create: true`, which is what `collection_id` does and
         /// what made a status call CREATE.
         fn status(&mut self, collection: &str) -> Result<Option<u64>, IndexError> {
+            if !self.exists(collection)? {
+                return Ok(None);
+            }
+            let id = self.ids.get(collection).cloned().ok_or_else(|| {
+                IndexError::BadResponse("collection lookup resolved no id".into())
+            })?;
+            let resp = self.call("GET", &format!("/collections/{id}/count"), None)?;
+            resp.as_u64()
+                .map(Some)
+                .ok_or_else(|| IndexError::BadResponse("count not a number".into()))
+        }
+
+        /// Chroma's collection path takes the NAME and its count needs the
+        /// ID, so the lookup that answers existence also resolves the id and
+        /// caches it — the same thing `collection_id` would have, without
+        /// creating.
+        fn exists(&mut self, collection: &str) -> Result<bool, IndexError> {
             let url = format!("{}/collections/{collection}", self.base);
             let Some(found) = super::get_or_absent(&self.agent, &url)? else {
-                return Ok(None);
+                return Ok(false);
             };
             let id = found
                 .get("id")
                 .and_then(Value::as_str)
                 .ok_or_else(|| IndexError::BadResponse("collection lookup returned no id".into()))?
                 .to_string();
-            // Cache it: this resolved the same thing `collection_id` would
-            // have, without creating, so a later call need not ask again.
-            self.ids.insert(collection.to_string(), id.clone());
-            let resp = self.call("GET", &format!("/collections/{id}/count"), None)?;
-            resp.as_u64()
-                .map(Some)
-                .ok_or_else(|| IndexError::BadResponse("count not a number".into()))
+            self.ids.insert(collection.to_string(), id);
+            Ok(true)
         }
 
         fn count(&mut self, collection: &str) -> Result<u64, IndexError> {
@@ -920,6 +949,13 @@ pub mod pgvector {
         /// relation — no `CREATE EXTENSION`, no `CREATE TABLE`. Probed both
         /// directions against the live server.
         fn status(&mut self, collection: &str) -> Result<Option<u64>, IndexError> {
+            if !self.exists(collection)? {
+                return Ok(None);
+            }
+            self.count(collection).map(Some)
+        }
+
+        fn exists(&mut self, collection: &str) -> Result<bool, IndexError> {
             let table = Self::table(collection);
             let row = self
                 .client
@@ -928,10 +964,7 @@ pub mod pgvector {
                     &[&format!("public.{table}")],
                 )
                 .map_err(|e| IndexError::Pg(e.to_string()))?;
-            if !row.get::<_, bool>(0) {
-                return Ok(None);
-            }
-            self.count(collection).map(Some)
+            Ok(row.get::<_, bool>(0))
         }
 
         fn count(&mut self, collection: &str) -> Result<u64, IndexError> {
@@ -1072,17 +1105,17 @@ pub mod milvus {
         /// `{"code":0,"data":{"has":false}}` for an absent name. No 404 to
         /// interpret, and no create.
         fn status(&mut self, collection: &str) -> Result<Option<u64>, IndexError> {
-            let resp = self.call("/collections/has", json!({ "collectionName": collection }))?;
-            let has = resp
-                .pointer("/data/has")
-                .and_then(Value::as_bool)
-                .ok_or_else(|| {
-                    IndexError::BadResponse("collections/has returned no `has`".into())
-                })?;
-            if !has {
+            if !self.exists(collection)? {
                 return Ok(None);
             }
             self.count(collection).map(Some)
+        }
+
+        fn exists(&mut self, collection: &str) -> Result<bool, IndexError> {
+            let resp = self.call("/collections/has", json!({ "collectionName": collection }))?;
+            resp.pointer("/data/has")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| IndexError::BadResponse("collections/has returned no `has`".into()))
         }
 
         fn count(&mut self, collection: &str) -> Result<u64, IndexError> {
@@ -1288,12 +1321,16 @@ pub mod weaviate {
         /// answer away by treating ANY error as absent; this one keeps the
         /// distinction.
         fn status(&mut self, collection: &str) -> Result<Option<u64>, IndexError> {
-            let class = Self::class_name(collection);
-            let url = format!("{}/v1/schema/{class}", self.base);
-            if super::get_or_absent(&self.agent, &url)?.is_none() {
+            if !self.exists(collection)? {
                 return Ok(None);
             }
             self.count(collection).map(Some)
+        }
+
+        fn exists(&mut self, collection: &str) -> Result<bool, IndexError> {
+            let class = Self::class_name(collection);
+            let url = format!("{}/v1/schema/{class}", self.base);
+            Ok(super::get_or_absent(&self.agent, &url)?.is_some())
         }
 
         fn count(&mut self, collection: &str) -> Result<u64, IndexError> {

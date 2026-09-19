@@ -75,6 +75,22 @@ or when they could never be presented.
 
 ## 1.6.0 (unreleased)
 
+### `search --backend` on a vault with no mirror now exits 1 instead of answering an empty page (O185)
+
+**Who is affected:** a script that runs `undercroft search … --backend <b>`
+against a vault nothing has pushed to that backend.
+
+**Symptom:** exit 1 with `no mirror of this vault on <b> — nothing has been
+pushed there …`, where it used to print "No memories matched" and exit 0.
+
+**Cause:** the search used to CREATE the backend's collection before querying
+it, so it could only ever answer an empty page — while the vault itself may
+hold the answer. It now asks whether the mirror exists and never makes one.
+
+**Fix:** run `undercroft index push <b>` for that vault first, or search
+without `--backend`. `undercroft index status <b>` says whether a mirror
+exists. `config check` cannot detect this, because it depends on data.
+
 ### `admission allow` refuses a row whose destination has been written or deleted since it was queued (O224)
 
 **Who is affected:** anyone with `UNDERCROFT_ADMISSION=quarantine` who rules

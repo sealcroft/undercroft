@@ -467,7 +467,24 @@ impl VaultStore {
             }
         }
         let collection = self.index_collection();
-        index.ensure(&collection, self.embedder_dimension())?;
+        // A search is a READ, so it asks whether the mirror exists and never
+        // makes one (ROADMAP O185). It used to call `ensure`, which is the
+        // CREATE on every real backend: searching a vault nothing had pushed
+        // made an empty collection on operator infrastructure — from a read,
+        // and from a read-only handle alike — and then answered "no memories
+        // matched" from a vault that may hold the answer. `exists` is the
+        // first half of the non-creating `status` O83 proved on all five
+        // backends, without the count a search never reads; an absent mirror
+        // is refused, naming the push that makes one, because an empty page
+        // there would be a false answer rather than an empty one.
+        if !index.exists(&collection)? {
+            return Err(StoreError::Invalid(format!(
+                "no mirror of this vault on {backend} — nothing has been pushed \
+                 there, so a search through it cannot answer; run `undercroft \
+                 index push {backend}` first, or search without --backend",
+                backend = index.name()
+            )));
+        }
         let qvec = self.embedder_embed(query);
         // Over-fetch so local re-ranking + relevance gating has material.
         let asked = depth.saturating_mul(4).max(20);
@@ -692,6 +709,10 @@ mod tests {
             } else {
                 Ok(Some(self.ids.len() as u64))
             }
+        }
+        /// The same answer as `status`, without the count.
+        fn exists(&mut self, _collection: &str) -> Result<bool, IndexError> {
+            Ok(!self.ids.is_empty())
         }
         fn upsert(&mut self, _collection: &str, records: &[IndexRecord]) -> Result<(), IndexError> {
             if self.fail_after > 0 && self.accepted >= self.fail_after {
@@ -1991,6 +2012,42 @@ mod tests {
             "ids past the {} asked for were hydrated: {:?}",
             20,
             ids(&flooded)
+        );
+    }
+
+    /// **A search asks whether the mirror exists and never makes one** (ROADMAP
+    /// O185). It called `ensure` — the CREATE on every real backend — so
+    /// searching a vault nothing had pushed made an empty collection, from a
+    /// read, and answered "no memories matched" for a vault that may hold the
+    /// answer. `ensured` is what sees the create here; `backends-e2e` asks the
+    /// real backends twice.
+    ///
+    /// Counterfactual, `65cbc20`: the first search calls `ensure` and answers
+    /// an empty page.
+    #[test]
+    fn a_search_through_an_absent_mirror_refuses_and_creates_nothing() {
+        let (_d, mut s) = store();
+        s.upsert(&drawer("notes", "the turbine inspection is on tuesday", 0))
+            .unwrap();
+        let mut index = EchoIndex::default();
+        let err = s
+            .search_with_index(&mut index, "turbine", &SearchOptions::default())
+            .unwrap_err();
+        assert!(
+            matches!(&err, StoreError::Invalid(m) if m.contains("no mirror") && m.contains("index push")),
+            "{err:?}"
+        );
+        assert_eq!(index.ensured, 0, "a search created a mirror");
+        // PREMISE: once pushed, the same search answers, and adds no create.
+        s.index_push(&mut index, PlaintextPush::Refuse).unwrap();
+        let pushed = index.ensured;
+        let hits = s
+            .search_with_index(&mut index, "turbine", &SearchOptions::default())
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(
+            index.ensured, pushed,
+            "a search after the push called ensure"
         );
     }
 

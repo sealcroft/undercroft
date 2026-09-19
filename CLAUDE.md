@@ -1344,7 +1344,9 @@ Consequences that are binding, not advisory:
   declares it (C8). Remote results are candidate ids only, re-loaded and
   HMAC-verified locally — deduplicated first and capped at the distinct ids
   asked for, because a mirror is untrusted for the SHAPE of its answer too
-  (O186) — and every push appends one `egress/index-push` chain
+  (O186); a search asks `VectorIndex::exists` and never `ensure`, the CREATE,
+  so a vault with no mirror is refused rather than given one (O185) — and
+  every push appends one `egress/index-push` chain
   record — a failed push too, once any batch had already left. **On a
   read-only open the store refuses the push, and `forget --backend`, before
   either touches the mirror (O175)**: `query_only` refuses a write INTO the
@@ -2132,8 +2134,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (961 run,
-                                      # 4 #[ignore]d = 965 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (962 run,
+                                      # 4 #[ignore]d = 966 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2258,7 +2260,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
 docker compose run --rm e2e           # e2e UI/UX suite against the release binary (562 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (165 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 checks)
-docker compose run --rm backends-e2e  # five live vector DBs over TLS (137 checks; weaviate
+docker compose run --rm backends-e2e  # five live vector DBs over TLS (157 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
                                       # answers HTTP before its Raft leader exists)
 bash tests/tls-pins.sh                # CA pins readable + both stacks start (31 checks).

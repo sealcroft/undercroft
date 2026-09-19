@@ -132,6 +132,16 @@ run_backend_suite() { # run_backend_suite <backend>
   check "[$be] probe vault"        0 "Created vault"  -- "$BIN" vault create "$probe" --level sealed
   check "[$be] absent is not zero" 0 "no mirror"      -- "$BIN" index status "$be" --vault "$probe"
   check "[$be] status creates none" 0 "no mirror"     -- "$BIN" index status "$be" --vault "$probe"
+  # ROADMAP O185: a SEARCH is a read too, and it called `ensure` — the CREATE —
+  # so searching the never-pushed probe vault made its collection and then
+  # answered an empty page. Refused now, naming the push; a read-only search
+  # the same. The status call after each is what sees whether one was made.
+  check "[$be] O185 search with no mirror refuses" 1 "no mirror" -- \
+    "$BIN" search "rollout" --backend "$be" --vault "$probe"
+  check "[$be] ...and created none"                0 "no mirror" -- "$BIN" index status "$be" --vault "$probe"
+  check "[$be] ...nor does a read-only search"     1 "no mirror" -- \
+    "$BIN" --read-only search "rollout" --backend "$be" --vault "$probe"
+  check "[$be] ...which created none either"       0 "no mirror" -- "$BIN" index status "$be" --vault "$probe"
   # ROADMAP O175. `--read-only` leaves a mutating subcommand to SQLite, which
   # refuses the write loudly — but for an effect OUTSIDE the database that
   # refusal came after the effect: `index push` shipped every batch before its

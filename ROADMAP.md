@@ -4171,6 +4171,46 @@ MINOR since O149: `PATCH /admin/tenants/{id}` and its CLI mirror are new
 capability, backward compatible. The rest of the section is PATCH work — no
 documented contract moves.
 
+### O185 — CLOSED 2026-09-19: a search asks whether the mirror exists and never creates one; with no mirror it refuses
+
+**Filed 2026-09-14 by O175's ruling panel; verified by reading.**
+`VaultStore::search_with_index` calls `index.ensure` (`remote.rs`) before
+querying, and on every real backend `ensure` creates the collection when absent.
+So a search against a vault that was never mirrored CREATES an empty remote
+collection, from a read and from a read-only handle alike. O83 fixed exactly this
+shape for `index status` by giving `VectorIndex::status` a non-creating path
+proved per backend by asking twice. **Shape**: query without `ensure`, treating
+an absent collection as "no mirror" the way `status` does. **Gate**: the O83
+shape in `backends-e2e` — `search --backend` against a never-pushed vault, then
+`index status` twice reporting no mirror.
+
+#### BUILT 2026-09-19, to the entry's shape, with one refinement
+
+**No ruling was needed**: the entry states its shape and the O83 precedent it
+follows. **The refinement**: querying "the way `status` does" would have put
+`status` in front of every search, and every backend answers `status` as an
+existence check FOLLOWED BY an exact count — a second round trip and a count a
+search never reads. So `VectorIndex::exists` is a new REQUIRED trait method,
+the first half of `status`, and all five backends now answer `status` as
+`exists` then `count`: the non-creating question O83 proved per backend keeps
+one implementation, and a search pays for existence alone. No default, because
+a default is the silent shape.
+
+`search_with_index` asks `exists` where it called `ensure`, and refuses an
+absent mirror as `StoreError::Invalid` naming `undercroft index push <backend>`
+— an empty page there would be a false answer, since the vault may hold one.
+That turns an exit 0 into an exit 1 for a script searching a never-pushed
+vault, so `UPGRADING.md` carries it.
+
+**Gates.** `a_search_through_an_absent_mirror_refuses_and_creates_nothing`
+(store): refused, `ensure` never called; after a push the search answers and
+calls `ensure` no more. Counterfactual, the `ensure` restored on a scratch
+copy: the search returned `Ok([])` — the empty page. In `backends-e2e`, on each
+of the five live backends, a search and a `--read-only` search of the
+never-pushed probe vault each refuse naming the push, and `index status`
+after each still reports no mirror — the O83 shape, where the call AFTER is
+what sees a create. That arm was not run against the `65cbc20` binary.
+
 ### O186 — CLOSED 2026-09-19: a mirror's repeated or surplus candidate ids are dropped before hydration
 
 **Filed 2026-09-15 by O167's refuter; verified by reading, not executed.**
@@ -19859,19 +19899,6 @@ the difference is the defect. Premise arm: a healthy vault reports 0.
 Discriminator arm: a hash-vault drawer whose content yields no token is not
 reported as a hole. Counterfactual: a count sourced from `embed_failures`
 passes the premise and fails the restart arm.
-
-### O185 — `search --backend` calls `ensure` — a CREATE on real backends — on a read path
-
-**Filed 2026-09-14 by O175's ruling panel; verified by reading.**
-`VaultStore::search_with_index` calls `index.ensure` (`remote.rs`) before
-querying, and on every real backend `ensure` creates the collection when absent.
-So a search against a vault that was never mirrored CREATES an empty remote
-collection, from a read and from a read-only handle alike. O83 fixed exactly this
-shape for `index status` by giving `VectorIndex::status` a non-creating path
-proved per backend by asking twice. **Shape**: query without `ensure`, treating
-an absent collection as "no mirror" the way `status` does. **Gate**: the O83
-shape in `backends-e2e` — `search --backend` against a never-pushed vault, then
-`index status` twice reporting no mirror.
 
 ### O187 — `refine`'s fact-mirror drawers are embedded and screened with no record naming those endpoints
 
