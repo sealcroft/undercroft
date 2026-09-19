@@ -23,6 +23,40 @@ record naming a row awaiting review, and keeps each version of text under
 review. An operator's export is not refused for carrying queue rows, as a
 tenant's is: restoring a vault restores its queue.
 
+### a retention sweep reads each drawer's scope from its covered meta, so a flipped mirror no longer hides a drawer from its policy (O206)
+
+A sweep took its candidates from the clear `wing`/`room` mirror columns and
+decided from the covered copy (O120), so one offline `UPDATE drawers SET wing
+= …` that moved a drawer OUT of its policy's scope kept it from ever being a
+candidate: the sweep destroyed the rest, exited 0, and kept a drawer its
+declared retention says must go — while `docs/THREAT_MODEL.md` promised that a
+flipped clear column cannot "hide a drawer from its declared retention".
+Measured on the LoCoMo feed in 120 wings (10,200 sealed drawers): 84 destroyed,
+the flipped one kept, the output clean. Ruled by a three-lens panel and a
+refuter.
+
+The sweep now walks every drawer once, reads its wing, room and clock from the
+HMAC-covered meta, and matches every policy in memory. The walk is the one
+`verify` rides — a single streaming function, so `verify` no longer holds the
+whole corpus in memory to check it (122 MB → 25 MB peak at 102,000 drawers)
+and the two cannot disagree about what drifted. What the sweep cannot decide
+it names and does not destroy, and it goes on with the rest: a row whose tag
+fails, anywhere in the vault (`unverifiable`); a member whose covered
+`filed_at` does not parse, which used to fail the whole sweep, and a member
+whose clear `wing` was flipped into the review queue, which the
+pending-evidence fence would refuse (`withheld`, each naming its exit). The
+report also carries the mirror drift on what it destroyed or withheld — the
+one trace of the flip, which destroying the drawer removes from the vault —
+and a policy row deleted behind the store (`policy_drift`). Any of these sets
+`ok: false`: `/v1` answers 200 with the report and the receipt, the CLI exits
+2 after printing both, and the orchestrator's `ops … retention-sweep` exits 2
+with no change of its own. The admin console's sweep button could never
+destroy anything: it gated on the preview's `destroyed`, which a dry run always
+reports as 0. It gates on the distinct ids the preview would destroy now, and
+shows every list before the confirmation. A dry sweep at 102,000 sealed
+drawers costs 0.21 s (was 0.03 s) at the same 11 MB peak. `UPGRADING.md`
+carries what a scheduled sweep will meet.
+
 ### `search --backend` no longer creates a remote collection; with no mirror it refuses (O185)
 
 A search through a remote backend called `ensure` first, and `ensure` is the

@@ -878,6 +878,49 @@ pub const HAND_PROJECTED: &[(&str, &str, &str, &str)] = &[
         "undercroft-cli/src/main.rs",
         "RetentionAction::Sweep",
     ),
+    // ROADMAP O206: what a sweep could not decide or would not destroy, the
+    // two lists that decide its `ok`. Hand-projected, so each gets a row.
+    (
+        "undercroft-store/src/retention.rs",
+        "RetentionUnverifiable",
+        "undercroft-cli/src/main.rs",
+        "RetentionAction::Sweep",
+    ),
+    (
+        "undercroft-store/src/retention.rs",
+        "RetentionWithheld",
+        "undercroft-cli/src/main.rs",
+        "RetentionAction::Sweep",
+    ),
+    // The console's sweep had no row, and it was the renderer that was
+    // broken: it gated its confirmation on the preview's `destroyed`, which
+    // a dry run always reports as 0, so it answered "nothing has aged out"
+    // and could never sweep (O206). All four structs, since it renders them
+    // by hand before the operator confirms.
+    (
+        "undercroft-store/src/retention.rs",
+        "RetentionSweep",
+        "undercroft-cli/src/ui.html",
+        "async function sweepRetention()",
+    ),
+    (
+        "undercroft-store/src/retention.rs",
+        "RetentionSweepEntry",
+        "undercroft-cli/src/ui.html",
+        "async function sweepRetention()",
+    ),
+    (
+        "undercroft-store/src/retention.rs",
+        "RetentionUnverifiable",
+        "undercroft-cli/src/ui.html",
+        "async function sweepRetention()",
+    ),
+    (
+        "undercroft-store/src/retention.rs",
+        "RetentionWithheld",
+        "undercroft-cli/src/ui.html",
+        "async function sweepRetention()",
+    ),
     // The orchestrator's own report, in the crate the gate could not read
     // until the projecting path was generalised. `level` is precisely the
     // field whose doc says it exists because "a migration has to recreate
@@ -1320,8 +1363,13 @@ mod tests {
                         .then(|| name.to_string())
                 })
                 .collect();
+            // The premise catches an extractor that read NOTHING. It was
+            // `>= 3` while every listed struct had three fields or more;
+            // `RetentionUnverifiable` (O206) is a real two-field report, and
+            // padding it with a field to clear a threshold would be the
+            // gate deciding the struct.
             assert!(
-                fields.len() >= 3,
+                fields.len() >= 2,
                 "premise: the field extractor actually read {struct_name}, got {fields:?}"
             );
 

@@ -2976,6 +2976,24 @@ fn run(cli: Cli) -> Result<()> {
                         );
                     }
                     println!("Destroyed: {} drawer(s).", sweep.destroyed);
+                    // What the sweep could not decide or would not destroy
+                    // (ROADMAP O206). Each is named, because a sweep that
+                    // skipped a row silently is the defect O206 closed.
+                    for u in &sweep.unverifiable {
+                        println!("  UNVERIFIABLE: {} — {}", u.id, u.reason);
+                    }
+                    for w in &sweep.withheld {
+                        println!(
+                            "  WITHHELD: {} ({}/{}) — {}",
+                            w.id, w.wing, w.room, w.reason
+                        );
+                    }
+                    for m in &sweep.mirror_drift {
+                        println!("  MIRROR: {m}");
+                    }
+                    for p in &sweep.policy_drift {
+                        println!("  POLICY: {p}");
+                    }
                     let json = serde_json::to_string_pretty(&sweep)?;
                     match out {
                         Some(path) => {
@@ -2984,6 +3002,18 @@ fn run(cli: Cli) -> Result<()> {
                         }
                         None if sweep.attestation.is_some() => println!("{json}"),
                         None => {}
+                    }
+                    // The integrity verdict exits 2 AFTER the report and the
+                    // receipt are out: a sweep that destroyed the clean set
+                    // must still hand over the attestation for what it did.
+                    // A dry run answers the same way, so a scheduled preview
+                    // reports drift before anything is destroyed.
+                    if !sweep.ok {
+                        println!(
+                            "RETENTION SWEEP NOT CLEAN — the rows named above were not \
+                             destroyed or were destroyed over drift. Run `undercroft verify`."
+                        );
+                        std::process::exit(EXIT_INTEGRITY.into());
                     }
                 }
             }

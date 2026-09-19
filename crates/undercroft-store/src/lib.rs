@@ -2487,6 +2487,28 @@ fn date_hit_for(
 /// drawer's HMAC, so a forged date fails the read that hydrates the row.
 const CONTENT_DATE_SQL: &str = "substr(json_extract(meta_json, '$.content_date'), 1, 10)";
 
+/// One drawer row as [`VaultStore::walk_covered`] reads it (ROADMAP O206).
+///
+/// `Verified` carries the whole covered meta and the other arms an id, so the
+/// variants differ in size; boxing would buy nothing, because the walk
+/// streams and exactly one of these is alive at a time — never a collection.
+#[allow(clippy::large_enum_variant)]
+pub(crate) enum CoveredRow {
+    /// The record HMAC verified and the covered meta parsed. `drift` holds
+    /// one line per mirror column (`wing`, `room`, `kind`, `supersedes`)
+    /// that disagrees with the covered meta, in `verify`'s wording.
+    Verified {
+        id: String,
+        meta: undercroft_core::DrawerMeta,
+        drift: Vec<String>,
+    },
+    /// The record HMAC does not verify, so neither copy of the row's scope,
+    /// clock or content is authentic.
+    TagFailed { id: String },
+    /// The tag verified but the covered meta does not parse.
+    MetaUnparseable { id: String },
+}
+
 /// The whole verdict, seven legs: record HMACs, the chain replay, supersession receipts, fact receipts, orphan labels, mirror drift and policy drift. Hand-projected on four renderers (`parity::HAND_PROJECTED`), so a new leg must reach all of them.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct VerifyReport {
@@ -8135,6 +8157,146 @@ impl VaultStore {
         })
     }
 
+    /// Walk every drawer row once, in `seq` order, and hand each to `visit`
+    /// as the COVERED copy sees it (ROADMAP O206): the record HMAC checked
+    /// over the at-rest bytes, the covered meta parsed, and every mirror
+    /// column compared with it. Nothing is decrypted — the tag covers the
+    /// at-rest content, and `meta_json` is stored unsealed on every level.
+    ///
+    /// **It streams.** `verify` used to collect every row, content blobs
+    /// included, into one `Vec` before checking any of them, which is the
+    /// whole corpus resident at once (122 MB at 102,000 sealed drawers,
+    /// measured). A walk that retention now runs on every sweep must not
+    /// carry that, so each row's bytes are borrowed from the statement and
+    /// dropped before the next row is read.
+    ///
+    /// The mirror comparison lives here and nowhere else, so `verify`'s
+    /// drift leg and the sweep cannot disagree about what drifted.
+    pub(crate) fn walk_covered(
+        &self,
+        mut visit: impl FnMut(CoveredRow) -> Result<(), StoreError>,
+    ) -> Result<(), StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, meta_json, content, tag, wing, room, kind, supersedes \
+             FROM drawers ORDER BY seq",
+        )?;
+        // A borrowed column of the wrong type fails exactly as `r.get` would.
+        fn typed(
+            i: usize,
+            t: rusqlite::types::Type,
+            e: rusqlite::types::FromSqlError,
+        ) -> StoreError {
+            rusqlite::Error::FromSqlConversionFailure(i, t, Box::new(e)).into()
+        }
+        use rusqlite::types::Type;
+        let mut rows = stmt.query([])?;
+        while let Some(r) = rows.next()? {
+            let id: String = r.get(0)?;
+            let meta_json = r
+                .get_ref(1)?
+                .as_str()
+                .map_err(|e| typed(1, Type::Text, e))?;
+            let content_rest = r
+                .get_ref(2)?
+                .as_blob()
+                .map_err(|e| typed(2, Type::Blob, e))?;
+            let tag = r
+                .get_ref(3)?
+                .as_blob()
+                .map_err(|e| typed(3, Type::Blob, e))?;
+            if self
+                .vault
+                .verify_tag(&canonical(&id, meta_json.as_bytes(), content_rest), tag)
+                .is_err()
+            {
+                visit(CoveredRow::TagFailed { id })?;
+                continue;
+            }
+            // The tag verified, so `meta_json` is authentic — which makes any
+            // disagreement with a mirror column an offline edit of the
+            // mirror. Reported separately from a tag failure: the record
+            // itself is intact, and calling it a corrupt record would
+            // misname what happened.
+            let Ok(meta) = serde_json::from_str::<undercroft_core::DrawerMeta>(meta_json) else {
+                visit(CoveredRow::MetaUnparseable { id })?;
+                continue;
+            };
+            let wing: String = r.get(4)?;
+            let room: String = r.get(5)?;
+            let kind: Option<String> = r.get(6)?;
+            let supersedes: Option<String> = r.get(7)?;
+            let mut drift = Vec::new();
+            let mut compare = |field: &str, column: &str, covered: &str| {
+                if column != covered {
+                    drift.push(format!(
+                        "{id}: column {field}={column:?} but the covered meta says {covered:?}"
+                    ));
+                }
+            };
+            // **`filed_at` is NOT in this list, and that is a correction to
+            // this leg's first version rather than an omission.** The other
+            // four columns are bound straight from `drawer.meta.*` at write
+            // time, so a difference can only be an offline edit. `filed_at`
+            // is not: the column takes the write path's own `now` while
+            // `meta.filed_at` was stamped when the `Drawer` was constructed,
+            // so the two differ by a clock read in NORMAL operation — and an
+            // import may legitimately carry an older declared value. Checking
+            // it made eight healthy tests report a tampered vault. The column
+            // is storage metadata; the covered field is the declared value,
+            // which is exactly why retention reads the covered one.
+            compare("wing", &wing, &meta.wing);
+            compare("room", &room, &meta.room);
+            compare(
+                "kind",
+                kind.as_deref().unwrap_or_default(),
+                meta.kind.as_deref().unwrap_or_default(),
+            );
+            compare(
+                "supersedes",
+                supersedes.as_deref().unwrap_or_default(),
+                meta.supersedes.as_deref().unwrap_or_default(),
+            );
+            visit(CoveredRow::Verified { id, meta, drift })?;
+        }
+        Ok(())
+    }
+
+    /// Each policy record's newest position in the chain, keyed by record id
+    /// (`trust/…`, `retention/…`, `retention-clear/…`) — the one ordered pass
+    /// over `audit` that the policy-drift leg reads (ROADMAP O94), shared by
+    /// `verify` and the retention sweep.
+    ///
+    /// **Seq only, and NOT the tag — the tag cannot survive a rotation and
+    /// comparing it made this leg alarm on every rotated vault.** Rotation
+    /// re-tags `wing_trust`/`retention_policy` with the new keys and
+    /// PRESERVES audit tags verbatim as historical evidence (the same
+    /// asymmetry O13 records for forgetting attestations: a keyed replay has
+    /// a shorter lifetime than the document it checks). So row-tag ==
+    /// chain-tag holds only until the first rotation, and asserting it is a
+    /// false alarm on the routine path — which is exactly how a leg gets
+    /// ignored and then removed. What DOES survive is what the leg uses: the
+    /// row's own tag recomputed under the CURRENT key (rotation re-tags, so a
+    /// flip still fails), and the EXISTENCE of the record id (rotation
+    /// preserves those verbatim, so a deletion still shows).
+    pub(crate) fn policy_chain_latest(
+        &self,
+    ) -> Result<std::collections::HashMap<String, i64>, StoreError> {
+        let mut latest = std::collections::HashMap::new();
+        let mut stmt = self.conn.prepare(concat!(
+            "SELECT seq, record_id FROM audit ",
+            "WHERE record_id LIKE 'trust/%' ",
+            "OR record_id LIKE 'retention/%' ",
+            "OR record_id LIKE 'retention-clear/%' ",
+            "ORDER BY seq",
+        ))?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
+        for row in rows {
+            let (seq, id) = row?;
+            latest.insert(id, seq);
+        }
+        Ok(latest)
+    }
+
     /// Walk every record verifying its HMAC, replay the audit chain
     /// against the manifest head, check every drawer supersession receipt
     /// and every graph fact receipt, resolve every graph audit label,
@@ -8151,96 +8313,25 @@ impl VaultStore {
     /// that verified only what the first two legs returned answered green
     /// on a tampered link.
     pub fn verify(&self) -> Result<VerifyReport, StoreError> {
-        // The mirror columns come along: `wing`, `room`, `kind` and
-        // `supersedes` are indexed copies of values whose authoritative form
-        // lives inside the HMAC-covered `meta_json`, and nothing compared
-        // the two. See `mirror_drift` on the report — a flipped mirror is
-        // not an HMAC failure, so it needs its own leg. `filed_at` is
-        // selected but deliberately NOT compared: the column takes the
-        // write path's own clock and differs from the covered field in
-        // normal operation.
-        let mut stmt = self.conn.prepare(
-            "SELECT id, meta_json, content, tag, wing, room, kind, supersedes, filed_at \
-             FROM drawers ORDER BY seq",
-        )?;
-        #[allow(clippy::type_complexity)]
-        let rows: Vec<(
-            String,
-            String,
-            Vec<u8>,
-            Vec<u8>,
-            String,
-            String,
-            Option<String>,
-            Option<String>,
-        )> = stmt
-            .query_map([], |r| {
-                Ok((
-                    r.get(0)?,
-                    r.get(1)?,
-                    r.get(2)?,
-                    r.get(3)?,
-                    r.get(4)?,
-                    r.get(5)?,
-                    r.get(6)?,
-                    r.get(7)?,
-                ))
-            })?
-            .collect::<Result<_, _>>()?;
+        // The first two legs ride the covered-copy walk, which the retention
+        // sweep shares (ROADMAP O206): one implementation of "which rows
+        // verify, and where does a mirror disagree with the covered meta".
+        // An unparseable covered meta is counted and reported by neither
+        // leg here, as before, on the argument that the decode path reports
+        // it as a corrupt row on every read — which leaves `verify` answering
+        // OK over it. That silence is filed as ROADMAP O231.
         let mut bad = Vec::new();
         let mut mirror_drift = Vec::new();
         let mut checked = 0u64;
-        for (id, meta_json, content_rest, tag, wing, room, kind, supersedes) in rows {
+        self.walk_covered(|row| {
             checked += 1;
-            if self
-                .vault
-                .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
-                .is_err()
-            {
-                bad.push(id);
-                continue;
+            match row {
+                CoveredRow::TagFailed { id } => bad.push(id),
+                CoveredRow::MetaUnparseable { .. } => {}
+                CoveredRow::Verified { drift, .. } => mirror_drift.extend(drift),
             }
-            // The tag verified, so `meta_json` is authentic — which makes any
-            // disagreement with a mirror column an offline edit of the
-            // mirror. Reported separately from `bad_records`: the record
-            // itself is intact, and calling it a corrupt record would
-            // misname what happened.
-            let Ok(meta) = serde_json::from_str::<undercroft_core::DrawerMeta>(&meta_json) else {
-                // An unparseable covered meta is a corrupt row, and the
-                // decode path already reports it as such on every read.
-                continue;
-            };
-            let mut drift = |field: &str, column: &str, covered: &str| {
-                if column != covered {
-                    mirror_drift.push(format!(
-                        "{id}: column {field}={column:?} but the covered meta says {covered:?}"
-                    ));
-                }
-            };
-            // **`filed_at` is NOT in this list, and that is a correction to
-            // this leg's first version rather than an omission.** The other
-            // four columns are bound straight from `drawer.meta.*` at write
-            // time, so a difference can only be an offline edit. `filed_at`
-            // is not: the column takes the write path's own `now` while
-            // `meta.filed_at` was stamped when the `Drawer` was constructed,
-            // so the two differ by a clock read in NORMAL operation — and an
-            // import may legitimately carry an older declared value. Checking
-            // it made eight healthy tests report a tampered vault. The column
-            // is storage metadata; the covered field is the declared value,
-            // which is exactly why retention reads the covered one.
-            drift("wing", &wing, &meta.wing);
-            drift("room", &room, &meta.room);
-            drift(
-                "kind",
-                kind.as_deref().unwrap_or_default(),
-                meta.kind.as_deref().unwrap_or_default(),
-            );
-            drift(
-                "supersedes",
-                supersedes.as_deref().unwrap_or_default(),
-                meta.supersedes.as_deref().unwrap_or_default(),
-            );
-        }
+            Ok(())
+        })?;
         // Knowledge-graph and tunnel rows are integrity-tagged too.
         checked += self.kg_count()?;
         bad.extend(self.kg_verify()?);
@@ -8429,36 +8520,7 @@ impl VaultStore {
         // over that table rather than the Nth.
         let mut policy_drift: Vec<String> = Vec::new();
         {
-            use std::collections::HashMap;
-            // **Seq only, and NOT the tag — the tag cannot survive a rotation
-            // and comparing it made this leg alarm on every rotated vault.**
-            // Rotation re-tags `wing_trust`/`retention_policy` with the new
-            // keys and PRESERVES audit tags verbatim as historical evidence
-            // (the same asymmetry O13 records for forgetting attestations: a
-            // keyed replay has a shorter lifetime than the document it
-            // checks). So row-tag == chain-tag holds only until the first
-            // rotation, and asserting it is a false alarm on the routine
-            // path — which is exactly how a leg gets ignored and then
-            // removed. What DOES survive is what this now uses: the row's own
-            // tag recomputed under the CURRENT key (rotation re-tags, so a
-            // flip still fails), and the EXISTENCE of the record id (rotation
-            // preserves those verbatim, so a deletion still shows).
-            let mut latest: HashMap<String, i64> = HashMap::new();
-            {
-                let mut stmt = self.conn.prepare(concat!(
-                    "SELECT seq, record_id FROM audit ",
-                    "WHERE record_id LIKE 'trust/%' ",
-                    "OR record_id LIKE 'retention/%' ",
-                    "OR record_id LIKE 'retention-clear/%' ",
-                    "ORDER BY seq",
-                ))?;
-                let rows =
-                    stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
-                for row in rows {
-                    let (seq, id) = row?;
-                    latest.insert(id, seq);
-                }
-            }
+            let latest = self.policy_chain_latest()?;
 
             // Trust. Every row must recompute (a flip moves the canonical,
             // not the tag) AND must match the assignment that recorded it.
@@ -8499,59 +8561,9 @@ impl VaultStore {
             }
 
             // Retention. Same shape, plus the one legitimate absence: a
-            // `retention-clear/` record NEWER than the assignment.
-            let mut seen_ret: Vec<String> = Vec::new();
-            {
-                let mut stmt = self.conn.prepare(concat!(
-                    "SELECT wing, room, max_age_days, tag, assigned_at ",
-                    "FROM retention_policy ORDER BY wing, room",
-                ))?;
-                let rows: Vec<(String, String, u32, Vec<u8>, String)> = stmt
-                    .query_map([], |r| {
-                        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
-                    })?
-                    .collect::<Result<_, _>>()?;
-                for (wing, room, days, tag, at) in rows {
-                    let rest = if room.is_empty() {
-                        wing.clone()
-                    } else {
-                        format!("{wing}/{room}")
-                    };
-                    let key = format!("retention/{rest}");
-                    seen_ret.push(key.clone());
-                    if self
-                        .vault
-                        .verify_tag(
-                            crate::retention::retention_canonical(&wing, &room, days, &at)
-                                .as_slice(),
-                            &tag,
-                        )
-                        .is_err()
-                    {
-                        policy_drift.push(format!("{key}: row does not verify"));
-                        continue;
-                    }
-                    if !latest.contains_key(&key) {
-                        policy_drift.push(format!("{key}: declared in no chain record"));
-                    }
-                }
-            }
-            for (key, seq) in latest.iter() {
-                let Some(rest) = key.strip_prefix("retention/") else {
-                    continue;
-                };
-                if seen_ret.contains(key) {
-                    continue;
-                }
-                // Cleared is the legitimate absence, and only when the clear
-                // is NEWER — an older one belongs to a policy since redeclared.
-                let cleared = latest
-                    .get(&format!("retention-clear/{rest}"))
-                    .is_some_and(|cseq| cseq > seq);
-                if !cleared {
-                    policy_drift.push(format!("{key}: declared in the chain, row is gone"));
-                }
-            }
+            // `retention-clear/` record NEWER than the assignment. One
+            // implementation, which the retention sweep calls too (O206).
+            policy_drift.extend(self.retention_policy_drift()?);
             policy_drift.sort();
         }
 
@@ -16750,6 +16762,9 @@ mod tests {
         // verifies and names it, everything else survives, chain green.
         let sweep = s.retention_sweep(false).unwrap();
         assert_eq!(sweep.destroyed, 1);
+        // A clean vault sweeps clean (O206): nothing unverifiable, withheld
+        // or drifted, so `ok` holds.
+        assert!(dry.ok && sweep.ok, "{dry:?} {sweep:?}");
         let att = sweep.attestation.expect("a destroying sweep attests");
         assert_eq!(
             s.verify_forget_attestation(&att).unwrap(),

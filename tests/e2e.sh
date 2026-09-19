@@ -1558,6 +1558,67 @@ else
   echo "FAIL  O224: /v1 refuses the allow"; echo "$O224_VA" | sed 's/^/      /'; FAIL=$((FAIL+1))
 fi
 
+# ── ROADMAP O206: a retention sweep reads the COVERED scope ─────────────────
+# A sweep took its candidates from the clear `wing`/`room` mirror, so an
+# offline flip of the mirror moved a drawer OUT of its policy's scope: the
+# sweep destroyed the rest and exited 0, and the flipped drawer stayed. The
+# fixture re-dates two drawers through export and import (only an import may
+# carry an older covered `filed_at`), then flips their clear ROOM with a
+# same-length byte edit whose lookbehind leaves the covered `"room":"…"`
+# inside `meta_json` alone. The flip lands BEFORE the policy is declared, so
+# no policy row or audit label carries the name the edit rewrites.
+O206_SRC="$(mktemp -d)"; O206_HOME="$(mktemp -d)"
+o206() { env UNDERCROFT_HOME="$O206_HOME" "$BIN" "$@"; }
+UNDERCROFT_HOME="$O206_SRC" "$BIN" init >/dev/null 2>&1
+UNDERCROFT_HOME="$O206_SRC" "$BIN" remember "the lock keeper logs the barges at noon" \
+  --wing canal --room zqlocks >/dev/null 2>&1
+UNDERCROFT_HOME="$O206_SRC" "$BIN" remember "the towpath floods every march" \
+  --wing canal --room zqlocks >/dev/null 2>&1
+UNDERCROFT_HOME="$O206_SRC" "$BIN" remember "the mill race was dredged in june" \
+  --wing mill --room race >/dev/null 2>&1
+O206_EXPORT="$(mktemp)"
+UNDERCROFT_HOME="$O206_SRC" "$BIN" export | grep -F '"drawer"' \
+  | sed 's/"filed_at":"[^"]*"/"filed_at":"2020-01-01T00:00:00Z"/' > "$O206_EXPORT"
+o206 init >/dev/null 2>&1
+o206 import "$O206_EXPORT" >/dev/null 2>&1
+O206_DB="$O206_HOME/vaults/default/vault.db"
+O206_BEFORE="$(md5sum "$O206_DB" | cut -d' ' -f1)"
+perl -0777 -pi -e 's/(?<!"room":")zqlocks/zqlockz/g' "$O206_DB"
+O206_V="$(o206 verify 2>&1)"
+if [ "$O206_BEFORE" != "$(md5sum "$O206_DB" | cut -d' ' -f1)" ] \
+   && [ "$(grep -cF 'column room="zqlockz" but the covered meta says "zqlocks"' <<<"$O206_V")" -eq 2 ] \
+   && grep -qE 'hmac failures:[[:space:]]+0' <<<"$O206_V"; then
+  echo "ok    O206: premise — both clear rooms flipped, both tags intact"; PASS=$((PASS+1))
+else
+  echo "FAIL  O206: premise — both clear rooms flipped, both tags intact"
+  echo "$O206_V" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+o206 retention set canal --room zqlocks --days 30 >/dev/null 2>&1
+check "O206: a dry sweep counts the flipped drawers" 2 "canal/zqlocks (> 30 day(s)): 2 expired" -- \
+  env UNDERCROFT_HOME="$O206_HOME" "$BIN" retention sweep --dry-run
+check "O206: and names the drift before destroying" 2 "MIRROR: " -- \
+  env UNDERCROFT_HOME="$O206_HOME" "$BIN" retention sweep --dry-run
+# The destroying sweep through /v1: 200, the receipt, and `ok:false`.
+UNDERCROFT_HOME="$O206_HOME" "$BIN" serve-http --host 127.0.0.1 --port 18882 >/dev/null 2>&1 &
+O206_PID=$!
+for _ in $(seq 1 40); do curl -sf http://127.0.0.1:18882/healthz >/dev/null 2>&1 && break; sleep 0.25; done
+O206_S="$(curl -s -w '\n%{http_code}' -X POST http://127.0.0.1:18882/v1/vaults/default/retention/sweep \
+  -d '{"dry_run":false}')"
+kill "$O206_PID" 2>/dev/null; wait "$O206_PID" 2>/dev/null
+if [ "$(tail -1 <<<"$O206_S")" = 200 ] && grep -qF '"ok":false' <<<"$O206_S" \
+   && grep -qF '"destroyed":2' <<<"$O206_S" && grep -qF '"attestation":{' <<<"$O206_S" \
+   && grep -qF 'column room=\"zqlockz\"' <<<"$O206_S"; then
+  echo "ok    O206: /v1 destroys the flipped drawers, 200 + ok:false + the receipt"; PASS=$((PASS+1))
+else
+  echo "FAIL  O206: /v1 destroys the flipped drawers"; echo "$O206_S" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+check "O206: nothing drifted is left" 0 "VERIFY OK" -- \
+  env UNDERCROFT_HOME="$O206_HOME" "$BIN" verify
+check "O206: the next sweep is clean" 0 "Destroyed: 0 drawer(s)." -- \
+  env UNDERCROFT_HOME="$O206_HOME" "$BIN" retention sweep
+check "O206: the drawer no policy covers survives" 0 "mill" -- \
+  env UNDERCROFT_HOME="$O206_HOME" "$BIN" drawer list
+
 EXPORT_FILE="$(mktemp)"
 "$BIN" export > "$EXPORT_FILE"
 IMPORT_HOME="$(mktemp -d)"
