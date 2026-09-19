@@ -1030,6 +1030,136 @@ fn a_forged_fact_receipt_fails_the_cli_with_the_integrity_exit_code() {
         .stdout(predicate::str::contains("1 tampered"));
 }
 
+/// A stub Qdrant on loopback — the untrusted mirror of ROADMAP O186 — that
+/// answers the collection probe, and every search with `ids` in that order,
+/// whatever it was asked for.
+fn stub_qdrant(ids: Vec<String>) -> (String, std::sync::Arc<tiny_http::Server>) {
+    let server = std::sync::Arc::new(tiny_http::Server::http("127.0.0.1:0").unwrap());
+    let port = server.server_addr().to_ip().unwrap().port();
+    let s2 = server.clone();
+    std::thread::spawn(move || {
+        for mut req in s2.incoming_requests() {
+            // Read the body first (ROADMAP O114, O184's flake).
+            let _ = std::io::Read::read_to_end(req.as_reader(), &mut Vec::new());
+            let body = if req.url().contains("/points/search") {
+                let hits: Vec<_> = ids
+                    .iter()
+                    .map(|id| serde_json::json!({ "payload": { "record_id": id }, "score": 0.9 }))
+                    .collect();
+                serde_json::json!({ "result": hits })
+            } else {
+                serde_json::json!({ "result": { "status": "green" } })
+            };
+            let _ = req.respond(
+                tiny_http::Response::from_string(body.to_string()).with_header(
+                    tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
+                        .unwrap(),
+                ),
+            );
+        }
+    });
+    (format!("http://127.0.0.1:{port}"), server)
+}
+
+/// **`search --backend` through a mirror that repeats ids, or floods more
+/// than it was asked for, prints each drawer once and hydrates nothing past
+/// the request** (ROADMAP O186), on the real binary against a loopback stub.
+/// The flood arm is observed through relevance: twenty unrelated drawers
+/// first, the matching ones after, and `-n 2` asks for twenty.
+///
+/// Counterfactual, `a9ce6f0`: the repeat arm prints each drawer twice or
+/// more, and the flood arm finds the matching drawers.
+#[test]
+fn search_through_a_mirror_that_repeats_or_floods_ids_prints_each_drawer_once() {
+    let home = TempDir::new().unwrap();
+    cmd(&home).args(["init"]).assert().success();
+    for text in [
+        "the turbine inspection is on tuesday",
+        "the turbine blades were replaced",
+    ] {
+        cmd(&home)
+            .args(["remember", text, "--wing", "notes"])
+            .assert()
+            .success();
+    }
+    for i in 0..20 {
+        cmd(&home)
+            .args([
+                "remember",
+                &format!("a quiet note about gardening, number {i}"),
+                "--wing",
+                "notes",
+            ])
+            .assert()
+            .success();
+    }
+    let printed = |out: &str| -> Vec<String> {
+        out.split("   id ")
+            .skip(1)
+            .filter_map(|rest| rest.split_whitespace().next().map(str::to_string))
+            .collect()
+    };
+    let hot = printed(&search_out(&home, &["turbine"]));
+    assert_eq!(hot.len(), 2, "premise: two matching drawers, found locally");
+    let listed = String::from_utf8(
+        cmd(&home)
+            .args(["drawer", "list", "--wing", "notes", "--limit", "50"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone(),
+    )
+    .unwrap();
+    let unrelated: Vec<String> = listed
+        .lines()
+        .filter_map(|l| l.split_whitespace().next())
+        .filter(|id| id.len() == 32 && !hot.iter().any(|h| h == id))
+        .map(str::to_string)
+        .collect();
+    assert_eq!(unrelated.len(), 20, "premise: twenty unrelated drawers");
+    let through = |ids: Vec<String>, n: &str| -> Vec<String> {
+        let (url, _srv) = stub_qdrant(ids);
+        let mut c = cmd(&home);
+        c.env("UNDERCROFT_QDRANT_URL", url);
+        let out = c
+            .args(["search", "turbine", "--backend", "qdrant", "-n", n])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        printed(&String::from_utf8(out).unwrap())
+    };
+    let repeated = through(
+        vec![
+            hot[0].clone(),
+            hot[0].clone(),
+            hot[1].clone(),
+            hot[1].clone(),
+            hot[0].clone(),
+        ],
+        "10",
+    );
+    let mut sorted = repeated.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(repeated.len(), 2, "each drawer once: {repeated:?}");
+    assert_eq!(sorted.len(), 2, "both drawers: {repeated:?}");
+    let first: Vec<String> = hot.iter().chain(unrelated.iter()).cloned().collect();
+    assert_eq!(
+        through(first, "2").len(),
+        2,
+        "premise: offered first, the matches are found"
+    );
+    let last: Vec<String> = unrelated.iter().chain(hot.iter()).cloned().collect();
+    let flooded = through(last, "2");
+    assert!(
+        flooded.is_empty(),
+        "ids past the twenty asked for were hydrated: {flooded:?}"
+    );
+}
+
 /// A stub LLM on loopback answering every chat request with one canned
 /// triple, in Ollama's response shape. Loopback because the transport policy
 /// refuses cleartext anywhere else; the drawer plaintext really reaches it.

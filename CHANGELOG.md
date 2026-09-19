@@ -23,6 +23,16 @@ record naming a row awaiting review, and keeps each version of text under
 review. An operator's export is not refused for carrying queue rows, as a
 tenant's is: restoring a vault restores its queue.
 
+### a remote mirror that repeats ids, or floods more than it was asked for, gets one hit per drawer (O186)
+
+`search --backend` hydrated every candidate a mirror returned, with no seen-set
+and no bound. Every one was re-verified, so neither could forge a hit, but an
+id the mirror answered twice came back as two hits for one drawer — filling
+the page with it — and every id past the request was verified and decrypted
+for a page that could not use it. A repeated id is now dropped before
+hydration, first-seen order kept, and hydration stops at the number of
+distinct ids the mirror was asked for.
+
 ### an allow no longer replaces or re-creates what the screen never saw (O224)
 
 `admission allow` re-filed a queued text at its drawer's id with a write that
