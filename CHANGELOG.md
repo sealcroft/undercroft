@@ -23,6 +23,62 @@ record naming a row awaiting review, and keeps each version of text under
 review. An operator's export is not refused for carrying queue rows, as a
 tenant's is: restoring a vault restores its queue.
 
+### a key rotation refuses a vault it would launder, instead of turning detected tampering into authentic data (O232)
+
+`rotate_keys` recomputed every tag from the row's current columns under the
+next key and re-folded the chain over whatever the audit table held, and
+neither `vault rotate` nor `POST …/rotate` ran `verify` first. So everything
+`verify` reported came out of a rotation authentic, with the evidence gone.
+Measured before the fix: a `quarantined` wing flipped to `trusted` in the clear
+column read `trusted` with `VERIFY OK`; an edited drawer `meta_json`, a deleted
+audit row (`audit chain: BROKEN` → `ok`), an edited content column on an
+hmac-only vault (whose forged text `search` then returned), and a quarantined
+drawer's edited wing (whose injection text `search` then returned) all read
+`VERIFY OK` after `vault rotate`.
+
+A rotation now runs one `verify` inside the same `BEGIN IMMEDIATE` as its reads
+and writes, and refuses — exit 2 on the CLI, 409 with `class: "integrity"` on
+`/v1` — on what it would launder: a record HMAC that fails, a broken chain, a
+tampered supersession or fact receipt, or a policy finding. It does not refuse
+on mirror drift or orphan labels, which it leaves exactly as detectable. The
+message lists up to ten findings and the remedy for each kind; nothing is
+re-tagged, no manifest is staged, and a guard rolls the transaction back so a
+long-lived `/v1` handle stays writable. The refusal is a new variant in the
+integrity family, `StoreError::IntegrityFinding`, because `Integrity`'s text
+says "HMAC mismatch" and a broken chain is not one (the older sites are O235).
+The admin console shows the refusal in its rotate report. **Residual, stated**:
+whatever was tampered when a rotation by an earlier binary ran is authentic now
+— the old key was the only witness. Ruled with O230 by three lenses and a
+refuter.
+
+### an older policy row written back offline no longer passes `verify` or governs the sweep and the trust floor (O230)
+
+A `retention_policy` or `wing_trust` row was checked for a tag the current key
+recomputes and for a chain record naming it — and a row copied out of the file
+earlier and written back satisfied both. Measured: a 30-day retention row
+replayed over a 365-day one listed 30 days with `VERIFY OK`, so a sweep would
+destroy what the current policy keeps; a `trusted` row replayed over
+`quarantined` lifted the floor with `VERIFY OK`.
+
+A policy row must now be the one its NEWEST chain record assigned — its tag
+equal to that record's, the row's own tag when it was written — whenever that
+record is newer than the last rotation; a retention row present after a newer
+clear is a cleared policy written back. This is the comparison O94 dropped
+because it alarmed on every rotated vault; bounded by the rotation it no longer
+does, and since O232 every rotation checks before it re-tags. One decision,
+`retention::policy_finding`, serves `verify`, the trust floor and the sweep, on
+indexed equality and range probes of `record_id` that replace a
+case-insensitive `LIKE`. `wing_trusts()` refuses a replayed row and — closing
+O94's read-path half — a row deleted behind the store, so a floored search,
+`recent`, `list_drawers` and `trust list` refuse instead of serving with the
+floor lifted; `retention_policies()` refuses a replayed row, so the sweep and
+`retention list` refuse. A deleted retention row stays report-only. The way out
+is to re-declare the policy. **Stated costs**, pinned by a test: an offline
+writer who also relabels an audit row hides a replay, because `record_id` is
+outside the chain hash (O233); and a row whose newest record predates the last
+rotation is not compared, which covers anything an earlier binary's rotation
+laundered.
+
 ### a retention sweep reads each drawer's scope from its covered meta, so a flipped mirror no longer hides a drawer from its policy (O206)
 
 A sweep took its candidates from the clear `wing`/`room` mirror columns and

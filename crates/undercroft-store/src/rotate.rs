@@ -72,6 +72,66 @@ pub struct RotationReport {
     pub retention_policies: usize,
 }
 
+/// The rotation's one `BEGIN IMMEDIATE`, from the pre-rotation check to the
+/// commit (ROADMAP O232). Rolls back on every exit that did not commit —
+/// an early `?`, the refusal, a panic — because a long-lived `/v1` handle
+/// that kept a transaction open would fail or lose every later write.
+struct RotationTx<'a> {
+    conn: &'a rusqlite::Connection,
+    committed: bool,
+}
+
+impl<'a> RotationTx<'a> {
+    fn begin(conn: &'a rusqlite::Connection) -> Result<Self, StoreError> {
+        conn.execute_batch("BEGIN IMMEDIATE")?;
+        Ok(Self {
+            conn,
+            committed: false,
+        })
+    }
+
+    fn commit(mut self) -> Result<(), StoreError> {
+        self.conn.execute_batch("COMMIT")?;
+        self.committed = true;
+        Ok(())
+    }
+}
+
+impl Drop for RotationTx<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            // Nothing to report from here: the caller already has the error
+            // that made this rollback necessary.
+            let _ = self.conn.execute_batch("ROLLBACK");
+        }
+    }
+}
+
+/// What a refused rotation says (ROADMAP O232): the findings it would have
+/// laundered, up to ten, and what to do about each kind.
+fn rotation_refusal(blockers: &[String]) -> String {
+    let shown: String = blockers
+        .iter()
+        .take(10)
+        .map(|b| format!("\n  {b}"))
+        .collect();
+    let more = match blockers.len().saturating_sub(10) {
+        0 => String::new(),
+        n => format!("\n  … and {n} more"),
+    };
+    format!(
+        "key rotation refused: {} finding(s) that a rotation would re-tag into authentic \
+         data under the new key, destroying the evidence `undercroft verify` reports:\
+         {shown}{more}\n\
+         Nothing was re-tagged. Run `undercroft verify`, then: for a record whose HMAC \
+         fails or a receipt that does not verify, restore it from a backup that \
+         verifies or delete it; for a broken audit chain, restore a backup that \
+         verifies; for a policy finding, re-declare the policy (`trust set`, \
+         `retention set` or `retention clear`).",
+        blockers.len()
+    )
+}
+
 impl VaultStore {
     /// Rotate this vault onto `next`'s keys (obtain `next` from
     /// [`undercroft_vault::VaultManager::rotation_candidate`]). On return the
@@ -85,6 +145,23 @@ impl VaultStore {
                 next.id(),
                 self.vault.id()
             )));
+        }
+        // **ONE transaction from the check to the commit (ROADMAP O232).** A
+        // rotation recomputes every tag from the row's CURRENT columns under
+        // the next key and re-folds the chain over whatever `audit` holds, so
+        // anything `verify` would report — a tag that fails, a broken chain,
+        // a forged receipt, a replayed or deleted policy row — came out of it
+        // authentic, and the evidence was gone. Measured before this: a
+        // quarantined wing flipped to `trusted`, an edited drawer and a
+        // deleted audit row all read `VERIFY OK` after `vault rotate`. So the
+        // vault is verified first, and inside the SAME `BEGIN IMMEDIATE` as
+        // the reads and writes below, so the bytes checked are the bytes
+        // re-tagged; the guard rolls back on every exit that does not commit,
+        // which a long-lived `/v1` handle needs as much as the check.
+        let rotation = RotationTx::begin(&self.conn)?;
+        let blockers = self.verify()?.rotation_blockers();
+        if !blockers.is_empty() {
+            return Err(StoreError::IntegrityFinding(rotation_refusal(&blockers)));
         }
         // Make sure every derived table exists so the sweeps below see them.
         self.late_schema()?;
@@ -670,9 +747,12 @@ impl VaultStore {
         let writes = writes + 1;
         next.save_manifest_pending(&head, writes)?;
 
-        // ---- Phase 3: one transaction applies everything ----
+        // ---- Phase 3: the one transaction applies everything ----
+        // It was opened above, before the check (O232); these statements
+        // run inside it, and `commit` below is the only way it ends
+        // successfully.
         {
-            let tx = self.conn.transaction()?;
+            let tx = &self.conn;
             {
                 let mut up = tx.prepare(
                     "UPDATE drawers SET content = ?2, embedding = ?3, tag = ?4, fp = ?5, \
@@ -770,8 +850,8 @@ impl VaultStore {
                  ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 params![next.keycheck_hex()],
             )?;
-            tx.commit()?;
         }
+        rotation.commit()?;
 
         // ---- Phase 4: promote and adopt ----
         next.promote_manifest()?;
@@ -2180,5 +2260,97 @@ mod tests {
         ));
         assert_eq!(store.admission_allow(&queued[0].1).unwrap(), queued[0].0);
         assert!(store.verify().unwrap().ok());
+    }
+
+    /// **A key rotation must never turn detected tampering into authentic
+    /// data** (ROADMAP O232). `rotate_keys` recomputed every tag from the
+    /// row's CURRENT columns under the next key, so a flipped trust class and
+    /// an edited covered `meta_json` — both of which `verify` reported, and
+    /// the first of which the trust floor refused — came out of the rotation
+    /// validly tagged, with `verify` green and a quarantined wing read as
+    /// `trusted`. Ruled: the rotation REFUSES in the integrity family, re-tags
+    /// nothing, stages no manifest, leaves the handle writable, and the
+    /// tampering stays reported and the floor stays refused.
+    #[test]
+    fn a_rotation_never_launders_a_tampered_row() {
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let vault = mgr.create("r", SecurityLevel::Sealed).unwrap();
+        let mut store = VaultStore::open(vault).unwrap();
+        let d = drawer("the ferry leaves at six", 0);
+        store.upsert(&d).unwrap();
+        store.set_wing_trust("secret", "quarantined").unwrap();
+        assert!(
+            store.verify().unwrap().ok(),
+            "premise: clean before tampering"
+        );
+        store
+            .conn
+            .execute("UPDATE wing_trust SET trust = 'trusted'", [])
+            .unwrap();
+        store
+            .conn
+            .execute(
+                "UPDATE drawers SET meta_json = replace(meta_json, '\"added_by\":\"t\"', \
+                 '\"added_by\":\"u\"')",
+                [],
+            )
+            .unwrap();
+        let before = store.verify().unwrap();
+        assert!(
+            before.bad_records.contains(&d.id) && !before.policy_drift.is_empty(),
+            "premise: both tampers are detected before the rotation: {before:?}"
+        );
+        assert!(
+            matches!(store.wing_trusts(), Err(StoreError::Integrity(_))),
+            "premise: the floor refuses the flipped row"
+        );
+
+        let tags = |s: &VaultStore| -> Vec<Vec<u8>> {
+            let mut stmt = s
+                .conn
+                .prepare(
+                    "SELECT tag FROM drawers UNION ALL SELECT tag FROM wing_trust \
+                     UNION ALL SELECT tag FROM audit",
+                )
+                .unwrap();
+            stmt.query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        };
+        let tags_before = tags(&store);
+
+        let candidate = mgr.rotation_candidate("r").unwrap();
+        let err = store
+            .rotate_keys(candidate)
+            .expect_err("a rotation over detected tampering must refuse");
+        assert!(
+            matches!(&err, StoreError::IntegrityFinding(m)
+                if m.contains("key rotation refused") && m.contains(&d.id)
+                    && m.contains("trust/secret")),
+            "the refusal is an integrity verdict naming the findings: {err}"
+        );
+        assert_eq!(tags(&store), tags_before, "nothing was re-tagged");
+        assert!(
+            !dir.path().join("vaults/r/vault.json.next").exists(),
+            "a refused rotation stages no manifest"
+        );
+        // The guard rolled the transaction back: the handle still writes.
+        store.set_wing_trust("other", "trusted").unwrap();
+
+        let after = store.verify().unwrap();
+        assert!(
+            after.bad_records.contains(&d.id),
+            "the edited drawer must still fail its tag after a rotation: {after:?}"
+        );
+        assert!(
+            !after.policy_drift.is_empty(),
+            "the flipped trust row must still be drift after a rotation: {after:?}"
+        );
+        assert!(
+            matches!(store.wing_trusts(), Err(StoreError::Integrity(_))),
+            "and the floor must still refuse it: a rotation lifted it to `trusted`"
+        );
     }
 }

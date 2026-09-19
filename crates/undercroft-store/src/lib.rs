@@ -1510,6 +1510,15 @@ pub enum StoreError {
     /// A record's HMAC did not verify — the integrity verdict, carrying the record's id.
     #[error("integrity failure on record {0} — HMAC mismatch")]
     Integrity(String),
+    /// An integrity verdict that is NOT a failed HMAC — a policy row that is
+    /// not its newest assignment, a policy row deleted behind the store, or a
+    /// rotation refused over findings it would launder (ROADMAP O230, O232).
+    /// The same family as [`Self::Integrity`] — exit 2 on the CLI, 409 with
+    /// `class: "integrity"` on `/v1` — carrying a message that states what was
+    /// found, because `Integrity`'s says "HMAC mismatch" and these compared no
+    /// HMAC (the older sites that share that problem are ROADMAP O235's).
+    #[error("integrity verdict: {0}")]
+    IntegrityFinding(String),
     /// The vault's recorded vector space is not this process's embedder; searching across the swap would degrade recall silently.
     #[error(
         "vault was embedded with {stored:?} ({stored_dim}d) but the current embedder is \
@@ -2647,11 +2656,18 @@ pub struct VerifyReport {
     /// `retention-clear/` record for the same key is NEWER than the
     /// `retention/` one, and a finding otherwise.
     ///
-    /// Both directions are compared: a row whose tag no longer matches the
-    /// chain's, and a row that exists with no assignment behind it at all.
-    /// Reported separately from `bad_records` because no drawer record is
-    /// corrupt — this is a policy claim that stopped matching its own audit
-    /// trail.
+    /// Both directions are compared, through the one decision
+    /// `retention::policy_finding` the readers share (ROADMAP O230): a row
+    /// whose tag fails under the current key; a row with no assignment behind
+    /// it; a row that verifies and is still not the one its NEWEST chain
+    /// record assigned — an older row written back — whenever that record is
+    /// newer than the last rotation; a retention row present after a newer
+    /// clear; and an assignment whose row is gone. This line said "a row whose
+    /// tag no longer matches the chain's" from O94 on, while O94 had removed
+    /// exactly that comparison — it is back, bounded by the rotation, so it no
+    /// longer alarms on a rotated vault. Reported separately from
+    /// `bad_records` because no drawer record is corrupt — this is a policy
+    /// claim that stopped matching its own audit trail.
     pub policy_drift: Vec<String>,
 }
 
@@ -2690,6 +2706,61 @@ impl VerifyReport {
             .iter()
             .filter(|r| r.verdict == crate::kg::ReceiptVerdict::Tampered)
             .count()
+    }
+
+    /// What a key rotation would LAUNDER — one line per finding (ROADMAP
+    /// O232).
+    ///
+    /// `rotate_keys` recomputes every tag from the row's current columns under
+    /// the next key and re-folds the chain over whatever `audit` holds, so a
+    /// finding in a leg it rewrites comes out of the rotation authentic and
+    /// the evidence is gone: record HMACs (drawers, facts, entities, tunnels,
+    /// and on an hmac-only vault the content itself), the chain, both receipt
+    /// kinds, and the policy rows. Mirror drift and orphan labels are NOT
+    /// here: a rotation touches neither, so both stay exactly as detectable,
+    /// and an orphan label has no remedy — the audit trail is append-only —
+    /// so refusing on it would block rotation for good.
+    ///
+    /// **Destructured with no `..`**: a new leg does not compile until
+    /// someone rules whether a rotation rewrites it.
+    pub fn rotation_blockers(&self) -> Vec<String> {
+        let VerifyReport {
+            records_checked: _,
+            bad_records,
+            chain_ok,
+            supersessions,
+            orphan_labels: _,
+            mirror_drift: _,
+            receipts,
+            policy_drift,
+        } = self;
+        let tampered = crate::kg::ReceiptVerdict::Tampered;
+        let mut out: Vec<String> = bad_records
+            .iter()
+            .map(|id| format!("record {id}: its HMAC does not verify"))
+            .collect();
+        if !chain_ok {
+            out.push("audit chain: replaying it does not reproduce the committed head".to_string());
+        }
+        out.extend(
+            supersessions
+                .iter()
+                .filter(|l| l.verdict == tampered)
+                .map(|l| {
+                    format!(
+                        "supersession {} -> {}: its receipt does not verify",
+                        l.drawer_id, l.supersedes
+                    )
+                }),
+        );
+        out.extend(receipts.iter().filter(|r| r.verdict == tampered).map(|r| {
+            format!(
+                "fact {} <- {}: its receipt does not verify",
+                r.triple_id, r.source_drawer_id
+            )
+        }));
+        out.extend(policy_drift.iter().map(|p| format!("policy {p}")));
+        out
     }
 }
 
@@ -8261,42 +8332,6 @@ impl VaultStore {
         Ok(())
     }
 
-    /// Each policy record's newest position in the chain, keyed by record id
-    /// (`trust/…`, `retention/…`, `retention-clear/…`) — the one ordered pass
-    /// over `audit` that the policy-drift leg reads (ROADMAP O94), shared by
-    /// `verify` and the retention sweep.
-    ///
-    /// **Seq only, and NOT the tag — the tag cannot survive a rotation and
-    /// comparing it made this leg alarm on every rotated vault.** Rotation
-    /// re-tags `wing_trust`/`retention_policy` with the new keys and
-    /// PRESERVES audit tags verbatim as historical evidence (the same
-    /// asymmetry O13 records for forgetting attestations: a keyed replay has
-    /// a shorter lifetime than the document it checks). So row-tag ==
-    /// chain-tag holds only until the first rotation, and asserting it is a
-    /// false alarm on the routine path — which is exactly how a leg gets
-    /// ignored and then removed. What DOES survive is what the leg uses: the
-    /// row's own tag recomputed under the CURRENT key (rotation re-tags, so a
-    /// flip still fails), and the EXISTENCE of the record id (rotation
-    /// preserves those verbatim, so a deletion still shows).
-    pub(crate) fn policy_chain_latest(
-        &self,
-    ) -> Result<std::collections::HashMap<String, i64>, StoreError> {
-        let mut latest = std::collections::HashMap::new();
-        let mut stmt = self.conn.prepare(concat!(
-            "SELECT seq, record_id FROM audit ",
-            "WHERE record_id LIKE 'trust/%' ",
-            "OR record_id LIKE 'retention/%' ",
-            "OR record_id LIKE 'retention-clear/%' ",
-            "ORDER BY seq",
-        ))?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
-        for row in rows {
-            let (seq, id) = row?;
-            latest.insert(id, seq);
-        }
-        Ok(latest)
-    }
-
     /// Walk every record verifying its HMAC, replay the audit chain
     /// against the manifest head, check every drawer supersession receipt
     /// and every graph fact receipt, resolve every graph audit label,
@@ -8513,59 +8548,14 @@ impl VaultStore {
 
         // ── The seventh leg: declared policy vs the chain that recorded it.
         //
-        // ONE ordered pass over `audit` and nothing per-row, for the reason
-        // the comment above gives: a correlated `MAX(seq)` subquery would be
-        // a round trip per policy (indexed, since `idx_audit_record_id`
-        // exists, but still N of them), and this is one more ordered pass
-        // over that table rather than the Nth.
-        let mut policy_drift: Vec<String> = Vec::new();
-        {
-            let latest = self.policy_chain_latest()?;
-
-            // Trust. Every row must recompute (a flip moves the canonical,
-            // not the tag) AND must match the assignment that recorded it.
-            let mut seen_trust: Vec<String> = Vec::new();
-            {
-                let mut stmt = self.conn.prepare(
-                    "SELECT wing, trust, tag, assigned_at FROM wing_trust ORDER BY wing",
-                )?;
-                let rows: Vec<(String, String, Vec<u8>, String)> = stmt
-                    .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
-                    .collect::<Result<_, _>>()?;
-                for (wing, trust, tag, at) in rows {
-                    let key = format!("trust/{wing}");
-                    seen_trust.push(key.clone());
-                    if self
-                        .vault
-                        .verify_tag(
-                            crate::manage::wing_trust_canonical(&wing, &trust, &at).as_slice(),
-                            &tag,
-                        )
-                        .is_err()
-                    {
-                        policy_drift.push(format!("{key}: row does not verify"));
-                        continue;
-                    }
-                    if !latest.contains_key(&key) {
-                        policy_drift.push(format!("{key}: assigned in no chain record"));
-                    }
-                }
-            }
-            // ...and every assignment must still have its row. No
-            // `DELETE FROM wing_trust` exists in this crate, so absence here
-            // has no legitimate path.
-            for key in latest.keys() {
-                if key.starts_with("trust/") && !seen_trust.contains(key) {
-                    policy_drift.push(format!("{key}: assigned in the chain, row is gone"));
-                }
-            }
-
-            // Retention. Same shape, plus the one legitimate absence: a
-            // `retention-clear/` record NEWER than the assignment. One
-            // implementation, which the retention sweep calls too (O206).
-            policy_drift.extend(self.retention_policy_drift()?);
-            policy_drift.sort();
-        }
+        // Both halves are the ONE decision `retention::policy_finding` makes,
+        // on the one gatherer the readers use too (ROADMAP O230) — so
+        // `verify`, the trust floor and the retention sweep cannot disagree
+        // about a policy row. Every lookup is an indexed equality or range
+        // on `record_id`, and there is one per declared key.
+        let mut policy_drift = self.trust_policy_drift()?;
+        policy_drift.extend(self.retention_policy_drift()?);
+        policy_drift.sort();
 
         Ok(VerifyReport {
             records_checked: checked,

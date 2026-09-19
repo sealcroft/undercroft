@@ -417,7 +417,7 @@ enclave execution) compose with undercroft but are not provided by it.
 | Record integrity | HMAC-SHA256 per record, verified before every return | A2 forgery, A5 result forgery |
 | Audit chain | hash chain advanced in the data transaction; MAC'd manifest anchor; open-time reconciliation (crash ≠ rollback) | A2 rollback/truncation, A7 forensics |
 | Durability pinning | WAL + `synchronous=FULL`; fsync'd atomic manifest rename; fsync'd key files | keeps A2 detection sound under power loss |
-| Key rotation | one-transaction byte-exact reseal of every artifact + re-tag of every HMAC'd table + chain re-key; two-phase manifest swap, crash-safe; the rotation appends its own chain record | key-compromise recovery; A1 going forward |
+| Key rotation | one-transaction byte-exact reseal of every artifact + re-tag of every HMAC'd table + chain re-key; two-phase manifest swap, crash-safe; the rotation appends its own chain record, and refuses a vault whose tags, chain, receipts or policy rows `verify` fails, rather than re-key tampering into authentic data (O232) | key-compromise recovery; A1 going forward |
 | Export bundles | hybrid X25519 + ML-KEM-768 ephemeral-static → HKDF → XChaCha20-Poly1305; header + KEM ct as AAD (v2; legacy X25519 v1 still opens) | A1 for backups in transit/at rest, incl. harvest-now-decrypt-later |
 | Server auth | bearer + per-vault HMAC assertion (vault id in the MAC, constant-time, bare 401s); `--read-only` decided once in front of dispatch, failing closed | A4 |
 | Write-path admission | deterministic tier-1 screen at the one write choke point (a required `Screen` argument every caller must state); flagged writes diverted to the retrieval-excluded quarantine wing; allow/deny chain-audited | A7 ingest |
@@ -474,6 +474,28 @@ historical evidence), and a post-rotation arm that calls every reader whose
 contract is "tag-verified on the way out" and requires it to answer
 cleanly. The second exists because the first cannot see the failure: a row
 whose tag was not re-keyed is byte-identical and simply stops verifying.
+
+**And rotation must never re-key a tag it has not checked (ROADMAP O232).**
+Re-keying recomputes each tag from the row's CURRENT columns and re-folds the
+chain over the audit table as found, so until 1.6.0 anything an offline writer
+had changed — a flipped trust class, an edited drawer, a deleted audit row, an
+hmac-only vault's content — came out of a routine rotation validly tagged,
+with `verify` green and the evidence destroyed. A rotation now runs one
+`verify` inside its own transaction and refuses (an integrity verdict) on a
+tag that fails, a broken chain, a tampered receipt or a policy finding;
+mirror drift and orphan labels, which it does not rewrite, do not block it.
+**Residual, stated**: whatever was tampered when a rotation by an earlier
+binary ran is authentic now, because the old key was the only witness.
+
+**A policy row must also be its key's newest assignment (ROADMAP O230).** An
+older `wing_trust` or `retention_policy` row written back offline verifies
+under the key, so the policy leg compares a row's tag with its newest chain
+record's whenever that record is newer than the last rotation, and the trust
+floor, the sweep and the listings refuse a row that fails the comparison, as
+they refuse a flipped one. Two costs are stated rather than hidden: the
+lookups find records by `record_id`, which the chain does not hash, so an
+offline writer who also relabels an audit row hides a replay (ROADMAP O233);
+and a row whose newest record predates the last rotation is not compared.
 
 The chain also carries what left and what was read. Every export
 appends an `egress/export` record binding the surface, the recipient

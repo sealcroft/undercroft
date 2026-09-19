@@ -75,6 +75,54 @@ or when they could never be presented.
 
 ## 1.6.0 (unreleased)
 
+### `vault rotate` refuses a vault that `verify` would fail on a leg the rotation rewrites (O232)
+
+**Who is affected:** a scheduled `undercroft vault rotate`, a script calling
+`POST /v1/vaults/{id}/rotate`, or the admin console's rotate button, on a vault
+whose database was edited behind the engine.
+
+**Symptom:** exit 2 (CLI) or 409 with `"class": "integrity"` (`/v1`), with
+`integrity verdict: key rotation refused: N finding(s) …` listing up to ten of
+them, where the rotation used to succeed. Nothing is re-tagged.
+
+**Cause:** a rotation recomputed every tag from the row's current columns and
+re-folded the chain over the audit table as it found it, so any tampering
+`verify` reported came out of the rotation authentic, and the evidence was gone.
+It now refuses on a record HMAC that fails, a broken audit chain, a tampered
+supersession or fact receipt, and any policy finding. Mirror drift and orphan
+labels do not block it.
+
+**Fix:** run `undercroft verify` first — it is the detector; `config check`
+cannot see vault state. Then: restore a record that fails its HMAC from a backup
+that verifies, or delete it; restore a backup that verifies for a broken chain;
+re-declare a policy with a finding (`trust set`, `retention set` or `retention
+clear`). **What an earlier rotation already did cannot be undone**: tampering
+present when a rotation by an earlier binary ran is authentic under the current
+key. Re-declare each policy to its intended value, and compare drawers against
+a backup taken before that rotation if you have reason to doubt them.
+
+### a floored search, `trust list`, `retention list` and the sweep refuse a replayed or deleted policy row (O230)
+
+**Who is affected:** a deployment with a trust floor (`UNDERCROFT_TRUST_FLOOR`
+or `min_trust`) or a retention policy, on a vault whose `wing_trust` or
+`retention_policy` table was edited behind the engine.
+
+**Symptom:** these fail with an integrity verdict (exit 2, or 409 `integrity`)
+where they used to answer: a floored `search`, `recent` and `wake-up`, `drawer
+list`, `trust list`, `retention list` and `retention sweep`. `verify` fails
+with `row is not the newest assignment|declaration in the chain`, `row present,
+cleared later in the chain`, or, for trust, `assigned in the chain, row is gone`.
+
+**Cause:** an older, validly tagged policy row written back offline passed every
+check, and a deleted trust row silently lifted the floor. A policy row must now
+be the one its newest chain record assigned, and a trust row whose assignment is
+recorded must exist. A deleted retention row is still reported by `verify` and
+the sweep, and does not stop them.
+
+**Fix:** `undercroft verify` names the policy; re-declare it (`trust set`,
+`retention set`, `retention clear`), which writes a fresh record the row
+matches. `config check` cannot detect this.
+
 ### a retention sweep reads each drawer's scope from its covered meta, and exits 2 when it cannot account for every row (O206)
 
 **Who is affected:** a scheduled `undercroft retention sweep`, a script

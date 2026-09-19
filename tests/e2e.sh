@@ -1619,6 +1619,45 @@ check "O206: the next sweep is clean" 0 "Destroyed: 0 drawer(s)." -- \
 check "O206: the drawer no policy covers survives" 0 "mill" -- \
   env UNDERCROFT_HOME="$O206_HOME" "$BIN" drawer list
 
+# ── ROADMAP O232: a key rotation refuses over detected tampering ────────────
+# A rotation recomputed every tag from the row's CURRENT columns, so a trust
+# class flipped offline — which `verify` reported and the floor refused — came
+# out of `vault rotate` validly tagged, with `verify` green. The flip here is a
+# same-length byte edit of the `trust` column (the value appears nowhere else
+# in the file), on a SECOND vault because the server below serves `default`
+# on `/mcp` too and a co-resident rotation is refused before any check runs.
+O232_HOME="$(mktemp -d)"
+o232() { env UNDERCROFT_HOME="$O232_HOME" "$BIN" "$@"; }
+o232 init >/dev/null 2>&1
+o232 vault create second >/dev/null 2>&1
+o232 remember "the ferry leaves at six" --vault second >/dev/null 2>&1
+o232 trust set zqsecret quarantined --vault second >/dev/null 2>&1
+O232_DB="$O232_HOME/vaults/second/vault.db"
+O232_BEFORE="$(md5sum "$O232_DB" | cut -d' ' -f1)"
+perl -0777 -pi -e 's/quarantined/Quarantined/' "$O232_DB"
+if [ "$O232_BEFORE" != "$(md5sum "$O232_DB" | cut -d' ' -f1)" ]; then
+  echo "ok    O232: premise — the trust column was edited"; PASS=$((PASS+1))
+else
+  echo "FAIL  O232: premise — the trust column was edited"; FAIL=$((FAIL+1))
+fi
+check "O232: premise — verify reports the flip" 2 "trust/zqsecret: row does not verify" -- \
+  env UNDERCROFT_HOME="$O232_HOME" "$BIN" verify --vault second
+check "O232: a rotation over it refuses, exit 2" 2 "key rotation refused" -- \
+  env UNDERCROFT_HOME="$O232_HOME" "$BIN" vault rotate second
+check "O232: and the flip is still reported" 2 "trust/zqsecret: row does not verify" -- \
+  env UNDERCROFT_HOME="$O232_HOME" "$BIN" verify --vault second
+UNDERCROFT_HOME="$O232_HOME" "$BIN" serve-http --host 127.0.0.1 --port 18883 >/dev/null 2>&1 &
+O232_PID=$!
+for _ in $(seq 1 40); do curl -sf http://127.0.0.1:18883/healthz >/dev/null 2>&1 && break; sleep 0.25; done
+O232_R="$(curl -s -w '\n%{http_code}' -X POST http://127.0.0.1:18883/v1/vaults/second/rotate)"
+kill "$O232_PID" 2>/dev/null; wait "$O232_PID" 2>/dev/null
+if [ "$(tail -1 <<<"$O232_R")" = 409 ] && grep -qF '"class":"integrity"' <<<"$O232_R" \
+   && grep -qF 'key rotation refused' <<<"$O232_R"; then
+  echo "ok    O232: /v1 refuses the rotation, 409 class integrity"; PASS=$((PASS+1))
+else
+  echo "FAIL  O232: /v1 refuses the rotation"; echo "$O232_R" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+
 EXPORT_FILE="$(mktemp)"
 "$BIN" export > "$EXPORT_FILE"
 IMPORT_HOME="$(mktemp -d)"

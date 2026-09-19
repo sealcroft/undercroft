@@ -1168,7 +1168,14 @@ async function runRotate() {
       "\nnew chain head: " + r.chain_head + "\n" + (r.note || "");
     toast("rotated " + v);
     loadOverview();
-  } catch (e) { toast("rotate failed — " + e.message, true); }
+  } catch (e) {
+    // A refused rotation is an integrity verdict (ROADMAP O232): the vault
+    // holds findings a rotation would re-tag into authentic data. The
+    // message lists them, so it goes in the report, not only in a toast.
+    $("rotateReport").style.display = "block";
+    $("rotateReport").textContent = "ROTATION REFUSED — nothing was re-tagged\n" + e.message;
+    toast("rotate failed — " + e.message, true);
+  }
 }
 
 async function deleteVault() {

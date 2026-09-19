@@ -1196,7 +1196,23 @@ Consequences that are binding, not advisory:
   declaration refuses to open, read-only open warns and disables),
   in-place key rotation
   (rotate.rs: one-transaction re-seal of every artifact + chain re-key
-  over preserved audit bytes, crash-reconciled at open), bulk ingest
+  over preserved audit bytes, crash-reconciled at open. **It re-keys only
+  what it has checked (O232)**: re-keying recomputes every tag from the
+  row's CURRENT columns, so it turned every tampering `verify` reported —
+  a flipped trust class, an edited drawer, a deleted audit row, an
+  hmac-only vault's content — into authentic data with `verify` green.
+  One `verify()` now runs inside the rotation's own `BEGIN IMMEDIATE`
+  (`RotationTx`, which rolls back on every exit that does not commit)
+  and it refuses on `VerifyReport::rotation_blockers()`, destructured
+  with no `..` so a new leg does not compile unruled, as
+  `StoreError::IntegrityFinding` — the integrity family's variant for a
+  verdict that compared no HMAC. **And a policy row must be its key's
+  newest assignment (O230)**: `retention::policy_finding` is the ONE
+  decision `verify`, `wing_trusts()` and `retention_policies()` share,
+  comparing a row's tag with its newest chain record's above the last
+  `rotate/` record, on indexed `record_id` probes; relabelling an audit
+  row defeats it, because `record_id` is outside the chain hash — O233),
+  bulk ingest
   (`upsert_many`: one transaction + one manifest anchor per batch —
   advisory encode paths must never BEGIN or batching breaks)
 - `crates/undercroft-config` — the declaration resolvers the engine and the
@@ -2144,8 +2160,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (968 run,
-                                      # 4 #[ignore]d = 972 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (977 run,
+                                      # 4 #[ignore]d = 981 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2267,7 +2283,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (569 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (574 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (167 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (157 checks; weaviate
