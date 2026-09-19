@@ -23,15 +23,20 @@
 //!   removes the quarantined copy; `admission deny` deletes it (keyed
 //!   tombstone). Both append a DECISION record to the audit chain with
 //!   the verdict inside the tag's canonical, so the review trail is as
-//!   tamper-evident as the data. A crash between the two steps of an
-//!   allow leaves both copies present and the pending entry intact —
-//!   re-running the allow converges (same deterministic ids), the
-//!   append-only crash posture everywhere else in this store.
+//!   tamper-evident as the data. An allow is three steps — the re-filed
+//!   write, the ruling, the delete — and a crash between them leaves both
+//!   copies present and the pending entry intact: re-running the allow
+//!   converges (same deterministic ids), the append-only crash posture
+//!   everywhere else in this store;
+//! * an allow never replaces or re-creates what the screen never saw
+//!   (ROADMAP O224): the queue row records what its destination held when
+//!   the text was queued ([`QueuedAgainst`]), and the allow is refused when
+//!   the destination has been written or deleted since.
 
 use rusqlite::params;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
-use undercroft_core::Drawer;
+use undercroft_core::{Drawer, QueuedAgainst};
 
 use crate::{chain_append, Namespace, StoreError, VaultStore};
 
@@ -52,7 +57,10 @@ pub struct PendingAdmission {
     pub intended_room: String,
     /// The closed-vocabulary signal codes that tripped the screen, with offsets and never content.
     pub signals: Vec<undercroft_core::admission::AdmissionSignal>,
-    /// When the write was diverted (RFC 3339).
+    /// The drawer's own `filed_at` (RFC 3339) — NOT the time it was
+    /// diverted: an update diversion keeps the updated drawer's original
+    /// filing time, a re-mine carries when its `Drawer` was built, and an
+    /// import carries the payload's. Arrival order is the list's order.
     pub filed_at: String,
     /// The source the write was filed from (`(direct)` for an API save) —
     /// with `chunk_index`, the FILING, so a reviewer can see which rows are
@@ -61,12 +69,145 @@ pub struct PendingAdmission {
     pub source_file: String,
     /// The chunk of that source the write was filed as.
     pub chunk_index: u32,
+    /// The drawer id an `allow` would re-file this text under.
+    pub destination_id: String,
+    /// What that destination holds now, against what it held when this text
+    /// was queued (ROADMAP O224) — whether an `allow` would proceed, before
+    /// anyone rules. Advisory: the allow decides again, inside its write.
+    pub destination: DestinationState,
+}
+
+/// What a queue row's destination holds now, against what the row recorded
+/// when its text was queued (ROADMAP O224). One comparison,
+/// [`VaultStore::destination_state`], answers it for the list, the allow's
+/// door and the write boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DestinationState {
+    /// Nothing held the destination when the text was queued, and nothing
+    /// does now: an allow creates it.
+    Absent,
+    /// The destination still holds what it held when the text was queued:
+    /// an allow replaces it, which is what the text was submitted to do.
+    Unchanged,
+    /// The destination already holds this very text — an allow that was
+    /// interrupted after its write. Re-running it converges.
+    Applied,
+    /// The row records nothing (queued before 1.6.0, restored from an export,
+    /// or its destination was unreadable when queued) and nothing holds the
+    /// destination: an allow creates it, replacing nothing.
+    UnrecordedAbsent,
+    /// The destination has been written since the text was queued — or
+    /// created, where nothing held it then. Refused: allowing would replace
+    /// content the screen never saw.
+    Changed,
+    /// The destination held a drawer when the text was queued and holds
+    /// none now. Refused: allowing would re-create a deleted drawer.
+    Deleted,
+    /// The row records nothing and the destination holds other content.
+    /// Refused: nothing says the text was submitted over what is there now.
+    UnrecordedOccupied,
+    /// The destination fails its integrity check. Refused as an integrity
+    /// verdict: a ruling must not overwrite the only trace of tampering.
+    Unreadable,
+}
+
+impl DestinationState {
+    /// The state's name, as `admission list` and `/v1` spell it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DestinationState::Absent => "absent",
+            DestinationState::Unchanged => "unchanged",
+            DestinationState::Applied => "applied",
+            DestinationState::UnrecordedAbsent => "unrecorded-absent",
+            DestinationState::Changed => "changed",
+            DestinationState::Deleted => "deleted",
+            DestinationState::UnrecordedOccupied => "unrecorded-occupied",
+            DestinationState::Unreadable => "unreadable",
+        }
+    }
+
+    /// Whether an `allow` proceeds from this state.
+    pub fn allows(self) -> bool {
+        matches!(
+            self,
+            DestinationState::Absent
+                | DestinationState::Unchanged
+                | DestinationState::Applied
+                | DestinationState::UnrecordedAbsent
+        )
+    }
+}
+
+/// A queue row's recorded destination state in the form the comparison
+/// takes — `Copy`, so it can travel on [`crate::BypassReason::OperatorRuling`]
+/// to the write boundary, where the authoritative check runs (ROADMAP O224).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Expected {
+    /// The row recorded that nothing held the destination.
+    Absent,
+    /// The row recorded this keyed digest of the destination's content.
+    Held([u8; 32]),
+    /// The row records nothing usable — a legacy row, a replayed one, or an
+    /// unreadable destination at queueing.
+    Unrecorded,
+}
+
+impl Expected {
+    /// The expectation a queue row's recorded field states. A digest that
+    /// does not decode to 32 bytes is not a recorded state, so it reads as
+    /// none — the conservative arm, which proceeds only where nothing would
+    /// be replaced.
+    pub(crate) fn of(recorded: Option<&QueuedAgainst>) -> Self {
+        match recorded {
+            Some(QueuedAgainst::Absent) => Expected::Absent,
+            Some(QueuedAgainst::Held(h)) => hex::decode(h)
+                .ok()
+                .and_then(|b| <[u8; 32]>::try_from(b).ok())
+                .map_or(Expected::Unrecorded, Expected::Held),
+            Some(QueuedAgainst::Unrecorded) | None => Expected::Unrecorded,
+        }
+    }
 }
 
 fn now_rfc3339() -> String {
     OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .expect("rfc3339 now")
+}
+
+/// Why `admission allow` refused queue row `queue_id`, whose destination
+/// `dest` reads `state` (ROADMAP O224) — naming the row, the destination and
+/// the state, saying nothing was changed, and naming the doors that work.
+fn destination_refusal(queue_id: &str, dest: &str, state: DestinationState) -> String {
+    let resave = format!(
+        "To apply this text anyway: read it (`drawer get {queue_id}`), deny this \
+         row, and save the text again (`drawer update {dest} …`, or re-mine its \
+         source) — it is then queued against {dest} as it is now"
+    );
+    match state {
+        DestinationState::Deleted => format!(
+            "{queue_id} cannot be allowed: its destination {dest} has been deleted \
+             since this text was queued, so allowing it would re-create it. \
+             Nothing was changed. To drop this text: `admission deny {queue_id}`. \
+             To keep it: read it (`drawer get {queue_id}`), deny this row, and \
+             save it as a new drawer"
+        ),
+        DestinationState::UnrecordedOccupied => format!(
+            "{queue_id} cannot be allowed: this row records no destination state \
+             (it was queued before 1.6.0, or restored from an export) and its \
+             destination {dest} holds other content, so allowing it could replace \
+             content written after this text was queued. Nothing was changed. To \
+             keep {dest}: `admission deny {queue_id}`. {resave}"
+        ),
+        _ => format!(
+            "{queue_id} cannot be allowed: its destination {dest} has been written \
+             since this text was queued (it reads `{}`), so allowing it would \
+             replace newer content. Nothing was changed. To keep {dest}: \
+             `admission deny {queue_id}`. {resave}",
+            state.as_str()
+        ),
+    }
 }
 
 /// The two ids one declaration files under: the ordinary recipe's, and the
@@ -141,6 +282,16 @@ pub(crate) enum QueueRow {
     Unreadable,
     /// A row whose covered wing is not the reserved one.
     NotPending,
+}
+
+/// The queue slot a diverted drawer lands on ([`VaultStore::queue_slot`]).
+pub(crate) struct Slot {
+    /// The queue id.
+    pub(crate) id: String,
+    /// `Some` when the landing converges onto a pending row holding the same
+    /// text: what that row recorded of its destination, which the landing
+    /// carries verbatim (ROADMAP O224). `None` for a fresh slot.
+    pub(crate) converged: Option<Option<QueuedAgainst>>,
 }
 
 /// A declared supersession link may not name the queue slot the write lands
@@ -600,7 +751,22 @@ impl VaultStore {
                 // may take the text, or whether it already holds a different
                 // text a reviewer has not ruled on — in which case the text
                 // takes its own version slot rather than replacing it.
-                diverted.id = self.queue_slot(&diverted)?;
+                let slot = self.queue_slot(&diverted)?;
+                diverted.id = slot.id;
+                // And what its destination holds, which is the precondition an
+                // allow checks (ROADMAP O224). Always assigned here, so a value
+                // arriving on the candidate never survives — except the replay
+                // marker the import unwrap sets, which only ever narrows what
+                // an allow may do.
+                diverted.meta.queued_against = match slot.converged {
+                    // A convergence CARRIES what the row recorded, a stored
+                    // none included. It is the text the reviewer sees, and so
+                    // is its precondition: a restore of the vault's own backup
+                    // converges every pending row, and recomputing here would
+                    // turn a destination written since into "unchanged".
+                    Some(recorded) => recorded,
+                    None => Some(self.record_destination(drawer, &diverted)?),
+                };
                 refuse_self_supersession_of_slot(drawer, &diverted)?;
                 Ok(Some(diverted))
             }
@@ -624,15 +790,145 @@ impl VaultStore {
     /// "pending" is the COVERED wing — never `fp`, never the clear column.
     /// Metadata is not compared: `filed_at` is stamped at construction and the
     /// signals and `added_by` legitimately differ between re-mines.
-    pub(crate) fn queue_slot(&self, diverted: &Drawer) -> Result<String, StoreError> {
+    ///
+    /// When the slot is a pending row holding this same text, the landing
+    /// CONVERGES, and [`Slot::converged`] carries what that row recorded of
+    /// its destination (ROADMAP O224) — read in the same `get` that judged it.
+    pub(crate) fn queue_slot(&self, diverted: &Drawer) -> Result<Slot, StoreError> {
         let version = self.version_slot(diverted)?;
-        if self.queue_row(&version, &diverted.content)? == QueueRow::SameText {
-            return Ok(version);
+        if let (QueueRow::SameText, recorded) = self.read_queue_row(&version, &diverted.content)? {
+            return Ok(Slot {
+                id: version,
+                converged: Some(recorded),
+            });
         }
         let filing = filing_ids(diverted).quarantine;
-        Ok(match self.queue_row(&filing, &diverted.content)? {
-            QueueRow::DifferentText => version,
-            _ => filing,
+        Ok(match self.read_queue_row(&filing, &diverted.content)? {
+            (QueueRow::DifferentText, _) => Slot {
+                id: version,
+                converged: None,
+            },
+            (QueueRow::SameText, recorded) => Slot {
+                id: filing,
+                converged: Some(recorded),
+            },
+            _ => Slot {
+                id: filing,
+                converged: None,
+            },
+        })
+    }
+
+    /// What `diverted`'s destination holds as its text is queued (ROADMAP
+    /// O224): `filing_ids(diverted).recipe` — the id an allow writes — read
+    /// through the verified `get`. `candidate` is the write as it arrived: a
+    /// queue record replayed by the import unwrap carries
+    /// [`QueuedAgainst::Unrecorded`] and keeps it, because what that record's
+    /// destination held when it was queued elsewhere is unknowable here, and
+    /// reading the destination the restore happens to find would be a guess.
+    pub(crate) fn record_destination(
+        &self,
+        candidate: &Drawer,
+        diverted: &Drawer,
+    ) -> Result<QueuedAgainst, StoreError> {
+        if candidate.meta.queued_against == Some(QueuedAgainst::Unrecorded) {
+            return Ok(QueuedAgainst::Unrecorded);
+        }
+        let dest = filing_ids(diverted).recipe;
+        match self.get(
+            &dest,
+            crate::Read::Internal(crate::InternalRead::WritePathLookup),
+        ) {
+            Ok(None) => Ok(QueuedAgainst::Absent),
+            Ok(Some(held)) => Ok(QueuedAgainst::Held(hex::encode(
+                self.destination_key(&dest, &held.content)?,
+            ))),
+            // A flagged write is never refused over its destination's state;
+            // an unreadable one is recorded as unknown, which an allow treats
+            // conservatively.
+            Err(StoreError::Integrity(_)) | Err(StoreError::CorruptRow { .. }) => {
+                Ok(QueuedAgainst::Unrecorded)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// A diverted batch row whose destination the SAME batch wrote earlier
+    /// (ROADMAP O224). The door read the database, which holds none of the
+    /// batch yet, while `/v1` commits each record before judging the next —
+    /// so a fresh slot records the landing the batch made, as `/v1` would
+    /// have read it. A convergence (it carried) and a replay (it records
+    /// nothing) are left as the door set them.
+    pub(crate) fn record_batch_destination(
+        &self,
+        candidate: &Drawer,
+        queued: &mut Drawer,
+        landed: &std::collections::HashMap<String, String>,
+    ) -> Result<(), StoreError> {
+        let dest = filing_ids(queued).recipe;
+        let Some(content) = landed.get(&dest) else {
+            return Ok(());
+        };
+        if candidate.meta.queued_against == Some(QueuedAgainst::Unrecorded)
+            || self.queue_row(&queued.id, &queued.content)? == QueueRow::SameText
+        {
+            return Ok(());
+        }
+        queued.meta.queued_against = Some(QueuedAgainst::Held(hex::encode(
+            self.destination_key(&dest, content)?,
+        )));
+        Ok(())
+    }
+
+    /// The keyed digest of `content` held at `dest_id`, under the stored KG
+    /// secret (`kg::queue_destination_key`).
+    fn destination_key(&self, dest_id: &str, content: &str) -> Result<[u8; 32], StoreError> {
+        Ok(crate::kg::queue_destination_key(
+            &self.kg_secret()?,
+            dest_id,
+            content,
+        ))
+    }
+
+    /// What `dest_id` holds now, against what a queue row recorded when its
+    /// text `pending` was queued (ROADMAP O224) — the ONE comparison, with
+    /// three callers: `admission list`, the allow's door, and the write
+    /// boundary, where it runs inside the transaction. Verbatim content
+    /// through the verified `get`, never `fp` or a clear column, and the
+    /// expectation always comes from the QUEUE ROW, never from the copy being
+    /// restored.
+    ///
+    /// An unreadable destination is a state, not an error, so one tampered
+    /// drawer cannot fail the whole review list (O221); the allow turns it
+    /// into the integrity verdict.
+    pub(crate) fn destination_state(
+        &self,
+        dest_id: &str,
+        pending: &str,
+        expected: Expected,
+        read: crate::Read,
+    ) -> Result<DestinationState, StoreError> {
+        let now = match self.get(dest_id, read) {
+            Ok(now) => now,
+            Err(StoreError::Integrity(_)) | Err(StoreError::CorruptRow { .. }) => {
+                return Ok(DestinationState::Unreadable)
+            }
+            Err(e) => return Err(e),
+        };
+        Ok(match (now, expected) {
+            (Some(d), _) if d.content == pending => DestinationState::Applied,
+            (None, Expected::Absent) => DestinationState::Absent,
+            (None, Expected::Held(_)) => DestinationState::Deleted,
+            (None, Expected::Unrecorded) => DestinationState::UnrecordedAbsent,
+            (Some(_), Expected::Absent) => DestinationState::Changed,
+            (Some(d), Expected::Held(h)) => {
+                if self.destination_key(dest_id, &d.content)? == h {
+                    DestinationState::Unchanged
+                } else {
+                    DestinationState::Changed
+                }
+            }
+            (Some(_), Expected::Unrecorded) => DestinationState::UnrecordedOccupied,
         })
     }
 
@@ -646,16 +942,27 @@ impl VaultStore {
 
     /// What the row at `id` means to a diversion carrying `content`.
     pub(crate) fn queue_row(&self, id: &str, content: &str) -> Result<QueueRow, StoreError> {
+        Ok(self.read_queue_row(id, content)?.0)
+    }
+
+    /// [`Self::queue_row`], and — for a pending row holding this same text —
+    /// what that row recorded of its destination (ROADMAP O224; `None`
+    /// otherwise, and for a row queued before the field existed).
+    pub(crate) fn read_queue_row(
+        &self,
+        id: &str,
+        content: &str,
+    ) -> Result<(QueueRow, Option<QueuedAgainst>), StoreError> {
         match self.get(
             id,
             crate::Read::Internal(crate::InternalRead::WritePathLookup),
         ) {
-            Ok(None) => Ok(QueueRow::Free),
-            Ok(Some(d)) if d.meta.wing != QUARANTINE_WING => Ok(QueueRow::NotPending),
-            Ok(Some(d)) if d.content == content => Ok(QueueRow::SameText),
-            Ok(Some(_)) => Ok(QueueRow::DifferentText),
+            Ok(None) => Ok((QueueRow::Free, None)),
+            Ok(Some(d)) if d.meta.wing != QUARANTINE_WING => Ok((QueueRow::NotPending, None)),
+            Ok(Some(d)) if d.content == content => Ok((QueueRow::SameText, d.meta.queued_against)),
+            Ok(Some(_)) => Ok((QueueRow::DifferentText, None)),
             Err(StoreError::Integrity(_)) | Err(StoreError::CorruptRow { .. }) => {
-                Ok(QueueRow::Unreadable)
+                Ok((QueueRow::Unreadable, None))
             }
             Err(e) => Err(e),
         }
@@ -923,6 +1230,15 @@ impl VaultStore {
             else {
                 continue;
             };
+            // Whether an allow would proceed, shown before anyone rules
+            // (ROADMAP O224), through the comparison the allow itself runs.
+            let destination_id = filing_ids(&d).recipe;
+            let destination = self.destination_state(
+                &destination_id,
+                &d.content,
+                Expected::of(d.meta.queued_against.as_ref()),
+                crate::Read::Internal(crate::InternalRead::BulkMember),
+            )?;
             out.push(PendingAdmission {
                 id: d.id.clone(),
                 intended_wing: d.meta.intended_wing.clone().unwrap_or_default(),
@@ -935,6 +1251,8 @@ impl VaultStore {
                     .clone()
                     .unwrap_or_else(|| "(direct)".to_string()),
                 chunk_index: d.meta.chunk_index,
+                destination_id,
+                destination,
             });
         }
         // ROADMAP O50: one record for this door, through the one recording
@@ -998,6 +1316,7 @@ impl VaultStore {
         restored.meta.intended_wing = None;
         restored.meta.intended_room = None;
         restored.meta.admission_signals = Vec::new();
+        restored.meta.queued_against = None;
         // The inverse of the diversion: the recipe id of where the row was
         // aimed, from the same derivation the diversion used.
         restored.id = filing_ids(&d).recipe;
@@ -1020,6 +1339,31 @@ impl VaultStore {
             ))
         })?;
         let restored_id = restored.id.clone();
+        // A ruling never replaces or re-creates what the screen never saw
+        // (ROADMAP O224). The write replaces whatever the destination holds,
+        // and an allow used to run it unconditionally, so a flagged update
+        // parked before a clean one reverted the drawer when it was allowed —
+        // and a drawer forgotten in between came back, failing its own erasure
+        // receipt as tampered. The expectation is the QUEUE ROW's record,
+        // never the copy being restored. Checked here for the message, and
+        // again inside the write's transaction, where it cannot be raced.
+        let expected = Expected::of(d.meta.queued_against.as_ref());
+        match self.destination_state(
+            &restored_id,
+            &restored.content,
+            expected,
+            crate::Read::Internal(crate::InternalRead::WritePathLookup),
+        )? {
+            state if state.allows() => {}
+            DestinationState::Unreadable => return Err(StoreError::Integrity(restored_id)),
+            state => {
+                return Err(StoreError::Invalid(destination_refusal(
+                    id,
+                    &restored_id,
+                    state,
+                )))
+            }
+        }
         // Straight to the write path, NOT through `upsert`: the content
         // still trips the screen (that is why it was here), and the
         // human ruling IS the override — re-screening would trap every
@@ -1034,7 +1378,7 @@ impl VaultStore {
         self.write_drawer(
             &restored,
             embedding,
-            crate::Screen::Bypass(crate::BypassReason::OperatorRuling),
+            crate::Screen::Bypass(crate::BypassReason::OperatorRuling(expected)),
         )?;
         self.admission_ruling(id, "allowed", Some(&restored_id))?;
         // `Ruled`: the verdict is already in the chain one line above, which

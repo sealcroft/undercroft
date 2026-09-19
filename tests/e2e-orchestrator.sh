@@ -702,6 +702,30 @@ done
 Q_ROWS="$(curl -s "${ADMIN[@]}" "$O/admin/tenants/$QUARRY_ID/ops/admission" | grep -o '"source_file"' | wc -l | tr -d ' ')"
 [ "$Q_ROWS" = 3 ] && ok "O220: two flagged tenant updates of one drawer are two queue rows" \
   || fail "O220: two flagged tenant updates of one drawer are two queue rows" "queue rows naming a filing: $Q_ROWS"
+# O224: the tenant then writes the drawer CLEANLY. An allow of either parked
+# update used to re-file it over the newer text; the operator's queue now says
+# the destination changed, and an allow through the ops plane is refused.
+curl -s -o /dev/null -X PUT "${Q_AUTH[@]}" -d '{"text":"the heron moved to the upper pool"}' \
+  "$O/t/drawers/$Q_OLD"
+Q_LIST="$(curl -s "${ADMIN[@]}" "$O/admin/tenants/$QUARRY_ID/ops/admission")"
+Q_CHANGED="$(grep -o '"destination":"changed"' <<<"$Q_LIST" | wc -l | tr -d ' ')"
+[ "$Q_CHANGED" = 2 ] && ok "O224: the operator's queue says both updates' destination changed" \
+  || fail "O224: the operator's queue says both updates' destination changed" "$Q_LIST"
+# A queued UPDATE: any row but the diverted save, whose queue id the 202 above
+# named. Not by pairing `destination_id` with the `id` beside it — `/v1`
+# serializes each row as a map with sorted keys, so `destination_id` precedes
+# `id`, and splitting the list on `"id":"` pairs each row with the NEXT row's
+# destination. That is how this check's first version allowed the save.
+Q_VER="$(grep -o '"id":"[0-9a-f]\{32\}"' <<<"$Q_LIST" | cut -d'"' -f4 | grep -vF "$Q_ID" | head -1)"
+Q_RULE="$(curl -s -w '\n%{http_code}' -X POST "${ADMIN[@]}" \
+  -d "{\"drawer_id\":\"$Q_VER\",\"verdict\":\"allow\"}" "$O/admin/tenants/$QUARRY_ID/ops/admission")"
+if [ -n "$Q_VER" ] && [ "$(tail -1 <<<"$Q_RULE")" = 400 ] && grep -qF "cannot be allowed" <<<"$Q_RULE"; then
+  ok "O224: an ops-plane allow over it is refused, 400 naming why"
+else
+  fail "O224: an ops-plane allow over it is refused, 400 naming why" "row=$Q_VER" "$Q_RULE"
+fi
+body_has "O224: and the tenant's drawer keeps the newer text" "upper pool" -- \
+  "${Q_AUTH[@]}" "$O/t/drawers/$Q_OLD"
 curl -s -X DELETE "${ADMIN[@]}" "$O/admin/tenants/$QUARRY_ID" >/dev/null
 curl -s -X DELETE "${ADMIN[@]}" "$O/admin/instances/engine-q" >/dev/null
 kill "$ENGINE_Q" 2>/dev/null; wait "$ENGINE_Q" 2>/dev/null

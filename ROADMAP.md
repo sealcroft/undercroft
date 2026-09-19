@@ -3990,7 +3990,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**256** of the **271** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**259** of the **274** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4170,6 +4170,340 @@ identities.
 MINOR since O149: `PATCH /admin/tenants/{id}` and its CLI mirror are new
 capability, backward compatible. The rest of the section is PATCH work — no
 documented contract moves.
+
+### O224 — CLOSED 2026-09-19: an allow no longer replaces or re-creates what the screen never saw; a queue row records its destination's state
+
+**Filed 2026-09-18 by O220's ruling panel (all three lenses and the refuter),
+established by reading.** `admission_allow` writes the restored drawer to its
+ordinary recipe id through `write_drawer`, whose `ON CONFLICT(id) DO UPDATE`
+replaces whatever is there (`crates/undercroft-store/src/admission.rs`,
+`admission_allow`). Nothing compares that row with the moment the queue row
+was diverted. So an agent can park a flagged update to drawer D, wait for a
+legitimate CLEAN update to D, and if a reviewer allows the parked row, D
+silently reverts; `admission list` shows nothing about it. Reachable today
+through MCP's update tool, and O220's ruled design makes it more frequent,
+since two versions of one filing both restore to that id.
+
+**Why it is a ruling.** The allow is the operator's explicit act, and "the
+later allow wins" is re-mine semantics. What is missing is that the operator
+is never told the destination moved since the diversion. Refusing, warning,
+or showing the current destination text beside the pending one are all
+shapes, and each changes what `allow` answers.
+
+**Gate**: an allow over a destination written after the diversion is refused,
+or says so, as ruled. **Counterfactual**: today, the newer content is
+replaced in silence.
+
+#### RULED 2026-09-19 by a three-lens panel (agentic memory architecture, security, software engineering and surface parity) plus an adversarial refuter
+
+**The question.** `admission_allow` re-files a queue row at its restore id
+(`filing_ids(&d).recipe`) through `write_drawer`, whose `ON CONFLICT(id) DO
+UPDATE` replaces whatever that id holds, and nothing compares the destination
+with its state when the text was queued. What must `allow` do when the
+destination has been written, or deleted, since, and where does that live?
+Working files are in the session scratchpad's `o224/` (the brief, three lens
+answers, the refuter's report, probe scripts and their outputs) — material,
+never the record.
+
+**Measured before ruling**, on the `de79d8f` release binary, through the CLI,
+with the screen on:
+- **P1**: a flagged `drawer update` of D is queued; a clean update C3 lands;
+  `admission allow` exits 0 and D holds the parked text again. C3 is gone —
+  no copy survives an `ON CONFLICT DO UPDATE`, and the chain holds tags —
+  and `verify` reports OK.
+- **P2**: a file mined clean, edited to a flagged text (queued), edited clean
+  and re-mined; the allow reverts the drawer to the file's older flagged text,
+  so the vault disagrees with the file.
+- **P3**: a drawer deleted after its flagged update was queued is RE-CREATED by
+  the allow.
+- **P-C**: the same after `forget D`: the allow exits 0, and the operator's
+  genuine erasure receipt then fails `verify-forgetting` with "still exists",
+  exit 2 — the tamper verdict, from a routine ruling.
+- **P4**: O220's two versions of one drawer, allowed newer first: the older
+  submission wins. `admission list` prints the same `filed` time for both,
+  because an update diversion keeps the drawer's ORIGINAL `meta.filed_at`.
+- **P-B**: the parked text re-submitted after C3 converges onto the same queue
+  row, and the allow reverts D.
+- **P-D**: an unchanged re-mine moves the chain height (14 → 15) with equal
+  content — which is what disqualifies a timestamp or chain-order check.
+
+**Prior rulings found and their disposition.**
+- **A flagged write is "never rejected and never silently dropped"**
+  (`admission.rs` module doc). FOLLOWED: what is refused is a RULING, never a
+  write; the text stays pending. It also covers the clean write C3, which the
+  allow drops today.
+- **An interrupted allow re-runs and converges** (module doc). FOLLOWED, through
+  the `applied` state below.
+- **O220 items 1-5** (slot order, verbatim equality through `get`, the keyed
+  slot, the door placement, the backstop). FOLLOWED; item 4's backstop is
+  widened.
+- **O220 item 6 — "each restores to the one ordinary id and the later allow
+  wins there". REFUTED and REVISED**, recorded beside the item rather than in
+  place of it. "Later allow" orders RULINGS, not SUBMISSIONS: P4 measured the
+  older submission winning after the newer one was allowed, the second allow
+  destroys a text a ruling had just admitted, and the same panel filed O224 as
+  that item's residual. Revised: rulings stay independent and a deny destroys
+  only its row; the first allow among versions recorded against one
+  destination state applies, and each later sibling reads `changed` and is
+  refused until it is denied and re-submitted.
+- **O220 item 7** (PATCH, `UPGRADING.md` not owed): PATCH FOLLOWED; "not owed"
+  does NOT transfer — that refusal converged on retry, and this one does not.
+- **O224's own line** that "the later allow wins" is re-mine semantics:
+  REFUTED. Re-mine semantics is that the latest SUBMISSION wins; allow order is
+  the reviewer's click order.
+- **O215** (verbatim equality through `get`, never `fp`; no write-suppression
+  primitive), **O216** verdicts 2, 3 and 7 (the covered copy decides; an
+  unreadable row is `Integrity`; PATCH with `UPGRADING.md`), **O30/O170** (an
+  allow refusal names the row and the remedy; a refusal naming its remedy is
+  the tree's answer for older rows, not a trap), **O31** (the screen is the
+  only author of screen fields), **A10/U12** (keyed with the stored
+  `kg_secret`, never a vault key), **A28** (the covered copy decides), the
+  never-guess invariant, and the 2026-09-08 versioning ruling. All FOLLOWED.
+- **`update_drawer`'s "the reviewer must rule on exactly what the screen
+  saw"** (O216). FOLLOWED, and its converse follows: nor may a ruling APPLY
+  over what the screen never saw.
+No `#### RULED` subsection existed in O224, O225, O226, O221 or O197.
+
+**The verdict — record the destination's state when the text is queued,
+compare it inside the allow's write transaction, refuse a destination that
+moved, and show the state before anyone rules.**
+1. **The field.** `DrawerMeta.queued_against: Option<QueuedAgainst>`,
+   `#[serde(default, skip_serializing_if = "Option::is_none")]`, where
+   `QueuedAgainst` is `Absent | Held(64 hex) | Unrecorded` (snake_case). Every
+   existing row's canonical and tag stay byte-identical; it sits inside the
+   queue row's HMAC.
+2. **The digest.** `kg::queue_destination_key(secret, dest_id, content)` =
+   `HMAC(kg_secret, "queuedestination" ‖ u64le(len id) ‖ id ‖ u64le(32) ‖
+   sha256(content))`, computed directly on every security level, as
+   `queue_version_key` is — never through `keyed_fp_of_digest`, which is
+   unkeyed below Sealed. Keyed because the digest OUTLIVES the content it
+   describes (that content is later replaced or forgotten); the stored secret
+   because rotation re-seals it and never regenerates it; and the destination
+   id is bound, so if the recorded and compared ids ever drift (O197) the
+   allow refuses instead of passing.
+3. **Written at the door only** — `screen_and_divert`'s `Apply` arm, after the
+   slot is chosen. A convergence onto a pending row with the same text COPIES
+   that row's stored value verbatim, a stored none included; a fresh diversion
+   carrying `Unrecorded` (a queue record replayed by the import unwrap) keeps
+   it; otherwise the door reads `R = filing_ids(&diverted).recipe` through the
+   verified `get` — no row is `Absent`, a row is `Held(key)`, an unreadable one
+   is `Unrecorded`. Every other value arriving on a candidate is overwritten.
+   The batch path carries the value of a slot the batch already took, and
+   records a destination the batch itself wrote earlier as the `/v1` path,
+   which commits per record, would.
+4. **A replay records `Unrecorded`.** A queue record restored from an export
+   asserts nothing about the destination the payload carried, and computing a
+   fresh state would turn a `changed` row into `unchanged` at the new vault —
+   inference, which the invariant forbids. All three lenses missed this; the
+   refuter found it.
+5. **Strips and one invariant.** The ordinary import-unwrap branch clears the
+   field, `upsert_many_held`'s screen-field guard notices it, `admission_allow`
+   clears it on the restored copy, and `write_drawer_stmts` never persists it
+   on a row the screen did not divert.
+6. **One comparison**, `destination_state`, with three callers — the list, the
+   allow's door and the boundary — reading the destination through the
+   verified `get` and comparing verbatim content, the expectation taken from
+   the QUEUE ROW and never from the restored copy:
+
+   | destination now | recorded | state | allow |
+   |---|---|---|---|
+   | fails its tag | any | `unreadable` | `Integrity` |
+   | holds the pending text | any | `applied` | proceeds (the crash re-run) |
+   | absent | `Absent` | `absent` | proceeds |
+   | present | `Absent` | `changed` | refused |
+   | holds the recorded content | `Held` | `unchanged` | proceeds |
+   | holds other content | `Held` | `changed` | refused |
+   | absent | `Held` | `deleted` | refused |
+   | absent | none / `Unrecorded` | `unrecorded-absent` | proceeds |
+   | holds other content | none / `Unrecorded` | `unrecorded-occupied` | refused |
+7. **Where it is decided.** A door check in `admission_allow` gives the full
+   message; the authoritative check runs inside `write_drawer_stmts` under
+   `BEGIN IMMEDIATE`, the expectation travelling on
+   `BypassReason::OperatorRuling(Expected)` (`Copy`, as `Screen` is), as ONE
+   inline refusal — the state-dependent-refusal count goes from two to three.
+   The diversion backstop widens: a pending row holding the same text under a
+   different recorded value is raced.
+8. **What each surface answers.** A refusal is `StoreError::Invalid`: CLI
+   exit 1, `/v1` 400 with no class, the ops plane relays it and exits 1, the
+   console shows it in its error toast and keeps the row. An unreadable
+   destination is `Integrity`: exit 2, 409 `class: integrity`. The message
+   names the queue row, the destination and the state, says nothing was
+   changed, and names the remedies: deny to keep the destination; to apply
+   the text anyway, read it, deny the row, and save it again, which queues it
+   against the destination as it is now. Success replies are unchanged.
+9. **What the reviewer sees.** `PendingAdmission` gains `destination_id` and
+   `destination` (the state). The CLI appends `destination <id> <state>` after
+   the fields it prints, keeping the id first; `/v1` serializes the struct
+   whole; the console gains a column. An unreadable destination makes its own
+   row `unreadable` and never fails the list (O221). The false `filed_at` doc
+   and the module doc's "two steps" (there are three) are corrected.
+10. **Legacy rows** carry no field: they proceed only when the destination is
+    absent or already holds the pending text, and a convergence onto one fills
+    nothing in. No migration or backfill — the state at queueing is unknowable.
+11. **PATCH**, inside the unreleased `1.6.0`; the list field is reporting
+    surface for a fix. **`UPGRADING.md` is owed**: the refusal does not clear
+    on retry, and it meets every legacy pending update of an existing drawer
+    and every pending update restored into another vault. `config check`
+    cannot detect it; `admission list` is the detector.
+
+**Options that lost.**
+- **(o1) clear timestamps** — a clear column deciding a protection (A28); the
+  diverting agent moves `updated_at` online by converging; an unchanged
+  re-mine reads as a move (P-D).
+- **(o2) audit-chain order** — `record_id` is a label outside the chain
+  arithmetic; every convergence and every re-mine appends; O223's self-restore
+  would mark every pending update moved.
+- **(o4) the destination's tag** — a vault-key value (moves on rotation), and
+  a random seal nonce moves it on identical rewrites.
+- **(r2) proceed and report** — the newer text is gone before anyone agreed.
+- **(r3) the list alone** — a list read is stale by allow time, the console's
+  ALLOW has no confirmation, and scripts never read the list.
+- **(r4) an override on `allow`** — changes what a surface offers, so it is
+  the maintainer's; not needed to close the defect, because the refusal names
+  a working exit. Filed as O229.
+- **Re-basing on convergence** (lens A) — a restore of the vault's own backup
+  is a REPLAY and converges every pending row, so re-basing would silently
+  turn `changed` into `unchanged`; and it buys an attacker nothing, since a
+  varied text takes a fresh slot recorded against the current content anyway.
+- **Letting legacy rows proceed as today** (lens A) — the silent reversion
+  stays for exactly the rows pending longest.
+- **409 through a new variant** (lens B) — correct HTTP, and the only state
+  refusal on that route that would not answer 400.
+- **A separate table, or the sealed frame** — outside every drawer HMAC, or an
+  on-disk format change.
+
+**Claims refuted, the brief's included.**
+- **The brief**: `a_sealed_vault_exposes_metadata_but_never_content` does not
+  see queue rows at all — its fixture never turns admission on, so
+  `intended_*` and the signal offsets were never measured; `HAND_PROJECTED`
+  carries `PendingAdmission` × CLI only, not the console that hand-projects
+  it; the allow runs THREE transactions; it omitted the forget harm (P-C) and
+  the replay question; and "D reverts" holds only when D's id re-derives
+  (O197).
+- **Lens A**: re-basing "cannot launder" (it launders every restore);
+  refusing legacy rows "recreates O30's trap" (a refusal naming its remedy is
+  O170's answer); a restore "recomputes from what it finds" (inference).
+- **Lenses B and C**: both recorded a fresh state for a replayed queue record;
+  neither carried the value inside a batch, where the widened backstop would
+  then refuse a whole batch spuriously.
+
+**Dissent, recorded.** Lens A for re-basing on convergence and for letting
+legacy rows proceed; lens B for 409 through a new variant. Overruled on the
+evidence above.
+
+**Residuals, stated.** ABA — a destination that returns to its recorded
+content allows, as a compare-and-swap does by design. A metadata-only move of
+the destination is replaced by the allow (O226's neighbourhood). An
+`unrecorded-absent` row can re-create a destination deleted after it was
+queued — loud through `verify-forgetting` when it was a forget. A downgrade
+that rewrites a queue row drops the field, which reads as legacy
+(conservative). The re-submit remedy stamps the re-submitting surface, and a
+trusted surface auto-admits it. Any writer of the destination can make a
+pending update of it un-allowable as it stands, which is the point. A
+screen-off restore of a drawer and a pending update of it lands the update's
+text on the drawer — O219's case, recorded there.
+
+**Filed from this ruling**: O227 (a restore or migration leaves every restored
+pending update `unrecorded-occupied`), O228 (what an erasure owes pending
+rows that name its target), O229 (an override on `allow` — the maintainer's).
+
+#### BUILT 2026-09-19, as ruled
+
+**Built to the ruling above.**
+- `DrawerMeta.queued_against: Option<QueuedAgainst>` (`undercroft-core`),
+  `Absent | Held(hex) | Unrecorded`, serialized only when present, so every
+  row written before it keeps its canonical and tag.
+- `kg::queue_destination_key` — HMAC under the stored KG secret over a domain
+  tag, the destination id and a digest of its verbatim content, on every
+  security level. Pinned to a literal derived in Python over the same framing.
+- **The door records it**, in `screen_and_divert`'s `Apply` arm: `queue_slot`
+  now returns a `Slot` whose `converged` field carries the pending row's
+  stored record when the landing converges, read in the same `get` that judged
+  the row (`read_queue_row`); a fresh slot records through
+  `record_destination`, which keeps a replay's `Unrecorded` and otherwise reads
+  the recipe id through the verified `get`.
+- **The batch path** keeps each slot's record beside its text and carries it on
+  an in-batch convergence, and records a destination an earlier row of the
+  same batch wrote (`record_batch_destination`), as `/v1` would.
+- **One comparison**, `destination_state`, with its three callers pinned by a
+  source gate: `admission_pending`, `admission_allow`'s door, and an inline
+  refusal inside `write_drawer_stmts`, the expectation travelling on
+  `BypassReason::OperatorRuling(Expected)`. The state-dependent-refusal count
+  gate goes from two to three, with a premise naming the new one. The O220
+  backstop is widened to a same-text row holding a different record.
+- **Strips**: the import unwrap's ordinary branch clears every value but the
+  replay marker (which must survive `import_many`'s unwrap AND the batch
+  path's second one — my first build stripped it there, and the restore test
+  caught it); `upsert_many_held`'s screen-field guard notices the field;
+  `admission_allow` clears it; `write_drawer_stmts` never persists it on a row
+  the screen did not divert.
+- **Surfaces**: `PendingAdmission` gains `destination_id` and `destination`
+  (`DestinationState`, kebab-case). The CLI appends `destination <id> <state>`
+  after the fields it printed, keeping the id first; the admin console gains a
+  DESTINATION column; `/v1` serializes the struct whole. A new
+  `HAND_PROJECTED` row, `PendingAdmission` × `ui.html`, gates the console —
+  it had none, although it hand-projects the struct.
+- The false `PendingAdmission.filed_at` doc and the module doc's "two steps"
+  are corrected; the exposure inventory
+  (`a_sealed_vault_exposes_metadata_but_never_content`) now writes two queue
+  rows and inventories their four fields, sixteen in all.
+
+**Measured**, release binaries at `de79d8f` and at this tree.
+- **The probes**: P1, P2, P3, P-C, P4 and P-B each refuse on this tree; P-C's
+  erasure receipt keeps verifying.
+- **A real corpus**: the LoCoMo feed mined into eight wings with the screen on,
+  plus three flagged files; flagged updates queued for 20 mined drawers and
+  clean revisions written to 10 of them — 23 queued rows.
+  - `admission list` reads `3 absent, 10 changed, 10 unchanged`. Allowing every
+    row allows 13 and refuses 10, and all 10 revised drawers keep their newer
+    text; the `de79d8f` binary allows all 23 and keeps none.
+  - An unchanged re-mine of every wing writes the feed's text back over the
+    revised drawers — a later submission — so their rows read `unchanged`
+    afterwards (the ABA residual, as ruled), and no row's record moves; the
+    only additions are the three already-allowed flagged files re-queued, which
+    the `de79d8f` binary re-queues too.
+  - A flagged file edited clean and re-mined: its allow is refused here and
+    proceeds on `de79d8f`, reverting the file's drawer.
+  - Three runs each: mine 721–828 ms against 749–796 ms, `admission list` over
+    23 rows 4–9 ms on both, an unchanged re-mine 596–651 ms against 588–618 ms
+    — within the spread.
+
+**Gates.** Fifteen store tests (fourteen in `lib.rs`, one in `rotate.rs`), one
+MCP test (the route an agent drives alone), twelve `e2e` checks (CLI and
+`/v1`) and three `orchestrator-e2e` checks (a tenant's two parked updates and
+a clean write through `/t/drawers`, then the operator's ops-plane list and
+allow).
+
+**Counterfactuals**, each on a scratch copy with the edit confirmed to land,
+each firing on its own target:
+- no allow check at all → the every-route, deletion and sibling tests;
+- no boundary check → the race test;
+- recompute on convergence → the carry test;
+- a replay reads the destination → the restore test;
+- no in-batch carry → the batch test's first arm (the backstop refuses the
+  batch as raced);
+- no landed map → the batch test's parity arm;
+- no boundary strip → the persistence test;
+- the expectation read from the restored copy → the deletion test;
+- a digest over the NFC-folded text → the NFD test;
+- the list propagating an unreadable destination → the unreadable test;
+- an UNKEYED destination digest → the digest test, the pin, and the exposure
+  inventory's new arm.
+The `e2e` block was also run against the `de79d8f` binary: every check
+asserting the fix fails there. Its first version found its queue rows by the
+new list field, so on `de79d8f` it found none, never ran the allow, and
+"the drawer keeps the newer text" passed for that reason; it finds them by
+the intended wing now, which both binaries print.
+The `orchestrator-e2e` arm failed its first battery on my own selection:
+`/v1` serializes each queue row as a map with SORTED keys, so
+`destination_id` precedes `id`, and splitting the list on `"id":"` paired each
+row with the NEXT row's destination — the check allowed the diverted save,
+whose empty destination rightly allows, and read a 200 as the defect. It now
+takes any row but the save's known queue id. That arm was not run against the
+`de79d8f` binary.
+
+**What this unit did not touch**, each with its own entry: O225, O226, O197,
+O219, and O227–O229 filed from the ruling.
 
 ### O222 — CLOSED 2026-09-18: import and export are tenant AND operator capabilities; the operator plane carries both
 
@@ -4403,6 +4737,13 @@ slot; equal text converges and writes, as today.**
    and `chunk_index` so a reviewer sees which rows are versions of one filing
    — reporting surface for a fix, so PATCH by the 2026-09-08 ruling, on every
    renderer.
+   **Revised 2026-09-19 by O224's panel, and kept here as it was ruled:**
+   "the later allow wins there" ordered RULINGS rather than submissions, and
+   O224's probe P4 measured the older submission reverting the newer one.
+   Rulings stay independent and a deny destroys only its row; the first allow
+   among versions recorded against one destination state applies, and a
+   later sibling is refused as `changed` until it is denied and re-submitted.
+   See O224's `#### RULED`.
 7. **PATCH, and `UPGRADING.md` is not owed**: nothing that runs today stops;
    the only new refusal is a raced write, which a retry converges. The
    CHANGELOG says the queue now holds one row per distinct flagged text.
@@ -19861,6 +20202,14 @@ then allowed. After the allow, the link resolves, or the unit says in writing
 why it cannot. **Premise:** the same bundle into a non-screening vault resolves
 the link.
 
+O224, in prose since it closed, supplies the rule this entry said it lacked
+for "a different drawer already holds that id": the allow compares the id it
+writes with what the queue row recorded of it, and a different occupant reads
+`changed` and is refused. What this entry must keep is that the record and the
+restore id move TOGETHER — the destination digest binds the id, so a fix that
+restores to a declared id while the record describes the recipe id refuses
+rather than passes, which is safe and would be a new trap.
+
 ### O199 — the observability recipe's `undercroft init 2>/dev/null || true` hides why an init failed
 
 **Filed 2026-09-17 by O172, whose ruling named it; verified by reading.**
@@ -20269,6 +20618,12 @@ the batch-local arm O216's ruling adds to `upsert_many_held`, so the CLI
 answers that payload as `/v1` does. Two ordinary records sharing an id — the
 case above — are untouched by it.
 
+A case O224's refuter recorded here, in prose since O224 closed: a restore with
+the screen OFF of a vault holding a drawer and a pending update of it unwraps
+the update's queue record to the drawer's own id, so both records land on one
+id and the update's text replaces the drawer's — the last record wins, which
+is this entry's question with a queue record as one of the pair.
+
 ### O221 — a queue row no ruling door can act on: one whose tag fails, and one flipped into the reserved wing
 
 **Filed 2026-09-18 by O216's ruling panel; measured by its probes P2 and P3 on
@@ -20331,29 +20686,6 @@ the most common restore.
 moves no chain height, or does what is ruled. **Counterfactual**: today,
 `681 replaced`.
 
-### O224 — allowing an older queue row overwrites newer content at the drawer's ordinary id
-
-**Filed 2026-09-18 by O220's ruling panel (all three lenses and the refuter),
-established by reading.** `admission_allow` writes the restored drawer to its
-ordinary recipe id through `write_drawer`, whose `ON CONFLICT(id) DO UPDATE`
-replaces whatever is there (`crates/undercroft-store/src/admission.rs`,
-`admission_allow`). Nothing compares that row with the moment the queue row
-was diverted. So an agent can park a flagged update to drawer D, wait for a
-legitimate CLEAN update to D, and if a reviewer allows the parked row, D
-silently reverts; `admission list` shows nothing about it. Reachable today
-through MCP's update tool, and O220's ruled design makes it more frequent,
-since two versions of one filing both restore to that id.
-
-**Why it is a ruling.** The allow is the operator's explicit act, and "the
-later allow wins" is re-mine semantics. What is missing is that the operator
-is never told the destination moved since the diversion. Refusing, warning,
-or showing the current destination text beside the pending one are all
-shapes, and each changes what `allow` answers.
-
-**Gate**: an allow over a destination written after the diversion is refused,
-or says so, as ruled. **Counterfactual**: today, the newer content is
-replaced in silence.
-
 ### O225 — a ruling binds no content, so an id vacated and re-occupied can release text no reviewer read
 
 **Filed 2026-09-18 by O220's ruling panel (security lens and refuter),
@@ -20370,6 +20702,17 @@ that `allow` and `deny` take the keyed content digest `admission list` shows,
 and refuse when it no longer matches — which changes the operator surface on
 the CLI, `/v1` and the orchestrator's ops plane, i.e. a question of what a
 surface offers.
+
+O224's refuter found the premise of that shape absent: `admission list` shows
+no content digest today (`PendingAdmission` carries none), so the digest this
+entry would have `allow` take is a new field as well as a new parameter.
+O224's ruling does not pre-empt this entry: it binds nothing new into the
+ruling canonical and adds no pending-text digest to the list.
+
+**Relations:** decided together with O229 — both change what `admission_allow`
+takes on every ruling surface, and both preconditions must travel on the one
+expectation `BypassReason::OperatorRuling` carries into `write_drawer_stmts`,
+so they are checked in the same transaction.
 
 **Gate**: an allow naming a digest the row no longer holds is refused.
 **Counterfactual**: today, it releases the current text.
@@ -20391,6 +20734,79 @@ question — and the answer decides whether a convergence may write them.
 **Gate**: a convergence that changes only `kind` or `supersedes` leaves the
 pending row's covered declaration as the reviewer will allow it, as ruled.
 **Counterfactual**: today, the incoming declaration replaces it.
+
+O224's ruling fixes this entry's answer for one field: a convergence never
+rewrites `queued_against`, the record of what the destination held, because
+that record is what an allow requires to hold and restoring the vault's own
+backup converges every pending row. Whatever is ruled here for the other
+covered fields must not loosen that.
+
+### O227 — a restore into another vault leaves every restored pending update un-allowable as it stands
+
+**Filed 2026-09-19 by O224's ruling (the refuter's residual), established by
+measurement in O224's store gate
+`a_restored_queue_record_records_nothing_and_its_allow_is_refused`.** A queue
+record restored from an export records `unrecorded`, because what its
+destination held where it was queued cannot be known at the destination — the
+record the payload carries is keyed with the SOURCE vault's secret, and
+reading the destination the restore finds would call a row whose destination
+moved before the export `unchanged`. So every pending UPDATE restored into
+another vault, and every one a tenant migration carries, lists
+`unrecorded-occupied` and its allow is refused until it is denied and saved
+again. A pending save is unaffected.
+
+**Why it is open.** The cost lands on the ordinary restore of a queue into a
+fresh vault, and on tenant migration. A portable record would need a value the
+destination can check without the source's secret and without being a
+confirmation oracle for content no longer on disk — an unkeyed digest is ruled
+out for that reason. Candidate shapes: carry the record re-keyed under the
+DESTINATION's secret by a migration that holds both (the orchestrator does
+not), or have the export say which queue rows were `unchanged` at export time,
+signed, so the destination can trust it — each needs a ruling.
+
+**Gate**: a vault's pending update whose destination was unchanged at export,
+restored into another vault, allows there, while one whose destination had
+moved is still refused. **Counterfactual**: today, both are refused.
+
+### O228 — erasing a drawer leaves the pending updates that name it in the queue
+
+**Filed 2026-09-19 by O224's ruling panel; established by reading and by
+O224's store gate on `forget_with_proof`.** A `forget`, a retention sweep or a
+`drawer delete` of a drawer destroys that drawer and leaves every queued update
+whose destination it was. Since O224 their allow is refused as `deleted`, so
+the erasure can no longer be undone by a ruling. But the erasure does not
+mention them, their text stays in the queue until someone denies it, and each
+row keeps a keyed digest of the erased content on its record.
+
+**Why it is the maintainer's.** What an erasure owes the review queue — destroy
+the pending rows naming its target in the same attested run, list them in the
+receipt, or leave them for a reviewer — changes what `forget` and the
+retention sweep do and report, which is a product decision about the erasure
+promise.
+
+**Gate**: after a `forget` of a drawer with a pending update, the update is
+handled as ruled, and the receipt says so. **Counterfactual**: today, the row
+stays queued and the receipt does not mention it.
+
+### O229 — an allow has no override for applying a queued text over newer content
+
+**Filed 2026-09-19 by O224's ruling panel and escalated: what a surface offers
+is the maintainer's.** Since O224 an allow over a destination written since
+the text was queued is refused, and the only way to apply that text anyway is
+to read it, deny the row, save it again and allow the new row. That destroys
+the original evidence (receipted) and takes three steps. Two shapes were
+named: a force flag on `allow`, or `allow` taking the destination digest
+`admission list` would show (compare-and-swap), on the CLI, `/v1`, the
+orchestrator's ops plane and the admin console alike.
+
+**Relations:** decided together with O225 — both change what `admission_allow`
+takes on every ruling surface, and both preconditions must travel on the one
+expectation `BypassReason::OperatorRuling` carries into `write_drawer_stmts`,
+so they are checked in the same transaction.
+
+**Gate**: as ruled; if an override is added, it is refused on every surface
+unless the destination still holds what the operator named. **Counterfactual**:
+today, no override exists.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 

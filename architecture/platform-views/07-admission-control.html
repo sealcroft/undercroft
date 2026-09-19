@@ -46,7 +46,7 @@
 
     <svg viewBox="0 0 1200 992" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="admission-control-title admission-control-desc">
       <title id="admission-control-title">Undercroft admission control</title>
-      <desc id="admission-control-desc">An incoming write is refused with a 400 when its declaration is invalid, committed verbatim when the admission screen is off or nothing trips — the deterministic tier-1 detector, the declared per-writer rate screen, or the optional tier-2 advisor, which can only ever vote toward quarantine — and otherwise diverted into the quarantine-pending wing with a 202 naming the id it landed under, where it is excluded from search, recent and list_drawers until an operator — never an agent over MCP — allows or denies it.</desc>
+      <desc id="admission-control-desc">An incoming write is refused with a 400 when its declaration is invalid, committed verbatim when the admission screen is off or nothing trips — the deterministic tier-1 detector, the declared per-writer rate screen, or the optional tier-2 advisor, which can only ever vote toward quarantine — and otherwise diverted into the quarantine-pending wing with a 202 naming the id it landed under, where it is excluded from search, recent and list_drawers until an operator — never an agent over MCP — allows or denies it; an allow is refused when the destination drawer was written or deleted after the text was queued.</desc>
       <defs>
         <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7fa39c"/></marker>
         <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#35e0c2"/></marker>
@@ -177,7 +177,7 @@
       <text x="732" y="791" fill="#35e0c2" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.08em">OPERATOR</text>
       <text x="872" y="816" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif" text-anchor="middle">Ruling: allow or deny</text>
       <text x="872" y="834" fill="#7fa39c" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">operator surfaces only, never MCP</text>
-      <text x="872" y="848" fill="#5c7f79" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">deny is receipted, allow restores</text>
+      <text x="872" y="848" fill="#5c7f79" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">deny receipted · allow only if unmoved</text>
 
       <!-- ============ LEGEND ============ -->
       <line x1="120" y1="924" x2="1080" y2="924" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>

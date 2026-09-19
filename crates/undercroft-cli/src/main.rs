@@ -2869,15 +2869,20 @@ fn run(cli: Cli) -> Result<()> {
                     }
                     for p in pending {
                         let codes: Vec<&str> = p.signals.iter().map(|s| s.code.as_str()).collect();
+                        // The destination state goes LAST, so the id stays the
+                        // first field scripts read (ROADMAP O224): it says,
+                        // before anyone rules, whether an allow would proceed.
                         println!(
-                            "  {}  → {}/{}  [{}]  filed {}  from {}#{}",
+                            "  {}  → {}/{}  [{}]  filed {}  from {}#{}  destination {} {}",
                             p.id,
                             p.intended_wing,
                             p.intended_room,
                             codes.join(", "),
                             p.filed_at,
                             p.source_file,
-                            p.chunk_index
+                            p.chunk_index,
+                            p.destination_id,
+                            p.destination.as_str()
                         );
                     }
                 }

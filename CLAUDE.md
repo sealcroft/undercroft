@@ -952,7 +952,22 @@ Consequences that are binding, not advisory:
   distinct text now takes its own slot, `ids::quarantine_version_id` keyed
   with the STORED `kg_secret` (never a vault key, never unkeyed), chosen at
   the door with a batch-local map and backstopped inside the write
-  transaction, and equal text converges; **deny is receipted**
+  transaction, and equal text converges; **an allow never replaces or
+  re-creates what the screen never saw (O224)** — it re-filed over whatever
+  the destination held, so a flagged update an agent parked over MCP before
+  a clean one reverted the drawer when allowed, and a drawer forgotten in
+  between came back and failed its own erasure receipt as tampered. The
+  queue row records `queued_against` at the door (absent, or
+  `queue_destination_key` — HMAC under the STORED `kg_secret` over the
+  destination id and a digest of its verbatim content, because the record
+  outlives that content); ONE comparison, `destination_state`, serves the
+  list, the allow's door and an inline refusal inside `write_drawer_stmts`
+  (the expectation travels on `BypassReason::OperatorRuling`); a convergence
+  CARRIES the record, since restoring the vault's own backup converges every
+  pending row; a queue record restored into another vault records
+  `Unrecorded` — what its destination held there is unknowable — and such a
+  row, like one queued before 1.6.0, allows only where nothing would be
+  replaced; **deny is receipted**
   — it destroys through `forget_with_proof` and hands back the
   attestation; **updates are screened on the UPDATING surface** —
   `update_drawer` re-stamps `added_by` before the screen so an untrusted
@@ -2115,8 +2130,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (943 run,
-                                      # 4 #[ignore]d = 947 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (959 run,
+                                      # 4 #[ignore]d = 963 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2238,8 +2253,8 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (550 checks)
-docker compose run --rm orchestrator-e2e  # two engines + orchestrator (162 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (562 checks)
+docker compose run --rm orchestrator-e2e  # two engines + orchestrator (165 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (137 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
@@ -2794,11 +2809,15 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   — `Drawer::meta_at_rest()` empties `time_mentions[].text` and `entities`
   before a row is written, keeping only resolutions (offsets + ISO dates,
   which are not content). What metadata still leaks is measured and pinned by
-  `a_sealed_vault_exposes_metadata_but_never_content` — **twelve** fields,
+  `a_sealed_vault_exposes_metadata_but_never_content` — **sixteen** fields,
   counted from the test's own list, not seven as this line said until
   2026-08-05: wing, room, source_file, added_by, hall, content_date,
-  resolved dates, declared `kind`, the `supersedes` link, and the
-  writer's `agent`/`channel`/`session` claims (plus the clear `filed_at`/
+  resolved dates, declared `kind`, the `supersedes` link, the
+  writer's `agent`/`channel`/`session` claims, and on a review-queue row the
+  intended wing and room, the signal codes and offsets, and the keyed
+  `queued_against` record. Those four were exposed long before the test
+  could see them: its fixture never turned admission on, so no queue row
+  existed to measure until O224 wrote two (plus the clear `filed_at`/
   `updated_at` columns and per-record ciphertext sizes, which the pricing
   test's column inventory covers). That test fails
   in **both** directions, so shrinking the exposure forces the inventory to

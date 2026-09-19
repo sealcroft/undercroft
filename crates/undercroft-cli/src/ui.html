@@ -418,8 +418,8 @@
               <span class="spacer"></span>
               <button class="ctl" id="admRefresh">↻ REFRESH</button>
             </div>
-            <p class="kv">Writes the tier-1 screen diverted into <code>quarantine-pending</code>. They are sealed, excluded from retrieval, and stay here until ruled on. <b>Allow</b> re-files the drawer where it was headed; <b>deny</b> destroys it through the attested-forgetting path and returns a receipt. Both append a verdict to the audit chain. Empty here means empty — the queue is only populated when <code>UNDERCROFT_ADMISSION=quarantine</code> is declared.</p>
-            <table><thead><tr><th>ID</th><th>INTENDED</th><th>SIGNALS</th><th>FILED</th><th>RULING</th></tr></thead><tbody id="admRows"></tbody></table>
+            <p class="kv">Writes the tier-1 screen diverted into <code>quarantine-pending</code>. They are sealed, excluded from retrieval, and stay here until ruled on. <b>Allow</b> re-files the drawer where it was headed, unless its destination has been written or deleted since the text was queued — <code>DESTINATION</code> says which before you rule, and an allow over a moved destination is refused rather than replacing newer content; <b>deny</b> destroys it through the attested-forgetting path and returns a receipt. Both append a verdict to the audit chain. Empty here means empty — the queue is only populated when <code>UNDERCROFT_ADMISSION=quarantine</code> is declared.</p>
+            <table><thead><tr><th>ID</th><th>INTENDED</th><th>SIGNALS</th><th>FILED</th><th>DESTINATION</th><th>RULING</th></tr></thead><tbody id="admRows"></tbody></table>
             <pre class="report" id="admReport" style="display:none"></pre>
           </div>
 
@@ -1385,12 +1385,15 @@ async function loadAdmission() {
       return "<tr><td class='kv'>" + esc(p.id) + "<br>" + esc(p.source_file) + "#" + esc(String(p.chunk_index)) + "</td>" +
         "<td><span class='pill wing'>" + esc(p.intended_wing) + "</span>/" + esc(p.intended_room) + "</td>" +
         "<td class='kv'>" + sig + "</td><td class='kv'>" + esc(p.filed_at) + "</td>" +
+        // Whether an allow would proceed (ROADMAP O224). ALLOW stays enabled:
+        // the server decides, inside its write, and says why when it refuses.
+        "<td class='kv'>" + esc(p.destination) + "<br>" + esc(p.destination_id) + "</td>" +
         "<td><button class='ctl' data-adm-allow='" + esc(p.id) + "'>✓ ALLOW</button> " +
         "<button class='ctl danger' data-adm-deny='" + esc(p.id) + "'>✕ DENY</button></td></tr>";
     });
     // Say WHY the queue is empty: with screening off, "no pending" is a
     // configuration fact, not a clean bill of health.
-    $("admRows").innerHTML = rows.join("") || "<tr><td colspan=5 class='kv'>" +
+    $("admRows").innerHTML = rows.join("") || "<tr><td colspan=6 class='kv'>" +
       (r.screening ? "nothing pending — screening is ON" :
         "screening is OFF (set UNDERCROFT_ADMISSION=quarantine to enable it); nothing can be pending") +
       "</td></tr>";

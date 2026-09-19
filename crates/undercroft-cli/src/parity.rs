@@ -812,6 +812,16 @@ pub const HAND_PROJECTED: &[(&str, &str, &str, &str)] = &[
         "undercroft-cli/src/main.rs",
         "AdmissionAction::List",
     ),
+    // The console hand-projects the queue too, and had no row: O220 added
+    // `source_file` and `chunk_index` to it by hand, and nothing would have
+    // said so had it not. Added with ROADMAP O224's `destination_id` and
+    // `destination`, the two fields a reviewer reads before ruling.
+    (
+        "undercroft-store/src/admission.rs",
+        "PendingAdmission",
+        "undercroft-cli/src/ui.html",
+        "async function loadAdmission()",
+    ),
     (
         "undercroft-store/src/retention.rs",
         "RetentionPolicy",
