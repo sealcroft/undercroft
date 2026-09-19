@@ -4171,6 +4171,63 @@ MINOR since O149: `PATCH /admin/tenants/{id}` and its CLI mirror are new
 capability, backward compatible. The rest of the section is PATCH work — no
 documented contract moves.
 
+### O186 — CLOSED 2026-09-19: a mirror's repeated or surplus candidate ids are dropped before hydration
+
+**Filed 2026-09-15 by O167's refuter; verified by reading, not executed.**
+`search_with_index` (`remote.rs`) walks every candidate the backend returns with
+no seen-set, so an id the mirror offers twice is loaded, scored and returned
+twice. Nothing bounds the response either: Qdrant, Chroma, Milvus and Weaviate
+keep the whole array their server sends, and pgvector's `LIMIT` runs on the
+server — which the module's own header calls untrusted. Integrity holds, since
+every hit is re-verified locally; the page does not, and until O167's build lands
+each repeat also re-embeds a stored drawer through a served embedder. **Shape**:
+drop repeated candidate ids before hydration, keeping first-seen order, and cap
+the candidates hydrated at what was asked for. **Gate**: an index fixture
+returning one id twice, and more ids than `limit`, yields one hit per drawer and
+no more than the page.
+
+#### BUILT 2026-09-19, to the entry's shape
+
+**No ruling was needed**: the entry states its shape, it moves no contract, and
+the tree already rules the mirror untrusted (`remote.rs`'s own header). Built
+in `search_with_index`: candidates pass a seen-set that keeps first-seen order,
+and hydration stops at the number of DISTINCT ids the mirror was asked for
+(`max(depth·4, 20)`) — what an honest mirror returns at most. Deduplicating
+first means repeats cannot crowd distinct ids out of that budget.
+
+**Gates.** `a_mirror_repeating_or_flooding_ids_returns_one_hit_per_drawer_and_hydrates_no_surplus`
+(store): the O167 fake answering every id twice yields the same ids, once, in
+the same order as a mirror that does not repeat; and a mirror answering with
+twenty unrelated drawers first and the matching ones after finds nothing at
+`limit 2`, where the same mirror in the other order finds both — the surplus
+observed through relevance, since no counter sees a hydration.
+`search_through_a_mirror_that_repeats_or_floods_ids_prints_each_drawer_once`
+(`tests/cli.rs`): the same two arms through the real binary's
+`search --backend qdrant` against a loopback stub Qdrant.
+
+**Counterfactuals**, each on a scratch copy with the edit confirmed to land:
+removing the seen-set and the cap fails both tests on the repeat arm (each
+drawer printed two or three times); removing the cap alone fails both on the
+surplus arm. My first overlay did not compile — a `HashSet` with nothing left
+to infer its type from — and printed nothing, which read like a pass until
+the compile error was shown. `/v1` and MCP never consult a mirror, so the CLI
+is the one surface; O185 (the `ensure` a search calls) is untouched.
+
+**A real corpus**: the LoCoMo feed mined into one wing (85 drawers), searched
+through a loopback stub Qdrant answering every query with all 85 ids, twice.
+On the `a9ce6f0` binary each of three queries printed 5 hits naming only 3
+drawers, in 15–23 ms; on this tree, 5 distinct hits in 9–11 ms. **The cost,
+stated**: one query found 2 drawers here against 3 there, because the stub
+answers in list order rather than by similarity and the third match sat past
+the 20 ids asked for. An honest mirror ranks its answer, so the cap removes
+hits only from a mirror that did not do what it was asked; it is an
+availability cost of trusting the mirror's ORDER, which the untrusted-
+accelerator rule already accepts, never an integrity one. My first comparison
+ran the fixed binary twice: `cargo test --test cli` had rebuilt
+`release/undercroft` with the fix before I copied it as the baseline, and the
+two runs matched. The baseline was then taken from the `e2e` image built at
+`a9ce6f0`, checked to carry O224 and not O186.
+
 ### O224 — CLOSED 2026-09-19: an allow no longer replaces or re-creates what the screen never saw; a queue row records its destination's state
 
 **Filed 2026-09-18 by O220's ruling panel (all three lenses and the refuter),
@@ -19815,21 +19872,6 @@ proved per backend by asking twice. **Shape**: query without `ensure`, treating
 an absent collection as "no mirror" the way `status` does. **Gate**: the O83
 shape in `backends-e2e` — `search --backend` against a never-pushed vault, then
 `index status` twice reporting no mirror.
-
-### O186 — a mirror that repeats a candidate id gets duplicate hits back from remote search
-
-**Filed 2026-09-15 by O167's refuter; verified by reading, not executed.**
-`search_with_index` (`remote.rs`) walks every candidate the backend returns with
-no seen-set, so an id the mirror offers twice is loaded, scored and returned
-twice. Nothing bounds the response either: Qdrant, Chroma, Milvus and Weaviate
-keep the whole array their server sends, and pgvector's `LIMIT` runs on the
-server — which the module's own header calls untrusted. Integrity holds, since
-every hit is re-verified locally; the page does not, and until O167's build lands
-each repeat also re-embeds a stored drawer through a served embedder. **Shape**:
-drop repeated candidate ids before hydration, keeping first-seen order, and cap
-the candidates hydrated at what was asked for. **Gate**: an index fixture
-returning one id twice, and more ids than `limit`, yields one hit per drawer and
-no more than the page.
 
 ### O187 — `refine`'s fact-mirror drawers are embedded and screened with no record naming those endpoints
 

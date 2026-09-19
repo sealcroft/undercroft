@@ -470,16 +470,27 @@ impl VaultStore {
         index.ensure(&collection, self.embedder_dimension())?;
         let qvec = self.embedder_embed(query);
         // Over-fetch so local re-ranking + relevance gating has material.
-        let candidates = index.query(
-            &collection,
-            &qvec,
-            opts.wing.as_deref(),
-            depth.saturating_mul(4).max(20),
-        )?;
+        let asked = depth.saturating_mul(4).max(20);
+        let candidates = index.query(&collection, &qvec, opts.wing.as_deref(), asked)?;
         // One clock for every page of an iteration, exactly as locally.
         let now = opts.ranked_at.unwrap_or_else(time::OffsetDateTime::now_utc);
         let mut hits = Vec::new();
-        for c in candidates {
+        // The mirror is untrusted for SHAPE as well as for content (ROADMAP
+        // O186): nothing stops it answering one id twice, or far more ids than
+        // it was asked for. Every candidate is re-verified below, so neither
+        // could forge a hit — but a repeated id was loaded, scored and
+        // returned twice, filling the page with one drawer, and every id past
+        // the request was verified and decrypted for a page that could not use
+        // it. So a repeat is dropped before hydration, first-seen order kept,
+        // and hydration stops at the number of DISTINCT ids asked for — what
+        // an honest mirror returns at most. Deduplicating first means repeats
+        // cannot crowd distinct ids out of that budget.
+        let mut offered = std::collections::HashSet::new();
+        for c in candidates
+            .into_iter()
+            .filter(|c| offered.insert(c.id.clone()))
+            .take(asked)
+        {
             // Local load = HMAC verify + decrypt. Unknown ids (index drift
             // after deletes) are skipped, not trusted.
             let Some(drawer) = self.get(
@@ -1890,6 +1901,97 @@ mod tests {
                 "remote scores from the stored vector, as hydration does"
             );
         }
+    }
+
+    /// **A mirror that repeats ids, or answers with more than it was asked
+    /// for, yields one hit per drawer and hydrates nothing past the request**
+    /// (ROADMAP O186). Every candidate was re-verified, so neither could forge
+    /// a hit, but a repeated id came back as two hits for one drawer, and
+    /// every surplus id was verified and decrypted.
+    ///
+    /// The surplus arm is observed through relevance: the mirror answers with
+    /// the request's worth of unrelated drawers FIRST and the matching ones
+    /// after, so a search that stops where it should finds nothing — and the
+    /// premise, the same mirror in the other order, finds the matches.
+    ///
+    /// Counterfactual: without the seen-set the repeat arm returns each drawer
+    /// twice; without the cap the surplus arm finds the matching drawers.
+    #[test]
+    fn a_mirror_repeating_or_flooding_ids_returns_one_hit_per_drawer_and_hydrates_no_surplus() {
+        let (_d, mut s) = store();
+        for (i, text) in [
+            "the turbine inspection is on tuesday",
+            "the turbine blades were replaced",
+            "turbine noise complaints rose",
+        ]
+        .iter()
+        .enumerate()
+        {
+            s.upsert(&drawer("notes", text, i as u32)).unwrap();
+        }
+        let mut index = EchoIndex::default();
+        s.index_push(&mut index, PlaintextPush::Refuse).unwrap();
+        let opts = SearchOptions {
+            limit: 10,
+            ..Default::default()
+        };
+        let once = s.search_with_index(&mut index, "turbine", &opts).unwrap();
+        assert!(once.len() >= 2, "premise: {} hits", once.len());
+        index.repeat = true;
+        let repeated = s.search_with_index(&mut index, "turbine", &opts).unwrap();
+        let ids = |hits: &[SearchHit]| hits.iter().map(|h| h.drawer.id.clone()).collect::<Vec<_>>();
+        assert_eq!(
+            ids(&repeated),
+            ids(&once),
+            "a repeated id is one hit, in the order the mirror first offered it"
+        );
+
+        // Surplus: 20 unrelated drawers, then the matching ones. `limit: 2`
+        // asks the mirror for max(2·4, 20) = 20 candidates.
+        let (_d2, mut s) = store();
+        let mut unrelated = Vec::new();
+        for i in 0..20u32 {
+            let d = drawer(
+                "notes",
+                &format!("a quiet note about gardening, number {i}"),
+                i,
+            );
+            s.upsert(&d).unwrap();
+            unrelated.push(d.id);
+        }
+        let mut hot = Vec::new();
+        for (i, text) in [
+            "the turbine inspection is on tuesday",
+            "the turbine blades were replaced",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let d = drawer("notes", text, 100 + i as u32);
+            s.upsert(&d).unwrap();
+            hot.push(d.id);
+        }
+        let mut index = EchoIndex::default();
+        s.index_push(&mut index, PlaintextPush::Refuse).unwrap();
+        let opts = SearchOptions {
+            limit: 2,
+            ..Default::default()
+        };
+        index.ids = hot.iter().chain(unrelated.iter()).cloned().collect();
+        let premise = s.search_with_index(&mut index, "turbine", &opts).unwrap();
+        assert_eq!(
+            premise.len(),
+            2,
+            "premise: offered first, the matches are found"
+        );
+        index.ids = unrelated.iter().chain(hot.iter()).cloned().collect();
+        let flooded = s.search_with_index(&mut index, "turbine", &opts).unwrap();
+        assert!(
+            flooded.is_empty(),
+            "ids past the {} asked for were hydrated: {:?}",
+            20,
+            ids(&flooded)
+        );
     }
 
     /// **A stored vector that will not open fails the search as an integrity

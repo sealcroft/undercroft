@@ -1342,7 +1342,9 @@ Consequences that are binding, not advisory:
   ciphertext on a sealed vault, while on an hmac-only vault that blob IS the
   plaintext, so the push is refused unless `index push --allow-plaintext`
   declares it (C8). Remote results are candidate ids only, re-loaded and
-  HMAC-verified locally, and every push appends one `egress/index-push` chain
+  HMAC-verified locally — deduplicated first and capped at the distinct ids
+  asked for, because a mirror is untrusted for the SHAPE of its answer too
+  (O186) — and every push appends one `egress/index-push` chain
   record — a failed push too, once any batch had already left. **On a
   read-only open the store refuses the push, and `forget --backend`, before
   either touches the mirror (O175)**: `query_only` refuses a write INTO the
@@ -2130,8 +2132,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (959 run,
-                                      # 4 #[ignore]d = 963 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (961 run,
+                                      # 4 #[ignore]d = 965 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
