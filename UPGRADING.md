@@ -75,6 +75,55 @@ or when they could never be presented.
 
 ## 1.6.0 (unreleased)
 
+### a vault holding an older version of a row, written back offline, now fails `verify` and REFUSES the reads that would serve it (O234)
+
+**Who is affected:** anyone whose vault has had a row restored into it by
+anything other than `undercroft import` — a `sqlite3` edit, a partial file
+copy, a restore that put back only some tables — and anyone measuring warm
+search latency to a tight budget.
+
+**Symptom:** three, and the second is the one that stops work.
+
+- `undercroft verify` exits 2 with `version replay:  N` and a line per row:
+  `<id>: the drawer row is not the newest version in the chain`, or `… is
+  present after its destruction was recorded`. `/v1 …/verify` answers `"ok":
+  false` with `version_replay`, MCP says `VERIFY FAILED`, and the console
+  prints `REPLAYED:` lines.
+- **A read that RETURNS content refuses** — `search`, `get`, `recent`, and
+  the graph's entity, relationship, timeline and canonical doors — with
+  `<id>: the … row is not the version the audit chain last recorded — this
+  read consulted it`. It refuses on the whole set a read CONSULTED, not on
+  what it would have returned, so one replayed row can stop a search whose
+  answer never contained it.
+- `undercroft vault rotate` refuses while a finding stands, because a
+  rotation recomputes every tag from the row's current columns and would make
+  the replayed version authentic.
+
+**Cause:** every tagged table appends its row's tag to the audit chain when
+the row is written, and then recomputes that tag in place on the next write.
+Nothing compared the two, so an older version of a row verified under the
+current key over a record id that still existed. It does not any more.
+
+**Fix:** run `undercroft verify`, read the ids it names, and restore a backup
+that verifies. `undercroft import` of a whole-vault export is the supported
+way to put an older version back: it WRITES the row, which records it, and
+the leg stays quiet — a restore and a replay differ by exactly that record.
+The engine's own lookups never refuse, so an import can still read and
+replace a row a returning door would refuse to serve.
+
+**Not affected:** a key rotation, the knowledge-graph blinding walk, a
+destroy-then-re-mine, an authority promotion, a repeated `kg add` or tunnel
+create, or a vault rotated by any released binary. Each of those was measured
+before and after a rotation, on both security levels, expecting zero.
+
+**Cost:** `undercroft verify` is **76% slower** at 10⁵ drawers — 353 ms → 621
+ms on a 102,000-drawer sealed vault, three timed runs each. If you run it on a
+schedule with a timeout, raise the timeout. Warm search is **7.7% slower** at 10⁵ drawers — measured over four
+interleaved rounds on a 102,000-drawer sealed vault, 36.8 → 39.7 ms/q with
+the PQ tier and 9.74 → 10.49 s/q with no prefilter tier, where a search
+consults the whole corpus. `undercroft config check` cannot pre-flight this:
+it opens no vault, by design.
+
 ### after 1.6.0 has opened a vault writable, a 1.5.x binary refuses it with `integrity failure on record audit-chain head` — do not restore a backup over that (O233)
 
 **Who is affected:** anyone who rolls a binary back after upgrading: a

@@ -838,7 +838,7 @@ fn call_tool(store: &mut VaultStore, name: &str, args: &Value) -> Result<String>
                 )
             };
             let text = format!(
-                "records checked: {}\nhmac failures: {}\naudit chain: {}\naudit labels: {}\norphan labels: {}\nmirror drift: {}\npolicy drift: {}{}{}\nresult: {}",
+                "records checked: {}\nhmac failures: {}\naudit chain: {}\naudit labels: {}\norphan labels: {}\nmirror drift: {}\npolicy drift: {}\nversion replay: {}{}{}\nresult: {}",
                 report.records_checked,
                 report.bad_records.len(),
                 if report.chain_ok { "ok" } else { "BROKEN" },
@@ -846,6 +846,7 @@ fn call_tool(store: &mut VaultStore, name: &str, args: &Value) -> Result<String>
                 report.orphan_labels.len(),
                 report.mirror_drift.len(),
                 report.policy_drift.len(),
+                report.version_replay.len(),
                 sup_line,
                 rec_line,
                 if report.ok() {

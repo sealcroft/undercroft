@@ -25,6 +25,7 @@ pub mod manage;
 pub mod pq;
 mod pqidx;
 pub mod remote;
+mod replay;
 pub mod retention;
 mod rotate;
 
@@ -2698,6 +2699,36 @@ pub struct VerifyReport {
     /// `bad_records` because no drawer record is corrupt — this is a policy
     /// claim that stopped matching its own audit trail.
     pub policy_drift: Vec<String>,
+    /// Rows that are not the version the chain last recorded (ROADMAP O234).
+    ///
+    /// **The ninth leg, and it is the seventh applied to the tables that hold
+    /// the CORPUS** (the eighth is O233's label commitment, which counts by
+    /// arrival rather than by position in this struct). A drawer, a fact, an
+    /// entity and a tunnel each carry
+    /// an HMAC tag and each append that tag to the chain when written — and
+    /// the tag is then recomputed IN PLACE on every later write, so an older
+    /// version of a row copied out of the file and written back satisfies
+    /// both of the things `verify` checked: its tag verifies under the
+    /// current key, and its record id exists. Measured: after a `drawer
+    /// update` corrected an account number, restoring the earlier row's four
+    /// columns with sqlite3 served the old number again under `hmac
+    /// failures: 0`, `audit chain: ok`, `VERIFY OK`. The same restores an
+    /// ended or demoted canonical fact, and a drawer `forget` destroyed,
+    /// written back, is served beside its own tombstone — which only
+    /// `verify-forgetting`, holding that attestation, could see.
+    ///
+    /// The comparison and its three arms — a recorded newer version above
+    /// `max(the last rotation, the chain switch)`, the row's own tag sitting
+    /// in an older record, and a row present after its destruction — are
+    /// [`crate::replay::replay_finding`], with the reason for each bound
+    /// stated beside it. A rotation recomputes every tag from the row's
+    /// current columns, so a replayed version would come out of one
+    /// authentic: these are rotation blockers, on ROADMAP O232's criterion.
+    ///
+    /// Reported separately from `bad_records` for the reason the two legs
+    /// above it are: the row is not corrupt. Its tag verifies. What it is
+    /// not is current.
+    pub version_replay: Vec<String>,
 }
 
 impl VerifyReport {
@@ -2711,6 +2742,7 @@ impl VerifyReport {
             && self.mirror_drift.is_empty()
             && self.tampered_receipts() == 0
             && self.policy_drift.is_empty()
+            && self.version_replay.is_empty()
     }
 
     /// Supersession links whose keyed receipt failed its HMAC. The other
@@ -2767,6 +2799,12 @@ impl VerifyReport {
             mirror_drift: _,
             receipts,
             policy_drift,
+            // ROADMAP O234. A rotation recomputes every tag from the row's
+            // CURRENT columns, so a replayed older version — or a row
+            // restored after its destruction — comes out of one carrying an
+            // authentic tag, and the chain record that disagreed with it is
+            // the only evidence there was.
+            version_replay,
         } = self;
         let tampered = crate::kg::ReceiptVerdict::Tampered;
         let mut out: Vec<String> = bad_records
@@ -2794,6 +2832,7 @@ impl VerifyReport {
             )
         }));
         out.extend(policy_drift.iter().map(|p| format!("policy {p}")));
+        out.extend(version_replay.iter().map(|v| format!("version {v}")));
         out
     }
 }
@@ -6398,6 +6437,15 @@ impl VaultStore {
                         StoreError::Integrity(id.clone())
                     })?;
                 let drawer = self.decode(&id, &meta_json, &content_rest)?;
+                // ROADMAP O234: a row whose tag verifies can still be an
+                // older version of itself, written back. A read that RETURNS
+                // it refuses; the engine's own lookups do not, because the
+                // remedy is the write that replaces it.
+                self.refuse_replayed(
+                    read,
+                    crate::replay::Consulted::Drawers,
+                    Some(std::slice::from_ref(&id)),
+                )?;
                 // ROADMAP O50, through the one recording door.
                 self.record_read(read, &id, ReadScope::none(), 1)?;
                 Ok(Some(drawer))
@@ -6515,6 +6563,12 @@ impl VaultStore {
             .query_map(rusqlite::params_from_iter(binds.iter()), map)?
             .collect::<Result<_, _>>()?;
         let mut out = Vec::with_capacity(rows.len());
+        // ROADMAP O234, over the whole CONSULTED set: every row this read
+        // looked at, not only the ones that survive the admission test below
+        // — a replayed row that merely displaced a real one has changed the
+        // answer without appearing in it.
+        let consulted: Vec<String> = rows.iter().map(|(id, ..)| id.clone()).collect();
+        self.refuse_replayed(read, crate::replay::Consulted::Drawers, Some(&consulted))?;
         for (id, meta_json, content_rest, tag) in rows {
             self.vault
                 .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
@@ -7169,6 +7223,20 @@ impl VaultStore {
             })?
             .collect::<Result<_, _>>()?;
         phase_ms("sql-fetch", &mut t_phase);
+        // ROADMAP O234, before a byte is decrypted: the CONSULTED set is
+        // every candidate hydrated here, because a search's rank is a
+        // function of all of them — a replayed row that merely displaced a
+        // real one changed the answer without appearing in it. A search is
+        // always a returning read (`Read::Returned(ReadOp::Search)` at the
+        // record below), so the witness is stated rather than threaded.
+        {
+            let consulted: Vec<String> = rows.iter().map(|(id, ..)| id.clone()).collect();
+            self.refuse_replayed(
+                Read::Returned(ReadOp::Search),
+                crate::replay::Consulted::Drawers,
+                Some(&consulted),
+            )?;
+        }
 
         // Pass 1: verify + decrypt every candidate, and gather the signals
         // that don't need corpus statistics (cosine, recency). Content
@@ -8648,6 +8716,14 @@ impl VaultStore {
         policy_drift.extend(self.retention_policy_drift()?);
         policy_drift.sort();
 
+        // ── The ninth leg: the corpus's own rows against the chain that
+        // recorded them (ROADMAP O234). The seventh leg's question, asked of
+        // `drawers`, `kg_triples`, `kg_entities` and `tunnels` — every table
+        // whose rows carry a tag the chain holds and whose tag is then
+        // recomputed in place on the next write. One statement per table,
+        // short-circuiting on a single indexed probe for a row that agrees.
+        let version_replay = self.version_replay_drift()?;
+
         Ok(VerifyReport {
             records_checked: checked,
             bad_records: bad,
@@ -8658,6 +8734,7 @@ impl VaultStore {
             mirror_drift,
             receipts,
             policy_drift,
+            version_replay,
         })
     }
 

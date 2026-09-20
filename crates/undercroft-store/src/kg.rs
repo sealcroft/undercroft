@@ -3076,6 +3076,19 @@ impl VaultStore {
                AND review_state = 'approved' AND valid_to IS NULL \
              ORDER BY extracted_at DESC, seq DESC LIMIT 1"
         );
+        // ROADMAP O234, and this door is the one where the CONSULTED set is
+        // strictly wider than the answer: the filter above rides CLEAR
+        // columns (`canonical_key`, `authority_class`, `review_state`,
+        // `valid_to`), so a replayed row can walk INTO the filter and win on
+        // `extracted_at DESC` — or push the current holder out of it. The
+        // consulted set is therefore every row on this key, whatever the
+        // other clauses say, read through the `canonical_key` index.
+        let candidates: Vec<String> = self
+            .conn
+            .prepare("SELECT id FROM kg_triples WHERE canonical_key = ?1")?
+            .query_map(params![key], |r| r.get(0))?
+            .collect::<Result<_, _>>()?;
+        self.refuse_replayed(read, crate::replay::Consulted::Facts, Some(&candidates))?;
         let row = self
             .conn
             .prepare(&sql)?
@@ -3178,6 +3191,13 @@ impl VaultStore {
         direction: &str,
         read: crate::Read,
     ) -> Result<Vec<Triple>, StoreError> {
+        // ROADMAP O234, over the whole CONSULTED set: this door rides
+        // `all_triples`, which decodes every fact in the graph, so the set
+        // it consulted IS the table — naming the ids it kept would
+        // under-report exactly as recording a count on the shared helper
+        // would over-report (ROADMAP O51). A replayed fact that merely
+        // displaced the answer never appears in the answer.
+        self.refuse_replayed(read, crate::replay::Consulted::Facts, None)?;
         let all = self.all_triples()?;
         let key = as_of.map(temporal_key);
         let out: Vec<Triple> = all
@@ -3206,6 +3226,13 @@ impl VaultStore {
         as_of: Option<&str>,
         read: crate::Read,
     ) -> Result<Vec<Triple>, StoreError> {
+        // ROADMAP O234, over the whole CONSULTED set: this door rides
+        // `all_triples`, which decodes every fact in the graph, so the set
+        // it consulted IS the table — naming the ids it kept would
+        // under-report exactly as recording a count on the shared helper
+        // would over-report (ROADMAP O51). A replayed fact that merely
+        // displaced the answer never appears in the answer.
+        self.refuse_replayed(read, crate::replay::Consulted::Facts, None)?;
         let key = as_of.map(temporal_key);
         let out: Vec<Triple> = self
             .all_triples()?
@@ -3398,6 +3425,13 @@ impl VaultStore {
         entity: Option<&str>,
         read: crate::Read,
     ) -> Result<Vec<Triple>, StoreError> {
+        // ROADMAP O234, over the whole CONSULTED set: this door rides
+        // `all_triples`, which decodes every fact in the graph, so the set
+        // it consulted IS the table — naming the ids it kept would
+        // under-report exactly as recording a count on the shared helper
+        // would over-report (ROADMAP O51). A replayed fact that merely
+        // displaced the answer never appears in the answer.
+        self.refuse_replayed(read, crate::replay::Consulted::Facts, None)?;
         let mut out: Vec<Triple> = self
             .all_triples()?
             .into_iter()

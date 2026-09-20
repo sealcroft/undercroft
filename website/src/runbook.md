@@ -60,6 +60,7 @@ undercroft verify --vault <vault>
 # orphan labels:   0
 # mirror drift:    0
 # policy drift:    0
+# version replay:  0
 # VERIFY FAILED
 ```
 
@@ -68,7 +69,7 @@ The named id is the tampered record, and `VERIFY FAILED` exits **2**. Expect
 tags against the committed head and the manifest anchor, so editing the
 tampered record's bytes does not move it. `audit chain: BROKEN` is a separate
 finding — the audit trail itself was edited or truncated, or the database was
-rolled back relative to the anchor. The next three lines are further legs, and
+rolled back relative to the anchor. The next four lines are further legs, and
 a non-zero count on any of them fails the verdict too; a vault holding
 supersession links or fact receipts prints a line for each of those legs as
 well, where only a tampered count fails.

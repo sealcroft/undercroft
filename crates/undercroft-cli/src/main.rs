@@ -2688,6 +2688,13 @@ fn run(cli: Cli) -> Result<()> {
             for p in &report.policy_drift {
                 println!("  POLICY: {p}");
             }
+            // O234: a row that verifies, and is not the version the chain
+            // last recorded — an older drawer, fact or entity written back
+            // over the current one, or a row restored after its destruction.
+            println!("version replay:  {}", report.version_replay.len());
+            for v in &report.version_replay {
+                println!("  REPLAYED: {v}");
+            }
             // Drawer supersession links are part of the vault's integrity
             // story: a receipted link that fails its HMAC is tampering,
             // reported with the same severity as a bad record. The leg now

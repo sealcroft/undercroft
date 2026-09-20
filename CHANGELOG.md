@@ -8,6 +8,74 @@ its CLI mirror `tenant-repoint` are additive, and so are the operator plane's
 behaves differently because they exist. Everything else in this section is a
 fix whose only observable change is that a defect is gone.
 
+### an older version of a drawer, fact, entity or tunnel, written back offline, no longer passes `verify` (O234)
+
+Every table whose rows carry an HMAC tag appends that tag to the audit chain
+when the row is written — and then recomputes the tag IN PLACE on every later
+write. No leg compared the two. So a row copied out of the file and written
+back later satisfied both of the things `verify` checked: its tag verifies
+under the current key, and its record id exists. Measured on `d938e62`,
+through the CLI: after `drawer update` corrected "the account number is 1111"
+to "… 2222 (corrected)", restoring the earlier row's `meta_json`, `content`,
+`embedding` and `tag` with sqlite3 served "1111" again under `hmac failures:
+0`, `audit chain: ok`, `VERIFY OK`. The same restored an ended or demoted
+canonical fact, and a drawer `forget` had destroyed, written back, was served
+beside its own tombstone — visible only to `verify-forgetting`, and only to a
+caller holding that attestation.
+
+`verify` gains a ninth leg, `version_replay`, on all four renderers, and its
+findings block a key rotation (a rotation recomputes every tag from the row's
+current columns, so it would come out of one authentic). One decision, three
+arms, and the boundaries are the substance:
+
+- a record NEWER than the row's tag, above `max(the last rotation, the chain
+  switch)`. The rotation half is O230's; the switch half is this entry's, and
+  it is what the filing missed — the rotations from `cc0e1c7` to `55af8d1`
+  re-tagged drawers, facts and entities with no `rotate/` record at all, so a
+  bound on rotation alone false-alarms on every vault those binaries rotated;
+- the row's OWN tag sitting in an older record for the same key. Unbounded,
+  and it is what finds a replay made before the upgrade, which the first arm
+  structurally cannot see. Neither a rotation nor the blinding walk can trip
+  it, because a tag either of those produced appears in no record;
+- the row present after a newer DESTRUCTION record — which records destroy is
+  an exhaustive `Namespace::is_destruction`, not a `strip_prefix("del/")` at
+  the check, because a second destruction namespace is already filed (O205).
+  Destroy-then-re-mine records a write above the tombstone and is not a
+  finding.
+
+Facts take the newest record across `kg/{id}` and `kg/{id}/authority`, so an
+authority promotion is a write rather than a replay; tunnels take the third
+arm alone, because a tunnel row is never rewritten in place and
+`create_tunnel` appends a record for a create that wrote nothing (O236).
+
+**Reads refuse too.** A door that RETURNS content — `get`, `recent`, a
+search's hydrated candidates, and the graph's `kg_query_entity`,
+`kg_query_relationship`, `kg_timeline` and `lookup_canonical` — refuses on
+the whole CONSULTED set through one helper, because a replayed row that
+merely displaced a real one has changed the answer without appearing in it,
+and `lookup_canonical` filters on clear columns, so a replayed row there can
+hide the current holder rather than be returned in its place. An INTERNAL
+lookup never refuses: the remedy for a replayed row is the write that
+replaces it (`import_verdict`, O215), and refusing inside the engine's own
+reads would block the restore that fixes the vault. Measured at 102,000
+sealed drawers over four interleaved rounds, **+7.7% on warm search** under
+the PQ tier (36.8 → 39.7 ms/q) and **+7.7%** with no prefilter tier, where
+the consulted set is the whole corpus (9.74 → 10.49 s/q).
+
+`verify` itself costs more: measured on a 102,000-drawer sealed vault, three
+timed runs each, **353 ms → 621 ms** against a binary whose only difference is
+that the leg returns empty. That is what the ruling priced for this shape
+before it ruled, and it is a 76% rise on the command an operator runs on a
+schedule, so it is said here rather than left to be found.
+
+Found while building it, and reported as ours rather than as a finding: one
+refusal statement named every consulted id, and an unscoped search on a vault
+with no prefilter tier consults the WHOLE corpus — so the first real
+102,000-drawer run answered 500, `variable number must be between ?1 and
+?32766`. It batches now, under the 999-variable limit an older SQLite is
+compiled with rather than under the one this build reports. A fixture could
+not have seen it.
+
 ### the audit chain binds each record's label and time, so a relabelled audit row no longer passes `verify` (O233)
 
 The chain folded each record's TAG alone, `HMAC(mac, prev ‖ tag)`, so an audit

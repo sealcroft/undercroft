@@ -1093,6 +1093,12 @@ if grep -qF 'audit labels: intact' <<<"$MCP_CLEAN"; then
 else
   echo "FAIL  O233: MCP verify names the label commitment"; echo "$MCP_CLEAN" | sed 's/^/      /'; FAIL=$((FAIL+1))
 fi
+# ROADMAP O234: and so does the version leg, on the same reply.
+if grep -qF 'version replay: 0' <<<"$MCP_CLEAN"; then
+  echo "ok    O234: MCP verify names the version leg"; PASS=$((PASS+1))
+else
+  echo "FAIL  O234: MCP verify names the version leg"; echo "$MCP_CLEAN" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
 
 echo "== config check: an upgrade fails in a pipeline, not at a restart =="
 # The refusals this project added are deliberate — a declaration that turns a
@@ -1691,6 +1697,40 @@ check "O233: verify reads the relabel as a broken chain" 2 "audit chain:     BRO
   env UNDERCROFT_HOME="$O233_HOME" "$BIN" verify --vault second
 check "O233: a rotation over it refuses, exit 2" 2 "audit chain" -- \
   env UNDERCROFT_HOME="$O233_HOME" "$BIN" vault rotate second
+
+# ── ROADMAP O234: the version leg, through the surfaces an operator drives ──
+# A row that verifies can still be an OLDER version of itself, written back.
+# What an e2e can prove here is bounded, and the bound is the finding itself:
+# producing one needs the old row's authentic bytes, so no supported surface
+# can make this leg fire — an offline writer with a copy of the file can, and
+# that is what the store's own tests simulate. So these checks drive the two
+# halves an operator does meet: the leg is RENDERED, and the ordinary
+# lifecycle — an update in place, a destruction, a re-mine, and a restore from
+# an export taken BEFORE the update — leaves it at zero. That last one is the
+# one worth having: the import door writes an older version back on purpose
+# (ROADMAP O215), and it appends a record while doing so, which is exactly
+# what separates a restore from a replay.
+O234_HOME="$(mktemp -d)"
+o234() { env UNDERCROFT_HOME="$O234_HOME" "$BIN" "$@"; }
+o234 init >/dev/null 2>&1
+o234 remember "The account number is 1111." --wing ledger --room r >/dev/null 2>&1
+O234_EXPORT="$(mktemp)"
+o234 export > "$O234_EXPORT"
+O234_ID="$(o234 drawer list --wing ledger --limit 1 | awk '{print $1}')"
+o234 drawer update "$O234_ID" "The account number is 2222 (corrected)." >/dev/null 2>&1
+o234 remember "A note the sweep will destroy." --wing ledger --room r >/dev/null 2>&1
+O234_GONE="$(o234 drawer list --wing ledger --limit 1 | awk '{print $1}')"
+o234 drawer delete "$O234_GONE" >/dev/null 2>&1
+check "O234: the version leg is rendered, and an update is not a replay" 0 \
+  "version replay:  0" -- env UNDERCROFT_HOME="$O234_HOME" "$BIN" verify
+# The restore: an export taken before the correction, imported over it. The
+# older content lands again — legitimately, through the door that exists for
+# it — and the leg stays quiet because the import RECORDED the write.
+o234 import "$O234_EXPORT" >/dev/null 2>&1
+check "O234: a restore from an older export is not a replay" 0 \
+  "version replay:  0" -- env UNDERCROFT_HOME="$O234_HOME" "$BIN" verify
+check "O234: and the restored content is served" 0 "1111" -- \
+  env UNDERCROFT_HOME="$O234_HOME" "$BIN" drawer get "$O234_ID"
 
 EXPORT_FILE="$(mktemp)"
 "$BIN" export > "$EXPORT_FILE"
@@ -3025,6 +3065,11 @@ rest_body "verify after rotate" '"ok":true'       -- -X POST "$API/vaults/acme/v
 # ROADMAP O233: the eighth leg reaches the wire, and a rotation keeps the
 # labels it bound — the commitment is preserved verbatim.
 rest_body "O233: /v1 verify names the label commitment" '"label_commitment":"intact"' -- \
+  -X POST "$API/vaults/acme/verify" -H "X-Vault-Assertion: $(sign acme)"
+# ROADMAP O234: the version leg reaches the wire too — and this vault has just
+# been ROTATED, which re-tags every row and records nothing per row, so a leg
+# without the boundary it uses would read the whole corpus as replayed here.
+rest_body "O234: /v1 verify names the version leg after a rotation" '"version_replay":[]' -- \
   -X POST "$API/vaults/acme/verify" -H "X-Vault-Assertion: $(sign acme)"
 rest_body "search after rotate" 'postgres'        -- -X POST "$API/vaults/acme/search" \
   -H "X-Vault-Assertion: $(sign acme)" -d '{"query":"which database for billing"}'

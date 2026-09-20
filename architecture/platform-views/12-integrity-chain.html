@@ -44,9 +44,9 @@
     <p class="eyebrow">Data flow · 12 of 22 · Undercroft</p>
     <h1>How tampering is detected</h1>
 
-    <svg viewBox="0 0 1200 768" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="integrity-chain-title integrity-chain-desc">
-      <title id="integrity-chain-title">Undercroft integrity chain and the eight legs of verify</title>
-      <desc id="integrity-chain-desc">Every write appends one HMAC-tagged audit record, chained over its label, tag and time, inside the same database transaction that stores the data, advancing the committed head in chain_meta, while a separate manifest anchor is fsynced outside it and deliberately lags behind the database so that a power loss reconciles as a crash rather than raising a tamper alarm; verify then reads that committed state and returns one verdict assembled from eight legs — record HMACs, chain replay, the label commitment that binds the labels the chain held when it switched to the labelled step, supersession receipts, knowledge-graph fact receipts, orphan graph labels, mirror drift, which compares a clear column against its HMAC-covered copy, and policy drift, which re-verifies every wing-trust and retention row under the current key and matches it to the chain record that assigned it, so an edit or a deletion made offline is caught.</desc>
+    <svg viewBox="0 0 1200 828" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="integrity-chain-title integrity-chain-desc">
+      <title id="integrity-chain-title">Undercroft integrity chain and the nine legs of verify</title>
+      <desc id="integrity-chain-desc">Every write appends one HMAC-tagged audit record, chained over its label, tag and time, inside the same database transaction that stores the data, advancing the committed head in chain_meta, while a separate manifest anchor is fsynced outside it and deliberately lags behind the database so that a power loss reconciles as a crash rather than raising a tamper alarm; verify then reads that committed state and returns one verdict assembled from nine legs — record HMACs, chain replay, the label commitment that binds the labels the chain held when it switched to the labelled step, supersession receipts, knowledge-graph fact receipts, orphan graph labels, mirror drift, which compares a clear column against its HMAC-covered copy, policy drift, which re-verifies every wing-trust and retention row under the current key and matches it to the chain record that assigned it, and version replay, which matches every drawer, fact, entity and tunnel row against the chain record that last wrote it, so an older version of a row written back offline, or a row present after its recorded destruction, is caught as well as an edit or a deletion.</desc>
       <defs>
         <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7fa39c"/></marker>
         <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#35e0c2"/></marker>
@@ -60,7 +60,7 @@
       <rect x="284" y="28" width="72" height="12" rx="2" fill="#04080a"/>
       <text x="320" y="37" fill="rgba(217,240,234,0.40)" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.14em">WRITE PATH</text>
 
-      <rect x="600" y="24" width="480" height="616" rx="8" fill="rgba(217,240,234,0.02)" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
+      <rect x="600" y="24" width="480" height="676" rx="8" fill="rgba(217,240,234,0.02)" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
       <rect x="816" y="28" width="48" height="12" rx="2" fill="#04080a"/>
       <text x="840" y="37" fill="rgba(217,240,234,0.40)" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.14em">VERIFY</text>
 
@@ -75,7 +75,7 @@
       <!-- chain_meta -> verify (gutter corridor at x=548) -->
       <path d="M 480,348 H 540 Q 548,348 548,340 V 100 Q 548,92 556,92 H 632" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
 
-      <!-- verify -> eight legs; attach points 648..816 on the bottom edge, 24 apart; chips 60 apart -->
+      <!-- verify -> nine legs; attach points 624..816 on the bottom edge, 24 apart; chips 60 apart -->
       <path d="M 816,136 V 164 Q 816,172 824,172 H 848" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
       <path d="M 792,136 V 224 Q 792,232 800,232 H 848" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
       <path d="M 768,136 V 284 Q 768,292 776,292 H 848" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
@@ -84,6 +84,7 @@
       <path d="M 696,136 V 464 Q 696,472 704,472 H 848" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
       <path d="M 672,136 V 524 Q 672,532 680,532 H 848" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
       <path d="M 648,136 V 584 Q 648,592 656,592 H 848" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 624,136 V 644 Q 624,652 632,652 H 848" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
 
       <!-- ============ ARROW LABELS (mask + 8px gap) ============ -->
       <rect x="328" y="128" width="96" height="12" rx="2" fill="#04080a"/>
@@ -141,7 +142,7 @@
       <rect x="640" y="54" width="44" height="12" rx="2" fill="transparent" stroke="rgba(53,224,194,0.50)" stroke-width="0.8"/>
       <text x="662" y="63" fill="#35e0c2" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.08em">VERIFY</text>
       <text x="736" y="92" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif" text-anchor="middle">verify</text>
-      <text x="736" y="110" fill="#7fa39c" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">eight legs, one verdict</text>
+      <text x="736" y="110" fill="#7fa39c" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">nine legs, one verdict</text>
       <text x="736" y="124" fill="#5c7f79" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">reads; never writes</text>
 
       <!-- ============ VERIFY LEGS (chips) ============ -->
@@ -198,35 +199,42 @@
       <text x="892" y="590" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif">policy drift</text>
       <text x="892" y="604" fill="#ff5d73" font-size="9" font-family="'DejaVu Sans Mono', monospace">trust + retention rows vs chain</text>
 
+      <rect x="848" y="628" width="216" height="48" rx="4" fill="#04080a"/>
+      <rect x="848" y="628" width="216" height="48" rx="4" fill="rgba(255,93,115,0.10)" stroke="#ff5d73" stroke-width="1"/>
+      <rect x="856" y="646" width="24" height="12" rx="2" fill="transparent" stroke="rgba(255,93,115,0.50)" stroke-width="0.8"/>
+      <text x="868" y="655" fill="#ff5d73" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.08em">09</text>
+      <text x="892" y="650" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif">version replay</text>
+      <text x="892" y="664" fill="#ff5d73" font-size="9" font-family="'DejaVu Sans Mono', monospace">row tag vs its newest record</text>
+
       <!-- ============ CALLOUT ============ -->
-      <line x1="124" y1="620" x2="124" y2="668" stroke="rgba(217,240,234,0.18)" stroke-width="1.2"/>
-      <text x="148" y="634" fill="#5c7f79" font-size="7" font-family="'DejaVu Sans Mono', monospace" letter-spacing="0.14em">THE RULE</text>
-      <text x="148" y="662" fill="#d9f0ea" font-size="17" font-style="italic" font-family="'DejaVu Serif', 'Noto Serif', serif">A keyed claim in columns no drawer HMAC or chain step covers needs a leg here, or goes unseen.</text>
+      <line x1="124" y1="680" x2="124" y2="728" stroke="rgba(217,240,234,0.18)" stroke-width="1.2"/>
+      <text x="148" y="694" fill="#5c7f79" font-size="7" font-family="'DejaVu Sans Mono', monospace" letter-spacing="0.14em">THE RULE</text>
+      <text x="148" y="722" fill="#d9f0ea" font-size="17" font-style="italic" font-family="'DejaVu Serif', 'Noto Serif', serif">A keyed claim in columns no drawer HMAC or chain step covers needs a leg here, or goes unseen.</text>
 
       <!-- ============ LEGEND ============ -->
-      <line x1="120" y1="696" x2="1080" y2="696" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
-      <text x="120" y="716" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace" letter-spacing="0.14em">LEGEND</text>
+      <line x1="120" y1="756" x2="1080" y2="756" stroke="rgba(217,240,234,0.10)" stroke-width="0.8"/>
+      <text x="120" y="776" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace" letter-spacing="0.14em">LEGEND</text>
 
-      <rect x="212" y="708" width="16" height="10" rx="2" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1"/>
-      <text x="236" y="716" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace">FOCAL</text>
+      <rect x="212" y="768" width="16" height="10" rx="2" fill="rgba(53,224,194,0.10)" stroke="#35e0c2" stroke-width="1"/>
+      <text x="236" y="776" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace">FOCAL</text>
 
-      <rect x="292" y="708" width="16" height="10" rx="2" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
-      <text x="316" y="716" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace">COMPONENT</text>
+      <rect x="292" y="768" width="16" height="10" rx="2" fill="#071014" stroke="#d9f0ea" stroke-width="1"/>
+      <text x="316" y="776" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace">COMPONENT</text>
 
-      <rect x="392" y="708" width="16" height="10" rx="2" fill="rgba(217,240,234,0.05)" stroke="#7fa39c" stroke-width="1"/>
-      <text x="416" y="716" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace">ON DISK</text>
+      <rect x="392" y="768" width="16" height="10" rx="2" fill="rgba(217,240,234,0.05)" stroke="#7fa39c" stroke-width="1"/>
+      <text x="416" y="776" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace">ON DISK</text>
 
-      <rect x="484" y="708" width="16" height="10" rx="2" fill="#071014" stroke="#5c7f79" stroke-width="1"/>
-      <text x="508" y="716" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace">VERIFY LEG</text>
+      <rect x="484" y="768" width="16" height="10" rx="2" fill="#071014" stroke="#5c7f79" stroke-width="1"/>
+      <text x="508" y="776" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace">VERIFY LEG</text>
 
-      <rect x="592" y="708" width="16" height="10" rx="2" fill="rgba(255,93,115,0.10)" stroke="#ff5d73" stroke-width="1"/>
-      <text x="616" y="716" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace">OFFLINE-EDIT LEG</text>
+      <rect x="592" y="768" width="16" height="10" rx="2" fill="rgba(255,93,115,0.10)" stroke="#ff5d73" stroke-width="1"/>
+      <text x="616" y="776" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace">OFFLINE-EDIT LEG</text>
 
-      <line x1="728" y1="713" x2="760" y2="713" stroke="#35e0c2" stroke-width="1.2"/>
-      <text x="768" y="716" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace">SAME TRANSACTION</text>
+      <line x1="728" y1="773" x2="760" y2="773" stroke="#35e0c2" stroke-width="1.2"/>
+      <text x="768" y="776" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace">SAME TRANSACTION</text>
 
-      <line x1="880" y1="713" x2="912" y2="713" stroke="#7fa39c" stroke-width="1.2"/>
-      <text x="920" y="716" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace">LAGGING WRITE</text>
+      <line x1="880" y1="773" x2="912" y2="773" stroke="#7fa39c" stroke-width="1.2"/>
+      <text x="920" y="776" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace">LAGGING WRITE</text>
     </svg>
   </div>
 </body>

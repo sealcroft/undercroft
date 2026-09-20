@@ -674,14 +674,40 @@ Consequences that are binding, not advisory:
   which is what makes a 1.5.x binary refuse the vault instead of appending
   version-1 steps to it; measured, and without the fence it wrote and
   rotated and left 1.6.0 unable to open the vault),
-  verify (**`VerifyReport` is the whole verdict and it has EIGHT legs**: record
+  verify (**`VerifyReport` is the whole verdict and it has NINE legs**: record
   HMACs, the chain replay, the label commitment (O233), drawer supersession
   receipts, **KG fact receipts**, orphan graph labels, mirror drift,
-  **declared-policy drift**.
+  **declared-policy drift**, **version replay (O234)**.
   The rule that keeps growing
   it: *a keyed claim living in columns no drawer HMAC and no chain step
-  covers must have a leg, or nothing sees it.* **The seventh is that rule
-  applied one table over (O94)**: `wing_trust` and `retention_policy` are
+  covers must have a leg, or nothing sees it.* **The NINTH is that rule
+  applied to the tables that hold the CORPUS (O234)**: a drawer, a fact, an
+  entity and a tunnel each append their tag to the chain when written and
+  then have that tag recomputed IN PLACE on the next write, and no leg
+  compared the two — so an older version of a row, written back offline,
+  verified under the current key over a record id that still exists.
+  Measured: a `drawer update` that corrected an account number, then the
+  earlier row's four columns restored with sqlite3, read the old number again
+  under `VERIFY OK`. Three arms, and the boundaries are the whole of it: a
+  newer record above `max(the last rotation, O233's switch)` — the switch
+  half because the rotations from `cc0e1c7` to `55af8d1` re-tagged every row
+  with NO `rotate/` record, so a bound on rotation alone false-alarms on
+  every vault they touched; the row's own tag sitting in an OLDER record,
+  which is unbounded and is what finds a replay made before the upgrade; and
+  a row present after a newer DESTRUCTION record, through an exhaustive
+  `Namespace::is_destruction` rather than a `strip_prefix("del/")`, because
+  O205 has a second destruction namespace filed. Findings fail `verify` and
+  block a rotation. **The READ half lands with it**: a `Read::Returned` door
+  refuses on the whole CONSULTED set through one helper — `get`, `recent`,
+  `search_inner`, and the graph's `kg_query_entity`/`_relationship`/
+  `kg_timeline`/`lookup_canonical` — while an INTERNAL lookup never refuses,
+  because the remedy for a replayed row is the write that replaces it
+  (`import_verdict`, O215) and refusing there would block the restore.
+  Measured at 102,000 sealed drawers, four interleaved rounds: **+7.7% warm
+  search** under the PQ tier (36.8 → 39.7 ms/q) and **+7.7%** with no
+  prefilter tier at all (9.74 → 10.49 s/q, where the consulted set is the
+  whole corpus) — under the 10% the ruling set as its condition.
+  **The seventh leg is that same rule one table over (O94)**: `wing_trust` and `retention_policy` are
   operator declarations, HMAC-tagged, outside every drawer's coverage, and
   `verify()` mentioned neither table. A FLIP failed closed on the retrieval
   path (`wing_trusts()` raises `Integrity`) while `verify` still answered OK
@@ -2172,8 +2198,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (992 run,
-                                      # 4 #[ignore]d = 996 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (1008 run,
+                                      # 4 #[ignore]d = 1012 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2295,7 +2321,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (580 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (585 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (167 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (157 checks; weaviate

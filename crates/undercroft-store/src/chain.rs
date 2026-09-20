@@ -498,6 +498,89 @@ pub(crate) fn append(
     Ok(next)
 }
 
+// ── What the chain says ABOUT one label ────────────────────────────────────
+//
+// The readers below answer "which record assigned this row, and when" — the
+// question O230's policy decision asks of `wing_trust` and `retention_policy`
+// and O234's asks of `drawers`, `kg_triples`, `kg_entities` and `tunnels`.
+// One question, four tables, ONE implementation: they were written for the
+// policy tables and live here now, because a second copy is a second place
+// for the boundary arithmetic to be subtly wrong — and the boundary is what
+// separates a replay from a rotation that legitimately re-tagged every row.
+
+/// One audit record's place in the chain and its tag.
+pub(crate) struct ChainRecord {
+    /// Where it sits in the trail.
+    pub(crate) seq: i64,
+    /// The tag it recorded, as BYTES.
+    pub(crate) tag: Vec<u8>,
+}
+
+/// The newest audit record carrying exactly this label — an indexed
+/// equality on `record_id` (`idx_audit_record_id`), newest first.
+pub(crate) fn newest_record(
+    conn: &Connection,
+    record_id: &str,
+) -> Result<Option<ChainRecord>, StoreError> {
+    Ok(conn
+        .query_row(
+            "SELECT seq, tag FROM audit WHERE record_id = ?1 ORDER BY seq DESC LIMIT 1",
+            params![record_id],
+            |r| {
+                // The tag's BYTES, whatever storage class holds them: a
+                // tag rewritten as text made this read — and so the
+                // whole `verify` — return an error instead of a verdict.
+                // The chain replay reports the retype itself (ROADMAP
+                // O233); here the bytes are what the comparison needs.
+                let tag = match r.get_ref(1)? {
+                    ValueRef::Blob(b) => b.to_vec(),
+                    ValueRef::Text(t) => t.to_vec(),
+                    _ => Vec::new(),
+                };
+                Ok(ChainRecord {
+                    seq: r.get(0)?,
+                    tag,
+                })
+            },
+        )
+        .optional()?)
+}
+
+/// The newest rotation's place in the chain — the boundary a tag comparison
+/// stops at. A half-open range on `record_id` rather than a `LIKE`: SQLite's
+/// `LIKE` is case-insensitive and cannot use the BINARY index, so it would
+/// scan the whole trail on every floored search and could disagree with an
+/// equality about `ROTATE/x`.
+pub(crate) fn rotation_boundary(conn: &Connection) -> Result<Option<i64>, StoreError> {
+    let (lo, hi) = prefix_range(Namespace::Rotate);
+    Ok(conn.query_row(
+        "SELECT MAX(seq) FROM audit WHERE record_id >= ?1 AND record_id < ?2",
+        [lo.as_str(), hi.as_str()],
+        |r| r.get(0),
+    )?)
+}
+
+/// A namespace's labels as a half-open range: `prefix` up to the same string
+/// with its closing `/` replaced by the next byte, `0`.
+pub(crate) fn prefix_range(ns: Namespace) -> (String, String) {
+    let lo = ns.prefix().to_string();
+    let hi = format!("{}0", &lo[..lo.len() - 1]);
+    (lo, hi)
+}
+
+/// Every distinct label a namespace's records carry, by the same range.
+pub(crate) fn chain_keys(conn: &Connection, ns: Namespace) -> Result<Vec<String>, StoreError> {
+    let (lo, hi) = prefix_range(ns);
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT record_id FROM audit \
+         WHERE record_id >= ?1 AND record_id < ?2 ORDER BY record_id",
+    )?;
+    let keys = stmt
+        .query_map([lo.as_str(), hi.as_str()], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    Ok(keys)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
