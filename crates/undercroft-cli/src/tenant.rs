@@ -1441,6 +1441,10 @@ impl Tenancy {
             "orphan_labels": report.orphan_labels,
             "mirror_drift": report.mirror_drift,
             "policy_drift": report.policy_drift,
+            // ROADMAP O234: rows that verify and are not the version the
+            // chain last recorded — a replayed older version, or a row
+            // present after its destruction was recorded.
+            "version_replay": report.version_replay,
             "supersessions": {
                 "verified": count(V::Verified),
                 "source_changed": count(V::SourceChanged),

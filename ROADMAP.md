@@ -4179,6 +4179,153 @@ MINOR since O149: `PATCH /admin/tenants/{id}` and its CLI mirror are new
 capability, backward compatible. The rest of the section is PATCH work — no
 documented contract moves.
 
+### O234 — CLOSED 2026-09-20: an older, validly tagged version of a drawer, fact, entity or tunnel, written back offline, no longer passes `verify`
+
+**Filed 2026-09-19 by O230/O232's ruling; measured for drawers on `d938e62`.**
+A drawer upsert, a fact's validity window closing, an authority change and an
+entity re-tag each rewrite the row's tag in place and append the new tag to the
+chain (`lib.rs` drawer write, `kg.rs` window close, authority, entity); no leg
+compares a row's CURRENT tag with its newest chain record, and `orphan_labels`
+never flags a row that is present after a newer `del/{id}`. Measured: after
+`drawer update` corrected "the account number is 1111" to "… 2222 (corrected)",
+the earlier row's `meta_json`, `content`, `embedding` and `tag` written back with
+sqlite3 read "1111" again, with `hmac failures: 0`, `audit chain: ok`, `VERIFY
+OK`. By reading, the same restores an ended or demoted canonical fact, and a
+drawer destroyed by `forget` written back resurrects it beside its own
+tombstone.
+
+**Shape**: O230's comparison, extended to every table that appends its row's
+tag to the chain — a row's tag must equal its newest record's tag above the
+last rotation, and a row present after a newer `del/{id}` is a finding — on the
+one gatherer O230 builds. A panel's question for its cost: `verify` walks the
+drawers already, and the reads that return content would pay a per-row chain
+probe. It shares O233's label residual.
+
+**Gate**: an update-then-restore and a forget-then-restore each make `verify`
+fail. **Counterfactual**: today, `VERIFY OK`.
+
+#### RULED 2026-09-19 by the panel recorded under O233 (three lenses plus an adversarial refuter)
+
+The full record — measurements, prior rulings, options, splits — is O233's
+`#### RULED 2026-09-19`. This entry's half: one pure decision on O230's gatherer
+flags a row when (1) its key's newest record lies above max(the last `rotate/`,
+O233's switch S) with a different tag, (2) at any seq its tag equals an older
+record's for that key while the newest differs, or (3) it is present after a
+newer destruction record, through an exhaustive `Namespace` predicate. Facts
+take the newest across `kg/{id}` and `kg/{id}/authority`; tunnels arm 3 only;
+arm 1 only on a switched vault. Findings fail `verify` and block a rotation.
+Internal lookups never refuse; the `Read::Returned` doors refuse on the whole
+consulted set through one helper, landing in this pull request only if it adds
+at most 10% to warm search ms/q at ~10⁵ drawers, filed otherwise. The ruling
+built it second, in O233's pull request; **it moved to its own pull request in
+`1.6.0`** because the session that built O233 measured 80% of its context used
+at O233's close — recorded in O233's `#### BUILT`. O233's switch is already in
+the tree, so arm 1 has its boundary; build from this record, not from a new
+panel.
+
+**This entry's filing was incomplete in two places**, found by the panel: the
+rotations from `cc0e1c7` to `55af8d1` re-tagged drawers, facts and entities with
+no `rotate/` record, so a boundary on `rotate/` alone false-alarms on every
+vault they rotated; and a boundary on S alone would hide every replay made
+before the upgrade — arm 2 is what finds those.
+
+
+#### BUILT 2026-09-20, as ruled — including the read half, which the measurement admitted
+
+**The decision.** `crates/undercroft-store/src/replay.rs` holds `TAGGED` (the
+four tables, each stating the labels a write appends, the destruction infix,
+and whether its rows are ever rewritten in place) and `replay_finding`, a pure
+function of one row's evidence — so `verify` and every returning door answer
+the same question the same way. `Namespace::is_destruction` is the exhaustive
+predicate arm 3 reads, beside `fenced_from_agent` and for the same reason.
+`verify`'s ninth leg is `VerifyReport.version_replay`, on all four renderers,
+in `ok()`, and in `rotation_blockers` (destructured with no `..`, so it did
+not compile until it was ruled).
+
+**One gatherer, shared.** O230's `newest_record`, `rotation_boundary`,
+`prefix_range` and `chain_keys` moved from `retention.rs` into `chain.rs` as
+`pub(crate)` free functions — the same question about a label, asked of four
+more tables, with one implementation. `retention.rs` calls them; nothing about
+O230's decision moved.
+
+**Cost, and the shape that buys it.** One statement per table, whose LEADING
+subquery settles a clean row with a single indexed probe of
+`idx_audit_record_id` and short-circuits the rest; arm 3 is driven from the
+destruction records instead of from the table, so it costs two probes per
+destroyed thing rather than one per row of the corpus.
+
+Measured on the 102,000-drawer sealed corpus, three timed runs each after a
+warm-up, against a binary whose only difference is that the leg returns
+empty: **`verify` 353 ms → 621 ms** (342–399 against 602–639), **+268 ms**.
+That is the 281 ms the panel priced for exactly this shape BEFORE it ruled,
+so the implementation costs what the ruling bought — but it is a 76% rise on
+the one command an operator runs on a schedule, and it is stated here,
+in CHANGELOG and in `UPGRADING.md` rather than left to be discovered. Both
+binaries answered `version replay:  0` on that corpus.
+
+**The read half LANDS**, measured as the ruling required. Four interleaved
+rounds of 25 warm requests each through a long-lived `serve-http` over the
+102,000-drawer sealed corpus, two release binaries differing only in an early
+return inside the helper (both present, byte-different, checked):
+
+| configuration | without | with | delta |
+| --- | --- | --- | --- |
+| `UNDERCROFT_RETRIEVAL=pq` (what a 10⁵ deployment runs) | 36.84 ms/q | 39.67 ms/q | **+7.7%** |
+| no prefilter tier — the consulted set is the whole corpus | 9.74 s/q | 10.49 s/q | **+7.7%** |
+
+`WITH` was slower in every one of the four rounds, so the effect is real
+rather than noise, and both configurations sit under the 10% the ruling set.
+
+**That measurement is also the false-alarm sweep at scale, and it is the
+strongest evidence here.** Every request ran under `curl -fsS`, which fails on
+any non-2xx, and all 200 of them returned a timing — so on a real 102,000-row
+corpus whose chain had switched, no row tripped a single arm. The no-tier half
+is the sharp one: with no prefilter tier a search consults the WHOLE corpus, so
+those 100 requests put all 102,000 rows through the check and none was read as
+a replay.
+The doors are `get`, `recent`, `search_inner`, `kg_query_entity`,
+`kg_query_relationship`, `kg_timeline` and `lookup_canonical` — never partial,
+held by a source gate that names them and names the three drawer verify sites
+that do not ask, with the reason each cannot (`walk_covered` IS the leg; the
+two export paths carry no caller witness, are `InternalRead::ExportAudited`,
+and are covered by an unconditional `egress/` record and by `backup create`
+gating on this verdict).
+
+**Reported as mine, not as a finding.** The first real 102,000-drawer run
+answered **500**: one refusal statement named every consulted id, and an
+unscoped search on a vault with no prefilter tier consults the whole corpus,
+past SQLite's `?32766`. It batches at 900 now — the limit an older SQLite is
+compiled with, not the one this build reports. A fixture could not have seen
+it, and the entry's own gate would have passed over it.
+
+**Tests** (16 in `replay.rs`). Each arm on its own through the pure function,
+including the two shapes that must NOT fire (a tag no record holds below the
+boundary — a rotation, or the blinding walk — and a destruction older than the
+newest write); O234a, b and c end to end, each asserting every OTHER leg clean
+so the verdict is attributable; a demotion written back and a promotion that
+is not one, which is what makes the two-label rule for facts more than a
+premise; a repeated tunnel create clean and a deleted tunnel restored found;
+the false-alarm sweep — every ordinary write surface, on both levels, before
+AND after a key rotation, expecting zero; a replay made before the switch,
+found by the unbounded arm with arm 1 asserted off; a returning read refusing
+while an internal one serves the same row; a search refusing on a candidate it
+would not have returned; the authority door refusing on a key whose answer the
+replay HIDES; a graph door refusing on a fact about another entity; and a
+clean vault returning from all five guarded doors. `e2e`: five checks — the
+leg rendered on CLI, MCP and `/v1` (the last on a vault that has just been
+ROTATED, which is the false-alarm case a boundary-less leg would fail), an
+ordinary lifecycle at zero, and a restore from an export taken BEFORE the
+update, which lands older content legitimately and stays quiet because the
+import RECORDED the write.
+
+**What an e2e cannot do here, stated rather than left implicit.** No supported
+surface can make this leg fire: producing a finding needs the old row's
+authentic bytes, which is an offline writer with a copy of the file. The
+positive direction therefore lives in the store's own tests, where that writer
+can be simulated; the e2e drives the two halves an operator meets.
+
+**Figures**: cargo 1008/4 (1012 compiled), e2e 585; landing tiles 1008 and 997.
+
 ### O233 — CLOSED 2026-09-19: the audit chain binds each record's label and time, so a relabelled audit row no longer passes `verify`
 
 **Filed 2026-09-19 by O230/O232's ruling; measured on `d938e62`.**
@@ -21944,56 +22091,6 @@ leg of its own projected on all four renderers.
 
 **Gate**: a drawer re-tagged over an unparseable `meta_json` makes `verify`
 fail and names it. **Counterfactual**: today, `VERIFY OK`.
-
-### O234 — an older, validly tagged version of a drawer or a fact written back offline passes `verify`
-
-**Filed 2026-09-19 by O230/O232's ruling; measured for drawers on `d938e62`.**
-A drawer upsert, a fact's validity window closing, an authority change and an
-entity re-tag each rewrite the row's tag in place and append the new tag to the
-chain (`lib.rs` drawer write, `kg.rs` window close, authority, entity); no leg
-compares a row's CURRENT tag with its newest chain record, and `orphan_labels`
-never flags a row that is present after a newer `del/{id}`. Measured: after
-`drawer update` corrected "the account number is 1111" to "… 2222 (corrected)",
-the earlier row's `meta_json`, `content`, `embedding` and `tag` written back with
-sqlite3 read "1111" again, with `hmac failures: 0`, `audit chain: ok`, `VERIFY
-OK`. By reading, the same restores an ended or demoted canonical fact, and a
-drawer destroyed by `forget` written back resurrects it beside its own
-tombstone.
-
-**Shape**: O230's comparison, extended to every table that appends its row's
-tag to the chain — a row's tag must equal its newest record's tag above the
-last rotation, and a row present after a newer `del/{id}` is a finding — on the
-one gatherer O230 builds. A panel's question for its cost: `verify` walks the
-drawers already, and the reads that return content would pay a per-row chain
-probe. It shares O233's label residual.
-
-**Gate**: an update-then-restore and a forget-then-restore each make `verify`
-fail. **Counterfactual**: today, `VERIFY OK`.
-
-#### RULED 2026-09-19 by the panel recorded under O233 (three lenses plus an adversarial refuter)
-
-The full record — measurements, prior rulings, options, splits — is O233's
-`#### RULED 2026-09-19`. This entry's half: one pure decision on O230's gatherer
-flags a row when (1) its key's newest record lies above max(the last `rotate/`,
-O233's switch S) with a different tag, (2) at any seq its tag equals an older
-record's for that key while the newest differs, or (3) it is present after a
-newer destruction record, through an exhaustive `Namespace` predicate. Facts
-take the newest across `kg/{id}` and `kg/{id}/authority`; tunnels arm 3 only;
-arm 1 only on a switched vault. Findings fail `verify` and block a rotation.
-Internal lookups never refuse; the `Read::Returned` doors refuse on the whole
-consulted set through one helper, landing in this pull request only if it adds
-at most 10% to warm search ms/q at ~10⁵ drawers, filed otherwise. The ruling
-built it second, in O233's pull request; **it moved to its own pull request in
-`1.6.0`** because the session that built O233 measured 80% of its context used
-at O233's close — recorded in O233's `#### BUILT`. O233's switch is already in
-the tree, so arm 1 has its boundary; build from this record, not from a new
-panel.
-
-**This entry's filing was incomplete in two places**, found by the panel: the
-rotations from `cc0e1c7` to `55af8d1` re-tagged drawers, facts and entities with
-no `rotate/` record, so a boundary on `rotate/` alone false-alarms on every
-vault they rotated; and a boundary on S alone would hide every replay made
-before the upgrade — arm 2 is what finds those.
 
 ### O235 — `StoreError::Integrity` says "HMAC mismatch" at sites where no HMAC was compared
 

@@ -42,11 +42,12 @@
 //! one legacy row stopping every policy), and a row whose tag fails is
 //! named wherever it sits.
 
-use rusqlite::{params, OptionalExtension};
+use rusqlite::params;
 use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime};
 
 use crate::admission::QUARANTINE_WING;
+use crate::chain::ChainRecord;
 use crate::forget::ForgetAttestation;
 use crate::{chain_append, Namespace, StoreError, VaultStore};
 
@@ -613,59 +614,20 @@ impl VaultStore {
         Ok((kept, findings))
     }
 
-    /// The newest audit record carrying exactly this label — an indexed
-    /// equality on `record_id` (`idx_audit_record_id`), newest first.
+    /// The newest audit record carrying exactly this label, and the newest
+    /// rotation's place in the chain — both from [`crate::chain`], the one
+    /// place that reads what the trail says about a label (ROADMAP O234
+    /// asks the same question of four more tables).
     fn newest_record(&self, record_id: &str) -> Result<Option<ChainRecord>, StoreError> {
-        Ok(self
-            .conn
-            .query_row(
-                "SELECT seq, tag FROM audit WHERE record_id = ?1 ORDER BY seq DESC LIMIT 1",
-                [record_id],
-                |r| {
-                    // The tag's BYTES, whatever storage class holds them: a
-                    // tag rewritten as text made this read — and so the
-                    // whole `verify` — return an error instead of a verdict.
-                    // The chain replay reports the retype itself (ROADMAP
-                    // O233); here the bytes are what the comparison needs.
-                    let tag = match r.get_ref(1)? {
-                        rusqlite::types::ValueRef::Blob(b) => b.to_vec(),
-                        rusqlite::types::ValueRef::Text(t) => t.to_vec(),
-                        _ => Vec::new(),
-                    };
-                    Ok(ChainRecord {
-                        seq: r.get(0)?,
-                        tag,
-                    })
-                },
-            )
-            .optional()?)
+        crate::chain::newest_record(&self.conn, record_id)
     }
 
-    /// The newest rotation's place in the chain — the boundary O230's
-    /// comparison stops at. A half-open range on `record_id` rather than a
-    /// `LIKE`: SQLite's `LIKE` is case-insensitive and cannot use the BINARY
-    /// index, so it would scan the whole trail on every floored search and
-    /// could disagree with an equality about `ROTATE/x`.
     fn rotation_boundary(&self) -> Result<Option<i64>, StoreError> {
-        let (lo, hi) = prefix_range(Namespace::Rotate);
-        Ok(self.conn.query_row(
-            "SELECT MAX(seq) FROM audit WHERE record_id >= ?1 AND record_id < ?2",
-            [lo.as_str(), hi.as_str()],
-            |r| r.get(0),
-        )?)
+        crate::chain::rotation_boundary(&self.conn)
     }
 
-    /// Every distinct label a namespace's records carry, by the same range.
     fn chain_keys(&self, ns: Namespace) -> Result<Vec<String>, StoreError> {
-        let (lo, hi) = prefix_range(ns);
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT record_id FROM audit \
-             WHERE record_id >= ?1 AND record_id < ?2 ORDER BY record_id",
-        )?;
-        let keys = stmt
-            .query_map([lo.as_str(), hi.as_str()], |r| r.get(0))?
-            .collect::<Result<_, _>>()?;
-        Ok(keys)
+        crate::chain::chain_keys(&self.conn, ns)
     }
 }
 
@@ -697,21 +659,8 @@ pub(crate) fn refuse_on_findings(
 }
 
 /// A namespace's labels as a half-open range: `prefix` up to the same string
-/// with its closing `/` replaced by the next byte, `0`.
-fn prefix_range(ns: Namespace) -> (String, String) {
-    let lo = ns.prefix().to_string();
-    let hi = format!("{}0", &lo[..lo.len() - 1]);
-    (lo, hi)
-}
-
 /// Every `wing_trust` row as `(wing, trust)`, and every finding.
 pub(crate) type TrustScan = (Vec<(String, String)>, Vec<PolicyFinding>);
-
-/// One audit record's place in the chain and its tag.
-pub(crate) struct ChainRecord {
-    seq: i64,
-    tag: Vec<u8>,
-}
 
 /// What the chain holds about one policy key, gathered by the one gatherer.
 pub(crate) struct PolicyEvidence {

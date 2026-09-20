@@ -262,8 +262,9 @@ travel in a body — and `POST …/verify` — which walks every record's HMAC,
 replays the whole
 audit chain, checks every supersession receipt, checks every
 knowledge-graph fact receipt, resolves every graph and drawer audit
-label, compares four of the five mirror columns (`wing`, `room`, `kind`, `supersedes`; `filed_at` is deliberately excluded — the column takes the write path's own clock while the covered field was stamped at construction, so they differ by a clock read in normal operation and checking it reported healthy vaults as tampered) against the covered meta, and checks every wing-trust and retention row against the chain record that assigned it in both directions — a row that does not verify or was never recorded, and a recorded assignment whose row is gone with no later clear (**seven** legs
-since 1.3.0, when O94 added declared-policy drift; six from 1.1.0; five
+label, compares four of the five mirror columns (`wing`, `room`, `kind`, `supersedes`; `filed_at` is deliberately excluded — the column takes the write path's own clock while the covered field was stamped at construction, so they differ by a clock read in normal operation and checking it reported healthy vaults as tampered) against the covered meta, checks every wing-trust and retention row against the chain record that assigned it in both directions — a row that does not verify or was never recorded, and a recorded assignment whose row is gone with no later clear — and matches every drawer, fact, entity and tunnel row against the chain record that last wrote it, so an older version written back offline, or a row present after its recorded destruction, is a finding (**nine** legs
+since 1.6.0, when O233 added the label commitment and O234 the version check; seven from 1.3.0, when O94
+added declared-policy drift; six from 1.1.0; five
 from 2026-08-06 — the fact-receipt leg arrived in 1.1.0, and until it did, a forged citation answered `VERIFY OK` on every surface while
 `backup create` archived it as clean), and is a POST for cost, not for effect: it takes `&self`
 and writes nothing at all). Said plainly, because an earlier draft of

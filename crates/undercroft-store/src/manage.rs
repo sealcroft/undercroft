@@ -2421,6 +2421,49 @@ impl Namespace {
         }
     }
 
+    /// **Whether a record in this namespace says a row was DESTROYED**
+    /// (ROADMAP O234) — the one place that question is answered.
+    ///
+    /// A row written back after its destruction was recorded is a
+    /// resurrection: the drawer `forget` erased, restored beside its own
+    /// tombstone, or a tunnel an agent deleted put back. The check that finds
+    /// it needs to know which records are destructions, and the obvious
+    /// spelling — a `strip_prefix("del/")` at the check — is the defect O80
+    /// closed one funnel over: a second destruction namespace would simply go
+    /// unseen, and O205 has one filed (separating an agent's own deletions
+    /// from operator-attested ones). Exhaustive, so that split does not
+    /// compile until somebody classifies it here.
+    ///
+    /// The REST is the caller's, and it is not uniform: a drawer's tombstone
+    /// is `del/{id}` and a tunnel's `del/tunnel/{id}`, which is why the
+    /// scan composes the label from this prefix and the table's own infix
+    /// rather than assuming the id follows the prefix directly.
+    pub const fn is_destruction(self) -> bool {
+        match self {
+            // `delete_drawer_ruled` (the crate's one `DELETE FROM drawers`,
+            // inherited by the public delete, admission deny and
+            // `forget_with_proof`) and `delete_tunnel`.
+            Namespace::Del => true,
+            // Nothing else removes a row. A `retention-clear/` record removes
+            // a POLICY, which is the policy leg's business (O230) and not a
+            // record the graph, the corpus or the tunnels can resurrect; a
+            // `rotate/` or `migrate/` record re-tags rows in place; the rest
+            // name no row at all.
+            Namespace::Drawer
+            | Namespace::Admission
+            | Namespace::Trust
+            | Namespace::Retention
+            | Namespace::RetentionClear
+            | Namespace::Egress
+            | Namespace::Read
+            | Namespace::Rotate
+            | Namespace::Migrate
+            | Namespace::Kg
+            | Namespace::KgEntity
+            | Namespace::Tunnel => false,
+        }
+    }
+
     /// Compose a record id: the prefix, then whatever the call site names.
     ///
     /// The call sites pass only the *rest* — `create_tunnel` passes the
