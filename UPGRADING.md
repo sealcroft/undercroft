@@ -75,6 +75,56 @@ or when they could never be presented.
 
 ## 1.6.0 (unreleased)
 
+### after 1.6.0 has opened a vault writable, a 1.5.x binary refuses it with `integrity failure on record audit-chain head` — do not restore a backup over that (O233)
+
+**Who is affected:** anyone who rolls a binary back after upgrading: a
+deployment that downgrades to 1.5.x, a mixed fleet where an older engine opens
+a vault a newer one has written, or a script that runs an older `undercroft`
+against a current data directory.
+
+**Symptom:** every 1.5.x command on the vault — `verify`, a read-only open, a
+write, `vault rotate` — exits 2 with `Error: integrity failure on record
+audit-chain head — HMAC mismatch`. **That message is the fence, not
+tampering.** The vault is intact: the 1.5.x binary wrote nothing, and 1.6.0
+opens and verifies it. Restoring a backup over it would throw away every write
+made since the backup.
+
+**Cause:** 1.6.0 switches each vault's audit chain, at its first writable
+open, to a step that folds every record's label and time with its tag — the
+fix for relabelled audit rows passing `verify`. A 1.5.x binary would append
+old-style steps to that chain and leave it unverifiable for both versions (a
+1.5.x rotation would re-chain it outright). So the switch freezes the chain
+head a 1.5.x binary compares and keeps the live head where it does not look,
+and the older binary refuses the vault before it can write anything.
+
+**Fix:** run the 1.6.0 binary. There is no supported downgrade after the first
+writable open; to go back, restore a backup taken **before** the upgrade, which
+loses what was written since. `config check` opens no vault and cannot see
+this. A forget attestation minted under 1.6.0 is `version: 2`, and a 1.5.x
+`verify-forgetting` reads it as forged for the same reason.
+
+### `verify` reports a relabelled audit row, and a rotation refuses over one written after the upgrade (O233)
+
+**Who is affected:** a vault whose `audit` table was edited behind the engine.
+
+**Symptom:** `verify` fails — exit 2, `VERIFY FAILED`, `ok: false` on `/v1` —
+with `audit chain:     BROKEN` for an edit to a record written since the vault
+switched, or `audit labels:    MISMATCH` for one written before; `vault rotate`
+refuses (exit 2, 409 `integrity`) over the first and not over the second, which
+a rotation preserves verbatim. Every `verify` renderer shows a new line, `audit
+labels:`, reading `pending` until the vault's first writable open under 1.6.0
+and `intact` after. A read-only open of a vault 1.6.0 has not yet opened
+writable reports `the audit chain's labels are not yet chain-authenticated` on
+`VaultStats.unhealed`; so does a sealed vault whose knowledge-graph blinding
+walk is still incomplete, whose switch waits for that walk.
+
+**Cause:** an audit row's label and time sat outside the chain, so a relabel
+defeated every check that finds a record by its label while `verify` answered
+OK. **Residual, stated**: labels as they stood when a vault switched are bound
+as found — a relabel made before the upgrade becomes authentic.
+
+**Fix:** restore a backup that verifies. Nothing re-declares a label.
+
 ### `vault rotate` refuses a vault that `verify` would fail on a leg the rotation rewrites (O232)
 
 **Who is affected:** a scheduled `undercroft vault rotate`, a script calling

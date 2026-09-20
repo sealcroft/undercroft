@@ -1137,6 +1137,9 @@ async function runVerify() {
     $("verifyReport").textContent =
       "records checked: " + r.records_checked +
       "\nchain ok:        " + r.chain_ok +
+      // ROADMAP O233: the labels the chain held when it switched, against
+      // the commitment that bound them — `mismatch` fails the verdict.
+      "\naudit labels:    " + (r.label_commitment === "mismatch" ? "MISMATCH" : (r.label_commitment || "pending")) +
       "\nbad records:     " + (r.bad_records.length ? "\n  " + r.bad_records.join("\n  ") : "none") +
       "\norphan labels:   " + (orphans.length ? "\n  ORPHANED: " + orphans.join("\n  ORPHANED: ") : "none") +
       "\nmirror drift:    " + (drift.length ? "\n  MIRROR: " + drift.join("\n  MIRROR: ") : "none") +

@@ -46,7 +46,7 @@
 
     <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="containment-and-keys-title containment-and-keys-desc">
       <title id="containment-and-keys-title">Undercroft containment and key hierarchy</title>
-      <desc id="containment-and-keys-desc">A palace directory on one machine holds vaults, each vault holds wings that a caller scopes to and that carry trust, each wing holds rooms for a session or document, and each room holds drawers of verbatim text; beside that nest, a master key is expanded by HKDF into four derived subkeys — sealing, HMAC tagging, MACing the rollback anchor and choosing training rows, while a separately stored kg_secret is re-sealed by a key rotation rather than re-derived, so identifiers keyed with it never move.</desc>
+      <desc id="containment-and-keys-desc">A palace directory on one machine holds vaults, each vault holds wings that a caller scopes to and that carry trust, each wing holds rooms for a session or document, and each room holds drawers of verbatim text; beside that nest, a master key is expanded by HKDF into five derived subkeys — sealing, HMAC tagging, MACing the rollback anchor, stepping the audit chain over each record's label, tag and time, and choosing training rows, while a separately stored kg_secret is re-sealed by a key rotation rather than re-derived, so identifiers keyed with it never move.</desc>
       <defs>
         <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7fa39c"/></marker>
         <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#35e0c2"/></marker>
@@ -90,7 +90,7 @@
       <text x="956" y="225" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.06em">IKM</text>
 
       <rect x="936" y="328" width="64" height="12" rx="2" fill="#04080a"/>
-      <text x="968" y="337" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.06em">4 LABELS</text>
+      <text x="968" y="337" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.06em">5 LABELS</text>
 
       <rect x="672" y="388" width="64" height="12" rx="2" fill="#04080a"/>
       <text x="704" y="397" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.06em">DERIVES</text>
@@ -151,11 +151,12 @@
       <rect x="784" y="360" width="288" height="108" rx="6" fill="rgba(217,240,234,0.05)" stroke="#7fa39c" stroke-width="1"/>
       <rect x="792" y="366" width="44" height="12" rx="2" fill="transparent" stroke="rgba(127,163,156,0.40)" stroke-width="0.8"/>
       <text x="814" y="375" fill="rgba(127,163,156,0.90)" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.08em">DERIVED</text>
-      <text x="928" y="400" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif" text-anchor="middle">Four derived subkeys</text>
-      <text x="928" y="418" fill="#7fa39c" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">enc · seals content</text>
-      <text x="928" y="432" fill="#7fa39c" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">mac · HMAC tags + chain + fingerprints</text>
-      <text x="928" y="446" fill="#7fa39c" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">manifest · MACs the rollback anchor</text>
-      <text x="928" y="460" fill="#5c7f79" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">sample · picks training rows</text>
+      <text x="928" y="396" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif" text-anchor="middle">Five derived subkeys</text>
+      <text x="928" y="411" fill="#7fa39c" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">enc · seals content</text>
+      <text x="928" y="423" fill="#7fa39c" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">mac · HMAC tags + v1 chain + fingerprints</text>
+      <text x="928" y="435" fill="#7fa39c" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">manifest · MACs the rollback anchor</text>
+      <text x="928" y="447" fill="#7fa39c" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">chain · steps label + tag + time</text>
+      <text x="928" y="459" fill="#5c7f79" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">sample · picks training rows</text>
 
       <!-- kg_secret (FOCAL) -->
       <rect x="784" y="508" width="288" height="88" rx="6" fill="#04080a"/>

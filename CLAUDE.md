@@ -662,10 +662,22 @@ Consequences that are binding, not advisory:
   `drawer_fde` + `fde_meta`; opt-in inverted tier via
   `UNDERCROFT_FDE_IVF_MIN` — slab-grouped cache + sealed centroids, kept
   default-off by its measured containment gate), experimental in-memory
-  HNSW (hnsw.rs, `hnsw` feature), transactional audit chain (`chain_meta` + `chain_append`),
-  verify (**`VerifyReport` is the whole verdict and it has SEVEN legs**: record
-  HMACs, the chain replay, drawer supersession receipts, **KG fact
-  receipts**, orphan graph labels, mirror drift, **declared-policy drift**.
+  HNSW (hnsw.rs, `hnsw` feature), transactional audit chain (`chain_meta` + `chain_append`,
+  and **chain.rs, the chain's one owner since ROADMAP O233**: the regime, the
+  committed head and one streaming replay for `verify`, reconciliation and a
+  rotation. The version-2 step folds each record's LABEL and TIME with its
+  tag under a fifth HKDF subkey, `chain`, because a label is evidence — one
+  relabel plus one deleted row lifted a quarantine floor with `verify` green.
+  A vault switches at its first writable open by appending a
+  `migrate/chain-v2` commitment whose tag is an UNKEYED digest of every
+  earlier row, and the live head moves to `head_v2` while `head` is FROZEN —
+  which is what makes a 1.5.x binary refuse the vault instead of appending
+  version-1 steps to it; measured, and without the fence it wrote and
+  rotated and left 1.6.0 unable to open the vault),
+  verify (**`VerifyReport` is the whole verdict and it has EIGHT legs**: record
+  HMACs, the chain replay, the label commitment (O233), drawer supersession
+  receipts, **KG fact receipts**, orphan graph labels, mirror drift,
+  **declared-policy drift**.
   The rule that keeps growing
   it: *a keyed claim living in columns no drawer HMAC and no chain step
   covers must have a leg, or nothing sees it.* **The seventh is that rule
@@ -2160,8 +2172,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (977 run,
-                                      # 4 #[ignore]d = 981 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (992 run,
+                                      # 4 #[ignore]d = 996 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2283,7 +2295,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (574 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (580 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (167 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (157 checks; weaviate
@@ -3306,7 +3318,7 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   re-keying it means re-indexing the whole corpus, which is why searchable
   encryption separates the index key's lifecycle from the data key's in the
   first place. So: no HKDF-derived vault key (`Vault::tag`, the enc key,
-  any of the four) may appear in an id recipe or a blind-index recipe.
+  any of the five) may appear in an id recipe or a blind-index recipe.
   Where confidentiality demands keying — an unkeyed digest over content is
   a confirmation oracle — use a per-vault secret **stored sealed in
   `meta`**, which rotation RE-SEALS and never regenerates.
@@ -3360,6 +3372,21 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   audit table also holds **wing and room names** in clear
   (`trust/{wing}`, `retention/{wing}[/{room}]`, `retention-clear/…`), which
   is scope A10 unit 2 inherits and which its sizing did not list.
+  **REVISED by ROADMAP O233 (2026-09-19), beside rather than in place of the
+  paragraph above: a label IS evidence.** The paragraph was true of the chain
+  arithmetic and false of the system: O11 (a label's absence is evidence),
+  O13 (a recorded run compares labels), O94 and O230 (security verdicts found
+  by label) and the forget attestation's mirror disclosure all DECIDE from
+  `record_id`, and one relabel plus one deleted row lifted a quarantine floor
+  with `verify` green. The version-2 chain step now folds every record's
+  label and time, so on a switched chain an in-place `UPDATE audit` is
+  exactly the tampering the replay catches, and **a migration that moves an
+  identifier may not relabel in place** — it owes a recorded re-chain of its
+  own, ruled when one is needed (the next blinding unit, which would move the
+  wing names above, is the foreseeable case). A10's relabel was correct when
+  made; the switch binds it as found. Applied backwards, the revision
+  reclassifies exactly that one decision and confirms O205's standing
+  constraint that existing `del/` record ids are never relabelled.
 - **Rotation completeness is ENFORCED, not remembered.** *Every sealed column
   and every sealed meta value needs a line in `rotate.rs`* was prose and
   failed four times: `terms` (caught by e2e on `export`), then its neighbour

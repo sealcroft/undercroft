@@ -688,19 +688,17 @@ impl VaultStore {
         report.fde_rows = fde_upds.len();
         report.meta_artifacts = meta_upds.len() + meta_dyn_upds.len();
 
-        // ---- Phase 2: replay the chain under the new mac key; stage ----
-        let audit_tags: Vec<Vec<u8>> = {
-            let mut stmt = self.conn.prepare("SELECT tag FROM audit ORDER BY seq")?;
-            let tags = stmt
-                .query_map([], |r| r.get::<_, Vec<u8>>(0))?
-                .collect::<Result<_, _>>()?;
-            tags
-        };
-        report.audit_entries = audit_tags.len();
-        let mut head = Vault::chain_genesis_hex();
-        for tag in &audit_tags {
-            head = next.chain_next_hex(&head, tag)?;
-        }
+        // ---- Phase 2: replay the chain under the new keys; stage ----
+        // The one replay (ROADMAP O233), stepped with the NEXT generation's
+        // keys over the rows as found — the regime included, so a switched
+        // chain stays switched with its commitment preserved verbatim, and a
+        // version-1 prefix is never re-stepped as version 2 (which would
+        // bind, and so launder, whatever its labels are now). The `verify`
+        // above refused a chain that does not replay; a pre-switch label
+        // mismatch does not block, because it survives this untouched.
+        let replayed = crate::chain::replay(&self.conn, &next, None)?;
+        report.audit_entries = replayed.rows;
+        let regime = replayed.regime;
         // **The rotation records ITSELF (ROADMAP A19).** This is the largest
         // single mutation the engine can perform — every artifact re-sealed,
         // every tag re-keyed, a new key generation adopted — and until
@@ -731,7 +729,17 @@ impl VaultStore {
             report.kg_entities
         );
         let rotate_tag = next.tag(rotate_canonical.as_bytes()).to_vec();
-        head = next.chain_next_hex(&head, &rotate_tag)?;
+        let rotate_label = crate::manage::Namespace::Rotate.record(&next.keycheck_hex()[..16]);
+        let head = crate::chain::next_head(
+            &next,
+            &crate::chain::Head {
+                regime,
+                head: replayed.head,
+            },
+            &rotate_label,
+            &rotate_tag,
+            &rotated_at,
+        )?;
         let writes: u64 = self
             .conn
             .query_row(
@@ -827,22 +835,9 @@ impl VaultStore {
             // everything it describes. Appended last so its `seq` orders
             // after every row it covers, which is also the order phase 2
             // folded it into the head in.
-            tx.execute(
-                "INSERT INTO audit (record_id, tag, at) VALUES (?1, ?2, ?3)",
-                params![
-                    crate::manage::Namespace::Rotate.record(&next.keycheck_hex()[..16]),
-                    rotate_tag,
-                    rotated_at
-                ],
-            )?;
-            tx.execute(
-                "UPDATE chain_meta SET value = ?1 WHERE key = 'head'",
-                params![head],
-            )?;
-            tx.execute(
-                "UPDATE chain_meta SET value = ?1 WHERE key = 'writes'",
-                params![writes.to_string()],
-            )?;
+            crate::chain::insert_record(tx, &rotate_label, &rotate_tag, &rotated_at)?;
+            crate::chain::set_head(tx, regime, &head)?;
+            crate::chain::set_writes(tx, writes)?;
             // The committed marker: reconciliation reads this to decide
             // whether a crash left the staging manifest promotable.
             tx.execute(

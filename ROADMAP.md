@@ -3998,7 +3998,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**265** of the **280** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**268** of the **283** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4178,6 +4178,328 @@ identities.
 MINOR since O149: `PATCH /admin/tenants/{id}` and its CLI mirror are new
 capability, backward compatible. The rest of the section is PATCH work — no
 documented contract moves.
+
+### O233 — CLOSED 2026-09-19: the audit chain binds each record's label and time, so a relabelled audit row no longer passes `verify`
+
+**Filed 2026-09-19 by O230/O232's ruling; measured on `d938e62`.**
+`chain_append` folds only a record's TAG into the head (`chain_next_hex(&head,
+tag)`); `record_id` and `at` sit beside it unauthenticated, and the rotation's
+own record binds counts stored nowhere, so no reader can authenticate a
+`rotate/` label either. Every check that locates a record by its label is
+therefore one UPDATE deep. Measured (P1r): `trust set secret quarantined`,
+then `UPDATE audit SET record_id='read/x' WHERE record_id='trust/secret'` and
+`DELETE FROM wing_trust` — `verify` answered `policy drift: 0`, `VERIFY OK`,
+and the quarantine floor was gone. The same move defeats O230's comparison (a
+replay plus a relabel of the newer record), moves O230's rotation boundary (a
+later record relabelled `rotate/`), and hides a record from `orphan_labels`,
+which resolves only `kg/`, `kg-entity/` and bare labels.
+
+**Shape**: fold the label into each chain step — a versioned chain whose step
+covers `record_id` as well as the tag — with a migration that carries O232's
+residual for the history before it; the head values a forgetting attestation
+carries move with it, which O13's verdicts must absorb. A panel's question,
+because it changes the chain arithmetic every verifier replays.
+
+**Gate**: P1r and both O230 relabel costs make `verify` fail. **Counterfactual**:
+today, `VERIFY OK`.
+
+#### RULED 2026-09-19 by a three-lens panel (agentic memory architecture, security, software engineering) plus an adversarial refuter — together with O234
+
+**The questions.** What authenticates an audit label (O233) and how existing
+chains migrate; what the "a label is navigation, not evidence" position becomes;
+what `verify`, a rotation and a forget attestation do with it; how a replayed
+older version of a drawer, fact, entity or tunnel is detected (O234), where its
+boundaries sit, and whether reads refuse; one unit or two; surfaces and
+versioning. Working files are in the session scratchpad's `o233-panel/` (the
+brief, three lens answers, the refuter's report, the probe logs) — material,
+never the record.
+
+**Measured before ruling**, on a release binary built from `eae75fe`, through
+the CLI, sealed vaults:
+- **P1r still holds after O230**: a `quarantined` wing whose `trust/` record was
+  relabelled `read/x` and whose row was deleted — `audit chain: ok`, `orphan
+  labels: 0`, `policy drift: 0`, `VERIFY OK`, `trust list` empty, and a
+  `standard`-floored search returned the quarantined drawer (0 hits before).
+- **O234a/b/c, all `VERIFY OK`**: an updated drawer's earlier row written back
+  reads "1111" again; a forgotten drawer's row re-inserted is served again
+  beside its own `del/` record (only `verify-forgetting` with that attestation
+  sees it: exit 0 before, exit 2 after); an invalidated fact's active row
+  written back reads active.
+- **Cost at 102,000 sealed drawers** (102,000 audit rows, one per label, 3.26 MB
+  of labels): `verify` 0.33–0.36 s at 25 MB; a set-based "row tag vs its
+  label's newest record" 281 ms (covering-index scan plus key probes — the
+  best case, one record per label); one indexed newest-record probe ~10 µs.
+- **Read by the integrator**: `blind_existing_kg_rows` returns before writing
+  its marker on every non-sealed vault (`kg.rs` ~1214); `v1.5.2`'s
+  `reconcile_chain` replays only when the anchor differs from `chain_meta.head`;
+  `rotate.rs` at `cc0e1c7` inserts no audit row and at `55af8d1` (A19) one.
+
+**Prior rulings found and their disposition.**
+- **A10's "`record_id` is a label for navigation, outside the chain arithmetic
+  … remapping it moves no evidence"** (`kg.rs` ~1186, the `Namespace` doc,
+  `docs/THREAT_MODEL.md`, and `CLAUDE.md`'s "`audit.record_id` is a LABEL, not
+  evidence … any future migration that moves an identifier owes the same
+  remap"). REFUTED: true of the chain arithmetic, false of the system — O11
+  (a label's absence is evidence), O13 (labels compared), O94 and O230
+  (security verdicts found by label), `mirror_note` (a label's existence decides
+  a signed disclosure) and `rotations_since` all decide from labels, and P1r
+  measures the consequence. REVISED beside each statement in the build; A10's
+  own relabel was correct when made, and the migration below authenticates it
+  as found. The `CLAUDE.md` revision lands only through the maintainer's
+  approval of the pull request.
+- **O230/O232 (2026-09-19)**: FOLLOWED — O232 ruling 1's criterion (refuse
+  only what a rotation launders) decides split 4 below, O234's findings join
+  `rotation_blockers`, and O230 ruling 4's "the whole consulted set" decides the
+  read shape. Their "no released build re-tagged without a `rotate/` record"
+  covered policy rows only; drawers, facts, entities and tunnels were re-tagged
+  record-less by every rotation from `cc0e1c7` (2026-07-18) to `55af8d1`
+  (2026-08-06), the v0.35–v0.46 releases. Their comment that an orphan label
+  "has no remedy" is REFUTED (a deleted row can be restored); the exclusion
+  stands on its other half.
+- **O13's `Recorded` verdict**: FOLLOWED, with a chain-replay requirement added.
+- **The 2026-09-08 versioning ruling**: FOLLOWED — PATCH-class, inside the
+  already-MINOR `1.6.0`.
+
+**Options, their costs, and why each lost.**
+- **(S2) a per-row label MAC column**: a `READ_SCHEMA` row (a read-only open of
+  every 1.5.x vault refuses `ReadOnlyUnmigrated`), a re-key at every rotation,
+  and its legacy NULLs make a clear switch pointer unbound by any replay; it buys
+  localisation only, which changes no remedy.
+- **(M1) re-chain the whole history at open**: every head moves, and rotation's
+  staging decides by keycheck, which a same-key re-chain never moves, so it
+  needs new staging or a second place reconciliation accepts a head.
+- **(M2) a switch point with no commitment**: P1r stays open for ever against
+  every policy declared before the upgrade.
+- **Covering `seq` in the step** (the agentic-memory lens): rotation folds its
+  own record before the `INSERT` assigns its seq, and attestations carry none;
+  the one seq-VALUE use, `audit_run_matches`'s `BETWEEN`, becomes relational.
+- **S in a `chain_meta` pointer** (two lenses): a second copy of one fact, and a
+  pointer with no commitment made legitimate for fresh vaults lets a planted
+  pointer keep writers on v1 silently.
+- **A relabel before S folded into `!chain_ok`** (two lenses): it would block a
+  rotation over a condition the rotation leaves exactly as detectable, against
+  O232 ruling 1; and a rotation that re-chains from genesis under v2 (S→1)
+  would launder it.
+- **The `v2:` head prefix as the downgrade fence** (the security lens): 1.5.2
+  still opens, and its rotation (no verify, replay from genesis) re-chains
+  everything as v1 for good.
+- **O234 bounded by S alone**: every replay made before the upgrade stays hidden
+  for ever; **by every `migrate/` record**: `repair`, the embedding walk and U12
+  append `migrate/` in ordinary operation, so each would hide earlier replays;
+  **a destruction arm on `del/` alone**: O205's agent-deletion namespace would
+  go silent.
+- **O234 reads**: "every consulted row, internal lookups included" (the
+  agentic-memory lens) blocks the writes that are the remedy (`import_verdict`
+  maps only `Integrity`/`CorruptRow` to a replace); "returned hits only" (the
+  security lens) contradicts `lib.rs` ~7082 and O230 ruling 4 and misses hides
+  (`lookup_canonical` filters on clear columns first); "verify only, filed"
+  (the software-engineering lens) is kept as the fallback below.
+
+**Ruling — O233.**
+1. **A versioned chain step.** v2 = `HMAC(chain_key, "undercroft.chain.v2" ‖
+   prev ‖ lp(record_id) ‖ lp(tag) ‖ lp(at))`, `lp` a fixed-width length prefix,
+   under a **new dedicated HKDF subkey** (label `chain`; a structural choice —
+   prefix separation is sound today by enumeration of every `mac_key` input, but
+   heads leave the vault on `/v1` and to the orchestrator, and the tree's
+   precedent for a keyed output outside the record-tag domain is `sample_rank`'s
+   own subkey). `seq` is not covered. v1 stays for rows below S and for
+   `version: 1` attestations. **One implementation**: a vault-crate step taking
+   a required version argument, and one streaming store replay used by
+   `verify`, `reconcile_chain` (all three of its callers), rotation phase 2 and
+   the forget replay; `chain_append` and rotation's own `INSERT` take their step
+   from the same regime decision.
+2. **Migration M3, recorded in the commitment's own label.** One v2-stepped
+   record `migrate/chain-v2` whose TAG is an UNKEYED SHA-256, under a domain
+   string, over a count and every earlier row's `lp(record_id) ‖ lp(tag) ‖
+   lp(at)` in seq order. S is the first row carrying that label; the replay and
+   every writer decide their step from that record alone. **It is always
+   written**, a fresh vault's over zero rows. It runs last in the writable open,
+   after A10 and U12, in one `BEGIN IMMEDIATE` that re-checks its absence (two
+   handles write one record), and only when (a) the vault is not a sealed vault
+   whose A10 marker is missing, and (b) the v1 replay reproduces the head
+   (verify-first, O232's shape); otherwise it is withheld and says why on
+   `VaultStats.unhealed`. A read-only open never switches: it replays v1 and
+   reports on `unhealed`.
+3. **The downgrade fence.** The live head moves to a new `chain_meta` key and
+   `head` is frozen at the switch, so a 1.5.2 binary cannot reproduce it and
+   refuses to open (`Integrity("audit-chain head")`), writable or read-only,
+   before it can write or rotate. The new key exists if and only if the
+   commitment does; either alone is an integrity finding (a writable open
+   refuses, a read-only one reports). Every site naming `key = 'head'` moves
+   behind one accessor, held by a source gate.
+4. **`verify` and the rotation.** A relabel, a re-timed `at` or a changed tag
+   at or after S is `!chain_ok` — a rotation blocker, remedy "restore a backup
+   that verifies". A relabel BEFORE S is a SEPARATE finding (the commitment does
+   not match), fails `verify`, and does NOT block a rotation, which preserves
+   the unkeyed commitment and the earlier labels verbatim; it reaches all four
+   renderers. `orphan_labels` keeps a narrower job — an offline row deletion
+   with no destruction record — and stays out of the blockers because a
+   rotation leaves it exactly as detectable, not because it has no remedy. No
+   rotation re-chains history to v2.
+5. **Forget attestations.** A new attestation mints `version: 2` when its
+   tombstones are v2-stepped; the verifier dispatches 1 → v1 and 2 → v2 and
+   refuses any other version as unsupported, never as forged; old documents
+   keep byte-identical canonicals. `audit_run_matches` becomes relational
+   (`seq >= ? ORDER BY seq LIMIT n`), and the `Recorded` path requires the
+   vault's chain to replay, refusing as an integrity verdict when it does not.
+6. **Stale statements corrected in the same unit**: A10's four statements,
+   `mirror_note`'s "neither can suppress it" (a relabel plus a `meta` delete
+   does, until `verify` runs), and the orphan-label "no remedy" comment.
+
+**Residual, stated** in CHANGELOG, `UPGRADING.md`, `docs/security.md` and the
+threat model: labels as found at the switch become authentic — a relabel made
+before the upgrade, or in the window where a `--read-only` server opens first,
+is laundered; O232's residual one table over. **And O233 detects, it does not
+prevent, at read time**: `wing_trusts()`, `mirror_note` and
+`attested_run_in_audit` still decide from labels no read replays, so P1r lifts
+the floor until `verify` runs — filed as O237 rather than claimed closed.
+
+**Ruling — O234** (recorded in O234 too). One pure decision, on O230's
+gatherer, per table: a row is a finding when (1) its key's newest record lies
+above max(the last `rotate/`, S) and carries a different tag; or (2) at any
+seq, the row's tag equals an OLDER record's tag for its key while the newest
+record's differs — the version was written and superseded under the current
+key, and a tag a rotation or A10 produced has no record, so neither trips it; or
+(3) the row is present after a newer destruction record, through an exhaustive
+`Namespace` "is a destruction" predicate. Facts take the newest across
+`kg/{id}` and `kg/{id}/authority`; tunnels take arm 3 only (a tunnel row is
+never updated in place, and `create_tunnel` appends a tag no row carries on a
+no-op — O236); arm 1 needs S and runs only on a switched vault. Findings fail
+`verify` and join `rotation_blockers`. **Reads**: internal lookups never refuse;
+`Read::Returned` doors refuse on the whole consulted set through one helper over
+the six drawer verify sites, `decode_triple` and `lookup_canonical`'s
+candidates. That read half lands in this pull request only if it adds at most
+10% to warm search ms/q at ~10⁵ drawers; otherwise it is filed as its own open
+entry with this shape. Never partial.
+
+**One pull request, two commits** (O233, then O234). **PATCH**, inside the
+already-MINOR `1.6.0`. **`UPGRADING.md`** carries: no downgrade after the first
+writable open — a 1.5.x binary then reports an integrity failure that is the
+fence, not tampering, so do not restore a backup over it; the head moves once at
+that open (an orchestrator migration in flight then reads it as a write); a
+switch withheld on a sealed vault with A10 incomplete or a chain that does not
+replay; version-2 attestations read as forged under 1.5.x; relabels, version
+replays and resurrections are now reported and block a rotation. `config check`
+opens no vault (O206's precedent).
+
+**Claims refuted.** The brief's: "attestation heads move with it" (the keyed
+replay never compares heads with the vault's chain), fact 2's three replays
+(`reconcile_chain` also serves `tighten_anchor` and the read-only report), fact
+4's "until its marker lands" (never, on an hmac-only vault), and fact 7 (it
+omitted the record-less pre-A19 rotations, listed tunnels as exact appends, and
+omitted `delete_tunnel`). The lenses': every lens deferred the switch on the A10
+marker alone, which would have left every hmac-only vault unswitched for ever;
+"three readers use seq values" (one does); "covering seq is free"; the read
+rules above; the `v2:` fence; S as the only boundary; and folding a pre-S
+relabel into `!chain_ok` while citing O232.
+
+**Dissent.** The agentic-memory lens held for two units and for covering `seq`;
+the software-engineering lens for a `chain_meta` pointer and verify-only reads.
+Each is answered above by evidence, not by count.
+
+**Probes owed by the build**, ranked: a 1.5.2 binary against a switched vault
+(writable and read-only open, write, verify, rotate; exit codes, the database's
+sha256, any `vault.json.next`); O234's false-alarm sweep — a pre-A19-rotated
+vault, an A10-migrated sealed vault, every write surface (repeated tunnel
+creates and `kg add`s, destroy then re-mine, all three import verdicts) before
+and after a rotation, expecting zero — then O234a/b/c made before the switch
+and found by arms 2 and 3; an hmac-only vault switches at its first writable
+open; warm search ms/q at ~10⁵ with and without the read check (decides the read
+half); the 102k cost of the v2 replay and digest in `verify`, rotation, the
+reconciliation and the switching open; `typeof(record_id, tag, at)` on legacy
+vaults; a crash between the switch's commit and its anchor heals; relabel
+counterfactuals on both sides of S (a rotation proceeds over a pre-S relabel and
+refuses over a post-S one).
+
+**Filed from this ruling**: O236 (`create_tunnel` appends a record for a no-op),
+O237 (reads decide from labels no read replays), O238 (the manifest `version` is
+never checked on load).
+
+#### BUILT 2026-09-19, as ruled — O233 alone; O234 follows in its own pull request
+
+**The step.** `seal::chain_next_v2` (domain `undercroft.chain.v2`, every field
+u64-LE length-prefixed, the previous head included) under a fifth HKDF subkey,
+`chain`; `Vault::chain_step_hex(ChainStep, prev, ChainLink)` replaces
+`chain_next_hex`, so every caller names its step. Version 1 is pinned
+byte-identical to the pre-O233 step.
+
+**One owner.** `crates/undercroft-store/src/chain.rs` holds the regime (read
+from the first `migrate/chain-v2` record), `head_state` / `committed_head` (the
+fence: `head` frozen, the live head in `head_v2`, and a commitment without its
+head key — or the reverse, or no frozen head — an integrity finding), one
+streaming `replay` (used by `verify` through `chain_verdict`, by
+`reconcile_chain`, by a rotation's re-fold under the next keys and by the
+switch), `append` / `next_head` / `insert_record` (the `audit` table's one
+writer), and `switch`, which re-reads the regime inside its `BEGIN IMMEDIATE`,
+refuses to bind a chain that does not replay, and writes the commitment and the
+live head together. The writable open switches last, after A10 and U12, and
+waits only on a SEALED vault's A10 marker (`kg_blind_complete`). A10 no longer
+runs on a switched chain. The read-only open reports an unswitched chain and an
+inconsistent head pair on `unhealed`. `VerifyReport.label_commitment`
+(`pending` / `intact` / `mismatch`) is on all four renderers and in `ok()`, and
+`rotation_blockers` destructures it as not a blocker. Forget attestations mint
+`version: 2` on a switched chain; the verifier dispatches 1/2, refuses another
+version as `Invalid`, finds the recorded run by order, counts `rotate/` on a
+case-sensitive range, and refuses `Recorded` as `IntegrityFinding` when the
+trail does not verify.
+
+**Beyond the letter of the ruling, reported as mine.** (1) **A label or time not
+stored as text, or a tag not stored as a blob, is a finding** — on the chain's
+side after the switch, the commitment's before it. SQLite compares a text value
+and a blob holding the same bytes as unequal, so a label rewritten as a blob
+hides from every `record_id = ?` lookup while stepping the same bytes: bound, and
+still a relabel. No lens and not the refuter named it; it follows from what the
+ruling binds, and the 102k legacy corpus holds only text/blob/text rows, so it
+cannot fire on a genuine vault. (2) The test for it found that O230's gatherer
+read `audit.tag` as a blob, so a tag rewritten as text made `verify` return an
+ERROR instead of a verdict; `newest_record` now reads the bytes of either class.
+(3) **O234 is not built here**, against the ruling's "one pull request, two
+commits": measured, this session reached 80% of its context with O233 built, and
+O234 — four tables, three arms, a new leg on four renderers — would not have fit
+beside the battery and the governance surfaces. It stays ruled, open and in
+`1.6.0`, so the release carries both; O233's switch is already the boundary its
+arm 1 needs. The maintainer may hold this pull request until O234's lands.
+
+**Tests.** Vault: `a_v2_step_covers_the_label_and_the_time_and_v1_does_not`,
+`chain_steps_are_pinned_and_a_rotation_rekeys_the_v2_step`. `chain.rs`: a fresh
+vault switches once on BOTH levels; P1r breaks the chain and blocks a rotation;
+a re-timed record, a label retyped as a blob and a tag retyped as text each break
+it; a relabel before the switch is `mismatch`, fails `verify`, does not block a
+rotation and survives it; a crash between the switch and its anchor heals; each
+of three head-key inconsistencies refuses a writable open and is reported
+read-only; a read-only open reports and switches nothing; the switch waits for a
+sealed vault's A10 walk; version-2 attestations bind their labels and times, an
+unknown version is unsupported, a version-1 attestation verifies after the
+switch; the recorded verdict needs an authenticated trail and survives a
+renumber; and a source gate — no `key = 'head'`, no tag-only replay, one `INSERT
+INTO audit`, steps taken only in `chain.rs` and `forget.rs`, one `UPDATE audit`
+(A10's). O230's two pinned relabel costs are now this entry's gate
+(`a_relabelled_record_no_longer_hides_a_replay`); U3 splits into a switched and a
+legacy arm; the A10 fixture builds a legacy chain with `unswitch_chain_for_test`.
+`e2e`: six checks — a fresh vault reads `intact`, an order-preserving relabel
+reads `BROKEN` and a rotation refuses, `/v1` carries `label_commitment`, MCP
+prints it.
+
+**Counterfactuals, each failing its targets.** CF-1 the step ignores the label
+(P1r, U3 switched, the O230 gate); CF-2 the switch waits on the marker alone (the
+hmac-only arm); CF-3 a pre-switch mismatch folded into `chain_ok` (the rotation
+arm); CF-4 the recorded run by `seq` arithmetic and CF-5 without an authenticated
+trail (the recorded-verdict test); CF-6 a retyped label not malformed; CF-7 a head
+read left outside `chain.rs` (the source gate, and a version-2 attestation minted
+against the frozen head); CF-8 the replay stepping everything version 1 (the
+crash-heal and fresh-vault tests). CF-3's first run did not compile — its pattern
+dropped a semicolon — and was re-run.
+
+**Probes.** Downgrade, against a `v1.5.2` binary built from its tag: with the
+fence, `verify`, a read-only open, a write and `vault rotate` each exit 2 with
+`integrity failure on record audit-chain head`, the database sha256 unchanged, no
+`vault.json.next`, and 1.6.0 verifies the vault afterwards; without it (the
+frozen head set to the live head), 1.5.2 wrote and rotated with exit 0 and 1.6.0
+then refused the vault. `typeof` on the 102,000-row corpus: text/blob/text on
+every row. Cost on that corpus: the switching open 0.51 s against 0.35 s, once;
+`verify` 0.32–0.34 s against 0.31–0.32 s at 18 MB against 25 MB peak (the replay
+streams); a rotation 2.51 s against 2.82 s. A crash between the switch and its
+anchor, and the hmac-only switch, are unit-tested rather than probed.
 
 ### O230 — CLOSED 2026-09-19: an older policy row written back offline no longer passes `verify` or governs the sweep and the trust floor
 
@@ -21114,6 +21436,9 @@ operator-attested destruction under `del/`, with these constraints:
   `strip_prefix("del/")`, so the leg must admit the new prefix or every later
   delete reads as an integrity alarm;
 - the discriminator is the delete PATH, not the surface that called it;
+- a new destruction namespace answers O234's exhaustive "is a destruction"
+  predicate, or O234's resurrection arm goes silent for its deletions (ruled
+  2026-09-19 under O233);
 - `Namespace::prefix()` stays pinned and `fenced_from_agent` exhaustive (O80);
 - whether `HistoryScope::Agent` is per-principal is answered first, because it
   decides whether the split exposes one agent's deletions to another.
@@ -21620,30 +21945,6 @@ leg of its own projected on all four renderers.
 **Gate**: a drawer re-tagged over an unparseable `meta_json` makes `verify`
 fail and names it. **Counterfactual**: today, `VERIFY OK`.
 
-### O233 — an audit label is outside the chain hash, so one relabel defeats every check that finds a record by its label
-
-**Filed 2026-09-19 by O230/O232's ruling; measured on `d938e62`.**
-`chain_append` folds only a record's TAG into the head (`chain_next_hex(&head,
-tag)`); `record_id` and `at` sit beside it unauthenticated, and the rotation's
-own record binds counts stored nowhere, so no reader can authenticate a
-`rotate/` label either. Every check that locates a record by its label is
-therefore one UPDATE deep. Measured (P1r): `trust set secret quarantined`,
-then `UPDATE audit SET record_id='read/x' WHERE record_id='trust/secret'` and
-`DELETE FROM wing_trust` — `verify` answered `policy drift: 0`, `VERIFY OK`,
-and the quarantine floor was gone. The same move defeats O230's comparison (a
-replay plus a relabel of the newer record), moves O230's rotation boundary (a
-later record relabelled `rotate/`), and hides a record from `orphan_labels`,
-which resolves only `kg/`, `kg-entity/` and bare labels.
-
-**Shape**: fold the label into each chain step — a versioned chain whose step
-covers `record_id` as well as the tag — with a migration that carries O232's
-residual for the history before it; the head values a forgetting attestation
-carries move with it, which O13's verdicts must absorb. A panel's question,
-because it changes the chain arithmetic every verifier replays.
-
-**Gate**: P1r and both O230 relabel costs make `verify` fail. **Counterfactual**:
-today, `VERIFY OK`.
-
 ### O234 — an older, validly tagged version of a drawer or a fact written back offline passes `verify`
 
 **Filed 2026-09-19 by O230/O232's ruling; measured for drawers on `d938e62`.**
@@ -21669,6 +21970,31 @@ probe. It shares O233's label residual.
 **Gate**: an update-then-restore and a forget-then-restore each make `verify`
 fail. **Counterfactual**: today, `VERIFY OK`.
 
+#### RULED 2026-09-19 by the panel recorded under O233 (three lenses plus an adversarial refuter)
+
+The full record — measurements, prior rulings, options, splits — is O233's
+`#### RULED 2026-09-19`. This entry's half: one pure decision on O230's gatherer
+flags a row when (1) its key's newest record lies above max(the last `rotate/`,
+O233's switch S) with a different tag, (2) at any seq its tag equals an older
+record's for that key while the newest differs, or (3) it is present after a
+newer destruction record, through an exhaustive `Namespace` predicate. Facts
+take the newest across `kg/{id}` and `kg/{id}/authority`; tunnels arm 3 only;
+arm 1 only on a switched vault. Findings fail `verify` and block a rotation.
+Internal lookups never refuse; the `Read::Returned` doors refuse on the whole
+consulted set through one helper, landing in this pull request only if it adds
+at most 10% to warm search ms/q at ~10⁵ drawers, filed otherwise. The ruling
+built it second, in O233's pull request; **it moved to its own pull request in
+`1.6.0`** because the session that built O233 measured 80% of its context used
+at O233's close — recorded in O233's `#### BUILT`. O233's switch is already in
+the tree, so arm 1 has its boundary; build from this record, not from a new
+panel.
+
+**This entry's filing was incomplete in two places**, found by the panel: the
+rotations from `cc0e1c7` to `55af8d1` re-tagged drawers, facts and entities with
+no `rotate/` record, so a boundary on `rotate/` alone false-alarms on every
+vault they rotated; and a boundary on S alone would hide every replay made
+before the upgrade — arm 2 is what finds those.
+
 ### O235 — `StoreError::Integrity` says "HMAC mismatch" at sites where no HMAC was compared
 
 **Filed 2026-09-19 by O230/O232's ruling; established by reading.** The
@@ -21685,6 +22011,57 @@ with the family's exit 2 / 409 `integrity` class unchanged.
 
 **Gate**: every `Integrity` mint site's message names what was compared, pinned
 by a source count. **Counterfactual**: today's single message.
+
+### O236 — `create_tunnel` appends a chain record for a create that wrote nothing
+
+**Filed 2026-09-19 by O233/O234's ruling; established by reading.**
+`create_tunnel` (`crates/undercroft-store/src/manage.rs` ~1720-1745) derives the
+id from `(from, to, label)`, inserts with `ON CONFLICT DO NOTHING`, and then
+appends `tunnel/{id}` with a freshly computed tag unconditionally. A repeated
+create — an agent calling `undercroft_create_tunnel` twice — therefore writes a
+record claiming a write that did not happen, carrying a tag no row holds. That
+is why O234 compares tunnels by the destruction arm only.
+
+**Shape**: append only when the insert inserted, and answer the caller whether
+the tunnel was new. Existing surplus records stay (the trail is append-only).
+
+**Gate**: a repeated create appends nothing and the tunnel's newest record
+carries the row's tag. **Counterfactual**: today, two records.
+
+### O237 — reads decide from audit labels that no read replays, so a relabel acts until `verify` runs
+
+**Filed 2026-09-19 by O233/O234's ruling (the refuter).** O233 makes a relabel
+fail `verify`; it does not stop the reads that consult labels from acting on
+one first. `wing_trusts()` (the trust floor, `recent`, `list_drawers`, `trust
+list`), `retention_policies()` (the sweep), `mirror_note` (a forget
+attestation's mirror disclosure) and `attested_run_in_audit` find records by
+`record_id` and replay nothing, so P1r's relabel-plus-delete still lifts the
+quarantine floor on a floored search until someone runs `verify`.
+
+**Shape, for a ruling panel**: whether those readers require an authenticated
+chain first — a replay at open (O(audit) per writable open, measured ~0.1 s at
+10⁵ rows), an incremental replay from a verified position per handle, or a
+stated residual — and what a read does when the chain does not replay.
+
+**Gate**: P1r against a running server refuses the floored read before any
+`verify`. **Counterfactual**: after O233, the floor is lifted until `verify`.
+
+### O238 — the manifest `version` is written and never checked on load, so a later format cannot fence an older binary
+
+**Filed 2026-09-19 by O233/O234's ruling (the refuter); established by
+reading.** `vault.json` carries a `version` that every build writes and none
+reads (`crates/undercroft-vault/src/lib.rs` ~141-168). O233 had to fence 1.5.x
+out of a migrated chain by freezing a database row that 1.5.x happens to
+compare; the next on-disk change may find no such row. A binary that refuses a
+manifest version above the one it knows makes every future format change
+fenceable by a version bump.
+
+**Shape**: refuse, as its own typed error naming both versions, a manifest
+whose `version` exceeds this build's; `UPGRADING.md` states which release
+introduced the check.
+
+**Gate**: a manifest with `version` one above the build's refuses to open.
+**Counterfactual**: today, it opens.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 

@@ -622,9 +622,19 @@ impl VaultStore {
                 "SELECT seq, tag FROM audit WHERE record_id = ?1 ORDER BY seq DESC LIMIT 1",
                 [record_id],
                 |r| {
+                    // The tag's BYTES, whatever storage class holds them: a
+                    // tag rewritten as text made this read — and so the
+                    // whole `verify` — return an error instead of a verdict.
+                    // The chain replay reports the retype itself (ROADMAP
+                    // O233); here the bytes are what the comparison needs.
+                    let tag = match r.get_ref(1)? {
+                        rusqlite::types::ValueRef::Blob(b) => b.to_vec(),
+                        rusqlite::types::ValueRef::Text(t) => t.to_vec(),
+                        _ => Vec::new(),
+                    };
                     Ok(ChainRecord {
                         seq: r.get(0)?,
-                        tag: r.get(1)?,
+                        tag,
                     })
                 },
             )
@@ -754,9 +764,13 @@ pub(crate) struct PolicyFinding {
 /// comparison is O94's, which that entry dropped because it alarmed on every
 /// rotated vault; bounded by the rotation it no longer does.
 ///
-/// **Known cost, stated (ROADMAP O233)**: every lookup finds a record by its
-/// label, and `record_id` is outside the chain hash, so relabelling the newer
-/// record, or a later one as `rotate/`, hides a replay.
+/// **What a lookup by label can still miss (ROADMAP O233)**: every lookup
+/// finds a record by its label, so relabelling the newer record, or a later
+/// one as `rotate/`, still hides a replay FROM THIS FUNCTION. It was a stated
+/// cost until O233's labelled chain step made the relabel itself break the
+/// replay on a switched chain, where `verify` fails on `chain_ok` (after the
+/// switch) or `label_commitment` (before it). The readers that call this act
+/// before any replay runs, which is ROADMAP O237.
 pub(crate) fn policy_finding(
     key: &str,
     noun: PolicyNoun,

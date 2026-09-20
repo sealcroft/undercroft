@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 812" width="900" height="812" role="img" aria-labelledby="t d">
 <title id="t">How a write, a read and an open are actually handled</title>
-<desc id="d">A write seals the content, tags it with an HMAC, advances the audit chain, and commits all three in one SQLite transaction before the manifest anchor is fsynced. A read recomputes the tag before the row becomes data. At open the anchor is compared with the committed chain head: behind means a crash and fast-forwards, ahead means the database was rolled back and raises a tamper alarm.</desc>
+<desc id="d">A write seals the content, tags it with an HMAC, advances the audit chain over the record's label, tag and time, and commits all three in one SQLite transaction before the manifest anchor is fsynced. A read recomputes the tag before the row becomes data. At open the anchor is compared with the committed chain head: behind means a crash and fast-forwards, ahead means the database was rolled back and raises a tamper alarm.</desc>
 <style>
   .f { font-family: "DejaVu Sans", "Noto Sans", sans-serif; }
   .h { font-size: 17px; font-weight: 600; }
@@ -46,7 +46,7 @@
 <circle cx="58" cy="248" r="11" fill="var(--d-green,#2f7d4f)"/>
 <text x="58" y="252" class="f s" fill="var(--d-on,#ffffff)" text-anchor="middle">3</text>
 <text x="80" y="246" class="f b ink">advance the chain</text>
-<text x="80" y="264" class="f mono dim">head' = HMAC(mac_key, head ‖ tag)</text>
+<text x="80" y="264" class="f mono dim">head' = HMAC(chain_key, head ‖ label ‖ tag ‖ time)</text>
 <text x="80" y="280" class="f s dim">Each head commits to every write that came before it.</text>
 
 <rect x="42" y="296" width="394" height="76" rx="8" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.8"/>

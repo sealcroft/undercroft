@@ -4,9 +4,12 @@
 //! named content was destroyed and nothing else changed in the same
 //! breath.
 //!
-//! **What the attestation is, honestly.** The chain step is KEYED
-//! (`next = HMAC(mac_key, prev ‖ tag)`), so replaying heads requires the
-//! vault key. Two verification postures follow, and both are real:
+//! **What the attestation is, honestly.** The chain step is KEYED — version
+//! 1 `next = HMAC(mac_key, prev ‖ tag)`, version 2 (ROADMAP O233) the same
+//! over each record's label and time too, under the `chain` subkey — so
+//! replaying heads requires the vault key. The document's `version` names
+//! which step its heads were computed with. Two verification postures
+//! follow, and both are real:
 //!
 //! * **vault-verifiable** — [`VaultStore::verify_forget_attestation`]
 //!   replays the recorded segment with the key in hand and checks four
@@ -86,7 +89,11 @@ pub enum AttestationVerdict {
     /// The tags do not verify under this vault's current MAC key, and this
     /// vault's own `audit` trail — which rotation preserves byte for byte —
     /// holds exactly these records, as a CONTIGUOUS run, in this order, and
-    /// the named drawers are gone.
+    /// the named drawers are gone. **And that trail verifies** (ROADMAP
+    /// O233): its chain replays and its pre-switch labels match their
+    /// commitment, or the verdict is refused as an integrity finding —
+    /// matching a document against rows nothing authenticates vouches for
+    /// nothing.
     ///
     /// What that proves: the document names evidence this vault actually
     /// recorded, and nothing else happened *between* the attested records.
@@ -164,7 +171,10 @@ pub struct AttestedRecord {
 /// `admission deny`, which destroy through the same `forget_with_proof`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ForgetAttestation {
-    /// Attestation format version.
+    /// Attestation format version, which names the chain step the heads were
+    /// computed with: `1`, the tag alone; `2`, each tombstone's label, tag
+    /// and time (ROADMAP O233). Inside the signed canonical, so a signed
+    /// document's version cannot be flipped.
     pub version: u32,
     /// The vault the destruction ran in.
     pub vault: String,
@@ -396,6 +406,14 @@ impl VaultStore {
             });
         }
         let head_before: String = self.chain_head()?;
+        // The attestation names the step its heads were computed with
+        // (ROADMAP O233): version 2 on a switched chain, whose tombstones fold
+        // their labels and times. The regime cannot change mid-call — a chain
+        // switches only at an open.
+        let version = match crate::chain::regime(&self.conn)? {
+            crate::chain::Regime::V1 => 1,
+            crate::chain::Regime::V2 { .. } => 2,
+        };
         let seq_before: i64 =
             self.conn
                 .query_row("SELECT COALESCE(MAX(seq), 0) FROM audit", [], |r| r.get(0))?;
@@ -416,7 +434,7 @@ impl VaultStore {
             })?
             .collect::<Result<_, _>>()?;
         Ok(ForgetAttestation {
-            version: 1,
+            version,
             vault: self.vault.id().to_string(),
             created_at: OffsetDateTime::now_utc()
                 .format(&Rfc3339)
@@ -443,9 +461,16 @@ impl VaultStore {
     /// what every build before this one produced.
     fn mirror_note(&self, mirror: &MirrorDelete) -> Option<String> {
         // **Decided off the CHAIN first; the legacy `meta` row is a second,
-        // disclose-only signal.** Either one makes the note appear, neither
-        // can suppress it: a vault pushed before `egress/index-push` existed
-        // has only the row, and a stripped row still has the chain record.
+        // disclose-only signal.** Either one makes the note appear: a vault
+        // pushed before `egress/index-push` existed has only the row, and a
+        // stripped row still has the chain record.
+        //
+        // This said "neither can suppress it", and that was false while the
+        // chain folded tags alone: relabelling the `egress/index-push`
+        // record and deleting the `meta` row suppressed the disclosure with
+        // `verify` green. Since ROADMAP O233 the relabel breaks a switched
+        // chain, so `verify` reports it — but this lookup still decides
+        // before any replay runs, which is ROADMAP O237.
         //
         // The first version asked `pushed_embedder()` ALONE, which reads an
         // untagged, unsealed `INSERT INTO meta`. One offline
@@ -543,6 +568,21 @@ impl VaultStore {
             // verdict says "unsigned" about it, which is true.
             (_, None) => {}
         }
+        // **Which chain step the document's heads were computed with**
+        // (ROADMAP O233): version 1 folds each tombstone's tag alone, version
+        // 2 its label and time as well. A version this build does not know is
+        // REFUSED as unsupported — an input error, never the tamper verdict,
+        // because a document a newer build minted is not a forgery.
+        let step = match att.version {
+            1 => undercroft_vault::ChainStep::V1,
+            2 => undercroft_vault::ChainStep::V2,
+            v => {
+                return Err(StoreError::Invalid(format!(
+                    "attestation version {v} is not one this build can check (it checks 1 \
+                     and 2); a newer build minted it"
+                )))
+            }
+        };
         let named: std::collections::HashSet<&str> =
             att.drawers.iter().map(|d| d.id.as_str()).collect();
         let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
@@ -597,10 +637,18 @@ impl VaultStore {
         });
         let verdict = if replayable {
             let mut head = att.head_before.clone();
-            for tag in &tags {
+            for (r, tag) in att.records.iter().zip(&tags) {
                 head = self
                     .vault
-                    .chain_next_hex(&head, tag)
+                    .chain_step_hex(
+                        step,
+                        &head,
+                        undercroft_vault::ChainLink {
+                            record_id: &r.record_id,
+                            tag,
+                            at: &r.at,
+                        },
+                    )
                     .map_err(|e| fail(format!("chain step: {e}")))?;
             }
             if head != att.head_after {
@@ -610,6 +658,23 @@ impl VaultStore {
             }
             AttestationVerdict::Verified
         } else {
+            // **The recorded evidence counts only while the trail it is read
+            // from is authenticated** (ROADMAP O233). This path matches the
+            // document against `audit` rows by label, tag and time and
+            // replays nothing itself, so a trail whose chain does not replay,
+            // or whose pre-switch labels no longer match their commitment,
+            // cannot vouch for anything — refused as an integrity verdict,
+            // naming `verify`, rather than reported as `Recorded`.
+            let (chain_ok, labels) = self.chain_verdict()?;
+            if !chain_ok || labels == crate::LabelCommitment::Mismatch {
+                return Err(StoreError::IntegrityFinding(
+                    "the audit trail this attestation would be matched against does not \
+                     verify (its chain does not replay, or its labels no longer match their \
+                     commitment), so it cannot vouch for the recorded tombstones — run \
+                     `undercroft verify`"
+                        .into(),
+                ));
+            }
             AttestationVerdict::Recorded {
                 rotations_since: self.attested_run_in_audit(att, &tags)?,
             }
@@ -693,10 +758,13 @@ impl VaultStore {
             )));
         }
         for start in candidates {
-            if self.audit_run_matches(start, att, tags)? {
-                let end = start + n as i64 - 1;
+            if let Some(end) = self.audit_run_matches(start, att, tags)? {
+                // A case-sensitive half-open range on the indexed label, the
+                // shape O230's gatherer uses, rather than a `LIKE` that cannot
+                // use the BINARY index and matches `ROTATE/…` too.
                 let rotations: i64 = self.conn.query_row(
-                    "SELECT COUNT(*) FROM audit WHERE seq > ?1 AND record_id LIKE 'rotate/%'",
+                    "SELECT COUNT(*) FROM audit \
+                     WHERE seq > ?1 AND record_id >= 'rotate/' AND record_id < 'rotate0'",
                     params![end],
                     |r| r.get(0),
                 )?;
@@ -718,37 +786,43 @@ impl VaultStore {
     /// Do the `n` audit rows starting at `start` equal the attested records,
     /// field for field and in order? Every column is compared, `at`
     /// included: the row this vault wrote is the evidence, not a subset of
-    /// it that happens to match.
+    /// it that happens to match. Answers the `seq` of the run's last row
+    /// when it matches.
+    ///
+    /// **The run is the next `n` rows in `seq` ORDER, never `seq BETWEEN
+    /// start AND start + n - 1`** (ROADMAP O233). `seq` VALUES are bound by
+    /// nothing — a chain step binds a row's position, not its number — so an
+    /// order-preserving renumber that opened a gap inside the run turned a
+    /// genuine document into a forgery verdict under the arithmetic form.
     fn audit_run_matches(
         &self,
         start: i64,
         att: &ForgetAttestation,
         tags: &[Vec<u8>],
-    ) -> Result<bool, StoreError> {
-        let end = start + att.records.len() as i64 - 1;
+    ) -> Result<Option<i64>, StoreError> {
         let mut stmt = self.conn.prepare(
-            "SELECT record_id, tag, at FROM audit WHERE seq BETWEEN ?1 AND ?2 ORDER BY seq",
+            "SELECT seq, record_id, tag, at FROM audit WHERE seq >= ?1 ORDER BY seq LIMIT ?2",
         )?;
-        let rows: Vec<(String, Vec<u8>, String)> = stmt
-            .query_map(params![start, end], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        let rows: Vec<(i64, String, Vec<u8>, String)> = stmt
+            .query_map(params![start, att.records.len() as i64], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
             })?
             .collect::<Result<_, _>>()?;
         if rows.len() != att.records.len() {
-            return Ok(false);
+            return Ok(None);
         }
-        Ok(rows
-            .iter()
-            .zip(att.records.iter().zip(tags))
-            .all(|((rid, tag, at), (r, want))| rid == &r.record_id && tag == want && at == &r.at))
+        let matches =
+            rows.iter()
+                .zip(att.records.iter().zip(tags))
+                .all(|((_, rid, tag, at), (r, want))| {
+                    rid == &r.record_id && tag == want && at == &r.at
+                });
+        Ok(matches.then(|| rows.last().map(|(seq, ..)| *seq)).flatten())
     }
 
+    /// The live head (ROADMAP O233: `head_v2` once the chain has switched).
     fn chain_head(&self) -> Result<String, StoreError> {
-        Ok(self
-            .conn
-            .query_row("SELECT value FROM chain_meta WHERE key = 'head'", [], |r| {
-                r.get(0)
-            })?)
+        Ok(crate::chain::require_head(&self.conn)?.head)
     }
 }
 

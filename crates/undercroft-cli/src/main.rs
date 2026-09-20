@@ -2663,10 +2663,13 @@ fn run(cli: Cli) -> Result<()> {
                 "audit chain:     {}",
                 if report.chain_ok { "ok" } else { "BROKEN" }
             );
-            // The fourth leg: a graph label naming a record that is not
-            // there. `record_id` is the one part of an audit row the chain
-            // does not authenticate, so this is the only place a relabel
-            // shows up.
+            // ROADMAP O233: the labels the chain held when it switched to the
+            // labelled step, against the commitment that bound them. A
+            // mismatch fails the verdict and does not block a rotation.
+            println!("audit labels:    {}", report.label_commitment.as_str());
+            // The fourth leg: a graph or drawer label naming a record that
+            // is not there — on a switched chain, a row deleted with no
+            // destruction record; on an unswitched one, a relabel too.
             println!("orphan labels:   {}", report.orphan_labels.len());
             for l in &report.orphan_labels {
                 println!("  ORPHANED: {l} — names no live record");
@@ -3038,10 +3041,11 @@ fn run(cli: Cli) -> Result<()> {
                 println!("No audit records match.");
             }
             for r in &rows {
-                // The tag is the evidence and the label is navigation, so the
-                // label leads and the tag is abbreviated — an operator
+                // The label leads and the tag is abbreviated — an operator
                 // chasing a record reads the label; one verifying it reads
-                // the full value off `/v1` or a forgetting attestation.
+                // the full value off `/v1` or a forgetting attestation. Both
+                // are evidence since ROADMAP O233 (the chain step folds the
+                // label); this is a reading order, not a ranking.
                 println!(
                     "  #{:<6} {}  {:<40} {}…",
                     r.seq,
