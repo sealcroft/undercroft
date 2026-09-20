@@ -2198,8 +2198,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (1008 run,
-                                      # 4 #[ignore]d = 1012 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (1012 run,
+                                      # 4 #[ignore]d = 1016 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote

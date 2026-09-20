@@ -546,16 +546,68 @@ pub(crate) fn newest_record(
         .optional()?)
 }
 
-/// The newest rotation's place in the chain — the boundary a tag comparison
-/// stops at. A half-open range on `record_id` rather than a `LIKE`: SQLite's
-/// `LIKE` is case-insensitive and cannot use the BINARY index, so it would
-/// scan the whole trail on every floored search and could disagree with an
-/// equality about `ROTATE/x`.
-pub(crate) fn rotation_boundary(conn: &Connection) -> Result<Option<i64>, StoreError> {
+/// **The rotation that installed the key this handle holds** — the boundary a
+/// tag comparison stops at, and it is bound to the KEY rather than to the
+/// namespace (ROADMAP O239).
+///
+/// It used to be `MAX(seq)` over the whole `rotate/` half-open range, which
+/// admits any label an offline writer spells. Measured: one statement —
+/// `UPDATE audit SET record_id='rotate/deadbeefdeadbeef' WHERE seq=(SELECT
+/// MAX(seq) FROM audit)` — put the boundary above every record, and O230's
+/// replay attack then went from `retention_policies()` REFUSING to answering
+/// `Ok(30 days)` with `policy_drift` EMPTY: the replayed policy governs and a
+/// sweep destroys under it. The same boundary feeds
+/// [`crate::VaultStore::version_boundary`], so that one statement disabled
+/// O234's arm 1 for every table and every key at once. Cheaper than the
+/// relabel O237 was filed on, and it needs no row deletion.
+///
+/// `rotate.rs` already writes `rotate/{keycheck_hex()[..16]}` under the NEXT
+/// key, and the vault holds that key once the rotation commits — so an
+/// indexed EQUALITY on this handle's own keycheck names exactly the rotation
+/// that installed the key the comparison is made under. That is what the
+/// boundary always meant, and a planted label with a foreign keycheck is
+/// rejected in constant time. The change can only make the boundary SMALLER
+/// or `None`, i.e. strictly more checking, never less: a vault that never
+/// rotated, or that was rotated by a binary older than A19 (which appended no
+/// record at all), answers `None` exactly as before.
+pub(crate) fn rotation_boundary(
+    conn: &Connection,
+    vault: &Vault,
+) -> Result<Option<i64>, StoreError> {
+    Ok(conn.query_row(
+        "SELECT MAX(seq) FROM audit WHERE record_id = ?1",
+        params![rotation_label(vault)],
+        |r| r.get(0),
+    )?)
+}
+
+/// The label a rotation under THIS key wrote — stated once, here, because
+/// `rotate.rs` composes it at the write and this module reads it.
+pub(crate) fn rotation_label(vault: &Vault) -> String {
+    Namespace::Rotate.record(&vault.keycheck_hex()[..KEYCHECK_LABEL_LEN])
+}
+
+/// How much of the keycheck a `rotate/` label carries.
+pub(crate) const KEYCHECK_LABEL_LEN: usize = 16;
+
+/// **How many rotations the chain records after `seq`** — and this one is
+/// deliberately NOT bound to the current key (ROADMAP O239).
+///
+/// The two questions differ and the difference is the reason both live here.
+/// [`rotation_boundary`] asks *where is the rotation that installed the key I
+/// hold*, which is one record under one keycheck. This asks *how many
+/// rotations happened since*, which spans every key generation — so bounding
+/// it by the current keycheck would answer at most one and silently undercount
+/// a vault rotated twice. It corroborates a `Recorded` forget verdict and
+/// never decides it (ROADMAP O13: a pre-A19 rotation appended no record, so
+/// reading zero as "no rotation, therefore forged" recreates the defect), and
+/// a planted `rotate/` label inflates it without changing any verdict.
+pub(crate) fn rotations_since(conn: &Connection, seq: i64) -> Result<i64, StoreError> {
     let (lo, hi) = prefix_range(Namespace::Rotate);
     Ok(conn.query_row(
-        "SELECT MAX(seq) FROM audit WHERE record_id >= ?1 AND record_id < ?2",
-        [lo.as_str(), hi.as_str()],
+        "SELECT COUNT(*) FROM audit \
+          WHERE seq > ?1 AND record_id >= ?2 AND record_id < ?3",
+        params![seq, lo, hi],
         |r| r.get(0),
     )?)
 }

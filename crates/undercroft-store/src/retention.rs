@@ -623,7 +623,7 @@ impl VaultStore {
     }
 
     fn rotation_boundary(&self) -> Result<Option<i64>, StoreError> {
-        crate::chain::rotation_boundary(&self.conn)
+        crate::chain::rotation_boundary(&self.conn, &self.vault)
     }
 
     fn chain_keys(&self, ns: Namespace) -> Result<Vec<String>, StoreError> {
@@ -771,7 +771,8 @@ pub(crate) fn policy_finding(
 
 #[cfg(test)]
 mod tests {
-    use crate::{InternalRead, Read, VaultStore};
+    use crate::{InternalRead, Read, StoreError, VaultStore};
+    use rusqlite::params;
     use tempfile::TempDir;
     use undercroft_core::Drawer;
     use undercroft_vault::{SecurityLevel, VaultManager};
@@ -1159,5 +1160,165 @@ mod tests {
             .unwrap()
             .policy_drift
             .contains(&sweep.policy_drift[0]));
+    }
+
+    /// **ROADMAP O239: a planted `rotate/` label no longer lifts the
+    /// boundary.**
+    ///
+    /// Measured before the fix, on O230's own replay attack: one statement —
+    /// `UPDATE audit SET record_id='rotate/deadbeefdeadbeef' WHERE
+    /// seq=(SELECT MAX(seq) FROM audit)` — took `retention_policies()` from
+    /// REFUSING to answering `Ok(30 days)` with `policy_drift` EMPTY, so the
+    /// replayed policy governed and a sweep would have destroyed under it.
+    /// The same boundary feeds O234's arm 1, so one statement disabled the
+    /// newest-version comparison for every table and every key at once.
+    ///
+    /// Both arms are asserted, because a test that only plants the label
+    /// cannot tell a working bound from a comparison that stopped working.
+    #[test]
+    fn a_planted_rotate_label_does_not_lift_the_policy_boundary() {
+        for plant in [false, true] {
+            let (_d, mut s) = sealed_store();
+            s.set_retention("scratch", None, 30).unwrap();
+            let old: (u32, Vec<u8>, String) = s
+                .conn
+                .query_row(
+                    "SELECT max_age_days, tag, assigned_at FROM retention_policy \
+                     WHERE wing = 'scratch'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .unwrap();
+            s.set_retention("scratch", None, 365).unwrap();
+
+            if plant {
+                // An INSERT, not a relabel. Appending a forged `rotate/` row
+                // AFTER the newer declaration leaves that declaration in the
+                // chain and simply puts the boundary above it, so the
+                // comparison is skipped while every record the gatherer needs
+                // is still there. Strictly easier than a relabel — it destroys
+                // nothing — and it is the shape O230 ruling 5 pinned.
+                let n = s
+                    .conn
+                    .execute(
+                        "INSERT INTO audit (record_id, tag, at) \
+                         VALUES ('rotate/deadbeefdeadbeef', X'00', '2026-01-01T00:00:00Z')",
+                        [],
+                    )
+                    .unwrap();
+                assert_eq!(n, 1, "premise: the forged rotation is appended");
+                // PREMISE: the newer declaration is still on the chain, so a
+                // finding here is attributable to the boundary and not to a
+                // record the plant removed.
+                let newest: i64 = s
+                    .conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM audit WHERE record_id = 'retention/scratch'",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(newest, 2, "premise: both declarations still recorded");
+            }
+
+            // The replay: write the older, validly tagged row back.
+            s.conn
+                .execute(
+                    "UPDATE retention_policy SET max_age_days = ?1, tag = ?2, \
+                     assigned_at = ?3 WHERE wing = 'scratch'",
+                    params![old.0, old.1, old.2],
+                )
+                .unwrap();
+
+            let err = s.retention_policies().unwrap_err();
+            assert!(
+                matches!(err, StoreError::IntegrityFinding(_)),
+                "plant={plant}: the replayed policy must not govern — {err:?}"
+            );
+            let drift = s.verify().unwrap().policy_drift;
+            assert_eq!(drift.len(), 1, "plant={plant}: {drift:?}");
+            assert!(drift[0].contains("not the newest declaration"));
+        }
+    }
+
+    /// **A REAL rotation still moves the boundary**, which is the half a
+    /// keycheck bound could silently break: bind it to the wrong generation
+    /// and every rotated vault alarms on rows the rotation legitimately
+    /// re-tagged — the false alarm O94 dropped the comparison for.
+    #[test]
+    fn a_real_rotation_still_bounds_the_comparison() {
+        let (dir, mut s) = sealed_store();
+        s.set_retention("scratch", None, 30).unwrap();
+        s.set_wing_trust("w", "trusted").unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        s.rotate_keys(mgr.rotation_candidate("r").unwrap()).unwrap();
+
+        // PREMISE: the rotation wrote a record under the key the vault now
+        // holds, and the boundary finds it.
+        let boundary = crate::chain::rotation_boundary(&s.conn, &s.vault).unwrap();
+        assert!(boundary.is_some(), "a rotation must move the boundary");
+        assert!(s.verify().unwrap().ok(), "a rotated vault verifies");
+        assert_eq!(s.retention_policies().unwrap().len(), 1);
+        assert_eq!(s.wing_trusts().unwrap().len(), 1);
+
+        // And a SECOND rotation moves it again — the newest generation wins,
+        // so the bound is "the rotation that installed the key I hold" rather
+        // than "the first rotation ever".
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        s.rotate_keys(mgr.rotation_candidate("r").unwrap()).unwrap();
+        let later = crate::chain::rotation_boundary(&s.conn, &s.vault).unwrap();
+        assert!(
+            later > boundary,
+            "{later:?} must be newer than {boundary:?}"
+        );
+        assert!(s.verify().unwrap().ok());
+    }
+
+    /// **A vault that never rotated answers `None`**, exactly as the range
+    /// scan did — the bound can only make the boundary smaller, never
+    /// manufacture one.
+    #[test]
+    fn an_unrotated_vault_has_no_rotation_boundary() {
+        let (_d, s) = sealed_store();
+        assert_eq!(
+            crate::chain::rotation_boundary(&s.conn, &s.vault).unwrap(),
+            None
+        );
+        // And a planted label of a FOREIGN keycheck does not manufacture one.
+        s.conn
+            .execute(
+                "INSERT INTO audit (record_id, tag, at) \
+                 VALUES ('rotate/deadbeefdeadbeef', X'00', '2026-01-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        assert_eq!(
+            crate::chain::rotation_boundary(&s.conn, &s.vault).unwrap(),
+            None,
+            "a foreign keycheck is not this vault's rotation"
+        );
+    }
+
+    /// **The rotation COUNT is a different question and keeps the range**
+    /// (ROADMAP O239). Bound to the current keycheck it would answer at most
+    /// one and silently undercount a vault rotated twice, which is the
+    /// corroboration O13's `Recorded` verdict reads.
+    #[test]
+    fn the_rotation_count_spans_every_key_generation() {
+        let (dir, mut s) = sealed_store();
+        for _ in 0..2 {
+            let mgr = VaultManager::open(dir.path(), None).unwrap();
+            s.rotate_keys(mgr.rotation_candidate("r").unwrap()).unwrap();
+        }
+        assert_eq!(
+            crate::chain::rotations_since(&s.conn, 0).unwrap(),
+            2,
+            "both rotations counted, across two key generations"
+        );
+        // The boundary, by contrast, names exactly one.
+        let b = crate::chain::rotation_boundary(&s.conn, &s.vault)
+            .unwrap()
+            .expect("the current key's rotation");
+        assert_eq!(crate::chain::rotations_since(&s.conn, b).unwrap(), 0);
     }
 }

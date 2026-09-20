@@ -729,7 +729,9 @@ impl VaultStore {
             report.kg_entities
         );
         let rotate_tag = next.tag(rotate_canonical.as_bytes()).to_vec();
-        let rotate_label = crate::manage::Namespace::Rotate.record(&next.keycheck_hex()[..16]);
+        // ROADMAP O239: composed where it is READ, so the write and the
+        // keycheck-bound boundary cannot drift about how the label is spelled.
+        let rotate_label = crate::chain::rotation_label(&next);
         let head = crate::chain::next_head(
             &next,
             &crate::chain::Head {

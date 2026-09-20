@@ -280,7 +280,7 @@ impl VaultStore {
             chain::Regime::V1 => return Ok(None),
             chain::Regime::V2 { switch_seq } => switch_seq,
         };
-        let rotate = chain::rotation_boundary(&self.conn)?.unwrap_or(switch);
+        let rotate = chain::rotation_boundary(&self.conn, &self.vault)?.unwrap_or(switch);
         Ok(Some(switch.max(rotate)))
     }
 

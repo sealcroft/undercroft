@@ -3998,7 +3998,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**268** of the **283** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**271** of the **286** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4178,6 +4178,105 @@ identities.
 MINOR since O149: `PATCH /admin/tenants/{id}` and its CLI mirror are new
 capability, backward compatible. The rest of the section is PATCH work — no
 documented contract moves.
+
+### O239 — CLOSED 2026-09-20: a forged `rotate/` label no longer lifts the boundary, because it is bound to the key the handle holds
+
+**Filed 2026-09-20 by O237's ruling panel (the software-engineering lens and
+the refuter); MEASURED by the integrator.** `chain::rotation_boundary` takes
+`MAX(seq)` over the whole `rotate/` half-open range and reads no further.
+`rotate.rs` writes its label as `rotate/{keycheck_hex()[..16]}`, so the range
+admits any label an offline writer spells. ONE statement — `INSERT INTO audit
+(record_id, tag, at) VALUES ('rotate/deadbeefdeadbeef', X'00', …)` — puts the
+boundary above every record already there.
+
+**The first measurement of this was mine and it was WRONG, which is worth
+recording because the wrong version is the plausible one.** It used `UPDATE …
+WHERE seq=(SELECT MAX(seq) FROM audit)`, and the newest row at that moment WAS
+the declaration the attack needed ignored — so it demonstrated a RELABEL
+(P1r's shape, which removes the record from the key's universe) and not a
+boundary lift at all. The gate written from it failed on its first run, which
+is how the conflation surfaced. An INSERT is the real lever and it is strictly
+easier: it destroys nothing, leaves every record the gatherer needs in place,
+and simply puts the boundary above them.
+
+Measured correctly on O230's own replay attack (declare 30 days, re-declare
+365, append the forged rotation, write the 30-day row back), with both
+declarations asserted still present: **without** the plant
+`retention_policies()` refuses and `policy_drift` names the row; **with** it
+`retention_policies()` answers `Ok(30 days)` and `policy_drift` is EMPTY — the
+replayed policy governs, and a sweep would destroy under it. The same boundary feeds O234's `version_boundary`
+(`replay.rs`), so the same statement disables arm 1 for every table and every
+key at once. Cheaper than the variant O237 was filed on, and it needs no row
+deletion.
+
+O230 ruling 5 pinned "a relabel of a later record to `rotate/`" as a named
+cost citing O233, and O233 then made it break `chain_ok` and left the
+comparison itself blind. That disposition is revised by O237's ruling.
+
+**Shape**: the boundary is the newest `rotate/` record whose label carries THIS
+key's keycheck, which any handle can derive (`Vault::keycheck_hex`). O(1), no
+format change, and strictly more checking — it can only make the boundary
+smaller or `None`. `forget.rs`'s own `rotate/` range count takes the same
+decision, or the two disagree about what a rotation is.
+
+**Gate**: the measurement above, both arms, plus a false-alarm arm over a real
+rotation. **Counterfactual**: today, the planted label wins.
+
+guard built over the loose range inherits the lever it exists to close.
+
+#### BUILT 2026-09-20, as ruled
+
+**The boundary is an indexed EQUALITY on this key's label.**
+`chain::rotation_boundary(conn, vault)` matches `rotate/{keycheck_hex()[..16]}`
+for the key the handle holds, so it names the rotation that installed that key
+— which is what the boundary always meant — and a label an offline writer
+spells names no rotation. It is cheaper than the range scan it replaces, and it
+can only make the boundary SMALLER or `None`: an unrotated vault, and one
+rotated by a binary older than A19 (which appended no record at all), answer
+`None` exactly as before.
+
+**One spelling.** `chain::rotation_label` composes the label, and `rotate.rs`
+writes through it, so the write and the read cannot drift about how a `rotate/`
+label is spelled.
+
+**The COUNT is a different question and keeps the range.**
+`chain::rotations_since` is the `forget.rs` count, moved out of a second
+hand-written copy of that range and into the module that owns the spelling.
+It is deliberately NOT keycheck-bound: it spans every key generation, so
+bounding it would answer at most one and silently undercount a vault rotated
+twice — and it corroborates O13's `Recorded` verdict rather than deciding it,
+so a planted label inflates it without changing any verdict. The difference is
+stated on both functions.
+
+**A pinned cost is CLOSED, and recorded rather than absorbed.** O233's
+`a_relabelled_record_no_longer_hides_a_replay` pinned two relabel variants;
+its second arm asserted `policy_drift.is_empty()` — the moved boundary hiding
+the replay from the policy leg — as a named price. That assertion now fails,
+which is good news, so the arm is INVERTED rather than deleted and still
+exercises the variant: the policy leg names the replay itself. The first arm
+(a relabel of the newest record, which removes the key from its universe)
+remains a cost and is O237's.
+
+**Tests** (4 new, plus the inverted arm). The measured attack with both arms
+and a premise asserting both declarations are still on the chain, so a finding
+is attributable to the boundary and not to a record the plant removed; a REAL
+rotation still moves the boundary, and a second rotation moves it again, with
+`verify`, `retention_policies` and `wing_trusts` clean after each — the false
+alarm a wrong keycheck bound would produce on every rotated vault, which is
+what O94 dropped the comparison for; an unrotated vault answers `None`, and a
+planted foreign keycheck does not manufacture one; and the count spans two key
+generations while the boundary names one.
+
+**Counterfactual**: with `rotation_boundary` restored to the `MAX(seq)` range,
+the gate FAILS — the planted row lifts the boundary and `retention_policies()`
+returns the replayed policy. Run, not assumed.
+
+**Reported as mine.** The first measurement of this lever was wrong: it used
+`UPDATE … WHERE seq=(SELECT MAX(seq) FROM audit)`, and the newest row was the
+declaration the attack needed ignored — so it demonstrated a relabel rather
+than a boundary lift, and I reported it to the maintainer in those terms. The
+gate written from it failed on its first run, which is what surfaced the
+conflation. The entry and O237's ruling record both carry the correction.
 
 ### O234 — CLOSED 2026-09-20: an older, validly tagged version of a drawer, fact, entity or tunnel, written back offline, no longer passes `verify`
 
@@ -22143,6 +22242,190 @@ stated residual — and what a read does when the chain does not replay.
 **Gate**: P1r against a running server refuses the floored read before any
 `verify`. **Counterfactual**: after O233, the floor is lifted until `verify`.
 
+**Sequenced after O239, which has shipped**: this entry's guard reads
+`chain::rotation_boundary`, and a guard built over the loose `rotate/` range
+would have inherited the lever O239 measured. Not a `Relations:` line any
+more — that marker names a partner under `## Open`.
+
+#### RULED 2026-09-20 by a three-lens panel (agentic memory architecture, security, software engineering) plus an adversarial refuter
+
+**The question.** Whether the readers that DECIDE from audit labels must require
+an authenticated chain first; by what mechanism and at what scope; what a read
+does when the chain does not replay; and the unit, surfaces and versioning
+class. Working files are in the session scratchpad's `o237-panel/` (the brief,
+three lens answers, the refuter's report) — material, never the record.
+
+**Measured before ruling**, by the integrator, on this tree:
+
+- **The exploit stands.** On a sealed vault with wing `secret` assigned
+  `quarantined`, `UPDATE audit SET record_id='read/x' WHERE
+  record_id='trust/secret'` plus `DELETE FROM wing_trust WHERE wing='secret'`
+  took a `standard`-floored search from 0 hits to **returning the drawer**;
+  `recent` served it; `wing_trusts()` answered `[]`; `verify` failed on
+  `chain_ok` ALONE — `policy_drift`, `orphan_labels` and `version_replay` were
+  all empty. The relabel moves the key out of the `trust/` half-open range, so
+  `policy_finding` is never asked about it.
+- **A cheaper lever exists and defeats more.** ONE statement — an `INSERT` of
+  a forged `rotate/` row after the declaration to be ignored — lifts
+  `rotation_boundary` above every record already there. Measured on O230's own
+  replay attack, with both declarations asserted still on the chain: without
+  it `retention_policies()` REFUSES and `policy_drift` names the row; with it
+  `retention_policies()` answers **`Ok(30 days)`** — the replayed policy
+  governs, and the sweep would destroy under it — with `policy_drift` EMPTY.
+  (The integrator's FIRST measurement of this used an `UPDATE` of the newest
+  row, which was the declaration itself, and so measured a relabel rather than
+  a boundary lift; O239 records the conflation.) The same boundary feeds O234's
+  `version_boundary`, so one statement disables arm 1 for every table and every
+  key at once. O230 ruling 5 pinned this variant as a named cost citing O233;
+  O233 then made it break `chain_ok` and left the comparison blind.
+- **Cost, and the growth is the finding.** At 102,001 audit rows: replay 88 ms,
+  steady-state open + `stats` 36 ms. At 1,002,001 rows: replay **836 ms**, open
+  **35 ms**. Rows ×9.82, replay ×9.50, open ×0.97. **The replay is linear in
+  `audit`; the open is flat.** So a replay at every open is not "3.4×" — it is
+  25× at 10⁶ and unbounded, because `audit` has no compaction anywhere in the
+  tree and grows with every write, every read under
+  `UNDERCROFT_READ_AUDIT=chain`, every export and every push.
+- **`PRAGMA data_version` behaves as a foreign-write signal on WAL**, executed
+  with a real second process and a premise assertion: the handle's own commit
+  does NOT move it, another connection does (2→3), another process does (3→4).
+  Its first run reported `process-moves-it=false` from a child that ran ZERO
+  tests and exited 0 — the premise arm is what caught it.
+
+**Prior rulings found and their disposition.**
+
+- **O233 ruling 5** — the `Recorded` path requires the chain to replay,
+  refusing as an integrity verdict. **FOLLOWED, and it SETTLES two things**: it
+  is the shape for a rare reader (full replay, refuse as `IntegrityFinding`
+  naming `verify`), and `attested_run_in_audit` is ALREADY closed at
+  `forget.rs:668`. O233's own residual paragraph contradicts O233's own ruling
+  5 in the same entry; O237's filing copied the stale sentence and this
+  panel's brief copied it again. Correcting all three is part of the unit.
+- **O234's read budget** (at most 10% of warm search ms/q at ~10⁵) —
+  **FOLLOWED, and it RULES OUT a per-search replay**: 88 ms on a 36.84 ms/q
+  baseline is +240%, and linear in `audit`.
+- **O230 ruling 4** ("Reads fail closed") — **FOLLOWED**, and it removes the
+  denial-of-service objection for the trust and retention readers: an offline
+  writer already holds that lever (one `UPDATE wing_trust SET tag=…` makes
+  `wing_trusts()` raise `Integrity` today), so this adds no new one there.
+- **O230 ruling 5** — the relabel variants pinned as named costs.
+  **PARTIALLY REFUTED**: the `rotate/` variant is not merely a cost, it is
+  cheaper than the variant O237 was filed on and it disables O234 as well.
+  Revised here.
+- **O171 item (c) / O206** — the cost on a destruction path is the erasure
+  promise, not availability. **FOLLOWED**, and it decides the `mirror_note`
+  split against a refusal.
+- **O232 ruling 1** — refuse only what a rotation would launder. FOLLOWED as a
+  ROTATION criterion; it does not answer whether a READ refuses.
+- **A31** — a long-lived server caches its handle and never re-opens.
+  **FOLLOWED**, and it is what makes a per-open replay nearly worthless for
+  the deployment this entry was filed for.
+- **O91** — a posture is a property of the PATH. **FOLLOWED**, and it decides
+  two placements below.
+- **A28** — the covered copy is the boundary, the index the accelerator.
+  **FOLLOWED**, and it decides the `data_version` question.
+- **O233's (S2)** (a per-row label MAC column) — **FOLLOWED as refuted**; it
+  kills the per-row half of option (D).
+
+**Ruling.**
+
+1. **Mechanism: ONE lazy full replay per handle, on the first guarded read,
+   plus a per-key APPEND-ONLY PREFIX invariant on every guarded read.** Not at
+   open: the open is flat in `audit` and the replay is linear, so (A) charges
+   every process an unbounded cost for a protection that covers a server only
+   at boot. Not per read: refuted by O234's own measured budget. Not (B): an
+   incremental replay from a verified position is UNSOUND, because the attack
+   rewrites rows BELOW any watermark. The prefix invariant is not a cached
+   position — `audit` is append-only in production (one `INSERT`, one `UPDATE`,
+   both source-gated; every `DELETE FROM audit` in the tree is `#[cfg(test)]`),
+   so a key that vanishes, a newest record that moves backwards, or an older
+   tag promoted to newest is ALWAYS a finding, at O(keys) over rows the scan
+   already fetches.
+2. **`PRAGMA data_version` is the ACCELERATOR, never the boundary.** It is
+   measured sound for an SQLite-mediated writer and blind to one editing pages
+   beneath SQLite, so it may short-circuit the expensive REPLAY and may never
+   gate the prefix check. That is A28's shape, and stating it the other way
+   round is how this fix would ship green and empty.
+3. **Reads refuse** as `StoreError::IntegrityFinding` — exit 2, 409
+   `class: "integrity"` — naming `undercroft verify`. "Serve the strictest
+   interpretation" is unavailable: with the key universe corrupted the
+   strictest reading is "exclude every wing", an empty page, which this tree
+   has repeatedly ruled worse than a loud refusal. **`Regime::V1` /
+   `LabelCommitment::Pending` MUST NOT refuse** — a clean legacy chain replays
+   with `chain_ok = true` and labels bound by nothing, and refusing there
+   would brick every pre-1.6.0 vault served `--read-only`, which is a
+   documented contract change and therefore MAJOR. That exemption is part of
+   the ruling, not an implementation detail.
+4. **Scope, and two placements are corrections.** Guard
+   `trust_policy_scan` and `retention_policy_scan` — the SCANS, not the public
+   wrappers, or the next caller reaching the scan is unguarded (as `verify`
+   already does). Guard `forget_with_proof_ruled` at its TOP, beside the
+   existing pre-flights, NOT inside `mirror_note`: by the time `mirror_note`
+   runs the drawers are already destroyed, so a refusal there refuses after
+   the fact (O91). Guard `refuse_replayed` — O234's read half, which the
+   filing and the brief both omitted and which is the hottest label decision
+   in the tree. `attested_run_in_audit` is OUT: already closed.
+5. **The destruction path does NOT refuse** (O171 item (c) / O206): refusing
+   trades the erasure promise for availability, the wrong way round. Instead
+   the suppression is closed where it is cheap — `mirror_note`'s second signal
+   is a plain UNTAGGED `meta` row (`pushed_embedder`), and tagging it under
+   the vault key makes its deletion an integrity failure at zero read cost.
+   The audit-label half stays a stated residual on that one reader.
+6. **The `rotate/` boundary is bounded by the KEYCHECK.** `rotate.rs` already
+   writes `rotate/{keycheck_hex()[..16]}`, and any handle can derive its own,
+   so the boundary becomes "the newest `rotate/` record whose label carries
+   THIS key's keycheck" — O(1), no format change, strictly more checking
+   (it can only make the boundary smaller or `None`), and semantically what
+   the boundary always meant. `forget.rs`'s own `rotate/` range count moves to
+   the same decision, or the two disagree about what a rotation is.
+7. **Unit and class.** ONE pull request, three commits: the guard in
+   `chain.rs`; the consumers plus the keycheck boundary; `refuse_replayed`'s
+   adoption. **PATCH**, inside the already-MINOR `1.6.0` — no documented
+   contract moves, and a tampered audit trail was never documented as valid
+   input. `UPGRADING.md` owes an entry: after upgrade, a vault whose chain does
+   not replay stops serving floored searches, stops sweeping and refuses a
+   `forget`; `config check` cannot pre-flight it, because it opens no vault.
+
+**Gates owed by the build.** P1r against a RUNNING server, refusing the
+floored read before any `verify`, with the edit made from a second process
+while the handle is open — a test that re-opens the store passes over the
+defect. Both sides of the window: tampering before the process starts (the
+lazy replay) and after the first guarded read (the prefix invariant); a test
+doing only one passes over half a mechanism. A source gate deriving its
+universe from the CODE — every production call of `chain::newest_record`,
+`chain::chain_keys` and `chain::rotation_boundary` is inside `chain.rs` or
+behind the guard, both directions. A `DELETE FROM audit` arm on that gate,
+because the prefix invariant's premise is append-only and only `INSERT` and
+`UPDATE` are gated today. The replay runs at most ONCE per handle over N
+guarded reads. A false-alarm sweep expecting zero: a rotation between two
+guarded reads, two handles on one vault, a `trust set` against a running
+server, a legitimate `retention clear`, O233's switch, a pre-A19-rotated
+vault, an hmac-only vault. And the `rotate/` lever's own counterfactual.
+
+**Claims refuted.** The brief's: "four readers, none replays" (three, and
+`attested_run_in_audit` is closed); "all four reach `audit` through the
+`chain::` helpers" (`mirror_note` and `attested_run_in_audit` both issue
+inline statements, so a fix placed in `chain.rs` would have covered half);
+"the quarantine floor is what keeps admission-diverted content out of
+retrieval" (that is `verified_meta_admits`' unconditional refusal off the
+covered meta plus `resolve_search_policy`'s own `EXISTS`, neither of which
+reads `wing_trust` — the exploit lifts an operator-declared trust class, not
+admission containment); "3.4×" (25× at 10⁶, and unbounded); and the omission
+of `refuse_replayed` entirely. Option (D) as posed — a cheap per-row witness —
+is refuted: an HMAC fold admits no per-row proof, and the only O(1)
+alternatives were rejected by O233's (S2). The lenses': a replay at open as
+the primary mechanism, and a refusal on the destruction path.
+
+**Dissent.** The agentic-memory lens held for a replay at every open with a
+per-call replay on the irreversible paths; the security lens for a cached
+verdict invalidated by `data_version` as the boundary rather than the
+accelerator. Both are answered by the 10⁶ measurement and by A28
+respectively, not by count.
+
+**Filed from this ruling**: O239 (the `rotate/` boundary lever, measured),
+O240 (a rolled-back vault silently un-switches and the next open re-blesses
+it), O241 (an authenticated key census in the MAC'd manifest — the option
+that removes the replay, depending on O238).
+
 ### O238 — the manifest `version` is written and never checked on load, so a later format cannot fence an older binary
 
 **Filed 2026-09-19 by O233/O234's ruling (the refuter); established by
@@ -22159,6 +22442,72 @@ introduced the check.
 
 **Gate**: a manifest with `version` one above the build's refuses to open.
 **Counterfactual**: today, it opens.
+
+### O240 — a rolled-back vault silently un-switches its chain, and the next writable open re-blesses the truncated history
+
+**Filed 2026-09-20 by O237's ruling panel (the refuter); established by
+reading.** `chain::head_state` decides the regime from the `migrate/chain-v2`
+record and the two head keys, and `(Regime::V1, Some(frozen), None)` is an
+ordinary seeded version-1 vault. **Nothing outside the database records that a
+vault has ever switched.** So an attacker with full disk control who truncates
+`audit` past the switch, drops the commitment and `head_v2`, and restores the
+matching pre-switch `vault.json` — which is genuine and validly MAC'd — gets a
+vault that replays clean under the version-1 step, answers `chain_ok = true`
+and `label_commitment: pending`, and whose next writable open **switches
+again**, minting a fresh commitment over the truncated history and
+authenticating it as found.
+
+Rollback itself is a documented residual (`docs/THREAT_MODEL.md`, A2: a
+consistent old database and manifest restored together "rewinds the vault to a
+state that was genuine at the time"). What the residual does NOT say is that
+the rollback also downgrades the chain REGIME and that the re-switch then
+re-authenticates the trail — so a vault that was rolled back reads `intact`
+rather than visibly rewound, and every check whose predicate is "the chain
+replays" answers clean on it. That includes O237's guard.
+
+**Shape, for a ruling**: a monotone regime marker outside the database — the
+MAC'd manifest is the only authenticated, unforgeable place the tree has — or
+a stated residual sharpened to say this consequence out loud. The manifest
+route is O241's, and the two should be decided together.
+
+**Gate**: a switched vault, rolled back as above, is reported rather than
+re-blessed. **Counterfactual**: today, the next open re-switches it.
+
+**Relations:** decided together with O241 — both turn on whether the MAC'd
+manifest gains an authenticated statement about the chain.
+
+### O241 — an authenticated key census in the MAC'd manifest would remove the replay O237 pays for
+
+**Filed 2026-09-20 by O237's ruling panel (the software-engineering lens and
+the refuter).** O237's guard authenticates a POINT question — "what does the
+chain say about this key?" — with a WHOLE-HISTORY replay, because the chain
+head is the only unforgeable witness the vault carries. Measured, that replay
+is linear in `audit`: 88 ms at 102,001 rows and 836 ms at 1,002,001, against
+an open that is flat at ~35 ms. `audit` has no compaction anywhere in the tree
+and grows with every write, every read under `UNDERCROFT_READ_AUDIT=chain`,
+every export and every push, so the cost is unbounded by design.
+
+The only sub-linear witness available is `Manifest::canonical`, HMAC'd under
+`manifest_key` and verified from disk on every `anchored_head()` call. A
+per-namespace digest or count written by `anchor_manifest` — already on every
+write path — would make a vanished key detectable in one file read and one
+HMAC, with no replay at all.
+
+**Costs, stated rather than discovered**: it is a SECOND copy of a chain fact,
+which O233 rejected twice (the `chain_meta` pointer, and (S2)'s per-row label
+MAC) and which `CLAUDE.md` calls two lists being a closed system; it changes
+the manifest canonical, so it needs a version-aware canonical and therefore
+depends on O238, whose `version` field nobody reads; a read-only open cannot
+write it, so a legacy vault has an unknown state with O233's own laundering
+window; and it does not cover O239's boundary variant, where nothing vanishes.
+
+**Gate**: the O237 exploit is caught with no `chain::replay` on the read path,
+and a rotation, a switch and a legitimate policy clear all pass.
+**Counterfactual**: O237's guard, which pays the replay.
+
+**Relations:** decided together with O240 — both turn on whether the MAC'd
+manifest gains an authenticated statement about the chain.
+
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 

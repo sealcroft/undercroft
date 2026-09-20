@@ -759,16 +759,14 @@ impl VaultStore {
         }
         for start in candidates {
             if let Some(end) = self.audit_run_matches(start, att, tags)? {
-                // A case-sensitive half-open range on the indexed label, the
-                // shape O230's gatherer uses, rather than a `LIKE` that cannot
-                // use the BINARY index and matches `ROTATE/…` too.
-                let rotations: i64 = self.conn.query_row(
-                    "SELECT COUNT(*) FROM audit \
-                     WHERE seq > ?1 AND record_id >= 'rotate/' AND record_id < 'rotate0'",
-                    params![end],
-                    |r| r.get(0),
-                )?;
-                return Ok(rotations as usize);
+                // Through `chain`, the one place that knows how a `rotate/`
+                // label is spelled (ROADMAP O239). This was a second
+                // hand-written copy of that range, and the two would have
+                // drifted the moment either moved. It is deliberately NOT
+                // bound to the current keycheck the way the BOUNDARY is: this
+                // counts rotations across every key generation, and the
+                // function's own doc says why.
+                return Ok(crate::chain::rotations_since(&self.conn, end)? as usize);
             }
         }
         // Deliberately names BOTH causes rather than the interesting one: a
