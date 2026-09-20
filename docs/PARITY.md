@@ -88,7 +88,7 @@ this project, which is why the two codebases share concepts but not code
 **Security layer** (MemPalace stored everything in plaintext):
 
 - Vault isolation: per-vault SQLite databases with per-vault
-  HKDF-SHA256-derived keys (enc/mac/manifest/sample domains) from one master key
+  HKDF-SHA256-derived keys (enc/mac/manifest/sample/chain domains) from one master key
   (file or Argon2id passphrase).
 - Sealed-at-rest storage: XChaCha20-Poly1305 over content *and*
   embeddings *and* every derived artifact (ColBERT token matrices, PQ

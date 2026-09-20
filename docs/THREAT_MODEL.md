@@ -154,9 +154,15 @@ still leaked.** Every write records its subject's id in
 held `kg/<unkeyed digest of the words>` — the same oracle, one table over,
 surviving a migration that had rewritten and `VACUUM`ed every column it
 knew about. The migration now carries each moved id's audit label with its
-row; that is sound because the chain hashes `audit.tag` and nothing else,
-so `record_id` is a navigation label rather than evidence, and leaving it
-behind orphaned the audit trail as well as leaking. For the two units still
+row; that was sound when it was written because the chain hashed
+`audit.tag` and nothing else, so `record_id` read as a navigation label
+rather than evidence, and leaving it behind orphaned the audit trail as well
+as leaking. **ROADMAP O233 refuted that reading in 1.6.0**: the trust floor's
+policy comparison, the orphan-label leg and a forget attestation's recorded
+run all decide from labels, so a label is evidence and the chain step now
+folds it. The walk still runs, on a vault whose chain has not switched yet,
+and the switch waits for it; on a switched chain no migration may rewrite a
+label in place. For the two units still
 open this matters directly: `audit.record_id` **holds wing and room names
 in clear today** (`trust/{wing}`, `retention/{wing}[/{room}]`), so treat
 them as part of the same exposure and not as a separate question.
@@ -432,7 +438,9 @@ enclave execution) compose with undercroft but are not provided by it.
 `undercroft verify` — the CLI, the `undercroft_verify` MCP tool,
 `POST /v1/vaults/{id}/verify`, the engine's admin console at `/ui`, and
 the orchestrator's `ops <tenant> verify` pass-through, all rendering one
-seven-leg verdict — re-checks every drawer record HMAC and every KG and
+eight-leg verdict — checks the audit labels a chain held when it switched
+to the labelled step against the commitment that bound them (ROADMAP
+O233); re-checks every drawer record HMAC and every KG and
 tunnel tag, every receipted supersession link and every knowledge-graph
 fact receipt; resolves every graph and drawer audit label to a live
 record (or, for a destroyed drawer, its tombstone); compares the `wing`,
@@ -492,10 +500,15 @@ older `wing_trust` or `retention_policy` row written back offline verifies
 under the key, so the policy leg compares a row's tag with its newest chain
 record's whenever that record is newer than the last rotation, and the trust
 floor, the sweep and the listings refuse a row that fails the comparison, as
-they refuse a flipped one. Two costs are stated rather than hidden: the
-lookups find records by `record_id`, which the chain does not hash, so an
-offline writer who also relabels an audit row hides a replay (ROADMAP O233);
-and a row whose newest record predates the last rotation is not compared.
+they refuse a flipped one. A row whose newest record predates the last
+rotation is not compared. The lookups find records by `record_id`, which the
+chain did not hash until 1.6.0, so an offline writer who also relabelled an
+audit row hid a replay; **the labelled chain step (ROADMAP O233) folds each
+record's label and time**, so that relabel now breaks the chain replay, or,
+for a row written before the vault switched, the label commitment. What
+remains is read time: the trust floor, the sweep and the listings consult
+the labels before any replay runs, so they act on a relabel until `verify`
+does (ROADMAP O237).
 
 The chain also carries what left and what was read. Every export
 appends an `egress/export` record binding the surface, the recipient

@@ -1087,6 +1087,12 @@ if grep -qF 'VERIFY OK' <<<"$MCP_CLEAN" && ! grep -qF '"isError":true' <<<"$MCP_
 else
   echo "FAIL  a clean vault still verifies as a success"; echo "$MCP_CLEAN" | sed 's/^/      /'; FAIL=$((FAIL+1))
 fi
+# ROADMAP O233: the label-commitment leg reaches the MCP text too.
+if grep -qF 'audit labels: intact' <<<"$MCP_CLEAN"; then
+  echo "ok    O233: MCP verify names the label commitment"; PASS=$((PASS+1))
+else
+  echo "FAIL  O233: MCP verify names the label commitment"; echo "$MCP_CLEAN" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
 
 echo "== config check: an upgrade fails in a pipeline, not at a restart =="
 # The refusals this project added are deliberate — a declaration that turns a
@@ -1657,6 +1663,34 @@ if [ "$(tail -1 <<<"$O232_R")" = 409 ] && grep -qF '"class":"integrity"' <<<"$O2
 else
   echo "FAIL  O232: /v1 refuses the rotation"; echo "$O232_R" | sed 's/^/      /'; FAIL=$((FAIL+1))
 fi
+
+# ── ROADMAP O233: a relabelled audit row breaks the labelled chain ─────────
+# The chain folded each record's TAG alone, so an audit row's label sat
+# outside it: relabelling a `trust/` record (and deleting its row) lifted a
+# quarantine floor with `verify` green. The version-2 step folds the label,
+# so the same edit is a broken chain — and a rotation, which would re-step
+# the forged label under the next key, refuses. The relabel is a
+# same-length, ORDER-PRESERVING byte edit (`…label` → `…labek`), applied to
+# the row and its index entry alike, since the image carries no sqlite3.
+O233_HOME="$(mktemp -d)"
+o233() { env UNDERCROFT_HOME="$O233_HOME" "$BIN" "$@"; }
+o233 init >/dev/null 2>&1
+o233 vault create second >/dev/null 2>&1
+o233 trust set zqlabel quarantined --vault second >/dev/null 2>&1
+check "O233: a fresh vault's audit labels are bound" 0 "audit labels:    intact" -- \
+  env UNDERCROFT_HOME="$O233_HOME" "$BIN" verify --vault second
+O233_DB="$O233_HOME/vaults/second/vault.db"
+O233_BEFORE="$(md5sum "$O233_DB" | cut -d' ' -f1)"
+perl -0777 -pi -e 's{trust/zqlabel}{trust/zqlabek}g' "$O233_DB"
+if [ "$O233_BEFORE" != "$(md5sum "$O233_DB" | cut -d' ' -f1)" ]; then
+  echo "ok    O233: premise — the audit label was edited"; PASS=$((PASS+1))
+else
+  echo "FAIL  O233: premise — the audit label was edited"; FAIL=$((FAIL+1))
+fi
+check "O233: verify reads the relabel as a broken chain" 2 "audit chain:     BROKEN" -- \
+  env UNDERCROFT_HOME="$O233_HOME" "$BIN" verify --vault second
+check "O233: a rotation over it refuses, exit 2" 2 "audit chain" -- \
+  env UNDERCROFT_HOME="$O233_HOME" "$BIN" vault rotate second
 
 EXPORT_FILE="$(mktemp)"
 "$BIN" export > "$EXPORT_FILE"
@@ -2988,6 +3022,10 @@ rest_body "rotate over http"    '"rotated":true'  -- -X POST "$API/vaults/acme/r
   -H "X-Vault-Assertion: $(sign acme)"
 rest_body "verify after rotate" '"ok":true'       -- -X POST "$API/vaults/acme/verify" \
   -H "X-Vault-Assertion: $(sign acme)"
+# ROADMAP O233: the eighth leg reaches the wire, and a rotation keeps the
+# labels it bound — the commitment is preserved verbatim.
+rest_body "O233: /v1 verify names the label commitment" '"label_commitment":"intact"' -- \
+  -X POST "$API/vaults/acme/verify" -H "X-Vault-Assertion: $(sign acme)"
 rest_body "search after rotate" 'postgres'        -- -X POST "$API/vaults/acme/search" \
   -H "X-Vault-Assertion: $(sign acme)" -d '{"query":"which database for billing"}'
 rest_body "stats carries management fields" '"db_bytes"' -- "$API/vaults/acme/stats" \

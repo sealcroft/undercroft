@@ -2205,9 +2205,13 @@ impl VaultStore {
 /// the agent surface the same way.
 ///
 /// **A record id is [`Namespace::prefix`] plus the caller's rest, and
-/// nothing else.** Those bytes are load-bearing well beyond the chain, which
-/// hashes `tag` and not `record_id` (A10: the label is navigation, the tag is
-/// evidence) — so a moved prefix still verifies perfectly clean while
+/// nothing else.** Those bytes are load-bearing well beyond the chain. When
+/// this was written the chain hashed `tag` and not `record_id` (A10: the
+/// label is navigation, the tag is evidence), which ROADMAP O233 refuted —
+/// every reader below decides from the label, so the version-2 chain step
+/// folds it and a relabel breaks the replay. Composition still has to be
+/// exact, because the chain binds whatever bytes were written: a moved
+/// prefix verifies perfectly clean while
 /// `forget.rs`'s `strip_prefix("del/")`, the graph's `strip_prefix("kg/")`,
 /// `VerifyReport::orphan_labels` and this fence's `LIKE` all quietly stop
 /// matching. Pinned byte for byte by
@@ -2240,13 +2244,18 @@ pub enum Namespace {
     Egress,
     /// The read-audit trail, under `UNDERCROFT_READ_AUDIT=chain`.
     Read,
-    /// Key rotation. Minted by `rotate.rs`'s own `INSERT INTO audit` rather
-    /// than by `chain_append` — see `fence_inventory` for why that matters.
+    /// Key rotation. Minted by `rotate.rs` rather than by `chain_append`,
+    /// because it computes its head over the rows as found under the NEXT
+    /// key before its own row exists — through `chain::insert_record`, the
+    /// `audit` table's one writer since ROADMAP O233, so a scan of
+    /// `chain_append` callers still cannot see it.
     Rotate,
-    /// An at-rest migration: `migrate/{kind}` for the four kinds the store
+    /// An at-rest migration: `migrate/{kind}` for the five kinds the store
     /// mints — `kg-blind` (the blind-index walk), `content-fp` (the
     /// fingerprint re-key), `embedding-space` (the hash-embedder upgrade
-    /// walk) and `repair`.
+    /// walk), `repair`, and `chain-v2` (the audit chain's switch to the
+    /// labelled step, ROADMAP O233, whose record is the commitment the
+    /// replay switches at).
     Migrate,
     /// A distilled fact, and the authority tier's promotions.
     Kg,
@@ -2447,7 +2456,9 @@ mod fence_inventory {
     /// before O80 moved the prefix into `Namespace::prefix`. `audit.record_id`
     /// is a durable label held by attestations, by `forget.rs`'s
     /// `strip_prefix("del/")`, by the graph's `strip_prefix("kg/")` and by the
-    /// SQL fence — and the chain hashes `tag`, never `record_id`, so a
+    /// SQL fence — and the chain hashed `tag`, never `record_id` (until
+    /// ROADMAP O233's labelled step, which binds whatever bytes were written
+    /// and so still cannot tell a mistyped prefix from an intended one), so a
     /// mistyped prefix in that refactor would have verified clean and broken
     /// those readers silently. Observing that the suite still passes is not
     /// the same claim, which is why this compares to hand-written strings.
@@ -3874,7 +3885,8 @@ mod tests {
         let before: i64 = s
             .conn
             .query_row(
-                "SELECT COUNT(*) FROM audit WHERE record_id LIKE 'migrate/%'",
+                "SELECT COUNT(*) FROM audit WHERE record_id LIKE 'migrate/%' \
+                 AND record_id <> 'migrate/chain-v2'",
                 [],
                 |r| r.get(0),
             )
@@ -3887,7 +3899,8 @@ mod tests {
         let (rid, at, tag): (String, String, Vec<u8>) = s
             .conn
             .query_row(
-                "SELECT record_id, at, tag FROM audit WHERE record_id LIKE 'migrate/%'",
+                "SELECT record_id, at, tag FROM audit WHERE record_id LIKE 'migrate/%' \
+                 AND record_id <> 'migrate/chain-v2'",
                 [],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
@@ -4683,15 +4696,16 @@ mod tests {
         );
     }
 
-    /// **Stated costs, pinned (ROADMAP O233).** Every O230 lookup finds a
-    /// record by its label, and `record_id` is outside the chain hash, so an
-    /// offline writer who also RELABELS hides a replay: the newer assignment
-    /// relabelled into a namespace no leg resolves, or a later record
-    /// relabelled `rotate/` so the boundary moves past the assignment. Both
-    /// answer OK today and are pinned here so their disappearance — O233's
-    /// label authentication — is recorded rather than absorbed.
+    /// **O233's gate: a relabel no longer hides a replay.** Every O230 lookup
+    /// finds a record by its label, so an offline writer who also RELABELLED
+    /// hid a replay — the newer assignment relabelled into a namespace no leg
+    /// resolves, or a later record relabelled `rotate/` so the boundary moved
+    /// past the assignment. Both answered OK and were pinned here as O230's
+    /// stated costs. The labelled chain step folds each row's label, so both
+    /// relabels now break the replay: the policy leg is still blind to them,
+    /// by design, and the chain is not.
     #[test]
-    fn a_relabelled_record_hides_a_replay_and_that_is_a_stated_cost() {
+    fn a_relabelled_record_no_longer_hides_a_replay() {
         // (1) The newer declaration relabelled away.
         let (_d, mut s) = store();
         s.set_retention("pacific", None, 30).unwrap();
@@ -4709,9 +4723,14 @@ mod tests {
                 [],
             )
             .unwrap();
+        let r = s.verify().unwrap();
         assert!(
-            s.verify().unwrap().ok(),
-            "COST (O233): a relabel of the newer record hides the replay"
+            r.policy_drift.is_empty(),
+            "premise: the relabel still hides the replay from the POLICY leg: {r:?}"
+        );
+        assert!(
+            !r.chain_ok && !r.ok(),
+            "and the labelled chain catches the relabel (O233): {r:?}"
         );
 
         // (2) A later record relabelled `rotate/`: the boundary moves past it.
@@ -4734,9 +4753,14 @@ mod tests {
             )
             .unwrap();
         s2.conn.execute("DELETE FROM wing_trust", []).unwrap();
+        let r2 = s2.verify().unwrap();
         assert!(
-            s2.verify().unwrap().ok(),
-            "COST (O233): a record relabelled `rotate/` moves the boundary past the replay"
+            r2.policy_drift.is_empty(),
+            "premise: the moved boundary still hides the replay from the POLICY leg: {r2:?}"
+        );
+        assert!(
+            !r2.chain_ok && !r2.ok(),
+            "and the labelled chain catches the relabel (O233): {r2:?}"
         );
     }
 

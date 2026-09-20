@@ -1320,10 +1320,10 @@ impl Tenancy {
         ))
     }
 
-    /// `POST /v1/vaults/{id}/verify` — the whole `VerifyReport`, all seven
-    /// legs: every record's HMAC, the chain replay, drawer supersession
-    /// receipts, KG fact receipts, orphan graph labels, mirror drift and
-    /// declared-policy drift. Read-only despite the verb (POST because it is
+    /// `POST /v1/vaults/{id}/verify` — the whole `VerifyReport`, all eight
+    /// legs: every record's HMAC, the chain replay, the label commitment
+    /// (ROADMAP O233), drawer supersession receipts, KG fact receipts, orphan
+    /// graph labels, mirror drift and declared-policy drift. Read-only despite the verb (POST because it is
     /// an expensive action, not a resource read).
     ///
     /// `ok` is the vault's whole verdict, the same one CLI `verify` exits
@@ -1435,6 +1435,9 @@ impl Tenancy {
             "records_checked": report.records_checked,
             "bad_records": report.bad_records,
             "chain_ok": report.chain_ok,
+            // ROADMAP O233: `pending` (the chain has not switched), `intact`,
+            // or `mismatch` — which fails `ok`.
+            "label_commitment": report.label_commitment,
             "orphan_labels": report.orphan_labels,
             "mirror_drift": report.mirror_drift,
             "policy_drift": report.policy_drift,

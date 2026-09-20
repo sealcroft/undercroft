@@ -8,6 +8,60 @@ its CLI mirror `tenant-repoint` are additive, and so are the operator plane's
 behaves differently because they exist. Everything else in this section is a
 fix whose only observable change is that a defect is gone.
 
+### the audit chain binds each record's label and time, so a relabelled audit row no longer passes `verify` (O233)
+
+The chain folded each record's TAG alone, `HMAC(mac, prev ‖ tag)`, so an audit
+row's `record_id` and `at` sat outside it — and every check that finds a record
+by its label was one `UPDATE` deep: O230's policy comparison, the orphan-label
+leg, a forget attestation's recorded run, the attestation's mirror disclosure
+and the rotation count. Measured on `eae75fe`: `trust set secret quarantined`,
+then that record relabelled `read/x` and the trust row deleted — `verify`
+answered `audit chain: ok`, `policy drift: 0`, `VERIFY OK`, and a
+`standard`-floored search returned the quarantined drawer it had excluded.
+
+The chain now steps each record with a version-2 step, `HMAC(chain,
+"undercroft.chain.v2" ‖ lp(prev) ‖ lp(record_id) ‖ lp(tag) ‖ lp(at))`, under a
+fifth HKDF subkey, `chain`. A vault switches once, at its first writable open,
+by appending a `migrate/chain-v2` record whose tag is an unkeyed SHA-256 over
+every earlier row's label, tag and time — unkeyed so a rotation, which
+preserves audit tags verbatim, cannot orphan it — after its version-1 rows have
+replayed cleanly, and, on a sealed vault, after the knowledge-graph blinding
+walk (which relabels audit rows) has completed. `verify` gains an eighth leg,
+`label_commitment` (`pending`, `intact` or `mismatch`), on all four renderers.
+A relabel, a re-timed record, or a label or tag rewritten as another storage
+type after the switch breaks the chain and blocks a rotation; one before it
+breaks the commitment, fails `verify`, and does not block a rotation, which
+preserves it verbatim. One module, `chain.rs`, now owns the regime, the
+committed head and the replay — four hand-written replay loops and nine reads
+of the head were one each — held by a source gate. A forget attestation names
+its step (`version: 2` on a switched chain), a version this build does not know
+is refused as unsupported rather than as forged, the recorded run is found by
+order rather than by `seq` arithmetic, and a `Recorded` verdict is refused when
+the trail it matches against does not verify.
+
+**The downgrade fence, measured.** The live head moves to `chain_meta.head_v2`
+and `head` is frozen at the switch, so a 1.5.2 binary cannot reproduce it: every
+1.5.2 command on a switched vault — `verify`, a read-only open, a write, `vault
+rotate` — exits 2 with the database bytes unchanged, and 1.6.0 verifies the
+vault afterwards. Without the fence, 1.5.2 wrote and rotated successfully and
+1.6.0 could no longer open the vault. `UPGRADING.md` names the 1.5.x message
+so an operator does not restore a backup over it.
+
+**Cost, at 102,000 sealed drawers:** the switching open 0.51 s against 0.35 s,
+once; `verify` unchanged at 0.32–0.34 s, its peak memory down from 25 MB to
+18 MB because the replay streams instead of holding every tag; a rotation
+2.51 s against 2.82 s. Every audit row of that corpus is stored as
+text/blob/text, so the storage-type finding cannot fire on a real legacy vault.
+
+**Ruled** by three lenses and an adversarial refuter, with O234; the refuter
+found the switch all three lenses proposed would never have run on an
+hmac-only vault, whose blinding marker is never written. **Refuted and revised
+in the same unit**: A10's "a label is navigation, not evidence", in the code,
+the threat model and `CLAUDE.md`. **Residual, stated**: labels as they stood at
+the switch are bound as found, so a relabel made before the upgrade becomes
+authentic; and the readers that consult labels still act before any replay
+runs, until `verify` does (ROADMAP O237). Filed: O236, O237, O238.
+
 ### a fleet operator can export and import a tenant's vault (O222)
 
 The maintainer ruled whole-corpus movement a tenant AND an operator

@@ -14,6 +14,7 @@
 #![warn(missing_docs)]
 
 pub mod admission;
+mod chain;
 mod fdeidx;
 pub mod forget;
 #[cfg(feature = "hnsw")]
@@ -720,34 +721,13 @@ pub(crate) fn chain_append(
     at: &str,
 ) -> Result<(String, u64), StoreError> {
     let record_id = ns.record(rest);
-    conn.execute(
-        "INSERT INTO audit (record_id, tag, at) VALUES (?1, ?2, ?3)",
-        params![record_id, tag, at],
-    )?;
-    let head: String =
-        conn.query_row("SELECT value FROM chain_meta WHERE key = 'head'", [], |r| {
-            r.get(0)
-        })?;
-    let next = vault.chain_next_hex(&head, tag)?;
-    let writes: u64 =
-        conn.query_row(
-            "SELECT value FROM chain_meta WHERE key = 'writes'",
-            [],
-            |r| r.get::<_, String>(0),
-        )?
-        .parse::<u64>()
-        .map_err(|e| StoreError::CorruptRow {
-            id: "chain_meta/writes".into(),
-            reason: e.to_string(),
-        })? + 1;
-    conn.execute(
-        "UPDATE chain_meta SET value = ?1 WHERE key = 'head'",
-        params![next],
-    )?;
-    conn.execute(
-        "UPDATE chain_meta SET value = ?1 WHERE key = 'writes'",
-        params![writes.to_string()],
-    )?;
+    // The regime and the live head come from `chain`, the one owner of the
+    // chain's arithmetic (ROADMAP O233): a version-2 chain folds this row's
+    // label and time with its tag, so relabelling it later breaks the replay.
+    let head = chain::require_head(conn)?;
+    let next = chain::append(conn, vault, &head, &record_id, tag, at)?;
+    let writes = chain::writes(conn)? + 1;
+    chain::set_writes(conn, writes)?;
     Ok((next, writes))
 }
 
@@ -2518,15 +2498,59 @@ pub(crate) enum CoveredRow {
     MetaUnparseable { id: String },
 }
 
-/// The whole verdict, seven legs: record HMACs, the chain replay, supersession receipts, fact receipts, orphan labels, mirror drift and policy drift. Hand-projected on four renderers (`parity::HAND_PROJECTED`), so a new leg must reach all of them.
+/// What `verify` found about the audit labels a chain held when it switched
+/// to the labelled step (ROADMAP O233).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LabelCommitment {
+    /// The chain has not switched: its labels are not chain-authenticated.
+    Pending,
+    /// Every label, tag and time before the switch is the one the
+    /// commitment bound.
+    Intact,
+    /// A row before the switch was relabelled, re-timed, retyped, removed
+    /// or added since the commitment bound them.
+    Mismatch,
+}
+
+impl LabelCommitment {
+    /// The word every renderer prints.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LabelCommitment::Pending => "pending",
+            LabelCommitment::Intact => "intact",
+            LabelCommitment::Mismatch => "MISMATCH",
+        }
+    }
+}
+
+/// The whole verdict, eight legs: record HMACs, the chain replay, the label commitment, supersession receipts, fact receipts, orphan labels, mirror drift and policy drift. Hand-projected on four renderers (`parity::HAND_PROJECTED`), so a new leg must reach all of them.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct VerifyReport {
     /// How many records had their HMAC checked.
     pub records_checked: u64,
     /// Ids whose HMAC failed.
     pub bad_records: Vec<String>,
-    /// Whether replaying every record's tag reproduces the committed head.
+    /// Whether replaying the audit trail reproduces the committed head and
+    /// passes through the manifest anchor.
+    ///
+    /// On a chain that has switched (ROADMAP O233) every row at or after
+    /// the switch is stepped over its LABEL and TIME as well as its tag, so a
+    /// relabel, a re-timed record or a label rewritten as a blob there is
+    /// `false` here — and so a rotation blocker, since a rotation re-steps
+    /// the rows as found under the next key. Before the switch the tag alone
+    /// is stepped; the labels there are the next field's.
     pub chain_ok: bool,
+    /// Whether the audit labels written BEFORE the chain switched still
+    /// match the commitment that bound them (ROADMAP O233).
+    ///
+    /// `pending` on a chain that has not switched yet — its labels are not
+    /// chain-authenticated, and `VaultStats.unhealed` says why. `mismatch`
+    /// fails the verdict and does NOT block a key rotation: the commitment is
+    /// an unkeyed digest a rotation preserves verbatim with the rows it
+    /// covers, so the finding survives it (O232 ruling 1 blocks only what a
+    /// rotation would launder).
+    pub label_commitment: LabelCommitment,
     /// Every drawer supersession link with its verdict (empty when no
     /// drawer declares one). Carried INSIDE the report rather than left to
     /// a separate [`VaultStore::verify_supersessions`] call, because the
@@ -2539,13 +2563,18 @@ pub struct VerifyReport {
     pub supersessions: Vec<crate::kg::SupersessionStatus>,
     /// Audit labels naming a knowledge-graph record that does not exist.
     ///
-    /// **The fourth leg, and it exists because `record_id` is the one part of
-    /// an audit row the chain does NOT authenticate** (`chain_next_hex` takes
-    /// the tag; rotation preserves tags verbatim; `verify` replays tags). That
-    /// property is what makes the A10 audit-label remap legitimate — it moves
-    /// no evidence — and its flip side is that an offline writer can relabel
-    /// any row and every other leg still passes. A relabel onto a subject
-    /// that does not exist is what this catches.
+    /// **The fourth leg. It was written because `record_id` was the one part
+    /// of an audit row the chain did not authenticate** — the version-1 step
+    /// took the tag alone — and on a chain that has not switched that is
+    /// still so: an offline writer can relabel any row there and every other
+    /// leg passes, and a relabel onto a subject that does not exist is what
+    /// this catches. The position that made it tolerable — A10's "a label is
+    /// navigation, so remapping it moves no evidence" — was refuted by ROADMAP
+    /// O233: O11, O13, O94 and O230 all decide from labels. On a switched
+    /// chain a relabel breaks the replay (`chain_ok`, or `label_commitment`
+    /// before the switch), and this leg keeps the job no chain step can see:
+    /// an offline `DELETE` of a drawer, fact or entity row, which moves no
+    /// audit row at all.
     ///
     /// Covers `kg/{id}`, `kg/{id}/authority`, `kg-entity/{id}` — nothing in
     /// this crate deletes from `kg_triples` or `kg_entities` (invalidation
@@ -2676,6 +2705,7 @@ impl VerifyReport {
     pub fn ok(&self) -> bool {
         self.bad_records.is_empty()
             && self.chain_ok
+            && self.label_commitment != LabelCommitment::Mismatch
             && self.tampered_supersessions() == 0
             && self.orphan_labels.is_empty()
             && self.mirror_drift.is_empty()
@@ -2716,10 +2746,13 @@ impl VerifyReport {
     /// finding in a leg it rewrites comes out of the rotation authentic and
     /// the evidence is gone: record HMACs (drawers, facts, entities, tunnels,
     /// and on an hmac-only vault the content itself), the chain, both receipt
-    /// kinds, and the policy rows. Mirror drift and orphan labels are NOT
-    /// here: a rotation touches neither, so both stay exactly as detectable,
-    /// and an orphan label has no remedy — the audit trail is append-only —
-    /// so refusing on it would block rotation for good.
+    /// kinds, and the policy rows. Mirror drift, orphan labels and the label
+    /// commitment are NOT here: a rotation rewrites none of them — the mirror
+    /// columns, the row deletion an orphan label reports, and the unkeyed
+    /// commitment with the rows before it all survive it verbatim — so each
+    /// stays exactly as detectable. That is the reason, and the only one: this
+    /// comment used to add that an orphan label "has no remedy", which is
+    /// false — restoring the deleted row from a backup is one (ROADMAP O233).
     ///
     /// **Destructured with no `..`**: a new leg does not compile until
     /// someone rules whether a rotation rewrites it.
@@ -2728,6 +2761,7 @@ impl VerifyReport {
             records_checked: _,
             bad_records,
             chain_ok,
+            label_commitment: _,
             supersessions,
             orphan_labels: _,
             mirror_drift: _,
@@ -3730,6 +3764,10 @@ impl VaultStore {
         // is what adds. `init_chain` is strictly after both.
         store.blind_existing_kg_rows()?;
         store.rekey_content_fingerprints()?;
+        // LAST of the chain-touching steps (ROADMAP O233): A10 above may
+        // relabel `audit` rows, which a commitment written before it would
+        // then contradict.
+        store.switch_chain_to_v2()?;
         // `check_duplicate` looks a content fingerprint up on EVERY save and
         // every imported record, and `fp` is an ADD COLUMN that never got an
         // index — so that lookup was a full table scan (ROADMAP O139).
@@ -4042,6 +4080,29 @@ impl VaultStore {
 
     /// [`reconcile_chain`](Self::reconcile_chain)'s verdict without its heal.
     fn check_chain_read_only(&mut self) -> Result<(), StoreError> {
+        // ROADMAP O233. A regime and a head key that disagree is an integrity
+        // finding, which the writable open refuses; this posture reports it
+        // and serves, as it does a torn staging manifest — `verify` then
+        // reads the chain as broken. A chain that has not switched is still
+        // fully readable; it says its labels are not yet bound.
+        match chain::head_state(&self.conn)? {
+            chain::HeadState::Inconsistent { finding, .. } => {
+                self.unhealed.push(format!(
+                    "{finding} — an integrity finding a writable open refuses; run \
+                     `undercroft verify`"
+                ));
+                return Ok(());
+            }
+            chain::HeadState::Seeded(h) if h.regime == chain::Regime::V1 => {
+                self.unhealed.push(
+                    "the audit chain's labels are not yet chain-authenticated: the switch to \
+                     the labelled chain (ROADMAP O233) is a write, and runs at the next \
+                     writable open"
+                        .to_string(),
+                );
+            }
+            _ => {}
+        }
         self.anchor_at_open = self.reconcile_chain(false)?;
         match self.anchor_at_open {
             AnchorState::Current => Ok(()),
@@ -4111,13 +4172,10 @@ impl VaultStore {
     /// fire whatever `heal` says — declining to write is not declining to
     /// look.
     fn reconcile_chain(&mut self, heal: bool) -> Result<AnchorState, StoreError> {
-        let db_head: Option<String> = self
-            .conn
-            .query_row("SELECT value FROM chain_meta WHERE key = 'head'", [], |r| {
-                r.get(0)
-            })
-            .optional()?;
-        let Some(db_head) = db_head else {
+        // The LIVE head: `head_v2` on a switched chain, `head` before it
+        // (ROADMAP O233). A regime and a head key that disagree refuse here
+        // as an integrity finding — the read-only open reports it instead.
+        let Some(db_head) = chain::committed_head(&self.conn)?.map(|h| h.head) else {
             return Ok(AnchorState::Unseeded);
         };
         // **The anchor is read from DISK and MAC-verified**, never from this
@@ -4132,23 +4190,17 @@ impl VaultStore {
         if anchor == db_head {
             return Ok(AnchorState::Current);
         }
-        // Heads differ: replay the audit rows and decide crash vs rollback.
-        let mut stmt = self.conn.prepare("SELECT tag FROM audit ORDER BY seq")?;
-        let tags: Vec<Vec<u8>> = stmt
-            .query_map([], |r| r.get::<_, Vec<u8>>(0))?
-            .collect::<Result<_, _>>()?;
-        drop(stmt);
-        let genesis = undercroft_vault::Vault::chain_genesis_hex();
-        let mut head = genesis.clone();
-        let mut anchor_seen = head == anchor;
-        let mut behind_by = if anchor == genesis { tags.len() } else { 0 };
-        for (i, tag) in tags.iter().enumerate() {
-            head = self.vault.chain_next_hex(&head, tag)?;
-            if head == anchor {
-                anchor_seen = true;
-                behind_by = tags.len() - (i + 1);
-            }
-        }
+        // Heads differ: replay the audit rows and decide crash vs rollback,
+        // through the one replay (ROADMAP O233). A crash between a switch's
+        // commit and its anchor leaves the anchor on a version-1 head, and
+        // the version-1 prefix is unchanged, so it is found here and healed.
+        let replayed = chain::replay(&self.conn, &self.vault, Some(&anchor))?;
+        let (head, anchor_seen, behind_by, rows) = (
+            replayed.head,
+            replayed.anchor_seen,
+            replayed.behind_by,
+            replayed.rows,
+        );
         if head != db_head {
             // The committed head doesn't match its own audit rows — this is
             // in-database corruption, not an anchoring artifact.
@@ -4169,7 +4221,7 @@ impl VaultStore {
                     |r| r.get::<_, String>(0),
                 )?
                 .parse()
-                .unwrap_or(tags.len() as u64);
+                .unwrap_or(rows as u64);
             self.vault.anchor_manifest(&db_head, writes)?;
         }
         Ok(AnchorState::Healed { behind_by })
@@ -4342,10 +4394,81 @@ impl VaultStore {
         if self.anchor_at_open == AnchorState::Unseeded {
             // Legacy adoption (pre-chain_meta database) or a fresh vault:
             // seed from the manifest, which was authoritative until now.
-            self.conn.execute(
-                "INSERT INTO chain_meta (key, value) VALUES ('head', ?1), ('writes', ?2)",
-                params![self.vault.chain_head_hex(), self.vault.writes().to_string()],
-            )?;
+            chain::seed(&self.conn, self.vault.chain_head_hex(), self.vault.writes())?;
+        }
+        Ok(())
+    }
+
+    /// **Test only: turn this vault's chain back into a legacy version-1
+    /// chain** — the shape every vault written before ROADMAP O233 has, and
+    /// which no production path can produce any more. Removes the
+    /// commitment and the version-2 head, re-steps every remaining row with
+    /// the version-1 step, and re-anchors the manifest, so the next writable
+    /// open switches it as it would a real legacy vault.
+    #[cfg(test)]
+    pub(crate) fn unswitch_chain_for_test(&mut self) {
+        self.conn
+            .execute(
+                "DELETE FROM audit WHERE record_id = ?1",
+                params![chain::commitment_label()],
+            )
+            .unwrap();
+        let had_v2 = self
+            .conn
+            .execute(
+                "DELETE FROM chain_meta WHERE key = ?1",
+                params![chain::LIVE_HEAD],
+            )
+            .unwrap();
+        let replayed = chain::replay(&self.conn, &self.vault, None).unwrap();
+        assert_eq!(
+            replayed.regime,
+            chain::Regime::V1,
+            "premise: no commitment left"
+        );
+        chain::set_head(&self.conn, chain::Regime::V1, &replayed.head).unwrap();
+        let writes = chain::writes(&self.conn).unwrap() - had_v2 as u64;
+        chain::set_writes(&self.conn, writes).unwrap();
+        self.vault.anchor_manifest(&replayed.head, writes).unwrap();
+    }
+
+    /// Switch this vault's audit chain to the labelled version-2 step, once
+    /// (ROADMAP O233), at a writable open.
+    ///
+    /// Withheld — and said so on `VaultStats.unhealed` — while a sealed
+    /// vault's A10 walk is incomplete (the walk relabels `audit` rows) and
+    /// while the version-1 chain does not replay cleanly (the commitment
+    /// would bind labels on a broken chain). Everything else is in
+    /// [`chain::switch`]: one `BEGIN IMMEDIATE`, the regime re-read inside
+    /// it, the commitment and the live head written together, then the
+    /// anchor after the commit, so a crash leaves the anchor on the
+    /// version-1 head the next open heals from.
+    fn switch_chain_to_v2(&mut self) -> Result<(), StoreError> {
+        if chain::regime(&self.conn)? != chain::Regime::V1 {
+            return Ok(());
+        }
+        if !self.kg_blind_complete()? {
+            self.unhealed.push(
+                "the audit chain's labels are NOT chain-authenticated: the switch to the \
+                 labelled chain (ROADMAP O233) waits for the knowledge-graph blinding \
+                 migration, which relabels audit rows and has not completed — `undercroft \
+                 verify` names the rows it refused"
+                    .to_string(),
+            );
+            return Ok(());
+        }
+        let anchor = self.vault.anchored_head()?;
+        let at = crate::manage::now_rfc3339();
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        match chain::switch(&tx, &self.vault, &anchor, &at)? {
+            chain::SwitchOutcome::Switched { head, writes } => {
+                tx.commit()?;
+                self.vault.anchor_manifest(&head, writes)?;
+            }
+            chain::SwitchOutcome::Already => {}
+            chain::SwitchOutcome::Withheld(reason) => self.unhealed.push(reason),
         }
         Ok(())
     }
@@ -4608,11 +4731,7 @@ impl VaultStore {
     /// security level, embedder identity, committed audit-chain head)`.
     /// Provenance only — none of it is importable state.
     pub fn manifest_facts(&self) -> Result<(String, String, String, String), StoreError> {
-        let head: String =
-            self.conn
-                .query_row("SELECT value FROM chain_meta WHERE key = 'head'", [], |r| {
-                    r.get(0)
-                })?;
+        let head = chain::require_head(&self.conn)?.head;
         let level = match self.vault.level() {
             undercroft_vault::SecurityLevel::Sealed => "sealed",
             undercroft_vault::SecurityLevel::HmacOnly => "hmac-only",
@@ -4649,20 +4768,9 @@ impl VaultStore {
     /// one number came from SQL, the other from a cache. Both come from
     /// SQL now.
     pub fn chain_state(&self) -> Result<(String, u64), StoreError> {
-        let head: String =
-            self.conn
-                .query_row("SELECT value FROM chain_meta WHERE key = 'head'", [], |r| {
-                    r.get(0)
-                })?;
-        let writes: String = self.conn.query_row(
-            "SELECT value FROM chain_meta WHERE key = 'writes'",
-            [],
-            |r| r.get(0),
-        )?;
-        let writes = writes.parse::<u64>().map_err(|e| StoreError::CorruptRow {
-            id: "chain_meta/writes".into(),
-            reason: e.to_string(),
-        })?;
+        // The LIVE head (ROADMAP O233): `head_v2` once the chain has switched.
+        let head = chain::require_head(&self.conn)?.head;
+        let writes = chain::writes(&self.conn)?;
         Ok((head, writes))
     }
 
@@ -8333,13 +8441,16 @@ impl VaultStore {
     }
 
     /// Walk every record verifying its HMAC, replay the audit chain
-    /// against the manifest head, check every drawer supersession receipt
-    /// and every graph fact receipt, resolve every graph audit label,
-    /// compare every mirror column against the covered meta, and re-tag
-    /// every declared policy row. **All SEVEN legs are in the one report**
-    /// — it was three until 2026-08-06, and each addition is there because
-    /// it covers a mutation the others structurally cannot see
-    /// (`orphan_labels`: `record_id` is outside the chain hash;
+    /// against the manifest head, check the label commitment, check every
+    /// drawer supersession receipt and every graph fact receipt, resolve
+    /// every graph audit label, compare every mirror column against the
+    /// covered meta, and re-tag every declared policy row. **All EIGHT legs
+    /// are in the one report** — it was three until 2026-08-06, and each
+    /// addition is there because it covers a mutation the others structurally
+    /// cannot see (`label_commitment`: the labels a chain held when it
+    /// switched to the labelled step, which the version-1 step before the
+    /// switch did not bind, ROADMAP O233; `orphan_labels`: a row deleted with
+    /// no destruction record, and on an unswitched chain a relabel;
     /// `mirror_drift`: a mirror column is outside the drawer HMAC;
     /// `receipts`: a fact's receipt columns are outside the fact's own
     /// canonical, added 2026-08-10; `policy_drift`: `wing_trust` and
@@ -8372,11 +8483,6 @@ impl VaultStore {
         bad.extend(self.kg_verify()?);
         checked += self.tunnel_count()?;
         bad.extend(self.tunnels_verify()?);
-        let mut stmt = self.conn.prepare("SELECT tag FROM audit ORDER BY seq")?;
-        let tags: Vec<Vec<u8>> = stmt
-            .query_map([], |r| r.get::<_, Vec<u8>>(0))?
-            .collect::<Result<_, _>>()?;
-        drop(stmt);
         // Two-part chain check. (1) The audit rows must reproduce exactly
         // the committed head in chain_meta — they advanced in the same
         // transactions, so any mismatch is corruption, not timing. (2) The
@@ -8388,22 +8494,7 @@ impl VaultStore {
         // not see a `vault.json` swapped underneath a long-lived server
         // until a fresh open, which is the one deployment its own doctrine
         // is written for.
-        let anchor = self.vault.anchored_head()?;
-        let mut head = Vault::chain_genesis_hex();
-        let mut anchor_seen = head == anchor;
-        for tag in &tags {
-            head = self.vault.chain_next_hex(&head, tag)?;
-            if head == anchor {
-                anchor_seen = true;
-            }
-        }
-        let db_head: Option<String> = self
-            .conn
-            .query_row("SELECT value FROM chain_meta WHERE key = 'head'", [], |r| {
-                r.get(0)
-            })
-            .optional()?;
-        let chain_ok = db_head.as_deref() == Some(head.as_str()) && anchor_seen;
+        let (chain_ok, label_commitment) = self.chain_verdict()?;
         // Not folded into `records_checked`: that count is HMAC-covered
         // *records*, and a supersession link is a relation between two of
         // them, reported with its own verdicts.
@@ -8561,12 +8652,55 @@ impl VaultStore {
             records_checked: checked,
             bad_records: bad,
             chain_ok,
+            label_commitment,
             supersessions,
             orphan_labels,
             mirror_drift,
             receipts,
             policy_drift,
         })
+    }
+
+    /// The chain's two verdicts — `(chain_ok, label_commitment)` — from ONE
+    /// streaming replay (ROADMAP O233). `verify` reports them; the forget
+    /// path's recorded-evidence verdict refuses without them.
+    ///
+    /// Besides a wrong head, the replay can find a regime and a head key
+    /// that disagree, and a row whose label, time or tag is not stored as the
+    /// type every writer binds. Each is sorted by which side of the switch it
+    /// sits on: at or after it, the CHAIN's finding (a rotation re-steps those
+    /// rows as found, so it must refuse); before it, the label commitment's,
+    /// which a rotation preserves verbatim and so cannot launder (O232
+    /// ruling 1).
+    pub(crate) fn chain_verdict(&self) -> Result<(bool, LabelCommitment), StoreError> {
+        let anchor = self.vault.anchored_head()?;
+        let replayed = chain::replay(&self.conn, &self.vault, Some(&anchor))?;
+        let (db_head, heads_consistent) = match chain::head_state(&self.conn)? {
+            chain::HeadState::Seeded(h) => (Some(h.head), true),
+            chain::HeadState::Unseeded => (None, true),
+            chain::HeadState::Inconsistent { .. } => (None, false),
+        };
+        let malformed_at = |step| {
+            replayed
+                .malformed
+                .iter()
+                .any(|seq| replayed.regime.step_for(*seq) == step)
+        };
+        let chain_ok = heads_consistent
+            && db_head.as_deref() == Some(replayed.head.as_str())
+            && replayed.anchor_seen
+            && !malformed_at(undercroft_vault::ChainStep::V2);
+        let label_commitment = match replayed.regime {
+            chain::Regime::V1 => LabelCommitment::Pending,
+            chain::Regime::V2 { .. }
+                if replayed.commitment_intact == Some(true)
+                    && !malformed_at(undercroft_vault::ChainStep::V1) =>
+            {
+                LabelCommitment::Intact
+            }
+            chain::Regime::V2 { .. } => LabelCommitment::Mismatch,
+        };
+        Ok((chain_ok, label_commitment))
     }
 
     /// Decrypted export of every drawer (for backup / migration).
@@ -13197,8 +13331,10 @@ mod tests {
 
         // Simulate a crash between transaction commit and manifest anchor:
         // the database holds three chained writes, the manifest only saw
-        // the first. A power loss must NOT read as tampering.
-        s.vault.anchor_manifest(&old_head, 1).unwrap();
+        // the first (and the chain's `migrate/chain-v2` commitment before
+        // it, ROADMAP O233 — hence 2 and 4 below, not 1 and 3). A power loss
+        // must NOT read as tampering.
+        s.vault.anchor_manifest(&old_head, 2).unwrap();
         assert!(
             s.verify().unwrap().chain_ok,
             "a behind-anchor (crash artifact) must not fail verification"
@@ -13209,13 +13345,8 @@ mod tests {
         // head and the vault is fully healthy again.
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let s = VaultStore::open(mgr.unlock("test").unwrap()).unwrap();
-        assert_eq!(s.vault.writes(), 3, "anchor fast-forwarded");
-        let db_head: String = s
-            .conn
-            .query_row("SELECT value FROM chain_meta WHERE key = 'head'", [], |r| {
-                r.get(0)
-            })
-            .unwrap();
+        assert_eq!(s.vault.writes(), 4, "anchor fast-forwarded");
+        let db_head = chain::require_head(&s.conn).unwrap().head;
         assert_eq!(s.vault.chain_head_hex(), db_head);
         assert!(s.verify().unwrap().chain_ok);
     }
@@ -13245,12 +13376,14 @@ mod tests {
             [],
         )
         .unwrap();
+        // The LIVE head: `head_v2` on a switched chain (ROADMAP O233), and a
+        // record count that includes the commitment.
         db.execute(
-            "UPDATE chain_meta SET value = ?1 WHERE key = 'head'",
-            params![h2],
+            "UPDATE chain_meta SET value = ?1 WHERE key = ?2",
+            params![h2, chain::LIVE_HEAD],
         )
         .unwrap();
-        db.execute("UPDATE chain_meta SET value = '2' WHERE key = 'writes'", [])
+        db.execute("UPDATE chain_meta SET value = '3' WHERE key = 'writes'", [])
             .unwrap();
         drop(db);
 
@@ -19778,12 +19911,20 @@ mod tests {
     #[test]
     fn verify_detects_audit_chain_tampering() {
         let (dir, mut s) = store(SecurityLevel::Sealed);
-        s.upsert(&drawer("w", "r", "one", 0)).unwrap();
+        let one = drawer("w", "r", "one", 0);
+        s.upsert(&one).unwrap();
         s.upsert(&drawer("w", "r", "two", 1)).unwrap();
         drop(s);
-        // Delete an audit row (hide a write).
+        // Delete a write's audit row (hide the write). Named by its label, not
+        // `seq = 1`: since ROADMAP O233 the first row of every chain is its
+        // `migrate/chain-v2` commitment, and deleting THAT is a different
+        // finding (a head key without its commitment), refused at open.
         let conn = Connection::open(dir.path().join("vaults/test/vault.db")).unwrap();
-        conn.execute("DELETE FROM audit WHERE seq = 1", []).unwrap();
+        assert_eq!(
+            conn.execute("DELETE FROM audit WHERE record_id = ?1", params![one.id])
+                .unwrap(),
+            1
+        );
         drop(conn);
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let s = VaultStore::open(mgr.unlock("test").unwrap()).unwrap();

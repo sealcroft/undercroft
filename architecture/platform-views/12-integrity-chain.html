@@ -45,8 +45,8 @@
     <h1>How tampering is detected</h1>
 
     <svg viewBox="0 0 1200 768" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="integrity-chain-title integrity-chain-desc">
-      <title id="integrity-chain-title">Undercroft integrity chain and the seven legs of verify</title>
-      <desc id="integrity-chain-desc">Every write appends one HMAC-tagged audit record inside the same database transaction that stores the data, advancing the committed head in chain_meta, while a separate manifest anchor is fsynced outside it and deliberately lags behind the database so that a power loss reconciles as a crash rather than raising a tamper alarm; verify then reads that committed state and returns one verdict assembled from seven legs — record HMACs, chain replay, supersession receipts, knowledge-graph fact receipts, orphan graph labels, mirror drift, which compares a clear column against its HMAC-covered copy, and policy drift, which re-verifies every wing-trust and retention row under the current key and matches it to the chain record that assigned it, so an edit or a deletion made offline is caught.</desc>
+      <title id="integrity-chain-title">Undercroft integrity chain and the eight legs of verify</title>
+      <desc id="integrity-chain-desc">Every write appends one HMAC-tagged audit record, chained over its label, tag and time, inside the same database transaction that stores the data, advancing the committed head in chain_meta, while a separate manifest anchor is fsynced outside it and deliberately lags behind the database so that a power loss reconciles as a crash rather than raising a tamper alarm; verify then reads that committed state and returns one verdict assembled from eight legs — record HMACs, chain replay, the label commitment that binds the labels the chain held when it switched to the labelled step, supersession receipts, knowledge-graph fact receipts, orphan graph labels, mirror drift, which compares a clear column against its HMAC-covered copy, and policy drift, which re-verifies every wing-trust and retention row under the current key and matches it to the chain record that assigned it, so an edit or a deletion made offline is caught.</desc>
       <defs>
         <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7fa39c"/></marker>
         <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#35e0c2"/></marker>
@@ -75,14 +75,15 @@
       <!-- chain_meta -> verify (gutter corridor at x=548) -->
       <path d="M 480,348 H 540 Q 548,348 548,340 V 100 Q 548,92 556,92 H 632" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
 
-      <!-- verify -> seven legs; attach points 644/672/700/728/756/784/812 on the bottom edge, 28 apart -->
-      <path d="M 812,136 V 164 Q 812,172 820,172 H 848" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
-      <path d="M 784,136 V 236 Q 784,244 792,244 H 848" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
-      <path d="M 756,136 V 308 Q 756,316 764,316 H 848" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
-      <path d="M 728,136 V 380 Q 728,388 736,388 H 848" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
-      <path d="M 700,136 V 452 Q 700,460 708,460 H 848" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <!-- verify -> eight legs; attach points 648..816 on the bottom edge, 24 apart; chips 60 apart -->
+      <path d="M 816,136 V 164 Q 816,172 824,172 H 848" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 792,136 V 224 Q 792,232 800,232 H 848" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 768,136 V 284 Q 768,292 776,292 H 848" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 744,136 V 344 Q 744,352 752,352 H 848" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 720,136 V 404 Q 720,412 728,412 H 848" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 696,136 V 464 Q 696,472 704,472 H 848" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
       <path d="M 672,136 V 524 Q 672,532 680,532 H 848" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
-      <path d="M 644,136 V 596 Q 644,604 652,604 H 848" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
+      <path d="M 648,136 V 584 Q 648,592 656,592 H 848" fill="none" stroke="#7fa39c" stroke-width="1.2" marker-end="url(#arrow)"/>
 
       <!-- ============ ARROW LABELS (mask + 8px gap) ============ -->
       <rect x="328" y="128" width="96" height="12" rx="2" fill="#04080a"/>
@@ -140,7 +141,7 @@
       <rect x="640" y="54" width="44" height="12" rx="2" fill="transparent" stroke="rgba(53,224,194,0.50)" stroke-width="0.8"/>
       <text x="662" y="63" fill="#35e0c2" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.08em">VERIFY</text>
       <text x="736" y="92" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif" text-anchor="middle">verify</text>
-      <text x="736" y="110" fill="#7fa39c" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">seven legs, one verdict</text>
+      <text x="736" y="110" fill="#7fa39c" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">eight legs, one verdict</text>
       <text x="736" y="124" fill="#5c7f79" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">reads; never writes</text>
 
       <!-- ============ VERIFY LEGS (chips) ============ -->
@@ -150,44 +151,52 @@
       <text x="868" y="175" fill="rgba(92,127,121,0.90)" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.08em">01</text>
       <text x="892" y="177" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif">record HMACs</text>
 
-      <rect x="848" y="220" width="216" height="48" rx="4" fill="#04080a"/>
-      <rect x="848" y="220" width="216" height="48" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>
-      <rect x="856" y="238" width="24" height="12" rx="2" fill="transparent" stroke="rgba(92,127,121,0.40)" stroke-width="0.8"/>
-      <text x="868" y="247" fill="rgba(92,127,121,0.90)" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.08em">02</text>
-      <text x="892" y="249" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif">chain replay</text>
+      <rect x="848" y="208" width="216" height="48" rx="4" fill="#04080a"/>
+      <rect x="848" y="208" width="216" height="48" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>
+      <rect x="856" y="226" width="24" height="12" rx="2" fill="transparent" stroke="rgba(92,127,121,0.40)" stroke-width="0.8"/>
+      <text x="868" y="235" fill="rgba(92,127,121,0.90)" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.08em">02</text>
+      <text x="892" y="230" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif">chain replay</text>
+      <text x="892" y="244" fill="#7fa39c" font-size="9" font-family="'DejaVu Sans Mono', monospace">label · tag · time</text>
 
-      <rect x="848" y="292" width="216" height="48" rx="4" fill="#04080a"/>
-      <rect x="848" y="292" width="216" height="48" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>
-      <rect x="856" y="310" width="24" height="12" rx="2" fill="transparent" stroke="rgba(92,127,121,0.40)" stroke-width="0.8"/>
-      <text x="868" y="319" fill="rgba(92,127,121,0.90)" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.08em">03</text>
-      <text x="892" y="321" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif">supersession receipts</text>
+      <rect x="848" y="268" width="216" height="48" rx="4" fill="#04080a"/>
+      <rect x="848" y="268" width="216" height="48" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>
+      <rect x="856" y="286" width="24" height="12" rx="2" fill="transparent" stroke="rgba(92,127,121,0.40)" stroke-width="0.8"/>
+      <text x="868" y="295" fill="rgba(92,127,121,0.90)" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.08em">03</text>
+      <text x="892" y="290" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif">label commitment</text>
+      <text x="892" y="304" fill="#7fa39c" font-size="9" font-family="'DejaVu Sans Mono', monospace">labels bound at the switch</text>
 
-      <rect x="848" y="364" width="216" height="48" rx="4" fill="#04080a"/>
-      <rect x="848" y="364" width="216" height="48" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>
-      <rect x="856" y="382" width="24" height="12" rx="2" fill="transparent" stroke="rgba(92,127,121,0.40)" stroke-width="0.8"/>
-      <text x="868" y="391" fill="rgba(92,127,121,0.90)" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.08em">04</text>
-      <text x="892" y="386" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif">knowledge-graph</text>
-      <text x="892" y="400" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif">fact receipts</text>
+      <rect x="848" y="328" width="216" height="48" rx="4" fill="#04080a"/>
+      <rect x="848" y="328" width="216" height="48" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>
+      <rect x="856" y="346" width="24" height="12" rx="2" fill="transparent" stroke="rgba(92,127,121,0.40)" stroke-width="0.8"/>
+      <text x="868" y="355" fill="rgba(92,127,121,0.90)" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.08em">04</text>
+      <text x="892" y="357" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif">supersession receipts</text>
 
-      <rect x="848" y="436" width="216" height="48" rx="4" fill="#04080a"/>
-      <rect x="848" y="436" width="216" height="48" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>
-      <rect x="856" y="454" width="24" height="12" rx="2" fill="transparent" stroke="rgba(92,127,121,0.40)" stroke-width="0.8"/>
-      <text x="868" y="463" fill="rgba(92,127,121,0.90)" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.08em">05</text>
-      <text x="892" y="465" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif">orphan graph labels</text>
+      <rect x="848" y="388" width="216" height="48" rx="4" fill="#04080a"/>
+      <rect x="848" y="388" width="216" height="48" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>
+      <rect x="856" y="406" width="24" height="12" rx="2" fill="transparent" stroke="rgba(92,127,121,0.40)" stroke-width="0.8"/>
+      <text x="868" y="415" fill="rgba(92,127,121,0.90)" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.08em">05</text>
+      <text x="892" y="410" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif">knowledge-graph</text>
+      <text x="892" y="424" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif">fact receipts</text>
+
+      <rect x="848" y="448" width="216" height="48" rx="4" fill="#04080a"/>
+      <rect x="848" y="448" width="216" height="48" rx="4" fill="#071014" stroke="#5c7f79" stroke-width="0.8"/>
+      <rect x="856" y="466" width="24" height="12" rx="2" fill="transparent" stroke="rgba(92,127,121,0.40)" stroke-width="0.8"/>
+      <text x="868" y="475" fill="rgba(92,127,121,0.90)" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.08em">06</text>
+      <text x="892" y="477" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif">orphan graph labels</text>
 
       <rect x="848" y="508" width="216" height="48" rx="4" fill="#04080a"/>
       <rect x="848" y="508" width="216" height="48" rx="4" fill="rgba(255,93,115,0.10)" stroke="#ff5d73" stroke-width="1"/>
       <rect x="856" y="526" width="24" height="12" rx="2" fill="transparent" stroke="rgba(255,93,115,0.50)" stroke-width="0.8"/>
-      <text x="868" y="535" fill="#ff5d73" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.08em">06</text>
+      <text x="868" y="535" fill="#ff5d73" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.08em">07</text>
       <text x="892" y="530" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif">mirror drift</text>
       <text x="892" y="544" fill="#ff5d73" font-size="9" font-family="'DejaVu Sans Mono', monospace">clear column vs covered copy</text>
 
-      <rect x="848" y="580" width="216" height="48" rx="4" fill="#04080a"/>
-      <rect x="848" y="580" width="216" height="48" rx="4" fill="rgba(255,93,115,0.10)" stroke="#ff5d73" stroke-width="1"/>
-      <rect x="856" y="598" width="24" height="12" rx="2" fill="transparent" stroke="rgba(255,93,115,0.50)" stroke-width="0.8"/>
-      <text x="868" y="607" fill="#ff5d73" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.08em">07</text>
-      <text x="892" y="602" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif">policy drift</text>
-      <text x="892" y="616" fill="#ff5d73" font-size="9" font-family="'DejaVu Sans Mono', monospace">trust + retention rows vs chain</text>
+      <rect x="848" y="568" width="216" height="48" rx="4" fill="#04080a"/>
+      <rect x="848" y="568" width="216" height="48" rx="4" fill="rgba(255,93,115,0.10)" stroke="#ff5d73" stroke-width="1"/>
+      <rect x="856" y="586" width="24" height="12" rx="2" fill="transparent" stroke="rgba(255,93,115,0.50)" stroke-width="0.8"/>
+      <text x="868" y="595" fill="#ff5d73" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.08em">08</text>
+      <text x="892" y="590" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif">policy drift</text>
+      <text x="892" y="604" fill="#ff5d73" font-size="9" font-family="'DejaVu Sans Mono', monospace">trust + retention rows vs chain</text>
 
       <!-- ============ CALLOUT ============ -->
       <line x1="124" y1="620" x2="124" y2="668" stroke="rgba(217,240,234,0.18)" stroke-width="1.2"/>

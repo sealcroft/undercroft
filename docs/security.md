@@ -15,9 +15,11 @@ modification: every read verifies, `verify` audits everything.
   (ROADMAP O204). The key files are unauthenticated, so they decide nothing
   about which key sealed a vault; the manifest MAC does.
 - **Per-vault keys**: `HKDF-SHA256(master, vault_salt, "undercroft.v1/vault/<id>/<label>")`
-  for enc / mac / manifest / sample labels. The fourth keys the PQ
+  for enc / mac / manifest / sample / chain labels. `sample` keys the PQ
   training-sample rank and is deliberately rotation-sensitive, because
-  nothing holds a durable reference to it. Vaults never share working keys.
+  nothing holds a durable reference to it; `chain` keys the version-2 audit
+  chain step, whose heads leave the vault on `/v1` and to the orchestrator
+  (ROADMAP O233). Vaults never share working keys.
 - **Compression**: sealed content is zstd-compressed *before* encryption
   (compress-then-encrypt; the reverse leaks nothing but gains nothing).
   Note the standard caveat: at-rest sizes correlate weakly with content
@@ -35,9 +37,26 @@ modification: every read verifies, `verify` audits everything.
   forge a record, since every returned row still verifies its HMAC.
 - **Integrity**: HMAC-SHA256 per record (independent key) over
   id + metadata + at-rest content; append-only audit table; chain head
-  `h_i = HMAC(mac, h_{i-1} || tag_i)` committed in `chain_meta` in the same
-  transaction as the write, and anchored in a MAC'd manifest. Deletions
-  log keyed tombstones. KG triples and tunnels carry tags too.
+  `h_i = HMAC(chain, "undercroft.chain.v2" ‖ lp(h_{i-1}) ‖ lp(record_id_i) ‖
+  lp(tag_i) ‖ lp(at_i))` committed in `chain_meta` in the same transaction
+  as the write, and anchored in a MAC'd manifest. Deletions log keyed
+  tombstones. KG triples and tunnels carry tags too.
+  **The step covers each record's LABEL and TIME, not only its tag, since
+  1.6.0 (ROADMAP O233).** The version-1 step, `HMAC(mac, h_{i-1} ‖ tag_i)`,
+  left `audit.record_id` outside the chain, and every check that finds a
+  record by its label — the trust floor's policy comparison, the
+  orphan-label leg, a forget attestation's recorded run — was one `UPDATE`
+  away from being defeated: measured, relabelling a quarantined wing's
+  `trust/` record and deleting its row read `VERIFY OK` while a floored
+  search returned the quarantined drawer. A vault switches at its first
+  writable open under 1.6.0 by appending one `migrate/chain-v2` record whose
+  tag is an unkeyed SHA-256 over every earlier row's label, tag and time;
+  `verify` checks that commitment as its own leg, and a relabel on either
+  side of it fails. **Residual, stated**: labels as they stood at the switch
+  are bound as found, so a relabel made before the upgrade becomes authentic
+  — O232's residual, one table over. And the switch detects rather than
+  prevents at read time: the readers that consult a label still act before
+  any replay runs, until `verify` does (ROADMAP O237).
 - **Duplicate detection** uses keyed fingerprints (truncated HMAC), so
   stored fingerprints reveal nothing offline.
 
@@ -101,6 +120,9 @@ stateDiagram-v2
   current columns and would make the tampering authentic (ROADMAP O232).
   Run `undercroft verify` first. What a rotation by an earlier binary
   re-keyed cannot be told apart any more: the old key was the only witness.
+  A relabelled audit row after the chain's switch is a broken chain and
+  refuses the rotation; one before the switch is the label commitment's
+  finding, which the rotation preserves verbatim and does not refuse over.
 - **Encrypted export bundles** (`undercroft export --to <recipient>`): a
   backup or migration file never exists in plaintext. Since C3.4 the
   recipient identity is **hybrid post-quantum** — X25519 **and**

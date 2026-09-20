@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 812" width="900" height="812" role="img" aria-labelledby="t d">
 <title id="t">Key derivation and the AAD that binds every ciphertext</title>
-<desc id="d">One master key derives four subkeys per vault via HKDF — encryption, MAC, manifest MAC and the training-sample draw — while the knowledge graph's blind-index secret is stored sealed and re-sealed on rotation rather than derived, so fact identifiers never move. Every sealed blob binds the vault id and the record id into its AAD, so a ciphertext moved between vaults or between rows fails to decrypt. Rotation re-seals every artifact and re-keys the chain in one transaction; export bundles use a hybrid X25519 + ML-KEM-768 exchange to a recipient key.</desc>
+<desc id="d">One master key derives five subkeys per vault via HKDF — encryption, MAC, manifest MAC, the audit-chain step and the training-sample draw — while the knowledge graph's blind-index secret is stored sealed and re-sealed on rotation rather than derived, so fact identifiers never move. Every sealed blob binds the vault id and the record id into its AAD, so a ciphertext moved between vaults or between rows fails to decrypt. Rotation re-seals every artifact and re-keys the chain in one transaction; export bundles use a hybrid X25519 + ML-KEM-768 exchange to a recipient key.</desc>
 <style>
   .f { font-family: "DejaVu Sans", "Noto Sans", sans-serif; }
   .h { font-size: 17px; font-weight: 600; }
@@ -42,7 +42,7 @@
 
 <rect x="286" y="110" width="326" height="72" rx="7" fill="var(--d-blue-bg,#f3f7fc)" stroke="var(--d-blue,#4a6fa5)" stroke-width="1.5"/>
 <text x="300" y="130" class="f b" fill="var(--d-blue-ink,#33527d)">HKDF(master, salt = vault_salt, info)</text>
-<text x="300" y="150" class="f mono dim">undercroft.v1/vault/&lt;id&gt;/enc · /mac</text>
+<text x="300" y="150" class="f mono dim">undercroft.v1/vault/&lt;id&gt;/enc · /mac · /chain</text>
 <text x="300" y="167" class="f mono dim">undercroft.v1/vault/&lt;id&gt;/manifest · /sample</text>
 
 <path d="M616 146 L656 146" stroke="var(--d-line2,#8fa3b4)" stroke-width="1.6" marker-end="url(#a)"/>
@@ -53,9 +53,9 @@
 
 <rect x="660" y="150" width="198" height="34" rx="7" fill="var(--d-green-bg,#f1f8f2)" stroke="var(--d-green,#2f7d4f)" stroke-width="1.5"/>
 <text x="674" y="172" class="f mono" fill="var(--d-green-ink,#22603c)">mac_key</text>
-<text x="728" y="172" class="f s dim">HMAC-SHA256 · chain</text>
+<text x="728" y="172" class="f s dim">HMAC-SHA256 · tags</text>
 
-<text x="42" y="200" class="f s dim">Four subkeys, independent outputs of one derivation: <tspan class="f mono">enc</tspan> seals, <tspan class="f mono">mac</tspan> tags records and the chain (and keys the dedup fingerprints),</text>
+<text x="42" y="200" class="f s dim">Five subkeys from one derivation: <tspan class="f mono">enc</tspan> seals, <tspan class="f mono">mac</tspan> tags records (and keys the dedup fingerprints), <tspan class="f mono">chain</tspan> steps the audit chain,</text>
 <text x="42" y="214" class="f s dim"><tspan class="f mono">manifest</tspan> MACs the rollback anchor, <tspan class="f mono">sample</tspan> draws the training rows — so a tag can never be forged from a decryption key.</text>
 <text x="42" y="228" class="f s dim">All live in a zeroize-on-drop wrapper, are never <tspan class="f mono">Debug</tspan>-printed, and the key file is fsynced at creation; a <tspan class="f mono">keycheck</tspan> marker refuses a wrong</text>
 <text x="42" y="242" class="f s dim">passphrase up front rather than as a wall of decryption failures.</text>

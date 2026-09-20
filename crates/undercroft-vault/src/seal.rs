@@ -118,13 +118,54 @@ pub fn verify_hmac(mac_key: &SecretKey, canonical: &[u8], tag: &[u8]) -> Result<
     }
 }
 
-/// One link of the vault's tamper-evident audit chain:
+/// One link of the vault's tamper-evident audit chain, **version 1**:
 /// `head_{i} = HMAC(mac_key, head_{i-1} || record_tag)`.
+///
+/// It folds the TAG alone, so an audit row's label and time sit outside it
+/// (ROADMAP O233). Kept for the rows a vault wrote before its chain switched
+/// to [`chain_next_v2`], and for the forget attestations minted over them.
 pub fn chain_next(mac_key: &SecretKey, prev_head: &[u8], record_tag: &[u8]) -> [u8; HMAC_LEN] {
     let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(mac_key.as_bytes())
         .expect("HMAC accepts any key length");
     mac.update(prev_head);
     mac.update(record_tag);
+    mac.finalize().into_bytes().into()
+}
+
+/// The domain string every version-2 chain step begins with.
+pub const CHAIN_V2_DOMAIN: &[u8] = b"undercroft.chain.v2";
+
+/// One link of the audit chain, **version 2** (ROADMAP O233): the record's
+/// label and time ride in the step with its tag.
+///
+/// `head_i = HMAC(chain_key, "undercroft.chain.v2" ‖ lp(head_{i-1}) ‖
+/// lp(record_id) ‖ lp(record_tag) ‖ lp(at))`, where `lp` prefixes a field with
+/// its length as a u64, little-endian.
+///
+/// **Every field is length-prefixed, the head included**, because a delimiter
+/// is injective only while no field contains it and a prefix is injective by
+/// construction — `Vault::sample_rank`'s argument. The head is 32 bytes on
+/// every row this store writes, and is prefixed anyway: it arrives hex-decoded
+/// from a column, and a field whose length is merely expected is not one whose
+/// length is bound.
+///
+/// **Keyed with its own subkey** (label `chain`), never the record-tag key:
+/// heads leave the vault on `/v1` and to the orchestrator, and the tree keeps a
+/// keyed output that leaves the record-tag domain on a subkey of its own.
+pub fn chain_next_v2(
+    chain_key: &SecretKey,
+    prev_head: &[u8],
+    record_id: &str,
+    record_tag: &[u8],
+    at: &str,
+) -> [u8; HMAC_LEN] {
+    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(chain_key.as_bytes())
+        .expect("HMAC accepts any key length");
+    mac.update(CHAIN_V2_DOMAIN);
+    for field in [prev_head, record_id.as_bytes(), record_tag, at.as_bytes()] {
+        mac.update(&(field.len() as u64).to_le_bytes());
+        mac.update(field);
+    }
     mac.finalize().into_bytes().into()
 }
 
@@ -197,5 +238,57 @@ mod tests {
         let ab = chain_next(&mac, &chain_next(&mac, &genesis, &t1), &t2);
         let ba = chain_next(&mac, &chain_next(&mac, &genesis, &t2), &t1);
         assert_ne!(ab, ba);
+    }
+
+    /// **ROADMAP O233: every field of a version-2 step moves the head**, and
+    /// the encoding is injective across field boundaries. The version-1 step
+    /// takes no label and no time at all, which is the defect.
+    #[test]
+    fn a_v2_step_covers_the_label_and_the_time_and_v1_does_not() {
+        let (_, key) = keys();
+        let tag = record_hmac(&key, b"one");
+        let genesis = [0u8; HMAC_LEN];
+        let base = chain_next_v2(&key, &genesis, "trust/secret", &tag, "2026-09-19T00:00:00Z");
+        assert_ne!(
+            base,
+            chain_next_v2(&key, &genesis, "read/x", &tag, "2026-09-19T00:00:00Z"),
+            "a relabel moves the head"
+        );
+        assert_ne!(
+            base,
+            chain_next_v2(&key, &genesis, "trust/secret", &tag, "2026-09-18T00:00:00Z"),
+            "a re-timed record moves the head"
+        );
+        assert_ne!(
+            base,
+            chain_next_v2(
+                &key,
+                &genesis,
+                "trust/secret",
+                &record_hmac(&key, b"two"),
+                "2026-09-19T00:00:00Z"
+            ),
+            "a changed tag moves the head"
+        );
+        let mut other = genesis;
+        other[0] = 1;
+        assert_ne!(
+            base,
+            chain_next_v2(&key, &other, "trust/secret", &tag, "2026-09-19T00:00:00Z"),
+            "the previous head moves the head"
+        );
+        // Injective across a boundary: bytes moved from one field into its
+        // neighbour are a different step, which a delimiter-free concatenation
+        // would not guarantee.
+        assert_ne!(
+            chain_next_v2(&key, &genesis, "ab", b"c", "t"),
+            chain_next_v2(&key, &genesis, "a", b"bc", "t"),
+        );
+        assert_ne!(
+            chain_next_v2(&key, &genesis, "a", b"b", "ct"),
+            chain_next_v2(&key, &genesis, "a", b"bc", "t"),
+        );
+        // Domain-separated from v1 even over the same key and the same tag.
+        assert_ne!(&base[..], &chain_next(&key, &genesis, &tag)[..]);
     }
 }

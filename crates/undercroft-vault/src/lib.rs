@@ -58,7 +58,7 @@ pub enum VaultError {
     /// The manifest could not be read as one — or a sealed content frame
     /// could not be decoded (`decompress_frame` raises this variant for a
     /// frame past the content bound or a failed zstd decode) — or a chain
-    /// head handed to `chain_next_hex` is not hex (the message names the
+    /// head handed to `chain_step_hex` is not hex (the message names the
     /// manifest even then); the message says which. All are integrity
     /// verdicts on the CLI (exit 2).
     #[error("vault manifest is corrupt: {0}")]
@@ -274,6 +274,32 @@ pub enum RotationVerdict {
     Abandoned,
 }
 
+/// Which audit-chain step a row takes (ROADMAP O233).
+///
+/// The store decides it per row, from one record: rows before the chain's
+/// `migrate/chain-v2` commitment are `V1`, that record and every row after it
+/// are `V2`. A forget attestation names its own through its `version`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChainStep {
+    /// `HMAC(mac_key, prev ‖ tag)`: the tag alone, as every chain before O233.
+    V1,
+    /// [`seal::chain_next_v2`]: the label, the tag and the time, under the
+    /// `chain` subkey.
+    V2,
+}
+
+/// One audit row as a chain step reads it: exactly the bytes the `audit`
+/// table holds for it.
+#[derive(Debug, Clone, Copy)]
+pub struct ChainLink<'a> {
+    /// `audit.record_id` — the label every reader finds the row by.
+    pub record_id: &'a str,
+    /// `audit.tag`.
+    pub tag: &'a [u8],
+    /// `audit.at`.
+    pub at: &'a str,
+}
+
 /// An unlocked vault: derived keys + manifest state.
 pub struct Vault {
     id: String,
@@ -287,6 +313,11 @@ pub struct Vault {
     /// ranks are published *by their effects* (which rows shaped a codebook)
     /// and must not share a key with record integrity.
     sample_key: SecretKey,
+    /// Keys the version-2 audit-chain step (ROADMAP O233), whose heads leave
+    /// the vault on `/v1` and to the orchestrator — kept off the record-tag
+    /// key for the reason `sample_key` is. The version-1 step stays on
+    /// `mac_key`, which is what every chain written before O233 used.
+    chain_key: SecretKey,
     manifest: Manifest,
     /// A pending key-rotation manifest (`vault.json.next`), attached at
     /// unlock when one exists so the store's open path can reconcile it
@@ -546,15 +577,30 @@ impl Vault {
         u64::from_le_bytes(tag[..8].try_into().expect("HMAC-SHA256 is 32 bytes"))
     }
 
-    /// One pure chain step over hex heads: `next = HMAC(prev ‖ tag)`. The
-    /// store owns *where* the committed head lives (a `chain_meta` row that
-    /// advances inside the same SQLite transaction as the data it covers —
-    /// a crash can never separate a record from its chain entry); the vault
-    /// owns the key. See [`anchor_manifest`](Self::anchor_manifest) for the
-    /// out-of-database half.
-    pub fn chain_next_hex(&self, prev_hex: &str, record_tag: &[u8]) -> Result<String, VaultError> {
+    /// One pure chain step over hex heads, in the version the caller STATES.
+    /// The store owns *where* the committed head lives (a `chain_meta` row
+    /// that advances inside the same SQLite transaction as the data it covers
+    /// — a crash can never separate a record from its chain entry) and which
+    /// version a row takes; the vault owns the keys. See
+    /// [`anchor_manifest`](Self::anchor_manifest) for the out-of-database half.
+    ///
+    /// **The version is a required argument** (ROADMAP O233), on the `Screen`
+    /// and `Read` precedent: this replaced `chain_next_hex`, which folded the
+    /// tag alone, so every caller had to be rewritten to say which step it
+    /// takes and none can inherit the old one by default.
+    pub fn chain_step_hex(
+        &self,
+        step: ChainStep,
+        prev_hex: &str,
+        link: ChainLink<'_>,
+    ) -> Result<String, VaultError> {
         let prev = hex::decode(prev_hex).map_err(|e| VaultError::CorruptManifest(e.to_string()))?;
-        Ok(hex::encode(chain_next(&self.mac_key, &prev, record_tag)))
+        Ok(hex::encode(match step {
+            ChainStep::V1 => chain_next(&self.mac_key, &prev, link.tag),
+            ChainStep::V2 => {
+                seal::chain_next_v2(&self.chain_key, &prev, link.record_id, link.tag, link.at)
+            }
+        }))
     }
 
     /// The all-zero head every chain starts from.
@@ -619,7 +665,7 @@ impl Vault {
     // reloads (the `anchored_head` doc records why), so the one answer it
     // could give was stale on exactly the deployment it would be reached
     // from. The store's `verify` replays the chain against `chain_meta`
-    // through `chain_next_hex`. Deleted under ROADMAP O126 — a public door
+    // through `chain_step_hex`. Deleted under ROADMAP O126 — a public door
     // with a contract nothing kept.
 
     /// Value proving which key generation a database was last sealed under:
@@ -670,7 +716,7 @@ impl Vault {
     /// `keycheck` marker — **decided without doing anything**.
     ///
     /// Split out from the store's `reconcile_rotation` for the same reason
-    /// [`chain_next_hex`](Self::chain_next_hex) is split from
+    /// [`chain_step_hex`](Self::chain_step_hex) is split from
     /// [`anchor_manifest`](Self::anchor_manifest): the arithmetic is pure and
     /// the effect is not, so a caller that must not write can still learn the
     /// verdict and report it.
@@ -1154,6 +1200,7 @@ impl VaultManager {
             mac_key: derive_vault_key(master, &salt, &id, "mac"),
             manifest_key: derive_vault_key(master, &salt, &id, "manifest"),
             sample_key: derive_vault_key(master, &salt, &id, "sample"),
+            chain_key: derive_vault_key(master, &salt, &id, "chain"),
             level: manifest.level,
             id,
             dir,
@@ -1164,8 +1211,9 @@ impl VaultManager {
     }
 
     /// Build the next key generation for a vault: same identity, level, and
-    /// history metadata, **fresh salt** ⇒ fresh enc/mac/manifest/sample keys.
-    /// The fourth one moves the training-sample draw
+    /// history metadata, **fresh salt** ⇒ fresh enc/mac/manifest/sample/chain
+    /// keys. The chain key is why a rotation re-steps every version-2 audit
+    /// row under the next generation. The sample key moves the training-sample draw
     /// ([`Vault::sample_rank`]), so a *future* retrain in a rotated vault draws
     /// a different sample; rotation itself only re-seals, never re-quantizes,
     /// so nothing already on disk changes.
@@ -1585,22 +1633,91 @@ mod tests {
         let mut v = mgr.create("c", SecurityLevel::HmacOnly).unwrap();
         let t1 = v.tag(b"record-one").to_vec();
         let t2 = v.tag(b"record-two").to_vec();
-        // The store advances heads transactionally via chain_next_hex and
-        // anchors the manifest afterwards — same arithmetic, split API.
-        let h1 = v.chain_next_hex(&Vault::chain_genesis_hex(), &t1).unwrap();
-        let h2 = v.chain_next_hex(&h1, &t2).unwrap();
+        fn link(tag: &[u8]) -> ChainLink<'_> {
+            ChainLink {
+                record_id: "r",
+                tag,
+                at: "2026-09-19T00:00:00Z",
+            }
+        }
+        for step in [ChainStep::V1, ChainStep::V2] {
+            // The store advances heads transactionally via chain_step_hex and
+            // anchors the manifest afterwards — same arithmetic, split API.
+            let h1 = v
+                .chain_step_hex(step, &Vault::chain_genesis_hex(), link(&t1))
+                .unwrap();
+            let h2 = v.chain_step_hex(step, &h1, link(&t2)).unwrap();
+            // Order matters: the same two tags the other way round replay to
+            // a different head, in both versions.
+            let swapped = v
+                .chain_step_hex(
+                    step,
+                    &v.chain_step_hex(step, &Vault::chain_genesis_hex(), link(&t2))
+                        .unwrap(),
+                    link(&t1),
+                )
+                .unwrap();
+            assert_ne!(swapped, h2, "{step:?}");
+        }
+        let h1 = v
+            .chain_step_hex(ChainStep::V1, &Vault::chain_genesis_hex(), link(&t1))
+            .unwrap();
+        let h2 = v.chain_step_hex(ChainStep::V1, &h1, link(&t2)).unwrap();
         v.anchor_manifest(&h2, 2).unwrap();
         assert_eq!(v.chain_head_hex(), h2, "the anchor is the replayed head");
-        // Order matters: the same two tags the other way round replay to a
-        // different head.
-        let swapped = v
-            .chain_next_hex(
-                &v.chain_next_hex(&Vault::chain_genesis_hex(), &t2).unwrap(),
-                &t1,
-            )
-            .unwrap();
-        assert_ne!(swapped, h2);
         assert_eq!(v.writes(), 2);
+    }
+
+    /// **ROADMAP O233: the version-1 step is byte-identical to what every
+    /// chain before it wrote, and version 2 is keyed apart.** Version 1 is
+    /// pinned to the raw `HMAC(mac_key, prev ‖ tag)` a pre-O233 build
+    /// computed, so no vault's history replays differently; version 2 must
+    /// differ from it and must move when the label or the time does, and a
+    /// rotation candidate — a fresh salt — must re-key it.
+    #[test]
+    fn chain_steps_are_pinned_and_a_rotation_rekeys_the_v2_step() {
+        let dir = tempdir().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let v = mgr.create("k", SecurityLevel::Sealed).unwrap();
+        let tag = v.tag(b"record").to_vec();
+        let genesis = Vault::chain_genesis_hex();
+        let link = |record_id: &'static str| ChainLink {
+            record_id,
+            tag: &tag,
+            at: "2026-09-19T00:00:00Z",
+        };
+        let v1 = v
+            .chain_step_hex(ChainStep::V1, &genesis, link("r"))
+            .unwrap();
+        assert_eq!(
+            v1,
+            hex::encode(chain_next(&v.mac_key, &[0u8; HMAC_LEN], &tag)),
+            "version 1 is exactly the pre-O233 step"
+        );
+        assert_eq!(
+            v1,
+            v.chain_step_hex(ChainStep::V1, &genesis, link("relabelled"))
+                .unwrap(),
+            "premise: version 1 cannot see a label"
+        );
+        let v2 = v
+            .chain_step_hex(ChainStep::V2, &genesis, link("r"))
+            .unwrap();
+        assert_ne!(v2, v1);
+        assert_ne!(
+            v2,
+            v.chain_step_hex(ChainStep::V2, &genesis, link("relabelled"))
+                .unwrap(),
+            "version 2 sees the label"
+        );
+        drop(v);
+        let next = mgr.rotation_candidate("k").unwrap();
+        assert_ne!(
+            v2,
+            next.chain_step_hex(ChainStep::V2, &genesis, link("r"))
+                .unwrap(),
+            "a fresh salt re-keys the version-2 step"
+        );
     }
 
     #[test]

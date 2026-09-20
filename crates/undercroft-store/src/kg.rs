@@ -1193,6 +1193,20 @@ impl VaultStore {
     /// temp mapping table, inside the same transaction, so it is one pass
     /// and a remap can never chain through a second.
     ///
+    /// **Revised by ROADMAP O233 (2026-09-19), beside rather than in place of
+    /// the paragraph above.** It was true of the chain arithmetic when A10
+    /// wrote it and false of the system by the time O233 measured it: O11
+    /// (a label's absence is evidence), O13 (a recorded run compares labels),
+    /// O94 and O230 (security verdicts found by label) and the attestation's
+    /// mirror disclosure all DECIDE from labels, and one relabel plus one
+    /// deleted row lifted a quarantine floor with `verify` green. A label is
+    /// evidence. The version-2 chain step now folds it, so this walk runs
+    /// only on a chain that has not switched — the switch waits for its
+    /// marker, and the relabels it made are bound as found by the commitment.
+    /// A future migration that must move an identifier cannot `UPDATE audit`
+    /// on a switched chain: that is exactly the tampering the chain now
+    /// catches. It needs a recorded re-chain of its own, ruled when it exists.
+    ///
     /// Still true, and unchanged: an export carries ids but `kg_import`
     /// re-derives, so a payload is unaffected. Residue, stated: an id a
     /// caller recorded BEFORE the migration — an agent's note from a
@@ -1210,6 +1224,30 @@ impl VaultStore {
     /// Idempotent and crash-safe: the marker is written LAST — after the
     /// rows' commit AND after the VACUUM that scrubs the old row images —
     /// so a crash anywhere before it simply repeats the walk.
+    /// Whether A10's walk has nothing left to do here: a vault that is not
+    /// sealed never runs it (and never writes its marker), and a sealed one
+    /// is done when the marker names this version.
+    ///
+    /// The audit chain's switch (ROADMAP O233) waits on this, because the
+    /// walk relabels `audit` rows and a relabel after the commitment would
+    /// break it. **Asking for the marker alone would have waited for ever on
+    /// every hmac-only vault**, which is what all three lenses of that ruling
+    /// proposed and its refuter caught.
+    pub(crate) fn kg_blind_complete(&self) -> Result<bool, StoreError> {
+        if !matches!(self.vault.level(), undercroft_vault::SecurityLevel::Sealed) {
+            return Ok(true);
+        }
+        let done: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'kg_blind_version'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(done.as_deref() == Some(KG_BLIND_VERSION))
+    }
+
     pub(crate) fn blind_existing_kg_rows(&mut self) -> Result<(), StoreError> {
         if !matches!(self.vault.level(), undercroft_vault::SecurityLevel::Sealed) {
             return Ok(());
@@ -1223,6 +1261,21 @@ impl VaultStore {
             )
             .optional()?;
         if done.as_deref() == Some(KG_BLIND_VERSION) {
+            return Ok(());
+        }
+        // **Never on a switched chain (ROADMAP O233).** This walk relabels
+        // `audit` rows, and a switched chain binds every label: the switch
+        // waits for this walk's marker, so the walk cannot have work left on
+        // one. A missing marker here means `meta` was edited, and relabelling
+        // would break the chain on top of that — so it says so and does
+        // nothing, rather than failing the open that `verify` needs.
+        if crate::chain::regime(&self.conn)? != crate::chain::Regime::V1 {
+            self.unhealed.push(
+                "the knowledge-graph blinding marker is missing on a vault whose audit chain \
+                 has already switched; the blinding walk did not run, because it relabels \
+                 audit rows the switched chain binds"
+                    .to_string(),
+            );
             return Ok(());
         }
         // A read-only open cannot migrate, and does not have to: every read
@@ -4059,6 +4112,11 @@ mod tests {
                 .unwrap();
             s.kg_add("alice", "reports_to", "bob", None, None, 1.0, None)
                 .unwrap();
+            // A pre-A10 vault is a pre-O233 vault too: its chain folds tags
+            // alone, which is what made relabelling its audit rows below a
+            // legitimate way to plant the legacy shape. On a switched chain
+            // the relabel would break the replay (ROADMAP O233).
+            s.unswitch_chain_for_test();
             let rows: Vec<(String, String, String, Vec<u8>)> = s
                 .conn
                 .prepare("SELECT id, subject, predicate, object FROM kg_triples")
@@ -4131,9 +4189,11 @@ mod tests {
                 // below had nothing to find and passed while the oracle sat
                 // in the audit table of every real legacy vault.
                 //
-                // Relabelling only: `record_id` is outside the chain hash
-                // (`chain_next_hex` takes the tag), so the chain still
-                // replays and `verify` stays meaningful.
+                // Relabelling only: on the legacy, unswitched chain this
+                // fixture builds, `record_id` is outside the version-1 step
+                // (it takes the tag), so the chain still replays and `verify`
+                // stays meaningful — on a switched chain this would be the
+                // tampering ROADMAP O233 makes the replay catch.
                 s.conn
                     .execute(
                         "UPDATE audit SET record_id = ?1 WHERE record_id = ?2",
@@ -4585,13 +4645,44 @@ mod tests {
 
     /// **U3: an offline relabel of an audit row fails `verify`.**
     ///
-    /// `audit.record_id` is the one part of an audit row the chain does not
-    /// authenticate — `chain_next_hex` takes the tag, `verify` replays tags,
-    /// rotation preserves tags verbatim. That is exactly what makes the A10
-    /// audit-label remap legitimate (it moves no evidence), and the flip side
-    /// is that an attacker with write access could point a record at a
-    /// different subject and every other leg of `verify` still passed. This
-    /// is the fourth leg.
+    /// On a chain that has switched to the labelled step (ROADMAP O233) the
+    /// relabel breaks the replay itself, because the step folds the label —
+    /// and the orphan-label leg reports it too.
+    #[test]
+    fn a_relabelled_audit_row_breaks_a_switched_chain() {
+        let (_d, mut s) = store(SecurityLevel::Sealed);
+        let id = s
+            .kg_add("alice", "works_at", "acme", None, None, 1.0, None)
+            .unwrap();
+        assert!(
+            s.verify().unwrap().ok(),
+            "premise: clean before the relabel"
+        );
+        s.conn
+            .execute(
+                "UPDATE audit SET record_id = 'kg/deadbeefdeadbeefdeadbeefdeadbeef' \
+                 WHERE record_id = ?1",
+                rusqlite::params![format!("kg/{id}")],
+            )
+            .unwrap();
+        let report = s.verify().unwrap();
+        assert!(
+            !report.chain_ok,
+            "the labelled step sees the relabel: {report:?}"
+        );
+        assert_eq!(
+            report.orphan_labels,
+            vec!["kg/deadbeefdeadbeefdeadbeefdeadbeef".to_string()]
+        );
+        assert!(!report.ok());
+    }
+
+    /// **U3 on a chain that has NOT switched** — a legacy vault, or one a
+    /// read-only role opened: its version-1 step takes the tag alone, so
+    /// the relabel leaves the chain replaying, and the orphan-label leg is
+    /// the only one that sees it. That was every vault's state until O233,
+    /// when A10's "a label is navigation, so remapping it moves no evidence"
+    /// was the position on file.
     ///
     /// Both directions, and the premise is the point: the same vault verifies
     /// clean before the relabel, so this is about the relabel and not about a
@@ -4602,6 +4693,7 @@ mod tests {
         let id = s
             .kg_add("alice", "works_at", "acme", None, None, 1.0, None)
             .unwrap();
+        s.unswitch_chain_for_test();
         assert!(
             s.verify().unwrap().ok(),
             "premise: clean before the relabel"
@@ -4834,7 +4926,8 @@ mod tests {
 
     /// **A relabelled drawer audit row is caught; a legitimately destroyed
     /// one is not.** Both arms, because this leg is only worth having if it
-    /// discriminates — `record_id` is outside the chain hash, so an offline
+    /// discriminates — on a chain that has not switched to the labelled step
+    /// (ROADMAP O233) `record_id` is outside the chain hash, so an offline
     /// writer can relabel any row and every other leg still passes, but
     /// `del/{id}` naming a destroyed drawer is ordinary operation and
     /// alarming on it would retire the leg by making it noise.
@@ -4870,6 +4963,12 @@ mod tests {
             after_delete.orphan_labels
         );
         assert!(after_delete.ok(), "{after_delete:?}");
+        // A LEGACY chain (ROADMAP O233), whose version-1 step does not fold
+        // labels: the relabel below is then invisible to the chain, the next
+        // open's switch binds it as found — the residual that ruling states —
+        // and this leg is the one that still catches it. On a switched chain
+        // the chain catches it first (`a_relabelled_audit_row_breaks_a_switched_chain`).
+        s.unswitch_chain_for_test();
         drop(s);
 
         // TAMPERING: relabel the surviving drawer's audit row onto an id no
@@ -4895,10 +4994,16 @@ mod tests {
             "a relabel onto a drawer that never existed must be an orphan"
         );
         assert!(!after.ok(), "and it must fail the verdict: {after:?}");
-        // Attribution: the relabel moves no tag, so the other six legs are
-        // clean and `ok()` went false because of this one.
+        // Attribution: the relabel moves no tag and predates the switch, so
+        // the other seven legs are clean — the commitment bound the forged
+        // label as found — and `ok()` went false because of this one.
         assert!(after.bad_records.is_empty(), "{after:?}");
         assert!(after.chain_ok, "{after:?}");
+        assert_eq!(
+            after.label_commitment,
+            crate::LabelCommitment::Intact,
+            "{after:?}"
+        );
         assert_eq!(after.tampered_supersessions(), 0, "{after:?}");
         assert!(after.mirror_drift.is_empty(), "{after:?}");
         assert_eq!(after.tampered_receipts(), 0, "{after:?}");
