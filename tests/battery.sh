@@ -1021,6 +1021,8 @@ UNVERSIONED_CLOSED=(
   "O37|the house Pages site enforces HTTPS — a setting on another repository"
   "O158|closed by MEASUREMENT: the filed defect does not exist, so nothing ships"
   "O173|closed by doctrine: how an unanswered design question is ruled and where the ruling is recorded"
+  "O240|closed by RULING: a manifest regime marker is restored with the manifest, so it buys nothing"
+  "O241|closed by RULING: a manifest census cannot authenticate a point question over an unbounded key space"
 )
 ROADMAP_DRIFT=$(roadmap_scan ROADMAP.md)
 # The premise BEFORE the roster (ROADMAP O162). It used to run after it, so a
