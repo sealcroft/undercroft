@@ -34,7 +34,6 @@ use tiny_http::{Header, Method, Response, Server};
 
 use crate::mcp::McpHandler;
 use crate::tenant::Tenancy;
-use undercroft_store::VaultStore;
 
 /// Does `header` carry exactly `Bearer <expected>`, compared in constant
 /// time?
@@ -217,13 +216,17 @@ pub(crate) fn resolve_mcp_token(declared: Option<&str>) -> Result<Option<String>
     }
 }
 
-pub fn serve_http(
-    store: VaultStore,
-    tenancy: Tenancy,
-    host: &str,
-    port: u16,
-    read_only: bool,
-) -> Result<()> {
+/// **This takes no `VaultStore`, and that is the point** (ROADMAP O242).
+///
+/// The `/mcp` surface used to own one while `Tenancy` opened its own for the
+/// same vault, so one process held two connections to one database and every
+/// `/v1` commit looked FOREIGN to the `/mcp` handle's label guard — which
+/// replayed the whole audit chain on the next search, measured at +89.5 ms.
+/// The store now lives in `Tenancy` and both surfaces borrow it, so the
+/// two-handle state is not representable from here: re-creating it means
+/// changing this signature, which is the choke-point shape `Screen`, `Read`
+/// and `LabelUse` already use.
+pub fn serve_http(tenancy: Tenancy, host: &str, port: u16, read_only: bool) -> Result<()> {
     let token = resolve_mcp_token(std::env::var("UNDERCROFT_MCP_HTTP_TOKEN").ok().as_deref())
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     let loopback = host == "127.0.0.1" || host == "localhost" || host == "::1";
@@ -245,8 +248,12 @@ pub fn serve_http(
         }
     };
 
-    let mut handler = McpHandler::new(store, read_only);
     let mut tenancy = tenancy;
+    let mcp_vault = tenancy
+        .mcp_vault_id()
+        .ok_or_else(|| anyhow::anyhow!("serve-http was given no /mcp vault to serve"))?
+        .to_string();
+    let mut handler = McpHandler::new(mcp_vault, read_only);
     let server =
         Server::http((host, port)).map_err(|e| anyhow::anyhow!("binding {host}:{port}: {e}"))?;
     undercroft_obs::diag_info!(
@@ -496,7 +503,22 @@ pub fn serve_http(
                         continue;
                     }
                 };
-                match handler.handle(&msg) {
+                // The ONE handle this process holds on the vault (ROADMAP
+                // O242) — the same one `/v1` writes through, which is what
+                // stops a `/v1` commit looking foreign to the label guard.
+                // It can only fail if the vault had to be RE-opened after a
+                // `backup create` evicted it, and then it renders through
+                // the same envelope every other `/v1` refusal uses.
+                let response = match tenancy.mcp_store() {
+                    Ok(store) => handler.handle(store, &msg),
+                    Err(e) => {
+                        let code = e.code;
+                        crate::tenant::respond_err(request, e);
+                        undercroft_obs::http_request("mcp", code, start.elapsed());
+                        continue;
+                    }
+                };
+                match response {
                     Some(response) => {
                         let _ = request.respond(
                             Response::from_string(response.to_string())

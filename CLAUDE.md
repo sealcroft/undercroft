@@ -2243,8 +2243,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (1026 run,
-                                      # 4 #[ignore]d = 1030 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (1027 run,
+                                      # 4 #[ignore]d = 1031 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2366,7 +2366,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (596 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (597 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (167 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (157 checks; weaviate
@@ -2991,8 +2991,14 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   `VaultStats.writes`/`chain_head`), never `Vault::writes()` /
   `chain_head_hex()`: those are the handle's own manifest fields, written
   only by its own `anchor_manifest` and never reloaded, so in `serve-http`
-  — two handles on one vault — the handle that did not write reported a
-  frozen height beside a climbing live `drawers` count.
+  — which held **two handles on one vault** until O242 — the handle that did
+  not write reported a frozen height beside a climbing live `drawers` count.
+  That aliasing is gone (`serve-http` holds ONE handle, adopted into
+  `Tenancy` and borrowed by both surfaces, because the second connection made
+  every `/v1` commit look FOREIGN to the `/mcp` label guard and cost a full
+  chain replay per search — **+89.5 ms measured, 42 → 131.5 ms**), and the
+  rule outlives it: a handle's manifest fields describe what THAT handle
+  wrote, so anything reporting the chain still reads `chain_meta`.
 - Durability is pinned, not assumed: SQLite runs WAL + `synchronous=FULL`
   on both binaries, the manifest anchor is fsynced through an atomic
   rename (+ dir sync), and key material is fsynced at creation. The

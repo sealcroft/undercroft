@@ -1336,23 +1336,37 @@ fn passphrase() -> Result<Option<String>> {
 /// before anything refused. The posture is an argument so a call site
 /// cannot forget it.
 fn manager(cli: &Cli, posture: Posture) -> Result<VaultManager> {
-    let dir = data_dir(cli);
+    manager_at(&data_dir(cli), posture)
+}
+
+/// The same open, from the data directory alone.
+///
+/// It exists so a caller that must OUTLIVE the parsed command line can hold
+/// what it needs without cloning it: `serve-http` hands `Tenancy` a re-opener
+/// for the co-resident vault (ROADMAP O242), and that closure is `'static`.
+/// One implementation either way — [`manager`] is the adapter, not a second
+/// copy of the open.
+fn manager_at(dir: &std::path::Path, posture: Posture) -> Result<VaultManager> {
     let pw = passphrase()?;
-    VaultManager::open_as(&dir, pw.as_deref(), posture.access())
+    VaultManager::open_as(dir, pw.as_deref(), posture.access())
         .with_context(|| format!("opening palace at {}", dir.display()))
 }
 
 /// Whether a store this process opens is allowed to write to the vault.
 ///
 /// A required argument on [`open_store_as`], not a defaulted flag: the
-/// `serve-http --read-only` process opens TWO handles on the same vault (one
-/// for `/mcp`, one per tenant vault inside `Tenancy`), and for a while only
-/// the second one honoured the flag — so a "read-only" server re-embedded
-/// every drawer on the `--vault` vault at start-up (a bulk write, plus
-/// dropping the PQ/IVF tables) and, under `UNDERCROFT_READ_AUDIT=chain`,
-/// appended a chain record per `/mcp` search. Whether the vault was written
-/// depended on which port path opened it. Making the posture something a
-/// caller must state is what keeps the two handles from drifting apart again.
+/// `serve-http --read-only` process USED TO open two handles on the same
+/// vault (one for `/mcp`, one per tenant vault inside `Tenancy`), and for a
+/// while only the second one honoured the flag — so a "read-only" server
+/// re-embedded every drawer on the `--vault` vault at start-up (a bulk
+/// write, plus dropping the PQ/IVF tables) and, under
+/// `UNDERCROFT_READ_AUDIT=chain`, appended a chain record per `/mcp` search.
+/// Whether the vault was written depended on which port path opened it.
+///
+/// Since ROADMAP O242 that process holds ONE handle, so the two can no
+/// longer drift apart — but the argument stays required, and not out of
+/// sentiment: every other opener in this file still states a posture, and a
+/// defaulted flag is how the original drift happened.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Posture {
     ReadWrite,
@@ -1390,11 +1404,11 @@ impl Cli {
 /// call sites in this file — both `serve-* --read-only` — so no CLI command
 /// could inspect a vault without healing it.
 fn open_store(cli: &Cli, vault: &str) -> Result<VaultStore> {
-    open_store_as(cli, vault, cli.posture())
+    open_store_as(&data_dir(cli), vault, cli.posture())
 }
 
-fn open_store_as(cli: &Cli, vault: &str, posture: Posture) -> Result<VaultStore> {
-    let mgr = manager(cli, posture)?;
+fn open_store_as(dir: &std::path::Path, vault: &str, posture: Posture) -> Result<VaultStore> {
+    let mgr = manager_at(dir, posture)?;
     // The posture reaches the UNLOCK, not only the store open. Unlocking is
     // not passive: it deletes a `vault.json.next` it cannot authenticate, so
     // a read-only process that stated its posture only one call later had
@@ -1454,9 +1468,7 @@ fn open_store_as(cli: &Cli, vault: &str, posture: Posture) -> Result<VaultStore>
             Ok("ort") => {
                 #[cfg(feature = "ort")]
                 {
-                    let embedder = undercroft_embed_ort::embedder_from_env()
-                        .map_err(|e| anyhow::anyhow!("loading ORT embedder: {e}"))?;
-                    open(v, Box::new(embedder))?
+                    open(v, shared_ort_embedder()?)?
                 }
                 #[cfg(not(feature = "ort"))]
                 bail!(
@@ -1720,21 +1732,7 @@ fn embedder_factory() -> tenant::EmbedderFactory {
                 Ok("ort") => {
                     #[cfg(feature = "ort")]
                     {
-                        // One session pool shared across every tenant vault —
-                        // the pool holds a model copy per core, so per-vault
-                        // loads would multiply RAM for identical weights.
-                        use std::sync::{Arc, OnceLock};
-                        static SHARED: OnceLock<Arc<undercroft_embed_ort::OrtEmbedder>> =
-                            OnceLock::new();
-                        let arc = match SHARED.get() {
-                            Some(a) => a.clone(),
-                            None => {
-                                let e = undercroft_embed_ort::embedder_from_env()
-                                    .map_err(|e| anyhow::anyhow!("loading ORT embedder: {e}"))?;
-                                SHARED.get_or_init(|| Arc::new(e)).clone()
-                            }
-                        };
-                        Ok(Box::new(SharedOrtEmbedder(arc)))
+                        Ok(shared_ort_embedder()?)
                     }
                     #[cfg(not(feature = "ort"))]
                     bail!(
@@ -1769,6 +1767,33 @@ fn embedder_factory() -> tenant::EmbedderFactory {
 /// Generic over the model only so a test can prove it DELEGATES (ROADMAP
 /// O167): the shipped model answers `None` for its destination, and a wrapper
 /// answering `None` itself would pass any test built on that model.
+/// **The ORT embedder this PROCESS uses — one session pool, one model.**
+///
+/// The pool holds a model copy per core, so a second load multiplies RAM for
+/// identical weights. It is a single implementation because BOTH openers need
+/// it: `embedder_factory` opens every tenant vault, and since ROADMAP O242
+/// `serve-http` serves its `--vault` vault from the store `open_store_as`
+/// opened. While that arm built its own model, the served vault silently left
+/// the pool every tenant vault shares — and `embed_failures` is the
+/// EMBEDDER's number, so "process-wide across every vault under `ort`" (O122)
+/// quietly stopped being true for exactly one vault. `model_e2e`'s sharing
+/// assertion is what caught it, on the one CI leg that enables its
+/// `required-features`.
+#[cfg(feature = "ort")]
+fn shared_ort_embedder() -> Result<Box<dyn undercroft_core::embed::Embedder + Send>> {
+    use std::sync::{Arc, OnceLock};
+    static SHARED: OnceLock<Arc<undercroft_embed_ort::OrtEmbedder>> = OnceLock::new();
+    let arc = match SHARED.get() {
+        Some(a) => a.clone(),
+        None => {
+            let e = undercroft_embed_ort::embedder_from_env()
+                .map_err(|e| anyhow::anyhow!("loading ORT embedder: {e}"))?;
+            SHARED.get_or_init(|| Arc::new(e)).clone()
+        }
+    };
+    Ok(Box::new(SharedOrtEmbedder(arc)))
+}
+
 #[cfg(any(test, feature = "ort"))]
 struct SharedOrtEmbedder<E>(std::sync::Arc<E>);
 
@@ -2174,7 +2199,7 @@ fn run(cli: Cli) -> Result<()> {
                 // natural first command during an incident, and it was the
                 // one that touched everything.
                 for name in vaults {
-                    let store = match open_store_as(&cli, &name, cli.posture()) {
+                    let store = match open_store_as(&data_dir(&cli), &name, cli.posture()) {
                         Ok(s) => s,
                         // A listing must LIST. A vault a read-only role would
                         // have had to migrate refuses to open that way
@@ -3165,7 +3190,7 @@ fn run(cli: Cli) -> Result<()> {
             // stdio server does not migrate the embedder or append a
             // read-audit record per search.
             let store = open_store_as(
-                &cli,
+                &data_dir(&cli),
                 vault,
                 if *read_only {
                     Posture::ReadOnly
@@ -3184,29 +3209,49 @@ fn run(cli: Cli) -> Result<()> {
             vault,
             read_only,
         } => {
-            // Both handles this process opens take the SAME posture. The
-            // `/mcp` store used to be opened read-write regardless, so a
+            // The posture this process opens with. It used to say "both
+            // handles this process opens take the SAME posture", because the
+            // `/mcp` store was opened read-write regardless and a
             // `--read-only` server migrated embeddings and audited reads on
-            // the very vault the flag exists to protect.
+            // the very vault the flag exists to protect. Since ROADMAP O242
+            // there is only ONE handle, so the drift it guarded against is
+            // no longer expressible here.
             let posture = if *read_only {
                 Posture::ReadOnly
             } else {
                 Posture::ReadWrite
             };
-            let store = open_store_as(&cli, vault, posture)?;
+            let dir = data_dir(&cli);
+            let store = open_store_as(&dir, vault, posture)?;
             if let Ok(n) = store.warm_embedding_cache() {
                 undercroft_obs::diag_info!("warmed embedding cache: {n} vector(s)");
             }
+            // How that store comes BACK if `backup create` evicts it. It must
+            // be this opener and not `Tenancy`'s, or the vault would silently
+            // return with a different embedder, no warmed cache and no
+            // `UNDERCROFT_RETRIEVAL=hnsw` (`tenant::StoreOpener`).
+            let opener: tenant::StoreOpener = {
+                let dir = dir.clone();
+                let vault = vault.clone();
+                Box::new(move || {
+                    let store = open_store_as(&dir, &vault, posture)?;
+                    if let Ok(n) = store.warm_embedding_cache() {
+                        undercroft_obs::diag_info!("warmed embedding cache: {n} vector(s)");
+                    }
+                    Ok(store)
+                })
+            };
             let mut tenancy =
                 tenant::Tenancy::new(manager(&cli, posture)?, embedder_factory(), *read_only)?
-                    // `/v1` must know which vault the `/mcp` handle above holds:
-                    // rotating or deleting it from under a second live handle is
-                    // the one thing two handles in one process cannot survive.
-                    .with_mcp_vault(vault.clone());
+                    // ONE handle on this vault, held by `Tenancy` and borrowed
+                    // by both surfaces (ROADMAP O242). Two handles made every
+                    // `/v1` commit look foreign to the `/mcp` label guard, so
+                    // the next search replayed the whole chain.
+                    .with_mcp_vault(vault.clone(), store, opener);
             if let Some(reranker) = reranker_factory()? {
                 tenancy = tenancy.with_reranker(reranker);
             }
-            http::serve_http(store, tenancy, host, *port, *read_only)?;
+            http::serve_http(tenancy, host, *port, *read_only)?;
         }
         Command::AssertHeader { vault } => {
             // The SAME resolver the enforcing side runs. These were two

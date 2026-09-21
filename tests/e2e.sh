@@ -2707,6 +2707,19 @@ rest_code "/v1 restore rejects an unknown backup" 404 -- -X POST \
 rest_code "/v1 restore refuses a backup of another vault" 400 -- -X POST \
   "$API/vaults/globex/backups/restore" -H "X-Vault-Assertion: $(sign globex)" \
   -d "{\"name\":\"$BK\"}"
+# ROADMAP O242: the vault this process ALSO serves over /mcp is refused, and
+# the refusal is EXPLICIT rather than accidental. `backup_restore` drops this
+# process's cached handle and then takes an exclusive lock — which used to
+# fail only because a SECOND handle (the /mcp one) still held the database.
+# One handle per vault removed that second holder, so without the explicit
+# refusal the lock would succeed and `remove_dir_all` would destroy the
+# served vault under a live server: O69's disaster, arriving as a 200 where
+# docs/AGENTS.md, docs/MULTI_TENANCY.md and docs/remote-server.md all promise
+# a 409. It is 409 and not 400 because the co-resident check runs in FRONT of
+# the body parse, which is what makes this arm fail on a tree without it.
+rest_code "/v1 restore refuses the vault this process serves over /mcp" 409 -- -X POST \
+  "$API/vaults/default/backups/restore" -H "X-Vault-Assertion: $(sign default)" \
+  -d '{"name":"any-backup-at-all"}'
 
 # ---- drawer maintenance on /v1 (ROADMAP O68) ------------------------------
 rest_body "/v1 check-duplicate finds none" '"duplicate":false' -- -X POST \
