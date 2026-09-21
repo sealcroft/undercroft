@@ -4621,17 +4621,59 @@ level down, with `manager` as the adapter.
 - **What neither can do**, stated rather than implied: no gate here proves
   the COST went away. That is the four-arm probe, and it is owed.
 
-**Not yet measured, and named as owed rather than estimated.** The ruling's
-G3 — re-running `o242_probe.sh`'s four arms and showing the DOUBLE DIFFERENCE
-collapse from +89.5 ms to within noise — has not been run at this tree. It
-needs the warm `o242-corpus` volume and about fifteen minutes, and this
-project does not start a long run without being asked. Two conditions the
-re-run must carry, both from the refuter: a POSITIVE WITNESS that a guarded
-read is still reached (the `O237C` e2e arm against the fixed binary), because
-a double difference of ~0 is also what a probe that never reaches the guard
-produces — `refuse_replayed` returns early for `Read::Internal` and for an
-empty id list; and `UNDERCROFT_READ_AUDIT`'s state recorded on both runs,
-since the correction above shows it changes the figure.
+**MEASURED 2026-09-21 by the integrator, on the maintainer's instruction —
+the cost is GONE, and the probe proves it was still there to remove.**
+
+**EIGHT arms, not four.** The double difference cancels what the writes cost
+by themselves, but contention ITSELF differs between two connections and one,
+so each topology needs its own guard-off baseline — and the pre-fix pair is
+the POSITIVE CONTROL, without which a result of ~0 is indistinguishable from
+a probe that never reaches a guarded read (`refuse_replayed` returns early for
+an internal read and for an empty id list). Same corpus, same query, 30 cycles
+per arm, two rounds, per-arm warm-up untimed.
+
+| arm | round 1 | round 2 |
+|---|---|---|
+| old-off ctrl / inter (two handles, guard off) | 39 / 62 ms | 42 / 60 ms |
+| old-on ctrl / inter (two handles, guard on) | 40 / **152** ms | 40 / **152** ms |
+| new-off ctrl / inter (one handle, guard off) | 40 / 66 ms | 41 / 67 ms |
+| new-on ctrl / inter (one handle, guard on) | 48 / 68 ms | 41 / 71 ms |
+
+**Double difference — `(on-inter − on-ctrl) − (off-inter − off-ctrl)`:**
+
+| topology | round 1 | round 2 | mean |
+|---|---|---|---|
+| **two handles (before)** | **+89 ms** | **+94 ms** | **+91.5 ms** |
+| **one handle (after)** | **−6 ms** | **+4 ms** | **−1.0 ms** |
+
+**The positive control reproduced the defect independently.** `#### MEASURED`
+above attributed **+89.5 ms** to the replay from a four-arm run on a different
+day; this eight-arm run, against a corpus 360 drawers larger, attributes
+**+89 and +94 ms** to it. Two runs, two harnesses, one figure — so the ~0 on
+the row below is a fixed defect and not a blind probe.
+
+**As the search path sees it**: two handles, 40 → 152 ms per interleaved
+cycle; one handle, 40 → 69 ms, which is **the write contention alone** —
+`new-on-inter` (68, 71) sits on `new-off-inter` (66, 67). What the guard
+still costs on that path is **~3 ms**, the ordinary per-read append-only work
+it was always meant to cost, not a replay. `new-on-ctrl`'s 48 ms in round 1
+is the one outlier (41 ms in round 2) and it makes round 1's figure
+CONSERVATIVE, not flattering.
+
+**Premise arms, all asserted rather than assumed**, and the probe exits 3 on
+any of them: four DISTINCT sha256s over the four binaries (a build silently
+reusing another's artifacts would manufacture exactly the ~0 this claims);
+every interleaved arm's drawer count up by exactly its 30 saves; every control
+arm's unchanged; both topologies confirmed by source before building — the
+one-handle trees must carry `serve_http(tenancy: Tenancy`, the two-handle
+trees `store: VaultStore,`. `UNDERCROFT_READ_AUDIT` was UNSET on every arm and
+is recorded as such, because under `chain` a read commits too and every figure
+here would be larger. The audit height is recorded per arm (102,121 → 102,331
+across the run), since the replay is linear in that table and the corpus grows
+as the probe runs.
+
+The harness is `o242_probe2.sh` in the session scratchpad; the corpus is the
+docker volume `o242-corpus`.
 
 **What this does NOT close.** It removes the DEPLOYMENT the release was gated
 on, not the class. Any external concurrent writer — `undercroft mine`,

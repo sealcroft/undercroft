@@ -53,6 +53,13 @@ Three things worth knowing, because none of them is cosmetic:
   a read commits a `read/` record too, so two surfaces alternating pure
   READS replayed on both handles. The measured figure above is a floor.
 
+**Measured after the fix, on the same corpus**, with the pre-fix binary kept
+as a positive control so a result of zero could not be a broken probe: the
+double difference goes from **+89 / +94 ms** (two handles) to **−6 / +4 ms**
+(one handle) — zero within noise. On the search path, 40 → 152 ms per
+interleaved cycle becomes 40 → 69 ms, and 69 is what the writes cost by
+themselves; the guard's remaining ~3 ms is its ordinary per-read work.
+
 **What this does not close**: an external concurrent writer — another
 process, an operator `trust set`, `daemon run --watch` — still moves the
 cookie and still costs one full replay per guarded read, ~836 ms at 10⁶ audit
