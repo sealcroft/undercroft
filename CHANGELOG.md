@@ -8,6 +8,110 @@ its CLI mirror `tenant-repoint` are additive, and so are the operator plane's
 behaves differently because they exist. Everything else in this section is a
 fix whose only observable change is that a defect is gone.
 
+### a read that decides from an audit label now asks first whether the labels are still this vault's (O237)
+
+O233 made a relabelled audit row break the chain. It did not stop the reads
+that CONSULT labels from acting on one before anybody runs `verify` — and
+those reads are the trust floor (`wing_trusts`, and so `trust_clause`,
+`recent`, `list_drawers` and `trust list`), the retention sweep and listing,
+the forgetting path, and O234's version check on every returning read. Each
+found its record by `record_id` and replayed nothing. Measured on a sealed
+vault: `UPDATE audit SET record_id='read/x' WHERE record_id='trust/secret'`
+plus `DELETE FROM wing_trust WHERE wing='secret'` took a `standard`-floored
+search from zero hits to RETURNING the quarantined drawer, with `verify`
+failing on `chain_ok` alone — i.e. only once somebody ran it.
+
+Those readers now go through one door, and it holds two things:
+
+- **one lazy full replay per handle, on the first guarded read.** Not at
+  open. Measured on a 102,001-row audit trail the open is FLAT (36 ms; 35 ms
+  at 1,002,001 rows) while a replay is LINEAR (88 ms; 836 ms), and `audit`
+  has no compaction anywhere in this engine — so a replay at open charges
+  every process an unbounded cost for a protection that covers a long-lived
+  server only at boot. Not per read either: 88 ms on a 36.84 ms/q baseline is
+  +240%, far past the read budget O234 was priced against;
+- **a per-key append-only invariant on every guarded read.** `audit` is
+  append-only in production — one `INSERT`, one `UPDATE`, and every `DELETE
+  FROM audit` in the engine is test-only, all three now counted against the
+  source — so for a label this handle has already looked at, a record that
+  vanishes, a newest record that moves backwards, or a tag that changes under
+  a seq already read is always tampering. It costs O(keys) over rows the scan
+  already fetches, and it is what sees the exploit above, because a relabel
+  plus a row deletion leaves the key in neither the table nor its namespace.
+
+`PRAGMA data_version` is the accelerator between them and never the boundary:
+measured with a real second process, the handle's own commit does not move
+it, another connection does and another process does, so it may short-circuit
+the expensive replay and may never gate the append-only check.
+
+A refusal is `IntegrityFinding` — exit 2 on the CLI, 409 with
+`class: "integrity"` on `/v1` — and it names `undercroft verify`. A
+version-1 chain does NOT refuse: a clean legacy vault replays with its labels
+bound by nothing, and refusing there would stop every pre-1.6.0 vault served
+`--read-only`, which cannot switch. Such a vault gets the append-only
+invariant and nothing more, which is stated rather than implied. `verify`
+itself never refuses — it is the check an operator is told to run next, and
+the policy scans take a required witness saying whether the caller ACTS on
+the answer or reports it.
+
+**The mirror's staleness marker is tagged with the same unit.** `meta`'s
+`index_pushed_embedder` row was a plain insert outside every HMAC, and two
+decisions read it: a forget attestation's mirror disclosure and
+`search_with_index`'s `IndexStale` refusal. One offline `UPDATE` renamed the
+embedding space the attestation discloses and disarmed the staleness refusal
+over the very mirror it exists for. The tag is a SECOND `meta` row on
+purpose — in one row the two die together, while an orphaned tag is what
+makes deleting the value itself a verdict. The two deciding readers refuse a
+marker that does not verify; the DESTRUCTION path does not, because refusing
+there would trade the erasure promise for availability, so it discloses and
+names the embedding space as unrecorded. A rotation re-keys the marker, and
+refuses to rotate over one that does not verify rather than re-tagging it
+into authenticity.
+
+**Cost, measured on a 102,000-drawer sealed vault** (two binaries differing
+only by an early return, interleaved rounds): warm search under the PQ tier
+**39.7 → 40.3 ms/q, +1.7%**; the first guarded read of a handle pays the
+replay once, **+73 ms** (1.804 → 1.877 s); a CLI command is a fresh handle,
+so it pays that once per invocation (**+111 ms** measured on the full-scan
+path). A
+long-lived server pays it at boot and not again until another process
+commits.
+
+**What it does not see, stated rather than implied.** An APPEND is
+legitimate, so a forged row appended by a writer editing pages beneath SQLite
+— which does not move `data_version` either — is invisible to a handle that
+has already replayed, until it is re-opened or another connection commits.
+Only a replay can tell a forged append from a real one, because only the MAC
+key can. That is the residual O241 would close.
+
+### a forged `rotate/` label no longer lifts the rotation boundary, because it is bound to the key the handle holds (O239)
+
+`chain::rotation_boundary` took `MAX(seq)` over the whole `rotate/` half-open
+range while `rotate.rs` writes its label as `rotate/{keycheck_hex()[..16]}` —
+so the range admitted any label an offline writer cared to spell. One
+statement, an `INSERT` of a forged `rotate/` row after the declaration to be
+ignored, put the boundary above every record already there.
+
+Measured on O230's own replay attack (declare 30 days, re-declare 365, append
+the forged rotation, write the 30-day row back), with both declarations
+asserted still on the chain: without the plant `retention_policies()` refuses
+and `policy_drift` names the row; with it `retention_policies()` answers
+`Ok(30 days)` and `policy_drift` is EMPTY — the replayed policy governs, and
+a sweep would destroy under it. The same boundary feeds O234's version check,
+so that one statement also disabled its first arm for every table and every
+key at once.
+
+The boundary is now an indexed equality on the label a rotation under THIS
+key wrote, which is what it always meant: it can only make the boundary
+smaller or absent, so a vault that never rotated — or that was rotated by a
+binary older than A19, which appended no record at all — answers exactly as
+before. `chain::rotation_label` gives the write and the read one spelling,
+and `forget.rs`'s own rotation COUNT moves to `chain::rotations_since` rather
+than keeping a second hand-written range; that one is deliberately not bound
+to the current keycheck, because it counts rotations across every key
+generation and bounding it would answer at most one.
+
+
 ### an older version of a drawer, fact, entity or tunnel, written back offline, no longer passes `verify` (O234)
 
 Every table whose rows carry an HMAC tag appends that tag to the audit chain

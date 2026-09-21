@@ -55,7 +55,7 @@
 //! window is a vault rotated by a binary older than that fix — the same
 //! residual O230 records one table over.
 
-use crate::chain::{self, ChainRecord};
+use crate::chain::{self, ChainRecord, LabelUse};
 use crate::manage::Namespace;
 use crate::{StoreError, VaultStore};
 
@@ -258,7 +258,7 @@ impl VaultStore {
     /// Every row that is not the version the chain last recorded — the ninth
     /// verify leg (ROADMAP O234), sorted.
     pub(crate) fn version_replay_drift(&self) -> Result<Vec<String>, StoreError> {
-        let boundary = self.version_boundary()?;
+        let boundary = self.version_boundary(LabelUse::Report)?;
         let mut out = Vec::new();
         for spec in TAGGED {
             if spec.versioned {
@@ -275,12 +275,12 @@ impl VaultStore {
     /// `max(the last rotation, the chain switch)`, or `None` on a chain that
     /// has not switched — see arm 1 in this module's own documentation for
     /// why the switch is half of it.
-    fn version_boundary(&self) -> Result<Option<i64>, StoreError> {
+    fn version_boundary(&self, on: LabelUse) -> Result<Option<i64>, StoreError> {
         let switch = match chain::regime(&self.conn)? {
             chain::Regime::V1 => return Ok(None),
             chain::Regime::V2 { switch_seq } => switch_seq,
         };
-        let rotate = chain::rotation_boundary(&self.conn)?.unwrap_or(switch);
+        let rotate = self.rotation_boundary(on)?.unwrap_or(switch);
         Ok(Some(switch.max(rotate)))
     }
 
@@ -441,6 +441,14 @@ impl VaultStore {
         if matches!(read, crate::Read::Internal(_)) || ids.is_some_and(<[String]>::is_empty) {
             return Ok(());
         }
+        // **This comparison is only as good as the labels it rests on**
+        // (ROADMAP O237): every arm below finds a record BY ITS LABEL, so an
+        // `UPDATE audit SET record_id = …` on the newest write record makes a
+        // replayed row look like the current one, and a forged `rotate/` row
+        // lifts the boundary arm 1 stops at. This is the hottest label
+        // decision in the tree, so it is where the door belongs — one full
+        // replay per handle, then a per-key append-only check.
+        self.require_authenticated_labels()?;
         // **A consulted set is not bounded by anything the caller controls,
         // and one `IN` list is.** An unscoped search on a vault with no
         // prefilter tier hydrates the WHOLE corpus, so this arrived as a 500
@@ -458,7 +466,7 @@ impl VaultStore {
             _ => {}
         }
         let spec = from.spec();
-        let boundary = self.version_boundary()?;
+        let boundary = self.version_boundary(LabelUse::Decide)?;
         let (labels, mut binds) = write_label_sql(spec, 1);
         let dead = destruction_label_sql(spec, 1 + binds.len());
         binds.extend(dead.1);
@@ -922,7 +930,7 @@ mod tests {
         restore_drawer(&s, &first.id, &before);
 
         // PREMISE: arm 1 is off, because there is no switch to bound it.
-        assert_eq!(s.version_boundary().unwrap(), None);
+        assert_eq!(s.version_boundary(LabelUse::Report).unwrap(), None);
         let r = s.verify().unwrap();
         assert_eq!(r.version_replay.len(), 1, "{:?}", r.version_replay);
         assert!(!r.ok());

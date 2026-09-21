@@ -75,6 +75,70 @@ or when they could never be presented.
 
 ## 1.6.0 (unreleased)
 
+### a vault whose audit chain does not replay now REFUSES the reads that decide from a label, instead of serving them until someone runs `verify` (O237)
+
+**Who is affected:** anyone whose vault would fail `undercroft verify` on
+`audit chain` or `audit labels` — an offline `sqlite3` edit, a partial
+restore, a file copied back over a live vault — and anyone whose deployment
+mirrors to a remote index and has ever edited `meta`'s
+`index_pushed_embedder` row by hand.
+
+**Symptom:** three.
+
+- A read that decides from an audit label exits 2 (409 with
+  `class: "integrity"` on `/v1`, an error on MCP) saying *the audit chain
+  does not authenticate its own labels … run `undercroft verify`*. That is:
+  a trust-floored search, `trust list`, `recent` and `drawer list` under a
+  floor, `retention list`, a retention **sweep**, `forget` and
+  `verify-forgetting`'s minting path, and — because O234's version check
+  rides on the same labels — every read that RETURNS content.
+- A read whose record MOVED while the process held the vault open exits 2
+  naming that record: *the audit trail is append-only, so a record that moved
+  or vanished while this process held the vault open is tampering*.
+- `search --backend`, `index push` and a `forget` disclosure name the mirror
+  marker: *the record of which embedding space the remote mirror was built in
+  does not verify*. `vault rotate` refuses over the same marker rather than
+  re-tagging it into authenticity.
+
+**Cause:** those readers found their record by `record_id` and replayed
+nothing, so a relabelled audit row decided the answer until an operator
+happened to run `verify`. Measured: relabelling a quarantined wing's `trust/`
+record and deleting its `wing_trust` row took a `standard`-floored search
+from zero hits to returning the quarantined drawer.
+
+**Fix:** run `undercroft verify`, read what it names, and restore a backup
+that verifies. For the mirror marker specifically, `undercroft index push`
+rewrites it with a fresh tag. There is no flag that turns this off, by
+design: a label decision made over a trail that does not authenticate itself
+is not a decision.
+
+**The remedies still run.** `verify` itself reports rather than refusing —
+it is the command you are sent to, and one that returned an error instead of
+a verdict would be useless; `repair`, `undercroft import` and `backup
+restore` read through the engine's own internal lookups, which never refuse,
+so the writes that fix a vault are not blocked by the state they fix.
+
+**Not affected:** a vault whose chain replays — which is every vault this
+engine has written and not been tampered with. A **version-1 chain** (any
+vault this binary has not yet opened writable, including one served
+`--read-only`, which cannot switch) never refuses on unbound labels: it keeps
+serving exactly as before. Ordinary operations were measured expecting zero
+refusals on both security levels: a key rotation between two reads, two
+handles on one vault, a `trust set` from a second process against a running
+server, a `retention clear`, and the chain switch itself.
+
+**Cost:** one full chain replay per HANDLE, on its first guarded read —
+**+73 ms** on a 102,001-row audit trail, and linear in that trail (a measured
+836 ms at 1,002,001 rows), so a very long-lived, heavily audited vault pays
+proportionally more. It is not paid at open and not paid per read: warm
+search under the PQ tier measured **39.7 → 40.3 ms/q, +1.7%** over
+interleaved rounds on a 102,000-drawer sealed vault. A CLI command is a fresh
+handle, so each invocation pays the replay once (**+111 ms** measured on the
+full-scan path); a server pays it at boot and again only when another process
+commits to the same vault. `undercroft config check` cannot pre-flight any of
+this: it opens no vault, by design.
+
+
 ### a vault holding an older version of a row, written back offline, now fails `verify` and REFUSES the reads that would serve it (O234)
 
 **Who is affected:** anyone whose vault has had a row restored into it by

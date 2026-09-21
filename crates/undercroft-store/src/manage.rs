@@ -576,7 +576,7 @@ impl VaultStore {
     /// here as well, and the trust floor, `recent`, `list_drawers` and
     /// `trust list` refuse with them, exactly as a flip already made them.
     pub fn wing_trusts(&self) -> Result<Vec<(String, String)>, StoreError> {
-        let (rows, findings) = self.trust_policy_scan()?;
+        let (rows, findings) = self.trust_policy_scan(crate::chain::LabelUse::Decide)?;
         crate::retention::refuse_on_findings(&findings, |_| true)?;
         Ok(rows)
     }
@@ -4776,7 +4776,14 @@ mod tests {
             "and the labelled chain catches the relabel (O233): {r:?}"
         );
 
-        // (2) A later record relabelled `rotate/`: the boundary moves past it.
+        // (2) A later record relabelled `rotate/`: the boundary used to move
+        // past it. **CLOSED by ROADMAP O239** — the boundary is now the
+        // newest `rotate/` record carrying THIS key's keycheck, so a label an
+        // offline writer spells names no rotation and the comparison runs.
+        // This arm asserted `policy_drift.is_empty()` as a pinned cost until
+        // 2026-09-20; a pinned cost that disappears is recorded here rather
+        // than absorbed, and the assertion is inverted rather than deleted so
+        // the arm still exercises the variant.
         let (_d2, mut s2) = store();
         s2.set_retention("pacific", None, 30).unwrap();
         let old = policy_row(&s2, "retention_policy", "pacific");
@@ -4797,13 +4804,16 @@ mod tests {
             .unwrap();
         s2.conn.execute("DELETE FROM wing_trust", []).unwrap();
         let r2 = s2.verify().unwrap();
-        assert!(
-            r2.policy_drift.is_empty(),
-            "premise: the moved boundary still hides the replay from the POLICY leg: {r2:?}"
+        assert_eq!(
+            r2.policy_drift.len(),
+            1,
+            "O239: a forged `rotate/` label no longer moves the boundary, so \
+             the POLICY leg names the replay itself: {r2:?}"
         );
+        assert!(r2.policy_drift[0].contains("not the newest declaration"));
         assert!(
             !r2.chain_ok && !r2.ok(),
-            "and the labelled chain catches the relabel (O233): {r2:?}"
+            "and the labelled chain still catches the relabel (O233): {r2:?}"
         );
     }
 

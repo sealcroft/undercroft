@@ -3429,6 +3429,133 @@ else
 fi
 rm -rf "$RS_SRC" "$RS_DEST" "$RS_FILE"
 
+
+# ── ROADMAP O237: a read that DECIDES from an audit label refuses a chain
+#    that does not replay — before anybody runs `verify` ──────────────────
+# O233 made a relabelled audit row break the chain; it did not stop the reads
+# that consult labels from acting on one first, so a `standard`-floored search
+# kept serving a quarantined wing until an operator happened to run `verify`.
+# The edit is a same-length, ORDER-PRESERVING byte edit made by a SECOND
+# PROCESS (perl — the image carries no sqlite3), and it is aimed at the
+# `egress/export` record deliberately: nothing reads that label, so the trust
+# row and its own record are untouched and the ONLY thing wrong is the chain
+# — which is exactly the case that used to serve. The server is started AFTER
+# the edit, so its refusal comes from the lazy replay on its first guarded
+# read, with no `verify` run anywhere.
+O237_HOME="$(mktemp -d)"
+o237() { env UNDERCROFT_HOME="$O237_HOME" "$BIN" "$@"; }
+o237 init >/dev/null 2>&1
+o237 vault create vault2 >/dev/null 2>&1
+o237 trust set secret quarantined --vault vault2 >/dev/null 2>&1
+o237 remember "the kelp harvest quota was raised" --wing secret --vault vault2 >/dev/null 2>&1
+o237 remember "the harbour crane was repainted" --wing notes --vault vault2 >/dev/null 2>&1
+o237 export --vault vault2 >/dev/null 2>&1
+check "O237: a floored search answers on a clean chain" 0 "harbour crane" -- \
+  env UNDERCROFT_HOME="$O237_HOME" "$BIN" search "harbour crane" --min-trust standard --vault vault2
+O237_DB="$O237_HOME/vaults/vault2/vault.db"
+O237_BEFORE="$(md5sum "$O237_DB" | cut -d' ' -f1)"
+perl -0777 -pi -e 's{egress/export}{egress/exporu}g' "$O237_DB"
+if [ "$O237_BEFORE" != "$(md5sum "$O237_DB" | cut -d' ' -f1)" ]; then
+  echo "ok    O237: premise — a second process edited an audit label"; PASS=$((PASS+1))
+else
+  echo "FAIL  O237: premise — a second process edited an audit label"; FAIL=$((FAIL+1))
+fi
+check "O237: the floored search refuses, exit 2" 2 "integrity" -- \
+  env UNDERCROFT_HOME="$O237_HOME" "$BIN" search "harbour crane" --min-trust standard --vault vault2
+check "O237: the refusal names the check to run" 2 "undercroft verify" -- \
+  env UNDERCROFT_HOME="$O237_HOME" "$BIN" search "harbour crane" --min-trust standard --vault vault2
+check "O237: an unfloored returning read refuses too" 2 "integrity" -- \
+  env UNDERCROFT_HOME="$O237_HOME" "$BIN" search "harbour crane" --vault vault2
+check "O237: the retention sweep refuses" 2 "integrity" -- \
+  env UNDERCROFT_HOME="$O237_HOME" "$BIN" retention sweep --dry-run --vault vault2
+# `/v1`, against a RUNNING server: a 409 carrying the integrity class, from a
+# process that has run no `verify` at all.
+UNDERCROFT_HOME="$O237_HOME" "$BIN" serve-http --host 127.0.0.1 --port 18884 >/dev/null 2>&1 &
+O237_PID=$!
+for _ in $(seq 1 40); do curl -sf http://127.0.0.1:18884/healthz >/dev/null 2>&1 && break; sleep 0.25; done
+O237_R="$(curl -s -w '\n%{http_code}' -X POST http://127.0.0.1:18884/v1/vaults/vault2/search \
+          -H 'content-type: application/json' -d '{"query":"harbour crane","min_trust":"standard"}')"
+kill "$O237_PID" 2>/dev/null; wait "$O237_PID" 2>/dev/null
+if [ "$(tail -1 <<<"$O237_R")" = 409 ] && grep -qF '"class":"integrity"' <<<"$O237_R"; then
+  echo "ok    O237: a running server refuses the floored read, 409 class integrity"; PASS=$((PASS+1))
+else
+  echo "FAIL  O237: a running server refuses the floored read"; echo "$O237_R" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+check "O237: and verify says what is wrong" 2 "audit chain:     BROKEN" -- \
+  env UNDERCROFT_HOME="$O237_HOME" "$BIN" verify --vault vault2
+
+# The false-alarm half, which is the half that costs an operator if it is
+# wrong: a SECOND PROCESS writing legitimately while a server holds the vault
+# open moves SQLite's `data_version`, so the server re-establishes the chain
+# verdict rather than trusting a stale one — and goes on answering.
+O237B_HOME="$(mktemp -d)"
+o237b() { env UNDERCROFT_HOME="$O237B_HOME" "$BIN" "$@"; }
+o237b init >/dev/null 2>&1
+o237b trust set secret quarantined >/dev/null 2>&1
+o237b remember "the harbour crane was repainted" --wing notes >/dev/null 2>&1
+UNDERCROFT_HOME="$O237B_HOME" "$BIN" serve-http --host 127.0.0.1 --port 18885 >/dev/null 2>&1 &
+O237B_PID=$!
+for _ in $(seq 1 40); do curl -sf http://127.0.0.1:18885/healthz >/dev/null 2>&1 && break; sleep 0.25; done
+O237B_FIRST="$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:18885/v1/vaults/default/search \
+               -H 'content-type: application/json' -d '{"query":"harbour crane","min_trust":"standard"}')"
+o237b trust set another trusted >/dev/null 2>&1
+O237B_AFTER="$(curl -s -w '\n%{http_code}' -X POST http://127.0.0.1:18885/v1/vaults/default/search \
+               -H 'content-type: application/json' -d '{"query":"harbour crane","min_trust":"standard"}')"
+kill "$O237B_PID" 2>/dev/null; wait "$O237B_PID" 2>/dev/null
+if [ "$O237B_FIRST" = 200 ] && [ "$(tail -1 <<<"$O237B_AFTER")" = 200 ]; then
+  echo "ok    O237: a legitimate write from another process does not trip the guard"; PASS=$((PASS+1))
+else
+  echo "FAIL  O237: a legitimate write from another process tripped the guard"
+  echo "      first=$O237B_FIRST"; echo "$O237B_AFTER" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+rm -rf "$O237_HOME" "$O237B_HOME"
+
+# P1r EXACTLY, and the shape matters: a SECOND PROCESS edits the audit trail
+# while a server holds the vault OPEN, and that same server — never
+# re-opened — refuses the floored read. The ruling's own words: *a test that
+# re-opens the store passes over the defect*, so this one does not re-open.
+# The tamper is `sqlite3` against the live database, which is what carries it
+# to the open handle through SQLite's `data_version` cookie; the block above
+# covers the other side of the window, where the edit precedes the process.
+# Counterfactual MEASURED against a binary differing only by an early return
+# in the guard: the same sequence answers 200 with `trust_excluded_wings`
+# falling from 1 to 0 — the floor lifted under a live server, which is the
+# defect this arm exists for.
+O237C_HOME="$(mktemp -d)"
+o237c() { env UNDERCROFT_HOME="$O237C_HOME" "$BIN" "$@"; }
+o237c init >/dev/null 2>&1
+o237c trust set secret quarantined >/dev/null 2>&1
+o237c remember "the kelp harvest quota was raised" --wing secret >/dev/null 2>&1
+o237c remember "the harbour crane was repainted" --wing notes >/dev/null 2>&1
+UNDERCROFT_HOME="$O237C_HOME" "$BIN" serve-http --host 127.0.0.1 --port 18886 >/dev/null 2>&1 &
+O237C_PID=$!
+for _ in $(seq 1 40); do curl -sf http://127.0.0.1:18886/healthz >/dev/null 2>&1 && break; sleep 0.25; done
+O237C_Q='{"query":"harbour crane","min_trust":"standard"}'
+O237C_BEFORE="$(curl -s -w '\n%{http_code}' -X POST http://127.0.0.1:18886/v1/vaults/default/search \
+                -H 'content-type: application/json' -d "$O237C_Q")"
+# The exploit, from another process, with the handle still open: the wing's
+# assignment record moves out of its namespace and its row is deleted, so
+# neither the table nor the chain carries the key afterwards.
+sqlite3 "$O237C_HOME/vaults/default/vault.db" \
+  "UPDATE audit SET record_id='read/x' WHERE record_id='trust/secret'; \
+   DELETE FROM wing_trust WHERE wing='secret';" >/dev/null 2>&1
+O237C_TAMPERED=$?
+O237C_AFTER="$(curl -s -w '\n%{http_code}' -X POST http://127.0.0.1:18886/v1/vaults/default/search \
+               -H 'content-type: application/json' -d "$O237C_Q")"
+kill "$O237C_PID" 2>/dev/null; wait "$O237C_PID" 2>/dev/null
+if [ "$O237C_TAMPERED" -eq 0 ] && [ "$(tail -1 <<<"$O237C_BEFORE")" = 200 ]    && grep -qF '"trust_excluded_wings":1' <<<"$O237C_BEFORE"; then
+  echo "ok    O237 premise: the floor excluded a wing, then a second process tampered"; PASS=$((PASS+1))
+else
+  echo "FAIL  O237 premise: the tamper or the floored pre-tamper read did not happen"
+  echo "      sqlite3=$O237C_TAMPERED"; echo "$O237C_BEFORE" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+if [ "$(tail -1 <<<"$O237C_AFTER")" = 409 ] && grep -qF '"class":"integrity"' <<<"$O237C_AFTER"; then
+  echo "ok    O237: the OPEN handle refuses after the edit, with no re-open and no verify"; PASS=$((PASS+1))
+else
+  echo "FAIL  O237: the open handle served the lifted floor"; echo "$O237C_AFTER" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+rm -rf "$O237C_HOME"
+
 echo
 echo "e2e results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

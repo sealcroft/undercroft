@@ -532,6 +532,34 @@ impl VaultStore {
         }
         report.retention_policies = retention_upds.len();
 
+        // **The mirror's staleness marker, tagged since ROADMAP O237.** It is
+        // a `meta` row rather than a table, so the source gate below — which
+        // parses `CREATE TABLE` statements for a `tag` column — cannot see
+        // it; without this line a rotation would leave it keyed with the
+        // retired mac key and every later read would refuse, which is
+        // precisely the `wing_trust` disaster one table over. It is re-tagged
+        // from the value the row holds NOW, so a rotation over an already
+        // edited marker would launder it — hence the refusal, O232's
+        // criterion (refuse only what a rotation would launder), checked at
+        // O(1) inside the same transaction that verifies everything else.
+        let pushed_marker_upd: Option<Vec<u8>> = match self.pushed_marker()? {
+            crate::remote::PushedMarker::Absent => None,
+            crate::remote::PushedMarker::Tampered => {
+                return Err(StoreError::IntegrityFinding(
+                    "meta/index_pushed_embedder: the record of which embedding space the \
+                     remote mirror was built in does not verify, and a rotation would \
+                     re-tag it into authenticity — run `undercroft verify`, then \
+                     `index push` again before rotating"
+                        .into(),
+                ))
+            }
+            crate::remote::PushedMarker::Legacy(name)
+            | crate::remote::PushedMarker::Recorded(name) => Some(
+                next.tag(&crate::remote::pushed_embedder_canonical(&name))
+                    .to_vec(),
+            ),
+        };
+
         // Sealed-only artifact sweeps: for hmac-only vaults these blobs are
         // stored in clear and carry no key material — nothing to rewrite.
         let mut tok_upds: Vec<(String, Vec<u8>)> = Vec::new();
@@ -729,7 +757,9 @@ impl VaultStore {
             report.kg_entities
         );
         let rotate_tag = next.tag(rotate_canonical.as_bytes()).to_vec();
-        let rotate_label = crate::manage::Namespace::Rotate.record(&next.keycheck_hex()[..16]);
+        // ROADMAP O239: composed where it is READ, so the write and the
+        // keycheck-bound boundary cannot drift about how the label is spelled.
+        let rotate_label = crate::chain::rotation_label(&next);
         let head = crate::chain::next_head(
             &next,
             &crate::chain::Head {
@@ -830,6 +860,15 @@ impl VaultStore {
                         params![key, blob],
                     )?;
                 }
+            }
+            // The mirror marker's tag, under the next mac key (ROADMAP
+            // O237). Hex rather than a blob because the row it lives in is
+            // `meta(key TEXT, value TEXT)`.
+            if let Some(tag) = &pushed_marker_upd {
+                tx.execute(
+                    "UPDATE meta SET value = ?2 WHERE key = ?1",
+                    params![crate::remote::PUSHED_EMBEDDER_TAG_KEY, hex::encode(tag)],
+                )?;
             }
             // The rotation's own audit row, inside the same transaction as
             // everything it describes. Appended last so its `seq` orders

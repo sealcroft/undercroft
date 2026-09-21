@@ -69,7 +69,21 @@ The named id is the tampered record, and `VERIFY FAILED` exits **2**. Expect
 tags against the committed head and the manifest anchor, so editing the
 tampered record's bytes does not move it. `audit chain: BROKEN` is a separate
 finding — the audit trail itself was edited or truncated, or the database was
-rolled back relative to the anchor. The next four lines are further legs, and
+rolled back relative to the anchor.
+
+**A broken chain also stops work before you get here, and that is deliberate
+(ROADMAP O237).** Every read that DECIDES from an audit label — a
+trust-floored search, `trust list`, `retention list`, a retention sweep,
+`forget`, and the version check every returning read rides — refuses with
+*the audit chain does not authenticate its own labels*, exit 2 and 409
+`class: "integrity"`, rather than acting on a relabelled record until
+somebody runs this command. So an operator usually arrives here because a
+read refused, not because an alert fired. The remedy is the same: preserve
+the evidence, then restore a backup that verifies. A vault this binary has
+not yet opened writable keeps serving, because its labels were never bound
+to the chain.
+
+The next four lines are further legs, and
 a non-zero count on any of them fails the verdict too; a vault holding
 supersession links or fact receipts prints a line for each of those legs as
 well, where only a tampered count fails.

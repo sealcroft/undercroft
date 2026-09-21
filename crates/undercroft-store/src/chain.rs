@@ -546,16 +546,33 @@ pub(crate) fn newest_record(
         .optional()?)
 }
 
-/// The newest rotation's place in the chain — the boundary a tag comparison
-/// stops at. A half-open range on `record_id` rather than a `LIKE`: SQLite's
-/// `LIKE` is case-insensitive and cannot use the BINARY index, so it would
-/// scan the whole trail on every floored search and could disagree with an
-/// equality about `ROTATE/x`.
-pub(crate) fn rotation_boundary(conn: &Connection) -> Result<Option<i64>, StoreError> {
+/// The label a rotation under THIS key wrote — stated once, here, because
+/// `rotate.rs` composes it at the write and this module reads it.
+pub(crate) fn rotation_label(vault: &Vault) -> String {
+    Namespace::Rotate.record(&vault.keycheck_hex()[..KEYCHECK_LABEL_LEN])
+}
+
+/// How much of the keycheck a `rotate/` label carries.
+pub(crate) const KEYCHECK_LABEL_LEN: usize = 16;
+
+/// **How many rotations the chain records after `seq`** — and this one is
+/// deliberately NOT bound to the current key (ROADMAP O239).
+///
+/// The two questions differ and the difference is the reason both live here.
+/// [`rotation_boundary`] asks *where is the rotation that installed the key I
+/// hold*, which is one record under one keycheck. This asks *how many
+/// rotations happened since*, which spans every key generation — so bounding
+/// it by the current keycheck would answer at most one and silently undercount
+/// a vault rotated twice. It corroborates a `Recorded` forget verdict and
+/// never decides it (ROADMAP O13: a pre-A19 rotation appended no record, so
+/// reading zero as "no rotation, therefore forged" recreates the defect), and
+/// a planted `rotate/` label inflates it without changing any verdict.
+pub(crate) fn rotations_since(conn: &Connection, seq: i64) -> Result<i64, StoreError> {
     let (lo, hi) = prefix_range(Namespace::Rotate);
     Ok(conn.query_row(
-        "SELECT MAX(seq) FROM audit WHERE record_id >= ?1 AND record_id < ?2",
-        [lo.as_str(), hi.as_str()],
+        "SELECT COUNT(*) FROM audit \
+          WHERE seq > ?1 AND record_id >= ?2 AND record_id < ?3",
+        params![seq, lo, hi],
         |r| r.get(0),
     )?)
 }
@@ -579,6 +596,313 @@ pub(crate) fn chain_keys(conn: &Connection, ns: Namespace) -> Result<Vec<String>
         .query_map([lo.as_str(), hi.as_str()], |r| r.get(0))?
         .collect::<Result<_, _>>()?;
     Ok(keys)
+}
+
+// ── Are the chain's labels worth BELIEVING? (ROADMAP O237) ────────────────
+//
+// Everything above answers "what does the trail say about this label". This
+// answers the question that has to come first, and did not until O237: **is
+// the trail this handle is reading still the one the vault wrote.** Every
+// reader above finds a record by its label and replays nothing, so one
+// `UPDATE audit SET record_id = …` moved a quarantined wing's `trust/`
+// record out of its own namespace, a `DELETE FROM wing_trust` took the row,
+// and a `standard`-floored search returned the quarantined drawer — with
+// `verify` failing on `chain_ok` ALONE, i.e. only once somebody ran it.
+//
+// Two mechanisms, because one process cannot afford either alone:
+//
+// * **ONE lazy full replay per handle, on the first guarded read.** Not at
+//   open: measured on a real corpus, the open is FLAT in `audit` (36 ms at
+//   102,001 rows, 35 ms at 1,002,001) while a replay is LINEAR in it (88 ms,
+//   836 ms), and `audit` has no compaction anywhere in this tree — it grows
+//   with every write, every read under `UNDERCROFT_READ_AUDIT=chain`, every
+//   export and every push. A replay at open therefore charges every process
+//   an unbounded cost for a protection that covers a long-lived server only
+//   at boot (A31: such a server caches its handle and never re-opens). Not
+//   per read either: 88 ms on a 36.84 ms/q baseline is +240%, far past
+//   O234's measured read budget.
+// * **A per-key APPEND-ONLY PREFIX invariant on every guarded read.** Not a
+//   cached replay position — an incremental replay from a watermark is
+//   UNSOUND here, because the attack rewrites rows BELOW any watermark.
+//   `audit` is append-only in production (one `INSERT` and one `UPDATE`,
+//   both source-gated; every `DELETE FROM audit` in the crate is
+//   `#[cfg(test)]`), so for a label this handle has already looked at, a
+//   record that VANISHES, a newest record that moves BACKWARDS, or a tag
+//   that changes under a seq this handle already read is always tampering.
+//   It costs O(keys) over rows the scan already fetches.
+//
+// [`data_version`] is the ACCELERATOR between them and never the boundary
+// (A28's shape one more time). It is measured sound for a writer that goes
+// through SQLite — the handle's own commit does not move it, another
+// connection does, another PROCESS does — and blind to one editing pages
+// beneath SQLite. So it may short-circuit the expensive REPLAY, and it may
+// never gate the prefix check.
+//
+// **What the pair does not see, stated rather than implied.** An APPEND is
+// legitimate — it is the whole premise of the invariant — so a forged row
+// appended by a writer editing pages beneath SQLite, which does not move
+// the cookie either, is invisible to a handle that has already replayed,
+// until it is re-opened or another connection commits. Only a replay can
+// tell a forged append from a real one, because only the mac key can. The
+// window is narrow (raw page writes under a live SQLite, with no recorded
+// instance in this tree) and it is exactly the residual ROADMAP O241 would
+// close, by putting an authenticated key census in the MAC'd manifest and
+// removing the replay this module pays for.
+
+/// What a reader will DO with what the chain says about a label.
+///
+/// Required rather than inferred, on the [`crate::Read`] and
+/// `admission::Screen` precedent: the two answers are opposite and the
+/// difference is invisible at the call site, so the next caller to reach a
+/// policy scan has to state which it is instead of inheriting whichever the
+/// last one needed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum LabelUse {
+    /// The caller ACTS on the answer — a trust floor, a retention sweep, a
+    /// destruction, a returning read. Refuses unless the chain authenticates
+    /// its own labels, and holds the append-only invariant over every label
+    /// it looks at.
+    Decide,
+    /// `verify` itself, gathering findings to REPORT. It never refuses: a
+    /// `verify` that returns an ERROR instead of a verdict is the failure
+    /// `verify` exists to prevent, and `backup create` and `/v1/verify` both
+    /// read the verdict. It records nothing either — an observation taken
+    /// while the trail is already suspect must not become the baseline a
+    /// later decision is compared against.
+    Report,
+}
+
+/// One label's newest record, as this handle last saw it.
+struct Seen {
+    seq: i64,
+    tag: Vec<u8>,
+}
+
+/// What one handle has established about the chain, for the life of the
+/// handle (ROADMAP O237).
+#[derive(Default)]
+pub(crate) struct LabelGuard {
+    /// The last full replay's verdict, with the `data_version` it was taken
+    /// at. Reused while that cookie has not moved, which is what makes the
+    /// replay ONCE per handle on the deployment this was filed for.
+    replayed: Option<Replayed>,
+    /// The newest record seen for each label a guarded read looked up.
+    newest: std::collections::HashMap<String, Seen>,
+    /// The label SET seen for each namespace a guarded read enumerated. The
+    /// exploit deletes the policy row AND relabels its record, so the key is
+    /// in neither place afterwards and no per-key lookup is ever made for
+    /// it: the set is the only thing that can miss it.
+    keys: std::collections::HashMap<&'static str, std::collections::BTreeSet<String>>,
+    /// How many full replays this handle has run. Test-only, and it has to
+    /// be counted rather than timed: "at most once per handle over N guarded
+    /// reads" is the ruling's own gate, and a wall-clock proxy for it would
+    /// pass on a corpus small enough that a replay is free — which is every
+    /// fixture.
+    #[cfg(test)]
+    replays: u64,
+}
+
+/// A replay's verdict, and the point it describes.
+struct Replayed {
+    data_version: i64,
+    chain_ok: bool,
+    labels: crate::LabelCommitment,
+}
+
+/// SQLite's `data_version` cookie: it changes when a connection OTHER than
+/// this one commits, and not when this one does. Measured with a real second
+/// process, behind a premise assertion — its first run reported "a process
+/// does not move it" from a child that had run zero tests.
+pub(crate) fn data_version(conn: &Connection) -> Result<i64, StoreError> {
+    Ok(conn.query_row("PRAGMA data_version", [], |r| r.get(0))?)
+}
+
+impl crate::VaultStore {
+    /// **The door every reader that DECIDES from an audit label goes
+    /// through** (ROADMAP O237): the chain must replay to its committed head
+    /// under this handle's own keys, and its labels must still match the
+    /// commitment that bound them.
+    ///
+    /// `Regime::V1` and [`crate::LabelCommitment::Pending`] MUST NOT refuse,
+    /// and that is part of O237's ruling rather than an implementation
+    /// choice: a clean legacy chain replays with `chain_ok = true` and its
+    /// labels bound by nothing, so refusing on unbound labels would brick
+    /// every pre-1.6.0 vault served `--read-only` (which cannot switch) — a
+    /// documented contract change, i.e. MAJOR. Such a vault gets the
+    /// append-only invariant and nothing more, which is stated rather than
+    /// implied.
+    pub(crate) fn require_authenticated_labels(&self) -> Result<(), StoreError> {
+        // The cookie is read BEFORE the replay, and that order is the safe
+        // one. A commit landing between the two makes the cached pair
+        // (older cookie, newer verdict), so the next call sees a moved
+        // cookie and replays again — a wasted replay, never a skipped one.
+        // Reading it after would cache (newer cookie, older verdict) and
+        // skip the replay that the commit called for.
+        let version = data_version(&self.conn)?;
+        let cached = {
+            let guard = self.labels.borrow();
+            match &guard.replayed {
+                Some(r) if r.data_version == version => Some((r.chain_ok, r.labels)),
+                _ => None,
+            }
+        };
+        let (chain_ok, labels) = match cached {
+            Some(v) => v,
+            None => {
+                // Outside the borrow: the replay is the expensive call and
+                // holding a `RefCell` across it would be a re-entrancy trap
+                // for the next reader added here.
+                let (chain_ok, labels) = self.chain_verdict()?;
+                let mut guard = self.labels.borrow_mut();
+                guard.replayed = Some(Replayed {
+                    data_version: version,
+                    chain_ok,
+                    labels,
+                });
+                #[cfg(test)]
+                {
+                    guard.replays += 1;
+                }
+                (chain_ok, labels)
+            }
+        };
+        if chain_ok && labels != crate::LabelCommitment::Mismatch {
+            return Ok(());
+        }
+        let why = if !chain_ok {
+            "its records do not replay to the committed head"
+        } else {
+            "the labels it held when it switched no longer match their commitment"
+        };
+        Err(StoreError::IntegrityFinding(format!(
+            "the audit chain does not authenticate its own labels ({why}), so what it \
+             says about a record decides nothing — run `undercroft verify`, then \
+             restore a backup that verifies"
+        )))
+    }
+
+    /// [`newest_record`] through the handle's append-only memory.
+    pub(crate) fn newest_record(
+        &self,
+        record_id: &str,
+        on: LabelUse,
+    ) -> Result<Option<ChainRecord>, StoreError> {
+        let found = newest_record(&self.conn, record_id)?;
+        if on == LabelUse::Decide {
+            self.hold_append_only(record_id, found.as_ref())?;
+        }
+        Ok(found)
+    }
+
+    /// [`chain_keys`] through the same memory: a label this handle saw in a
+    /// namespace and no longer sees was taken out of it.
+    pub(crate) fn chain_keys(
+        &self,
+        ns: Namespace,
+        on: LabelUse,
+    ) -> Result<Vec<String>, StoreError> {
+        let found = chain_keys(&self.conn, ns)?;
+        if on == LabelUse::Decide {
+            self.hold_keys_append_only(ns, &found)?;
+        }
+        Ok(found)
+    }
+
+    /// **The rotation that installed the key this handle holds** — the
+    /// boundary a tag comparison stops at, bound to the KEY rather than to
+    /// the namespace (ROADMAP O239), and now through the same memory.
+    ///
+    /// It used to be `MAX(seq)` over the whole `rotate/` half-open range,
+    /// which admits any label an offline writer spells. Measured: one
+    /// statement — an `INSERT` of a forged `rotate/` row after the
+    /// declaration to be ignored — put the boundary above every record, and
+    /// O230's replay attack then went from `retention_policies()` REFUSING
+    /// to answering `Ok(30 days)` with `policy_drift` EMPTY: the replayed
+    /// policy governs and a sweep destroys under it. The same boundary feeds
+    /// [`crate::VaultStore::version_boundary`], so that one statement
+    /// disabled O234's arm 1 for every table and every key at once.
+    ///
+    /// `rotate.rs` writes `rotate/{keycheck_hex()[..16]}` under the NEXT
+    /// key, and the vault holds that key once the rotation commits — so an
+    /// indexed lookup of this handle's own keycheck names exactly the
+    /// rotation that installed the key the comparison is made under. That is
+    /// what the boundary always meant, and a planted label with a foreign
+    /// keycheck is rejected in constant time. It can only make the boundary
+    /// SMALLER or `None`, i.e. strictly more checking: a vault that never
+    /// rotated, or that was rotated by a binary older than A19 (which
+    /// appended no record at all), answers `None` exactly as before.
+    pub(crate) fn rotation_boundary(&self, on: LabelUse) -> Result<Option<i64>, StoreError> {
+        let label = rotation_label(&self.vault);
+        Ok(self.newest_record(&label, on)?.map(|r| r.seq))
+    }
+
+    /// How many full replays this handle has run (test-only).
+    #[cfg(test)]
+    pub(crate) fn replays(&self) -> u64 {
+        self.labels.borrow().replays
+    }
+
+    /// The invariant for one label.
+    fn hold_append_only(
+        &self,
+        record_id: &str,
+        found: Option<&ChainRecord>,
+    ) -> Result<(), StoreError> {
+        let mut guard = self.labels.borrow_mut();
+        let complaint = match (guard.newest.get(record_id), found) {
+            (Some(seen), None) => Some(format!(
+                "this handle read its record at seq {} and the chain now holds none",
+                seen.seq
+            )),
+            (Some(seen), Some(now)) if now.seq < seen.seq => Some(format!(
+                "its newest record moved back from seq {} to seq {}",
+                seen.seq, now.seq
+            )),
+            (Some(seen), Some(now)) if now.seq == seen.seq && now.tag != seen.tag => Some(format!(
+                "the record at seq {} now carries a different tag",
+                seen.seq
+            )),
+            _ => None,
+        };
+        if let Some(what) = complaint {
+            return Err(append_only_finding(record_id, &what));
+        }
+        if let Some(now) = found {
+            guard.newest.insert(
+                record_id.to_string(),
+                Seen {
+                    seq: now.seq,
+                    tag: now.tag.clone(),
+                },
+            );
+        }
+        Ok(())
+    }
+
+    /// The invariant for one namespace's label set.
+    fn hold_keys_append_only(&self, ns: Namespace, found: &[String]) -> Result<(), StoreError> {
+        let mut guard = self.labels.borrow_mut();
+        let seen = guard.keys.entry(ns.prefix()).or_default();
+        if let Some(gone) = seen.iter().find(|k| !found.contains(k)) {
+            let gone = gone.clone();
+            return Err(append_only_finding(
+                &gone,
+                "this handle read it in the chain and the chain no longer carries it",
+            ));
+        }
+        seen.extend(found.iter().cloned());
+        Ok(())
+    }
+}
+
+/// One wording for both halves of the invariant, so the two cannot describe
+/// the same mechanism differently.
+fn append_only_finding(record_id: &str, what: &str) -> StoreError {
+    StoreError::IntegrityFinding(format!(
+        "{record_id}: {what} — the audit trail is append-only, so a record that moved \
+         or vanished while this process held the vault open is tampering; run \
+         `undercroft verify`, then restore a backup that verifies"
+    ))
 }
 
 #[cfg(test)]
@@ -1151,5 +1475,473 @@ mod tests {
             matches!(regime(&store.conn).unwrap(), Regime::V2 { .. }),
             "once the walk completes, the same open switches"
         );
+    }
+
+    // ── ROADMAP O237: a read that DECIDES from a label asks first whether
+    //    the labels are still this vault's ────────────────────────────────
+
+    /// Relabel a wing's trust record and delete its row — the exploit P1r
+    /// names, in one place so every arm below runs the same edit.
+    fn lift_the_floor(conn: &Connection, wing: &str) {
+        conn.execute(
+            "UPDATE audit SET record_id = 'read/x' WHERE record_id = ?1",
+            params![Namespace::Trust.record(wing)],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM wing_trust WHERE wing = ?1", params![wing])
+            .unwrap();
+    }
+
+    /// **P1r, the gate this entry was filed on.** O233 made the relabel
+    /// break `verify`; it left the reads that consult labels acting on one
+    /// first, so the floored search returned the quarantined drawer until
+    /// somebody ran `verify`. Now `wing_trusts()` — and so `trust_clause`,
+    /// the floor, `recent` and `list_drawers` — refuses.
+    ///
+    /// The edit is made on the handle's OWN connection, which is the hard
+    /// case on purpose: `PRAGMA data_version` does not move for it, so the
+    /// cached replay verdict is reused and the APPEND-ONLY invariant is the
+    /// only thing that can see it. A test that tampered from a second
+    /// connection would pass on the replay alone and say nothing about half
+    /// the mechanism.
+    #[test]
+    fn p1r_a_relabelled_trust_record_refuses_the_floored_read_before_any_verify() {
+        let (_dir, mut store) = fresh(SecurityLevel::Sealed);
+        store.set_wing_trust("secret", "quarantined").unwrap();
+        assert_eq!(
+            store.wing_trusts().unwrap(),
+            vec![("secret".to_string(), "quarantined".to_string())],
+            "premise: the floor reads the assignment"
+        );
+        let before = store.replays();
+        lift_the_floor(&store.conn, "secret");
+        let err = store.wing_trusts().unwrap_err();
+        assert!(
+            matches!(&err, StoreError::IntegrityFinding(m)
+                     if m.contains("append-only") && m.contains("trust/secret")),
+            "the floored read refuses, naming the record: {err}"
+        );
+        assert_eq!(
+            store.replays(),
+            before,
+            "premise: no replay re-ran, so this was the append-only invariant"
+        );
+        // And the same refusal reaches the reads the floor rides.
+        assert!(store.trust_clause("standard").is_err());
+        // `verify` still REPORTS rather than refusing — it is the check an
+        // operator runs next, and a `verify` that errors instead of
+        // answering is the failure it exists to prevent.
+        let report = store.verify().unwrap();
+        assert!(!report.chain_ok && !report.ok(), "{report:?}");
+    }
+
+    /// The other side of the window: tampering done before this process ever
+    /// opened the vault, which no per-key memory can have seen. The LAZY
+    /// REPLAY is what catches it, and the two are told apart by the wording
+    /// each produces.
+    #[test]
+    fn a_chain_tampered_before_the_handle_opened_refuses_on_the_first_guarded_read() {
+        let dir = TempDir::new().unwrap();
+        {
+            let mgr = VaultManager::open(dir.path(), None).unwrap();
+            let mut store =
+                VaultStore::open(mgr.create("r", SecurityLevel::Sealed).unwrap()).unwrap();
+            store.set_wing_trust("secret", "quarantined").unwrap();
+            assert!(store.verify().unwrap().ok(), "premise: clean");
+        }
+        {
+            let db = dir.path().join("vaults/r/vault.db");
+            let conn = Connection::open(&db).unwrap();
+            lift_the_floor(&conn, "secret");
+        }
+        let store = reopen(&dir).unwrap();
+        assert_eq!(store.replays(), 0, "premise: nothing has replayed yet");
+        let err = store.wing_trusts().unwrap_err();
+        assert!(
+            matches!(&err, StoreError::IntegrityFinding(m)
+                     if m.contains("does not authenticate its own labels")),
+            "the first guarded read replays and refuses: {err}"
+        );
+        assert_eq!(store.replays(), 1);
+    }
+
+    /// **The replay runs at most ONCE per handle over N guarded reads**, and
+    /// `PRAGMA data_version` is what makes that true rather than a cache that
+    /// never expires: a write from another connection moves the cookie and
+    /// the next guarded read replays again.
+    #[test]
+    fn the_replay_runs_once_per_handle_and_again_only_when_another_writer_commits() {
+        let (dir, mut store) = fresh(SecurityLevel::Sealed);
+        store.set_wing_trust("secret", "quarantined").unwrap();
+        store.set_retention("secret", None, 30).unwrap();
+        store.upsert(&drawer("a harbour crane at dawn", 0)).unwrap();
+        for _ in 0..5 {
+            store.wing_trusts().unwrap();
+            store.retention_policies().unwrap();
+            store
+                .recent(None, 5, crate::Read::Returned(crate::ReadOp::Recent))
+                .unwrap();
+        }
+        assert_eq!(
+            store.replays(),
+            1,
+            "fifteen guarded reads, one replay — the cost the ruling priced"
+        );
+        // A second handle on the same vault commits: the cookie moves and
+        // the guard re-establishes the verdict rather than trusting a stale
+        // one. Two handles on one vault is an ordinary deployment, so this
+        // is also a false-alarm arm — it must not refuse.
+        {
+            let mut other = reopen(&dir).unwrap();
+            other.set_wing_trust("second", "trusted").unwrap();
+        }
+        store.wing_trusts().unwrap();
+        assert_eq!(store.replays(), 2, "the foreign commit is not trusted away");
+        store.wing_trusts().unwrap();
+        assert_eq!(store.replays(), 2, "and then it settles again");
+    }
+
+    /// A SECOND CONNECTION doing the exploit while this handle is open — the
+    /// SQLite-mediated writer `data_version` is measured sound for. The
+    /// replay re-runs and refuses; nothing was re-opened.
+    #[test]
+    fn a_second_connection_tampering_under_an_open_handle_is_refused() {
+        let (dir, mut store) = fresh(SecurityLevel::Sealed);
+        store.set_wing_trust("secret", "quarantined").unwrap();
+        store.wing_trusts().unwrap();
+        let db = dir.path().join("vaults/r/vault.db");
+        let other = Connection::open(&db).unwrap();
+        lift_the_floor(&other, "secret");
+        drop(other);
+        let err = store.wing_trusts().unwrap_err();
+        assert!(
+            matches!(&err, StoreError::IntegrityFinding(m)
+                     if m.contains("does not authenticate its own labels")),
+            "{err}"
+        );
+    }
+
+    /// **The legacy carve-out, and what it still buys.** A version-1 chain
+    /// replays clean with its labels bound by nothing, so refusing there
+    /// would brick every pre-1.6.0 vault served `--read-only` — that
+    /// exemption is the ruling's, not an implementation choice. The
+    /// append-only invariant is NOT exempt, and on such a vault it is the
+    /// only mechanism there is.
+    #[test]
+    fn a_legacy_chain_serves_its_readers_and_still_holds_the_append_only_rule() {
+        let (_dir, mut store) = fresh(SecurityLevel::Sealed);
+        store.set_wing_trust("secret", "quarantined").unwrap();
+        store.unswitch_chain_for_test();
+        assert_eq!(
+            regime(&store.conn).unwrap(),
+            Regime::V1,
+            "premise: a legacy chain"
+        );
+        assert_eq!(
+            store.verify().unwrap().label_commitment,
+            crate::LabelCommitment::Pending,
+            "premise: its labels are bound by nothing"
+        );
+        assert_eq!(
+            store.wing_trusts().unwrap().len(),
+            1,
+            "unbound labels are not a refusal"
+        );
+        lift_the_floor(&store.conn, "secret");
+        assert!(
+            store.verify().unwrap().chain_ok,
+            "premise: the version-1 replay cannot see a relabel at all"
+        );
+        let err = store.wing_trusts().unwrap_err();
+        assert!(
+            matches!(&err, StoreError::IntegrityFinding(m) if m.contains("append-only")),
+            "the invariant is what a legacy vault gets: {err}"
+        );
+    }
+
+    /// **A false-alarm sweep, expecting zero.** Every arm is an ordinary
+    /// operation; a guard that fires on one of these is worse than none,
+    /// because the remedy an operator is told to run (`verify`) reports
+    /// nothing wrong.
+    ///
+    /// Two of the ruling's arms are deliberately not fabricated here and say
+    /// why. O233's SWITCH is exercised by the legacy arm above, which
+    /// unswitches and re-opens. A PRE-A19-rotated vault — rows re-tagged
+    /// with no `rotate/` record — cannot be built any more without breaking
+    /// the chain, because the chain now binds labels; such a vault arrives
+    /// as a version-1 chain and is the legacy arm, one test up.
+    #[test]
+    fn ordinary_operations_do_not_trip_the_guard() {
+        for level in [SecurityLevel::Sealed, SecurityLevel::HmacOnly] {
+            let (dir, mut store) = fresh(level);
+            store.set_wing_trust("secret", "quarantined").unwrap();
+            store.set_retention("notes", None, 30).unwrap();
+            store.wing_trusts().unwrap();
+            store.retention_policies().unwrap();
+
+            // A rotation between two guarded reads: it re-tags every policy
+            // row and appends its own record, and the boundary it writes is
+            // the one the next read stops at.
+            rotate(&dir, &mut store).unwrap();
+            assert_eq!(store.wing_trusts().unwrap().len(), 1, "{level:?}");
+            assert_eq!(store.retention_policies().unwrap().len(), 1, "{level:?}");
+
+            // A legitimate clear, which deletes the row it declared.
+            store.clear_retention("notes", None).unwrap();
+            assert!(store.retention_policies().unwrap().is_empty(), "{level:?}");
+
+            // A `trust set` from another handle while this one is open.
+            {
+                let mut other = reopen(&dir).unwrap();
+                other.set_wing_trust("secret", "standard").unwrap();
+            }
+            assert_eq!(
+                store.wing_trusts().unwrap(),
+                vec![("secret".to_string(), "standard".to_string())],
+                "{level:?}: a re-declaration is an append, not a move"
+            );
+
+            // And a returning read, which is the hottest guarded site.
+            store.upsert(&drawer("a harbour crane at dawn", 0)).unwrap();
+            assert_eq!(
+                store
+                    .recent(None, 5, crate::Read::Returned(crate::ReadOp::Recent))
+                    .unwrap()
+                    .len(),
+                1,
+                "{level:?}"
+            );
+            assert!(
+                store.verify().unwrap().ok(),
+                "{level:?}: and nothing is wrong"
+            );
+        }
+    }
+
+    /// **The `rotate/` lever's own counterfactual** (ROADMAP O239 measured
+    /// it; O237 is the second answer to it). ONE forged `rotate/` row used
+    /// to lift the boundary above every record and disable O230's comparison
+    /// and O234's arm 1 at once. It is now dead twice: the boundary is an
+    /// equality on THIS key's keycheck, so a foreign label moves nothing,
+    /// and the forged row is an append to a labelled chain, so the guard
+    /// refuses before the boundary is asked.
+    ///
+    /// The insert is made from a SECOND CONNECTION, which is both the
+    /// realistic shape and the one the mechanism covers: an append does not
+    /// violate the append-only invariant — that is what makes the invariant
+    /// free of false alarms — so what sees it is the re-replay `PRAGMA
+    /// data_version` triggers. A writer editing pages beneath SQLite could
+    /// append without moving the cookie and would not be seen until the
+    /// handle is re-opened; that residual is stated in this module's own
+    /// documentation and in ROADMAP O237.
+    #[test]
+    fn a_forged_rotation_record_is_refused_by_the_guard_as_well() {
+        let (dir, mut store) = fresh(SecurityLevel::Sealed);
+        store.set_retention("notes", None, 30).unwrap();
+        store.retention_policies().unwrap();
+        let db = dir.path().join("vaults/r/vault.db");
+        let other = Connection::open(&db).unwrap();
+        other
+            .execute(
+                "INSERT INTO audit (record_id, tag, at) \
+                 VALUES ('rotate/deadbeefdeadbeef', X'00', '2030-01-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        drop(other);
+        assert_eq!(
+            store.rotation_boundary(LabelUse::Report).unwrap(),
+            None,
+            "ROADMAP O239: a foreign keycheck is not this handle's rotation"
+        );
+        let err = store.retention_policies().unwrap_err();
+        assert!(
+            matches!(&err, StoreError::IntegrityFinding(m)
+                     if m.contains("does not authenticate its own labels")),
+            "{err}"
+        );
+    }
+
+    /// **The guard is on the SCANS, so `verify` still reports.** The two
+    /// legs that read policy evidence pass `Report`, and they must go on
+    /// answering over a chain the guard refuses — which is the whole reason
+    /// the witness is required rather than inferred.
+    #[test]
+    fn verify_reports_over_a_chain_the_guard_refuses() {
+        let (_dir, mut store) = fresh(SecurityLevel::Sealed);
+        store.set_wing_trust("secret", "quarantined").unwrap();
+        store.wing_trusts().unwrap();
+        lift_the_floor(&store.conn, "secret");
+        assert!(store.wing_trusts().is_err(), "premise: the reader refuses");
+        let report = store.verify().unwrap();
+        assert!(!report.ok() && !report.chain_ok, "{report:?}");
+    }
+
+    /// **Every production call of the three label readers is inside this
+    /// module or named here with its reason** — derived from the CODE, in
+    /// both directions, because an inventory compared to another inventory
+    /// is a closed system that can be consistent and jointly wrong (O80).
+    #[test]
+    fn every_label_reader_is_reached_through_the_guard() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        // (file, enclosing fn, why it may call the free reader directly).
+        const ALLOWED: &[(&str, &str, &str)] = &[(
+            "replay.rs",
+            "newest_write_record",
+            "O234's verify leg: it gathers evidence to REPORT, so it takes no \
+             append-only observation — one made while the trail is already \
+             suspect must not become the baseline a later decision is \
+             compared against",
+        )];
+        let mut found: Vec<(String, String)> = Vec::new();
+        for entry in std::fs::read_dir(&src).expect("the crate's own src is readable") {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_string_lossy().to_string();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") || name == "chain.rs" {
+                continue;
+            }
+            for needle in [
+                concat!("chain::", "newest_record("),
+                concat!("chain::", "chain_keys("),
+                concat!("chain::", "rotation_boundary("),
+            ] {
+                for f in production_sites(&name, needle) {
+                    found.push((name.clone(), f));
+                }
+            }
+        }
+        found.sort();
+        found.dedup();
+        let expected: Vec<(String, String)> = ALLOWED
+            .iter()
+            .map(|(f, fun, _)| (f.to_string(), fun.to_string()))
+            .collect();
+        assert_eq!(
+            found, expected,
+            "a production call of a chain label reader that does not go through \
+             `VaultStore::newest_record`/`chain_keys`/`rotation_boundary` is a \
+             decision made with no guard in front of it"
+        );
+        // PREMISE, against ground truth rather than against itself: the
+        // readers exist here and the scanner finds a needle it is pointed at.
+        let here = std::fs::read_to_string(src.join("chain.rs")).unwrap();
+        for f in [
+            "pub(crate) fn newest_record(",
+            "pub(crate) fn chain_keys(",
+            "pub(crate) fn rotation_boundary(",
+        ] {
+            assert!(here.contains(f), "premise: chain.rs still defines {f:?}");
+        }
+        assert!(
+            !production_sites("replay.rs", concat!("chain::", "newest_record(")).is_empty(),
+            "premise: the scanner finds the one call the list names"
+        );
+    }
+
+    /// **`audit` is append-only in production, which is the prefix
+    /// invariant's premise** — so the statements that touch it are counted
+    /// against the source, not remembered. A `DELETE` would make a record
+    /// vanish legitimately and turn the invariant into a false alarm
+    /// generator; a second `INSERT` or `UPDATE` would be a writer nobody
+    /// ruled on (O80's lesson about a namespace nobody was forced to
+    /// classify).
+    #[test]
+    fn the_audit_table_is_append_only_in_production() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut deletes: Vec<(String, String)> = Vec::new();
+        let mut inserts: Vec<(String, String)> = Vec::new();
+        let mut updates: Vec<(String, String)> = Vec::new();
+        for entry in std::fs::read_dir(&src).expect("readable") {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let name = path.file_name().unwrap().to_string_lossy().to_string();
+            for (needle, into) in [
+                (concat!("DELETE FROM ", "audit"), &mut deletes),
+                (concat!("INSERT INTO ", "audit"), &mut inserts),
+                (concat!("UPDATE ", "audit SET"), &mut updates),
+            ] {
+                for f in production_sites(&name, needle) {
+                    into.push((name.clone(), f));
+                }
+            }
+        }
+        for v in [&mut deletes, &mut inserts, &mut updates] {
+            v.sort();
+            v.dedup();
+        }
+        assert!(
+            deletes.is_empty(),
+            "a production `DELETE FROM audit` breaks the append-only premise the \
+             O237 prefix invariant rests on, and would make an ordinary operation \
+             indistinguishable from the exploit: {deletes:?}"
+        );
+        assert_eq!(
+            inserts,
+            [("chain.rs".to_string(), "insert_record".to_string())],
+            "the chain's one row writer"
+        );
+        assert_eq!(
+            updates,
+            [("kg.rs".to_string(), "blind_existing_kg_rows".to_string())],
+            "the one label move in the tree: A10's blinding migration, which runs \
+             inside a writable open before any guarded read and owes a recorded \
+             re-chain if it is ever repeated (ROADMAP O233's revision)"
+        );
+    }
+
+    /// Every PRODUCTION line of one of this crate's files that holds
+    /// `needle`, named by the function enclosing it. The same reader
+    /// `replay.rs`'s own source gate uses, plus the one thing that file did
+    /// not need: an item annotated `#[cfg(test)]` OUTSIDE `mod tests` is
+    /// test code too, and `unswitch_chain_for_test` is exactly that — a
+    /// `DELETE FROM audit` that a split on `mod tests` alone would have
+    /// reported as production.
+    fn production_sites(file: &str, needle: &str) -> Vec<String> {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join(file);
+        let text = std::fs::read_to_string(&path).expect("the crate's own source is readable");
+        let prod = text
+            .split(concat!("#[cfg(test)]\n", "mod tests"))
+            .next()
+            .unwrap_or_default();
+        let mut enclosing = String::new();
+        let mut cfg_test_item = false;
+        let mut previous = String::new();
+        let mut out = Vec::new();
+        for line in prod.lines() {
+            let t = line.trim_start();
+            // A free function at column 0 or a method at four spaces, never
+            // a `fn` NESTED in a body. `replay.rs`'s reader takes four
+            // spaces alone, because every site it tracks is a method; this
+            // module's writers are free functions, and taking four alone
+            // attributed `insert_record`'s statement to `CommitmentDigest::
+            // finish` — the last method above it. The gate found that
+            // itself, on its first run.
+            let indent = line.len() - t.len();
+            if indent == 0 || indent == 4 {
+                if let Some(rest) = t
+                    .strip_prefix("pub fn ")
+                    .or_else(|| t.strip_prefix("pub(crate) fn "))
+                    .or_else(|| t.strip_prefix("fn "))
+                {
+                    enclosing = rest
+                        .split(['(', '<'])
+                        .next()
+                        .unwrap_or_default()
+                        .to_string();
+                    cfg_test_item = previous.trim() == "#[cfg(test)]";
+                }
+            }
+            if t.contains(needle) && !t.starts_with("//") && !cfg_test_item {
+                out.push(enclosing.clone());
+            }
+            if !t.is_empty() {
+                previous = t.to_string();
+            }
+        }
+        out
     }
 }

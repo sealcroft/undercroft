@@ -380,6 +380,20 @@ impl VaultStore {
         if ids.is_empty() {
             return Err(StoreError::Invalid("nothing to forget".into()));
         }
+        // **At the TOP, beside the other pre-flights, and NOT inside
+        // `mirror_note`** (ROADMAP O237). This path decides from audit
+        // labels — the mirror disclosure reads `egress/index-push`, and the
+        // attestation it mints is matched against labelled rows later — so
+        // it asks whether the trail is still the one the vault wrote. Here
+        // the answer costs nothing but the call: nothing has been destroyed
+        // yet, and the operator can run `verify` and restore. Inside
+        // `mirror_note` the drawers are already gone, so a refusal there
+        // would refuse after the fact (O91: a posture is a property of the
+        // PATH). The mirror disclosure itself never refuses — that would
+        // trade the erasure promise for availability, the wrong way round
+        // (O171 item (c) / O206) — and is closed instead by tagging the
+        // `meta` row it reads.
+        self.require_authenticated_labels()?;
         // Existence + fingerprints first, so a bad id aborts before any
         // deletion. The pending-evidence fence is checked here too, for the
         // same reason: the choke point would catch it, but only after the
@@ -472,7 +486,7 @@ impl VaultStore {
         // chain, so `verify` reports it — but this lookup still decides
         // before any replay runs, which is ROADMAP O237.
         //
-        // The first version asked `pushed_embedder()` ALONE, which reads an
+        // The first version asked the `meta` marker ALONE, which reads an
         // untagged, unsealed `INSERT INTO meta`. One offline
         // `DELETE FROM meta WHERE key='index_pushed_embedder'` and every
         // later attestation silently drops the disclosure — and still
@@ -486,6 +500,17 @@ impl VaultStore {
         // `meta` is still consulted for the embedder NAME — a label in a
         // warning — and, on the OR below, as the second signal that can only
         // ADD the disclosure, never remove it.
+        //
+        // **The marker is TAGGED since ROADMAP O237**, and this reader — and
+        // only this one — treats a tag that does not verify as evidence that
+        // something WAS pushed rather than as a refusal. Refusing here would
+        // trade the erasure promise for availability, the wrong way round
+        // (O171 item (c) / O206), and a marker an offline writer edited is
+        // still a marker somebody wrote. `search_with_index` and the push
+        // path, which are not destruction paths, do refuse on it.
+        let marker = self
+            .pushed_marker()
+            .unwrap_or(crate::remote::PushedMarker::Tampered);
         let pushed: bool = self
             .conn
             .query_row(
@@ -494,13 +519,14 @@ impl VaultStore {
                 |r| r.get(0),
             )
             .unwrap_or(false)
-            || self.pushed_embedder().is_some();
+            || marker != crate::remote::PushedMarker::Absent;
         if !pushed {
             return None;
         }
-        let embedder = self
-            .pushed_embedder()
-            .unwrap_or_else(|| "unrecorded".to_string());
+        let embedder = match marker {
+            crate::remote::PushedMarker::Legacy(n) | crate::remote::PushedMarker::Recorded(n) => n,
+            _ => "unrecorded".to_string(),
+        };
         Some(match mirror {
             MirrorDelete::Issued(backend) => format!(
                 "this vault was pushed to a remote index (embedding space {embedder}); a delete \
@@ -759,16 +785,14 @@ impl VaultStore {
         }
         for start in candidates {
             if let Some(end) = self.audit_run_matches(start, att, tags)? {
-                // A case-sensitive half-open range on the indexed label, the
-                // shape O230's gatherer uses, rather than a `LIKE` that cannot
-                // use the BINARY index and matches `ROTATE/…` too.
-                let rotations: i64 = self.conn.query_row(
-                    "SELECT COUNT(*) FROM audit \
-                     WHERE seq > ?1 AND record_id >= 'rotate/' AND record_id < 'rotate0'",
-                    params![end],
-                    |r| r.get(0),
-                )?;
-                return Ok(rotations as usize);
+                // Through `chain`, the one place that knows how a `rotate/`
+                // label is spelled (ROADMAP O239). This was a second
+                // hand-written copy of that range, and the two would have
+                // drifted the moment either moved. It is deliberately NOT
+                // bound to the current keycheck the way the BOUNDARY is: this
+                // counts rotations across every key generation, and the
+                // function's own doc says why.
+                return Ok(crate::chain::rotations_since(&self.conn, end)? as usize);
             }
         }
         // Deliberately names BOTH causes rather than the interesting one: a

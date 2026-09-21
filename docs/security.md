@@ -54,9 +54,24 @@ modification: every read verifies, `verify` audits everything.
   `verify` checks that commitment as its own leg, and a relabel on either
   side of it fails. **Residual, stated**: labels as they stood at the switch
   are bound as found, so a relabel made before the upgrade becomes authentic
-  — O232's residual, one table over. And the switch detects rather than
-  prevents at read time: the readers that consult a label still act before
-  any replay runs, until `verify` does (ROADMAP O237).
+  — O232's residual, one table over.
+  **Since ROADMAP O237 the readers do not act first.** Every reader that
+  DECIDES from a label — the trust floor, the retention sweep and listings,
+  the forgetting path, and the version check on every returning read — goes
+  through one door that replays the chain once per handle on its first such
+  read and then holds a per-key append-only invariant on every one of them,
+  refusing a chain that does not replay as an integrity verdict that names
+  `undercroft verify`. `PRAGMA data_version` decides when the replay is
+  re-run and never whether the invariant applies. Two carve-outs, both
+  stated rather than discovered: a version-1 chain does not refuse on unbound
+  labels, because that would stop every pre-1.6.0 vault, including one served
+  `--read-only` which cannot switch; and a forget attestation's mirror
+  disclosure does not refuse, because that trades the erasure promise for
+  availability — its `meta` marker is HMAC-covered instead, and a rotation
+  refuses to re-tag one that does not verify. Residual: an APPEND is
+  legitimate, so only a replay can tell a forged appended record from a real
+  one, and one written beneath SQLite is unseen by a handle that has already
+  replayed until it re-opens.
 - **Duplicate detection** uses keyed fingerprints (truncated HMAC), so
   stored fingerprints reveal nothing offline.
 

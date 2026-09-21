@@ -506,10 +506,22 @@ rotation is not compared. The lookups find records by `record_id`, which the
 chain did not hash until 1.6.0, so an offline writer who also relabelled an
 audit row hid a replay; **the labelled chain step (ROADMAP O233) folds each
 record's label and time**, so that relabel now breaks the chain replay, or,
-for a row written before the vault switched, the label commitment. What
-remains is read time: the trust floor, the sweep and the listings consult
-the labels before any replay runs, so they act on a relabel until `verify`
-does (ROADMAP O237).
+for a row written before the vault switched, the label commitment. **And
+since ROADMAP O237 those readers no longer act first**: the trust floor, the
+sweep, the listings, the forgetting path and the version check all go
+through one door that requires the chain to replay under this handle's own
+keys, once per handle on its first such read, and that holds a per-key
+append-only invariant over every label it looks at on every one of them. A
+chain that does not replay refuses them as an integrity verdict naming
+`undercroft verify`. Two things it does NOT do, and both are deliberate: a
+version-1 chain — any vault this binary has not opened writable, a
+`--read-only` server included — never refuses on unbound labels, because
+refusing would stop every pre-1.6.0 vault; and the forget attestation's
+mirror disclosure never refuses, because that would trade the erasure
+promise for availability, so its `meta` marker is HMAC-covered instead.
+What remains is an APPEND: only the MAC key separates a forged appended
+record from a real one, so one written beneath SQLite is invisible to a
+handle that has already replayed until it re-opens (ROADMAP O241).
 
 The chain also carries what left and what was read. Every export
 appends an `egress/export` record binding the surface, the recipient
