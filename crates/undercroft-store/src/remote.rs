@@ -45,6 +45,46 @@ use undercroft_index::{IndexRecord, VectorIndex};
 use crate::{Namespace, SearchHit, SearchOptions, StoreError, VaultStore};
 use undercroft_vault::SecurityLevel;
 
+/// The `meta` key holding which embedding space the mirror was built in.
+const PUSHED_EMBEDDER: &str = "index_pushed_embedder";
+/// The `meta` key holding that value's HMAC, hex (ROADMAP O237). Named once
+/// here; `rotate.rs` re-tags the row through [`PUSHED_EMBEDDER_TAG_KEY`].
+const PUSHED_EMBEDDER_TAG: &str = "index_pushed_embedder_tag";
+
+/// [`PUSHED_EMBEDDER_TAG`], for the rotation that re-keys it.
+pub(crate) const PUSHED_EMBEDDER_TAG_KEY: &str = PUSHED_EMBEDDER_TAG;
+
+/// The canonical the marker's tag covers.
+pub(crate) fn pushed_embedder_canonical(name: &str) -> Vec<u8> {
+    format!("indexpushed\x1f{name}").into_bytes()
+}
+
+/// What the mirror's staleness marker says once it has been judged
+/// (ROADMAP O237).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PushedMarker {
+    /// Nothing was ever pushed from a build that records one.
+    Absent,
+    /// A name with no tag: a push from a build before O237. Trusted, because
+    /// refusing would make an upgrade brick a mirrored vault.
+    Legacy(String),
+    /// A name whose tag verifies under the current key.
+    Recorded(String),
+    /// A name whose tag does not verify, or a tag whose value is gone — the
+    /// marker was edited or half-deleted behind the store.
+    Tampered,
+}
+
+/// One wording for the refusal both marker-reading decisions give.
+fn marker_tampered() -> StoreError {
+    StoreError::IntegrityFinding(format!(
+        "meta/{PUSHED_EMBEDDER}: the record of which embedding space the remote mirror \
+         was built in does not verify under this vault's key — it was edited or \
+         half-deleted behind the store, so no staleness verdict about that mirror is \
+         trustworthy; run `undercroft verify`, then `index push` again"
+    ))
+}
+
 /// Raw index-push row: (id, wing, room, content, embedding).
 type PushRow = (String, String, String, Vec<u8>, Vec<u8>);
 
@@ -249,7 +289,13 @@ impl VaultStore {
                         // refused, while `mirror_note` still sees a
                         // non-`None` value and warns.
                         let current = this.embedder.model_name().to_string();
-                        if this.pushed_embedder().is_none_or(|p| p == current) {
+                        // A tampered marker is left exactly as it is: it is
+                        // the evidence, and overwriting it here would destroy
+                        // what `search_with_index` refuses on (ROADMAP O237).
+                        let marker = this.pushed_marker().unwrap_or(PushedMarker::Tampered);
+                        if matches!(marker, PushedMarker::Absent)
+                            || matches!(&marker, PushedMarker::Legacy(p) | PushedMarker::Recorded(p) if *p == current)
+                        {
                             // Warned, never `?` (O175): a marker write that
                             // failed returned here and REPLACED the backend's
                             // error — the one the comment below says the
@@ -389,27 +435,66 @@ impl VaultStore {
     /// while the embedder never changes and silently wrong the moment it
     /// does: the query is embedded locally by the *current* embedder and
     /// matched against whatever the remote still holds.
+    /// **Tagged under the vault key since ROADMAP O237.** It was a plain
+    /// `INSERT INTO meta`, outside every HMAC and every seal, and two
+    /// different decisions read it: `mirror_note`'s disclosure and
+    /// `search_with_index`'s `IndexStale` refusal. An offline
+    /// `UPDATE meta SET value = …` therefore renamed the embedding space a
+    /// forget attestation discloses AND disarmed (or forged) the staleness
+    /// refusal, with nothing able to say so; a
+    /// `DELETE FROM meta WHERE key = 'index_pushed_embedder'` took the whole
+    /// marker. The tag is a SECOND row, deliberately: with one row the two
+    /// die together, while an orphaned tag is what makes the deletion of the
+    /// value itself an integrity failure. The tag costs one HMAC per push
+    /// and one per read, and it is re-keyed by a rotation like every other.
     fn record_pushed_embedder(&self) -> Result<(), StoreError> {
-        self.conn.execute(
-            "INSERT INTO meta (key, value) VALUES ('index_pushed_embedder', ?1)
+        let name = self.embedder.model_name().to_string();
+        let tx = self.conn.unchecked_transaction()?;
+        let mut up = tx.prepare(
+            "INSERT INTO meta (key, value) VALUES (?1, ?2)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![self.embedder.model_name()],
         )?;
+        up.execute(params![PUSHED_EMBEDDER, name])?;
+        up.execute(params![
+            PUSHED_EMBEDDER_TAG,
+            hex::encode(self.vault.tag(&pushed_embedder_canonical(&name)))
+        ])?;
+        drop(up);
+        tx.commit()?;
         Ok(())
     }
 
-    /// The embedder the remote mirror was pushed with, if it was ever pushed
-    /// from a build that recorded one.
-    pub(crate) fn pushed_embedder(&self) -> Option<String> {
-        self.conn
-            .query_row(
-                "SELECT value FROM meta WHERE key = 'index_pushed_embedder'",
-                [],
-                |r| r.get(0),
-            )
-            .optional()
-            .ok()
-            .flatten()
+    /// What the mirror's staleness marker says, judged (ROADMAP O237).
+    pub(crate) fn pushed_marker(&self) -> Result<PushedMarker, StoreError> {
+        let get = |key: &str| -> Result<Option<String>, StoreError> {
+            Ok(self
+                .conn
+                .query_row("SELECT value FROM meta WHERE key = ?1", params![key], |r| {
+                    r.get(0)
+                })
+                .optional()?)
+        };
+        Ok(match (get(PUSHED_EMBEDDER)?, get(PUSHED_EMBEDDER_TAG)?) {
+            (None, None) => PushedMarker::Absent,
+            // A push from a build before O237. It must NOT refuse — that
+            // would make an upgrade brick a mirrored vault — and it is the
+            // U12 shape one table over: a reader that cannot tell a legacy
+            // row from a tampered one reports an intact vault as tampered.
+            (Some(name), None) => PushedMarker::Legacy(name),
+            (Some(name), Some(tag)) => {
+                let bytes = hex::decode(&tag).unwrap_or_default();
+                match self
+                    .vault
+                    .verify_tag(&pushed_embedder_canonical(&name), &bytes)
+                {
+                    Ok(()) => PushedMarker::Recorded(name),
+                    Err(_) => PushedMarker::Tampered,
+                }
+            }
+            // The value gone while its tag remains: the deletion this tag
+            // exists to make visible.
+            (None, Some(_)) => PushedMarker::Tampered,
+        })
     }
 
     /// Search using a remote index for candidate retrieval. Candidates are
@@ -457,14 +542,20 @@ impl VaultStore {
         // back effectively at random and local re-scoring then drops them —
         // an empty result from a vault that holds the answer. Refuse, and say
         // what to run, rather than return that quietly.
-        if let Some(pushed) = self.pushed_embedder() {
-            let current = self.embedder.model_name();
-            if pushed != current {
+        let current = self.embedder.model_name();
+        match self.pushed_marker()? {
+            // A marker that does not verify cannot answer the question this
+            // refusal exists for (ROADMAP O237): flipping it to the current
+            // model is exactly how an offline writer disarms the refusal over
+            // the mirror it exists for.
+            PushedMarker::Tampered => return Err(marker_tampered()),
+            PushedMarker::Legacy(pushed) | PushedMarker::Recorded(pushed) if pushed != current => {
                 return Err(StoreError::IndexStale {
                     pushed,
                     current: current.to_string(),
-                });
+                })
             }
+            _ => {}
         }
         let collection = self.index_collection();
         // A search is a READ, so it asks whether the mirror exists and never
@@ -1550,8 +1641,8 @@ mod tests {
     fn refuse_the_marker(s: &VaultStore) {
         s.conn.execute_batch(REFUSE_THE_MARKER).unwrap();
         assert_eq!(
-            s.pushed_embedder(),
-            None,
+            s.pushed_marker().unwrap(),
+            PushedMarker::Absent,
             "premise: a first push — no marker exists yet"
         );
         // The arm proving the trigger fires, on the very write under test.
@@ -1563,7 +1654,11 @@ mod tests {
                 .contains("o175: the marker write is refused"),
             "{err}"
         );
-        assert_eq!(s.pushed_embedder(), None, "and the refusal left nothing");
+        assert_eq!(
+            s.pushed_marker().unwrap(),
+            PushedMarker::Absent,
+            "and the refusal left nothing"
+        );
     }
 
     /// **O175's second question: a marker write that fails never hides the
@@ -2708,6 +2803,150 @@ mod tests {
         assert!(
             validates_first(&code),
             "`embed_declared` in lib.rs must call `validate_declaration` before it embeds"
+        );
+    }
+
+    // ── ROADMAP O237: the mirror's staleness marker is tagged ────────────
+
+    /// A vault with one drawer, pushed to `index`, so the marker exists.
+    fn pushed(index: &mut EchoIndex) -> (TempDir, VaultStore) {
+        let (dir, mut s) = store();
+        s.upsert(&drawer("notes", "a harbour crane at dawn", 0))
+            .unwrap();
+        s.index_push(index, PlaintextPush::Refuse).unwrap();
+        (dir, s)
+    }
+
+    /// **The marker is HMAC-covered, and an edit is an integrity verdict on
+    /// the two decisions that act on it.** It was a plain `INSERT INTO meta`,
+    /// so one offline `UPDATE` renamed the embedding space a forget
+    /// attestation discloses and disarmed the `IndexStale` refusal, with
+    /// nothing able to say so.
+    #[test]
+    fn an_edited_mirror_marker_is_refused_where_it_decides_and_disclosed_where_it_does_not() {
+        let mut index = EchoIndex::default();
+        let (_d, mut s) = pushed(&mut index);
+        assert_eq!(
+            s.pushed_marker().unwrap(),
+            PushedMarker::Recorded(s.embedder.model_name().to_string()),
+            "premise: a push records a tagged marker"
+        );
+        s.conn
+            .execute(
+                "UPDATE meta SET value = 'evil-embedder' WHERE key = ?1",
+                params![PUSHED_EMBEDDER],
+            )
+            .unwrap();
+        assert_eq!(s.pushed_marker().unwrap(), PushedMarker::Tampered);
+
+        // The staleness decision refuses rather than believing it.
+        let err = s
+            .search_with_index(&mut index, "harbour", &SearchOptions::default())
+            .unwrap_err();
+        assert!(
+            matches!(&err, StoreError::IntegrityFinding(m)
+                     if m.contains("index_pushed_embedder")),
+            "{err}"
+        );
+
+        // The DESTRUCTION path does not refuse (O171 item (c) / O206): it
+        // discloses, naming the embedding space as unrecorded.
+        let ids: Vec<String> = s
+            .recent(
+                None,
+                10,
+                crate::Read::Internal(crate::InternalRead::BulkMember),
+            )
+            .unwrap()
+            .into_iter()
+            .map(|d| d.id)
+            .collect();
+        let att = s.forget_with_proof(&ids).unwrap();
+        let note = att.mirror.expect("the disclosure is not suppressed");
+        assert!(note.contains("unrecorded"), "{note}");
+    }
+
+    /// **Deleting the value is what the tag makes visible.** With the tag in
+    /// the same row the two would die together; as a second row it is
+    /// orphaned, and an orphaned tag is a verdict.
+    #[test]
+    fn deleting_the_marker_value_leaves_its_tag_behind() {
+        let mut index = EchoIndex::default();
+        let (_d, s) = pushed(&mut index);
+        s.conn
+            .execute("DELETE FROM meta WHERE key = ?1", params![PUSHED_EMBEDDER])
+            .unwrap();
+        assert_eq!(s.pushed_marker().unwrap(), PushedMarker::Tampered);
+        let rows: i64 = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM meta WHERE key IN (?1, ?2)",
+                params![PUSHED_EMBEDDER, PUSHED_EMBEDDER_TAG],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 1, "the tag is what is left, and it is the verdict");
+    }
+
+    /// **A marker written before this release is TRUSTED**, on U12's rule
+    /// one table over: a reader that cannot tell a legacy row from a
+    /// tampered one reports an intact vault as tampered, and here it would
+    /// make an upgrade brick every mirrored vault.
+    #[test]
+    fn a_marker_from_an_older_build_carries_no_tag_and_is_not_a_finding() {
+        let mut index = EchoIndex::default();
+        let (_d, s) = pushed(&mut index);
+        s.conn
+            .execute(
+                "DELETE FROM meta WHERE key = ?1",
+                params![PUSHED_EMBEDDER_TAG],
+            )
+            .unwrap();
+        let name = s.embedder.model_name().to_string();
+        assert_eq!(s.pushed_marker().unwrap(), PushedMarker::Legacy(name));
+        assert!(
+            s.search_with_index(&mut index, "harbour", &SearchOptions::default())
+                .is_ok(),
+            "a legacy marker still answers the staleness question"
+        );
+    }
+
+    /// **A rotation re-keys the marker, and refuses to launder a tampered
+    /// one.** The first half is the `wing_trust` lesson: a tag no rotation
+    /// re-keys raises a FALSE integrity verdict on every later read. The
+    /// second is O232's criterion — a rotation recomputes from the row's
+    /// current value, so it would turn an edited marker into an authentic
+    /// one and take the evidence with it.
+    #[test]
+    fn a_rotation_rekeys_the_mirror_marker_and_refuses_a_tampered_one() {
+        let dir = TempDir::new().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let mut s = VaultStore::open(mgr.create("test", SecurityLevel::Sealed).unwrap()).unwrap();
+        s.upsert(&drawer("notes", "a harbour crane at dawn", 0))
+            .unwrap();
+        let mut index = EchoIndex::default();
+        s.index_push(&mut index, PlaintextPush::Refuse).unwrap();
+        let name = s.embedder.model_name().to_string();
+
+        s.rotate_keys(mgr.rotation_candidate("test").unwrap())
+            .unwrap();
+        assert_eq!(
+            s.pushed_marker().unwrap(),
+            PushedMarker::Recorded(name),
+            "the marker verifies under the new key"
+        );
+
+        s.conn
+            .execute(
+                "UPDATE meta SET value = 'evil-embedder' WHERE key = ?1",
+                params![PUSHED_EMBEDDER],
+            )
+            .unwrap();
+        let refused = s.rotate_keys(mgr.rotation_candidate("test").unwrap());
+        assert!(
+            matches!(&refused, Err(StoreError::IntegrityFinding(m))
+                     if m.contains("index_pushed_embedder")),
+            "{refused:?}"
         );
     }
 }
