@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — 1.6.0
+## 1.6.0 — 2026-09-21
 
 MINOR: new capability, backward compatible. `PATCH /admin/tenants/{id}` and
 its CLI mirror `tenant-repoint` are additive, and so are the operator plane's
