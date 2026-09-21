@@ -82,7 +82,10 @@ legitimate, so a forged row appended by a writer editing pages beneath SQLite
 — which does not move `data_version` either — is invisible to a handle that
 has already replayed, until it is re-opened or another connection commits.
 Only a replay can tell a forged append from a real one, because only the MAC
-key can. That is the residual O241 would close.
+key can, and no in-band structure changes that: O241 was filed to close it
+with an authenticated census in the manifest and has since been RULED
+against, because a census catches a key that vanishes and never one that
+appears. The mechanism that would close it is an out-of-band witness (O245).
 
 ### a forged `rotate/` label no longer lifts the rotation boundary, because it is bound to the key the handle holds (O239)
 

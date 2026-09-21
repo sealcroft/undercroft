@@ -712,8 +712,13 @@ Consequences that are binding, not advisory:
   at 102k, +73 ms once per handle. **What it cannot see, stated: an APPEND
   is legitimate**, so a forged row appended beneath SQLite is invisible to a
   handle that already replayed until it re-opens — only the MAC key
-  separates a forged append from a real one, and that is what O241 would
-  close),
+  separates a forged append from a real one, and **no in-band structure
+  changes that** — O241 proposed an authenticated census in the MAC'd
+  manifest and was RULED against, because a census catches a key that
+  VANISHES and never one that APPEARS, which is the direction this residual
+  runs, and because the manifest is restorable from the vault's own
+  `backups/`. The mechanism that would close it is an out-of-band witness,
+  O245),
   verify (**`VerifyReport` is the whole verdict and it has NINE legs**: record
   HMACs, the chain replay, the label commitment (O233), drawer supersession
   receipts, **KG fact receipts**, orphan graph labels, mirror drift,

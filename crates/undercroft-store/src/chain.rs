@@ -643,11 +643,19 @@ pub(crate) fn chain_keys(conn: &Connection, ns: Namespace) -> Result<Vec<String>
 // appended by a writer editing pages beneath SQLite, which does not move
 // the cookie either, is invisible to a handle that has already replayed,
 // until it is re-opened or another connection commits. Only a replay can
-// tell a forged append from a real one, because only the mac key can. The
-// window is narrow (raw page writes under a live SQLite, with no recorded
-// instance in this tree) and it is exactly the residual ROADMAP O241 would
-// close, by putting an authenticated key census in the MAC'd manifest and
-// removing the replay this module pays for.
+// tell a forged append from a real one, because only the mac key can, and
+// **no in-band structure changes that** — ROADMAP O241 ruled against the
+// authenticated manifest census that was filed to, and a sentence here
+// said it would close this residual, which was false in both directions.
+// A census can only ever be ONE-directional (a key it names must be in the
+// database), so it catches a key that VANISHES and never one that APPEARS,
+// and appearing is the direction this residual runs; the anchor is also
+// deliberately allowed to lag and read audits append with no anchor at
+// all, so the unanchored tail a forged row hides in is legitimate and
+// unbounded. The window is narrow — raw page writes under a live SQLite,
+// with no recorded instance in this tree — and the mechanism that would
+// close it is an out-of-band witness (ROADMAP O245), not another copy of
+// a chain fact.
 
 /// What a reader will DO with what the chain says about a label.
 ///

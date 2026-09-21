@@ -200,7 +200,23 @@ restores a **consistent old database + manifest pair together** rewinds
 the vault to a state that was genuine at the time; the chain cannot
 distinguish that from the machine having been off. The planned
 mitigation is an external witness (publishing the chain head
-off-machine); until then this is stated, not hidden.
+off-machine), filed as ROADMAP O245; until then this is stated, not hidden.
+
+**Sharpened 2026-09-21 by O241's ruling, because "together" was narrower
+than the truth.** The **manifest alone** suffices to lower the anchor: a
+lagging anchor is read as a crash artifact and fast-forwarded, so restoring
+a genuine older `vault.json` beside a CURRENT database is healed silently —
+and lowering the anchor first *admits* a later database rollback to any
+point at or above it. So the detector degrades in two cheap steps rather
+than one coordinated one, and the pair need never be consistent. The
+attacker need capture nothing to do it: `backup create` copies the whole
+vault directory and keeps up to ten genuine, validly-MAC'd
+`(vault.db, vault.json)` pairs on the same disk, and a manifest is rejected
+only for a foreign vault id. Two consequences follow and are filed rather
+than absorbed: the writable open consumes the one observable of this in
+silence while a read-only open reports it (O246), and an authenticated
+statement placed IN the manifest — a key census or a regime marker — is
+restored along with it, which is why both were refused (O240, O241).
 
 ### A3 — Cross-tenant adversary (one vault against another)
 
@@ -521,7 +537,11 @@ mirror disclosure never refuses, because that would trade the erasure
 promise for availability, so its `meta` marker is HMAC-covered instead.
 What remains is an APPEND: only the MAC key separates a forged appended
 record from a real one, so one written beneath SQLite is invisible to a
-handle that has already replayed until it re-opens (ROADMAP O241).
+handle that has already replayed until it re-opens. ROADMAP O241 ruled
+against closing it with an authenticated census in the manifest — a census
+catches a key that VANISHES and never one that APPEARS, and the manifest is
+restorable from the vault's own backups — so the mechanism that would close
+it is an out-of-band witness (O245).
 
 The chain also carries what left and what was read. Every export
 appends an `egress/export` record binding the surface, the recipient

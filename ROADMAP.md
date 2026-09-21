@@ -3998,7 +3998,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**271** of the **286** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**276** of the **291** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -22594,70 +22594,215 @@ introduced the check.
 **Gate**: a manifest with `version` one above the build's refuses to open.
 **Counterfactual**: today, it opens.
 
-### O240 — a rolled-back vault silently un-switches its chain, and the next writable open re-blesses the truncated history
 
-**Filed 2026-09-20 by O237's ruling panel (the refuter); established by
-reading.** `chain::head_state` decides the regime from the `migrate/chain-v2`
-record and the two head keys, and `(Regime::V1, Some(frozen), None)` is an
-ordinary seeded version-1 vault. **Nothing outside the database records that a
-vault has ever switched.** So an attacker with full disk control who truncates
-`audit` past the switch, drops the commitment and `head_v2`, and restores the
-matching pre-switch `vault.json` — which is genuine and validly MAC'd — gets a
-vault that replays clean under the version-1 step, answers `chain_ok = true`
-and `label_commitment: pending`, and whose next writable open **switches
-again**, minting a fresh commitment over the truncated history and
-authenticating it as found.
+### O242 — a second handle's commit makes the label guard replay the whole chain, so a write-active server pays it per search
 
-Rollback itself is a documented residual (`docs/THREAT_MODEL.md`, A2: a
-consistent old database and manifest restored together "rewinds the vault to a
-state that was genuine at the time"). What the residual does NOT say is that
-the rollback also downgrades the chain REGIME and that the re-switch then
-re-authenticates the trail — so a vault that was rolled back reads `intact`
-rather than visibly rewound, and every check whose predicate is "the chain
-replays" answers clean on it. That includes O237's guard.
+**Filed 2026-09-21 by O241's ruling panel (the adversarial refuter); the
+defect is MINE, shipped in O237 the same day.** `require_authenticated_labels`
+caches its replay verdict against `PRAGMA data_version` and re-runs the replay
+whenever that cookie moves. The cookie moves when ANOTHER CONNECTION commits —
+measured with a real second process, and pinned by my own test
+`the_replay_runs_once_per_handle_and_again_only_when_another_writer_commits`,
+which asserts the count going 1 → 2. I read that behaviour as soundness and
+never priced it.
 
-**Shape, for a ruling**: a monotone regime marker outside the database — the
-MAC'd manifest is the only authenticated, unforgeable place the tree has — or
-a stated residual sharpened to say this consequence out loud. The manifest
-route is O241's, and the two should be decided together.
+**`serve-http` runs TWO handles on one vault** — the `/mcp` store and the
+`/v1` `Tenancy`, and `with_mcp_vault`'s own comment says so;
+`deny_co_resident` refuses only a rotate or a delete of the co-resident vault,
+never an ordinary write. So every `/v1` save moves the `/mcp` handle's cookie,
+and the next `/mcp` search replays the whole chain. On a server where writes
+interleave with reads that is a replay PER SEARCH: **88 ms at 102,001 audit
+rows against a 36.84 ms/q baseline, i.e. +240%, and 836 ms at 1,002,001** —
+which is exactly the per-read replay O237's own ruling used O234's 10% budget
+to rule out. `audit` has no compaction, so it worsens for the life of the
+vault.
 
-**Gate**: a switched vault, rolled back as above, is reported rather than
-re-blessed. **Counterfactual**: today, the next open re-switches it.
+The re-replay is SOUND and must not simply be removed: it is what sees an
+SQLite-mediated tamper by another process. What is wrong is that the cost was
+never measured on the deployment A31 describes, and the shipped figures
+(+1.7% warm search, +73 ms per handle) are true of a single-handle,
+no-concurrent-writer workload that a real server is not.
 
-**Relations:** decided together with O241 — both turn on whether the MAC'd
-manifest gains an authenticated statement about the chain.
+**Shape, for a ruling panel**: whether the re-replay can be narrowed to the
+rows appended since the cached verdict without reintroducing O237 ruling 1's
+watermark unsoundness (it likely cannot — the attack rewrites rows below any
+watermark); whether a `/v1` write should advance the `/mcp` handle's cached
+verdict in-process rather than invalidating it, which is sound because the
+two handles are in ONE process and the write is this process's own; or whether
+the honest answer is a measured, published cost.
 
-### O241 — an authenticated key census in the MAC'd manifest would remove the replay O237 pays for
+**Gate**: two handles on one vault, interleaved writes and reads, with the
+replay count asserted to have moved — a flat result is otherwise
+indistinguishable from a probe that never produced a foreign commit.
+**Counterfactual**: today the MCP search path replays after every `/v1` save.
 
-**Filed 2026-09-20 by O237's ruling panel (the software-engineering lens and
-the refuter).** O237's guard authenticates a POINT question — "what does the
-chain say about this key?" — with a WHOLE-HISTORY replay, because the chain
-head is the only unforgeable witness the vault carries. Measured, that replay
-is linear in `audit`: 88 ms at 102,001 rows and 836 ms at 1,002,001, against
-an open that is flat at ~35 ms. `audit` has no compaction anywhere in the tree
-and grows with every write, every read under `UNDERCROFT_READ_AUDIT=chain`,
-every export and every push, so the cost is unbounded by design.
+#### MEASURED 2026-09-21 by the integrator, on the maintainer's instruction
 
-The only sub-linear witness available is `Manifest::canonical`, HMAC'd under
-`manifest_key` and verified from disk on every `anchored_head()` call. A
-per-namespace digest or count written by `anchor_manifest` — already on every
-write path — would make a vanished key detectable in one file read and one
-HMAC, with no replay at all.
+**Confirmed, isolated, and reproducible.** On the 102,000-drawer sealed
+corpus under `UNDERCROFT_RETRIEVAL=pq`, with one `serve-http` up: searches
+through `POST /mcp` (the `--vault` handle), saves through
+`POST /v1/…/drawers` (the `Tenancy`'s own handle for the same vault), 30
+cycles per arm, two rounds, per-arm warm-up untimed so no first-read replay
+sits inside a timing.
 
-**Costs, stated rather than discovered**: it is a SECOND copy of a chain fact,
-which O233 rejected twice (the `chain_meta` pointer, and (S2)'s per-row label
-MAC) and which `CLAUDE.md` calls two lists being a closed system; it changes
-the manifest canonical, so it needs a version-aware canonical and therefore
-depends on O238, whose `version` field nobody reads; a read-only open cannot
-write it, so a legacy vault has an unknown state with O233's own laundering
-window; and it does not cover O239's boundary variant, where nothing vanishes.
+**FOUR arms, because two cannot separate the replay from write contention** —
+the writes cost something by themselves, and a two-arm probe would have
+charged that to the replay:
 
-**Gate**: the O237 exploit is caught with no `chain::replay` on the read path,
-and a rotation, a switch and a legitimate policy clear all pass.
-**Counterfactual**: O237's guard, which pays the replay.
+| arm | round 1 | round 2 |
+|---|---|---|
+| guard OFF, searches only | 41 ms | 40 ms |
+| guard OFF, one save between searches | 61 ms | 61 ms |
+| guard ON, searches only | 42 ms | 42 ms |
+| guard ON, one save between searches | **152 ms** | **152 ms** |
 
-**Relations:** decided together with O240 — both turn on whether the MAC'd
-manifest gains an authenticated statement about the chain.
+The writes alone cost **+20.5 ms** per cycle (the OFF rows). The double
+difference — `(ON-inter − ON-ctrl) − (OFF-inter − OFF-ctrl)` — is
+**+89.5 ms**, and that is the replay and nothing else. Stated as the search
+path sees it: **42 ms → 131.5 ms, +213%**, whenever a `/v1` write lands
+between two `/mcp` searches.
+
+**It lands on the number the panel predicted from a different direction.**
+O237's panel measured the replay at 88 ms at 102,001 audit rows; this probe
+attributes 89.5 ms to it without ever timing a replay directly. Two
+independent routes to one figure.
+
+**Premise arms, all asserted rather than assumed**: each interleaved arm's
+drawer count had to rise by exactly its 30 saves (102,000 → 102,120 over the
+run) and each control arm's had to be unchanged, or the probe exits 3. A flat
+result is otherwise indistinguishable from a probe that never produced a
+foreign commit, which is this tree's oldest trap; `LabelGuard::replays` is
+`#[cfg(test)]`, so the drawer count is the observable that was available.
+
+**Not measured, and stated rather than implied**: the 1,002,001-row arm. The
+replay is linear in `audit` and O237's panel measured it at 836 ms there, so
+the extrapolation is ~+836 ms per interleaved search — but it is an
+extrapolation from two measured points, not a third measurement. The corpus
+itself grew during the probe (120 drawers, and their audit rows with them),
+which is the unboundedness of O244 showing up inside a fifteen-minute run.
+
+The harness is `o242_probe.sh` in the session scratchpad; the corpus is the
+docker volume `o242-corpus`, a copy of the untouched `o206-corpus`.
+
+**Relations:** shares a diff surface with O244 — both change what the label
+guard costs on a read, and both edit `require_authenticated_labels` in
+`crates/undercroft-store/src/chain.rs`.
+
+### O243 — `chain::prefix_range` panics on the one namespace whose prefix is empty
+
+**Filed 2026-09-21 by O241's ruling panel (the security lens); verified by the
+integrator and by the refuter.** `prefix_range` computes
+`&lo[..lo.len() - 1]` to build its half-open upper bound, and
+`Namespace::Drawer`'s prefix is `""`, so `lo.len() - 1` underflows a `usize`
+and the slice bound panics. Both profiles panic: release wraps to
+`usize::MAX` and the slice bound fails anyway.
+
+**Unreachable today, and that is a property of three call sites rather than of
+the function**: `rotations_since` passes `Rotate`; `resurrected_rows` filters
+`is_destruction()` first, and `Namespace::Del` is the only one, exhaustively;
+and `chain_keys`'s two production callers pass `Retention` and `Trust`. So it
+is a latent panic in a `pub(crate)` function with no guard and no gate, on a
+tree whose doctrine is that a reachable-by-the-next-caller defect is a defect.
+
+Two things make it worth closing rather than noting. **O205 has a second
+destruction namespace filed**, and nothing checks that its prefix is
+non-empty; if it is empty, `resurrected_rows` reaches this. And **the first
+thing any per-namespace census would do is iterate `Namespace::ALL` into
+`prefix_range`**, which panics on entry one — recorded because O241 was
+refused, so nobody will meet it that way now.
+
+**Shape**: an empty prefix has no upper bound to compute — the whole table is
+its range — so the function returns a range with no `hi`, or the bare
+namespace is refused as having no prefix range at all, whichever reads
+honestly at the two callers.
+
+**Gate**: `prefix_range(Namespace::Drawer)` does not panic, and every
+`Namespace::ALL` variant is driven through it.
+**Counterfactual**: today it panics on the first variant.
+
+### O244 — `audit` is unbounded, has no compaction anywhere, and now sits on the read path
+
+**Filed 2026-09-21 by O241's ruling panel (the adversarial refuter).** No
+production statement deletes from `audit` — every `DELETE FROM audit` in the
+crate is `#[cfg(test)]`, which O237's own append-only gate now pins — and the
+table grows with every write, every read under
+`UNDERCROFT_READ_AUDIT=chain`, every export and every push. O237 then put a
+replay LINEAR in that table onto the read path: 88 ms at 10⁵ rows, 836 ms at
+10⁶.
+
+Both O237 and O241 NAME this fact and neither files it, which is O171's shape:
+a condition two entries rest their reasoning on, that nobody can pick, cite or
+shut. It is also the entry that would actually remove the cost O241 was filed
+against, and it does so without a second copy of a chain fact, a format change
+or a version gate.
+
+**Shape, for a ruling panel**: a retention or rollup policy for the audit
+trail — which is delicate, because the trail is the evidence and O13 already
+records that a keyed replay has a shorter lifetime than the document it
+checks; or a bound on the `read/` trail alone, which is the half that grows
+without recording a mutation; or a checkpoint commitment that lets a replay
+start above genesis without O237 ruling 1's watermark unsoundness.
+
+**Gate**: the replay's cost is bounded above by something an operator
+declares, and a trail that has been compacted still verifies.
+**Counterfactual**: today the replay is linear in a table with no ceiling.
+
+**Relations:** shares a diff surface with O242 — both change what the label
+guard costs on a read, and both edit `require_authenticated_labels` in
+`crates/undercroft-store/src/chain.rs`.
+
+### O245 — the external witness `docs/THREAT_MODEL.md` calls "the planned mitigation" has no entry anywhere
+
+**Filed 2026-09-21 by O241's ruling panel (all three lenses and the refuter).**
+A2's residual says an attacker with full disk control who restores a
+consistent old database and manifest together rewinds the vault undetectably,
+and names its own remedy: "The planned mitigation is an external witness
+(publishing the chain head off-machine)". `grep -i "external witness"
+ROADMAP.md` returns nothing. A governance surface has called this planned for
+the whole campaign and no entry exists — O171 verbatim, and invisible to the
+`ROADMAP headings` preflight, which reads `//` blocks in `crates/` only.
+
+O241's ruling makes filing it obligatory rather than tidy: the census and the
+regime marker were both refused BECAUSE the manifest is restorable, and the
+external witness is the only mechanism in the tree that supplies the freshness
+they lack. Refusing the in-band options without filing the out-of-band one
+would be a gap dressed as a principled refusal.
+
+**Shape**: the cheap first step exists today — `undercroft vault info` prints
+`writes` and the chain head, so "publish the anchored pair off-machine on a
+cadence, and compare on return" is a documentable operator procedure, not a
+2.0 project. What needs ruling is whether the engine should ASSIST it (a
+command that emits the pair in a checkable form, and one that checks a
+returned witness against the vault) or whether it stays procedure.
+
+**Gate**: a vault rolled back to a genuine earlier state is REPORTED against a
+witness taken before the rollback.
+**Counterfactual**: today `verify` answers clean on it, by construction.
+
+### O246 — a writable open heals a rolled-back manifest and reports nothing, while a read-only open reports it
+
+**Filed 2026-09-21 by O241's ruling panel (the adversarial refuter).**
+`reconcile_chain` returns `Healed { behind_by }`; the READ-ONLY path pushes
+that onto `unhealed`, and `init_chain`'s writable path discards it into a
+field that only `vault anchor` and one orchestrator route read. No caller
+anywhere refuses on `behind_by`, and `chain_verdict` requires only
+`anchor_seen`, never `behind_by == 0`, so `verify` is green.
+
+That asymmetry is defensible — a lagging anchor after a crash is the ordinary
+case and must not alarm — but it is the one observable of the attack O241's
+ruling sharpened into A2: restoring a genuine older `vault.json` beside a
+current database lowers the anchor, and the next writable open silently
+fast-forwards it. The evidence of the rollback is consumed in silence by the
+heal, on the posture that heals.
+
+**Shape**: the writable open says what it healed, on `unhealed` beside the
+read-only path's line, so the alarm stops being free to erase. Whether it
+should REFUSE above some `behind_by` is a separate and probably wrong idea —
+the crash window is unbounded in principle — and the entry does not propose it.
+
+**Gate**: a writable open over a lowered anchor reports the heal and its
+`behind_by` on all four renderers.
+**Counterfactual**: today it heals and says nothing.
 
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
@@ -22777,6 +22922,215 @@ falls in and confirmed against the CHANGELOG; the still-open, releasable O23
 went to the `Open` section above. The rule this leaves, stated once: **a
 closed entry lives under the release that carried it; an open releasable
 entry lives in `Open`; only what a release cannot contain lives here.**
+
+### O241 — CLOSED 2026-09-21: a manifest key census cannot authenticate a point question over an unbounded key space
+
+**Filed 2026-09-20 by O237's ruling panel (the software-engineering lens and
+the refuter).** O237's guard authenticates a POINT question — "what does the
+chain say about this key?" — with a WHOLE-HISTORY replay, because the chain
+head is the only unforgeable witness the vault carries. Measured, that replay
+is linear in `audit`: 88 ms at 102,001 rows and 836 ms at 1,002,001, against
+an open that is flat at ~35 ms. `audit` has no compaction anywhere in the tree
+and grows with every write, every read under `UNDERCROFT_READ_AUDIT=chain`,
+every export and every push, so the cost is unbounded by design.
+
+The only sub-linear witness available is `Manifest::canonical`, HMAC'd under
+`manifest_key` and verified from disk on every `anchored_head()` call. A
+per-namespace digest or count written by `anchor_manifest` — already on every
+write path — would make a vanished key detectable in one file read and one
+HMAC, with no replay at all.
+
+**Costs, stated rather than discovered**: it is a SECOND copy of a chain fact,
+which O233 rejected twice (the `chain_meta` pointer, and (S2)'s per-row label
+MAC) and which `CLAUDE.md` calls two lists being a closed system; it changes
+the manifest canonical, so it needs a version-aware canonical and therefore
+depends on O238, whose `version` field nobody reads; a read-only open cannot
+write it, so a legacy vault has an unknown state with O233's own laundering
+window; and it does not cover O239's boundary variant, where nothing vanishes.
+
+**Gate**: the O237 exploit is caught with no `chain::replay` on the read path,
+and a rotation, a switch and a legitimate policy clear all pass.
+**Counterfactual**: O237's guard, which pays the replay.
+
+manifest gains an authenticated statement about the chain.
+
+#### RULED 2026-09-21 by a three-lens panel (agentic memory architecture, security, software engineering) plus an adversarial refuter — together with O240
+
+**The question.** Whether the MAC'd manifest should gain an authenticated
+statement about the audit chain: a per-namespace key CENSUS that would remove
+O237's whole-history replay (this entry), or a monotone REGIME MARKER that
+would stop a rolled-back vault silently un-switching (O240). Working files are
+in the session scratchpad's `o241-panel/` — material, never the record.
+
+**Prior rulings found, and their disposition.**
+
+- **O233's rejection of "S in a `chain_meta` pointer"** — two reasons: a
+  second copy of one fact, and a pointer with no commitment made legitimate
+  for fresh vaults lets a planted pointer keep writers on v1 silently. The
+  integrator's brief argued the second reason does not transfer to a MAC'd
+  manifest an attacker cannot forge. **REFUTED, and both reasons transfer at
+  full strength.** The attacker never forges: `backup create` copies the whole
+  vault directory and `prune_backups` keeps TEN genuine, validly-MAC'd
+  `(vault.db, vault.json)` pairs on the same disk, and `anchored_head` rejects
+  only a foreign `id`. "Planted" becomes "restored" and the MAC is no defence.
+- **O233's (M2), a switch point with no commitment** — FOLLOWED, and it is the
+  precedent that reaches O240, which no lens cited and the refuter found: a
+  marker that is not itself a commitment over the rows it describes proves
+  nothing about them.
+- **O233's (S2), a per-row label MAC** — FOLLOWED as refuted, and it closes the
+  design space: a point proof over an unbounded key space needs a per-row
+  witness, so a Merkle root in the manifest is (S2) in another shape plus a
+  new on-disk structure maintained on every append.
+- **O233's `v2:` head-prefix fence** — found by the refuter, DOES NOT REACH
+  (it was judged as a fence against 1.5.x, not as a rollback detector), and it
+  is cited so O240's marker is not re-proposed as novel.
+- **O237 ruling 1** (an incremental replay from a watermark is UNSOUND because
+  the attack rewrites rows BELOW any watermark) — FOLLOWED, and it reaches an
+  incrementally folded census, which is a watermark wearing a MAC.
+- **O237 ruling 3** (`Regime::V1`/`Pending` must not refuse) — FOLLOWED, and it
+  answers the absence question before it is asked: a vault with no census must
+  not refuse, so absence means fall back to the replay, so **the replay never
+  goes away**. That was already ruled and did not need re-asking.
+- **O234's read budget**, **O230 rulings 4 and 5**, **O232 ruling 1**, **A28**,
+  **A31**, **O91**, **O13**, **O80** — all FOLLOWED; O80 ("two lists are a
+  closed system") is the doctrine that decides the SHAPE.
+- **O241, O240 and O238 carry no `#### RULED` record**; this panel is the first
+  on all three.
+
+**Ruling.**
+
+1. **The census is NOT built, and the ground is STRUCTURAL rather than a cost
+   comparison.** A bounded, lagging, restorable manifest cannot authenticate a
+   point question over an unbounded key space. Recording the refusal as "the
+   prize is small" would invert the moment somebody measures a 10⁶-row vault,
+   where the replay is 836 ms; the refuter named that trap and it is taken.
+2. **Three independent sufficient reasons, each verified by reading.** (a) The
+   reader that pays the whole measured cost is `refuse_replayed`, and on a
+   default vault it is the SOLE guarded read on a search — `resolve_search_policy`
+   reaches `wing_trusts` only under a declared floor — so no census that is
+   sub-linear covers it and the replay runs on the first search anyway. (b) A
+   label census is ORTHOGONAL to the replay, not weaker: blind to a re-tag, a
+   re-time and a storage-class retype, and the re-tag case alone re-opens O230,
+   because `policy_finding` compares nothing but `a.tag != r.tag`. (c) With the
+   replay retired, restoring a genuine older manifest out of the vault's own
+   `backups/` defeats the census, and only the replay can tell a STALE manifest
+   from a LAGGING one.
+3. **O240's marker is NOT built either, and it buys exactly zero.** Its own
+   attack text requires restoring the matching pre-switch `vault.json`; a
+   marker added to that file is restored with it. The inconsistent pair — a
+   truncated database beside a current manifest — is already caught by
+   `anchor_seen`, which is why the attack has to restore the manifest at all.
+   There is no variant a manifest marker catches.
+4. **O238 is built, on a reason stronger than its own entry's**, and it is
+   filed open rather than built here: a version bump ALONE opens today, but a
+   version bump PLUS a canonical field makes every older binary answer
+   `ManifestTampered` on an intact vault. So O238 must ship in a release
+   EARLIER than any canonical change, and its check must read `version` before
+   the MAC comparison — safe only because `version` is inside the canonical, so
+   trusting it pre-verification buys a refusal and never an acceptance. Its
+   entry's gate is also wrong: it drives the case that already refuses.
+5. **What remains is filed, not absorbed.** O242 (the two-handle replay cost —
+   the integrator's own defect, shipped in O237), O243 (`prefix_range` panics
+   on an empty prefix), O244 (`audit` is unbounded and now sits on the read
+   path — the buildable entry that actually removes the cost this one was
+   filed against), O245 (the external witness A2 has called "the planned
+   mitigation" with no entry anywhere — an O171 breach), and the A2 sharpening
+   in item 6.
+6. **A2's residual is SHARPENED rather than left.** It says "a consistent old
+   database + manifest pair together". The manifest ALONE suffices to lower the
+   anchor, because `reconcile_chain` reads a lagging anchor as a crash artifact
+   and fast-forwards it, and lowering it first ADMITS a later database rollback
+   to any point at or above the lowered anchor. So the detector degrades in two
+   cheap steps rather than one coordinated one, and the restore source is the
+   product's own `backups/`. The mechanism itself was already documented
+   ("heals silently"); the asymmetry was not.
+7. **Class.** A ruling, not code: recorded under `## Unversioned` with an
+   `UNVERSIONED_CLOSED` row, both entries moved TOGETHER and both `Relations:`
+   markers stripped — `roadmap_relations` fires the moment one partner leaves
+   `## Open` while the other still names it, which the refuter caught and no
+   lens did.
+
+**Claims refuted, including the brief's.** The brief said the manifest is read
+and MAC-verified on every guarded read, so a census would be free on the read
+side: FALSE — `require_authenticated_labels` short-circuits on a `PRAGMA
+data_version` cache hit and `chain_verdict` is the only caller of
+`anchored_head` on that path. (The refuter also refused to let that carry
+weight in the other direction: a file read plus one HMAC per read is tens of
+microseconds against a 36.8 ms/q search, so "not free" is right and "costly"
+would be false — a ruling resting on it would rest on nothing.) The brief's
+"deciding namespaces are few" list was wrong in the direction that decides the
+question, omitting the corpus namespaces `refuse_replayed` really consults; it
+also listed `egress/index-push` as guarded, and the lenses over-corrected to
+"not guarded at all" — the truth is that the PATH is guarded at
+`forget_with_proof_ruled`'s top while `mirror_note` deliberately does not
+refuse, which is O237 ruling 5. And a claim the integrator SHIPPED in
+`chain.rs`'s module documentation — that the forged-append residual "is
+exactly the residual ROADMAP O241 would close" — is false in both directions:
+a census can only ever be one-directional (a key in the census must be in the
+database), which catches vanishing and never appearing, and appearing is the
+direction the residual runs. Corrected in the same unit.
+
+**The option nobody considered, judged rather than skipped.** A CADENCED
+replay — moved off the read path onto an operator cadence with a staleness
+bound the readers consult, which is what `tighten_anchor` already does for the
+anchor. It needs no format change, no second copy of a chain fact and no
+version gate, and it is the only candidate that attacks the cost this entry
+names as the whole prize. **It loses on the same ground as (A):** a staleness
+bound weakens the guarantee from "verified at this read" to "verified within
+T", and the whole point of O237's guard is that a floored search must not act
+on a relabel made a moment ago. Recorded so the next session does not
+rediscover it as new.
+
+**Dissent.** None on the three build/do-not-build decisions; all three lenses
+and the refuter agree. The refuter dissented from the RECORD as first drafted
+— the ground, the two gated bookkeeping consequences, the false merged
+comment, and the unpriced two-handle replay it calls "a live defect the panel
+walked past while pricing a hypothetical one". Every one of those is taken
+above.
+
+**What remains, stated.** The prize is "approximately zero **on the measured
+path**", not zero: a handle that performs only policy work — `trust list`, a
+retention sweep, a `forget` — pays the replay today, and at 10⁶ audit rows
+that is 836 ms off an operator command that a policy-only census could remove.
+Narrow, real, and outside O234's read budget entirely. It is recorded here so
+that measuring it later reads as the known residual rather than as a refutation
+of this ruling.
+
+
+### O240 — CLOSED 2026-09-21: a manifest regime marker is refused; the un-switch is a sharpened residual
+
+**Filed 2026-09-20 by O237's ruling panel (the refuter); established by
+reading.** `chain::head_state` decides the regime from the `migrate/chain-v2`
+record and the two head keys, and `(Regime::V1, Some(frozen), None)` is an
+ordinary seeded version-1 vault. **Nothing outside the database records that a
+vault has ever switched.** So an attacker with full disk control who truncates
+`audit` past the switch, drops the commitment and `head_v2`, and restores the
+matching pre-switch `vault.json` — which is genuine and validly MAC'd — gets a
+vault that replays clean under the version-1 step, answers `chain_ok = true`
+and `label_commitment: pending`, and whose next writable open **switches
+again**, minting a fresh commitment over the truncated history and
+authenticating it as found.
+
+Rollback itself is a documented residual (`docs/THREAT_MODEL.md`, A2: a
+consistent old database and manifest restored together "rewinds the vault to a
+state that was genuine at the time"). What the residual does NOT say is that
+the rollback also downgrades the chain REGIME and that the re-switch then
+re-authenticates the trail — so a vault that was rolled back reads `intact`
+rather than visibly rewound, and every check whose predicate is "the chain
+replays" answers clean on it. That includes O237's guard.
+
+**Shape, for a ruling**: a monotone regime marker outside the database — the
+MAC'd manifest is the only authenticated, unforgeable place the tree has — or
+a stated residual sharpened to say this consequence out loud. The manifest
+route is O241's, and the two should be decided together.
+
+**Gate**: a switched vault, rolled back as above, is reported rather than
+re-blessed. **Counterfactual**: today, the next open re-switches it.
+
+manifest gains an authenticated statement about the chain.
+
+**RULED 2026-09-21 together with O241; the record is in that entry.** The marker is refused because it buys exactly zero: this attack must restore the matching pre-switch `vault.json`, and a marker added to that file is restored with it. The un-switch itself is real and stays, as a sharpened residual in `docs/THREAT_MODEL.md` A2 and in `docs/security.md`: a rollback also downgrades the chain REGIME, and the next writable open re-blesses the truncated history, so a rolled-back vault reads `intact` rather than visibly rewound. The mechanism that would close it is the external witness, filed as O245.
+
 
 ### O173 — CLOSED by doctrine 2026-09-14: where the reading runs out, a ruling panel decides, and the ruling is written into the entry that owns it
 
