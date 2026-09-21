@@ -22636,12 +22636,53 @@ replay count asserted to have moved — a flat result is otherwise
 indistinguishable from a probe that never produced a foreign commit.
 **Counterfactual**: today the MCP search path replays after every `/v1` save.
 
-**Probe the ruling owes, which the integrator must run**: on the
-102,000-drawer sealed corpus with `serve-http` up, interleave one `POST
-/v1/{vault}/drawers` with one `POST /mcp` search, N rounds, against a control
-with no interleaved save; then repeat at 1,002,001 audit rows.
-`LabelGuard::replays` is `#[cfg(test)]`, so the premise arm needs a
-counterfactual binary or explicit instrumentation.
+#### MEASURED 2026-09-21 by the integrator, on the maintainer's instruction
+
+**Confirmed, isolated, and reproducible.** On the 102,000-drawer sealed
+corpus under `UNDERCROFT_RETRIEVAL=pq`, with one `serve-http` up: searches
+through `POST /mcp` (the `--vault` handle), saves through
+`POST /v1/…/drawers` (the `Tenancy`'s own handle for the same vault), 30
+cycles per arm, two rounds, per-arm warm-up untimed so no first-read replay
+sits inside a timing.
+
+**FOUR arms, because two cannot separate the replay from write contention** —
+the writes cost something by themselves, and a two-arm probe would have
+charged that to the replay:
+
+| arm | round 1 | round 2 |
+|---|---|---|
+| guard OFF, searches only | 41 ms | 40 ms |
+| guard OFF, one save between searches | 61 ms | 61 ms |
+| guard ON, searches only | 42 ms | 42 ms |
+| guard ON, one save between searches | **152 ms** | **152 ms** |
+
+The writes alone cost **+20.5 ms** per cycle (the OFF rows). The double
+difference — `(ON-inter − ON-ctrl) − (OFF-inter − OFF-ctrl)` — is
+**+89.5 ms**, and that is the replay and nothing else. Stated as the search
+path sees it: **42 ms → 131.5 ms, +213%**, whenever a `/v1` write lands
+between two `/mcp` searches.
+
+**It lands on the number the panel predicted from a different direction.**
+O237's panel measured the replay at 88 ms at 102,001 audit rows; this probe
+attributes 89.5 ms to it without ever timing a replay directly. Two
+independent routes to one figure.
+
+**Premise arms, all asserted rather than assumed**: each interleaved arm's
+drawer count had to rise by exactly its 30 saves (102,000 → 102,120 over the
+run) and each control arm's had to be unchanged, or the probe exits 3. A flat
+result is otherwise indistinguishable from a probe that never produced a
+foreign commit, which is this tree's oldest trap; `LabelGuard::replays` is
+`#[cfg(test)]`, so the drawer count is the observable that was available.
+
+**Not measured, and stated rather than implied**: the 1,002,001-row arm. The
+replay is linear in `audit` and O237's panel measured it at 836 ms there, so
+the extrapolation is ~+836 ms per interleaved search — but it is an
+extrapolation from two measured points, not a third measurement. The corpus
+itself grew during the probe (120 drawers, and their audit rows with them),
+which is the unboundedness of O244 showing up inside a fifteen-minute run.
+
+The harness is `o242_probe.sh` in the session scratchpad; the corpus is the
+docker volume `o242-corpus`, a copy of the untouched `o206-corpus`.
 
 **Relations:** shares a diff surface with O244 — both change what the label
 guard costs on a read, and both edit `require_authenticated_labels` in
