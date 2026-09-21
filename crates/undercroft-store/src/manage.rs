@@ -576,7 +576,7 @@ impl VaultStore {
     /// here as well, and the trust floor, `recent`, `list_drawers` and
     /// `trust list` refuse with them, exactly as a flip already made them.
     pub fn wing_trusts(&self) -> Result<Vec<(String, String)>, StoreError> {
-        let (rows, findings) = self.trust_policy_scan()?;
+        let (rows, findings) = self.trust_policy_scan(crate::chain::LabelUse::Decide)?;
         crate::retention::refuse_on_findings(&findings, |_| true)?;
         Ok(rows)
     }

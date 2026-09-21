@@ -2857,6 +2857,14 @@ pub struct VaultStore {
     /// — this is the in-memory role embedded ChromaDB's index played
     /// upstream, without writing plaintext-derived data to disk.
     emb_cache: std::cell::RefCell<Option<std::collections::HashMap<String, Vec<f32>>>>,
+    /// **What this handle has established about the audit chain's labels**
+    /// (ROADMAP O237): the last full replay's verdict with the SQLite
+    /// `data_version` it was taken at, and the newest record this handle has
+    /// seen for every label a deciding read looked up. Per HANDLE, never
+    /// persisted — it is a claim about what this process has observed, and a
+    /// cached verdict that outlived the process would be a claim about a file
+    /// somebody else has had since. See `chain::LabelGuard`.
+    labels: std::cell::RefCell<crate::chain::LabelGuard>,
     /// The `semantic` score above which a drawer may be admitted on cosine
     /// alone; `None` refuses semantic-only admission entirely. Resolved once
     /// at open by [`resolve_semantic_gate`] — see there for why it is not
@@ -4309,6 +4317,7 @@ impl VaultStore {
             reranker: None,
             late: None,
             emb_cache: std::cell::RefCell::new(None),
+            labels: Default::default(),
             semantic_gate,
             sem_gate_source,
             fts: false,

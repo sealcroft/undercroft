@@ -47,7 +47,7 @@ use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime};
 
 use crate::admission::QUARANTINE_WING;
-use crate::chain::ChainRecord;
+use crate::chain::{ChainRecord, LabelUse};
 use crate::forget::ForgetAttestation;
 use crate::{chain_append, Namespace, StoreError, VaultStore};
 
@@ -272,7 +272,7 @@ impl VaultStore {
     /// behind the store stays report-only here (O206): there is no policy
     /// left to act on, and `verify` and the sweep's `policy_drift` name it.
     pub fn retention_policies(&self) -> Result<Vec<RetentionPolicy>, StoreError> {
-        let (rows, findings) = self.retention_policy_scan()?;
+        let (rows, findings) = self.retention_policy_scan(LabelUse::Decide)?;
         refuse_on_findings(&findings, |f| !f.gone)?;
         Ok(rows)
     }
@@ -463,7 +463,7 @@ impl VaultStore {
     /// present answered clean beside it.
     pub(crate) fn retention_policy_drift(&self) -> Result<Vec<String>, StoreError> {
         let mut drift: Vec<String> = self
-            .retention_policy_scan()?
+            .retention_policy_scan(LabelUse::Report)?
             .1
             .into_iter()
             .map(|f| f.text)
@@ -476,7 +476,7 @@ impl VaultStore {
     /// halves decide through [`policy_finding`] (ROADMAP O230), sorted.
     pub(crate) fn trust_policy_drift(&self) -> Result<Vec<String>, StoreError> {
         let mut drift: Vec<String> = self
-            .trust_policy_scan()?
+            .trust_policy_scan(LabelUse::Report)?
             .1
             .into_iter()
             .map(|f| f.text)
@@ -488,10 +488,20 @@ impl VaultStore {
     /// Every `retention_policy` row with the evidence about it, and every
     /// finding — rows present and declarations whose row is gone. The ONE
     /// scan `verify`, the sweep and `retention_policies` share.
+    ///
+    /// **The guard is HERE, on the scan, not on the public wrapper**
+    /// (ROADMAP O237): `verify` already reaches this function directly, so a
+    /// guard on `retention_policies` alone would leave the next caller that
+    /// does the same unguarded. `on` is required for the same reason — the
+    /// two answers are opposite and neither is a safe default.
     pub(crate) fn retention_policy_scan(
         &self,
+        on: LabelUse,
     ) -> Result<(Vec<RetentionPolicy>, Vec<PolicyFinding>), StoreError> {
-        let boundary = self.rotation_boundary()?;
+        if on == LabelUse::Decide {
+            self.require_authenticated_labels()?;
+        }
+        let boundary = self.rotation_boundary(on)?;
         let mut stmt = self.conn.prepare(concat!(
             "SELECT wing, room, max_age_days, tag, assigned_at ",
             "FROM retention_policy ORDER BY wing, room",
@@ -519,9 +529,9 @@ impl VaultStore {
                 )
                 .is_ok();
             let evidence = PolicyEvidence {
-                newest: self.newest_record(&key)?,
+                newest: self.newest_record(&key, on)?,
                 newest_clear: self
-                    .newest_record(&Namespace::RetentionClear.record(&rest))?
+                    .newest_record(&Namespace::RetentionClear.record(&rest), on)?
                     .map(|r| r.seq),
                 boundary,
             };
@@ -540,15 +550,15 @@ impl VaultStore {
                 assigned_at: at,
             });
         }
-        for key in self.chain_keys(Namespace::Retention)? {
+        for key in self.chain_keys(Namespace::Retention, on)? {
             if seen.contains(&key) {
                 continue;
             }
             let rest = &key[Namespace::Retention.prefix().len()..];
             let evidence = PolicyEvidence {
-                newest: self.newest_record(&key)?,
+                newest: self.newest_record(&key, on)?,
                 newest_clear: self
-                    .newest_record(&Namespace::RetentionClear.record(rest))?
+                    .newest_record(&Namespace::RetentionClear.record(rest), on)?
                     .map(|r| r.seq),
                 boundary,
             };
@@ -563,8 +573,14 @@ impl VaultStore {
     /// [`VaultStore::wing_trusts`]. Trust has no clear: no
     /// `DELETE FROM wing_trust` exists in this crate, so a row that is gone
     /// has no legitimate path.
-    pub(crate) fn trust_policy_scan(&self) -> Result<TrustScan, StoreError> {
-        let boundary = self.rotation_boundary()?;
+    ///
+    /// Guarded on the SCAN, with `on` required, for the reason stated on
+    /// [`VaultStore::retention_policy_scan`] (ROADMAP O237).
+    pub(crate) fn trust_policy_scan(&self, on: LabelUse) -> Result<TrustScan, StoreError> {
+        if on == LabelUse::Decide {
+            self.require_authenticated_labels()?;
+        }
+        let boundary = self.rotation_boundary(on)?;
         let mut stmt = self
             .conn
             .prepare("SELECT wing, trust, tag, assigned_at FROM wing_trust ORDER BY wing")?;
@@ -584,7 +600,7 @@ impl VaultStore {
                 )
                 .is_ok();
             let evidence = PolicyEvidence {
-                newest: self.newest_record(&key)?,
+                newest: self.newest_record(&key, on)?,
                 newest_clear: None,
                 boundary,
             };
@@ -598,12 +614,12 @@ impl VaultStore {
             seen.insert(key);
             kept.push((wing, trust));
         }
-        for key in self.chain_keys(Namespace::Trust)? {
+        for key in self.chain_keys(Namespace::Trust, on)? {
             if seen.contains(&key) {
                 continue;
             }
             let evidence = PolicyEvidence {
-                newest: self.newest_record(&key)?,
+                newest: self.newest_record(&key, on)?,
                 newest_clear: None,
                 boundary,
             };
@@ -612,22 +628,6 @@ impl VaultStore {
             }
         }
         Ok((kept, findings))
-    }
-
-    /// The newest audit record carrying exactly this label, and the newest
-    /// rotation's place in the chain — both from [`crate::chain`], the one
-    /// place that reads what the trail says about a label (ROADMAP O234
-    /// asks the same question of four more tables).
-    fn newest_record(&self, record_id: &str) -> Result<Option<ChainRecord>, StoreError> {
-        crate::chain::newest_record(&self.conn, record_id)
-    }
-
-    fn rotation_boundary(&self) -> Result<Option<i64>, StoreError> {
-        crate::chain::rotation_boundary(&self.conn, &self.vault)
-    }
-
-    fn chain_keys(&self, ns: Namespace) -> Result<Vec<String>, StoreError> {
-        crate::chain::chain_keys(&self.conn, ns)
     }
 }
 
@@ -771,6 +771,7 @@ pub(crate) fn policy_finding(
 
 #[cfg(test)]
 mod tests {
+    use crate::chain::LabelUse;
     use crate::{InternalRead, Read, StoreError, VaultStore};
     use rusqlite::params;
     use tempfile::TempDir;
@@ -1255,7 +1256,7 @@ mod tests {
 
         // PREMISE: the rotation wrote a record under the key the vault now
         // holds, and the boundary finds it.
-        let boundary = crate::chain::rotation_boundary(&s.conn, &s.vault).unwrap();
+        let boundary = s.rotation_boundary(LabelUse::Report).unwrap();
         assert!(boundary.is_some(), "a rotation must move the boundary");
         assert!(s.verify().unwrap().ok(), "a rotated vault verifies");
         assert_eq!(s.retention_policies().unwrap().len(), 1);
@@ -1266,7 +1267,7 @@ mod tests {
         // than "the first rotation ever".
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         s.rotate_keys(mgr.rotation_candidate("r").unwrap()).unwrap();
-        let later = crate::chain::rotation_boundary(&s.conn, &s.vault).unwrap();
+        let later = s.rotation_boundary(LabelUse::Report).unwrap();
         assert!(
             later > boundary,
             "{later:?} must be newer than {boundary:?}"
@@ -1280,10 +1281,7 @@ mod tests {
     #[test]
     fn an_unrotated_vault_has_no_rotation_boundary() {
         let (_d, s) = sealed_store();
-        assert_eq!(
-            crate::chain::rotation_boundary(&s.conn, &s.vault).unwrap(),
-            None
-        );
+        assert_eq!(s.rotation_boundary(LabelUse::Report).unwrap(), None);
         // And a planted label of a FOREIGN keycheck does not manufacture one.
         s.conn
             .execute(
@@ -1293,7 +1291,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            crate::chain::rotation_boundary(&s.conn, &s.vault).unwrap(),
+            s.rotation_boundary(LabelUse::Report).unwrap(),
             None,
             "a foreign keycheck is not this vault's rotation"
         );
@@ -1316,7 +1314,8 @@ mod tests {
             "both rotations counted, across two key generations"
         );
         // The boundary, by contrast, names exactly one.
-        let b = crate::chain::rotation_boundary(&s.conn, &s.vault)
+        let b = s
+            .rotation_boundary(LabelUse::Report)
             .unwrap()
             .expect("the current key's rotation");
         assert_eq!(crate::chain::rotations_since(&s.conn, b).unwrap(), 0);
