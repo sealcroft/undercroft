@@ -1468,9 +1468,7 @@ fn open_store_as(dir: &std::path::Path, vault: &str, posture: Posture) -> Result
             Ok("ort") => {
                 #[cfg(feature = "ort")]
                 {
-                    let embedder = undercroft_embed_ort::embedder_from_env()
-                        .map_err(|e| anyhow::anyhow!("loading ORT embedder: {e}"))?;
-                    open(v, Box::new(embedder))?
+                    open(v, shared_ort_embedder()?)?
                 }
                 #[cfg(not(feature = "ort"))]
                 bail!(
@@ -1734,21 +1732,7 @@ fn embedder_factory() -> tenant::EmbedderFactory {
                 Ok("ort") => {
                     #[cfg(feature = "ort")]
                     {
-                        // One session pool shared across every tenant vault —
-                        // the pool holds a model copy per core, so per-vault
-                        // loads would multiply RAM for identical weights.
-                        use std::sync::{Arc, OnceLock};
-                        static SHARED: OnceLock<Arc<undercroft_embed_ort::OrtEmbedder>> =
-                            OnceLock::new();
-                        let arc = match SHARED.get() {
-                            Some(a) => a.clone(),
-                            None => {
-                                let e = undercroft_embed_ort::embedder_from_env()
-                                    .map_err(|e| anyhow::anyhow!("loading ORT embedder: {e}"))?;
-                                SHARED.get_or_init(|| Arc::new(e)).clone()
-                            }
-                        };
-                        Ok(Box::new(SharedOrtEmbedder(arc)))
+                        Ok(shared_ort_embedder()?)
                     }
                     #[cfg(not(feature = "ort"))]
                     bail!(
@@ -1783,6 +1767,33 @@ fn embedder_factory() -> tenant::EmbedderFactory {
 /// Generic over the model only so a test can prove it DELEGATES (ROADMAP
 /// O167): the shipped model answers `None` for its destination, and a wrapper
 /// answering `None` itself would pass any test built on that model.
+/// **The ORT embedder this PROCESS uses — one session pool, one model.**
+///
+/// The pool holds a model copy per core, so a second load multiplies RAM for
+/// identical weights. It is a single implementation because BOTH openers need
+/// it: `embedder_factory` opens every tenant vault, and since ROADMAP O242
+/// `serve-http` serves its `--vault` vault from the store `open_store_as`
+/// opened. While that arm built its own model, the served vault silently left
+/// the pool every tenant vault shares — and `embed_failures` is the
+/// EMBEDDER's number, so "process-wide across every vault under `ort`" (O122)
+/// quietly stopped being true for exactly one vault. `model_e2e`'s sharing
+/// assertion is what caught it, on the one CI leg that enables its
+/// `required-features`.
+#[cfg(feature = "ort")]
+fn shared_ort_embedder() -> Result<Box<dyn undercroft_core::embed::Embedder + Send>> {
+    use std::sync::{Arc, OnceLock};
+    static SHARED: OnceLock<Arc<undercroft_embed_ort::OrtEmbedder>> = OnceLock::new();
+    let arc = match SHARED.get() {
+        Some(a) => a.clone(),
+        None => {
+            let e = undercroft_embed_ort::embedder_from_env()
+                .map_err(|e| anyhow::anyhow!("loading ORT embedder: {e}"))?;
+            SHARED.get_or_init(|| Arc::new(e)).clone()
+        }
+    };
+    Ok(Box::new(SharedOrtEmbedder(arc)))
+}
+
 #[cfg(any(test, feature = "ort"))]
 struct SharedOrtEmbedder<E>(std::sync::Arc<E>);
 
