@@ -673,7 +673,47 @@ Consequences that are binding, not advisory:
   earlier row, and the live head moves to `head_v2` while `head` is FROZEN —
   which is what makes a 1.5.x binary refuse the vault instead of appending
   version-1 steps to it; measured, and without the fence it wrote and
-  rotated and left 1.6.0 unable to open the vault),
+  rotated and left 1.6.0 unable to open the vault.
+  **And since O237 it holds the LABEL GUARD, the door every reader that
+  DECIDES from a label goes through.** O233 made a relabel break `verify`; it
+  did not stop the readers acting on one first, and each of them found its
+  record by `record_id` and replayed nothing — so one `UPDATE audit SET
+  record_id` plus one `DELETE FROM wing_trust` took a floored search from
+  zero hits to returning the quarantined drawer, with `verify` failing on
+  `chain_ok` ALONE, i.e. only once somebody ran it. Two mechanisms, because
+  one alone is unaffordable or unsound. **One lazy full replay per handle,
+  on the first guarded read** — never at open, because the open is FLAT in
+  `audit` (36 ms at 102k rows, 35 ms at 1M) while a replay is LINEAR (88 ms,
+  836 ms) and `audit` has no compaction anywhere in the tree, so a
+  replay-at-open charges every process an unbounded cost for a protection
+  that covers a server only at boot (A31); and never per read, which is
+  +240% on O234's own measured budget. **Plus a per-key APPEND-ONLY PREFIX
+  invariant on every guarded read**, at O(keys) over rows the scan already
+  fetches: `audit` is append-only in production, so a key that vanishes, a
+  newest record that moves backwards or a tag that changes under a seq
+  already read is always tampering. Not an incremental replay from a
+  watermark, which is UNSOUND here because the attack rewrites rows BELOW
+  any watermark. `PRAGMA data_version` is the ACCELERATOR between them and
+  never the boundary (A28's shape): measured with a real second process, the
+  handle's own commit does not move it and another connection or process
+  does, so it may short-circuit the REPLAY and may never gate the prefix
+  check. Refusal is `IntegrityFinding`, and **`Regime::V1` /
+  `LabelCommitment::Pending` MUST NOT refuse** — a clean legacy chain
+  replays with labels bound by nothing, and refusing there would brick every
+  pre-1.6.0 vault served `--read-only`, a documented contract change and
+  therefore MAJOR; such a vault gets the invariant and nothing else. The
+  guard sits on `trust_policy_scan` and `retention_policy_scan` — the SCANS,
+  because `verify` already reaches them past the public wrappers — behind a
+  REQUIRED `LabelUse` witness, so `verify` still returns a verdict rather
+  than an error over a chain the readers refuse; at the TOP of
+  `forget_with_proof_ruled`, never inside `mirror_note`, where the drawers
+  are already destroyed (O91); and inside `refuse_replayed`, the hottest
+  label decision in the tree. Measured: warm search +1.7% under the PQ tier
+  at 102k, +73 ms once per handle. **What it cannot see, stated: an APPEND
+  is legitimate**, so a forged row appended beneath SQLite is invisible to a
+  handle that already replayed until it re-opens — only the MAC key
+  separates a forged append from a real one, and that is what O241 would
+  close),
   verify (**`VerifyReport` is the whole verdict and it has NINE legs**: record
   HMACs, the chain replay, the label commitment (O233), drawer supersession
   receipts, **KG fact receipts**, orphan graph labels, mirror drift,
@@ -2198,8 +2238,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (1012 run,
-                                      # 4 #[ignore]d = 1016 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (1026 run,
+                                      # 4 #[ignore]d = 1030 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2321,7 +2361,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (585 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (596 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (167 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (157 checks; weaviate

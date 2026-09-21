@@ -15,9 +15,15 @@
 
 FROM rust:1.90-slim-bookworm AS builder
 WORKDIR /src
-# curl is used by the e2e suite to exercise the HTTP REST surface.
+# curl is used by the e2e suite to exercise the HTTP REST surface, and
+# sqlite3 is how it plays the OFFLINE WRITER: ROADMAP O237's gate needs the
+# audit trail edited by a SECOND PROCESS while a server still holds the vault
+# open, and that ruling's own words are that a test which re-opens the store
+# passes over the defect. A byte edit with perl cannot do it — a writer that
+# goes through SQLite is what moves the `data_version` cookie the open handle
+# reads. Neither package is in the runtime stage.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
+    && apt-get install -y --no-install-recommends curl sqlite3 \
     && rm -rf /var/lib/apt/lists/*
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
