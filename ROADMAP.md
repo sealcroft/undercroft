@@ -3998,7 +3998,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**279** of the **294** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**281** of the **296** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -23156,6 +23156,260 @@ start above genesis without O237 ruling 1's watermark unsoundness.
 declares, and a trail that has been compacted still verifies.
 **Counterfactual**: today the replay is linear in a table with no ceiling.
 
+**Relations:** shares its subject with O245 — the out-of-band witness is the
+one mechanism that would make a replay start point safe, so this entry's
+refusal is sequenced behind it rather than permanent.
+
+#### RULED 2026-09-21 by a three-lens panel (agentic memory architecture, security, software engineering) plus an adversarial refuter
+
+**The question.** Whether to bound `audit`'s growth, and how — retention, a
+checkpoint, bounding the `read/` half, or an honest published cost. Working
+files are in the session scratchpad's `o244-panel/`; material, never the
+record.
+
+**Ruling: DO NOT BUILD compaction, a checkpoint, or any production
+`DELETE FROM audit`. The entry STAYS OPEN**, because what it must still carry
+is not the compaction it was read as proposing — see "what is filed from
+this" below. **The refusal is SEQUENCED, not permanent**, and saying so is
+part of the ruling: one door is blocked behind an unbuilt entry rather than
+closed on principle.
+
+**The spine, found by the software-engineering lens and confirmed by the
+refuter against every leg of `verify`.** The replay starts at a CONSTANT —
+`Vault::chain_genesis_hex()`, `chain.rs:319-320` — and that constant is
+load-bearing security, not an implementation detail. Store a start head
+anywhere writable and a **keyless total erasure** follows from three
+statements:
+
+```text
+DELETE FROM audit;
+UPDATE chain_meta SET value = <anchored head> WHERE key = 'start_head';
+UPDATE chain_meta SET value = <anchored head> WHERE key = 'head_v2';
+```
+
+The replay then steps ZERO rows, so `head == start_head == anchor == db_head`
+and `chain_ok` is **true** (`lib.rs:8775-8778`, which never reads
+`Replay.rows`). The refuter traced the other eight legs: `label_commitment`
+falls to `Regime::V1`/`Pending`, which O237 ruling 3 **forbids refusing on**;
+`orphan_labels` scans an empty table; `policy_drift` finds nothing because
+`policy_finding` discriminates by ABSENCE (`retention.rs:761-768`) and the
+attacker deletes `wing_trust` too — the O237 exploit's own second statement;
+`version_replay` arm 1 returns early on V1 and arms 2–3 find nothing. **Total
+keyless erasure, `VERIFY OK`, on every vault.** The `LabelGuard` prefix
+invariant cannot see it either: a fresh handle's maps are empty, so the erased
+state becomes the baseline.
+
+**The authenticated defence exists and is discarded.** `Manifest::canonical`
+MAC-covers `writes` (`undercroft-vault/src/lib.rs:156-170`) and
+`anchored_head()` verifies the whole canonical then **returns only
+`chain_head_hex`, dropping `writes`** (`vault/lib.rs:834-866`). `writes` is
+exactly the row count (`chain_append` at `lib.rs:730-731`; `insert_record` is
+the table's only production `INSERT`). So a MAC'd `(start_head, start_count)`
+pair WOULD defeat the erasure — which is why the manifest door is **blocked,
+not closed**: it changes the manifest canonical, so O241 ruling 4 puts
+**O238 in an earlier release first**. Recorded precisely so the next panel
+does not re-derive O241 ruling 4 from scratch.
+
+**The arithmetic that removes the motive.** O234's budget is 10% of the
+36.84 ms/q baseline = 3.68 ms; at the DERIVED rate 88 ms ÷ 102,001 =
+~863 ns/row that is **~4,300 audit rows**, i.e. a vault with ~4,300 drawers.
+**No declarable bound makes a per-read replay affordable**, so compaction
+cannot retire O237's guard, the cookie policy or the append-only invariant —
+it would only shrink a once-per-handle constant while destroying evidence.
+The per-row rate is DERIVED, not measured, and is labelled as such here.
+
+**Prior rulings found and their disposition.**
+
+- **O237 ruling 1** (no incremental replay from a watermark) — **FOLLOWED for
+  option (D) verbatim**, and the brief's carve-out is judged: deleting the
+  rows below the mark is LITERALLY a different situation, and it does not
+  help. The refuter's formulation is the one recorded, because it is the only
+  one that is both true and decisive: **(B) is (D) with the audit of (D)
+  removed** — (D) leaves the evidence in place, so an unsound start point is
+  still auditable later by a full replay from genesis; (B) destroys it, so the
+  same unsoundness becomes undetectable forever. The memory lens's stronger
+  claim — that ruling 1 REACHES compaction because its principle is "the
+  verifier accepting a head it did not derive from the rows" — is **not
+  recorded**: ruling 1 does not contain that principle, and mis-stating a
+  prior ruling is a first-class defect in this tree.
+- **O237 ruling 3** (`Regime::V1`/`Pending` must not refuse) — **FOLLOWED**,
+  and it is load-bearing twice: it is why the erasure above passes
+  `label_commitment`, and it would force any age-based compaction clock onto
+  `audit.at`, which the v1 step does not bind.
+- **O233** (a second copy of a chain fact, refused twice) — **FOLLOWED**, and
+  **the brief's claim that O233's switch commitment is "the tree's own shape
+  for this problem" is REFUTED**: `replay` still reads every row from genesis
+  and only the STEP changes (`chain.rs:314-372`, `Regime::step_for`). The
+  commitment binds rows it KEEPS. A digest over DELETED rows is freely
+  computable by whoever deleted them, and the head it chains from would live
+  in unauthenticated `chain_meta` — **provenance, not integrity**.
+- **O241** (census refused; the manifest is restorable; cadence refused) —
+  **FOLLOWED**, and ruling 4 is what sequences this refusal. One correction to
+  the security lens: restoring an older genuine manifest yields a LOWER
+  `(head, writes)` pair, which makes the replay do MORE work — availability
+  loss, not the erasure. The manifest door's blockers are O238 and the
+  read-only posture, not restorability.
+- **O242** — **FOLLOWED.** It took the FREQUENCY axis; this entry is the
+  MAGNITUDE axis. Its option (E) already judged compaction "not PATCH-shaped".
+- **O234's read budget** — **FOLLOWED**, and it is the arithmetic above.
+- **O13** — **FOLLOWED, and it is the sharpest cost.** Corrected from the
+  brief: only the `Recorded` branch reads `audit` (`forget.rs:686`, `:707`);
+  the keyed `Verified` path replays the DOCUMENT's own records and never
+  touches the trail. That narrows the cost to rotated vaults and **sharpens
+  it past a tension into a regression**: `Recorded` exists precisely because
+  the vault still holds the bytes, so compaction removes the remedy O13
+  invented and a genuine third-party receipt returns `StoreError::Attestation`
+  — **exit 2, the tamper verdict**.
+- **O232 ruling 1** — **FOLLOWED**, and extended: a compaction would owe a
+  WIDER blocker set than `rotation_blockers()`, because a rotation preserves
+  audit tags as evidence and a compaction destroys them.
+- **O230 ruling 4**, **A28**, **A31**, **O80**, **O171** — FOLLOWED.
+- **O245** — **FOLLOWED as the partner**, and it is the sequencing condition:
+  an out-of-band witness is the one artifact an attacker with full disk
+  control cannot restore, so it is what would make a start point safe.
+
+**The options, each with its cost and why it lost.**
+
+- **(A) publish and change nothing** — LOST as inaction, TAKEN in content.
+  The growth is ALREADY published (`VaultStats.chain_records`, four
+  renderers; the `audit_chain_height` gauge). What is missing is a threshold
+  and a production replay counter.
+- **(B) compaction + re-chain** — LOST on the spine above, plus: it deletes
+  the subject of a live gate (`the_audit_table_is_append_only_in_production`,
+  whose own words are that a production delete *"would make an ordinary
+  operation indistinguishable from the exploit"*); it silently retires O234
+  arm 2, which is UNBOUNDED BY DESIGN — a leg that stops being ABLE to fire,
+  which no gate in this tree can see; it breaks `orphan_labels` in BOTH
+  directions; and it recreates O13 past its closed state.
+- **(B′) archive instead of delete** — LOST, named so it is not re-proposed
+  as the safe middle: the rows still exist, so O237 ruling 1 applies at full
+  strength; if the readers stop reading them the evidence is gone anyway; and
+  it still needs the start head.
+- **(C) bound the `read/` trail by deleting rows** — LOST: same chain
+  arithmetic, and it addresses nothing that was measured (below).
+- **(D) start the replay from the manifest anchor** — LOST, and a REGRESSION:
+  with rows present it is ruling 1 unmodified; `anchor_seen` becomes true by
+  construction, so the rollback detector stops being able to fail.
+- **(E) move `read/` off the chain** — LOST as posed. Survivable only as a
+  SEPARATELY CHAINED read trail (own table, own head, own anchor), which
+  keeps tamper-evidence; filed behind O238, MINOR, and prospective only.
+- **(F) cheaper per row** — **UNJUDGED, and not funded here.** There is no
+  prior ruling on it (see the refuted claims). Its ceiling is unmeasured: the
+  replay includes a full table scan no crypto optimisation removes, so a 3×
+  win on the crypto could be 1.75× overall. The probe that settles it is one
+  run with the step replaced by a no-op fold.
+- **(G) answer with O245** — LOST as the answer, KEPT as the sequencing
+  condition.
+- **(H-dedup), found by the refuter and missed by all four** — the open's
+  replay and the guard's replay are THE SAME replay computed twice in one
+  process: `reconcile_chain`'s `Replay` (`lib.rs:4244`) already carries every
+  field `chain_verdict` needs and three are dropped on the floor
+  (`lib.rs:4246-4251`), then recomputed at `lib.rs:8763`. Deletes no rows,
+  stores no start head, changes no format. **Filed rather than built here**,
+  because seeding a verdict across an open that itself appended (O233's
+  switch, A10's blinding) is O242 option (C)'s shape in miniature, and that
+  option *"would ship GREEN"*.
+- **(H-batch) aggregate `read/` records** — LOST: it changes what a `read/`
+  record MEANS, which O50/O51 fixed deliberately, and moves nothing on the
+  write half.
+
+**Claims refuted, including the brief's — and one is the integrator's own
+fabrication.**
+
+- **The brief attributed to O242's record a measurement that does not exist**:
+  *"~880 ns/row and judged a 3× win insufficient (+60% at 10⁵, 280 ms at
+  10⁶)"*. Verified absent: no `ns/row`, no `280 ms`, and the only `880` in
+  `ROADMAP.md` is inside a commit sha. It came from an option in the O242
+  **security lens's working answer**, which the integrator never wrote into
+  O242's record and then cited as though it were that record. **The memory
+  lens repeated it as settled fact**; the security and engineering lenses
+  each caught it independently; the refuter confirmed it and checked that no
+  other memory-lens conclusion is contaminated. This is O38's shape live, and
+  it is recorded because the lesson is the reasoning error: **a working file
+  is not the tree.**
+- The brief's fact 4 (erasure attestations depend on the trail) — **OVER-BROAD**,
+  corrected above.
+- The brief's prior-ruling item 3 (O233 generalises) — **REFUTED**, above.
+- The condensation's claim that the brief OMITTED O242's ruling on O244 —
+  **false**; the brief names it.
+- The lens framing *"the replay is the cheapest of four Θ(corpus) walks"* —
+  **STRUCK**: `verify`, the switching open and a rotation each CONTAIN the
+  replay (`lib.rs:8763`, `chain.rs:420`, `rotate.rs:162` and `:727`), so it is
+  their component, not their peer.
+- The engineering lens's *"O242's record says read auditing was UNSET on every
+  arm"* — **over-reads**; O242 states it for one arm. For O237's figures the
+  tree states nothing and `102,001 = 102,000 + 1` is inference, recorded as
+  such.
+- The engineering lens's compliance assertion (audit regimes usually impose a
+  MINIMUM retention) — **not recorded as established**; it is a claim about
+  the world that neither the tree nor the refuter verified.
+
+**Probes run.** None new; this ruling contradicts no figure. Two are OWED and
+named rather than assumed: the scan-versus-crypto split before (F) is funded,
+and a measurement of the read-audited deployment, whose growth half **no
+published figure in this campaign measured** — `UNDERCROFT_READ_AUDIT` is
+opt-in and was off.
+
+**Dissent.** None on the verdict; three lenses and the refuter agree. The
+refuter dissented from the panel's proposed CLOSURE and from its escalation
+framing, and both are taken (below). It also corrected two of the security
+lens's three reasons and one memory-lens overstatement; all are taken.
+
+**O244's own gate is REFUTED, not met, and replaced.** Half 1 — *"bounded
+above by something an operator declares"* — presumes a bound this ruling
+declines to create, and it imports a RETENTION model: retention is right for
+content and wrong for evidence, which the tree already says by construction,
+since `forget_with_proof` destroys drawers and APPENDS tombstones, so erasure
+GROWS the trail. Half 2 — *"a trail that has been compacted still verifies"* —
+is achievable and damning: the erasure above satisfies it while the vault
+holds nothing. **The replacement:**
+
+> **The trail's size is OBSERVED against a declared expectation on every
+> surface, and the replay is COUNTED in production.**
+> **Counterfactual**: a vault seeded past the declared ceiling must appear on
+> stats across all four renderers and must trip `promtool test rules`; today
+> it is silent. With the guard's replay forced twice in one handle, the
+> promoted counter must read 2; today nothing outside `#[cfg(test)]` can say.
+
+**What remains, and what is FILED from this ruling.** O244 stays open and
+carries the replacement gate. Its successors are filed as their own entries,
+because a condition living inside a finished record cannot be picked, cited or
+shut — which is O171, the defect this entry was filed to name, and O241's
+close-by-ruling filed five successors for exactly this reason.
+
+- **O250** — the growth is visible and the replay is not counted:
+  `LabelGuard::replays` is `#[cfg(test)]`, so a +213% regression on the
+  flagship deployment (O242) was found by a refuter reading code and the
+  observable that would have found it is still test-only; and
+  `audit_chain_height` is a shipped dashboard panel with **no alert rule
+  anywhere** in `deploy/observability/`.
+- **O251** — the double replay (H-dedup), with the O242-(C)-shaped
+  counterfactual it owes.
+- **Residuals recorded here rather than filed**, each with its argument:
+  a rotation's exclusive lock grows with `audit` and therefore with READS,
+  decoupled from corpus size, and nobody priced it (~17 s at 10⁷ inside
+  `RotationTx`); `verify` reaches `audit` through THREE Θ(audit) walks, not
+  one (`lib.rs:8611`, `:8700`), so the replay is not the only audit-linear
+  cost; the forged-append residual is unchanged and closes only on O245; and
+  `manage.rs:2649-2652` states that `record_id` is *"Unauthenticated: the
+  chain hashes `tag` and nothing else"*, which is **false on a v2 chain**
+  (`seal.rs:155-170` folds `record_id` and `at`) and is corrected in this
+  unit.
+
+**Escalated to the maintainer — RE-FRAMED, and the original framing is
+refused.** The question the lenses proposed — *may an Undercroft audit trail
+ever be truncated at all?* — is the engineering question in product clothes,
+and a "yes" would authorise what the spine above shows cannot be built safely
+with anything in this tree. The panel DECIDED that, and says so. The genuine
+O66-class question is narrower:
+
+> **Should `export → import` into a fresh vault be documented — and possibly
+> given a command — as the sanctioned trail-archival procedure, with the
+> superseded vault retained as the archive?**
+
+It already works, it keeps the evidence rather than destroying it, and it is
+*what a surface offers*, which is the maintainer's.
+
 ### O245 — the external witness `docs/THREAT_MODEL.md` calls "the planned mitigation" has no entry anywhere
 
 **Filed 2026-09-21 by O241's ruling panel (all three lenses and the refuter).**
@@ -23183,6 +23437,10 @@ returned witness against the vault) or whether it stays procedure.
 **Gate**: a vault rolled back to a genuine earlier state is REPORTED against a
 witness taken before the rollback.
 **Counterfactual**: today `verify` answers clean on it, by construction.
+
+**Relations:** shares its subject with O244 — this witness is the one artifact
+an attacker with full disk control cannot restore, so it is what would make a
+replay start point safe, and O244's refusal is sequenced behind it.
 
 ### O246 — a writable open heals a rolled-back manifest and reports nothing, while a read-only open reports it
 
@@ -23423,6 +23681,87 @@ first is what the code already meant to do.
 or the second one names the collision instead of failing the O175 assertion.
 **Counterfactual**: today the second run fails as though the engine leaked a
 mirror.
+
+### O250 — the audit trail's size is published and the replay that walks it is counted by nothing in production
+
+**Filed 2026-09-21 by O244's ruling panel (the adversarial refuter), as a
+successor O244's ruling owes rather than a sentence inside it.** O244 refused
+to bound `audit`, and a refusal fails silently in one specific way: the cost
+outgrows the reasoning and nothing reopens the question. Three of the four
+mechanisms that would reopen it do not exist.
+
+**`LabelGuard::replays` is `#[cfg(test)]`** (`chain.rs:861-864`). There is no
+production signal for how often the O237 replay runs. **O242 was a +213%
+regression on the flagship deployment and it was found by a refuter reading
+code** — the observable that would have found it is still test-only. That is
+the single sharpest item here.
+
+**`audit_chain_height` is a shipped dashboard panel with no alert.** The gauge
+exists (`undercroft-obs/src/lib.rs:438`), it is emitted (`tenant.rs:635`,
+`:793`), and `deploy/observability/grafana/dashboards/undercroft.json:128`
+draws it — and `deploy/observability/` contains **no alerting rule on it**. An
+operator sees a number that means nothing to them. Note also that the gauge is
+emitted from the tenancy path ONLY, so a CLI deployment or `serve-mcp`
+exports nothing at all.
+
+**And O234's budget structurally cannot fire on this cost**: it is a
+percentage of warm SEARCH ms/q, while the replay is a once-per-handle constant
+and an operator-command cost. It sits outside the only numeric gate the tree
+has.
+
+**Shape**: a declared ceiling that REPORTS and never deletes
+(`Tunes`/`Checked`, a `TUNED` row, unset = off), read O(1) off
+`chain_meta.writes`; the replay counter promoted out of `#[cfg(test)]`; an
+alert rule with its mandatory `alerts_test.yml` block. **Priced honestly**: a
+new `UNDERCROFT_*` declaration moves the gated `81` figure in
+`architecture/index.html`, the `prose figures` preflight, O155's
+platform-views cross-tab on both axes, `TUNED` and `config check` — a
+multi-surface unit, not a one-liner.
+
+**Gate**: a vault seeded past the declared ceiling appears on stats across all
+four renderers and trips `promtool test rules`; and with the guard's replay
+forced twice in one handle, the promoted counter reads 2.
+**Counterfactual**: today both are silent, and nothing outside `#[cfg(test)]`
+can say how many replays ran.
+
+**Relations:** shares a diff surface with O251 — both add production
+visibility to the same replay, and both edit the chain guard's accounting.
+
+### O251 — the open's replay and the guard's replay are the same replay, computed twice in one process
+
+**Filed 2026-09-21 by O244's ruling panel (the adversarial refuter); the
+option all four of us missed.** `reconcile_chain`'s `Replay` (`lib.rs:4244`)
+already carries every field `chain_verdict` needs — `regime`, `head`,
+`anchor_seen`, `commitment_intact`, `malformed` — and `reconcile_chain`
+already calls `chain::committed_head` (`lib.rs:4225`), which is
+`chain_verdict`'s own `head_state`. The struct is destructured at
+`lib.rs:4246-4251`, **three fields are dropped on the floor**, and the same
+walk over the same rows is recomputed at `lib.rs:8763`.
+
+**What it is worth, stated narrowly.** Zero in the steady state, because
+`reconcile_chain` short-circuits when the anchor equals the committed head
+(`lib.rs:4236-4238`) and never replays. It is worth one whole replay
+(~836 ms at 10⁶) exactly when the open DID replay — after a crash-heal, and on
+every command of a read-audited deployment, because `audit_read` commits
+without anchoring by design (`lib.rs:7663-7666`) so the anchor always lags.
+That deployment pays **two full replays per content-returning command** today.
+
+**Why it is filed rather than built.** Seeding a cached verdict across an open
+that ITSELF appended — O233's switch, A10's blinding migration — is unsound in
+the way O242 option (C) is unsound: those are this connection's own commits,
+which `PRAGMA data_version` is measured NOT to move, so a seeded verdict would
+go stale behind an unmoved cookie. O242's record says that option *"would ship
+GREEN"*. The sound form seeds only when the open performed no chain append.
+
+**Gate**: an open that replayed hands its verdict forward, and the first
+guarded read runs no second replay; an open that APPENDED does not, and the
+guard replays.
+**Counterfactual**: force a chain append during the open (a regime switch) and
+the gate must fail if the verdict is seeded unconditionally — today there is
+no seeding at all, so the first half fails on the current tree.
+
+**Relations:** shares a diff surface with O250 — both add production
+visibility to the same replay, and both edit the chain guard's accounting.
 
 ---
 

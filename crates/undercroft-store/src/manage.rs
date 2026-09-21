@@ -2647,8 +2647,19 @@ pub struct AuditRecord {
     /// The row's unique id, and the chain's order.
     pub seq: i64,
     /// The label naming the subject — `kg/{id}`, `kg-entity/{id}`,
-    /// `trust/{wing}`, a bare drawer id, … Unauthenticated: the chain hashes
-    /// `tag` and nothing else, so this is navigation, not evidence.
+    /// `trust/{wing}`, a bare drawer id, …
+    ///
+    /// **A label IS evidence on a version-2 chain, and this comment said the
+    /// opposite until O244's ruling panel read it.** It claimed the label was
+    /// *"unauthenticated: the chain hashes `tag` and nothing else, so this is
+    /// navigation, not evidence"*, which was true before O233 and is false
+    /// after it: `chain_next_v2` folds `record_id` and the record's time
+    /// along with the tag (`undercroft-vault/src/seal.rs`), which is what
+    /// makes an in-place `UPDATE audit SET record_id` the tampering the
+    /// replay catches. `CLAUDE.md` carries O233's revision in terms. On a
+    /// version-1 chain the old sentence still describes the arithmetic — and
+    /// that is exactly why O248 is filed, because such a vault's readers
+    /// decide from a label the chain does not bind.
     pub record_id: String,
     /// Hex of the subject's HMAC as of this write. This IS the evidence, and
     /// it is what the chain folds in.
