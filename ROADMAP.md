@@ -4179,6 +4179,16 @@ MINOR since O149: `PATCH /admin/tenants/{id}` and its CLI mirror are new
 capability, backward compatible. The rest of the section is PATCH work — no
 documented contract moves.
 
+**GATED ON O242, decided by the maintainer 2026-09-21.** This release does not
+cut while O242 stands. O237 shipped the label guard into this section and
+O242 is the regression it carried: on a server where `/v1` writes interleave
+with `/mcp` reads — which is the shape a team server has — the guard replays
+the whole chain per search, MEASURED at **+89.5 ms isolated from write
+contention, 42 → 131.5 ms**. Releasing first would put that cost in front of
+every operator who upgrades and leave it with anyone who pins, while the fix
+sat in a later patch. The earlier recommendation in this campaign — cut after
+O241 — is MOOT: O241 was ruled against and shipped no code.
+
 ### O237 — CLOSED 2026-09-21: a read that decides from an audit label asks first whether the labels are still this vault's
 
 **Filed 2026-09-19 by O233/O234's ruling (the refuter).** O233 makes a relabel
@@ -22683,6 +22693,12 @@ which is the unboundedness of O244 showing up inside a fifteen-minute run.
 
 The harness is `o242_probe.sh` in the session scratchpad; the corpus is the
 docker volume `o242-corpus`, a copy of the untouched `o206-corpus`.
+
+**GATES THE `1.6.0` RELEASE, decided by the maintainer 2026-09-21.** The
+release does not cut while this stands, and `## 1.6.0`'s own header says so.
+The reasoning is the operator's rather than the engine's: O237 shipped the
+guard into that section, so releasing before this fix hands every upgrading
+operator the cost and leaves it with anyone who pins to the release.
 
 **Relations:** shares a diff surface with O244 — both change what the label
 guard costs on a read, and both edit `require_authenticated_labels` in
