@@ -3998,7 +3998,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**276** of the **291** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**279** of the **294** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4179,15 +4179,465 @@ MINOR since O149: `PATCH /admin/tenants/{id}` and its CLI mirror are new
 capability, backward compatible. The rest of the section is PATCH work — no
 documented contract moves.
 
-**GATED ON O242, decided by the maintainer 2026-09-21.** This release does not
-cut while O242 stands. O237 shipped the label guard into this section and
-O242 is the regression it carried: on a server where `/v1` writes interleave
-with `/mcp` reads — which is the shape a team server has — the guard replays
-the whole chain per search, MEASURED at **+89.5 ms isolated from write
-contention, 42 → 131.5 ms**. Releasing first would put that cost in front of
-every operator who upgrades and leave it with anyone who pins, while the fix
-sat in a later patch. The earlier recommendation in this campaign — cut after
-O241 — is MOOT: O241 was ruled against and shipped no code.
+**WAS GATED ON O242, decided by the maintainer 2026-09-21; O242 is now CLOSED
+in this section.** The gate's condition is met, and **whether to cut remains
+the maintainer's** — no panel and no build grants that. The gate read: this
+release does not cut while O242 stands, because O237 shipped the label guard
+into this section and O242 was the regression it carried — on a server where
+`/v1` commits interleave with `/mcp` reads, which is the shape a team server
+has, the guard replayed the whole chain per search, MEASURED at **+89.5 ms
+isolated from write contention, 42 → 131.5 ms**. Releasing first would have
+put that cost in front of every operator who upgrades and left it with anyone
+who pins, while the fix sat in a later patch. The earlier recommendation in
+this campaign — cut after O241 — is MOOT: O241 was ruled against and shipped
+no code. **One thing O242's closure does not do is remove the class**: an
+external concurrent writer still costs a replay per guarded read, which is
+O244's to bound, and the four-arm re-measurement O242's own BUILT record
+names as owed has not been run.
+
+### O242 — CLOSED 2026-09-21: `serve-http` held two handles on one vault, so its own writes looked foreign and replayed the chain per search
+
+**Filed 2026-09-21 by O241's ruling panel (the adversarial refuter); the
+defect is MINE, shipped in O237 the same day.** `require_authenticated_labels`
+caches its replay verdict against `PRAGMA data_version` and re-runs the replay
+whenever that cookie moves. The cookie moves when ANOTHER CONNECTION commits —
+measured with a real second process, and pinned by my own test
+`the_replay_runs_once_per_handle_and_again_only_when_another_writer_commits`,
+which asserts the count going 1 → 2. I read that behaviour as soundness and
+never priced it.
+
+**`serve-http` runs TWO handles on one vault** — the `/mcp` store and the
+`/v1` `Tenancy`, and `with_mcp_vault`'s own comment says so;
+`deny_co_resident` refuses only a rotate or a delete of the co-resident vault,
+never an ordinary write. So every `/v1` save moves the `/mcp` handle's cookie,
+and the next `/mcp` search replays the whole chain. On a server where writes
+interleave with reads that is a replay PER SEARCH: **88 ms at 102,001 audit
+rows against a 36.84 ms/q baseline, i.e. +240%, and 836 ms at 1,002,001** —
+which is exactly the per-read replay O237's own ruling used O234's 10% budget
+to rule out. `audit` has no compaction, so it worsens for the life of the
+vault.
+
+The re-replay is SOUND and must not simply be removed: it is what sees an
+SQLite-mediated tamper by another process. What is wrong is that the cost was
+never measured on the deployment A31 describes, and the shipped figures
+(+1.7% warm search, +73 ms per handle) are true of a single-handle,
+no-concurrent-writer workload that a real server is not.
+
+**Shape, for a ruling panel**: whether the re-replay can be narrowed to the
+rows appended since the cached verdict without reintroducing O237 ruling 1's
+watermark unsoundness (it likely cannot — the attack rewrites rows below any
+watermark); whether a `/v1` write should advance the `/mcp` handle's cached
+verdict in-process rather than invalidating it, which is sound because the
+two handles are in ONE process and the write is this process's own; or whether
+the honest answer is a measured, published cost.
+
+**Gate**: two handles on one vault, interleaved writes and reads, with the
+replay count asserted to have moved — a flat result is otherwise
+indistinguishable from a probe that never produced a foreign commit.
+**Counterfactual**: today the MCP search path replays after every `/v1` save.
+
+#### MEASURED 2026-09-21 by the integrator, on the maintainer's instruction
+
+**Confirmed, isolated, and reproducible.** On the 102,000-drawer sealed
+corpus under `UNDERCROFT_RETRIEVAL=pq`, with one `serve-http` up: searches
+through `POST /mcp` (the `--vault` handle), saves through
+`POST /v1/…/drawers` (the `Tenancy`'s own handle for the same vault), 30
+cycles per arm, two rounds, per-arm warm-up untimed so no first-read replay
+sits inside a timing.
+
+**FOUR arms, because two cannot separate the replay from write contention** —
+the writes cost something by themselves, and a two-arm probe would have
+charged that to the replay:
+
+| arm | round 1 | round 2 |
+|---|---|---|
+| guard OFF, searches only | 41 ms | 40 ms |
+| guard OFF, one save between searches | 61 ms | 61 ms |
+| guard ON, searches only | 42 ms | 42 ms |
+| guard ON, one save between searches | **152 ms** | **152 ms** |
+
+The writes alone cost **+20.5 ms** per cycle (the OFF rows). The double
+difference — `(ON-inter − ON-ctrl) − (OFF-inter − OFF-ctrl)` — is
+**+89.5 ms**, and that is the replay and nothing else. Stated as the search
+path sees it: **42 ms → 131.5 ms, +213%**, whenever a `/v1` write lands
+between two `/mcp` searches.
+
+**It lands on the number the panel predicted from a different direction.**
+O237's panel measured the replay at 88 ms at 102,001 audit rows; this probe
+attributes 89.5 ms to it without ever timing a replay directly. Two
+independent routes to one figure.
+
+**Premise arms, all asserted rather than assumed**: each interleaved arm's
+drawer count had to rise by exactly its 30 saves (102,000 → 102,120 over the
+run) and each control arm's had to be unchanged, or the probe exits 3. A flat
+result is otherwise indistinguishable from a probe that never produced a
+foreign commit, which is this tree's oldest trap; `LabelGuard::replays` is
+`#[cfg(test)]`, so the drawer count is the observable that was available.
+
+**Not measured, and stated rather than implied**: the 1,002,001-row arm. The
+replay is linear in `audit` and O237's panel measured it at 836 ms there, so
+the extrapolation is ~+836 ms per interleaved search — but it is an
+extrapolation from two measured points, not a third measurement. The corpus
+itself grew during the probe (120 drawers, and their audit rows with them),
+which is the unboundedness of O244 showing up inside a fifteen-minute run.
+
+**CORRECTED by the ruling panel: the trigger is every COMMIT, not every
+save, and the measured figure is a FLOOR.** This entry says "`/v1` save"
+throughout, and a save is only the case the probe drove. Under
+`UNDERCROFT_READ_AUDIT=chain` — a documented declaration whose stated purpose
+is insider/exfil accounting — `record_read` appends through `audit_read`,
+which runs `self.conn.unchecked_transaction()` and COMMITS
+(`lib.rs:7664-7666`). So an `/mcp` search commits a `read/` record that moves
+the `/v1` handle's cookie, and a `/v1` read commits one that moves the
+`/mcp` handle's: two surfaces alternating pure READS replay the whole chain
+on both handles, and the 152 ms arm did not have read auditing on.
+
+**And the cost is SYMMETRIC.** The `/v1` store is cached for the process
+lifetime (`store_for` inserts and never evicts except on backup/delete), so
+an `/mcp` write replays the `/v1` handle's chain by the same mechanism. The
+probe measured one direction because that is the direction a team server
+drives hardest, not because the other is free.
+
+The harness is `o242_probe.sh` in the session scratchpad; the corpus is the
+docker volume `o242-corpus`, a copy of the untouched `o206-corpus`.
+
+**GATES THE `1.6.0` RELEASE, decided by the maintainer 2026-09-21.** The
+release does not cut while this stands, and `## 1.6.0`'s own header says so.
+The reasoning is the operator's rather than the engine's: O237 shipped the
+guard into that section, so releasing before this fix hands every upgrading
+operator the cost and leaves it with anyone who pins to the release.
+
+#### RULED 2026-09-21 by a three-lens panel (agentic memory architecture, security, software engineering) plus an adversarial refuter
+
+**The question.** What to do about the re-replay this entry measures: whether
+it can be narrowed, whether a sibling handle may advance another's cached
+verdict, or whether the honest answer is a published cost. Working files are
+in the session scratchpad's `o242-panel/` (the brief, the three lens answers,
+the refuter's report) — material, never the record.
+
+**The panel answered a question the entry did not ask, and that is the
+ruling.** All three lenses, independently and with no sight of each other,
+refused every option on the table and named the same absent one: **the defect
+is not the invalidation rule, it is that ONE PROCESS HOLDS TWO CONNECTIONS TO
+ONE DATABASE AND CALLS ITS OWN WRITES FOREIGN.** `serve-http` opens the `/mcp`
+store at `main.rs:3196` and lets `Tenancy::store_for` open its own for the
+same vault at `tenant.rs:3149`. Collapse them and a `/v1` write becomes the
+reading handle's OWN commit, which `PRAGMA data_version` is measured not to
+move — so the cost disappears with `require_authenticated_labels`, the cookie
+policy, the append-only invariant, the refusal wording and the `Regime::V1`
+carve-out all **byte-identical**. The store crate is not touched at all.
+
+**The soundness argument, which the refuter supplied and no lens stated.**
+Under one handle the writer and the reader are the same `rusqlite::Connection`,
+so there is nothing to attribute — a record this handle appended under this
+handle's own MAC key is authentic by induction on `chain_append`. That is not
+a new posture: it is what the CLI, `serve-mcp`, a `/v1`-only server and
+`daemon run` have always done, and what O237's own gate
+`the_replay_runs_once_per_handle_and_again_only_when_another_writer_commits`
+already pins. **This is the exact difference between this ruling and option
+(C)**, which asserts the same induction about a DIFFERENT connection's commit
+that the reading connection cannot verify.
+
+**Prior rulings found, all FOLLOWED, none refuted.** The search was
+`grep -n 'data_version' ROADMAP.md` plus the `#### RULED` subsections of O237,
+O241 and O240, and O234, O244, O246 by name.
+
+- **O237 rulings 1, 2 and 3** (one lazy replay per handle plus the append-only
+  prefix invariant; `data_version` is the ACCELERATOR never the boundary;
+  `Regime::V1`/`Pending` must not refuse) — **FOLLOWED and untouched, which is
+  the point.** The shipped code violates ruling 1's own "ONCE per handle" on
+  the deployment A31 describes; this restores the ruled mechanism rather than
+  revising it.
+- **O234's read budget** — **FOLLOWED, and met by construction rather than by
+  argument.** It is what disqualifies publishing the cost.
+- **O241's refusal of a CADENCED replay** — **FOLLOWED, and the brief's
+  invitation to refute it is itself the mis-statement, recorded here so it is
+  not re-opened.** All three lenses declined and the refuter confirmed by
+  reading: `require_authenticated_labels` reads the cookie BEFORE deciding
+  (`chain.rs:742-749`), and every SQLite-mediated mutation moves it, so "the
+  last cookie move" is by definition after the last change this handle can
+  see. The guarantee is *verified as of every change SQLite has shown me*, not
+  a staleness bound. A cadence `T` manufactures a window in which
+  SQLite-mediated tampering is provably unseen; the cookie policy has none.
+- **O241's residual** (the prize is ~zero on the measured path; a policy-only
+  handle still pays one replay) — **FOLLOWED and unaffected.**
+- **A28** — **FOLLOWED**, and it is the sharpest argument against (C): a
+  cohort signal that explains away a cookie move promotes an accelerator's
+  absence into a boundary's verdict.
+- **A31** — **FOLLOWED**, and it is why option (D) is exploitable rather than
+  merely weaker: "until re-open" is "never".
+- **O239** — **FOLLOWED and SHARPENED** (see "what remains").
+- **O80** (two lists are a closed system) — **FOLLOWED**; it shapes the gate.
+- **The maintainer's 2026-09-21 release gating** — **FOLLOWED**, and it is
+  what disqualifies publishing the cost.
+
+**The options, each with its cost and why it lost.**
+
+- **(A) publish the cost and change nothing** — LOST. +213% is the same
+  per-search replay O237 used O234's budget to rule out, arriving by another
+  door, on the deployment `serve-http` exists for. Adopting it by accident
+  what the panel refused on purpose, and `## 1.6.0`'s header already rejects
+  it in terms.
+- **(B) narrow the re-replay to rows appended since the cached verdict** —
+  LOST on O237 ruling 1, unrefuted: the attack rewrites rows BELOW any
+  watermark. The design space is closed, not just this member — a sound
+  incremental fold must establish that rows at or below the mark are
+  unchanged, which IS the replay, and making that cheap needs a per-row
+  witness (O233 (S2), refused) or a manifest commitment (O241, refused).
+- **(C) let a `/v1` write advance the `/mcp` handle's cached verdict
+  in-process** — LOST, and **this entry's own text claiming it "is sound
+  because the two handles are in ONE process" is REFUTED.** A cookie is a
+  change detector with no provenance: N foreign commits are indistinguishable
+  from one. The exploit is concrete — attacker appends a forged `rotate/` row
+  (cookie 5→6), `/v1` saves (6→7), the sibling signal re-stamps the verdict to
+  7, the next search sees 7 == 7 and does not replay, and the forged rotation
+  is authenticated as found. On the MEASURED workload — one save between every
+  two searches — every interval contains a sibling write, so the bypass is not
+  a residual but the common case. It would also **ship GREEN**:
+  `a_second_connection_tampering_under_an_open_handle_is_refused` contains no
+  sibling write and passes unchanged under it. Two things the panel refused to
+  rest on: the process-global objection (the channel would be an `Rc` with the
+  lifetime of one `serve_http` call, so `contain.rs`'s panic-hook refusal does
+  not reach it — rejecting (C) on that ground would refute a claim nobody
+  made), and the brief's delta-arithmetic framing, which invites an
+  implementer to argue it away by not doing arithmetic.
+- **(D) one replay per handle, full stop** — LOST, and it is a security
+  regression rather than a smaller guarantee. **An APPEND is invisible to the
+  append-only invariant by construction** (`hold_append_only`'s `_ => None` at
+  `chain.rs:872`; the module says so at `chain.rs:641-643`), so O239's
+  measured one-statement lever returns and
+  `a_forged_rotation_record_is_refused_by_the_guard_as_well` FAILS rather than
+  re-words. On the measured path the invariant contributes **zero**:
+  `version_boundary` returns early on `Regime::V1` (`replay.rs:278-281`), and
+  on an unfloored vault `refuse_replayed` is the sole guarded read and its only
+  per-key lookup returns `None` on a never-rotated vault. It would ship the
+  release by deleting the gate's subject.
+- **(E) answer this with O244** — LOST **as the release unblocker**, KEPT as
+  the partner. O244 bounds the replay's MAGNITUDE; this entry is about its
+  FREQUENCY, and a perfectly compacted `audit` still pays one replay per
+  interleaved search. O244 also runs into O13 for compaction and O237 ruling 1
+  for a checkpoint, touches an on-disk contract and may touch the `Regime::V1`
+  carve-out — a design project with a ruling of its own, not PATCH-shaped.
+- **(L) re-run the append-only invariant and re-enumerate every remembered
+  namespace on a cookie move**, at O(keys) — named by the refuter, LOST for
+  (D)'s reason: an append is invisible to all of it. Recorded because it is the
+  most seductive middle path and fails on the one direction the residual runs.
+- **(O) refuse `/v1` on the co-resident vault entirely** — LOST: removing the
+  cost by removing a capability, MAJOR, and it breaks two shipped e2e arms.
+  Named because it is the other end of the same axis and shows this is the
+  right end.
+- **(Q) adopt in the other direction** (the handler keeps the store,
+  `Tenancy::handle` takes `Option<&mut VaultStore>`) — LOST on diff size; it
+  threads a lifetime through ~57 handlers. Recorded because it is
+  borrow-checkable, so nobody re-proposes it as "the borrow checker forbids
+  it", which is false.
+
+**Claims refuted, including the brief's.** The brief's: that the two handles
+share no in-process channel — `Tenancy::stores` (`tenant.rs:162`) is exactly
+that, and the framing nearly confined the panel to the three options this
+entry named; that the re-replay's marginal value is "rows this handle has
+never looked up" — it is **every append**; that the cost is a `/v1` WRITE —
+it is every SQLite-mediated COMMIT, and under
+`UNDERCROFT_READ_AUDIT=chain` `audit_read` commits (`lib.rs:7664-7666`), so
+two surfaces alternating READS replay on both handles and the measured 152 ms
+is a floor; that the cost is one-directional — the `/v1` store is cached for
+the process lifetime, so an `/mcp` write replays the `/v1` handle too; and the
+invitation to refute O241, above. The lenses': that no test in `mcp.rs` drives
+`McpHandler` (there are ~20 sites from `mcp.rs:1284`), and that a
+`Tenancy::mcp_store` has "no borrow conflict" (it is E0502 unless the id is
+cloned first — a function no lens wrote). The condensation's own correction of
+`LabelGuard`'s line was wrong where the brief was right, which is O38's shape
+at micro-scale inside a paragraph whose job was correcting figures.
+
+**Probes run by the integrator.** None new: the four-arm measurement in
+`#### MEASURED` above is the figure this ruling is priced against, and the
+verdict contradicts no figure in it.
+
+**Dissent.** None on the verdict; all three lenses and the refuter agree. Each
+lens volunteered, unprompted, that it expected the panel to converge on (A) or
+(D) and that both are wrong — which is the shape of an anticipated dissent
+rather than a recorded one. The refuter dissented from the LENSES as
+condensed, on the three claims above, and from the scope of the residual
+(below); all are taken.
+
+**Blocking corrections the build owes, found by the refuter and by nobody
+else.**
+
+1. **`backup_restore` must call `deny_co_resident`.** It does
+   `self.stores.remove(id)` then `hold_vault_exclusively`, which detects a
+   holder because an open connection keeps the `-shm` mapped
+   (`lib.rs:363-390`, measured). Today the `/mcp` handle survives that removal
+   and the lock fails — **409**. Under one handle the removal drops the ONLY
+   handle, the lock SUCCEEDS, and `remove_dir_all` + `copy_dir` destroy the
+   served vault under a live server — a **200 where three documents promise a
+   409** (`docs/AGENTS.md:1266`, `docs/MULTI_TENANCY.md:454`,
+   `docs/remote-server.md:226`), and it is O69's own disaster. No gate catches
+   it: the `/v1` restore e2e arms drive `acme`/`globex`, never the co-resident
+   vault, and O69's arms drive the CLI from a second process, which still
+   fails the lock. **Nothing observable moves when it is added** — the route
+   409s before and after — which is what keeps this PATCH.
+2. **The post-eviction re-open must use the SAME opener.** `backup_create`
+   also removes the store and is NOT co-resident-refused, so the next `/mcp`
+   request re-opens; through `store_for` that changes the embedder, the
+   reranker, `warm_embedding_cache`, and — the sharp one —
+   `UNDERCROFT_RETRIEVAL=hnsw`, which `attach_retrieval` accepts and
+   `store_for` refuses with a 500, so on an `hnsw` build one `/v1` backup
+   would make every later `/mcp` call 500 forever. The opener travels on
+   `Tenancy`, on the `EmbedderFactory`/`RerankerFactory` precedent.
+3. **`deny_co_resident` is KEPT and its reason re-stated**, and
+   `vault_opened()` is called on adoption or one count per process silently
+   disappears from `undercroft_vault_opens_total`.
+4. **The proof carries a positive witness that a guarded read is still
+   reached.** A double difference of ~0 is what a fixed tree produces AND what
+   a probe that never reaches the guard produces — `refuse_replayed` returns
+   early for `Read::Internal` and for an empty id list. The existing `O237C`
+   e2e arm (a second process tampering under the open handle, expecting 409
+   `class: "integrity"`) is that witness, run against the FIXED binary.
+
+**What remains, stated rather than implied.**
+
+- **This unblocks the release by removing the DEPLOYMENT the release is gated
+  on, not by removing the class.** Any external concurrent writer —
+  `undercroft mine`, `daemon run --watch`, a `trust set`, a second server —
+  still moves the cookie and still costs a full replay per guarded read,
+  ~836 ms at 10⁶. That is O244's to bound and must not be read as closed here.
+  The gating condition is genuinely met, because the shipped team-server
+  recipe is exactly the two-handle deployment.
+- **The residual O237 states widens on `serve-http`, and it reaches the
+  MANIFEST.** `chain_verdict` begins `self.vault.anchored_head()`
+  (`lib.rs:8762`), a disk read plus a MAC verification of `vault.json` on
+  every replay — so today a sibling's commit gives the `/mcp` handle a free
+  re-read of the manifest as well as a free re-replay, and after this it gets
+  neither until a genuinely foreign commit. It therefore narrows detection of
+  a forged append by a raw-page writer AND of a manifest swapped under the
+  process, which is A2's attack and O246's. **It remains because the coverage
+  was an accident of the aliasing, not a mechanism** — it never existed for an
+  `/mcp`-only or `/v1`-only deployment, and after this `serve-http` behaves
+  like every other one. `chain.rs:641-658` is amended in the same unit,
+  because its "until it is re-opened or another connection commits" stops
+  describing a routine event on the tree's own shipped recipe. O245 is what
+  closes it.
+- **O239's keycheck equality rejects a FOREIGN label, not a COPIED one.**
+  `rotate/{keycheck_hex()[..16]}` sits in clear in `audit.record_id`, so an
+  offline writer reads the real keycheck and appends under the real label; the
+  existing gate uses `rotate/deadbeefdeadbeef`, a foreign one, so the copied
+  variant is exercised NOWHERE. Not live (the append trips the re-replay from
+  any SQLite-mediated writer) and this ruling does not arm it. **Filed as its
+  own entry** rather than left in a panel record, on O171.
+- **`backup_create`'s comment is false today for the co-resident vault** ("the
+  handle is dropped before copying so the snapshot is not taken through a
+  store this process is still writing") and this ruling makes it true — a fix
+  in passing, stated as one.
+- **A legacy-chain traceability gap**, found by the memory lens and outside
+  this entry: an append-only refusal on a `Regime::V1` chain names
+  `undercroft verify` as the remedy, and `chain.rs:1638` pins that
+  `verify().chain_ok` is TRUE after that same tamper — so the operator is
+  refused, told to run a remedy that reports nothing, and the evidence dies
+  with the handle. **Filed as its own entry.**
+
+**Escalated to the maintainer with this analysis attached**, both being what a
+surface OFFERS (O66's class), and neither taken here:
+
+1. Extending `deny_co_resident` to **`backup_create`**, which would turn a 200
+   into a 409 on the co-resident vault. The panel recommends it — a backup
+   taken through a vault a second live handle is writing is not a valid
+   backup — but it is an offer change.
+2. Whether `/v1` may now **rotate or repair** the served vault at all. After
+   this ruling `deny_co_resident`'s stated correctness reason evaporates and
+   only a policy reason remains. The refusal is KEPT here and its reason
+   re-stated; relaxing it is a separate question with its own entry, not a
+   side-effect of this one.
+
+#### BUILT 2026-09-21
+
+Built from the `#### RULED 2026-09-21` record above, without re-asking it.
+The store crate's guard is **untouched**: `require_authenticated_labels`, the
+`data_version` policy, the append-only invariant, every refusal wording and
+the `Regime::V1` carve-out are byte-identical. What changed is that
+`serve-http` stopped manufacturing the foreign commits.
+
+**What landed, against the ruling and its four blocking corrections.**
+
+1. **One handle per vault.** `McpHandler` holds the vault NAME and takes
+   `&mut VaultStore` per call (`mcp.rs`); `Tenancy::with_mcp_vault` adopts the
+   store `open_store_as` opened straight into the cache `store_for` reads, so
+   `/v1` finds it by that function's own `contains_key` short-circuit and
+   never opens a second one; `Tenancy::mcp_store` is the `/mcp` door.
+   **`serve_http` takes NO `VaultStore` at all**, which is what makes the
+   two-handle state UNREPRESENTABLE rather than merely absent — the
+   `Screen`/`Read`/`LabelUse` choke-point shape, applied to a handle.
+2. **C1, the blocking one.** `backup_restore` calls `deny_co_resident`, which
+   now has four callers. Without it this change would have turned a
+   documented 409 into a destructive 200: the refusal is produced by
+   `hold_vault_exclusively`, which fails only while ANOTHER handle holds the
+   database, and the route drops this process's cached handle first — so on
+   one handle the lock would have succeeded and `remove_dir_all` would have
+   destroyed the served vault under a live server. Nothing observable moves;
+   the route answered 409 before and answers 409 now, naming the remedy.
+3. **C2.** `tenant::StoreOpener` travels on `Tenancy` beside the embedder and
+   reranker factories, so the one eviction path that is NOT co-resident-refused
+   (`backup create`) brings the vault back through the CLI's opener rather
+   than the multi-tenant one. Without it an `hnsw` build would have had one
+   `/v1` backup make every later `/mcp` call 500 forever, and every re-open
+   would silently have resolved a different embedder and skipped
+   `warm_embedding_cache`.
+4. **C3.** `deny_co_resident` is KEPT and its rationale re-stated in place:
+   its correctness argument evaporated with the second handle and only a
+   policy argument remains, which is the maintainer's (escalated below).
+   `vault_opened()` is called on adoption, or one count per process would
+   have disappeared from `undercroft_vault_opens_total`.
+5. **C5.** The claims that said two handles moved with the unit:
+   `chain.rs`'s residual paragraph (which also gains the half no lens named —
+   the free re-read and MAC check of the manifest that went with the free
+   re-replay), `Posture`'s doc comment, `architecture/index.html`,
+   `CLAUDE.md`, and this entry's own "save" → "commit" correction above.
+
+**One signature moved that did not have to**, and it is recorded because a
+gate depends on the function it is in: `open_store_as` takes the data
+directory rather than `&Cli`, so the re-opener can be `'static` without
+cloning a parsed command line. It was NOT split into a delegator plus a body,
+deliberately — `config_check_accepts_only_embedder_names_the_opener_implements`
+slices this file from `fn open_store_as` to the first `\n}\n` and reads the
+embedder arms out of that slice, so a thin wrapper would have left that gate
+passing over a function with no arms in it. `manager_at` is the same shape one
+level down, with `manager` as the adapter.
+
+**Gates, and what each one can and cannot do.**
+
+- **`serve_http_holds_exactly_one_handle_on_its_vault`** (`parity.rs`) is the
+  gate, and it is SOURCE-scanning on purpose: `LabelGuard::replays` is
+  `#[cfg(test)]` and `pub(crate)` in `undercroft-store`, so this crate cannot
+  count replays, and a wall-clock assertion would pass on any fixture small
+  enough for a replay to be free — which is every fixture, as `chain.rs` says
+  in its own comment. It asserts the listener takes no store, the handler
+  declares none, and the arm adopts; each behind a premise probe.
+  **Counterfactual RUN, not assumed**: restoring a `VaultStore` parameter to
+  `serve_http` makes it fail with the message that names the remedy, and it
+  was restored from a saved copy rather than by `git checkout --`.
+- **`/v1 restore refuses the vault this process serves over /mcp`**
+  (`tests/e2e.sh`) pins C1 against a RUNNING server, and it is 409 rather
+  than 400 because the co-resident check runs in front of the body parse —
+  which is what makes it fail on a tree without it.
+- **What neither can do**, stated rather than implied: no gate here proves
+  the COST went away. That is the four-arm probe, and it is owed.
+
+**Not yet measured, and named as owed rather than estimated.** The ruling's
+G3 — re-running `o242_probe.sh`'s four arms and showing the DOUBLE DIFFERENCE
+collapse from +89.5 ms to within noise — has not been run at this tree. It
+needs the warm `o242-corpus` volume and about fifteen minutes, and this
+project does not start a long run without being asked. Two conditions the
+re-run must carry, both from the refuter: a POSITIVE WITNESS that a guarded
+read is still reached (the `O237C` e2e arm against the fixed binary), because
+a double difference of ~0 is also what a probe that never reaches the guard
+produces — `refuse_replayed` returns early for `Read::Internal` and for an
+empty id list; and `UNDERCROFT_READ_AUDIT`'s state recorded on both runs,
+since the correction above shows it changes the figure.
+
+**What this does NOT close.** It removes the DEPLOYMENT the release was gated
+on, not the class. Any external concurrent writer — `undercroft mine`,
+`daemon run --watch`, an operator `trust set`, a second server — still moves
+the cookie and still costs a full replay per guarded read, ~836 ms at 10⁶
+rows. That is O244's to bound and this entry must not be read as closing it.
 
 ### O237 — CLOSED 2026-09-21: a read that decides from an audit label asks first whether the labels are still this vault's
 
@@ -22605,105 +23055,6 @@ introduced the check.
 **Counterfactual**: today, it opens.
 
 
-### O242 — a second handle's commit makes the label guard replay the whole chain, so a write-active server pays it per search
-
-**Filed 2026-09-21 by O241's ruling panel (the adversarial refuter); the
-defect is MINE, shipped in O237 the same day.** `require_authenticated_labels`
-caches its replay verdict against `PRAGMA data_version` and re-runs the replay
-whenever that cookie moves. The cookie moves when ANOTHER CONNECTION commits —
-measured with a real second process, and pinned by my own test
-`the_replay_runs_once_per_handle_and_again_only_when_another_writer_commits`,
-which asserts the count going 1 → 2. I read that behaviour as soundness and
-never priced it.
-
-**`serve-http` runs TWO handles on one vault** — the `/mcp` store and the
-`/v1` `Tenancy`, and `with_mcp_vault`'s own comment says so;
-`deny_co_resident` refuses only a rotate or a delete of the co-resident vault,
-never an ordinary write. So every `/v1` save moves the `/mcp` handle's cookie,
-and the next `/mcp` search replays the whole chain. On a server where writes
-interleave with reads that is a replay PER SEARCH: **88 ms at 102,001 audit
-rows against a 36.84 ms/q baseline, i.e. +240%, and 836 ms at 1,002,001** —
-which is exactly the per-read replay O237's own ruling used O234's 10% budget
-to rule out. `audit` has no compaction, so it worsens for the life of the
-vault.
-
-The re-replay is SOUND and must not simply be removed: it is what sees an
-SQLite-mediated tamper by another process. What is wrong is that the cost was
-never measured on the deployment A31 describes, and the shipped figures
-(+1.7% warm search, +73 ms per handle) are true of a single-handle,
-no-concurrent-writer workload that a real server is not.
-
-**Shape, for a ruling panel**: whether the re-replay can be narrowed to the
-rows appended since the cached verdict without reintroducing O237 ruling 1's
-watermark unsoundness (it likely cannot — the attack rewrites rows below any
-watermark); whether a `/v1` write should advance the `/mcp` handle's cached
-verdict in-process rather than invalidating it, which is sound because the
-two handles are in ONE process and the write is this process's own; or whether
-the honest answer is a measured, published cost.
-
-**Gate**: two handles on one vault, interleaved writes and reads, with the
-replay count asserted to have moved — a flat result is otherwise
-indistinguishable from a probe that never produced a foreign commit.
-**Counterfactual**: today the MCP search path replays after every `/v1` save.
-
-#### MEASURED 2026-09-21 by the integrator, on the maintainer's instruction
-
-**Confirmed, isolated, and reproducible.** On the 102,000-drawer sealed
-corpus under `UNDERCROFT_RETRIEVAL=pq`, with one `serve-http` up: searches
-through `POST /mcp` (the `--vault` handle), saves through
-`POST /v1/…/drawers` (the `Tenancy`'s own handle for the same vault), 30
-cycles per arm, two rounds, per-arm warm-up untimed so no first-read replay
-sits inside a timing.
-
-**FOUR arms, because two cannot separate the replay from write contention** —
-the writes cost something by themselves, and a two-arm probe would have
-charged that to the replay:
-
-| arm | round 1 | round 2 |
-|---|---|---|
-| guard OFF, searches only | 41 ms | 40 ms |
-| guard OFF, one save between searches | 61 ms | 61 ms |
-| guard ON, searches only | 42 ms | 42 ms |
-| guard ON, one save between searches | **152 ms** | **152 ms** |
-
-The writes alone cost **+20.5 ms** per cycle (the OFF rows). The double
-difference — `(ON-inter − ON-ctrl) − (OFF-inter − OFF-ctrl)` — is
-**+89.5 ms**, and that is the replay and nothing else. Stated as the search
-path sees it: **42 ms → 131.5 ms, +213%**, whenever a `/v1` write lands
-between two `/mcp` searches.
-
-**It lands on the number the panel predicted from a different direction.**
-O237's panel measured the replay at 88 ms at 102,001 audit rows; this probe
-attributes 89.5 ms to it without ever timing a replay directly. Two
-independent routes to one figure.
-
-**Premise arms, all asserted rather than assumed**: each interleaved arm's
-drawer count had to rise by exactly its 30 saves (102,000 → 102,120 over the
-run) and each control arm's had to be unchanged, or the probe exits 3. A flat
-result is otherwise indistinguishable from a probe that never produced a
-foreign commit, which is this tree's oldest trap; `LabelGuard::replays` is
-`#[cfg(test)]`, so the drawer count is the observable that was available.
-
-**Not measured, and stated rather than implied**: the 1,002,001-row arm. The
-replay is linear in `audit` and O237's panel measured it at 836 ms there, so
-the extrapolation is ~+836 ms per interleaved search — but it is an
-extrapolation from two measured points, not a third measurement. The corpus
-itself grew during the probe (120 drawers, and their audit rows with them),
-which is the unboundedness of O244 showing up inside a fifteen-minute run.
-
-The harness is `o242_probe.sh` in the session scratchpad; the corpus is the
-docker volume `o242-corpus`, a copy of the untouched `o206-corpus`.
-
-**GATES THE `1.6.0` RELEASE, decided by the maintainer 2026-09-21.** The
-release does not cut while this stands, and `## 1.6.0`'s own header says so.
-The reasoning is the operator's rather than the engine's: O237 shipped the
-guard into that section, so releasing before this fix hands every upgrading
-operator the cost and leaves it with anyone who pins to the release.
-
-**Relations:** shares a diff surface with O244 — both change what the label
-guard costs on a read, and both edit `require_authenticated_labels` in
-`crates/undercroft-store/src/chain.rs`.
-
 ### O243 — `chain::prefix_range` panics on the one namespace whose prefix is empty
 
 **Filed 2026-09-21 by O241's ruling panel (the security lens); verified by the
@@ -22762,10 +23113,6 @@ start above genesis without O237 ruling 1's watermark unsoundness.
 **Gate**: the replay's cost is bounded above by something an operator
 declares, and a trail that has been compacted still verifies.
 **Counterfactual**: today the replay is linear in a table with no ceiling.
-
-**Relations:** shares a diff surface with O242 — both change what the label
-guard costs on a read, and both edit `require_authenticated_labels` in
-`crates/undercroft-store/src/chain.rs`.
 
 ### O245 — the external witness `docs/THREAT_MODEL.md` calls "the planned mitigation" has no entry anywhere
 
@@ -22915,6 +23262,125 @@ merges until it is fixed — not "recorded with a shape".
 **Two of these found live drifts while being closed** — `DrawerSummary.source_file`
 never reached the CLI, and `Tenant.level` was dropped from `tenant-list`, which
 is the field that exists because a migration has to ask for it. Both are fixed.
+### O247 — the `rotate/` boundary rejects a FOREIGN keycheck and not a COPIED one, and no gate exercises the copied variant
+
+**Filed 2026-09-21 by O242's ruling panel (the security lens); verified by the
+integrator and by the refuter.** O239 bounded the version-replay boundary to
+`rotate/{keycheck_hex()[..16]}` for the key the handle holds, which is what
+killed the forged-`rotate/` lever O237 measured. But that label sits **in
+clear in `audit.record_id`**, so an offline writer on a ROTATED vault can read
+the real keycheck out of the table and append a row under the REAL label at a
+higher seq; `rotation_boundary` takes it, because `newest_record` is a
+`MAX(seq)` over the label. The equality rejects a label that is not this
+key's; it cannot reject a copy of one that is.
+
+**It is not live today, and the reason is the thing that could change.** Such
+an append is an ordinary SQLite commit, so it moves `PRAGMA data_version` and
+trips the re-replay, which catches it — the append-only invariant does not,
+because an append is legitimate by construction (`chain.rs`'s own comment).
+So the variant is reachable only through the residual O237 already states: a
+writer editing pages beneath SQLite. O242 does not arm it, and both options
+O242 rejected — advancing a sibling's verdict, and dropping the re-replay —
+would have.
+
+**What is actually missing is the GATE.**
+`a_forged_rotation_record_is_refused_by_the_guard_as_well` inserts
+`rotate/deadbeefdeadbeef`, a foreign keycheck, so the copied-keycheck variant
+is exercised NOWHERE in the tree, and a future change to the boundary could
+retire the protection with every test green.
+
+**Shape, for a ruling panel**: an arm on the existing gate that copies the
+handle's own keycheck (which a test can derive), so the boundary is proved to
+rest on the re-replay rather than on the label's spelling; and, separately,
+whether the boundary should be bound to something an offline reader cannot
+copy — which is the same freshness problem O241 refused an in-band answer to
+and O245 names the out-of-band one for.
+
+**Gate**: a forged `rotate/` row carrying THIS handle's own keycheck is
+refused, and the test states which mechanism refuses it.
+**Counterfactual**: today only the foreign-keycheck spelling is driven.
+
+### O248 — an append-only refusal on a legacy chain names a remedy that reports nothing, and its evidence dies with the handle
+
+**Filed 2026-09-21 by O242's ruling panel (the agentic-memory lens).** O237's
+guard refuses a DECIDING read with a message naming `undercroft verify`. On a
+`Regime::V1` chain that is a dead end, and the tree already pins why:
+`a_legacy_chain_serves_its_readers_and_still_holds_the_append_only_rule`
+asserts that after the O237 exploit `verify().chain_ok` is **true** — the
+version-1 replay cannot see a relabel at all, which is the whole reason O233
+switched the chain. So a legacy operator is refused, told to run the named
+remedy, and the remedy answers clean.
+
+**And the evidence is process-local.** The refusal comes from `LabelGuard`'s
+own memory — "this handle read its record at seq N" — which is not persisted,
+is unverifiable by anyone else, and is gone at restart. A refusal appends
+nothing to the chain. So the operator has a door that will not open, a
+verdict that says nothing is wrong, and nothing to hand a second party.
+
+**Why it is not simply a bug in the carve-out.** `Regime::V1` /
+`LabelCommitment::Pending` MUST NOT refuse is O237 ruling 3, and it is load
+bearing: refusing there would brick every pre-1.6.0 vault served
+`--read-only`, a documented contract change and therefore MAJOR. The
+append-only invariant deliberately still applies on such a vault, and on one
+it is the only mechanism there is. The gap is the REPORTING, not the refusal.
+
+**Shape, for a ruling panel**: whether `verify` should report what the
+append-only invariant found (which means the finding has to outlive the
+handle, and a per-handle observation is exactly what O237 ruling 4 refuses to
+let become a baseline); or whether the refusal should name the switch — "this
+vault's chain predates the label commitment, so `verify` cannot corroborate
+this; switch it by opening it writable" — which costs nothing and is honest;
+or whether a legacy vault should be urged to switch at all, which is the
+upgrade path `UPGRADING.md` owns.
+
+**Gate**: an operator refused on a V1 chain is given something a second party
+can check, or is told plainly why there is nothing.
+**Counterfactual**: today the refusal names `verify`, and `verify` is green.
+
+
+### O249 — `backends-e2e` names its per-run vaults with `$$`, which is always `1` in the container, so two runs collide
+
+**Filed 2026-09-21 by the integrator, from a battery failure it caused.**
+`tests/e2e-backends.sh` builds two vault names per backend from the shell's
+PID — `local probe="o83${be}$$"` and `local ro="o175${be}$$"` — which is the
+ordinary idiom for "unique per run". The suite runs as the container's main
+process, so `$$` is **1**, every time: the names are `o83pgvector1` and
+`o175pgvector1` on every run of every backend, and the mirror collections
+derived from them are `undercroft_o175pgvector1` and so on. The uniqueness is
+decorative.
+
+**Measured, not theorised.** A battery on 2026-09-21 failed two pgvector
+checks — `[pgvector] ...and left no mirror` and `...nor did asking make one`
+— with `collection: undercroft_o175pgvector1, records: 1, local: 1`. That
+trailing `1` IS the PID. Re-run in isolation after
+`docker compose rm -sfv … pgvector …`, the same suite answered **157 passed,
+0 failed**. pgvector's `status` uses `to_regclass` and creates nothing
+(verified in `undercroft-index`), so the table it found was genuinely a
+previous run's.
+
+**Why it usually hides, and what that costs.** `tests/battery.sh` resets the
+five backends with `docker compose rm -sfv` before this suite, which takes
+their anonymous volumes with them — so inside a battery the collision is
+normally invisible. It surfaces when that reset does not happen or does not
+finish: the call is `|| true` by design (M12's narrowing), the suite can be
+driven directly with `docker compose run --rm backends-e2e`, and a machine
+under memory pressure can leave a container behind. The failure then looks
+like a **retrieval or refusal defect in the engine** — an O175 read-only
+refusal that appears to have leaked a mirror — rather than like stale state,
+which is the expensive part: it accuses the code.
+
+**Shape, for a ruling panel**: a name that is actually unique per run
+(`date +%s%N`, `mktemp -u` style, or a counter seeded from the suite's own
+start) versus making the suite DROP what it created at the end versus
+asserting the premise — that the collection does not exist before the O175
+block, so a stale one is reported as a stale one rather than as a leak. The
+third is the cheapest and matches this tree's premise-probe doctrine; the
+first is what the code already meant to do.
+
+**Gate**: two consecutive runs of `backends-e2e` against a warm backend pass,
+or the second one names the collision instead of failing the O175 assertion.
+**Counterfactual**: today the second run fails as though the engine leaked a
+mirror.
 
 ---
 

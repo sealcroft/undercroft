@@ -2946,4 +2946,81 @@ mod tests {
             );
         }
     }
+
+    /// **`serve-http` holds ONE handle on the vault it serves** (ROADMAP
+    /// O242).
+    ///
+    /// It used to hold two — the `/mcp` store and the `Tenancy`'s own for the
+    /// same vault — and that was never a design, it was an aliasing nobody
+    /// had priced. `PRAGMA data_version` does not move for a connection's own
+    /// commit, so two connections made every `/v1` commit look FOREIGN to the
+    /// `/mcp` handle's label guard, which replayed the whole audit chain on
+    /// the next guarded read: measured at **+89.5 ms isolated from write
+    /// contention, 42 → 131.5 ms per search**, linear in a table with no
+    /// compaction (O244).
+    ///
+    /// **This is a SOURCE gate because the behaviour has no observable from
+    /// here.** `LabelGuard::replays` is `#[cfg(test)]` and `pub(crate)` in
+    /// `undercroft-store`, so this crate cannot count replays, and a
+    /// wall-clock assertion would pass on any fixture small enough for a
+    /// replay to be free — which is every fixture. What this can check is
+    /// that the two-handle state stays UNREPRESENTABLE: `serve_http` takes no
+    /// store, so a future author cannot re-create the pair without changing a
+    /// signature this test reads.
+    ///
+    /// It fails on the tree before the fix, which is the property the
+    /// doctrine asks of a gate: there, `serve_http`'s second parameter is
+    /// `store: VaultStore`.
+    #[test]
+    fn serve_http_holds_exactly_one_handle_on_its_vault() {
+        let http = include_str!("http.rs");
+        let mcp = include_str!("mcp.rs");
+        let main = include_str!("main.rs");
+
+        // The listener takes no store.
+        let sig = http
+            .split_once("pub fn serve_http(")
+            .expect("premise: http.rs defines serve_http")
+            .1;
+        let sig = &sig[..sig
+            .find(") -> Result<()> {")
+            .expect("premise: serve_http's parameter list ends")];
+        assert!(
+            sig.contains("tenancy: Tenancy"),
+            "premise: serve_http still takes the tenancy, so this gate is reading the right signature"
+        );
+        assert!(
+            !sig.contains("VaultStore"),
+            "serve_http takes a VaultStore again, so this process can hold a SECOND handle on the vault it serves — which is what made every /v1 commit replay the whole audit chain on the next /mcp search (ROADMAP O242). The store belongs to Tenancy; borrow it with `mcp_store()`."
+        );
+
+        // The handler borrows a store per call rather than owning one.
+        let decl = mcp
+            .split_once("pub struct McpHandler {")
+            .expect("premise: mcp.rs declares McpHandler")
+            .1;
+        let decl = &decl[..decl.find("\n}\n").unwrap_or(decl.len())];
+        assert!(
+            decl.contains("vault: String"),
+            "premise: McpHandler still names its vault, so this gate is reading the right declaration"
+        );
+        assert!(
+            !decl.contains("VaultStore"),
+            "McpHandler owns a VaultStore again (ROADMAP O242): it must hold the vault NAME and take `&mut VaultStore` per call, or `serve-http` is back to two handles on one database"
+        );
+
+        // And the arm adopts the store it opened into the Tenancy, rather
+        // than handing it to the listener.
+        let arm = main
+            .split_once("Command::ServeHttp {")
+            .expect("premise: main.rs has a ServeHttp arm")
+            .1;
+        let arm = &arm[..arm
+            .find("Command::AssertHeader")
+            .expect("premise: the ServeHttp arm is followed by AssertHeader")];
+        assert!(
+            arm.contains(".with_mcp_vault("),
+            "the ServeHttp arm must ADOPT its store into the Tenancy (ROADMAP O242), so both surfaces run on one handle"
+        );
+    }
 }

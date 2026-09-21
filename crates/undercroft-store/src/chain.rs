@@ -656,6 +656,19 @@ pub(crate) fn chain_keys(conn: &Connection, ns: Namespace) -> Result<Vec<String>
 // with no recorded instance in this tree — and the mechanism that would
 // close it is an out-of-band witness (ROADMAP O245), not another copy of
 // a chain fact.
+//
+// **"Or another connection commits" got NARROWER on `serve-http`, and that
+// is stated rather than absorbed** (ROADMAP O242). That process used to
+// hold two handles on one vault, so every `/v1` commit handed the `/mcp`
+// handle a free re-replay — and a free re-read and MAC check of the
+// manifest with it, since `chain_verdict` begins at `anchored_head`. It now
+// holds one, which is what every other deployment has always had, so
+// neither happens until a genuinely FOREIGN commit arrives. The coverage
+// that goes was an accident of that aliasing and never a mechanism: it
+// never existed for an `/mcp`-only or `/v1`-only server, or for the CLI.
+// What it incidentally shortened is the window here and O246's manifest
+// rollback; both close on the same out-of-band witness, and neither was
+// ever designed to close on a sibling's write.
 
 /// What a reader will DO with what the chain says about a label.
 ///

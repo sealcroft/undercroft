@@ -150,6 +150,19 @@ pub type EmbedderFactory =
 pub type RerankerFactory =
     Box<dyn Fn() -> Box<dyn undercroft_core::rerank::Reranker + Send + Sync>>;
 
+/// Re-opens the co-resident `--vault` store, with the SAME configuration
+/// `serve-http` opened it with (ROADMAP O242).
+///
+/// It is required rather than optional because the alternative is silent
+/// drift: `backup create` evicts the store (`stores.remove`), and without
+/// this the next `/mcp` request would re-open through [`Tenancy::store_for`],
+/// which resolves a different embedder, a different reranker, never re-warms
+/// the embedding cache, and — the sharp one — REFUSES
+/// `UNDERCROFT_RETRIEVAL=hnsw` with a 500 where the CLI's opener accepts it.
+/// On an `hnsw` build, one `/v1` backup would have made every later `/mcp`
+/// call 500 forever.
+pub type StoreOpener = Box<dyn Fn() -> Result<VaultStore>>;
+
 /// The multi-tenant engine state behind the `/v1` routes. Single-threaded
 /// (the `tiny_http` request loop is sequential), so the store cache needs
 /// no locking.
@@ -161,14 +174,28 @@ pub struct Tenancy {
     reranker: Option<RerankerFactory>,
     stores: HashMap<String, VaultStore>,
     read_only: bool,
-    /// The vault this same process ALSO holds open behind `/mcp`, when the
-    /// binary is running `serve-http` (which opens one store for MCP and
-    /// lets `Tenancy` open its own per vault). Two independent handles over
-    /// one vault directory is fine for reads and ordinary writes — SQLite
-    /// arbitrates those — but not for an operation that retires the keys,
-    /// rewrites the whole derived layer (`repair`) or removes the files
-    /// under the other handle. See [`Self::deny_co_resident`].
+    /// The vault this process ALSO serves behind `/mcp`, when the binary is
+    /// running `serve-http`.
+    ///
+    /// **It is served through THIS cache, on ONE handle** (ROADMAP O242).
+    /// The two surfaces used to hold a handle each, and the second one was
+    /// never a design — it was an aliasing whose cost nobody had measured:
+    /// `PRAGMA data_version` does not move for a connection's own commit, so
+    /// two connections made every `/v1` write look FOREIGN to the `/mcp`
+    /// handle's label guard, which replayed the whole audit chain on the next
+    /// search. Measured at **+89.5 ms isolated from write contention, 42 →
+    /// 131.5 ms**. One handle makes the write this connection's own, and the
+    /// guard, its cookie policy and its refusals are untouched.
+    ///
+    /// The field still names the vault, because two things still turn on
+    /// co-residency: [`Self::mcp_store`] serves it through the opener rather
+    /// than through [`Self::store_for`], and [`Self::deny_co_resident`] still
+    /// refuses the operations that would pull the ground out from under a
+    /// live server.
     mcp_vault: Option<String>,
+    /// How to re-open [`Self::mcp_vault`] after an eviction. See
+    /// [`StoreOpener`] for why it is not optional in effect.
+    mcp_opener: Option<StoreOpener>,
     /// Per-request vault-assertion secret; when present every vault-
     /// addressing request must carry a valid `X-Vault-Assertion`.
     secret: Option<Vec<u8>>,
@@ -248,19 +275,68 @@ impl Tenancy {
             stores: HashMap::new(),
             read_only,
             mcp_vault: None,
+            mcp_opener: None,
             secret,
             window: assertion::DEFAULT_WINDOW_SECS,
         })
     }
 
-    /// Declare the vault this process also serves over `/mcp`, so the three
-    /// routes that would pull the ground out from under that second handle
-    /// — vault deletion, repair and key rotation — can refuse instead of
-    /// corrupting it. `serve-http` is the only caller; a bare `/v1` deployment holds
-    /// exactly one handle per vault and needs none of this.
-    pub fn with_mcp_vault(mut self, vault: impl Into<String>) -> Self {
-        self.mcp_vault = Some(vault.into());
+    /// Adopt the store `serve-http` opened for `/mcp`, so this process holds
+    /// ONE handle on that vault and both surfaces run on it (ROADMAP O242).
+    ///
+    /// `serve-http` is the only caller; a bare `/v1` deployment holds exactly
+    /// one handle per vault already and needs none of this.
+    ///
+    /// The store is put straight into the cache [`Self::store_for`] reads, so
+    /// `/v1` finds it by its `contains_key` short-circuit and never opens a
+    /// second one. `opener` is how it comes back after an eviction, with the
+    /// configuration it was opened with — see [`StoreOpener`].
+    pub fn with_mcp_vault(
+        mut self,
+        vault: impl Into<String>,
+        store: VaultStore,
+        opener: StoreOpener,
+    ) -> Self {
+        let vault = vault.into();
+        self.stores.insert(vault.clone(), store);
+        undercroft_obs::vault_opened();
+        self.mcp_vault = Some(vault);
+        self.mcp_opener = Some(opener);
         self
+    }
+
+    /// The vault id this process serves over `/mcp`, if it is a `serve-http`.
+    pub fn mcp_vault_id(&self) -> Option<&str> {
+        self.mcp_vault.as_deref()
+    }
+
+    /// The ONE handle on the co-resident vault, for the `/mcp` surface.
+    ///
+    /// It goes through the opener rather than [`Self::store_for`] because the
+    /// two are not interchangeable: `store_for` resolves the multi-tenant
+    /// configuration, which refuses `UNDERCROFT_RETRIEVAL=hnsw` outright. A
+    /// re-open happens only after `backup create` evicts the entry.
+    pub(crate) fn mcp_store(&mut self) -> Result<&mut VaultStore, RestError> {
+        let Some(id) = self.mcp_vault.clone() else {
+            return Err(RestError::new(500, "this process serves no /mcp vault"));
+        };
+        if !self.stores.contains_key(&id) {
+            // The opener's borrow ends with this block, before the insert
+            // below needs `&mut self`.
+            let opened = {
+                let opener = self
+                    .mcp_opener
+                    .as_ref()
+                    .ok_or_else(|| RestError::new(500, "the /mcp vault has no re-opener"))?;
+                opener().map_err(|e| RestError::new(500, e.to_string()))?
+            };
+            self.stores.insert(id.clone(), opened);
+            undercroft_obs::vault_opened();
+        }
+        Ok(self
+            .stores
+            .get_mut(&id)
+            .expect("just inserted or already present"))
     }
 
     /// Attach a shared second-stage reranker, applied to every per-vault
@@ -2176,8 +2252,25 @@ impl Tenancy {
     /// realistic use is a maintenance window — stated here rather than
     /// discovered in an incident. This process's own cached handle is dropped
     /// first, or it would be the thing blocking itself.
+    ///
+    /// **Which is why the co-resident vault is refused EXPLICITLY** (ROADMAP
+    /// O242). The 409 above is produced by `hold_vault_exclusively`, and it
+    /// fires because some OTHER handle still has the database open. While
+    /// `serve-http` held two handles, dropping this one left the `/mcp` one
+    /// holding it, so the served vault was refused by accident. On one handle
+    /// the drop below releases the last one, the exclusive lock SUCCEEDS, and
+    /// `remove_dir_all` destroys the vault under a live server — O69's exact
+    /// disaster, arriving as a 200 where `docs/AGENTS.md`,
+    /// `docs/MULTI_TENANCY.md` and `docs/remote-server.md` all promise a 409.
+    /// Nothing observable moves: the route answered 409 before and answers
+    /// 409 now, with a message that names the remedy.
     fn backup_restore(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
         self.assert_or_401(id, req, now)?;
+        self.deny_co_resident(
+            id,
+            "restoring over a vault",
+            "restore it while nothing serves it",
+        )?;
         // The backup NAME travels in the body, not the path, and that is not
         // cosmetic. The orchestrator's operator plane matches a subpath
         // EXACTLY (`ops_route_ok`), so a parameterised segment could not be
@@ -3233,10 +3326,23 @@ impl Tenancy {
     }
 
     /// Refuse an operation that would retire the keys of, rewrite the whole
-    /// derived layer of (`repair`), or delete the files under, a vault a
-    /// SECOND live handle in this same process is holding — the `/mcp`
-    /// store `serve-http` opened at start-up. Three callers: `delete_vault`,
-    /// `repair`, `rotate`.
+    /// derived layer of (`repair`), delete the files under, or restore over,
+    /// the vault this process is serving behind `/mcp`. Four callers:
+    /// `delete_vault`, `repair`, `rotate`, `backup_restore`.
+    ///
+    /// **Its REASON changed under it, and the refusal is deliberately kept**
+    /// (ROADMAP O242). The paragraphs below describe a SECOND live handle,
+    /// and since O242 there is only one — so rotating or repairing through
+    /// `/v1` would now run on the very handle that serves `/mcp`, and the
+    /// correctness argument for refusing has evaporated. What remains is a
+    /// policy argument, which is the maintainer's to rule: these are
+    /// operator-scale operations on a vault that is being served, and the
+    /// documented remedy is to stop the server. `backup_restore` is the
+    /// opposite case and is why nothing here may simply be deleted — its 409
+    /// used to be produced by the other handle holding the database, so
+    /// removing the second handle without adding it here would have turned a
+    /// documented refusal into a destructive 200. The history is left intact
+    /// below because it is the evidence for why the refusal exists at all.
     ///
     /// `rotate_keys` documents a sole-writer contract, and every doc states
     /// it at PROCESS granularity ("do not rotate a vault another process is

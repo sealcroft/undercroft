@@ -8,6 +8,57 @@ its CLI mirror `tenant-repoint` are additive, and so are the operator plane's
 behaves differently because they exist. Everything else in this section is a
 fix whose only observable change is that a defect is gone.
 
+### `serve-http` holds ONE handle on the vault it serves, so its own writes stop looking like tampering (O242)
+
+That process opened **two** `VaultStore` handles on one vault — the `/mcp`
+store and the `Tenancy`'s own for the same vault — on two connections. It was
+never a design; it was an aliasing nobody had priced, and O237's guard turned
+it into a regression the same day the guard shipped. `PRAGMA data_version`
+does not move for a connection's OWN commit, which is what makes "one replay
+per handle" affordable — so with two connections every `/v1` commit looked
+FOREIGN to the `/mcp` handle's label guard, and the next `/mcp` search
+replayed the entire audit chain.
+
+**Measured on a 102,000-drawer sealed corpus under the PQ tier, four arms
+because two cannot separate the replay from write contention**: searches only
+41/40 ms with the guard off and 42/42 with it on; one `/v1` save between
+searches, 61/61 off and **152/152** on. The writes alone cost +20.5 ms, so
+the double difference — **+89.5 ms** — is the replay and nothing else:
+**42 → 131.5 ms, +213%**, on every search that follows a write. Linear in a
+table with no compaction, so it worsens for the life of the vault.
+
+The store's guard is **untouched** — the replay policy, the `data_version`
+accelerator, the append-only invariant, every refusal wording and the legacy
+carve-out are byte-identical. What changed is that the engine stopped
+generating foreign commits against itself: `McpHandler` holds the vault name
+and borrows `&mut VaultStore` per call, the store `serve-http` opens is
+adopted into `Tenancy` where `/v1` already looks for it, and `serve_http`
+takes no store at all — so the two-handle state cannot be re-created without
+changing a signature a gate reads.
+
+Three things worth knowing, because none of them is cosmetic:
+
+- **`POST /v1/vaults/{id}/backups/restore` now refuses the served vault
+  explicitly.** It always answered 409, but only by accident: the refusal
+  comes from an exclusive lock that fails while another handle holds the
+  database, and the route drops its own handle first. With one handle the
+  lock would have succeeded and the restore would have destroyed the vault
+  under a live server. Nothing observable moves — 409 before, 409 now — but
+  the promise in `docs/AGENTS.md`, `docs/MULTI_TENANCY.md` and
+  `docs/remote-server.md` is now kept on purpose rather than by luck.
+- **`UNDERCROFT_RETRIEVAL=hnsw` now reaches `/v1` for the served vault**,
+  because both surfaces share the store the CLI opened. `/v1` refuses `hnsw`
+  for tenant vaults as before; on this one vault it no longer 500s.
+- **The trigger was never only writes.** Under `UNDERCROFT_READ_AUDIT=chain`
+  a read commits a `read/` record too, so two surfaces alternating pure
+  READS replayed on both handles. The measured figure above is a floor.
+
+**What this does not close**: an external concurrent writer — another
+process, an operator `trust set`, `daemon run --watch` — still moves the
+cookie and still costs one full replay per guarded read, ~836 ms at 10⁶ audit
+rows. Bounding that is the unbounded-`audit` problem (O244), and it stays
+open.
+
 ### a read that decides from an audit label now asks first whether the labels are still this vault's (O237)
 
 O233 made a relabelled audit row break the chain. It did not stop the reads
