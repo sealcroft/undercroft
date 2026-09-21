@@ -7,38 +7,35 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
 
 Published by **Sealcroft** at `github.com/sealcroft/undercroft`, site at
 `https://sealcroft.com/undercroft/`, house page at `https://sealcroft.com/`
-(repo `sealcroft/sealcroft.github.io`). Current release **1.5.2** — a PATCH
-over `1.5.1`, itself a PATCH over `1.5.0`. PATCH is right by this file's own
-test: no documented contract moves. **Surface that REPORTS an existing silent
-defect is a fix, not a feature** — ruled 2026-09-08 and applied here, where
-several entries add a stats field, a counter or an alert and none adds a
-capability: the defect was the silence. What it carries, in four groups.
-**Every model role now counts what it used to swallow (O122, O131)**: a
-failed embed degraded to a zero vector and a failed rerank to `0.0` — which
-SINKS a candidate, since `0.0` is also what a genuinely irrelevant passage
-scores — across nine reachable degrade arms in six backends and three roles
-(O134a's count), none of them counted anywhere.
-Three counters, four renderers, three alerts. **Two paths nobody had measured
-were the expensive ones (O138)**: `export --to` held the corpus THREE times
-and `import` FIVE, measuring **3.02x** and **4.49x** on a 467.7 MB export —
-both worse than the peak O113 was filed to fix, because O113 measured the one
-path carrying no envelope. Sealing and opening in place took them to 1.02x
-and 2.05x with the bundle format byte-identical. **A bundle from the future
-is recognised and refused by version (O141)**: `ui.html` guarded the shared
-magic stem and had a gate pinning it; `is_bundle` compared magics exactly and
-had neither, so the CLI told operators a sealed binary "is not UTF-8 text" —
-the browser was forward-compatible and the CLI was not. **A shipped artifact
-compiled on no pull request (O142)**: `ort-build` was run by neither CI nor
-the battery while `release.yml` ships an `ort` binary for five targets, which
-is O102's rule on the feature axis instead of the platform one.
-`UPGRADING.md` carries what a script could meet — the `/v1` migration ceiling
-named with its remedy (O136), an embedding dimension refused, a confidence
-bound, an RFC 3339 `created_at`. **O137 is SUPERSEDED here rather than
-built**: it asked for a chunked bundle format and a four-agent fanout refuted
-three of its claims, so what survives is filed as O143 and O144 with honest
-scope, and the entry is kept because the reasoning error is the lesson.
-**The tree carried `1.5.2` only
-once the release PR merged (#170, tagged `v1.5.2` at `f490fd6`); the TAG stays
+(repo `sealcroft/sealcroft.github.io`). Current release **1.6.0** — a MINOR over `1.5.2`, and MINOR is right by this
+file's own test: `PATCH /admin/tenants/{id}` with its CLI mirror
+`tenant-repoint` (O149) and the operator plane's `…/ops/export` and
+`…/ops/import` (O222) are new capability, backward compatible. **Everything
+else in it is a fix whose only observable change is that a defect is gone**,
+across 41 entries. Its spine is the audit trail becoming evidence a reader
+can DECIDE from. **The chain binds each record's LABEL and time (O233)**, so a
+relabelled row stops verifying — a version-2 step folded under a fifth HKDF
+subkey, switched at the first writable open, with `head` frozen so a 1.5.x
+binary refuses the vault rather than appending version-1 steps to it. **Every
+reader that decides from a label goes through one door (O237)**: one lazy full
+replay per handle plus a per-key append-only invariant, because one relabel
+plus one deleted row took a floored search from zero hits to returning a
+quarantined drawer with `verify` failing on `chain_ok` ALONE. **`verify` grew
+a ninth leg (O234)** — an older drawer, fact, entity or tunnel written back
+offline verified clean under the current key until a row's tag was compared
+with the record that carries it. **A rotation refuses a vault it would
+launder (O232)**, because re-keying recomputes every tag from the row's
+CURRENT columns and so turned detected tampering into authentic data.
+**And O242 is the one this release was GATED on**, a regression O237 carried
+in on the same day it shipped: `serve-http` held TWO handles on one vault, so
+`PRAGMA data_version` — which does not move for a connection's own commit —
+made every `/v1` commit look FOREIGN to the `/mcp` guard, which replayed the
+whole chain per search. Measured at **+89.5 ms isolated from write
+contention, 42 → 131.5 ms**, and measured GONE at **−1.0 ms** after the two
+handles became one, with the pre-fix binary kept as the positive control so a
+result of zero could not be a broken probe. `UPGRADING.md` carries what a
+script could meet. **The tree carried `1.6.0` only
+once the release PR merged (tagged `v1.6.0`); the TAG stays
 a separate, explicit step for every release** — a build reporting a version it
 was never tagged as is worse than one reporting the last release. `main` is
 branch protected on both repos: force pushes and deletions blocked — GitHub

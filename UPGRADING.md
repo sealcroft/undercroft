@@ -73,7 +73,7 @@ or when they could never be presented.
 
 ---
 
-## 1.6.0 (unreleased)
+## 1.6.0
 
 ### a vault whose audit chain does not replay now REFUSES the reads that decide from a label, instead of serving them until someone runs `verify` (O237)
 
