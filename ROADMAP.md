@@ -4323,6 +4323,115 @@ Grafana panel was added for the new counter, deliberately: O122 and O131
 added a counter and an alert and no panel for all three model-failure
 counters, and a panel is discoverability where the alert is the mechanism.
 
+### O251 — CLOSED 2026-09-22: the open's replay and the guard's replay are the same replay, computed twice in one process
+
+**Filed 2026-09-21 by O244's ruling panel (the adversarial refuter); the
+option all four of us missed.** `reconcile_chain`'s `Replay` (`lib.rs:4244`)
+already carries every field `chain_verdict` needs — `regime`, `head`,
+`anchor_seen`, `commitment_intact`, `malformed` — and `reconcile_chain`
+already calls `chain::committed_head` (`lib.rs:4225`), which is
+`chain_verdict`'s own `head_state`. The struct is destructured at
+`lib.rs:4246-4251`, **three fields are dropped on the floor**, and the same
+walk over the same rows is recomputed at `lib.rs:8763`.
+
+**What it is worth, stated narrowly.** Zero in the steady state, because
+`reconcile_chain` short-circuits when the anchor equals the committed head
+(`lib.rs:4236-4238`) and never replays. It is worth one whole replay
+(~836 ms at 10⁶) exactly when the open DID replay — after a crash-heal, and on
+every command of a read-audited deployment, because `audit_read` commits
+without anchoring by design (`lib.rs:7663-7666`) so the anchor always lags.
+That deployment pays **two full replays per content-returning command** today.
+
+**Why it is filed rather than built.** Seeding a cached verdict across an open
+that ITSELF appended — O233's switch, A10's blinding migration — is unsound in
+the way O242 option (C) is unsound: those are this connection's own commits,
+which `PRAGMA data_version` is measured NOT to move, so a seeded verdict would
+go stale behind an unmoved cookie. O242's record says that option *"would ship
+GREEN"*. The sound form seeds only when the open performed no chain append.
+
+**Gate**: an open that replayed hands its verdict forward, and the first
+guarded read runs no second replay; an open that APPENDED does not, and the
+guard replays.
+**Counterfactual**: force a chain append during the open (a regime switch) and
+the gate must fail if the verdict is seeded unconditionally — today there is
+no seeding at all, so the first half fails on the current tree.
+
+#### BUILT 2026-09-22
+
+**One replay, shared, and the sharing is gated on the open having appended
+nothing.** `reconcile_chain` now takes its replay's verdict while the
+`Replay` is still whole and OFFERS it; `adopt_open_verdict` — called LAST in
+both opens, after the two at-rest migrations and the version-2 switch — takes
+it only if the chain has not moved since.
+
+**The arithmetic lives in ONE place**, `chain::verdict(&Replay, &HeadState)`,
+which `chain_verdict` now calls too. That is the load-bearing half of the
+diff: two callers making the same judgement over the same rows is exactly the
+shape where a second copy goes subtly wrong, and `reconcile_chain`'s own doc
+comment already says so about the anchor arithmetic one level up.
+`HeadState::into_committed` was split out of `committed_head` for the same
+reason — `reconcile_chain` needs the judged head AND the unjudged state, and
+reading `chain_meta` twice would let one function disagree with itself about
+its own chain on a busy vault.
+
+**Two conditions, and they are not interchangeable.** The cookie is read
+BEFORE the replay, so a FOREIGN commit during the open leaves the pair
+stale-but-honest and the guard replays — a wasted replay, never a skipped
+one. Our OWN commits do not move that cookie at all, which is the whole
+reason "once per handle" is affordable, so they are caught by the committed
+head and height instead. Both are read after every open-time append has run.
+Deliberately NOT a flag set by `chain_append`: a flag trusts every writer to
+remember, and `rotate.rs` appends through its own `INSERT` rather than that
+function (O80). The head and the height are what an append actually moves.
+
+**What the unsound version would have done, measured rather than argued.**
+With the check replaced by `true`, `an_open_that_appended_after_its_replay_
+hands_nothing_forward` fails at 0 replays where 1 is required — and the
+verdict it hands forward is not merely stale: the open SWITCHED the chain, so
+the seeded verdict says `Regime::V1` ⇒ `LabelCommitment::Pending` for a vault
+that is now version 2. `require_authenticated_labels` admits `Pending`
+(O237 ruling 3 forbids refusing on it), so a broken version-2 commitment
+would have been admitted by a verdict taken before the commitment existed.
+That is O242 option (C)'s shape and it would have shipped green.
+
+**Gate, run on both halves.** An open that replayed hands its verdict forward
+and the first guarded read runs no second replay (`replays() == 0`); an open
+that APPENDED does not (`replays() == 1`). Both are asserted in the store and
+the first is asserted again through the RELEASE BINARY in `tests/e2e.sh`,
+against a `serve-http --read-only` whose own open reports the anchor lag it
+replayed to judge — the premise and the measurement from ONE handle.
+
+**Counterfactuals, run.** Disabling the seeding turns the e2e arm red at
+`got '1'` while BOTH premises stay green, which is the shape that says the
+premises are independent of the claim. Seeding unconditionally turns the
+store's second gate red. Neither was assumed.
+
+**Two defects of mine in the test scaffolding, reported as mine.** The e2e
+first asked `undercroft stats` whether the anchor was behind — and `stats`
+opens the vault WRITABLE, so it healed the very lag it was being asked about
+and the server that followed had nothing to replay: a premise that destroyed
+its own condition. And it drove `recent`, which is not a CLI command at all
+(`wake-up` is what calls that door), under `2>/dev/null` — so three appends
+that never happened read exactly like three that did. Both are the same rule:
+a failed step and a successful one must not produce the same transcript.
+
+**What it is worth, and the honesty of the figure.** One whole replay, in the
+cases the entry names: after a crash-heal, on a read-only replica, and on
+every command of a read-audited deployment, because `audit_read` appends
+without anchoring by design so the anchor always lags. The replay's cost is
+O237's already-measured constant — **88 ms at 102,001 rows, 836 ms at
+1,002,001** — and the saving is one of them. That multiplication is
+ARITHMETIC over a measured constant, not a new measurement, and is labelled
+as such here. What IS measured directly is that the replay does not happen:
+the guard's counter reads 0 where it read 1, on the release binary, which
+`VaultStats.chain_replays` made observable four hours earlier (O250).
+
+**Zero in the steady state**, and that is worth stating because it bounds the
+claim: `reconcile_chain` short-circuits when the anchor equals the committed
+head and never replays, so an ordinary writable deployment — which anchors
+after every write — offers nothing and loses nothing. The cost added there is
+two indexed `chain_meta` reads per open.
+
 ## 1.6.0 — released 2026-09-21
 
 MINOR since O149: `PATCH /admin/tenants/{id}` and its CLI mirror are new
@@ -23832,38 +23941,6 @@ or the second one names the collision instead of failing the O175 assertion.
 **Counterfactual**: today the second run fails as though the engine leaked a
 mirror.
 
-### O251 — the open's replay and the guard's replay are the same replay, computed twice in one process
-
-**Filed 2026-09-21 by O244's ruling panel (the adversarial refuter); the
-option all four of us missed.** `reconcile_chain`'s `Replay` (`lib.rs:4244`)
-already carries every field `chain_verdict` needs — `regime`, `head`,
-`anchor_seen`, `commitment_intact`, `malformed` — and `reconcile_chain`
-already calls `chain::committed_head` (`lib.rs:4225`), which is
-`chain_verdict`'s own `head_state`. The struct is destructured at
-`lib.rs:4246-4251`, **three fields are dropped on the floor**, and the same
-walk over the same rows is recomputed at `lib.rs:8763`.
-
-**What it is worth, stated narrowly.** Zero in the steady state, because
-`reconcile_chain` short-circuits when the anchor equals the committed head
-(`lib.rs:4236-4238`) and never replays. It is worth one whole replay
-(~836 ms at 10⁶) exactly when the open DID replay — after a crash-heal, and on
-every command of a read-audited deployment, because `audit_read` commits
-without anchoring by design (`lib.rs:7663-7666`) so the anchor always lags.
-That deployment pays **two full replays per content-returning command** today.
-
-**Why it is filed rather than built.** Seeding a cached verdict across an open
-that ITSELF appended — O233's switch, A10's blinding migration — is unsound in
-the way O242 option (C) is unsound: those are this connection's own commits,
-which `PRAGMA data_version` is measured NOT to move, so a seeded verdict would
-go stale behind an unmoved cookie. O242's record says that option *"would ship
-GREEN"*. The sound form seeds only when the open performed no chain append.
-
-**Gate**: an open that replayed hands its verdict forward, and the first
-guarded read runs no second replay; an open that APPENDED does not, and the
-guard replays.
-**Counterfactual**: force a chain append during the open (a regime switch) and
-the gate must fail if the verdict is seeded unconditionally — today there is
-no seeding at all, so the first half fails on the current tree.
 
 ---
 

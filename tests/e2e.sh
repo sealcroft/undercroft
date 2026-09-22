@@ -3684,6 +3684,88 @@ check "O250: the warning keeps the default rather than stopping start-up" 0 "kee
   env UNDERCROFT_HOME="$O250_HOME" UNDERCROFT_AUDIT_CEILING=lots "$BIN" config check
 rm -rf "$O250_HOME"
 
+# ── O251: an open that replayed hands its verdict to the first guarded read ─
+# `reconcile_chain` and `chain_verdict` make the same `chain::replay` call
+# over the same rows, and the second was computed from scratch. It costs
+# nothing in the steady state — the open short-circuits when the anchor
+# equals the committed head — and one whole replay exactly when the open DID
+# replay.
+#
+# **The deployment this is measured on is the one whose whole purpose is
+# reading.** `UNDERCROFT_READ_AUDIT=chain` appends one chain record per
+# content-returning read and deliberately does not anchor (A31/R3), so such a
+# deployment ends every command with the anchor behind, and the next open
+# replays to heal it — then replayed AGAIN on its first guarded read. Two
+# full replays per command.
+#
+# Driven through the release binary, and readable at all only because O250
+# took `chain_replays` out of `#[cfg(test)]` — the two units compose.
+O251_HOME="$(mktemp -d)"
+UNDERCROFT_HOME="$O251_HOME" "$BIN" init >/dev/null 2>&1
+o251() { UNDERCROFT_HOME="$O251_HOME" "$BIN" "$@"; }
+o251 remember "the harbour crane at dawn above the tideline" --wing notes >/dev/null 2>&1
+# A trust assignment makes a search a GUARDED read; without it the search
+# decides from no label, replays nothing, and every count below is 0 for the
+# wrong reason.
+o251 trust set secret quarantined >/dev/null 2>&1
+# Read-audited reads: the chain advances and the manifest anchor does not, so
+# the NEXT open has a lag to heal and must replay to do it.
+#
+# `search`, and stderr is NOT suppressed. The first version of this block ran
+# `recent`, which is not a CLI command at all — `wake-up` is what calls that
+# door — and `2>/dev/null` turned "no such command" into a silent no-op, so
+# three appends that never happened read exactly like three that did. A
+# failed step and a successful one must not produce the same transcript.
+#
+# Nothing writable may run between here and the server below: an ordinary
+# writable open HEALS the anchor, which is what this arm needs to still be
+# broken.
+for _ in 1 2 3; do
+  UNDERCROFT_HOME="$O251_HOME" UNDERCROFT_READ_AUDIT=chain "$BIN" search "crane" >/dev/null
+done
+# **The premise and the measurement come from ONE open**, and the first
+# version of this block got that wrong in a way worth recording: it asked
+# `undercroft stats` whether the anchor was behind, and `stats` opens the
+# vault WRITABLE — which heals the very lag it was being asked about, so the
+# premise read clean and the server that followed had nothing to replay.
+#
+# A `--read-only` open replays to JUDGE the anchor and declines to heal it
+# (R4), so it reports the lag on `unhealed` from the same handle that then
+# serves the search. That is also the deployment this most benefits: a
+# read-only replica, which never writes and so never closes the window.
+UNDERCROFT_HOME="$O251_HOME" "$BIN" serve-http --host 127.0.0.1 --port 18883 --read-only >/dev/null 2>&1 &
+O251_PID=$!
+for _ in $(seq 1 40); do curl -sf http://127.0.0.1:18883/healthz >/dev/null 2>&1 && break; sleep 0.25; done
+O251_BEFORE="$(curl -s http://127.0.0.1:18883/v1/vaults/default/stats)"
+curl -s -o /dev/null -X POST http://127.0.0.1:18883/v1/vaults/default/search \
+  -H 'content-type: application/json' -d '{"query":"harbour crane","min_trust":"standard"}'
+O251_STATS="$(curl -s http://127.0.0.1:18883/v1/vaults/default/stats)"
+kill "$O251_PID" 2>/dev/null; wait "$O251_PID" 2>/dev/null
+if grep -q 'rollback anchor is [0-9]* record' <<<"$O251_BEFORE"; then
+  echo "ok    O251 premise: this handle's own open found the anchor behind and replayed"; PASS=$((PASS+1))
+else
+  echo "FAIL  O251 premise: the open did not replay, so the arms below assert nothing"
+  echo "$O251_BEFORE" | sed 's/^/      /' | head -5; FAIL=$((FAIL+1))
+fi
+O251_R="$(sed -n 's/.*"chain_replays":\([0-9]*\).*/\1/p' <<<"$O251_STATS" | head -1)"
+if [ -n "$O251_R" ]; then
+  echo "ok    O251 premise: the release binary reports chain_replays"; PASS=$((PASS+1))
+else
+  echo "FAIL  O251 premise: no chain_replays on the wire, so the arm below is vacuous"
+  echo "$O251_STATS" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+if [ "$O251_R" = 0 ]; then
+  echo "ok    O251: the open's replay served the first guarded read — no second walk"; PASS=$((PASS+1))
+else
+  echo "FAIL  O251: expected 0 guard replays after an open that replayed, got '$O251_R'"; FAIL=$((FAIL+1))
+fi
+# And the handed-forward verdict is a REAL one, not a blank that lets
+# everything through: the vault still verifies, and the floored search above
+# was answered by a verdict that authenticates its labels.
+check "O251: and the vault the seeded verdict vouched for still verifies" 0 "VERIFY OK" -- \
+  env UNDERCROFT_HOME="$O251_HOME" "$BIN" verify
+rm -rf "$O251_HOME"
+
 echo
 echo "e2e results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1
