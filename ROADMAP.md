@@ -4415,8 +4415,11 @@ its own condition. And it drove `recent`, which is not a CLI command at all
 that never happened read exactly like three that did. Both are the same rule:
 a failed step and a successful one must not produce the same transcript.
 
-**What it is worth, and the honesty of the figure.** One whole replay, in the
-cases the entry names: after a crash-heal, on a read-only replica, and on
+**What it is worth, and the honesty of the figure. SUPERSEDED by the
+`#### MEASURED 2026-09-22` record below, which measured it directly at
+93.0 ms; this paragraph is kept as the record of what was claimed when the
+fix shipped, and of what it was careful not to claim.** One whole replay, in
+the cases the entry names: after a crash-heal, on a read-only replica, and on
 every command of a read-audited deployment, because `audit_read` appends
 without anchoring by design so the anchor always lags. The replay's cost is
 O237's already-measured constant — **88 ms at 102,001 rows, 836 ms at
@@ -4431,6 +4434,72 @@ claim: `reconcile_chain` short-circuits when the anchor equals the committed
 head and never replays, so an ordinary writable deployment — which anchors
 after every write — offers nothing and loses nothing. The cost added there is
 two indexed `chain_meta` reads per open.
+
+
+#### MEASURED 2026-09-22
+
+**The saving is no longer arithmetic.** The `#### BUILT` record above states
+it as one replay × O237's measured constant and says so in as many words;
+this is the direct measurement, and it agrees with that constant to within
+about four per cent.
+
+**Corpus and instrument.** The warm `o242-corpus` volume, copied so the
+reference is never mutated: **102,360 drawers, 102,361 audit records**,
+sealed, under the PQ tier. Each sample starts `serve-http --read-only` — a
+posture that replays to JUDGE the anchor and declines to heal it, so the
+condition survives the reading — then times the FIRST guarded search (a
+floored `min_trust` query, which consults a label) and a SECOND one. The
+second contains no replay under either binary, so `first − second` isolates
+the replay from the search. Six samples per arm.
+
+**A 2×2, because one column cannot separate the replay from anything else.**
+Binary {pre-fix, post-fix} × anchor {lagging, current}. Only ONE of the four
+cells should lose a replay: the fixed binary on a vault whose open replayed.
+
+| binary | anchor | open | first | second | first−second | `chain_replays` |
+|---|---|---|---|---|---|---|
+| pre-fix | lagging | 476 ms | 324 ms | 36 ms | **284 ms** | 1 |
+| pre-fix | current | 360 ms | 320 ms | 36 ms | **285 ms** | 1 |
+| post-fix | lagging | 472 ms | 226 ms | 34 ms | **192 ms** | **0** |
+| post-fix | current | 357 ms | 322 ms | 38 ms | **286 ms** | 1 |
+
+**The three arms that still replay agree at 284 / 285 / 286 ms** — across two
+different binaries and two different anchor states — and the one that does
+not is 192 ms. That agreement is the instrument vouching for itself: three
+independent paths to the same number, and a single cell departing from it.
+
+> **Saving: 93.0 ms** (double difference against the three replaying arms),
+> **91.5 ms** measured directly against the positive control.
+
+**The positive control is the pre-fix binary and it is what makes the zero
+mean anything.** It reads `chain_replays: 1` on the lagging-anchor arm, so
+the probe demonstrably produced the condition; only the fixed binary on that
+same arm reads 0. Without it, "the cost is gone" could not be told from "the
+probe never made the anchor lag" — which is exactly the trap O242's
+re-measurement was designed around, and the reason its pre-fix binary was
+kept as an arm.
+
+**It replicates O237 independently.** That entry measured the replay at
+**88 ms at 102,001 audit records**; this measures 91.5–93.0 ms at 102,361, by
+a different instrument, on a different day, through a surface rather than a
+unit test. Two measurements of one walk that were never derived from each
+other.
+
+**The open pays one too, and it is visible in the same table.** An open whose
+anchor lags costs ~118 ms more than one whose anchor is current (476 vs 360
+pre-fix, 472 vs 357 post-fix) — the same walk, slightly dearer because it
+also verifies the anchored head. So the read-audited command that was the
+motivating case went from **~800 ms to ~698 ms** of pre-response work in this
+configuration, and the part this entry removed is the second walk, not the
+first.
+
+**Two things this does NOT claim.** It is one configuration (sealed, PQ tier,
+one corpus size), so it is a replication of O237's constant rather than a new
+curve — 10⁶ remains O237's measurement and is still an extrapolation here.
+And it moves nothing for an ordinary writable deployment, which anchors after
+every write, takes the short-circuit and never replays at open: all four arms
+above needed a lag to be manufactured, and the `current`-anchor rows are what
+that deployment looks like — identical, at 285 and 286 ms.
 
 ## 1.6.0 — released 2026-09-21
 
