@@ -73,7 +73,7 @@ or when they could never be presented.
 
 ---
 
-## 1.6.1
+## 1.6.1 (released 2026-09-22)
 
 ### The manifest carries a version fence from this release on (O238)
 

@@ -7,35 +7,39 @@ HMAC-SHA256 integrity tags + a tamper-evident audit chain.
 
 Published by **Sealcroft** at `github.com/sealcroft/undercroft`, site at
 `https://sealcroft.com/undercroft/`, house page at `https://sealcroft.com/`
-(repo `sealcroft/sealcroft.github.io`). Current release **1.6.0** — a MINOR over `1.5.2`, and MINOR is right by this
-file's own test: `PATCH /admin/tenants/{id}` with its CLI mirror
-`tenant-repoint` (O149) and the operator plane's `…/ops/export` and
-`…/ops/import` (O222) are new capability, backward compatible. **Everything
-else in it is a fix whose only observable change is that a defect is gone**,
-across 41 entries. Its spine is the audit trail becoming evidence a reader
-can DECIDE from. **The chain binds each record's LABEL and time (O233)**, so a
-relabelled row stops verifying — a version-2 step folded under a fifth HKDF
-subkey, switched at the first writable open, with `head` frozen so a 1.5.x
-binary refuses the vault rather than appending version-1 steps to it. **Every
-reader that decides from a label goes through one door (O237)**: one lazy full
-replay per handle plus a per-key append-only invariant, because one relabel
-plus one deleted row took a floored search from zero hits to returning a
-quarantined drawer with `verify` failing on `chain_ok` ALONE. **`verify` grew
-a ninth leg (O234)** — an older drawer, fact, entity or tunnel written back
-offline verified clean under the current key until a row's tag was compared
-with the record that carries it. **A rotation refuses a vault it would
-launder (O232)**, because re-keying recomputes every tag from the row's
-CURRENT columns and so turned detected tampering into authentic data.
-**And O242 is the one this release was GATED on**, a regression O237 carried
-in on the same day it shipped: `serve-http` held TWO handles on one vault, so
-`PRAGMA data_version` — which does not move for a connection's own commit —
-made every `/v1` commit look FOREIGN to the `/mcp` guard, which replayed the
-whole chain per search. Measured at **+89.5 ms isolated from write
-contention, 42 → 131.5 ms**, and measured GONE at **−1.0 ms** after the two
-handles became one, with the pre-fix binary kept as the positive control so a
-result of zero could not be a broken probe. `UPGRADING.md` carries what a
-script could meet. **The tree carried `1.6.0` only
-once the release PR merged (tagged `v1.6.0`); the TAG stays
+(repo `sealcroft/sealcroft.github.io`). Current release **1.6.1** — a PATCH over `1.6.0`, and PATCH is right by this
+file's own test: **all three entries are fixes whose only observable change is
+that a defect is gone**, no documented contract moves, and the one thing that
+looks like new capability is not. `UNDERCROFT_AUDIT_CEILING` (O250) adds a
+surface that REPORTS an existing silence, which the 2026-09-08 ruling settles
+as a fix — the defect was the silence. Its spine is **the audit trail's cost
+becoming something an operator can SEE**, which is the other half of the
+1.6.0 spine: that release made the trail evidence a reader can decide from,
+and this one makes its SIZE and its COST observable. **O250** — the growth was
+published with nothing to read it against and `LabelGuard::replays` was
+`#[cfg(test)]`, so a **+213%** regression on the flagship deployment (O242)
+was found by a reviewer reading code and the observable that would have found
+it existed only in test builds; the ceiling REPORTS and never deletes, because
+the replay starts at a constant and a stored start point makes an emptied
+`audit` verify clean (O244's ruling). **O251** — `reconcile_chain` and
+`chain_verdict` made the same replay over the same rows, and the open now
+hands its verdict forward, ONLY when it appended nothing afterwards: the
+cookie is read BEFORE the replay so a foreign commit leaves the guard
+replaying, while this connection's own commits move no cookie and are caught
+by the committed head and height. **Measured at 93.0 ms** on 102,361 audit
+records, replicating O237's 88 ms by a different instrument — and worth
+exactly ZERO on an ordinary writable deployment, which anchors after every
+write and never replays at open. **O238** — the manifest `version` was written
+by every build and read by none; a binary now refuses one above its own as
+AGE rather than tampering (exit 1, a class-less 409), and **its own entry's
+gate was wrong**: hand-editing the number breaks the MAC and already refused,
+so the proposed gate passed over an absent check. It fences nothing today,
+and that is the point — O241 ruling 4 sequenced it ahead of any canonical
+change because a bump PLUS a canonical field makes every older binary answer
+`ManifestTampered` on an intact vault. `UPGRADING.md` records which release
+the fence starts in, the fact a future upgrade needs and nobody could derive
+later. **The tree carried `1.6.1` only
+once the release PR merged (tagged `v1.6.1`); the TAG stays
 a separate, explicit step for every release** — a build reporting a version it
 was never tagged as is worse than one reporting the last release. `main` is
 branch protected on both repos: force pushes and deletions blocked — GitHub

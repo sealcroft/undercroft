@@ -4173,7 +4173,7 @@ touching anyone's existing corpus.
 integrity verdict, and two different model files must produce two different
 identities.
 
-## 1.6.1 — unreleased
+## 1.6.1 — released 2026-09-22
 
 Fixes only. Each makes an existing silence visible — a surface added to
 REPORT a defect adds no capability, and the defect was the silence (the
