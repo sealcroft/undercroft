@@ -73,6 +73,46 @@ or when they could never be presented.
 
 ---
 
+## 1.6.1
+
+### The manifest carries a version fence from this release on (O238)
+
+**Nothing in 1.6.1 can stop a deployment that worked before.** This entry is
+here for the opposite reason: it records **which release the fence starts in**,
+because that is the fact a future upgrade will need and nobody will be able
+to derive it later.
+
+`vault.json` has always carried a `version` field. Until 1.6.1 every build
+wrote it and none read it, so a future on-disk format change had nothing to
+fence an older binary with — an older Undercroft would open a newer vault and
+act on a format it did not understand. **From 1.6.1 a binary refuses a
+manifest whose `version` is above the one it understands**, naming both
+versions and telling you to upgrade.
+
+**What this means for you today: nothing.** Every manifest any released
+Undercroft has ever written is version 1, and 1.6.1 understands version 1. No
+vault changes, no migration runs, and nothing is rewritten.
+
+**What it means later**, and why the release number matters:
+
+- A vault written by a future Undercroft that bumps the format will refuse to
+  open on **1.6.1 or newer** with a clear message — *"this vault's manifest is
+  version N, and this build understands up to version M — upgrade Undercroft
+  to open it"*. That is exit **1**, not exit 2: the vault is intact and the
+  binary is simply too old, so it is a posture refusal and not an integrity
+  verdict. On `/v1` it is a `409` with no `class`.
+- The same vault opened on **1.6.0 or older** gets no such message. If the
+  future change only bumps the number, an older build opens it regardless; if
+  it also adds a field to the manifest's authenticated canonical, an older
+  build reports **`ManifestTampered` on a perfectly intact vault** — the
+  alarming verdict, for what is only an age difference.
+
+So: **1.6.1 is the oldest release that can tell you the truth about a
+newer vault.** If you run a fleet that may later see vaults written by
+newer Undercrofts — a shared volume, a restored backup, a replica behind a
+faster-moving writer — getting to 1.6.1 or newer is what buys that message
+instead of a false tamper alarm. There is nothing to configure.
+
 ## 1.6.0
 
 ### a vault whose audit chain does not replay now REFUSES the reads that decide from a label, instead of serving them until someone runs `verify` (O237)

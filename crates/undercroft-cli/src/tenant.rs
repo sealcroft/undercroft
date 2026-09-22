@@ -3695,6 +3695,14 @@ fn vault_err(e: undercroft_vault::VaultError) -> RestError {
             undercroft_vault::keys::KeyError::SourceMismatch { .. }
             | undercroft_vault::keys::KeyError::MaterialMissing { .. },
         ) => 409,
+        // ROADMAP O238. The vault is INTACT and this build is too old for
+        // it, so it belongs with the posture refusals above and not with
+        // `ManifestTampered`: 409, and deliberately no `class`. Without this
+        // arm it would fall to the catch-all 500 — the one class that tells
+        // an operator to retry and page someone — for a vault whose only
+        // problem is that the binary in front of it needs upgrading. That is
+        // this function's own founding defect, one variant later.
+        V::ManifestTooNew { .. } => 409,
         _ => 500,
     };
     let err = RestError::new(code, e.to_string());
@@ -4115,6 +4123,19 @@ mod tests {
                 },
                 false,
             ),
+            // ROADMAP O238: a vault written by a NEWER build. Intact, and
+            // this binary is too old for it — age, not tampering. NOT an
+            // integrity verdict on either surface, and 409 rather than the
+            // catch-all 500, which is the class that tells an operator to
+            // retry and page someone.
+            (
+                "ManifestTooNew",
+                || V::ManifestTooNew {
+                    found: undercroft_vault::MANIFEST_VERSION + 1,
+                    supported: undercroft_vault::MANIFEST_VERSION,
+                },
+                false,
+            ),
         ];
         for (name, build, expected) in vault_cases {
             let cli = crate::integrity_verdict(&anyhow::Error::from(build()));
@@ -4131,6 +4152,8 @@ mod tests {
                 "ReadOnly",
                 "Key(SourceMismatch)",
                 "Key(MaterialMissing)",
+                // O238's refusal is the same shape: a posture, not a retry.
+                "ManifestTooNew",
             ]
             .contains(name)
             {

@@ -92,6 +92,32 @@ that table are what such a deployment looks like, and they are identical.
 
 Suites: cargo 1029 → 1031, e2e 611 → 615.
 
+### The manifest carries a version fence, so a future format can keep older binaries out (O238)
+
+`vault.json` has always carried a `version`. Every build wrote it and **none
+read it**, so a future on-disk change had nothing to fence an older binary
+with: O233 had to fence 1.5.x out of a migrated chain by freezing a database
+row 1.5.x happens to compare, and the next change may find no such row.
+
+A binary now **refuses a manifest whose `version` is above the one it
+understands**, naming both versions. It is **age, not tampering**: exit 1 on
+the CLI, not the integrity verdict's exit 2, and a class-less 409 on `/v1`
+rather than the catch-all 500 that tells an operator to page someone. The
+vault is intact; the binary is too old for it.
+
+The check reads `version` **before** the MAC is compared, which is sound in
+exactly one direction and only because `version` is the first field of the
+authenticated canonical: a forged bump buys a refusal of a vault this build
+would otherwise open, and a forged downgrade buys nothing because the MAC
+comparison that follows fails.
+
+**Nothing changes for any existing vault.** Every manifest any released
+Undercroft has written is version 1. `UPGRADING.md` carries an entry anyway,
+because the fact worth recording is *which release the fence starts in* —
+the same vault on 1.6.0 or older either opens regardless, or reports
+`ManifestTampered` on intact data if the future change also touches the
+canonical.
+
 ## 1.6.0 — 2026-09-21
 
 MINOR: new capability, backward compatible. `PATCH /admin/tenants/{id}` and
