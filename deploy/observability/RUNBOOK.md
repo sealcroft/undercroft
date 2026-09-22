@@ -11,8 +11,10 @@ as on-disk tampering until proven otherwise.
 says which artifact class failed, and its `instance` label says which process.
 Grafana “Tamper by surface” + Logs panels show the same.
 
-There is **no `vault` label**, on this alert or any other: the integrity
-counter is emitted with `surface` alone. This page told a responder to
+There is **no `vault` label on this alert**: the integrity counter is emitted
+with `surface` alone. (`AuditChainHeightHigh` does carry one — it is an
+unaggregated gauge, and gauges have always been per-vault. This sentence read
+"or any other" until ROADMAP O250 added that rule.) This page told a responder to
 localize by one, which is the same belief that produced the fleet-wide
 inhibition defect — `alertmanager.yml` scoped its silencing with
 `equal: ["vault"]`, and a label absent from both sides counts as equal, so

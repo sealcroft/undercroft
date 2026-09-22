@@ -724,6 +724,21 @@ impl Tenancy {
                 // here.
                 "rerank_failures": full.rerank_failures,
                 "late_failures": full.late_failures,
+                // ROADMAP O250. The growth was already published here and as
+                // the `audit_chain_height` gauge, with no threshold to read
+                // it against — so an operator saw a number that meant
+                // nothing to them. `chain_ceiling` is what they declared and
+                // `chain_over_ceiling` is the ENGINE's verdict on it, never
+                // a comparison this route makes: four renderers computing it
+                // is four places for it to drift.
+                "chain_ceiling": full.chain_ceiling,
+                "chain_over_ceiling": full.chain_over_ceiling,
+                // The live half of `undercroft_chain_replays_total`. On this
+                // surface it is the number that matters: a served handle is
+                // long-lived, so a climbing count means another connection
+                // keeps committing and every commit costs the next guarded
+                // read a walk of the whole `audit` table (O242).
+                "chain_replays": full.chain_replays,
             })),
         ))
     }

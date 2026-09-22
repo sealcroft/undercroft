@@ -4034,6 +4034,34 @@ fn run(cli: Cli) -> Result<()> {
             // colleague's copy, so a surface that omits it is the surface
             // that cannot answer "are we looking at the same chain?".
             println!("chain:   {}", st.chain_head);
+            // ROADMAP O250. Printed whenever a ceiling is DECLARED, not only
+            // when it is passed: `gate_source` below is on this same struct
+            // because a value alone cannot tell an operator whether anything
+            // read their declaration, and a ceiling that silently failed to
+            // parse looks exactly like one that holds. The breach line says
+            // what it costs rather than only that a number was crossed —
+            // every guarded read on a fresh handle walks these rows.
+            if let Some(ceiling) = st.chain_ceiling {
+                if st.chain_over_ceiling {
+                    println!(
+                        "audit ceiling: {ceiling} — EXCEEDED ({} records; nothing is deleted, \
+                         but each handle's first guarded read walks all of them)",
+                        st.chain_records
+                    );
+                } else {
+                    println!("audit ceiling: {ceiling} (declared; within it)");
+                }
+            }
+            // ROADMAP O250, and printed only when non-zero on the rule the
+            // lines below follow: this command opens its own handle and
+            // performs no guarded read, so on the CLI it is 0 by
+            // construction. It is a served process's number.
+            if st.chain_replays > 0 {
+                println!(
+                    "chain replays: {} (full audit-chain walks by this handle's label guard)",
+                    st.chain_replays
+                );
+            }
             println!("db size: {} bytes", st.db_bytes);
             // The posture this handle was opened under. Silence here read as
             // "writable" on a replica.

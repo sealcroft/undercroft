@@ -1012,6 +1012,28 @@ pub(crate) const TUNED: &[(&str, TuneShape, &str)] = &[
         },
         "hits handed to the cross-encoder reranker",
     ),
+    // **ROADMAP O250. It REPORTS and never deletes**, which is O244's
+    // ruling and not a softening of it: `audit` is append-only in
+    // production, the replay starts at a constant, and a stored start head
+    // would make a keyless total erasure verify clean. So the only thing an
+    // operator may declare here is an EXPECTATION — what they think this
+    // vault's trail should stay under — and the engine says whether it
+    // holds. Nothing is destroyed, nothing is refused, and no open changes
+    // behaviour, which is what keeps this a fix rather than something that
+    // can stop a running deployment.
+    //
+    // `min` is 1 rather than 0 because `off` is already the disable
+    // spelling: a ceiling of zero would be a second, undocumented way to
+    // say "report always", and this knob keeps the conservative default on
+    // an unreadable value.
+    (
+        "UNDERCROFT_AUDIT_CEILING",
+        TuneShape::OffOrUsize {
+            unset: usize::MAX,
+            min: 1,
+        },
+        "audit-chain height above which every stats surface reports the trail as past its declared expectation (unset = off)",
+    ),
     // The four FDE construction parameters. They live in `fdeidx.rs`'s
     // `params_from_env`, NOT in `assemble`, which is why O48's sweep of
     // "eleven resolvers in the store" did not reach them — a scoping phrase in
@@ -1159,6 +1181,18 @@ fn tuned_u64(name: &str) -> u64 {
         unset,
         min,
     ))
+}
+
+/// The declared audit-chain ceiling (`UNDERCROFT_AUDIT_CEILING`), resolved
+/// once at open. `None` is "nothing declared", which is both the unset value
+/// and where an unreadable declaration lands — the `Tunes` contract, so a
+/// typo leaves the vault reporting nothing rather than reporting a ceiling
+/// nobody chose (ROADMAP O250).
+fn audit_ceiling_from_env() -> Option<u64> {
+    match tuned("UNDERCROFT_AUDIT_CEILING") {
+        usize::MAX => None,
+        n => Some(n as u64),
+    }
 }
 
 /// The per-wing training-sample cap (`UNDERCROFT_TRAIN_SOURCE_CAP`), as a
@@ -3033,6 +3067,15 @@ pub struct VaultStore {
     /// default; the page tier is opt-in until the RAM trigger fires).
     /// `UNDERCROFT_PQ_PAGE_MIN` / [`VaultStore::set_pq_pages`]. See `pqidx`.
     pq_page_min: usize,
+    /// The operator's declared expectation for this vault's audit-chain
+    /// height (`UNDERCROFT_AUDIT_CEILING`; `None` ⇒ nothing declared, which
+    /// is the default). Reported on every stats surface and enforced
+    /// nowhere — see the `TUNED` row for why a bound that DELETED would be
+    /// unsound (ROADMAP O250, from O244's ruling).
+    ///
+    /// Resolved once at open like every other tunable, and identical on a
+    /// read-only handle: it never writes, so there is no posture to honour.
+    audit_ceiling: Option<u64>,
     /// When true, search generates candidates by MUVERA FDE dot product
     /// (`UNDERCROFT_RETRIEVAL=fde`; needs the late encoder). See `fdeidx`.
     fde_enabled: bool,
@@ -4382,6 +4425,11 @@ impl VaultStore {
             // from the environment on each search.
             late_top_n: late_top_n(),
             pq_page_min: tuned("UNDERCROFT_PQ_PAGE_MIN"),
+            // `usize::MAX` is this knob's unset value, i.e. "off" — and an
+            // unreadable declaration lands on it too, so a typo leaves the
+            // vault reporting nothing rather than reporting a ceiling
+            // nobody chose.
+            audit_ceiling: audit_ceiling_from_env(),
             fde_enabled: false,
             fde_encoder: std::cell::RefCell::new(None),
             fde_cache: std::cell::RefCell::new(None),

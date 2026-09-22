@@ -4147,6 +4147,24 @@ PV_FIGURES=(
   "Checked declarations|Checked · ([0-9]+)|$PF_CHECKED"
   "Opaque declarations|Opaque · ([0-9]+)|$PF_OPAQUE"
   "un-pre-flightable Protects|([0-9]+) of them protect|$PF_PROT_OPAQUE"
+  # **The cross-tab's own TOTAL, which was not gated (ROADMAP O250).** O155
+  # gated the four class cells and the intersection and left the population
+  # they partition ungated, in THREE places on the same diagram. Adding one
+  # variable made all three wrong at once while every gated cell moved
+  # correctly — this block's own lesson arriving one row short: a number
+  # beside a gated figure is the part that rots.
+  #
+  # One row covers two of them, because `engine var` is a prefix of both
+  # `engine vars` (the subtitle) and `engine variables` (the accessible
+  # description) — and the description was respelled from a WORD to a digit
+  # to bring it inside a gate, since `pf_word` stops at twenty and a figure
+  # that cannot be addressed is a figure that rots.
+  "engine env variables (diagram total)|([0-9]+) engine var|$PF_ENV_TOTAL"
+  # The badge, and its pattern is anchored at BOTH ends on purpose: bare
+  # `ALL ([0-9]+)` also matches `NEEDS ALL 10` and `ALL 20 OK` on the
+  # verification-pipeline diagram, which are different figures with their
+  # own rows. Measured against the real text, this matches exactly one.
+  "engine env variables (diagram badge)|^ *ALL [0-9]+ *\$|$PF_ENV_TOTAL"
   # `20-verification-pipeline.html`'s process figures, gated by no row until
   # the 2026-09-14 drift sweep. `ALL N OK` is the label on its
   # preflights-to-suites arrow; no other diagram in the set uses the phrase.

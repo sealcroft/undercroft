@@ -53,6 +53,53 @@ tests:
               description: "2 HMAC-verify failure(s) on surface 'drawer' in the last 2m. A stored record failed its integrity tag on read — treat as on-disk tampering until proven otherwise. Confirm with `undercroft verify`; follow the runbook."
               runbook_url: "https://sealcroft.com/undercroft/docs/runbook.html"
 
+  # ── AuditChainHeightHigh — the trail is large ─────────────────────────────
+  # ROADMAP O250. No aggregation in the rule, so every scrape label survives
+  # — `vault` included, which the annotation names. This is the first rule in
+  # this file to carry a `vault` label; `alertmanager.yml` equals on
+  # `instance` alone, so that is the one the join check requires.
+  - interval: 1m
+    input_series:
+      - series: 'undercroft_audit_chain_height{job="undercroft",instance="undercroft:8765",service="undercroft",vault="default"}'
+        values: "1000001+0x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: AuditChainHeightHigh
+        exp_alerts:
+          - exp_labels:
+              alertname: AuditChainHeightHigh
+              severity: warning
+              job: undercroft
+              instance: undercroft:8765
+              service: undercroft
+              vault: default
+            exp_annotations:
+              summary: "Audit trail is large — every handle's first guarded read walks it"
+              description: "Vault 'default' holds 1000001 audit-chain records. Nothing is wrong and nothing should be deleted — the trail is the evidence — but the label guard replays it once per handle, which was measured at 836ms per replay at 10^6 records. Expect slower first reads after a restart, and consider `export` into a fresh vault if this keeps growing."
+              runbook_url: "https://sealcroft.com/undercroft/docs/runbook.html"
+
+  # ── AuditChainReplaysRepeating — the rule that would have caught O242 ─────
+  # Five replays a minute for the whole window: the guard is designed to run
+  # one per handle, so this is a second writer moving `PRAGMA data_version`.
+  # `sum by (instance)` keeps the label the inhibition scopes on and drops
+  # the rest, which is what the `exp_labels` block below has to say.
+  - interval: 1m
+    input_series:
+      - series: 'undercroft_chain_replays_total{job="undercroft",instance="undercroft:8765",service="undercroft"}'
+        values: "0+5x20"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: AuditChainReplaysRepeating
+        exp_alerts:
+          - exp_labels:
+              alertname: AuditChainReplaysRepeating
+              severity: warning
+              instance: undercroft:8765
+            exp_annotations:
+              summary: "Audit-chain replays are repeating — a second writer is moving the cookie"
+              description: "75 full audit-chain replays in 15m on this instance. The guard is designed to replay once per handle, so a sustained rate means another connection keeps committing and every commit costs the next guarded read a walk of the whole audit table. Check for a second process writing the served vault."
+              runbook_url: "https://sealcroft.com/undercroft/docs/runbook.html"
+
   # ── AuditChainStalled — writes landing, chain not advancing ───────────────
   # Both sides of the `and` must aggregate by the same label or the vector
   # match finds no counterpart and the rule silently never fires. That is a
@@ -269,6 +316,15 @@ tests:
         values: "0+0x20"
       - series: 'undercroft_late_failures_total{job="undercroft",instance="undercroft:8765",service="undercroft",backend="onnx",side="query"}'
         values: "0+0x20"
+      # O250. A healthy trail well under the 10^6 threshold, and a replay
+      # counter that is PRESENT and flat — one replay at open and no more,
+      # which is what the guard is designed to do. Present rather than
+      # absent for the reason at the top of this block: an expression over
+      # an empty vector returns nothing whatever its comparison says.
+      - series: 'undercroft_audit_chain_height{job="undercroft",instance="undercroft:8765",service="undercroft",vault="default"}'
+        values: "4096+0x20"
+      - series: 'undercroft_chain_replays_total{job="undercroft",instance="undercroft:8765",service="undercroft"}'
+        values: "1+0x20"
     alert_rule_test:
       - eval_time: 15m
         alertname: UndercroftDown
@@ -296,4 +352,10 @@ tests:
         exp_alerts: []
       - eval_time: 15m
         alertname: AuthRejectionsSpike
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: AuditChainHeightHigh
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: AuditChainReplaysRepeating
         exp_alerts: []

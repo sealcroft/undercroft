@@ -133,6 +133,14 @@ pub const ENGINE_ENV_VARS: &[(&str, ConfigClass, Parse)] = &[
     ("UNDERCROFT_ADMISSION_RATE", Protects, Checked),
     ("UNDERCROFT_ADMIT_TRUSTED_SOURCES", Protects, Opaque),
     ("UNDERCROFT_ASSERTION_SECRET", Protects, Checked),
+    // ROADMAP O250. `Tunes`, and the class is the whole argument for the
+    // shape: this declares an EXPECTATION that every stats surface reports
+    // against, it turns no protection on, and an unreadable value leaves the
+    // vault exactly as it was — which is what "garbage warns and keeps the
+    // conservative default" means when the default is off. It is `Checked`
+    // for free through the `TUNED` table's fallthrough in
+    // `undercroft_store::check_declaration`.
+    ("UNDERCROFT_AUDIT_CEILING", Tunes, Checked),
     // **The fourteen MANDATORY OPERANDS (ROADMAP O155).** Scattered through
     // this alphabetical table are fourteen rows that were `Tunes` and are
     // `Protects`: the five backend URLs/DSN, the two served-runtime URLs, and
