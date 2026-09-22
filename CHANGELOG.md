@@ -77,12 +77,18 @@ what catch them — checked after the two at-rest migrations and the version-2
 switch have run. Seeding unconditionally would hand forward a verdict saying
 `Regime::V1` for a vault the same open had just switched to version 2.
 
-The replay's cost is O237's measured constant — 88 ms at 102,001 audit
-records, 836 ms at 1,002,001 — and the saving is one of them; that
-multiplication is arithmetic over a measured figure, not a new measurement.
-What is measured directly is that the replay does not happen: the guard's
-counter reads 0 where it read 1, on the release binary, which
-`VaultStats.chain_replays` made observable in O250.
+**Measured at 93.0 ms** on a 102,360-drawer sealed vault under the PQ tier
+(102,361 audit records), by a 2x2 of {pre-fix binary, post-fix binary} x
+{lagging anchor, current anchor} through `serve-http --read-only`. The three
+arms that still replay agree at 284 / 285 / 286 ms and the one that does not
+is 192 ms; the pre-fix binary is the positive control, and it reads
+`chain_replays: 1` on the same arm where the fixed one reads 0. That
+independently replicates O237's 88 ms at 102,001 records, by a different
+instrument through a surface rather than a unit test.
+
+It moves nothing for an ordinary writable deployment, which anchors after
+every write and takes the open's short-circuit: the `current`-anchor rows of
+that table are what such a deployment looks like, and they are identical.
 
 Suites: cargo 1029 → 1031, e2e 611 → 615.
 

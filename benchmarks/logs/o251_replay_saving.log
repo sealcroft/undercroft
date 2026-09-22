@@ -1,0 +1,75 @@
+# O251 — the replay the open hands forward, measured
+#
+# Date        2026-09-22
+# Tree        9774840 (O251 merged) vs a2e7892 (O250 merged, O251 absent)
+# Corpus      a COPY of the o242-corpus volume — 102,360 drawers,
+#             102,361 audit records, sealed. The reference volume is never
+#             mutated; every run below is against the copy.
+# Retrieval   UNDERCROFT_RETRIEVAL=pq. Measured without it first and the
+#             search cost ~5,000 ms, in which an ~88 ms replay is invisible;
+#             that first attempt is why this line exists.
+# Instrument  `serve-http --read-only` — it replays to JUDGE the anchor and
+#             declines to heal it, so the condition survives being observed.
+#             A writable open heals, which is how an earlier version of this
+#             probe destroyed its own premise.
+#             Per sample: time the FIRST guarded search (floored `min_trust`,
+#             so it consults a label) and a SECOND one. The second carries no
+#             replay under either binary, so first-second isolates the replay.
+# Control     The pre-fix binary is the POSITIVE CONTROL. It must read
+#             chain_replays=1 on the lagging arm, or a zero elsewhere means
+#             only that the probe never produced a lag.
+#
+# columns: open_ms first_ms second_ms chain_replays anchor_lag_reported
+== undercroft-pre / lag ==
+   478 329 34 1 1
+   474 307 38 1 1
+   472 355 34 1 1
+   481 328 38 1 1
+   485 311 34 1 1
+   466 321 51 1 1
+== undercroft-pre / nolag ==
+   356 317 36 1 0
+   361 310 36 1 0
+   358 324 36 1 0
+   355 334 44 1 0
+   364 329 34 1 0
+   423 313 31 1 0
+== undercroft-post / lag ==
+   473 224 35 0 1
+   472 228 35 0 1
+   470 225 34 0 1
+   473 225 34 0 1
+   474 231 34 0 1
+   471 235 36 0 1
+== undercroft-post / nolag ==
+   356 320 36 1 0
+   356 317 41 1 0
+   425 329 39 1 0
+   357 319 41 1 0
+   357 329 36 1 0
+   420 325 36 1 0
+
+# medians, and first-second is the figure
+#
+#   binary     anchor    open   first  second  first-second  chain_replays
+#   pre-fix    lagging   476     324      36       284             1
+#   pre-fix    current   360     320      36       285             1
+#   post-fix   lagging   472     226      34       192             0
+#   post-fix   current   357     322      38       286             1
+#
+# The three arms that still replay agree at 284/285/286 ms across two
+# binaries and two anchor states; the one that does not is 192 ms.
+#
+#   SAVING  93.0 ms  (double difference against the three replaying arms)
+#           91.5 ms  (directly against the positive control)
+#
+# Replicates O237's independently measured 88 ms at 102,001 audit records,
+# by a different instrument, through a surface rather than a unit test.
+#
+# The open pays one too: an open whose anchor lags costs ~118 ms more than
+# one whose anchor is current (476 vs 360 pre-fix, 472 vs 357 post-fix).
+#
+# NOT claimed: a curve. One configuration, one corpus size. 10^6 remains
+# O237's measurement and is an extrapolation here. And nothing moves for an
+# ordinary writable deployment, which anchors after every write and takes the
+# open's short-circuit — the `current` rows are what that looks like.
