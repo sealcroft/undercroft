@@ -4173,6 +4173,156 @@ touching anyone's existing corpus.
 integrity verdict, and two different model files must produce two different
 identities.
 
+## 1.6.1 — unreleased
+
+Fixes only. Each makes an existing silence visible — a surface added to
+REPORT a defect adds no capability, and the defect was the silence (the
+2026-09-08 ruling), so this is PATCH.
+
+### O250 — CLOSED 2026-09-22: the audit trail's size is published and the replay that walks it is counted by nothing in production
+
+**Filed 2026-09-21 by O244's ruling panel (the adversarial refuter), as a
+successor O244's ruling owes rather than a sentence inside it.** O244 refused
+to bound `audit`, and a refusal fails silently in one specific way: the cost
+outgrows the reasoning and nothing reopens the question. Three of the four
+mechanisms that would reopen it do not exist.
+
+**`LabelGuard::replays` is `#[cfg(test)]`** (`chain.rs:861-864`). There is no
+production signal for how often the O237 replay runs. **O242 was a +213%
+regression on the flagship deployment and it was found by a refuter reading
+code** — the observable that would have found it is still test-only. That is
+the single sharpest item here.
+
+**`audit_chain_height` is a shipped dashboard panel with no alert.** The gauge
+exists (`undercroft-obs/src/lib.rs:438`), it is emitted (`tenant.rs:635`,
+`:793`), and `deploy/observability/grafana/dashboards/undercroft.json:128`
+draws it — and `deploy/observability/` contains **no alerting rule on it**. An
+operator sees a number that means nothing to them. Note also that the gauge is
+emitted from the tenancy path ONLY, so a CLI deployment or `serve-mcp`
+exports nothing at all.
+
+**And O234's budget structurally cannot fire on this cost**: it is a
+percentage of warm SEARCH ms/q, while the replay is a once-per-handle constant
+and an operator-command cost. It sits outside the only numeric gate the tree
+has.
+
+**Shape**: a declared ceiling that REPORTS and never deletes
+(`Tunes`/`Checked`, a `TUNED` row, unset = off), read O(1) off
+`chain_meta.writes`; the replay counter promoted out of `#[cfg(test)]`; an
+alert rule with its mandatory `alerts_test.yml` block. **Priced honestly**: a
+new `UNDERCROFT_*` declaration moves the gated `81` figure in
+`architecture/index.html`, the `prose figures` preflight, O155's
+platform-views cross-tab on both axes, `TUNED` and `config check` — a
+multi-surface unit, not a one-liner.
+
+**Gate**: a vault seeded past the declared ceiling appears on stats across all
+four renderers and trips `promtool test rules`; and with the guard's replay
+forced twice in one handle, the promoted counter reads 2.
+**Counterfactual**: today both are silent, and nothing outside `#[cfg(test)]`
+can say how many replays ran.
+
+#### BUILT 2026-09-22
+
+Three parts, and the ruling's shape is followed rather than reinterpreted.
+
+**The declared ceiling REPORTS and never deletes.**
+`UNDERCROFT_AUDIT_CEILING` is a `Tunes`/`Checked` knob with a `TUNED` row
+(unset = off, `min` 1 because `off` is already the disable spelling), read
+O(1) off the `writes` binding `chain_records` already reports — so the
+verdict and the height a reader sees beside it cannot describe different
+moments. `VaultStats` gains `chain_ceiling` and `chain_over_ceiling` as TWO
+FLAT FIELDS rather than one nested struct, for a mechanical reason worth
+recording: `parity::HAND_PROJECTED` matches `.{field}` against `VaultStats`'s
+own fields and does NOT recurse, so a nested struct's members would sit
+outside the gate that exists to stop exactly this drift — which is the shape
+`SemanticChannel` already has. The comparison itself stays in the engine:
+one decision, four renderers.
+
+**The replay counter is out of `#[cfg(test)]`.** `LabelGuard::replays` and
+its accessor are unconditional, `VaultStats.chain_replays` reads it live on
+all four renderers, and `undercroft_chain_replays_total` is the durable half
+for a served process whose stats nobody polls. It is the HANDLE's number and
+that is structural rather than a choice — `LabelGuard` lives on the
+`VaultStore`, so there is nowhere else for it to live; O122's
+`embed_failures` is the same contract one door over. No labels on the
+counter: a vault-shaped label has a value set created BY USE, which belongs
+on a query surface, and the per-vault figure is already on `/v1 …/stats`.
+
+**Two alert rules, and the second is beyond the ruled shape's literal
+words.** `AuditChainHeightHigh` fires above 10^6 records — the one height at
+which the replay cost was MEASURED (836 ms) rather than extrapolated — and
+`AuditChainReplaysRepeating` above 30 replays in 15m, which is the O242
+condition: the guard is designed to replay once per handle, so a sustained
+rate means another connection keeps moving the cookie. The second rule is
+recorded as an addition rather than smuggled in, and the argument for it is
+this entry's own: a counter nobody alerts on is an observable only if
+somebody looks, which is the same defect as the dashboard panel with no
+alert that this entry names as its second fact. The threshold is a LITERAL
+in `alerts.yml` and not a comparison against the engine's declared ceiling —
+every shipped rule carries its own, that file is a deployment config an
+operator edits, and the two answer different audiences.
+
+**The gate, run rather than asserted.** A vault seeded past the declared
+ceiling appears on stats across all four renderers (three hand-projections
+plus MCP's whole-struct `undercroft_status`) and both rules pass
+`promtool test rules` with a firing arm and a present-and-healthy quiet arm.
+With the guard's replay forced twice in one handle the promoted counter
+reads 2 — asserted in the store where the two replays are already forced,
+and again through the RELEASE BINARY in `tests/e2e.sh`, which is the arm
+that matters: a store unit test compiles with `cfg(test)` on and so cannot
+tell the promoted counter from the test-only one. It would pass either way.
+
+**Counterfactual, run.** Re-gating the increment to `#[cfg(test)]` and
+rebuilding turned the two e2e count arms red with `got '0'` while the
+premise arm ("the release binary reports `chain_replays` at all") stayed
+green — the honest split, since the field still reached the wire and only
+its value was dead. The ceiling arms stayed green because they are a
+different mechanism, which is a clean separation rather than a coverage gap.
+Removing the CLI's `chain_replays` projection failed
+`every_hand_projected_report_field_reaches_the_cli` by name.
+
+**A gate this unit broke, reported as mine.** The doc comment introducing
+the promoted counter contains the literal `#[cfg(test)]`, and
+`emitted_series_literals` splits the crate's source on exactly that string
+to find its "production half" — so the reader stopped at my sentence and
+announced that `undercroft_auth_rejections_total`, shipped since `1.0.0`,
+was emitted by nothing. It failed LOUDLY, which is the only reason it cost
+minutes rather than a release, but it named the wrong variable. The split is
+anchored to the start of a line now, because the marker is a module
+attribute and every one in that crate sits at column 0. A gate whose own
+prose is part of what it measures is a shape this tree has paid for before.
+
+**A figure this unit found ungated, and closed.** Adding one variable moved
+the four `ENGINE_ENV_VARS` cross-tab cells O155 gated — and made the
+POPULATION they partition wrong in three places on the same diagram, none of
+them gated: `ALL 81`, `81 engine vars`, and `eighty-one` spelled out in the
+accessible description. Every gated cell moved correctly while the total they
+add up to did not, which is O155's own lesson arriving one row short: a
+number beside a gated figure is the part that rots. Two rows close it. One
+covers two claims at once, because `engine var` is a prefix of both `engine
+vars` and `engine variables` — and the description was respelled from a word
+to a digit to bring it inside a gate at all, since `pf_word` stops at twenty.
+The badge's row is anchored at BOTH ends, measured rather than assumed: bare
+`ALL ([0-9]+)` also matches `NEEDS ALL 10` and `ALL 20 OK` on the
+verification-pipeline diagram, which are different figures with their own
+rows. Both were counterfactualled — set back to 81, both fire and name the
+figure.
+
+**Measured and unchanged**: nothing on the read or write path moved. The
+ceiling is a comparison against a number `stats` already computed, the
+counter is one `u64` increment on a path that was about to walk the whole
+`audit` table anyway, and neither is consulted by `search`, `get` or any
+write. Suites: cargo 1027 -> 1029 over 20 targets, e2e 597 -> 611,
+obs-config 13 -> 15.
+
+**Residual, stated.** The `audit_chain_height` gauge is emitted from the
+TENANCY path only, so a CLI deployment or `serve-mcp` exports nothing —
+and that is STRUCTURAL rather than a gap: `/metrics` is served by `http.rs`
+alone, so neither posture has a listener for Prometheus to scrape. No
+Grafana panel was added for the new counter, deliberately: O122 and O131
+added a counter and an alert and no panel for all three model-failure
+counters, and a panel is discoverability where the alert is the mechanism.
+
 ## 1.6.0 — released 2026-09-21
 
 MINOR since O149: `PATCH /admin/tenants/{id}` and its CLI mirror are new
@@ -23682,51 +23832,6 @@ or the second one names the collision instead of failing the O175 assertion.
 **Counterfactual**: today the second run fails as though the engine leaked a
 mirror.
 
-### O250 — the audit trail's size is published and the replay that walks it is counted by nothing in production
-
-**Filed 2026-09-21 by O244's ruling panel (the adversarial refuter), as a
-successor O244's ruling owes rather than a sentence inside it.** O244 refused
-to bound `audit`, and a refusal fails silently in one specific way: the cost
-outgrows the reasoning and nothing reopens the question. Three of the four
-mechanisms that would reopen it do not exist.
-
-**`LabelGuard::replays` is `#[cfg(test)]`** (`chain.rs:861-864`). There is no
-production signal for how often the O237 replay runs. **O242 was a +213%
-regression on the flagship deployment and it was found by a refuter reading
-code** — the observable that would have found it is still test-only. That is
-the single sharpest item here.
-
-**`audit_chain_height` is a shipped dashboard panel with no alert.** The gauge
-exists (`undercroft-obs/src/lib.rs:438`), it is emitted (`tenant.rs:635`,
-`:793`), and `deploy/observability/grafana/dashboards/undercroft.json:128`
-draws it — and `deploy/observability/` contains **no alerting rule on it**. An
-operator sees a number that means nothing to them. Note also that the gauge is
-emitted from the tenancy path ONLY, so a CLI deployment or `serve-mcp`
-exports nothing at all.
-
-**And O234's budget structurally cannot fire on this cost**: it is a
-percentage of warm SEARCH ms/q, while the replay is a once-per-handle constant
-and an operator-command cost. It sits outside the only numeric gate the tree
-has.
-
-**Shape**: a declared ceiling that REPORTS and never deletes
-(`Tunes`/`Checked`, a `TUNED` row, unset = off), read O(1) off
-`chain_meta.writes`; the replay counter promoted out of `#[cfg(test)]`; an
-alert rule with its mandatory `alerts_test.yml` block. **Priced honestly**: a
-new `UNDERCROFT_*` declaration moves the gated `81` figure in
-`architecture/index.html`, the `prose figures` preflight, O155's
-platform-views cross-tab on both axes, `TUNED` and `config check` — a
-multi-surface unit, not a one-liner.
-
-**Gate**: a vault seeded past the declared ceiling appears on stats across all
-four renderers and trips `promtool test rules`; and with the guard's replay
-forced twice in one handle, the promoted counter reads 2.
-**Counterfactual**: today both are silent, and nothing outside `#[cfg(test)]`
-can say how many replays ran.
-
-**Relations:** shares a diff surface with O251 — both add production
-visibility to the same replay, and both edit the chain guard's accounting.
-
 ### O251 — the open's replay and the guard's replay are the same replay, computed twice in one process
 
 **Filed 2026-09-21 by O244's ruling panel (the adversarial refuter); the
@@ -23759,9 +23864,6 @@ guard replays.
 **Counterfactual**: force a chain append during the open (a regime switch) and
 the gate must fail if the verdict is seeded unconditionally — today there is
 no seeding at all, so the first half fails on the current tree.
-
-**Relations:** shares a diff surface with O250 — both add production
-visibility to the same replay, and both edit the chain guard's accounting.
 
 ---
 

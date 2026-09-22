@@ -34,8 +34,11 @@ The alert carries two labels that localize the failure:
   `manifest`.
 - **`instance`** — which server process counted it.
 
-There is **no `vault` label**, on this alert or any other: the integrity
-counter is emitted with `surface` alone. The vault is on the live event stream
+There is **no `vault` label on this alert**: the integrity counter is emitted
+with `surface` alone. (One rule does carry one — `AuditChainHeightHigh`, whose
+expression is an unaggregated gauge, and gauges have always been per-vault.
+This sentence said "or any other" until ROADMAP O250 added it.) The vault is
+on the live event stream
 instead — the `hmac-fail` frame the Palace Monitor reads names it, beside the
 `id`, `wing` and `room` the failing row *claims* (marked `unverified`, since
 that row has just failed its own HMAC). The stream is live only, so it names

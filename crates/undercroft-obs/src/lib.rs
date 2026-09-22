@@ -253,6 +253,31 @@ pub fn rerank_failed(backend: &str, count: u64) {
     }
 }
 
+/// Record one FULL audit-chain replay by the label guard (ROADMAP O250).
+///
+/// The durable half of a signal whose live half is
+/// `VaultStats.chain_replays`. O237's design is **at most one replay per
+/// handle**, re-run only when `PRAGMA data_version` says another connection
+/// committed — so a sustained rate here is the condition O242 was: a second
+/// writer moving the cookie under a long-lived server, each move costing a
+/// walk of the whole `audit` table (measured 88 ms at 102,001 rows, 836 ms
+/// at 1,002,001). That regression was found by a reviewer reading code,
+/// because until this counter existed `LabelGuard::replays` was
+/// `#[cfg(test)]` and nothing in production could say how often the replay
+/// ran.
+///
+/// **No labels, and that is deliberate.** A vault-shaped label has a value
+/// set created BY USE, which belongs on a query surface — the per-vault
+/// figure is already on `/v1/…/stats` — and this crate's other counters take
+/// only closed vocabularies for the same reason.
+/// No `allow(unused_variables)` on this one, unlike its neighbours: it takes
+/// no arguments, so there is nothing for a no-op build to leave unused, and
+/// an attribute that cannot fire reads as though it were load-bearing.
+pub fn chain_replayed() {
+    #[cfg(feature = "telemetry")]
+    imp::counter_add("undercroft_chain_replays_total", 1, &[]);
+}
+
 /// Record one late-interaction encode degraded to an empty matrix (ROADMAP
 /// O131). `backend` is the kind — `onnx` or `ort` — and `side` is `doc` or
 /// `query`, a closed vocabulary that matters because the two fail
@@ -459,6 +484,7 @@ pub const GAUGE_NAMES: &[&str] = &[
 pub const COUNTER_NAMES: &[&str] = &[
     "undercroft_auth_rejections_total",
     "undercroft_chain_commits_total",
+    "undercroft_chain_replays_total",
     "undercroft_drawer_deletes_total",
     "undercroft_drawer_writes_total",
     "undercroft_embed_failures_total",
@@ -939,7 +965,23 @@ mod tests {
             // Production half only. The test module below asserts on rendered
             // metric text using deliberately TRUNCATED names, which would
             // otherwise enter the inventory as series that do not exist.
-            let prod = text.split("#[cfg(test)]").next().unwrap_or(&text);
+            //
+            // **Anchored to the start of a line**, because the marker is a
+            // module attribute and the unanchored split also matched the
+            // same characters inside a DOC COMMENT: ROADMAP O250 wrote
+            // `#[cfg(test)]` into a sentence above `auth_rejections`'s emit
+            // site and this reader stopped there, reporting that a series
+            // shipped since 1.0.0 was emitted by nothing. It failed loudly,
+            // which is the only reason it cost minutes rather than a
+            // release — but it named the wrong variable, and a gate whose
+            // own prose is part of what it measures is a shape this tree
+            // has paid for before.
+            //
+            // Safe because every `#[cfg(test)]` in this crate is a module
+            // attribute at column 0; an indented one carrying a series
+            // literal would now reach the inventory, and the other
+            // direction of this test refuses it by name.
+            let prod = text.split("\n#[cfg(test)]").next().unwrap_or(&text);
             for line in prod.lines() {
                 let trimmed = line.trim_start();
                 if trimmed.starts_with("//") || trimmed.starts_with('*') {

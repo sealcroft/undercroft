@@ -125,6 +125,59 @@ pub struct VaultStats {
     pub chain_records: u64,
     /// The committed chain head, from the same read as `writes`.
     pub chain_head: String,
+    /// The operator's declared expectation for the chain's height
+    /// (`UNDERCROFT_AUDIT_CEILING`), or `None` when nothing is declared —
+    /// which is the default and is what every vault reports today.
+    ///
+    /// **It reports and never deletes**, and that is O244's ruling rather
+    /// than a timid reading of it. `audit` has no compaction anywhere in
+    /// the tree, and it cannot have one: the replay starts at the constant
+    /// `Vault::chain_genesis_hex()`, so storing a start head anywhere
+    /// writable turns `DELETE FROM audit` plus two `chain_meta` writes into
+    /// a keyless total erasure that passes all nine legs of `verify`. A
+    /// retention model is right for content and wrong for evidence —
+    /// `forget_with_proof` destroys drawers and APPENDS tombstones, so
+    /// erasure GROWS this number.
+    ///
+    /// What is left, and what this is, is an expectation an operator can
+    /// state and a surface that says whether it holds — because the growth
+    /// was already published (here, and as the `audit_chain_height` gauge)
+    /// with no threshold to read it against, so the number meant nothing to
+    /// the person looking at it (ROADMAP O250).
+    pub chain_ceiling: Option<u64>,
+    /// Whether `chain_records` has passed [`chain_ceiling`](Self::chain_ceiling).
+    /// Always `false` when nothing is declared.
+    ///
+    /// **The ENGINE decides this, not the renderer.** It is one comparison
+    /// and there are four surfaces; computing it per renderer would be four
+    /// implementations of one decision, and the one that drifted would be
+    /// the one nobody reads. A flat field rather than a member of a nested
+    /// struct for a mechanical reason worth knowing:
+    /// `parity::HAND_PROJECTED` matches `.{field}` against `VaultStats`'s
+    /// own fields and does not recurse, so a nested struct's members would
+    /// be outside the gate that exists to stop exactly this drift.
+    pub chain_over_ceiling: bool,
+    /// Full audit-chain replays this handle's label guard has run since the
+    /// vault was opened (ROADMAP O250).
+    ///
+    /// O237's guard authenticates every label a reader DECIDES from by
+    /// replaying the chain, at most once per handle — re-run only when
+    /// `PRAGMA data_version` reports that another connection committed. That
+    /// bound is the whole reason the guard was affordable, and until this
+    /// field existed nothing outside `#[cfg(test)]` could say whether it
+    /// held: O242 broke it on the flagship deployment for a whole release,
+    /// at +213%, and was found by a reviewer reading code.
+    ///
+    /// Read live from the guard, and it is the HANDLE's number rather than
+    /// the database's — the same contract as
+    /// [`embed_failures`](Self::embed_failures). On the CLI each command is
+    /// its own handle, so a plain `stats` reports 0: it performs no guarded
+    /// read. On a served process it accumulates for as long as the handle
+    /// is cached, and a sustained climb there means a second writer is
+    /// moving the cookie and every move is costing a walk of the whole
+    /// `audit` table. The durable half is
+    /// `undercroft_chain_replays_total`.
+    pub chain_replays: u64,
     /// `sealed` or `hmac-only`.
     pub level: String,
     /// Size of the database file on disk, in bytes.
@@ -1244,6 +1297,15 @@ impl VaultStore {
             // the defect class this whole struct keeps closing.
             chain_records: writes,
             chain_head,
+            // O250: the declared expectation, and the ONE comparison against
+            // it. Against `writes` — the binding above, the same number
+            // `chain_records` reports — so the verdict and the height a
+            // reader sees beside it cannot describe different moments.
+            chain_ceiling: self.audit_ceiling,
+            chain_over_ceiling: self.audit_ceiling.is_some_and(|c| writes > c),
+            // O250: read live from the label guard, exactly as the three
+            // model counts above are read live from their backends.
+            chain_replays: self.replays(),
             level: self.vault.level().to_string(),
             db_bytes,
             codebooks: self.codebook_generations(),
@@ -1258,6 +1320,19 @@ impl VaultStore {
             late_failures: self.late.as_ref().map_or(0, |l| l.encode_failures()),
             semantic: self.semantic_channel(),
         })
+    }
+
+    /// Override the declared audit-chain ceiling for this handle.
+    ///
+    /// **Tests only, and by the setter rather than the environment on
+    /// purpose**: `std::env::set_var` is process-global and this suite runs
+    /// in parallel, so an env-driven test of a value resolved at open is a
+    /// flake generator aimed at every test beside it. The env path is
+    /// covered where it can be covered honestly — by `parse_tuned` for the
+    /// parse, and end to end through the real binary in `tests/e2e.sh`.
+    #[cfg(test)]
+    pub(crate) fn set_audit_ceiling(&mut self, ceiling: Option<u64>) {
+        self.audit_ceiling = ceiling;
     }
 
     /// Find exact-duplicate drawers (same keyed fingerprint). With `apply`,
@@ -3096,6 +3171,120 @@ mod tests {
             "the second name must be the FIRST one's binding, not a second \
              call spelled differently"
         );
+    }
+
+    /// **ROADMAP O250: the trail's size is reported against a DECLARED
+    /// expectation, and the verdict is the engine's.**
+    ///
+    /// The growth was already published — `chain_records` here, the
+    /// `audit_chain_height` gauge on `/metrics` — with nothing to read it
+    /// against, so the number meant nothing to the operator looking at it.
+    ///
+    /// Three arms, each failing independently. **Undeclared** is the default
+    /// every vault ships with and must stay silent rather than inventing a
+    /// threshold nobody measured. **Declared and within** must still report
+    /// the ceiling, because a value alone cannot tell an operator that their
+    /// declaration was read at all — the same reason `semantic.gate_source`
+    /// exists on this struct. **Declared and passed** is the one the entry is
+    /// about, and it is asserted at a ceiling the vault's own height
+    /// straddles rather than at a constant, so a `chain_over_ceiling`
+    /// hard-wired either way fails one arm.
+    #[test]
+    fn stats_reports_the_audit_trail_against_its_declared_ceiling() {
+        let (_d, mut s) = store();
+        s.upsert(&drawer("notes", "r", "the first note", 0))
+            .unwrap();
+        let height = s.stats().unwrap().chain_records;
+        assert!(
+            height > 1,
+            "premise: the chain is tall enough to sit a ceiling on both \
+             sides of it, got {height}"
+        );
+
+        // Undeclared — the shipped default, and it says nothing.
+        let undeclared = s.stats().unwrap();
+        assert_eq!(undeclared.chain_ceiling, None);
+        assert!(
+            !undeclared.chain_over_ceiling,
+            "nothing is declared, so nothing can be exceeded"
+        );
+
+        // Declared and within: reported, and not a breach.
+        s.set_audit_ceiling(Some(height + 1));
+        let within = s.stats().unwrap();
+        assert_eq!(within.chain_ceiling, Some(height + 1));
+        assert!(
+            !within.chain_over_ceiling,
+            "{} records under a ceiling of {}",
+            within.chain_records,
+            height + 1
+        );
+
+        // Declared and passed. Note the boundary: the comparison is `>`, so
+        // a trail exactly AT its ceiling has not passed it — which is what
+        // the word means, and the arm below pins it rather than leaving the
+        // next reader to infer it from the operator.
+        s.set_audit_ceiling(Some(height));
+        assert!(
+            !s.stats().unwrap().chain_over_ceiling,
+            "a height equal to the ceiling has not passed it"
+        );
+        s.set_audit_ceiling(Some(height - 1));
+        let over = s.stats().unwrap();
+        assert_eq!(over.chain_ceiling, Some(height - 1));
+        assert!(
+            over.chain_over_ceiling,
+            "{} records over a ceiling of {}",
+            over.chain_records,
+            height - 1
+        );
+
+        // And it REPORTS rather than refusing — O244's ruling, and the
+        // difference between this and a retention bound. Nothing was
+        // destroyed and the vault still answers.
+        assert_eq!(
+            over.chain_records, height,
+            "a breached ceiling deletes nothing: the trail is the evidence"
+        );
+        s.upsert(&drawer("notes", "r", "a note filed over the ceiling", 1))
+            .unwrap();
+        assert!(
+            s.stats().unwrap().chain_records > height,
+            "and writing past a breached ceiling is not refused either"
+        );
+    }
+
+    /// **ROADMAP O250: the ceiling's PARSE, exhaustively and without
+    /// touching the environment.**
+    ///
+    /// `parse_tuned` is the function both the engine (`tuned`) and
+    /// `undercroft config check` run, so this covers the pre-flight too —
+    /// the O52 contract. Env-driven tests of a value resolved at open are
+    /// flake generators aimed at every test beside them, so the end-to-end
+    /// wiring is covered through the real binary in `tests/e2e.sh` instead.
+    #[test]
+    fn the_declared_audit_ceiling_parses_or_keeps_the_default() {
+        let (shape, what) = crate::tune_shape("UNDERCROFT_AUDIT_CEILING")
+            .expect("premise: the knob has a TUNED row, or nothing below runs");
+        assert!(
+            what.contains("audit-chain height"),
+            "premise: the row describes this knob, got {what:?}"
+        );
+        let parse = |raw: Option<&str>| crate::parse_tuned("UNDERCROFT_AUDIT_CEILING", shape, raw);
+
+        // Unset and the explicit disable spelling are the same answer.
+        assert_eq!(parse(None).unwrap(), "off");
+        assert_eq!(parse(Some("off")).unwrap(), "off");
+        assert_eq!(parse(Some("1000000")).unwrap(), "1000000");
+        assert_eq!(parse(Some("1")).unwrap(), "1");
+
+        // `0` is REFUSED rather than silently meaning "report always": `off`
+        // is already the disable spelling, so admitting zero would be a
+        // second, undocumented way to say the opposite thing.
+        assert!(parse(Some("0")).is_err(), "a ceiling of zero is refused");
+        assert!(parse(Some("lots")).is_err());
+        assert!(parse(Some("-1")).is_err());
+        assert!(parse(Some("")).is_err());
     }
 
     /// **M4: the struct ADDS UP — `records == sum(wings) + quarantined`.**

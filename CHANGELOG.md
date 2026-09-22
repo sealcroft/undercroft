@@ -1,5 +1,59 @@
 # Changelog
 
+## 1.6.1 — unreleased
+
+PATCH: fixes only. Each adds a surface that REPORTS an existing silence, and
+a surface added to report a defect adds no capability — the defect was the
+silence. Nothing that worked before behaves differently, no default moves,
+and no declaration can stop a start-up.
+
+### The audit trail's size is observed, and the replay that walks it is counted (O250)
+
+Two things were silent, and O244's ruling named both. The trail's growth was
+published — `chain_records` on every stats surface, the `audit_chain_height`
+gauge on `/metrics` — with **nothing to read it against**, so an operator saw
+a number that meant nothing to them and `deploy/observability/` carried no
+alert on it at all. And `LabelGuard::replays` was `#[cfg(test)]`, so the
+once-per-handle bound O237's guard rests on had **no production observable**:
+O242 broke it on `serve-http` at +213% for a whole release and was found by a
+reviewer reading code rather than by anything the engine could say.
+
+**`UNDERCROFT_AUDIT_CEILING`** declares an audit-chain height this vault is
+expected to stay under. `undercroft stats` prints an `audit ceiling:` line,
+`/v1 …/stats`, `undercroft_status` and the admin console carry
+`chain_ceiling` and `chain_over_ceiling`, and `undercroft config check` runs
+the same parse the engine will. Unset is off, which is every vault today; an
+unreadable value keeps that default rather than refusing.
+
+**It reports and never deletes**, and that is the ruling rather than a
+timidity. The chain replay starts at a constant, so storing a start head
+anywhere writable turns `DELETE FROM audit` plus two `chain_meta` writes into
+a keyless total erasure that passes all nine legs of `verify`. Retention is
+right for content and wrong for evidence — `forget` destroys drawers and
+APPENDS tombstones, so erasure *grows* this number. Nothing is refused
+because a ceiling was passed: writes land, `verify` still says OK.
+
+**`VaultStats.chain_replays`** is the guard's own count, promoted out of test
+builds and read live on all four renderers, with
+`undercroft_chain_replays_total` as the durable half. It is the HANDLE's
+number — `LabelGuard` lives on the store handle — so the CLI reports 0 (its
+command performs no guarded read) and a served process accumulates. A
+climbing count there means another connection keeps committing and every
+commit costs the next guarded read a walk of the whole `audit` table.
+
+**Two alert rules**, each with its `promtool test rules` block and a
+present-and-healthy quiet arm. `AuditChainHeightHigh` fires above 10^6
+records, the one height at which the replay cost was measured (836 ms) rather
+than extrapolated. `AuditChainReplaysRepeating` fires above 30 replays in
+15m, which is the O242 condition rather than routine behaviour.
+
+Adding a variable also found three **ungated** copies of the engine-variable
+total on the configuration-classes diagram, while every gated cell of the
+same cross-tab moved correctly — a number beside a gated figure is the part
+that rots. Both are gated now.
+
+Suites: cargo 1027 → 1029, e2e 597 → 611, obs-config 13 → 15.
+
 ## 1.6.0 — 2026-09-21
 
 MINOR: new capability, backward compatible. `PATCH /admin/tenants/{id}` and

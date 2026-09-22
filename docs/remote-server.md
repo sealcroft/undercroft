@@ -170,7 +170,16 @@ GET    /v1/vaults/{id}/stats            (records AND drawers — one drawer
                                          rerank_failures + late_failures —
                                          the same for the cross-encoder and
                                          the ColBERT encoder, 0 when the
-                                         stage is not attached, O131)
+                                         stage is not attached, O131;
+                                         chain_ceiling + chain_over_ceiling —
+                                         the height this vault is declared to
+                                         stay under (UNDERCROFT_AUDIT_CEILING,
+                                         null when undeclared) and the
+                                         engine's verdict on it: it REPORTS,
+                                         never deletes and never refuses;
+                                         chain_replays — full audit-chain
+                                         replays by this handle's label
+                                         guard, O250)
 GET    /v1/vaults/{id}/stats/history    ?window=N   sample ring buffer
                                          (501 without --features telemetry)
 POST   /v1/vaults/{id}/drawers         {text, wing?, room?, vector?, dedup_threshold?}

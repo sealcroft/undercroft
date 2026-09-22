@@ -240,6 +240,17 @@
             <div class="h">MODEL FAILURES — RERANK AND LATE INTERACTION</div>
             <div class="kv" id="sModelFail">—</div>
           </div>
+          <!-- ROADMAP O250. The audit trail's size against what the operator
+               declared, and how often the label guard has walked it. Hidden
+               when nothing is declared AND nothing has replayed, which is
+               every default vault: the same rule the two sections above
+               follow. Nothing here is a bound that deletes — `audit` is
+               append-only, and a trail that could be truncated could be
+               erased entirely without failing `verify`. -->
+          <div class="sect" id="sAuditSect" style="display:none">
+            <div class="h">AUDIT TRAIL — DECLARED CEILING AND CHAIN REPLAYS</div>
+            <div class="kv" id="sAudit">—</div>
+          </div>
           <div class="sect">
             <div class="h">WINGS — DRAWER DISTRIBUTION</div>
             <table><thead><tr><th>WING</th><th>DRAWERS</th><th style="width:50%">SHARE</th></tr></thead><tbody id="wingRows"></tbody></table>
@@ -1093,6 +1104,24 @@ async function loadOverview() {
       + " of the reranked window, indistinguishable from irrelevant) · "
       + lf + " late-interaction encode" + (lf === 1 ? "" : "s") + " degraded to an empty"
       + " matrix (a doc failure is a drawer with no tokens at rest)";
+    // O250: the trail's size against the declared expectation, and this
+    // handle's chain replays. `chain_over_ceiling` is read, never recomputed
+    // from `chain_records` — the engine owns that comparison and this page is
+    // one of four renderers. Shown when there is something to say; textContent,
+    // so no escaping (numbers and fixed sentences).
+    const ceil = s.chain_ceiling;
+    const reps = Number(s.chain_replays || 0);
+    const over = !!s.chain_over_ceiling;
+    $("sAuditSect").style.display = (ceil !== null && ceil !== undefined) || reps > 0 ? "" : "none";
+    $("sAudit").textContent =
+      ((ceil === null || ceil === undefined)
+        ? "no ceiling declared"
+        : (over
+            ? "ceiling " + ceil + " EXCEEDED — nothing is deleted, but every handle's"
+              + " first guarded read walks the whole trail"
+            : "ceiling " + ceil + " declared · within it"))
+      + " · " + reps + " chain replay" + (reps === 1 ? "" : "s") + " by this handle's"
+      + " label guard (a climbing count means another connection keeps committing)";
     // M5: R4's report. A non-empty list means either "this replica is
     // serving a vault its writer has not finished with" or "this vault still
     // holds some graph words in clear at rest" — each note says which.

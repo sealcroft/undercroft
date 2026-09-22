@@ -3569,6 +3569,121 @@ else
 fi
 rm -rf "$O237C_HOME"
 
+# ── O250: the audit trail is OBSERVED, and the replay is COUNTED ───────────
+# Two things were silent. `LabelGuard::replays` was `#[cfg(test)]`, so the
+# once-per-handle bound O237's guard rests on had no production observable at
+# all — which is how O242 ran at +213% on this exact deployment for a whole
+# release and was found by a reviewer reading code. And `chain_records` was
+# published with no declared expectation to read it against.
+#
+# **This block has to drive the RELEASE BINARY, and that is the whole point
+# of it.** A store unit test compiles with `cfg(test)` on, so it cannot tell
+# the promoted counter from the test-only one: it would pass either way. Only
+# a build where `cfg(test)` is off can, which is this one.
+O250_HOME="$(mktemp -d)"
+UNDERCROFT_HOME="$O250_HOME" "$BIN" init >/dev/null 2>&1
+o250() { UNDERCROFT_HOME="$O250_HOME" "$BIN" "$@"; }
+o250 remember "the harbour crane at dawn above the tideline" --wing notes >/dev/null 2>&1
+# A trust assignment, so a search is a GUARDED read: the floor makes
+# `search` consult `wing_trusts()`, which is one of the doors O237 put the
+# label guard on. Without it the search decides from no label and replays
+# nothing, and every count below would be 0 for the wrong reason.
+o250 trust set secret quarantined >/dev/null 2>&1
+UNDERCROFT_HOME="$O250_HOME" "$BIN" serve-http --host 127.0.0.1 --port 18884 >/dev/null 2>&1 &
+O250_PID=$!
+for _ in $(seq 1 40); do curl -sf http://127.0.0.1:18884/healthz >/dev/null 2>&1 && break; sleep 0.25; done
+o250_search() {
+  curl -s -o /dev/null -X POST http://127.0.0.1:18884/v1/vaults/default/search \
+    -H 'content-type: application/json' -d '{"query":"harbour crane","min_trust":"standard"}'
+}
+o250_stats() { curl -s http://127.0.0.1:18884/v1/vaults/default/stats; }
+# Replay 1: the first guarded read on this handle.
+o250_search
+O250_ONE="$(o250_stats)"
+# A write from ANOTHER PROCESS moves `PRAGMA data_version`, which a
+# connection's own commit does not. This is O242's scenario exactly.
+o250 remember "a second note filed from outside the server" --wing notes >/dev/null 2>&1
+# Replay 2, and then a third search that must NOT replay again.
+o250_search
+o250_search
+O250_TWO="$(o250_stats)"
+kill "$O250_PID" 2>/dev/null; wait "$O250_PID" 2>/dev/null
+o250_field() { sed -n "s/.*\"$2\":\([0-9]*\).*/\1/p" <<<"$1" | head -1; }
+O250_R1="$(o250_field "$O250_ONE" chain_replays)"
+O250_R2="$(o250_field "$O250_TWO" chain_replays)"
+# PREMISE, and it is the arm that matters: a build where the counter never
+# reached the wire answers EMPTY here, and an empty string compared against a
+# number is the transcript a working probe would produce on a quiet server.
+if [ -n "$O250_R1" ] && [ -n "$O250_R2" ]; then
+  echo "ok    O250 premise: the release binary reports chain_replays at all"; PASS=$((PASS+1))
+else
+  echo "FAIL  O250 premise: /v1 stats carries no chain_replays, so the counter"
+  echo "      is still invisible outside a test build — every arm below is vacuous"
+  echo "$O250_TWO" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+if [ "$O250_R1" = 1 ]; then
+  echo "ok    O250: one guarded read, one full chain replay"; PASS=$((PASS+1))
+else
+  echo "FAIL  O250: expected 1 replay after the first guarded read, got '$O250_R1'"; FAIL=$((FAIL+1))
+fi
+# The ruling's own gate: "with the guard's replay forced twice in one handle,
+# the promoted counter reads 2". The third search is in there deliberately —
+# it proves the count is the REPLAY's and not the search's.
+if [ "$O250_R2" = 2 ]; then
+  echo "ok    O250: a foreign commit forces a second replay, and no more"; PASS=$((PASS+1))
+else
+  echo "FAIL  O250: expected 2 replays after an outside write, got '$O250_R2'"; FAIL=$((FAIL+1))
+fi
+
+# The declared ceiling, end to end through the environment — the half a store
+# test deliberately does not drive, because `set_var` is process-global.
+O250_H="$(o250 stats | sed -n 's/^chain records: \([0-9]*\)$/\1/p')"
+if [ -n "$O250_H" ] && [ "$O250_H" -gt 1 ]; then
+  echo "ok    O250 premise: the trail is tall enough to sit a ceiling either side of"; PASS=$((PASS+1))
+else
+  echo "FAIL  O250 premise: could not read the chain height ('$O250_H')"; FAIL=$((FAIL+1))
+fi
+check "O250: no ceiling declared, nothing said" 0 "chain records:" -- \
+  env UNDERCROFT_HOME="$O250_HOME" "$BIN" stats
+if ! o250 stats | grep -q "audit ceiling"; then
+  echo "ok    O250: and the default vault reports no ceiling at all"; PASS=$((PASS+1))
+else
+  echo "FAIL  O250: an undeclared ceiling was reported anyway"; FAIL=$((FAIL+1))
+fi
+check "O250: a declared ceiling within range is reported" 0 "audit ceiling: $((O250_H + 5)) (declared; within it)" -- \
+  env UNDERCROFT_HOME="$O250_HOME" UNDERCROFT_AUDIT_CEILING="$((O250_H + 5))" "$BIN" stats
+check "O250: a passed ceiling says so and says what it costs" 0 "EXCEEDED" -- \
+  env UNDERCROFT_HOME="$O250_HOME" UNDERCROFT_AUDIT_CEILING=1 "$BIN" stats
+# It REPORTS and never deletes — O244's ruling, and the difference between
+# this and a retention bound. A write past a breached ceiling is not refused.
+check "O250: a breached ceiling refuses no write" 0 "Filed drawer" -- \
+  env UNDERCROFT_HOME="$O250_HOME" UNDERCROFT_AUDIT_CEILING=1 "$BIN" remember "filed over the ceiling" --wing notes
+check "O250: and destroys nothing" 0 "VERIFY OK" -- \
+  env UNDERCROFT_HOME="$O250_HOME" UNDERCROFT_AUDIT_CEILING=1 "$BIN" verify
+# `Tunes`: an unreadable declaration warns and keeps the default, which for
+# this knob is off. A refusal here would be something that can stop a running
+# deployment, i.e. not a fix.
+if ! env UNDERCROFT_HOME="$O250_HOME" UNDERCROFT_AUDIT_CEILING=lots "$BIN" stats 2>/dev/null | grep -q "audit ceiling"; then
+  echo "ok    O250: an unreadable ceiling keeps the default rather than refusing"; PASS=$((PASS+1))
+else
+  echo "FAIL  O250: a garbage ceiling was honoured"; FAIL=$((FAIL+1))
+fi
+# `--verbose`, because the clean per-declaration lines print only there: the
+# first run of this arm asserted the name against a quiet run and failed on a
+# correct tree. It asserts the value the parse RESOLVED to, not merely that
+# the name was seen, so a row that reached the loop and answered nothing
+# cannot satisfy it.
+check "O250: config check runs the same parse the engine will" 0 'UNDERCROFT_AUDIT_CEILING="4096"' -- \
+  env UNDERCROFT_HOME="$O250_HOME" UNDERCROFT_AUDIT_CEILING=4096 "$BIN" config check --verbose
+# The warning prints WITHOUT --verbose, and that is the half that matters: a
+# `Tunes` knob silently keeping its default is the O48 defect, so an operator
+# running the pre-flight plainly must still be told.
+check "O250: and warns on a value it cannot read" 0 "UNDERCROFT_AUDIT_CEILING" -- \
+  env UNDERCROFT_HOME="$O250_HOME" UNDERCROFT_AUDIT_CEILING=lots "$BIN" config check
+check "O250: the warning keeps the default rather than stopping start-up" 0 "keeps the conservative default" -- \
+  env UNDERCROFT_HOME="$O250_HOME" UNDERCROFT_AUDIT_CEILING=lots "$BIN" config check
+rm -rf "$O250_HOME"
+
 echo
 echo "e2e results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

@@ -113,6 +113,17 @@ Exposed series (all `undercroft_*`):
   not manifest anchors — a 256-drawer bulk transaction anchors once and
   advances this by 256, and records appended without an anchor, such as
   read-audit records, are counted by the next anchor),
+  `chain_replays_total` (ROADMAP O250 — FULL audit-chain replays by the
+  label guard, which authenticates every label a reader decides from. It is
+  designed to run **once per handle**, re-running only when another
+  connection commits, so a sustained rate here is not routine: it is a
+  second writer moving `PRAGMA data_version` under a long-lived server, and
+  each move costs the next guarded read a walk of the entire `audit` table.
+  That was a +213% regression for a whole release, found by a reviewer
+  reading code because this count lived in test builds only. The live half
+  is `chain_replays` on every stats surface. No labels — a vault-shaped one
+  has a value set created by use, and the per-vault figure is on
+  `/v1/…/stats`),
   `hmac_verify_failures_total{surface}`, `vault_opens_total`,
   `http_requests_total{route,status}`, `auth_rejections_total{kind}`.
 - **Histograms** — `search_duration_seconds`, `search_hits`,

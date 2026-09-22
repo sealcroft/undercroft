@@ -40,6 +40,71 @@ groups:
             otherwise. Confirm with `undercroft verify`; follow the runbook.
           runbook_url: "https://sealcroft.com/undercroft/docs/runbook.html"
 
+      - alert: AuditChainHeightHigh
+        # ROADMAP O250. `undercroft_audit_chain_height` has been a dashboard
+        # panel since the stack shipped and had NO rule anywhere in this
+        # directory, so an operator saw a number with nothing to read it
+        # against. The trail is append-only and has no compaction — it cannot
+        # have one, because the replay starts at a constant and a stored
+        # start head would make `DELETE FROM audit` verify clean — so this
+        # number only ever goes up, and what it buys an operator is notice.
+        #
+        # The threshold is a LITERAL here rather than a comparison against
+        # the engine's `UNDERCROFT_AUDIT_CEILING`, deliberately: every rule
+        # in this file carries its own, this is a deployment config an
+        # operator edits, and the two answer different audiences — the
+        # engine's ceiling is what its own stats surfaces report against.
+        #
+        # 10^6 is the one height at which the cost was MEASURED rather than
+        # extrapolated: a full chain replay took 836 ms at 1,002,001 rows
+        # against 88 ms at 102,001, and every handle pays one on its first
+        # guarded read. No aggregation, so `job`, `instance` and `vault` all
+        # survive — `alertmanager.yml` inhibits on `instance`.
+        expr: undercroft_audit_chain_height > 1000000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Audit trail is large — every handle's first guarded read walks it"
+          description: >-
+            Vault '{{ $labels.vault }}' holds {{ $value | printf "%.0f" }}
+            audit-chain records. Nothing is wrong and nothing should be
+            deleted — the trail is the evidence — but the label guard replays
+            it once per handle, which was measured at 836ms per replay at
+            10^6 records. Expect slower first reads after a restart, and
+            consider `export` into a fresh vault if this keeps growing.
+          runbook_url: "https://sealcroft.com/undercroft/docs/runbook.html"
+
+      - alert: AuditChainReplaysRepeating
+        # ROADMAP O250, and this is the rule that would have caught O242.
+        # The label guard replays the whole chain AT MOST ONCE per handle;
+        # it re-runs only when `PRAGMA data_version` says another connection
+        # committed. So a sustained rate here is not routine — it is a second
+        # writer moving the cookie under a long-lived server, and each move
+        # costs the next guarded read a walk of the entire `audit` table.
+        # That was a +213% regression on `serve-http` for a whole release and
+        # it was found by a reviewer reading code, because the count lived in
+        # `#[cfg(test)]`.
+        #
+        # 30 in 15m is two a minute sustained. Stated honestly: a
+        # multi-tenant instance pays one first-replay per vault, so handle
+        # churn contributes — that is a real cost and worth seeing, and the
+        # threshold is yours to raise. The window carries "sustained" instead
+        # of a `for:`, so the rule and its test evaluate at one point.
+        expr: sum by (instance) (increase(undercroft_chain_replays_total[15m])) > 30
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Audit-chain replays are repeating — a second writer is moving the cookie"
+          description: >-
+            {{ $value | printf "%.0f" }} full audit-chain replays in 15m on
+            this instance. The guard is designed to replay once per handle,
+            so a sustained rate means another connection keeps committing and
+            every commit costs the next guarded read a walk of the whole
+            audit table. Check for a second process writing the served vault.
+          runbook_url: "https://sealcroft.com/undercroft/docs/runbook.html"
+
       - alert: AuditChainStalled
         # Writes are landing but the tamper-evident chain isn't advancing.
         # Both sides of the `and` aggregate by the same label, or the vector

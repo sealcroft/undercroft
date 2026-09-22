@@ -706,7 +706,14 @@ Consequences that are binding, not advisory:
   `forget_with_proof_ruled`, never inside `mirror_note`, where the drawers
   are already destroyed (O91); and inside `refuse_replayed`, the hottest
   label decision in the tree. Measured: warm search +1.7% under the PQ tier
-  at 102k, +73 ms once per handle. **What it cannot see, stated: an APPEND
+  at 102k, +73 ms once per handle. **And the replay is COUNTED in production
+  since O250** — `LabelGuard::replays` was `#[cfg(test)]`, so the
+  once-per-handle bound this whole design rests on had no observable outside
+  a test build, which is how O242 broke it at +213% for a release and was
+  found by a reviewer reading code. It is now `VaultStats.chain_replays` on
+  all four renderers plus `undercroft_chain_replays_total`, and it is the
+  HANDLE's number by construction, `LabelGuard` living on the store handle.
+  **What it cannot see, stated: an APPEND
   is legitimate**, so a forged row appended beneath SQLite is invisible to a
   handle that already replayed until it re-opens — only the MAC key
   separates a forged append from a real one, and **no in-band structure
@@ -1403,8 +1410,11 @@ Consequences that are binding, not advisory:
   worth knowing: `chain_commit(records)` counts audit-chain **records**, not
   manifest anchors (a 256-drawer batch anchors once and advances it by 256;
   records appended without an anchor — read audits — are counted by the next
-  one), and **a diversion is a `drawer-quarantined` frame decided by ONE
-  classifier**: `admission::save_event` classifies by WHERE THE ROW LANDED,
+  one; `chain_replayed()` beside it counts the label guard's FULL replays,
+  unlabelled on the per-wing-codebook rule — a vault-shaped label has a value
+  set created by use, and the per-vault figure is already on
+  `/v1/…/stats`), and **a diversion is a `drawer-quarantined` frame decided
+  by ONE classifier**: `admission::save_event` classifies by WHERE THE ROW LANDED,
   `write_drawer` emits at the choke point, and `upsert_many` — which owns
   its transaction and cannot reach the choke point — runs the same
   classifier over its batch. The frame carries the intended wing/room and
@@ -1853,9 +1863,9 @@ Consequences that are binding, not advisory:
   order for a spill, and the traps already paid for
 - `architecture/` — illustrated architecture reference: eleven theme-aware
   SVG diagrams (`diagrams/`), the same as PDF (`pdf/`), and `index.html`
-  which inlines them and documents every layer plus **all 81**
-  `UNDERCROFT_*` variables the engine honours — **64** written out in
-  full across the env table's 60 rows, plus **17** siblings abbreviated
+  which inlines them and documents every layer plus **all 82**
+  `UNDERCROFT_*` variables the engine honours — **65** written out in
+  full across the env table's 61 rows, plus **17** siblings abbreviated
   to a suffix inside the row that owns them (`UNDERCROFT_ORCH_ADDR ·
   _DB · _KEY · _ADMIN_TOKEN · …` is one row; `_TOKENIZER` and `_NAME`
   appear once per model role), which is why grepping the page for full
@@ -2240,8 +2250,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (1027 run,
-                                      # 4 #[ignore]d = 1031 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (1029 run,
+                                      # 4 #[ignore]d = 1033 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2363,7 +2373,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (597 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (611 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (167 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (157 checks; weaviate
@@ -2433,7 +2443,7 @@ docker compose run --rm arch-check    # TWO verifications, one service: the
                                       # a countable population, and inventing
                                       # a metric to satisfy a gate is how a
                                       # figure stops meaning anything
-docker compose run --rm obs-config    # the observability CONFIG suite (13 checks):
+docker compose run --rm obs-config    # the observability CONFIG suite (15 checks):
                                       # promtool check/test rules + amtool
                                       # check-config at the versions the stack
                                       # deploys, plus the join between them —
@@ -4017,7 +4027,7 @@ unwritten because a half-correct verdict is worse than a known-wrong one.
   report different values. A knob whose unset depends on ANOTHER variable has
   no row and says why (`UNDERCROFT_LATE_TOP_N` falls through to
   `UNDERCROFT_RERANK_TOP_N`, valid or not, which is a compatibility promise).
-  57 of the 81 are `Checked`, 24 `Opaque`, and 40 `Protects` against 41
+  58 of the 82 are `Checked`, 24 `Opaque`, and 40 `Protects` against 42
   `Tunes` — counted by the `prose figures` preflight, not remembered. The
   class figures had rotted before it existed: O121 moved
   `UNDERCROFT_RERANKER` to `Protects` and the platform-views decision tree

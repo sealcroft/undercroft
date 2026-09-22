@@ -714,12 +714,18 @@ pub(crate) struct LabelGuard {
     /// in neither place afterwards and no per-key lookup is ever made for
     /// it: the set is the only thing that can miss it.
     keys: std::collections::HashMap<&'static str, std::collections::BTreeSet<String>>,
-    /// How many full replays this handle has run. Test-only, and it has to
-    /// be counted rather than timed: "at most once per handle over N guarded
-    /// reads" is the ruling's own gate, and a wall-clock proxy for it would
-    /// pass on a corpus small enough that a replay is free — which is every
-    /// fixture.
-    #[cfg(test)]
+    /// How many full replays this handle has run. It has to be COUNTED
+    /// rather than timed: "at most once per handle over N guarded reads" is
+    /// O237's own gate, and a wall-clock proxy for it would pass on a corpus
+    /// small enough that a replay is free — which is every fixture.
+    ///
+    /// **`#[cfg(test)]` until ROADMAP O250**, which is what that cost: O242
+    /// was a +213% regression on the flagship deployment and it was found by
+    /// a reviewer reading code, because the observable that would have shown
+    /// it existed only in test builds. It now reaches
+    /// `VaultStats.chain_replays` on every stats surface, and the
+    /// `undercroft_chain_replays_total` counter beside it is the durable
+    /// half for a served process whose stats nobody polls.
     replays: u64,
 }
 
@@ -780,10 +786,13 @@ impl crate::VaultStore {
                     chain_ok,
                     labels,
                 });
-                #[cfg(test)]
-                {
-                    guard.replays += 1;
-                }
+                guard.replays += 1;
+                // The durable half (ROADMAP O250), OUTSIDE the borrow for
+                // the reason stated above it: nothing in `undercroft-obs`
+                // reaches back into this store today, and the next person to
+                // add a counter here should not have to prove that again.
+                drop(guard);
+                undercroft_obs::chain_replayed();
                 (chain_ok, labels)
             }
         };
@@ -857,8 +866,16 @@ impl crate::VaultStore {
         Ok(self.newest_record(&label, on)?.map(|r| r.seq))
     }
 
-    /// How many full replays this handle has run (test-only).
-    #[cfg(test)]
+    /// How many full replays this handle has run, for the life of the
+    /// handle (ROADMAP O250).
+    ///
+    /// **The HANDLE's number, not the database's**, and that is structural
+    /// rather than a choice: [`LabelGuard`] lives on the `VaultStore`, so
+    /// there is nowhere else for it to live. It is O122's `embed_failures`
+    /// contract one door over — on the CLI every command is its own handle
+    /// and reads its own count; on `serve-http` it accumulates for as long
+    /// as the handle is cached. A restart reads zero while the `audit` rows
+    /// that made the replay expensive are all still there.
     pub(crate) fn replays(&self) -> u64 {
         self.labels.borrow().replays
     }
@@ -1620,6 +1637,28 @@ mod tests {
         assert_eq!(store.replays(), 2, "the foreign commit is not trusted away");
         store.wing_trusts().unwrap();
         assert_eq!(store.replays(), 2, "and then it settles again");
+
+        // **ROADMAP O250: and the number REACHES A SURFACE.** This is the
+        // ruling's own gate — "with the guard's replay forced twice in one
+        // handle, the promoted counter reads 2" — and it is asserted here
+        // rather than in its own test because this is the only place in the
+        // tree that forces exactly two replays on one handle, and a second
+        // fixture reproducing it would be a second statement of what "a
+        // foreign commit" means.
+        //
+        // Until O250 the count was `#[cfg(test)]`, so nothing outside a test
+        // build could say whether the once-per-handle bound held — which is
+        // how O242 ran at +213% on `serve-http` for a whole release and was
+        // found by a reviewer reading code rather than by an observable.
+        // A unit test cannot tell the promoted counter from the test-only
+        // one (it compiles with `cfg(test)` on either way); `tests/e2e.sh`
+        // drives the release binary for that half.
+        assert_eq!(
+            store.stats().unwrap().chain_replays,
+            2,
+            "the guard's own count reaches `VaultStats`, or it is an \
+             accessor its tests alone read — which is the defect O122 named"
+        );
     }
 
     /// A SECOND CONNECTION doing the exploit while this handle is open — the

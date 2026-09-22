@@ -91,6 +91,8 @@ Defined in `alerts.yml`:
 |---|---|---|
 | **PalaceTamperDetected** | critical | any `undercroft_hmac_verify_failures_total` increase — a record/KG/tunnel/manifest failed its integrity tag on read. The `surface` label says where. |
 | **AuditChainStalled** | warning | writes are landing but the audit chain isn't advancing (10m). |
+| **AuditChainHeightHigh** | warning | `undercroft_audit_chain_height` above 10^6 records (10m). Nothing is wrong and nothing should be deleted — the trail is the evidence — but the label guard replays it once per handle, measured at 836ms per replay at that height, so first reads after a restart get slower. Raise the threshold or `export` into a fresh vault; `UNDERCROFT_AUDIT_CEILING` declares the same expectation to the engine's own stats surfaces (ROADMAP O250). |
+| **AuditChainReplaysRepeating** | warning | more than 30 `undercroft_chain_replays_total` in 15m on one instance — the guard is designed to replay **once per handle**, so a sustained rate means another connection keeps committing and each commit costs the next guarded read a walk of the whole `audit` table. That was O242, a +213% regression nothing could see. A multi-tenant instance pays one first-replay per vault, so handle churn contributes (ROADMAP O250). |
 | **UndercroftDown** | critical | the `/metrics` target is unscrapable (1m). |
 | **HighSearchLatencyP95** | warning | search p95 > 500ms (10m). |
 | **HttpServerErrors** | warning | any HTTP 5xx (5m). |
