@@ -122,6 +122,7 @@ pub(crate) struct Head {
 }
 
 /// What `chain_meta` says, before it is judged.
+#[derive(Clone)]
 pub(crate) enum HeadState {
     /// No head at all: a database older than `chain_meta`, or a fresh one the
     /// open has not seeded yet.
@@ -175,11 +176,65 @@ pub(crate) fn head_state(conn: &Connection) -> Result<HeadState, StoreError> {
 /// The committed head, refusing an inconsistent pair as an integrity
 /// finding. `None` when unseeded.
 pub(crate) fn committed_head(conn: &Connection) -> Result<Option<Head>, StoreError> {
-    match head_state(conn)? {
-        HeadState::Unseeded => Ok(None),
-        HeadState::Seeded(h) => Ok(Some(h)),
-        HeadState::Inconsistent { finding, .. } => Err(StoreError::IntegrityFinding(finding)),
+    head_state(conn)?.into_committed()
+}
+
+impl HeadState {
+    /// The committed head, or the integrity finding a disagreeing regime is.
+    ///
+    /// Split out of [`committed_head`] by ROADMAP O251 so a caller that
+    /// needs BOTH the judged head and the unjudged state — `reconcile_chain`
+    /// does, once it hands its replay's verdict forward — can read
+    /// `chain_meta` ONCE and derive both. Two reads would agree on every
+    /// quiet vault and could straddle a concurrent commit on a busy one,
+    /// which is one function disagreeing with itself about its own chain.
+    pub(crate) fn into_committed(self) -> Result<Option<Head>, StoreError> {
+        match self {
+            HeadState::Unseeded => Ok(None),
+            HeadState::Seeded(h) => Ok(Some(h)),
+            HeadState::Inconsistent { finding } => Err(StoreError::IntegrityFinding(finding)),
+        }
     }
+}
+
+/// **The chain's two verdicts from one replay, in ONE place** (ROADMAP
+/// O251): `(chain_ok, label_commitment)`, derived from a [`Replay`] and the
+/// [`HeadState`] it should agree with.
+///
+/// It exists because two callers now make the same judgement —
+/// [`crate::VaultStore::chain_verdict`], which replays for the label guard,
+/// and `reconcile_chain`, which replays at the open and (when the open
+/// appended nothing afterwards) hands its verdict forward so the guard need
+/// not walk the same rows again. A second copy of this arithmetic would be a
+/// second place for the chain's own verdict to be subtly wrong, which is the
+/// defect class `reconcile_chain`'s own doc comment names one level up.
+pub(crate) fn verdict(replayed: &Replay, head: &HeadState) -> (bool, crate::LabelCommitment) {
+    let (db_head, heads_consistent) = match head {
+        HeadState::Seeded(h) => (Some(h.head.as_str()), true),
+        HeadState::Unseeded => (None, true),
+        HeadState::Inconsistent { .. } => (None, false),
+    };
+    let malformed_at = |step| {
+        replayed
+            .malformed
+            .iter()
+            .any(|seq| replayed.regime.step_for(*seq) == step)
+    };
+    let chain_ok = heads_consistent
+        && db_head == Some(replayed.head.as_str())
+        && replayed.anchor_seen
+        && !malformed_at(undercroft_vault::ChainStep::V2);
+    let label_commitment = match replayed.regime {
+        Regime::V1 => crate::LabelCommitment::Pending,
+        Regime::V2 { .. }
+            if replayed.commitment_intact == Some(true)
+                && !malformed_at(undercroft_vault::ChainStep::V1) =>
+        {
+            crate::LabelCommitment::Intact
+        }
+        Regime::V2 { .. } => crate::LabelCommitment::Mismatch,
+    };
+    (chain_ok, label_commitment)
 }
 
 /// The committed head, which every caller that ADVANCES the chain needs to
@@ -864,6 +919,30 @@ impl crate::VaultStore {
     pub(crate) fn rotation_boundary(&self, on: LabelUse) -> Result<Option<i64>, StoreError> {
         let label = rotation_label(&self.vault);
         Ok(self.newest_record(&label, on)?.map(|r| r.seq))
+    }
+
+    /// Install a verdict the OPEN's replay produced, so the first guarded
+    /// read does not walk the same rows again (ROADMAP O251).
+    ///
+    /// **It does not count as a replay**, and that is deliberate rather than
+    /// an oversight: `chain_replays` answers *how many times did this handle
+    /// walk the whole `audit` table*, and the point of this unit is that the
+    /// walk happened once. Counting it here would report the cost O251
+    /// removes as though it were still being paid.
+    ///
+    /// The caller has already checked that the chain has not moved since the
+    /// replay; this only records it.
+    pub(crate) fn seed_label_verdict(
+        &self,
+        data_version: i64,
+        chain_ok: bool,
+        labels: crate::LabelCommitment,
+    ) {
+        self.labels.borrow_mut().replayed = Some(Replayed {
+            data_version,
+            chain_ok,
+            labels,
+        });
     }
 
     /// How many full replays this handle has run, for the life of the
@@ -1658,6 +1737,133 @@ mod tests {
             2,
             "the guard's own count reaches `VaultStats`, or it is an \
              accessor its tests alone read — which is the defect O122 named"
+        );
+    }
+
+    /// **ROADMAP O251: an open that already replayed hands its verdict
+    /// forward, so the first guarded read runs no SECOND replay.**
+    ///
+    /// `reconcile_chain` and `chain_verdict` make the same `chain::replay`
+    /// call over the same rows, and until O251 the second one was computed
+    /// from scratch. It costs nothing in the steady state, because
+    /// `reconcile_chain` short-circuits when the anchor equals the committed
+    /// head and never replays at all — and one whole replay (88 ms at
+    /// 102,001 rows, 836 ms at 1,002,001) exactly when the open DID replay.
+    ///
+    /// **The lag is manufactured the way production makes it.**
+    /// `UNDERCROFT_READ_AUDIT=chain` appends one chain record per
+    /// content-returning read and deliberately does not anchor (A31/R3), so
+    /// such a deployment ends every command with the anchor behind — and the
+    /// next command's open replays to heal it, then replayed AGAIN on its
+    /// first guarded read. Two full replays per command, on the one
+    /// deployment whose whole purpose is reading.
+    #[test]
+    fn an_open_that_replayed_hands_its_verdict_to_the_first_guarded_read() {
+        let (dir, mut store) = fresh(SecurityLevel::Sealed);
+        store.set_wing_trust("secret", "quarantined").unwrap();
+        store.upsert(&drawer("a harbour crane at dawn", 0)).unwrap();
+        // Read audits advance `chain_meta` and never anchor, so the handle
+        // closes with the manifest behind — which is what makes the NEXT
+        // open replay rather than short-circuit.
+        store.set_read_audit(true);
+        for _ in 0..3 {
+            store
+                .recent(None, 5, crate::Read::Returned(crate::ReadOp::Recent))
+                .unwrap();
+        }
+        drop(store);
+
+        let reopened = reopen(&dir).unwrap();
+        // PREMISE. Without this the test passes on a vault whose open took
+        // the short-circuit, where there is no first replay to hand forward
+        // and `replays() == 0` means only that nothing happened.
+        assert!(
+            matches!(reopened.anchor_at_open(), crate::AnchorState::Healed { .. }),
+            "premise: the open must have REPLAYED to heal a lagging anchor, \
+             got {:?}",
+            reopened.anchor_at_open()
+        );
+        reopened.wing_trusts().unwrap();
+        assert_eq!(
+            reopened.replays(),
+            0,
+            "the open already replayed these rows; the guard must reuse that \
+             verdict rather than walking them again"
+        );
+        // And the verdict handed forward is a real one, not a blank that
+        // happens to let every read through: the same handle still refuses
+        // when the chain stops authenticating its labels.
+        let db = dir.path().join("vaults/r/vault.db");
+        let other = Connection::open(&db).unwrap();
+        lift_the_floor(&other, "secret");
+        drop(other);
+        let err = reopened.wing_trusts().unwrap_err();
+        assert!(
+            matches!(&err, StoreError::IntegrityFinding(m)
+                     if m.contains("does not authenticate its own labels")),
+            "a seeded verdict must not survive a foreign commit: {err}"
+        );
+        assert_eq!(
+            reopened.replays(),
+            1,
+            "and the foreign commit costs exactly the one replay it should"
+        );
+    }
+
+    /// **ROADMAP O251, the other half: an open that APPENDED may not hand a
+    /// verdict forward**, because its own commits do not move
+    /// `PRAGMA data_version` and a seeded verdict would go stale behind an
+    /// unmoved cookie — O242 option (C)'s shape in miniature, and that
+    /// option "would ship GREEN".
+    ///
+    /// The writable open appends after its replay in three places:
+    /// `blind_existing_kg_rows` (A10), `rekey_content_fingerprints` (U12)
+    /// and `switch_chain_to_v2` (O233), which also changes the REGIME and
+    /// the live head — so a verdict computed before it would answer
+    /// `LabelCommitment::Pending` for a vault that is now version 2.
+    #[test]
+    fn an_open_that_appended_after_its_replay_hands_nothing_forward() {
+        let (dir, mut store) = fresh(SecurityLevel::Sealed);
+        store.set_wing_trust("secret", "quarantined").unwrap();
+        // Back to a legacy version-1 chain FIRST: `unswitch_chain_for_test`
+        // re-anchors the manifest onto the version-1 head, so doing it after
+        // the reads below would leave the anchor CURRENT and the next open
+        // would short-circuit instead of replaying — a premise failure
+        // dressed as a pass.
+        store.unswitch_chain_for_test();
+        // Now make the anchor lag, so the next open replays to heal it AND
+        // appends its own `migrate/chain-v2` commitment afterwards.
+        store.set_read_audit(true);
+        for _ in 0..3 {
+            store
+                .recent(None, 5, crate::Read::Returned(crate::ReadOp::Recent))
+                .unwrap();
+        }
+        drop(store);
+
+        let reopened = reopen(&dir).unwrap();
+        assert!(
+            matches!(reopened.anchor_at_open(), crate::AnchorState::Healed { .. }),
+            "premise: the open replayed, got {:?}",
+            reopened.anchor_at_open()
+        );
+        // Through its own connection: `VaultStore::conn` is private to the
+        // crate root, and every test here that needs the database reaches it
+        // the same way.
+        let db = dir.path().join("vaults/r/vault.db");
+        let peek = Connection::open(&db).unwrap();
+        assert!(
+            matches!(regime(&peek).unwrap(), Regime::V2 { .. }),
+            "premise: the open switched the chain, so it APPENDED after its \
+             own replay — which is the case a seed must decline"
+        );
+        drop(peek);
+        reopened.wing_trusts().unwrap();
+        assert_eq!(
+            reopened.replays(),
+            1,
+            "the open's verdict describes rows the open then added to, so the \
+             guard must replay rather than trust it"
         );
     }
 

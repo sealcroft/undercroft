@@ -2141,6 +2141,21 @@ pub struct SaveOutcome {
     pub unchanged: bool,
 }
 
+/// The verdict the open's own chain replay produced, waiting to be handed to
+/// the label guard (ROADMAP O251).
+///
+/// It carries the three things that decide whether it is still true when the
+/// open finishes: the `data_version` read BEFORE the replay (a foreign
+/// commit since then moves it), and the committed head and height at the
+/// moment of the replay (this connection's OWN appends move those, and move
+/// the cookie not at all).
+struct OpenVerdict {
+    data_version: i64,
+    head: String,
+    writes: u64,
+    verdict: (bool, LabelCommitment),
+}
+
 /// What the manifest's rollback anchor was found to be, relative to the
 /// committed chain head in `chain_meta`.
 ///
@@ -2899,6 +2914,12 @@ pub struct VaultStore {
     /// cached verdict that outlived the process would be a claim about a file
     /// somebody else has had since. See `chain::LabelGuard`.
     labels: std::cell::RefCell<crate::chain::LabelGuard>,
+    /// The verdict the OPEN's replay produced, offered to the label guard
+    /// once the open has finished appending (ROADMAP O251). `None` whenever
+    /// the open took `reconcile_chain`'s short-circuit and never replayed,
+    /// which is the steady state. Consumed by
+    /// [`VaultStore::adopt_open_verdict`] and never read twice.
+    open_verdict: Option<OpenVerdict>,
     /// The `semantic` score above which a drawer may be admitted on cosine
     /// alone; `None` refuses semantic-only admission entirely. Resolved once
     /// at open by [`resolve_semantic_gate`] — see there for why it is not
@@ -3891,6 +3912,11 @@ impl VaultStore {
                 [],
             )?;
         }
+        // ROADMAP O251: LAST, after every step that can append —
+        // the two at-rest migrations and the version-2 switch on the
+        // writable path — so the check it makes is against the chain
+        // this open is actually leaving behind.
+        store.adopt_open_verdict();
         store.note_unblinded_kg();
         Ok(store)
     }
@@ -4038,6 +4064,11 @@ impl VaultStore {
             .map(|u| u.to_string())
             .collect();
         store.unhealed.extend(notes);
+        // ROADMAP O251: LAST, after every step that can append —
+        // the two at-rest migrations and the version-2 switch on the
+        // writable path — so the check it makes is against the chain
+        // this open is actually leaving behind.
+        store.adopt_open_verdict();
         store.note_unblinded_kg();
         for note in &store.unhealed {
             undercroft_obs::diag_warn!("read-only open left this unhealed: {note}");
@@ -4221,6 +4252,52 @@ impl VaultStore {
         }
     }
 
+    /// **Hand the open's replay verdict to the label guard, if the open did
+    /// not go on to append** (ROADMAP O251).
+    ///
+    /// `reconcile_chain` and `chain_verdict` make the same `chain::replay`
+    /// call over the same rows against the same anchor, and the second one
+    /// was computed from scratch. It is worth nothing in the steady state —
+    /// `reconcile_chain` short-circuits when the anchor equals the committed
+    /// head and never replays — and one whole replay (88 ms at 102,001 rows,
+    /// 836 ms at 1,002,001) exactly when the open DID replay: after a
+    /// crash-heal, and on **every command of a read-audited deployment**,
+    /// because `audit_read` appends without anchoring by design (A31/R3) so
+    /// the anchor always lags. That deployment paid two full replays per
+    /// content-returning command.
+    ///
+    /// **The two conditions are not interchangeable and both are required.**
+    /// The cookie was read BEFORE the replay, so a FOREIGN commit during the
+    /// open leaves the pair stale-but-honest and the guard replays. Our OWN
+    /// commits do not move that cookie at all — measured, and the whole
+    /// reason "once per handle" is affordable — so they are caught by the
+    /// head and height instead. Both are read here, after every open-time
+    /// migration and the version-2 switch have run.
+    ///
+    /// Why the chain's own state rather than a flag set by `chain_append`:
+    /// a flag trusts every writer to remember, and `rotate.rs` appends
+    /// through its own `INSERT` rather than that function (ROADMAP O80). The
+    /// head and the height are what an append actually moves.
+    fn adopt_open_verdict(&mut self) {
+        let Some(offered) = self.open_verdict.take() else {
+            return;
+        };
+        // Any failure to read the chain's current state declines the seed.
+        // The open has already succeeded by now, and a verdict is an
+        // optimisation: refusing to hand one forward costs a replay, while
+        // handing a wrong one forward costs the guarantee.
+        let Ok(Some(head)) = chain::committed_head(&self.conn).map(|h| h.map(|h| h.head)) else {
+            return;
+        };
+        let Ok(writes) = chain::writes(&self.conn) else {
+            return;
+        };
+        if head == offered.head && writes == offered.writes {
+            let (chain_ok, labels) = offered.verdict;
+            self.seed_label_verdict(offered.data_version, chain_ok, labels);
+        }
+    }
+
     /// Tighten the manifest rollback anchor onto the committed chain head,
     /// as an operation an operator can *call* (ROADMAP R3).
     ///
@@ -4262,10 +4339,23 @@ impl VaultStore {
     /// fire whatever `heal` says — declining to write is not declining to
     /// look.
     fn reconcile_chain(&mut self, heal: bool) -> Result<AnchorState, StoreError> {
+        // **The cookie is read BEFORE the replay** (ROADMAP O251), the same
+        // order and for the same reason `require_authenticated_labels`
+        // states: a foreign commit landing between the two leaves the
+        // verdict paired with the OLDER cookie, so the next guarded read
+        // sees a moved cookie and replays — a wasted replay, never a
+        // skipped one. Reading it afterwards would pair a newer cookie with
+        // an older verdict and skip the replay the commit called for, which
+        // is O242 option (C)'s defect exactly.
+        let version = chain::data_version(&self.conn)?;
         // The LIVE head: `head_v2` on a switched chain, `head` before it
         // (ROADMAP O233). A regime and a head key that disagree refuse here
         // as an integrity finding — the read-only open reports it instead.
-        let Some(db_head) = chain::committed_head(&self.conn)?.map(|h| h.head) else {
+        //
+        // Read ONCE and used twice: the judged head decides the anchor
+        // arithmetic below, the unjudged state feeds `chain::verdict`.
+        let head_state = chain::head_state(&self.conn)?;
+        let Some(db_head) = head_state.clone().into_committed()?.map(|h| h.head) else {
             return Ok(AnchorState::Unseeded);
         };
         // **The anchor is read from DISK and MAC-verified**, never from this
@@ -4285,6 +4375,21 @@ impl VaultStore {
         // commit and its anchor leaves the anchor on a version-1 head, and
         // the version-1 prefix is unchanged, so it is found here and healed.
         let replayed = chain::replay(&self.conn, &self.vault, Some(&anchor))?;
+        // **ROADMAP O251: this replay is the guard's replay**, and its
+        // verdict is taken here while `replayed` is still whole — the
+        // destructuring below moves its `head` out. Offered rather than
+        // installed: the open goes on to run two at-rest migrations and the
+        // version-2 switch, each of which APPENDS, and this connection's own
+        // commits do not move `data_version` — so a verdict installed here
+        // would go stale behind an unmoved cookie, which is O242 option
+        // (C)'s shape. `adopt_open_verdict` takes it only if the chain has
+        // not moved since.
+        let offered = OpenVerdict {
+            data_version: version,
+            head: db_head.clone(),
+            writes: chain::writes(&self.conn)?,
+            verdict: chain::verdict(&replayed, &head_state),
+        };
         let (head, anchor_seen, behind_by, rows) = (
             replayed.head,
             replayed.anchor_seen,
@@ -4301,6 +4406,7 @@ impl VaultStore {
                 undercroft_vault::VaultError::ManifestTampered,
             ));
         }
+        self.open_verdict = Some(offered);
         if heal {
             // Crash artifact: the anchor is a strict ancestor. Fast-forward.
             let writes: u64 = self
@@ -4459,6 +4565,9 @@ impl VaultStore {
             unhealed: Vec::new(),
             kg_secret: std::cell::RefCell::new(None),
             anchor_at_open: AnchorState::Current,
+            // Nothing has replayed yet; `reconcile_chain` fills this in only
+            // when it does, and only the open consumes it (ROADMAP O251).
+            open_verdict: None,
         };
         Ok(store)
     }
@@ -8806,35 +8915,15 @@ impl VaultStore {
     /// rows as found, so it must refuse); before it, the label commitment's,
     /// which a rotation preserves verbatim and so cannot launder (O232
     /// ruling 1).
+    /// **The arithmetic itself lives in [`chain::verdict`]** (ROADMAP O251),
+    /// because the open's `reconcile_chain` makes the same judgement over
+    /// the same replay and hands it forward. This function is the replay,
+    /// the reads it needs, and nothing else.
     pub(crate) fn chain_verdict(&self) -> Result<(bool, LabelCommitment), StoreError> {
         let anchor = self.vault.anchored_head()?;
         let replayed = chain::replay(&self.conn, &self.vault, Some(&anchor))?;
-        let (db_head, heads_consistent) = match chain::head_state(&self.conn)? {
-            chain::HeadState::Seeded(h) => (Some(h.head), true),
-            chain::HeadState::Unseeded => (None, true),
-            chain::HeadState::Inconsistent { .. } => (None, false),
-        };
-        let malformed_at = |step| {
-            replayed
-                .malformed
-                .iter()
-                .any(|seq| replayed.regime.step_for(*seq) == step)
-        };
-        let chain_ok = heads_consistent
-            && db_head.as_deref() == Some(replayed.head.as_str())
-            && replayed.anchor_seen
-            && !malformed_at(undercroft_vault::ChainStep::V2);
-        let label_commitment = match replayed.regime {
-            chain::Regime::V1 => LabelCommitment::Pending,
-            chain::Regime::V2 { .. }
-                if replayed.commitment_intact == Some(true)
-                    && !malformed_at(undercroft_vault::ChainStep::V1) =>
-            {
-                LabelCommitment::Intact
-            }
-            chain::Regime::V2 { .. } => LabelCommitment::Mismatch,
-        };
-        Ok((chain_ok, label_commitment))
+        let head = chain::head_state(&self.conn)?;
+        Ok(chain::verdict(&replayed, &head))
     }
 
     /// Decrypted export of every drawer (for backup / migration).

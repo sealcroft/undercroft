@@ -713,6 +713,16 @@ Consequences that are binding, not advisory:
   found by a reviewer reading code. It is now `VaultStats.chain_replays` on
   all four renderers plus `undercroft_chain_replays_total`, and it is the
   HANDLE's number by construction, `LabelGuard` living on the store handle.
+  **And it is ONE replay per process where it used to be two (O251)**:
+  `reconcile_chain` makes the same `chain::replay` call over the same rows
+  against the same anchor, so the open now hands its verdict forward — but
+  ONLY when the open appended nothing afterwards, which the committed head
+  and height decide, because this connection's own commits move no cookie.
+  The arithmetic lives once, in `chain::verdict`. Zero in the steady state
+  (the open short-circuits on a current anchor and never replays); one whole
+  replay after a crash-heal, on a read-only replica, and on every command of
+  a read-audited deployment, where `audit_read` appends without anchoring so
+  the anchor always lags.
   **What it cannot see, stated: an APPEND
   is legitimate**, so a forged row appended beneath SQLite is invisible to a
   handle that already replayed until it re-opens — only the MAC key
@@ -2250,8 +2260,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (1029 run,
-                                      # 4 #[ignore]d = 1033 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (1031 run,
+                                      # 4 #[ignore]d = 1035 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2373,7 +2383,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (611 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (615 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (167 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (157 checks; weaviate

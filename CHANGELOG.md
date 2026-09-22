@@ -54,6 +54,38 @@ that rots. Both are gated now.
 
 Suites: cargo 1027 → 1029, e2e 597 → 611, obs-config 13 → 15.
 
+### The open's chain replay and the guard's are the same replay, run once (O251)
+
+`reconcile_chain` (at every store open) and `chain_verdict` (at the first
+guarded read) made the **same `chain::replay` call over the same rows against
+the same anchor**, and the second was computed from scratch.
+
+It costs nothing in the steady state, because the open short-circuits when the
+manifest anchor already equals the committed head and never replays. It costs
+one whole replay exactly when the open DID replay: after a crash-heal, on a
+read-only replica, and on **every command of a read-audited deployment** —
+`UNDERCROFT_READ_AUDIT=chain` appends one chain record per content-returning
+read and deliberately does not anchor, so the anchor always lags and the next
+open replays to heal it, then replayed again on its first guarded read.
+
+The open now hands its verdict forward, and **only when the open appended
+nothing afterwards**. Both conditions are needed and they catch different
+things: the `data_version` cookie is read before the replay, so a FOREIGN
+commit during the open leaves the guard replaying; this connection's OWN
+commits do not move that cookie at all, so the committed head and height are
+what catch them — checked after the two at-rest migrations and the version-2
+switch have run. Seeding unconditionally would hand forward a verdict saying
+`Regime::V1` for a vault the same open had just switched to version 2.
+
+The replay's cost is O237's measured constant — 88 ms at 102,001 audit
+records, 836 ms at 1,002,001 — and the saving is one of them; that
+multiplication is arithmetic over a measured figure, not a new measurement.
+What is measured directly is that the replay does not happen: the guard's
+counter reads 0 where it read 1, on the release binary, which
+`VaultStats.chain_replays` made observable in O250.
+
+Suites: cargo 1029 → 1031, e2e 611 → 615.
+
 ## 1.6.0 — 2026-09-21
 
 MINOR: new capability, backward compatible. `PATCH /admin/tenants/{id}` and
