@@ -1996,6 +1996,13 @@ fn integrity_verdict(e: &anyhow::Error) -> bool {
                     // same self-contradiction, one file too many rather
                     // than one too few.
                     | S::DatabaseAmbiguous { .. }
+                    // `V::ManifestTooNew` is deliberately absent, for the
+                    // same reason `ReadOnlyUnmigrated` is (ROADMAP O238):
+                    // the vault is intact and this BUILD is wrong for it, so
+                    // it exits 1 like a posture error rather than 2 like a
+                    // tamper verdict. Telling an operator to page someone
+                    // because their binary is old would be the opposite of
+                    // what the refusal means.
                     | S::Vault(
                         V::ManifestTampered
                             | V::CorruptManifest(_)
@@ -5146,6 +5153,20 @@ mod tests {
             anyhow::Error::from(S::ReadOnlyUnmigrated {
                 missing: "kg_triples.terms".into(),
             }),
+            // ROADMAP O238, and the same reading one variant over: a vault
+            // written by a NEWER build is intact and this binary is too old
+            // for it. Age is a posture, not a tamper verdict — exit 1, and a
+            // class-less 409 on `/v1`. It reaches this classifier by falling
+            // through the positive set, which is exactly the kind of
+            // correctness nothing notices breaking, so it is pinned here.
+            anyhow::Error::from(V::ManifestTooNew {
+                found: undercroft_vault::MANIFEST_VERSION + 1,
+                supported: undercroft_vault::MANIFEST_VERSION,
+            }),
+            anyhow::Error::from(S::Vault(V::ManifestTooNew {
+                found: undercroft_vault::MANIFEST_VERSION + 1,
+                supported: undercroft_vault::MANIFEST_VERSION,
+            })),
             anyhow::anyhow!("plain failure"),
         ] {
             assert!(!integrity_verdict(&e), "must stay exit 1: {e:?}");

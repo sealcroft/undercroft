@@ -74,6 +74,29 @@ pub enum VaultError {
     /// posture error, never an integrity verdict.
     #[error("refused under a read-only posture: {0}")]
     ReadOnly(&'static str),
+    /// The manifest was written by a NEWER Undercroft than this build
+    /// (ROADMAP O238). The vault is intact; this binary is simply too old
+    /// for it, so this is a POSTURE refusal and never an integrity verdict —
+    /// exit 1 on the CLI and a class-less 409 on `/v1`, like
+    /// `ReadOnlyUnmigrated` and unlike `ManifestTampered`.
+    ///
+    /// **Read before the MAC is compared**, which is safe for one reason and
+    /// only that reason: `version` is the FIRST field of
+    /// [`Manifest::canonical`], so it is MAC-covered. Trusting it ahead of
+    /// verification can therefore buy a refusal and never an acceptance — a
+    /// forged bump makes this build refuse a vault it would otherwise have
+    /// opened, which is the safe direction, and a forged DOWNGRADE cannot
+    /// help an attacker because the MAC comparison that follows fails.
+    #[error(
+        "this vault's manifest is version {found}, and this build of Undercroft understands \
+         up to version {supported} — upgrade Undercroft to open it (ROADMAP O238)"
+    )]
+    ManifestTooNew {
+        /// The version the manifest on disk declares.
+        found: u32,
+        /// The newest version this build understands.
+        supported: u32,
+    },
     /// `create` found vault manifests in the installation and the master key
     /// verifies NONE of them (ROADMAP O204). A vault created now would be
     /// sealed under a key no existing vault uses — a split installation. An
@@ -152,7 +175,50 @@ struct Manifest {
     manifest_mac_hex: String,
 }
 
+/// The newest manifest format this build understands, and the version every
+/// manifest it writes declares (ROADMAP O238).
+///
+/// **Bumping this is how a future on-disk change fences older binaries**, and
+/// it is the ONLY thing that does. O233 had to fence 1.5.x out of a migrated
+/// chain by freezing a database row that 1.5.x happens to compare; the next
+/// format change may find no such row to freeze.
+///
+/// **A bump must ship in a release of its own, EARLIER than the change it
+/// fences** (O241 ruling 4). A version bump alone is readable by an older
+/// build — the canonical is unchanged in shape, so its MAC still verifies —
+/// but a bump PLUS a new canonical field makes every older binary rebuild a
+/// different canonical and answer `ManifestTampered` on an intact vault. The
+/// fence has to be in the field before the format moves, or it reports
+/// tampering instead of age.
+pub const MANIFEST_VERSION: u32 = 1;
+
 impl Manifest {
+    /// **The one door every manifest on disk is parsed through** (ROADMAP
+    /// O238): deserialize, then refuse a version this build does not
+    /// understand.
+    ///
+    /// The version gate sits HERE rather than at each call site because
+    /// there are five of them — the open, the staging manifest, the fresh
+    /// anchor read, O204's key survey and the telemetry delta — and a gate
+    /// applied per call site is the arrangement that let three write paths
+    /// past the admission screen.
+    ///
+    /// It runs BEFORE any MAC comparison, and that ordering is the ruling's
+    /// (O241 ruling 4) rather than a convenience: see
+    /// [`VaultError::ManifestTooNew`] for why reading a MAC-covered field
+    /// ahead of its own verification is sound in this one direction.
+    fn parse(raw: &[u8]) -> Result<Self, VaultError> {
+        let manifest: Self =
+            serde_json::from_slice(raw).map_err(|e| VaultError::CorruptManifest(e.to_string()))?;
+        if manifest.version > MANIFEST_VERSION {
+            return Err(VaultError::ManifestTooNew {
+                found: manifest.version,
+                supported: MANIFEST_VERSION,
+            });
+        }
+        Ok(manifest)
+    }
+
     fn canonical(&self) -> Vec<u8> {
         format!(
             "{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}\x1f{}",
@@ -835,8 +901,7 @@ impl Vault {
         let Ok(raw) = fs::read(self.dir.join("vault.json")) else {
             return Ok(self.manifest.chain_head_hex.clone());
         };
-        let m: Manifest =
-            serde_json::from_slice(&raw).map_err(|e| VaultError::CorruptManifest(e.to_string()))?;
+        let m = Manifest::parse(&raw)?;
         if m.id != self.id {
             return Err(VaultError::CorruptManifest("manifest id mismatch".into()));
         }
@@ -865,9 +930,7 @@ impl Vault {
     /// signal that is already outside HMAC coverage by construction.
     fn anchored_writes(&self) -> Option<u64> {
         let raw = fs::read(self.dir.join("vault.json")).ok()?;
-        serde_json::from_slice::<Manifest>(&raw)
-            .ok()
-            .map(|m| m.writes)
+        Manifest::parse(&raw).ok().map(|m| m.writes)
     }
 
     fn save_manifest(&mut self) -> Result<(), VaultError> {
@@ -1011,7 +1074,9 @@ impl VaultManager {
     }
 
     fn manifest_verifies(&self, dir: PathBuf, raw: &[u8]) -> bool {
-        let Ok(manifest) = serde_json::from_slice::<Manifest>(raw) else {
+        // A manifest this build cannot read is one this key cannot be
+        // shown to open, which is what this predicate answers.
+        let Ok(manifest) = Manifest::parse(raw) else {
             return false;
         };
         let Ok(stored) = hex::decode(&manifest.manifest_mac_hex) else {
@@ -1070,7 +1135,7 @@ impl VaultManager {
         fs::create_dir_all(&dir)?;
         let salt = keys::new_vault_salt();
         let manifest = Manifest {
-            version: 1,
+            version: MANIFEST_VERSION,
             id: id.to_string(),
             level,
             salt_hex: hex::encode(salt),
@@ -1131,8 +1196,7 @@ impl VaultManager {
         if !manifest_path.exists() {
             return Err(VaultError::NotFound(id.to_string()));
         }
-        let manifest: Manifest = serde_json::from_slice(&fs::read(&manifest_path)?)
-            .map_err(|e| VaultError::CorruptManifest(e.to_string()))?;
+        let manifest = Manifest::parse(&fs::read(&manifest_path)?)?;
         if manifest.id != id {
             return Err(VaultError::CorruptManifest("manifest id mismatch".into()));
         }
@@ -1158,7 +1222,11 @@ impl VaultManager {
         if pending_path.exists() {
             vault.pending = fs::read(&pending_path)
                 .ok()
-                .and_then(|raw| serde_json::from_slice::<Manifest>(&raw).ok())
+                // A too-new staging manifest is NOT torn, so it must not
+                // be deleted: `parse` refusing it here makes this build leave
+                // a newer one's in-progress rotation alone (A32's shape, one
+                // file over). It is reported as unhealed rather than healed.
+                .and_then(|raw| Manifest::parse(&raw).ok())
                 .filter(|pm| pm.id == vault.id)
                 .and_then(|pm| self.assemble(vault.dir.clone(), pm).ok())
                 .filter(|pv| {
@@ -1599,6 +1667,128 @@ mod tests {
             a.sample_rank("pq", b"7"),
             u64::from_le_bytes(tag[..8].try_into().unwrap()),
             "the sample draw must not be the MAC key under another name"
+        );
+    }
+
+    /// **ROADMAP O238: a manifest a NEWER build wrote refuses, and says so
+    /// as age rather than as tampering.**
+    ///
+    /// `version` was written by every build and read by none, so a future
+    /// format change had nothing to fence an older binary with. O233 had to
+    /// fence 1.5.x out of a migrated chain by freezing a database row that
+    /// 1.5.x happens to compare; the next change may find no such row.
+    ///
+    /// **This is NOT the gate the entry proposed, and the difference is the
+    /// whole point** (O241 ruling 4: "its entry's gate is also wrong — it
+    /// drives the case that already refuses"). The entry said "a manifest
+    /// with `version` one above the build's refuses to open". Hand-editing
+    /// the number does that TODAY, because `version` is inside the canonical
+    /// so the edit breaks the MAC — a green gate over an absent check. The
+    /// arm below pins that, so nobody re-proposes it.
+    ///
+    /// What a FUTURE BINARY writes is a higher version with a VALID MAC over
+    /// it, and that is what this build must refuse.
+    #[test]
+    fn a_manifest_from_a_newer_build_refuses_as_age_not_as_tampering() {
+        let dir = tempdir().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let v = mgr.create("t", SecurityLevel::Sealed).unwrap();
+        let path = dir.path().join("vaults/t/vault.json");
+
+        // PREMISE: it opens now, and the version on disk is this build's.
+        assert!(mgr.unlock("t").is_ok(), "premise: an ordinary vault opens");
+        let mut m = Manifest::parse(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            m.version, MANIFEST_VERSION,
+            "premise: written at this version"
+        );
+
+        // **What a future binary writes**: a higher version, MAC'd over it.
+        // Re-keying the MAC is what separates this from the entry's gate —
+        // without it the file is simply corrupt.
+        m.version = MANIFEST_VERSION + 1;
+        m.manifest_mac_hex = hex::encode(record_hmac(&v.manifest_key, &m.canonical()));
+        fs::write(&path, serde_json::to_vec(&m).unwrap()).unwrap();
+
+        match mgr.unlock("t") {
+            Err(VaultError::ManifestTooNew { found, supported }) => {
+                assert_eq!((found, supported), (MANIFEST_VERSION + 1, MANIFEST_VERSION));
+            }
+            other => {
+                panic!("a manifest from a newer build must refuse as ManifestTooNew, got {other:?}")
+            }
+        }
+        // The message names BOTH versions, which is what makes it actionable
+        // rather than merely a refusal.
+        let msg = mgr.unlock("t").unwrap_err().to_string();
+        assert!(
+            msg.contains(&(MANIFEST_VERSION + 1).to_string())
+                && msg.contains(&MANIFEST_VERSION.to_string()),
+            "the refusal must name both versions: {msg}"
+        );
+
+        // **The ENTRY's gate, pinned as the wrong one.** Bump the number and
+        // leave the MAC alone: that already refused before this unit, and it
+        // refuses as TAMPERING, which is a different and misleading verdict.
+        let mut forged = m.clone();
+        forged.version = MANIFEST_VERSION + 1;
+        forged.manifest_mac_hex = hex::encode(record_hmac(&v.manifest_key, &forged.canonical()));
+        forged.version = MANIFEST_VERSION + 2; // MAC now describes a different version
+        fs::write(&path, serde_json::to_vec(&forged).unwrap()).unwrap();
+        assert!(
+            matches!(mgr.unlock("t"), Err(VaultError::ManifestTooNew { .. })),
+            "a forged bump refuses too — the version gate runs FIRST, and \
+             refusing early is the safe direction because the field is inside \
+             the canonical"
+        );
+    }
+
+    /// O238: the fence does not fire on the version this build writes, and
+    /// an OLDER version is not refused either — the gate is one-sided.
+    ///
+    /// Without this arm a `!=` comparison would pass every test above while
+    /// refusing every vault an older release wrote, which is the opposite of
+    /// what a compatibility fence is for.
+    #[test]
+    fn the_manifest_fence_refuses_only_what_is_newer() {
+        let dir = tempdir().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let v = mgr.create("t", SecurityLevel::Sealed).unwrap();
+        let path = dir.path().join("vaults/t/vault.json");
+        assert!(mgr.unlock("t").is_ok(), "this build's own version opens");
+
+        let mut m = Manifest::parse(&fs::read(&path).unwrap()).unwrap();
+        m.version = 0; // an older format than this build
+        m.manifest_mac_hex = hex::encode(record_hmac(&v.manifest_key, &m.canonical()));
+        fs::write(&path, serde_json::to_vec(&m).unwrap()).unwrap();
+        assert!(
+            mgr.unlock("t").is_ok(),
+            "an OLDER manifest version must still open — the fence keeps new \
+             formats out of old binaries, not old formats out of new ones"
+        );
+    }
+
+    /// O238: the fresh anchor read refuses a too-new manifest too.
+    ///
+    /// `anchored_head` re-reads `vault.json` from DISK on every call rather
+    /// than trusting this handle's cached copy, so a manifest swapped under
+    /// a running process reaches it without any open — which is exactly the
+    /// path that must not read a newer format as though it understood it.
+    #[test]
+    fn the_fresh_anchor_read_refuses_a_newer_manifest() {
+        let dir = tempdir().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let v = mgr.create("t", SecurityLevel::Sealed).unwrap();
+        let path = dir.path().join("vaults/t/vault.json");
+        assert!(v.anchored_head().is_ok(), "premise: it reads now");
+
+        let mut m = Manifest::parse(&fs::read(&path).unwrap()).unwrap();
+        m.version = MANIFEST_VERSION + 1;
+        m.manifest_mac_hex = hex::encode(record_hmac(&v.manifest_key, &m.canonical()));
+        fs::write(&path, serde_json::to_vec(&m).unwrap()).unwrap();
+        assert!(
+            matches!(v.anchored_head(), Err(VaultError::ManifestTooNew { .. })),
+            "the anchor read goes through the same door as the open"
         );
     }
 

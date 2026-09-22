@@ -4501,6 +4501,99 @@ every write, takes the short-circuit and never replays at open: all four arms
 above needed a lag to be manufactured, and the `current`-anchor rows are what
 that deployment looks like — identical, at 285 and 286 ms.
 
+### O238 — CLOSED 2026-09-22: the manifest `version` is written and never checked on load, so a later format cannot fence an older binary
+
+**Filed 2026-09-19 by O233/O234's ruling (the refuter); established by
+reading.** `vault.json` carries a `version` that every build writes and none
+reads (`crates/undercroft-vault/src/lib.rs` ~141-168). O233 had to fence 1.5.x
+out of a migrated chain by freezing a database row that 1.5.x happens to
+compare; the next on-disk change may find no such row. A binary that refuses a
+manifest version above the one it knows makes every future format change
+fenceable by a version bump.
+
+**Shape**: refuse, as its own typed error naming both versions, a manifest
+whose `version` exceeds this build's; `UPGRADING.md` states which release
+introduced the check.
+
+**Gate**: a manifest with `version` one above the build's refuses to open.
+**Counterfactual**: today, it opens.
+
+#### BUILT 2026-09-22
+
+**The ruling was O241's, not this entry's, and it is FOLLOWED rather than
+re-asked** — `#### RULED 2026-09-21`, item 4: build it; read `version` BEFORE
+the MAC comparison; ship it in a release earlier than any canonical change;
+and its own gate is wrong. All four are taken, and the fourth is the one that
+changed what got built.
+
+**`MANIFEST_VERSION` is the fence and `Manifest::parse` is the one door.**
+Five sites parsed a manifest — the open, the staging manifest, the fresh
+anchor read, O204's key survey and the telemetry delta — and a gate applied
+per call site is the arrangement that once let three write paths past the
+admission screen. One door, five callers, and the construction site now
+writes the same constant it checks.
+
+**Reading a MAC-covered field before its own MAC is verified is sound in
+exactly one direction, and only because of where the field sits.** `version`
+is the FIRST field of `Manifest::canonical`, so a forged bump buys a REFUSAL
+of a vault this build would otherwise have opened — the safe direction — and
+a forged downgrade buys nothing, because the MAC comparison that follows
+fails. That is O241 ruling 4's argument, verified here by reading
+`canonical()` rather than inherited.
+
+**THE ENTRY'S OWN GATE WAS WRONG AND IS PINNED AS WRONG.** It said *"a
+manifest with `version` one above the build's refuses to open"*. That passes
+TODAY: `version` is inside the canonical, so hand-editing the number breaks
+the MAC and the vault refuses as `ManifestTampered` — a green gate over an
+absent check, which is this tree's most expensive artifact. What a future
+binary actually writes is a higher version with a VALID MAC over it, and the
+counterfactual proves that case: with the check removed, `mgr.unlock("t")`
+returns `Ok(Vault { id: "t", level: Sealed, .. })`. **Today it opens**, word
+for word what the entry claimed and nobody had executed. An arm pins the
+forged-bump case too, so the wrong gate is not re-proposed.
+
+**It is age, not tampering, on every surface.** `ManifestTooNew { found,
+supported }` names both versions. It is deliberately ABSENT from the CLI's
+integrity-verdict set — exit **1**, not 2 — on the precedent stated three
+lines above it in that same `match`: `ReadOnlyUnmigrated` is excluded because
+*"the vault is intact, the posture is simply wrong for it"*, and a too-new
+manifest is that shape exactly. On `/v1` it is a class-less **409** beside
+the other posture refusals; without that arm it would have fallen to
+`vault_err`'s catch-all **500**, the one class that tells an operator to
+retry and page someone, for a vault whose only problem is the binary in front
+of it. That is this function's own founding defect, one variant later.
+
+**One thing beyond the entry's letter, stated rather than smuggled.** The
+staging manifest (`vault.json.next`) goes through the same door, and a
+too-new one is therefore no longer treated as TORN — which matters because
+the torn branch DELETES it on a writable open. Without this, an older binary
+opening a vault mid-rotation under a newer one would destroy that rotation's
+in-progress state. It is A32's lesson one file over, and it costs one call
+site.
+
+**The gate**: a manifest carrying `MANIFEST_VERSION + 1` with a valid MAC
+refuses as `ManifestTooNew`, naming both versions; the fresh anchor read
+refuses it too; and an OLDER version still opens, because a fence that
+refused both directions would lock out every vault an earlier release wrote.
+**Counterfactual, run**: with the check removed, two of the three arms fail
+and the open returns `Ok(Vault …)`. The third stays green and is not
+coverage — it asserts a vault OPENS, which is a different claim.
+
+**Versioning: PATCH.** Tightening validation of input that was never
+documented as valid is a fix, not a break — no released Undercroft has ever
+written a manifest above version 1, so nothing that worked before behaves
+differently. `UPGRADING.md` carries a `1.6.1` entry anyway, and deliberately:
+it records WHICH RELEASE the fence starts in, which is the fact a future
+upgrade needs and which nobody could derive later. It also states the thing
+an operator cannot see from here — that the same vault on 1.6.0 or older
+gets `ManifestTampered` on intact data, or simply opens.
+
+**What this does NOT do**, so the next reader does not over-read it: it
+fences nothing today, because there is no version 2. It is the mechanism a
+future format change will use, and its whole value is being in the field
+BEFORE that change — which is why O241 ruling 4 sequenced it ahead of any
+canonical change rather than bundling it with one.
+
 ## 1.6.0 — released 2026-09-21
 
 MINOR since O149: `PATCH /admin/tenants/{id}` and its CLI mirror are new
@@ -23406,24 +23499,6 @@ the tunnel was new. Existing surplus records stay (the trail is append-only).
 
 **Gate**: a repeated create appends nothing and the tunnel's newest record
 carries the row's tag. **Counterfactual**: today, two records.
-
-### O238 — the manifest `version` is written and never checked on load, so a later format cannot fence an older binary
-
-**Filed 2026-09-19 by O233/O234's ruling (the refuter); established by
-reading.** `vault.json` carries a `version` that every build writes and none
-reads (`crates/undercroft-vault/src/lib.rs` ~141-168). O233 had to fence 1.5.x
-out of a migrated chain by freezing a database row that 1.5.x happens to
-compare; the next on-disk change may find no such row. A binary that refuses a
-manifest version above the one it knows makes every future format change
-fenceable by a version bump.
-
-**Shape**: refuse, as its own typed error naming both versions, a manifest
-whose `version` exceeds this build's; `UPGRADING.md` states which release
-introduced the check.
-
-**Gate**: a manifest with `version` one above the build's refuses to open.
-**Counterfactual**: today, it opens.
-
 
 ### O243 — `chain::prefix_range` panics on the one namespace whose prefix is empty
 
