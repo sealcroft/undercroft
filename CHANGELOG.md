@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.6.1 — unreleased
+## 1.6.1 — 2026-09-22
 
 PATCH: fixes only. Each adds a surface that REPORTS an existing silence, and
 a surface added to report a defect adds no capability — the defect was the
