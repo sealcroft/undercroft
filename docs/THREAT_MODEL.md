@@ -198,9 +198,19 @@ evidence.
 **Residual (documented)**: an attacker with full disk control who
 restores a **consistent old database + manifest pair together** rewinds
 the vault to a state that was genuine at the time; the chain cannot
-distinguish that from the machine having been off. The planned
-mitigation is an external witness (publishing the chain head
-off-machine), filed as ROADMAP O245; until then this is stated, not hidden.
+distinguish that from the machine having been off. The mitigation is an
+external witness — a record of the chain kept where this attacker cannot
+write — filed as ROADMAP O245 and **ruled 2026-09-23**, with two facts
+that decide what such a witness must be. It cannot be the chain HEAD
+alone: a key rotation re-derives the keys both chain steps fold under, so
+every historical head moves, and this attacker holds the key and can
+rotate — a head-only witness reports "superseded" on exactly the rollback
+it exists to catch. A sound witness carries the row count and an unkeyed
+digest over the audit rows' preserved bytes, which no surface emits
+today. And it closes the REWIND direction only: a rollback or erasure at
+or below the witnessed height is reported, anything appended above it is
+writes since the witness. Whether the engine assists the procedure is
+escalated in that entry; until then this is stated, not hidden.
 
 **Sharpened 2026-09-21 by O241's ruling, because "together" was narrower
 than the truth.** The **manifest alone** suffices to lower the anchor: a

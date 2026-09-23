@@ -708,9 +708,16 @@ pub(crate) fn chain_keys(conn: &Connection, ns: Namespace) -> Result<Vec<String>
 // deliberately allowed to lag and read audits append with no anchor at
 // all, so the unanchored tail a forged row hides in is legitimate and
 // unbounded. The window is narrow — raw page writes under a live SQLite,
-// with no recorded instance in this tree — and the mechanism that would
-// close it is an out-of-band witness (ROADMAP O245), not another copy of
-// a chain fact.
+// with no recorded instance in this tree. **An out-of-band witness does
+// NOT close it either**, and this paragraph said it did until ROADMAP
+// O245's ruling (2026-09-23) read it against the check: a witness commits
+// to a PREFIX of the rows, so it catches a rewind or an erasure at or
+// below the witnessed height and sees any append above it — forged or
+// not — as writes since the witness; and an offline check is itself
+// "another connection replaying", which touches the serving handle's
+// blindness not at all. What would close the append direction is a
+// per-row out-of-band log under a credential that is not on the disk,
+// which is not a copy of a chain fact and not this tree's.
 //
 // **"Or another connection commits" got NARROWER on `serve-http`, and that
 // is stated rather than absorbed** (ROADMAP O242). That process used to
@@ -722,8 +729,12 @@ pub(crate) fn chain_keys(conn: &Connection, ns: Namespace) -> Result<Vec<String>
 // that goes was an accident of that aliasing and never a mechanism: it
 // never existed for an `/mcp`-only or `/v1`-only server, or for the CLI.
 // What it incidentally shortened is the window here and O246's manifest
-// rollback; both close on the same out-of-band witness, and neither was
-// ever designed to close on a sibling's write.
+// rollback, and neither was ever designed to close on a sibling's write.
+// This sentence said both "close on the same out-of-band witness" until
+// O245's ruling: neither does. The window above is the append direction
+// (previous paragraph), and O246's lowered anchor sits over an INTACT
+// database, which a witness compares and finds extended — O246 closes on
+// the writable open reporting the heal it performed, and on nothing else.
 
 /// What a reader will DO with what the chain says about a label.
 ///
@@ -1078,6 +1089,88 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap()
+    }
+
+    /// An unkeyed digest over the first `n` audit rows' preserved bytes —
+    /// `(record_id, tag, at)`, the `CommitmentDigest` recipe — for the
+    /// ROADMAP O245 probes below. Not a production function.
+    fn prefix_digest(conn: &Connection, n: usize) -> [u8; 32] {
+        let mut d = CommitmentDigest::new();
+        let mut stmt = conn
+            .prepare("SELECT record_id, tag, at FROM audit ORDER BY seq LIMIT ?1")
+            .unwrap();
+        let mut rows = stmt.query(params![n as i64]).unwrap();
+        while let Some(row) = rows.next().unwrap() {
+            let (rid, _, _) = bytes_of(row.get_ref(0).unwrap());
+            let (tag, _, _) = bytes_of(row.get_ref(1).unwrap());
+            let (at, _, _) = bytes_of(row.get_ref(2).unwrap());
+            d.push(&rid, &tag, &at);
+        }
+        d.finish()
+    }
+
+    /// **ROADMAP O245, probes P1 and P4 — named by the ruling panel's
+    /// refuter, run by the integrator.** P1: a key rotation moves every
+    /// intermediate chain head (both regimes step under a key the rotation
+    /// re-derives), so a witness carrying only a head is unreachable after
+    /// the first `vault rotate`; an unkeyed digest over the preserved
+    /// `(record_id, tag, at)` bytes of the same prefix does not move. P4: a
+    /// row that lands without moving `chain_meta.writes` is positioned by
+    /// the replay's ROW count and not by `writes`, so a witness must carry
+    /// rows, never `writes`, as its height.
+    #[test]
+    fn o245_probe_p1_p4_rotation_moves_heads_and_keeps_the_prefix_digest() {
+        let (dir, mut store) = fresh(SecurityLevel::Sealed);
+        for i in 0..3 {
+            store.upsert(&drawer(&format!("fact {i}"), i)).unwrap();
+        }
+        let before = replay(&store.conn, &store.vault, None).unwrap();
+        let head_n = before.head.clone();
+        let n = before.rows;
+        let digest_n = prefix_digest(&store.conn, n);
+        // PREMISE: the head is a prefix point of its own chain before the
+        // rotation, so a `!anchor_seen` afterwards is the rotation's doing.
+        let seen = replay(&store.conn, &store.vault, Some(&head_n)).unwrap();
+        assert!(seen.anchor_seen, "premise: the head is on its own chain");
+        assert_eq!(seen.behind_by, 0, "premise: it is the newest head");
+
+        rotate(&dir, &mut store).unwrap();
+
+        let after = replay(&store.conn, &store.vault, Some(&head_n)).unwrap();
+        assert_eq!(after.rows, n + 1, "the rotation appended its own record");
+        assert!(
+            !after.anchor_seen,
+            "P1: a pre-rotation head is unreachable after a rotation (O13's shape)"
+        );
+        assert_eq!(
+            prefix_digest(&store.conn, n),
+            digest_n,
+            "P1: the unkeyed prefix digest is rotation-stable"
+        );
+        assert_ne!(
+            prefix_digest(&store.conn, n + 1),
+            digest_n,
+            "P1: the digest is count-bound — one more row is a different digest"
+        );
+
+        // P4: plant a row without moving `writes` (the retention fixture's
+        // shape); the replay positions by rows and `writes` stays behind.
+        let writes_before = writes(&store.conn).unwrap();
+        store
+            .conn
+            .execute(
+                "INSERT INTO audit (record_id, tag, at) \
+                 VALUES ('probe/o245', X'00', '2026-01-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        let planted = replay(&store.conn, &store.vault, None).unwrap();
+        assert_eq!(planted.rows, n + 2, "P4: the replay counts the planted row");
+        assert_eq!(
+            writes(&store.conn).unwrap(),
+            writes_before,
+            "P4: `writes` did not move, so it is not the row height"
+        );
     }
 
     /// **The switch happens once, at the first writable open, on every
