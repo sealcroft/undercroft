@@ -24016,7 +24016,245 @@ honestly at the two callers.
 `Namespace::ALL` variant is driven through it.
 **Counterfactual**: today it panics on the first variant.
 
-### O244 — `audit` is unbounded, has no compaction anywhere, and now sits on the read path
+## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
+
+Code comments and documents across this tree cite ids of the form
+`ROADMAP <letter><number>`: **A** (audit findings), **C** (the completeness
+audit), **R** (read-only-posture residuals), **U** (at-rest units), **M**
+(the `1.2.0` units — three round-four rows too large for a PATCH, and what
+closing them found), **O** (work filed after 1.0.0). Most of the ids
+cited across the tree resolve to no heading here, which reads as rot and is
+not: **an `A`/`C`/`R`/`U` entry lives in this file only while the item is
+OPEN.** (Count them yourself if you need to — `grep -rhoE 'ROADMAP [ACRUMO][0-9]+' . | sort -u`.
+The first draft of this paragraph put the number in prose, which is the exact
+thing this file tells you not to trust, and it was wrong twice over.) When it
+closes, the entry leaves — for those four letters the file is a list of work,
+not an archive — and the narrative moves to the CHANGELOG section of the
+release that closed it. **`M` and `O` are the exception**: a closed entry
+that has a heading keeps it — since O101 (2026-09-06), under the release that
+shipped it, or under `Unversioned` for a decision no release carries. Not every
+one was given a heading — most `M` ids past M25 have none and are narrated in
+CHANGELOG — so the CHANGELOG search below stays the fallback for any letter.
+
+So a citation is a **breadcrumb into the history, not a pointer to a
+heading**, and the authoritative description of any closed item is the
+comment at the citation site itself, which is written to stand alone. If you
+are following one and want more, search CHANGELOG.md for the id.
+
+**For the ids below that search finds nothing, and the citation site is the
+whole record.** Checked 2026-09-14 with `git grep -w` over the tracked tree:
+each appeared in code comments or test headings and, before this table, in no
+document — not this file, not CHANGELOG. They closed inside units whose commit messages name the
+unit rather than the id, so the site's own words are the description and the
+commit, found by `git log -S` on those words, is where the diff lives:
+
+| id | cited at | what the site says | first cited in |
+|---|---|---|---|
+| `A11` | `undercroft-store` `kg.rs` (tests) | the graph is a content path, and it is screened | `4a4ef2c`, 2026-08-05 |
+| `A14` | `undercroft-store` `lib.rs` (tests) | `meta.filed_at`, the retention and recency clock, was chosen by the import payload | `4a4ef2c`, 2026-08-05 |
+| `A15` | `undercroft-store` `lib.rs` (tests) | named only for its "native half", which the site describes together with `A25`; no tracked text describes the rest | `4a4ef2c`, 2026-08-05 |
+| `A18` | `undercroft-store` `kg.rs` (tests) | entity rows are writes: they append a chain record, and `verify` walks them | `4a4ef2c`, 2026-08-05 |
+| `A20` | `pqidx.rs`, `fdeidx.rs`, `latestage.rs` | a codebook and the rows it recodes commit in one transaction, not one fsync per row | `4a4ef2c`, 2026-08-05 |
+| `A22` | CLI `main.rs` and `tenant.rs` (tests), orchestrator `main.rs` | an integrity verdict found at open exits as one on every command, not only the checking ones; `rotate`'s `/v1` error classes | `4a4ef2c`, 2026-08-05 |
+| `A24` | CLI `tenant.rs` (tests) | the import attestation | `4a4ef2c`, 2026-08-05 |
+| `A25` | `undercroft-store` `lib.rs` (tests) | an import took the payload's drawer `id` verbatim, and that id is an AEAD associated-data component | `4a4ef2c`, 2026-08-05 |
+| `A27` | `latestage.rs` | the token codebook's training draw is capped per source | `4a4ef2c`, 2026-08-05 |
+| `U2` | `undercroft-store` `rotate.rs` (tests) | the no-moved-reference gate covers `canonical_key` and the two policy tables | `55af8d1`, 2026-08-06 |
+| `U3` | `undercroft-store` `kg.rs` (tests) | an offline relabel of an audit row fails `verify` | `55af8d1`, 2026-08-06 |
+| `U6` | `undercroft-store` `kg.rs` | the migration's completion marker is written after the `VACUUM` | `55af8d1`, 2026-08-06 |
+| `U7` | `undercroft-store` `kg.rs` | the marker is withheld while any row is pending, and the pending rows are reported | `55af8d1`, 2026-08-06 |
+
+"First cited in" is what `git log -S` answers, and it is not proof of closure:
+`4a4ef2c` is titled as closing every open audit item and `55af8d1` as the U12
+unit, which is the evidence the column rests on. An id cited later that no
+document describes gets a row here in the same unit.
+
+Two consequences, both binding:
+
+- **Cite an id only beside a description that stands without it.** A comment
+  whose whole content is "see ROADMAP C14" tells a future reader nothing
+  once C14 closes.
+- **A newly OPENED item gets a heading here**, so an open item is always
+  resolvable. That is what the entries under `## Open` above are.
+
+---
+
+---
+
+## The round-three audit — T1–T15, ALL CLOSED 2026-08-09
+
+The seven-dimension audit run against the round-three fixes found eleven
+regressions inside them (all closed in the same unit, described in CHANGELOG)
+and fifteen further items. **This section listed those fifteen as open work;
+every one is now closed**, because the maintainer's rule is that nothing
+merges until it is fixed — not "recorded with a shape".
+
+| | What | How it closed |
+|---|---|---|
+| T1 | `UNDERCROFT_ADMISSION` and `_SEMANTIC_GATE` warned and ignored | Both refuse and `.trim()`; the file holds ONE doctrine now, and the semantic gate's comment stating the opposite is gone |
+| T2 | Four CA pins, three empty-value behaviours | `undercroft_net::declared_pin` — one rule, and an empty declaration refuses everywhere |
+| T3 | `undercroft-llm` built its own client | It calls `agent_from_env`; the gate is workspace-wide, with two named-and-checked exemptions |
+| T4 | `UNDERCROFT_INDEX_CA` resolved per call | `pin_from_env` caches per process, `Result` and all |
+| T5 | `migrate_embedding_space` and `repair` recorded nothing | `audit_migration_standalone`; both bind what they moved and skipped |
+| T6 | Tamper decision read a cached manifest | `Vault::anchored_head` — from disk, MAC-verified; `reconcile_chain` and `verify` both use it |
+| T7 | Vault trust floor narrowed `search` silently | `Exclusions::measure` reads the EFFECTIVE floor; the e2e that pinned the silence now pins the disclosure |
+| T8 | Projections uninventoried; orchestrator root unreachable | Projecting paths are crates-relative; five entries added — and the gate immediately found `DrawerSummary.source_file` and `Tenant.level` genuinely missing |
+| T9 | `forget --backend` was CLI-only | `POST /v1/…/forget` takes `backend`, so the ops plane reaches it too |
+| T10 | Engine refusals flattened to 502 | `engine_response` keeps the engine's status AND its `class`; a local transport refusal says so |
+| T11 | clap usage errors exited 2 | Both binaries exit 1; the e2e check that PINNED the collision now pins the doctrine |
+| T12 | Two integrity verdicts outside the doctrine | `supersessions` answers `ok`; `Unsealable` exits 2 on every subcommand |
+| T13 | Coverage the fixes did not get | Nine new e2e arms across both suites, incl. the CA refusal, the usage-exit doctrine, and the migration record seen by the operator and refused to the agent |
+| T14 | No inventory for the ops parity axis | `OPS_DELIBERATELY_ABSENT`, counted against the engine's capabilities in both directions, every absence carrying a reason |
+| T15 | Residues stated | The query-vector egress boundary and the CA-rotation restart, both written where the code is |
+
+**Two of these found live drifts while being closed** — `DrawerSummary.source_file`
+never reached the CLI, and `Tenant.level` was dropped from `tenant-list`, which
+is the field that exists because a migration has to ask for it. Both are fixed.
+### O247 — the `rotate/` boundary rejects a FOREIGN keycheck and not a COPIED one, and no gate exercises the copied variant
+
+**Filed 2026-09-21 by O242's ruling panel (the security lens); verified by the
+integrator and by the refuter.** O239 bounded the version-replay boundary to
+`rotate/{keycheck_hex()[..16]}` for the key the handle holds, which is what
+killed the forged-`rotate/` lever O237 measured. But that label sits **in
+clear in `audit.record_id`**, so an offline writer on a ROTATED vault can read
+the real keycheck out of the table and append a row under the REAL label at a
+higher seq; `rotation_boundary` takes it, because `newest_record` is a
+`MAX(seq)` over the label. The equality rejects a label that is not this
+key's; it cannot reject a copy of one that is.
+
+**It is not live today, and the reason is the thing that could change.** Such
+an append is an ordinary SQLite commit, so it moves `PRAGMA data_version` and
+trips the re-replay, which catches it — the append-only invariant does not,
+because an append is legitimate by construction (`chain.rs`'s own comment).
+So the variant is reachable only through the residual O237 already states: a
+writer editing pages beneath SQLite. O242 does not arm it, and both options
+O242 rejected — advancing a sibling's verdict, and dropping the re-replay —
+would have.
+
+**What is actually missing is the GATE.**
+`a_forged_rotation_record_is_refused_by_the_guard_as_well` inserts
+`rotate/deadbeefdeadbeef`, a foreign keycheck, so the copied-keycheck variant
+is exercised NOWHERE in the tree, and a future change to the boundary could
+retire the protection with every test green.
+
+**Shape, for a ruling panel**: an arm on the existing gate that copies the
+handle's own keycheck (which a test can derive), so the boundary is proved to
+rest on the re-replay rather than on the label's spelling; and, separately,
+whether the boundary should be bound to something an offline reader cannot
+copy — which is the same freshness problem O241 refused an in-band answer to
+and O245 names the out-of-band one for.
+
+**Gate**: a forged `rotate/` row carrying THIS handle's own keycheck is
+refused, and the test states which mechanism refuses it.
+**Counterfactual**: today only the foreign-keycheck spelling is driven.
+
+### O248 — an append-only refusal on a legacy chain names a remedy that reports nothing, and its evidence dies with the handle
+
+**Filed 2026-09-21 by O242's ruling panel (the agentic-memory lens).** O237's
+guard refuses a DECIDING read with a message naming `undercroft verify`. On a
+`Regime::V1` chain that is a dead end, and the tree already pins why:
+`a_legacy_chain_serves_its_readers_and_still_holds_the_append_only_rule`
+asserts that after the O237 exploit `verify().chain_ok` is **true** — the
+version-1 replay cannot see a relabel at all, which is the whole reason O233
+switched the chain. So a legacy operator is refused, told to run the named
+remedy, and the remedy answers clean.
+
+**And the evidence is process-local.** The refusal comes from `LabelGuard`'s
+own memory — "this handle read its record at seq N" — which is not persisted,
+is unverifiable by anyone else, and is gone at restart. A refusal appends
+nothing to the chain. So the operator has a door that will not open, a
+verdict that says nothing is wrong, and nothing to hand a second party.
+
+**Why it is not simply a bug in the carve-out.** `Regime::V1` /
+`LabelCommitment::Pending` MUST NOT refuse is O237 ruling 3, and it is load
+bearing: refusing there would brick every pre-1.6.0 vault served
+`--read-only`, a documented contract change and therefore MAJOR. The
+append-only invariant deliberately still applies on such a vault, and on one
+it is the only mechanism there is. The gap is the REPORTING, not the refusal.
+
+**Shape, for a ruling panel**: whether `verify` should report what the
+append-only invariant found (which means the finding has to outlive the
+handle, and a per-handle observation is exactly what O237 ruling 4 refuses to
+let become a baseline); or whether the refusal should name the switch — "this
+vault's chain predates the label commitment, so `verify` cannot corroborate
+this; switch it by opening it writable" — which costs nothing and is honest;
+or whether a legacy vault should be urged to switch at all, which is the
+upgrade path `UPGRADING.md` owns.
+
+**Gate**: an operator refused on a V1 chain is given something a second party
+can check, or is told plainly why there is nothing.
+**Counterfactual**: today the refusal names `verify`, and `verify` is green.
+
+
+### O249 — `backends-e2e` names its per-run vaults with `$$`, which is always `1` in the container, so two runs collide
+
+**Filed 2026-09-21 by the integrator, from a battery failure it caused.**
+`tests/e2e-backends.sh` builds two vault names per backend from the shell's
+PID — `local probe="o83${be}$$"` and `local ro="o175${be}$$"` — which is the
+ordinary idiom for "unique per run". The suite runs as the container's main
+process, so `$$` is **1**, every time: the names are `o83pgvector1` and
+`o175pgvector1` on every run of every backend, and the mirror collections
+derived from them are `undercroft_o175pgvector1` and so on. The uniqueness is
+decorative.
+
+**Measured, not theorised.** A battery on 2026-09-21 failed two pgvector
+checks — `[pgvector] ...and left no mirror` and `...nor did asking make one`
+— with `collection: undercroft_o175pgvector1, records: 1, local: 1`. That
+trailing `1` IS the PID. Re-run in isolation after
+`docker compose rm -sfv … pgvector …`, the same suite answered **157 passed,
+0 failed**. pgvector's `status` uses `to_regclass` and creates nothing
+(verified in `undercroft-index`), so the table it found was genuinely a
+previous run's.
+
+**Why it usually hides, and what that costs.** `tests/battery.sh` resets the
+five backends with `docker compose rm -sfv` before this suite, which takes
+their anonymous volumes with them — so inside a battery the collision is
+normally invisible. It surfaces when that reset does not happen or does not
+finish: the call is `|| true` by design (M12's narrowing), the suite can be
+driven directly with `docker compose run --rm backends-e2e`, and a machine
+under memory pressure can leave a container behind. The failure then looks
+like a **retrieval or refusal defect in the engine** — an O175 read-only
+refusal that appears to have leaked a mirror — rather than like stale state,
+which is the expensive part: it accuses the code.
+
+**Shape, for a ruling panel**: a name that is actually unique per run
+(`date +%s%N`, `mktemp -u` style, or a counter seeded from the suite's own
+start) versus making the suite DROP what it created at the end versus
+asserting the premise — that the collection does not exist before the O175
+block, so a stale one is reported as a stale one rather than as a leak. The
+third is the cheapest and matches this tree's premise-probe doctrine; the
+first is what the code already meant to do.
+
+**Gate**: two consecutive runs of `backends-e2e` against a warm backend pass,
+or the second one names the collision instead of failing the O175 assertion.
+**Counterfactual**: today the second run fails as though the engine leaked a
+mirror.
+
+
+---
+
+## Unversioned — decisions and external actions, not code
+
+These are not releasable work. Kept out of the version sections deliberately,
+so a release plan is not padded with things a release cannot contain: a
+decision recorded so it is not re-litigated, an action taken outside this
+repository (a GitHub setting, a house-site change, a published image), a
+finding refuted and kept for the record, and two dated records of how the
+August 2026 queue was picked, kept for their method. No enumeration here, because an enumeration in a section header goes
+stale every time the section changes — the same defect as a count in prose one
+level up, and this header carried one from 2026-08-20 to 2026-09-06.
+
+**What this section held until 2026-09-06 was mostly finished, releasable
+engine work — some seventy closed `O` entries — and the header above described
+none of it (O101).** Each release had moved its own entries out (`1.1.1`,
+`1.2.1`, `1.3.0`) and nobody had moved the backlog. They are now under the
+release that shipped them, decided by the release window their closure date
+falls in and confirmed against the CHANGELOG; the still-open, releasable O23
+went to the `Open` section above. The rule this leaves, stated once: **a
+closed entry lives under the release that carried it; an open releasable
+entry lives in `Open`; only what a release cannot contain lives here.**
+
+### O244 — CLOSED 2026-09-23 by ruling: `audit` is unbounded by design — compaction refused, its replacement gate met by O250, its witness built by O245
 
 **Filed 2026-09-21 by O241's ruling panel (the adversarial refuter).** No
 production statement deletes from `audit` — every `DELETE FROM audit` in the
@@ -24300,243 +24538,44 @@ O66-class question is narrower:
 It already works, it keeps the evidence rather than destroying it, and it is
 *what a surface offers*, which is the maintainer's.
 
-## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 
-Code comments and documents across this tree cite ids of the form
-`ROADMAP <letter><number>`: **A** (audit findings), **C** (the completeness
-audit), **R** (read-only-posture residuals), **U** (at-rest units), **M**
-(the `1.2.0` units — three round-four rows too large for a PATCH, and what
-closing them found), **O** (work filed after 1.0.0). Most of the ids
-cited across the tree resolve to no heading here, which reads as rot and is
-not: **an `A`/`C`/`R`/`U` entry lives in this file only while the item is
-OPEN.** (Count them yourself if you need to — `grep -rhoE 'ROADMAP [ACRUMO][0-9]+' . | sort -u`.
-The first draft of this paragraph put the number in prose, which is the exact
-thing this file tells you not to trust, and it was wrong twice over.) When it
-closes, the entry leaves — for those four letters the file is a list of work,
-not an archive — and the narrative moves to the CHANGELOG section of the
-release that closed it. **`M` and `O` are the exception**: a closed entry
-that has a heading keeps it — since O101 (2026-09-06), under the release that
-shipped it, or under `Unversioned` for a decision no release carries. Not every
-one was given a heading — most `M` ids past M25 have none and are narrated in
-CHANGELOG — so the CHANGELOG search below stays the fallback for any letter.
+#### CLOSED 2026-09-23 by ruling, its replacement gate met and its sequencing condition built
 
-So a citation is a **breadcrumb into the history, not a pointer to a
-heading**, and the authoritative description of any closed item is the
-comment at the citation site itself, which is written to stand alone. If you
-are following one and want more, search CHANGELOG.md for the id.
+**Why it may close now, and why it could not before.** The ruling above
+refused compaction, a checkpoint and any production `DELETE FROM audit`, and
+kept this entry open for one reason: to carry the REPLACEMENT gate it wrote in
+place of the filed one — *the trail's size is OBSERVED against a declared
+expectation on every surface, and the replay is COUNTED in production*. That
+gate was met by **O250** in `1.6.1`: `UNDERCROFT_AUDIT_CEILING` reports and
+never deletes, `chain_ceiling`/`chain_over_ceiling`/`chain_replays` sit on all
+four renderers, `undercroft_chain_replays_total` is the durable series with
+its alert rules, and a vault seeded past the ceiling trips `promtool test
+rules`. The ruling's other successor, **O251**, closed the double replay in
+the same release. And the sequencing condition the ruling named — an
+out-of-band witness, "the one artifact an attacker with full disk control
+cannot restore" — was ruled and built as **O245** in `1.7.0 — unreleased`.
+Nothing this entry asked for remains unbuilt or unruled, so leaving it open
+would be a heading contradicting its body, which is the defect this file's
+heading gate exists to refuse.
 
-**For the ids below that search finds nothing, and the citation site is the
-whole record.** Checked 2026-09-14 with `git grep -w` over the tracked tree:
-each appeared in code comments or test headings and, before this table, in no
-document — not this file, not CHANGELOG. They closed inside units whose commit messages name the
-unit rather than the id, so the site's own words are the description and the
-commit, found by `git log -S` on those words, is where the diff lives:
+**What the closure does NOT change.** The refusal stands: the replay starts at
+a constant, a stored start head plus one `DELETE` is a keyless total erasure
+under nine green legs, and no bound makes a per-read replay affordable. The
+"manifest start point" door stays BLOCKED behind O238 (shipped) and a fresh
+panel — and O245's ruling narrowed what such a panel would have to weigh: an
+OPTIONAL witness cannot license a stored start point, because an unwitnessed
+vault is exactly this entry's erasure. The residuals recorded in the ruling
+stay recorded: a rotation's exclusive lock grows with `audit` and nobody has
+priced it at 10⁷; `verify` walks `audit` three times; the per-row rate is
+DERIVED, not measured. One residual sentence is CORRECTED beside, above: the
+forged-append residual does not "close only on O245" — O245's ruling found a
+witness closes the REWIND direction only, and the records that said otherwise
+were corrected in that unit.
 
-| id | cited at | what the site says | first cited in |
-|---|---|---|---|
-| `A11` | `undercroft-store` `kg.rs` (tests) | the graph is a content path, and it is screened | `4a4ef2c`, 2026-08-05 |
-| `A14` | `undercroft-store` `lib.rs` (tests) | `meta.filed_at`, the retention and recency clock, was chosen by the import payload | `4a4ef2c`, 2026-08-05 |
-| `A15` | `undercroft-store` `lib.rs` (tests) | named only for its "native half", which the site describes together with `A25`; no tracked text describes the rest | `4a4ef2c`, 2026-08-05 |
-| `A18` | `undercroft-store` `kg.rs` (tests) | entity rows are writes: they append a chain record, and `verify` walks them | `4a4ef2c`, 2026-08-05 |
-| `A20` | `pqidx.rs`, `fdeidx.rs`, `latestage.rs` | a codebook and the rows it recodes commit in one transaction, not one fsync per row | `4a4ef2c`, 2026-08-05 |
-| `A22` | CLI `main.rs` and `tenant.rs` (tests), orchestrator `main.rs` | an integrity verdict found at open exits as one on every command, not only the checking ones; `rotate`'s `/v1` error classes | `4a4ef2c`, 2026-08-05 |
-| `A24` | CLI `tenant.rs` (tests) | the import attestation | `4a4ef2c`, 2026-08-05 |
-| `A25` | `undercroft-store` `lib.rs` (tests) | an import took the payload's drawer `id` verbatim, and that id is an AEAD associated-data component | `4a4ef2c`, 2026-08-05 |
-| `A27` | `latestage.rs` | the token codebook's training draw is capped per source | `4a4ef2c`, 2026-08-05 |
-| `U2` | `undercroft-store` `rotate.rs` (tests) | the no-moved-reference gate covers `canonical_key` and the two policy tables | `55af8d1`, 2026-08-06 |
-| `U3` | `undercroft-store` `kg.rs` (tests) | an offline relabel of an audit row fails `verify` | `55af8d1`, 2026-08-06 |
-| `U6` | `undercroft-store` `kg.rs` | the migration's completion marker is written after the `VACUUM` | `55af8d1`, 2026-08-06 |
-| `U7` | `undercroft-store` `kg.rs` | the marker is withheld while any row is pending, and the pending rows are reported | `55af8d1`, 2026-08-06 |
-
-"First cited in" is what `git log -S` answers, and it is not proof of closure:
-`4a4ef2c` is titled as closing every open audit item and `55af8d1` as the U12
-unit, which is the evidence the column rests on. An id cited later that no
-document describes gets a row here in the same unit.
-
-Two consequences, both binding:
-
-- **Cite an id only beside a description that stands without it.** A comment
-  whose whole content is "see ROADMAP C14" tells a future reader nothing
-  once C14 closes.
-- **A newly OPENED item gets a heading here**, so an open item is always
-  resolvable. That is what the entries under `## Open` above are.
-
----
-
----
-
-## The round-three audit — T1–T15, ALL CLOSED 2026-08-09
-
-The seven-dimension audit run against the round-three fixes found eleven
-regressions inside them (all closed in the same unit, described in CHANGELOG)
-and fifteen further items. **This section listed those fifteen as open work;
-every one is now closed**, because the maintainer's rule is that nothing
-merges until it is fixed — not "recorded with a shape".
-
-| | What | How it closed |
-|---|---|---|
-| T1 | `UNDERCROFT_ADMISSION` and `_SEMANTIC_GATE` warned and ignored | Both refuse and `.trim()`; the file holds ONE doctrine now, and the semantic gate's comment stating the opposite is gone |
-| T2 | Four CA pins, three empty-value behaviours | `undercroft_net::declared_pin` — one rule, and an empty declaration refuses everywhere |
-| T3 | `undercroft-llm` built its own client | It calls `agent_from_env`; the gate is workspace-wide, with two named-and-checked exemptions |
-| T4 | `UNDERCROFT_INDEX_CA` resolved per call | `pin_from_env` caches per process, `Result` and all |
-| T5 | `migrate_embedding_space` and `repair` recorded nothing | `audit_migration_standalone`; both bind what they moved and skipped |
-| T6 | Tamper decision read a cached manifest | `Vault::anchored_head` — from disk, MAC-verified; `reconcile_chain` and `verify` both use it |
-| T7 | Vault trust floor narrowed `search` silently | `Exclusions::measure` reads the EFFECTIVE floor; the e2e that pinned the silence now pins the disclosure |
-| T8 | Projections uninventoried; orchestrator root unreachable | Projecting paths are crates-relative; five entries added — and the gate immediately found `DrawerSummary.source_file` and `Tenant.level` genuinely missing |
-| T9 | `forget --backend` was CLI-only | `POST /v1/…/forget` takes `backend`, so the ops plane reaches it too |
-| T10 | Engine refusals flattened to 502 | `engine_response` keeps the engine's status AND its `class`; a local transport refusal says so |
-| T11 | clap usage errors exited 2 | Both binaries exit 1; the e2e check that PINNED the collision now pins the doctrine |
-| T12 | Two integrity verdicts outside the doctrine | `supersessions` answers `ok`; `Unsealable` exits 2 on every subcommand |
-| T13 | Coverage the fixes did not get | Nine new e2e arms across both suites, incl. the CA refusal, the usage-exit doctrine, and the migration record seen by the operator and refused to the agent |
-| T14 | No inventory for the ops parity axis | `OPS_DELIBERATELY_ABSENT`, counted against the engine's capabilities in both directions, every absence carrying a reason |
-| T15 | Residues stated | The query-vector egress boundary and the CA-rotation restart, both written where the code is |
-
-**Two of these found live drifts while being closed** — `DrawerSummary.source_file`
-never reached the CLI, and `Tenant.level` was dropped from `tenant-list`, which
-is the field that exists because a migration has to ask for it. Both are fixed.
-### O247 — the `rotate/` boundary rejects a FOREIGN keycheck and not a COPIED one, and no gate exercises the copied variant
-
-**Filed 2026-09-21 by O242's ruling panel (the security lens); verified by the
-integrator and by the refuter.** O239 bounded the version-replay boundary to
-`rotate/{keycheck_hex()[..16]}` for the key the handle holds, which is what
-killed the forged-`rotate/` lever O237 measured. But that label sits **in
-clear in `audit.record_id`**, so an offline writer on a ROTATED vault can read
-the real keycheck out of the table and append a row under the REAL label at a
-higher seq; `rotation_boundary` takes it, because `newest_record` is a
-`MAX(seq)` over the label. The equality rejects a label that is not this
-key's; it cannot reject a copy of one that is.
-
-**It is not live today, and the reason is the thing that could change.** Such
-an append is an ordinary SQLite commit, so it moves `PRAGMA data_version` and
-trips the re-replay, which catches it — the append-only invariant does not,
-because an append is legitimate by construction (`chain.rs`'s own comment).
-So the variant is reachable only through the residual O237 already states: a
-writer editing pages beneath SQLite. O242 does not arm it, and both options
-O242 rejected — advancing a sibling's verdict, and dropping the re-replay —
-would have.
-
-**What is actually missing is the GATE.**
-`a_forged_rotation_record_is_refused_by_the_guard_as_well` inserts
-`rotate/deadbeefdeadbeef`, a foreign keycheck, so the copied-keycheck variant
-is exercised NOWHERE in the tree, and a future change to the boundary could
-retire the protection with every test green.
-
-**Shape, for a ruling panel**: an arm on the existing gate that copies the
-handle's own keycheck (which a test can derive), so the boundary is proved to
-rest on the re-replay rather than on the label's spelling; and, separately,
-whether the boundary should be bound to something an offline reader cannot
-copy — which is the same freshness problem O241 refused an in-band answer to
-and O245 names the out-of-band one for.
-
-**Gate**: a forged `rotate/` row carrying THIS handle's own keycheck is
-refused, and the test states which mechanism refuses it.
-**Counterfactual**: today only the foreign-keycheck spelling is driven.
-
-### O248 — an append-only refusal on a legacy chain names a remedy that reports nothing, and its evidence dies with the handle
-
-**Filed 2026-09-21 by O242's ruling panel (the agentic-memory lens).** O237's
-guard refuses a DECIDING read with a message naming `undercroft verify`. On a
-`Regime::V1` chain that is a dead end, and the tree already pins why:
-`a_legacy_chain_serves_its_readers_and_still_holds_the_append_only_rule`
-asserts that after the O237 exploit `verify().chain_ok` is **true** — the
-version-1 replay cannot see a relabel at all, which is the whole reason O233
-switched the chain. So a legacy operator is refused, told to run the named
-remedy, and the remedy answers clean.
-
-**And the evidence is process-local.** The refusal comes from `LabelGuard`'s
-own memory — "this handle read its record at seq N" — which is not persisted,
-is unverifiable by anyone else, and is gone at restart. A refusal appends
-nothing to the chain. So the operator has a door that will not open, a
-verdict that says nothing is wrong, and nothing to hand a second party.
-
-**Why it is not simply a bug in the carve-out.** `Regime::V1` /
-`LabelCommitment::Pending` MUST NOT refuse is O237 ruling 3, and it is load
-bearing: refusing there would brick every pre-1.6.0 vault served
-`--read-only`, a documented contract change and therefore MAJOR. The
-append-only invariant deliberately still applies on such a vault, and on one
-it is the only mechanism there is. The gap is the REPORTING, not the refusal.
-
-**Shape, for a ruling panel**: whether `verify` should report what the
-append-only invariant found (which means the finding has to outlive the
-handle, and a per-handle observation is exactly what O237 ruling 4 refuses to
-let become a baseline); or whether the refusal should name the switch — "this
-vault's chain predates the label commitment, so `verify` cannot corroborate
-this; switch it by opening it writable" — which costs nothing and is honest;
-or whether a legacy vault should be urged to switch at all, which is the
-upgrade path `UPGRADING.md` owns.
-
-**Gate**: an operator refused on a V1 chain is given something a second party
-can check, or is told plainly why there is nothing.
-**Counterfactual**: today the refusal names `verify`, and `verify` is green.
-
-
-### O249 — `backends-e2e` names its per-run vaults with `$$`, which is always `1` in the container, so two runs collide
-
-**Filed 2026-09-21 by the integrator, from a battery failure it caused.**
-`tests/e2e-backends.sh` builds two vault names per backend from the shell's
-PID — `local probe="o83${be}$$"` and `local ro="o175${be}$$"` — which is the
-ordinary idiom for "unique per run". The suite runs as the container's main
-process, so `$$` is **1**, every time: the names are `o83pgvector1` and
-`o175pgvector1` on every run of every backend, and the mirror collections
-derived from them are `undercroft_o175pgvector1` and so on. The uniqueness is
-decorative.
-
-**Measured, not theorised.** A battery on 2026-09-21 failed two pgvector
-checks — `[pgvector] ...and left no mirror` and `...nor did asking make one`
-— with `collection: undercroft_o175pgvector1, records: 1, local: 1`. That
-trailing `1` IS the PID. Re-run in isolation after
-`docker compose rm -sfv … pgvector …`, the same suite answered **157 passed,
-0 failed**. pgvector's `status` uses `to_regclass` and creates nothing
-(verified in `undercroft-index`), so the table it found was genuinely a
-previous run's.
-
-**Why it usually hides, and what that costs.** `tests/battery.sh` resets the
-five backends with `docker compose rm -sfv` before this suite, which takes
-their anonymous volumes with them — so inside a battery the collision is
-normally invisible. It surfaces when that reset does not happen or does not
-finish: the call is `|| true` by design (M12's narrowing), the suite can be
-driven directly with `docker compose run --rm backends-e2e`, and a machine
-under memory pressure can leave a container behind. The failure then looks
-like a **retrieval or refusal defect in the engine** — an O175 read-only
-refusal that appears to have leaked a mirror — rather than like stale state,
-which is the expensive part: it accuses the code.
-
-**Shape, for a ruling panel**: a name that is actually unique per run
-(`date +%s%N`, `mktemp -u` style, or a counter seeded from the suite's own
-start) versus making the suite DROP what it created at the end versus
-asserting the premise — that the collection does not exist before the O175
-block, so a stale one is reported as a stale one rather than as a leak. The
-third is the cheapest and matches this tree's premise-probe doctrine; the
-first is what the code already meant to do.
-
-**Gate**: two consecutive runs of `backends-e2e` against a warm backend pass,
-or the second one names the collision instead of failing the O175 assertion.
-**Counterfactual**: today the second run fails as though the engine leaked a
-mirror.
-
-
----
-
-## Unversioned — decisions and external actions, not code
-
-These are not releasable work. Kept out of the version sections deliberately,
-so a release plan is not padded with things a release cannot contain: a
-decision recorded so it is not re-litigated, an action taken outside this
-repository (a GitHub setting, a house-site change, a published image), a
-finding refuted and kept for the record, and two dated records of how the
-August 2026 queue was picked, kept for their method. No enumeration here, because an enumeration in a section header goes
-stale every time the section changes — the same defect as a count in prose one
-level up, and this header carried one from 2026-08-20 to 2026-09-06.
-
-**What this section held until 2026-09-06 was mostly finished, releasable
-engine work — some seventy closed `O` entries — and the header above described
-none of it (O101).** Each release had moved its own entries out (`1.1.1`,
-`1.2.1`, `1.3.0`) and nobody had moved the backlog. They are now under the
-release that shipped them, decided by the release window their closure date
-falls in and confirmed against the CHANGELOG; the still-open, releasable O23
-went to the `Open` section above. The rule this leaves, stated once: **a
-closed entry lives under the release that carried it; an open releasable
-entry lives in `Open`; only what a release cannot contain lives here.**
+**Class.** A ruling closure, not code — recorded under `## Unversioned` with
+its `UNVERSIONED_CLOSED` row, on the O240/O241 precedent. No release entry, no
+CHANGELOG line: the code this entry produced shipped under O250, O251 and
+O245, each with its own.
 
 ### O241 — CLOSED 2026-09-21: a manifest key census cannot authenticate a point question over an unbounded key space
 
