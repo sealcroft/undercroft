@@ -23793,7 +23793,12 @@ close-by-ruling filed five successors for exactly this reason.
   decoupled from corpus size, and nobody priced it (~17 s at 10⁷ inside
   `RotationTx`); `verify` reaches `audit` through THREE Θ(audit) walks, not
   one (`lib.rs:8611`, `:8700`), so the replay is not the only audit-linear
-  cost; the forged-append residual is unchanged and closes only on O245; and
+  cost; the forged-append residual is unchanged and closes only on O245 —
+  **REFUTED beside, not in place, by O245's ruling of 2026-09-23**: a
+  witness commits to a prefix of the rows, so it closes the REWIND
+  direction below the witnessed height and sees any append above it as
+  writes since the witness; the append direction closes on no witness, and
+  O245's record says what would; and
   `manage.rs:2649-2652` states that `record_id` is *"Unauthenticated: the
   chain hashes `tag` and nothing else"*, which is **false on a v2 chain**
   (`seal.rs:155-170` folds `record_id` and `at`) and is corrected in this
@@ -23830,12 +23835,16 @@ external witness is the only mechanism in the tree that supplies the freshness
 they lack. Refusing the in-band options without filing the out-of-band one
 would be a gap dressed as a principled refusal.
 
-**Shape**: the cheap first step exists today — `undercroft vault info` prints
-`writes` and the chain head, so "publish the anchored pair off-machine on a
-cadence, and compare on return" is a documentable operator procedure, not a
-2.0 project. What needs ruling is whether the engine should ASSIST it (a
-command that emits the pair in a checkable form, and one that checks a
-returned witness against the vault) or whether it stays procedure.
+**Shape**: the cheap first step exists today — `undercroft vault status`
+(this sentence said `vault info` until the ruling below; no such subcommand
+exists) prints `writes` and the chain head, so "publish the anchored pair
+off-machine on a cadence, and compare on return" is a documentable operator
+procedure, not a 2.0 project. What needs ruling is whether the engine should
+ASSIST it (a command that emits the pair in a checkable form, and one that
+checks a returned witness against the vault) or whether it stays procedure.
+**The ruling below finds that first step UNSOUND as stated** — the pair is
+key-generation-bound and the attacker can rotate — so the procedure is not
+the floor this entry took it for.
 
 **Gate**: a vault rolled back to a genuine earlier state is REPORTED against a
 witness taken before the rollback.
@@ -23844,6 +23853,290 @@ witness taken before the rollback.
 **Relations:** shares its subject with O244 — this witness is the one artifact
 an attacker with full disk control cannot restore, so it is what would make a
 replay start point safe, and O244's refusal is sequenced behind it.
+
+#### RULED 2026-09-23 by a three-lens panel (agentic memory architecture, security, software engineering) plus an adversarial refuter; the product question ESCALATED to the maintainer
+
+**The question.** What an external witness must CARRY to be sound against
+A2, what a check of one can and cannot see, what an engine-side emit and
+check would owe on each surface, and how this entry sequences against O246
+and O244. Working files are in the session scratchpad's `o245-panel/` —
+material, never the record. **Whether the engine ASSISTS at all is what a
+surface offers (O66's class) and is escalated below, with this analysis
+attached; the panel did not decide it.**
+
+**The spine, found by all three lenses independently and confirmed by the
+refuter: a witness carrying only the chain head has the LIFETIME OF A KEY
+GENERATION, and the entry's own "cheap first step" is therefore unsound
+against the attacker it names.** A rotation replays the whole chain under
+the NEXT generation's keys (`rotate.rs:727`, `chain::replay(&self.conn,
+&next, None)`; the salt is fresh at `vault/lib.rs:1297` and both `mac_key`
+and `chain_key` derive from it, `:1266-1270`), and BOTH steps are keyed
+(`chain_step_hex`, `vault/lib.rs:657-671`). So every intermediate head moves
+on a rotation, and a pre-rotation head is `!anchor_seen` on every later
+replay — O13's "a keyed replay has a shorter lifetime than the document it
+checks", verbatim. The consequence is worse than a false alarm: **A2 holds
+`master.key` (`keys.rs:43-45`) and can run `vault rotate` after restoring
+the pair**, so a head-only procedure reports "witness superseded, take a new
+one" on exactly the rollback it exists to catch, and the vault's own routine
+operation launders it. `vault status` prints only the head and `writes`
+(`main.rs:2258-2266`); nothing on any surface today emits what survives.
+What survives a rotation is the ROW BYTES — `(record_id, tag, at)` are
+preserved verbatim (`rotate.rs:798-880` has no `UPDATE audit`; the
+`NOT_RETAGGED` gate exempts `audit`, `:1707-1713`) — and the tree already
+has the unkeyed recipe over them: `CommitmentDigest` (`chain.rs:300-321`,
+SHA-256 under `COMMITMENT_DOMAIN`, count-bound in `finish`), shape-stable
+across the text/blob forms `bytes_of` returns (`:353-361`).
+
+**Probes run (P1 and P4, named by the refuter, run by the integrator as
+`o245_probe_p1_p4_rotation_moves_heads_and_keeps_the_prefix_digest` in
+`chain.rs`'s tests, in the Docker test image).** Three writes on a sealed
+vault; the head at row 3 is `anchor_seen` with `behind_by = 0` on its own
+chain (the premise arm); after `rotate_keys` the replay has one more row,
+that head is **`!anchor_seen`**, the unkeyed digest over rows 1..=3 is
+**byte-identical** to the one taken before the rotation, and the digest over
+rows 1..=4 differs (count-bound). Then a row planted with a bare `INSERT INTO
+audit` is counted by the replay (`rows = 5`) while `chain_meta.writes` does
+not move. `test result: ok. 1 passed`, exit 0, log in the panel directory.
+The test stays in the tree as the pin for both facts. P2 (the A10 relabel,
+item 4 below) is settled by reading — the `UPDATE` changes the bytes the
+digest folds, which needs no execution to see — and P3 (the un-switch arm)
+belongs to the gate of whichever build the maintainer chooses.
+
+**Prior rulings found, and their disposition.**
+
+- **O13** (a rotation makes the replay unavailable, not the attestation
+  forged; a `key_generation` field REJECTED because "an optional provenance
+  field is exactly the claim a verifier cannot rely on", `ROADMAP` O13) —
+  **FOLLOWED, and it decides the design.** The memory lens proposed a
+  key-generation marker (the `rotate/` keycheck prefix) plus a third
+  `Superseded { rotations_since }` verdict; that is the field O13 refused,
+  and the refuter's evidence refutes it here on stronger ground than O13
+  had: unlike a tombstone tag, the rows a witness names are re-digestible
+  WITHOUT any key, so "the replay is unavailable" is not the honest answer
+  when the bytes can be checked; and `rotations_since` is a planted-label-
+  inflatable count by its own doc (`chain.rs:614-624`). An unkeyed prefix
+  digest is O13's own shape — a structural proof over bytes the vault holds.
+- **O233** (a second copy of a chain fact refused) — FOLLOWED: a witness is
+  out of band and consulted by no replay; it is not a second copy.
+- **O237 ruling 1** (no incremental replay from a watermark) — FOLLOWED: a
+  witness at height N is a prefix COMMITMENT; the check still replays from
+  genesis. **O237 ruling 3** (`Regime::V1`/`Pending` must not refuse) —
+  FOLLOWED, and it is one of the reasons the check is its own door: a
+  `verify` leg absent by default would sit on the path that must not refuse.
+- **O241 items 1-3 and 6** — FOLLOWED; the witness is the out-of-band
+  freshness those refusals presuppose, and item 6 is what makes O246
+  independent of it. One correction to O241's record and to this entry's
+  brief: `prune_backups` sorts names and keeps ten (`main.rs:4721-4735`), it
+  MAC-verifies nothing — "ten validly-MAC'd pairs" is true of what `backup
+  create` writes, not of what pruning checks.
+- **O244's ruling** — "followed as the partner" STANDS; O244's option (G)
+  already says the witness is LOST as an answer to compaction. Its sentence
+  *"the forged-append residual is unchanged and closes only on O245"*
+  (`ROADMAP` O244, residuals) is **REFUTED, beside rather than in place**
+  (O137): see the claims below. **O244 stays as ruled** — a witness that is
+  OPTIONAL cannot license a stored replay start point, because an
+  unwitnessed vault is O244's erasure exactly; only a REQUIRED witness could,
+  and that is a fresh panel, which would also have to weigh that the witness
+  is weaker than O244's ruling assumed.
+- **O240's closure** ("the mechanism that would close it is the external
+  witness") — TRUE ONLY of a witness taken AFTER the v2 switch, sharpened
+  beside: the re-switch mints a commitment with a fresh `at` (`lib.rs:4666`)
+  and a digest over the truncated rows (`chain.rs:481-483`), so a post-switch
+  witness diverges at the commitment; a PRE-switch witness's rows are
+  untouched and it is reached, so it is blind to the un-switch.
+- **O246** — stays OPEN and lands FIRST (below). **A28**, **A31**, **O91**
+  (gate the path, not the function), **O80**, **O171** — FOLLOWED.
+
+**The design, settled by evidence (never by vote), for whichever option the
+maintainer chooses.**
+
+1. **What a witness carries.** Binding: `vault_id`, `rows` (the replay's
+   ROW count, never `chain_meta.writes` — the replay positions by rows,
+   `chain.rs:412-414`, and a row can land without moving `writes`, P4), and
+   `prefix_digest` (the `CommitmentDigest` recipe over rows `1..=rows`,
+   count-bound). Corroboration, degraded and never binding: `head` (valid
+   until the first `rotate/` record above `rows`), `regime`/`switch_seq` (so
+   the check can NAME an un-switch), the ANCHORED pair read from disk
+   (`anchored_head`/`anchored_writes`, `vault/lib.rs:900-940` — an anchor
+   never legitimately moves backwards, so a read-only check gains O246's
+   observable off-machine; complementary to O246, not a replacement), and
+   `emitted_at` (the emitter's claim). NOT the manifest MAC: an A2-held key
+   over a restorable file, and the witness compares the DATABASE. NOT a
+   vault-keyed MAC over the witness: buys nothing against A2 and dies on
+   rotation.
+2. **What it cannot see, stated.** Rollback to any point at or above `rows`
+   (cadence-bounded by construction); ANY append above `rows`, forged or
+   not; a lowered anchor over an intact database (O246's observable — not
+   yet a rollback); a witness store A2 can write or delete (absence must
+   read `unwitnessed`, never clean); a check run against an older witness
+   than the newest taken; a witness EMITTED after a rollback (the procedure
+   is compare, THEN emit, into an append-only store); a genesis head
+   (vacuous — refused at emit).
+3. **The forged-append residual is NOT closed by a witness, and three
+   records said it was.** `chain.rs:690-712`'s residual is a LIVE-HANDLE
+   blindness — a row written beneath SQLite under a handle that already
+   replayed, invisible "until it is re-opened or another connection
+   commits" — and a non-key-holder's row is refused by the next replay
+   (`lib.rs:4396-4400`) because both steps are keyed. An offline witness
+   check is itself "another connection replaying" and touches the serving
+   handle not at all; and a KEY-HOLDER's append above `rows` is, to any
+   witness, writes since the witness. What the witness CLOSES is the REWIND
+   direction: A2's two-step, O240's un-switch (post-switch witness), and
+   O244's keyless erasure below `rows`; what it NARROWS is a forger who must
+   also remove or reorder anything at or below a witnessed point. Corrected
+   in this unit: `chain.rs:712` and `:735-736` (which also said O246's
+   manifest rollback closes on the witness — false, a witness compares the
+   database), and O244's residual sentence, beside.
+4. **The A10 relabel moves the digest, and nobody but the refuter saw it.**
+   `kg.rs:1508-1512` is a production `UPDATE audit SET record_id`, run by a
+   writable open BEFORE the switch (`lib.rs:3878`, `:3881`) on a sealed
+   vault whose blinding walk has not completed. A V1 head does not fold
+   `record_id`, so the head survives it; a `(record_id, tag, at)` digest
+   does not. Narrow — a vault never opened writable since 2026-08-05 — but it
+   is exactly the case a read-only witness of an old vault meets, and the
+   tree already names it on `unhealed` (`lib.rs:4655-4662`). So an emit
+   REFUSES, or marks the witness provisional, while that line is present.
+   Rejected alternative, with its cost: a TAG-only digest is stable across
+   both a rotation and the relabel, at the price of binding no label below
+   `rows` — which is the O233 defect a witness should not reintroduce.
+5. **The check is its own door, never a tenth `verify` leg**, on the
+   `verify-forgetting` precedent (`tenant.rs:1939-2004`,
+   `main.rs` `Command::VerifyForgetting`, `mcp.rs:1168-1193`): `verify()` is
+   `&self` with no argument (`lib.rs:8695`), its report is `HAND_PROJECTED`
+   on four renderers, a leg present only when a file is supplied makes
+   `ok()` conditional on input, and a witness mismatch is not a rotation
+   blocker (rotation preserves the rows). Verdict as TYPED tokens, never
+   prose: `extends` (the witness is a prefix; `rows_since`, and whether the
+   head still corroborates or a rotation has since re-keyed it — head
+   corroboration degrades, the binding never does) and `rolled_back`; a
+   malformed document is 400, and `rolled_back` and a FOREIGN `vault_id`
+   are both 409 `class: "integrity"` / exit 2 (`forget.rs:561-567` →
+   `Attestation` → `tenant.rs:3741`, `main.rs:1988`), because a re-created
+   vault is erasure and must not read as a caller's typo. **Always
+   read-only**, whatever the flags: a writable open heals the anchor,
+   relabels and re-switches BEFORE anything reads (`lib.rs:3878-3881`,
+   `:4412-4420`); none of that destroys what the check compares, but a
+   writable check consumes O246's evidence in silence (O91: gate the path).
+   Named in `mutates` as a fourth read exception, or a read-only server
+   refuses a pure read.
+6. **The emit** is a machine-readable document (stdout / `--out`), from a
+   read-only open, refusing on a genesis head and while `unhealed` carries
+   the pending-walk line. A writable emit is SOUND for the binding (the heal
+   moves the manifest and `chain_state` reads the database,
+   `lib.rs:4975-4980`) and wrong for the anchored pair it should also carry.
+   Its hazard is ORDERING: an emit before the previous witness is checked
+   blesses a rollback — one command (`check --then-emit`) or the docs order
+   it. `--out` under the data directory is restored with the backup; no gate
+   can see where an operator puts the file, so the docs carry it. NOT an
+   egress in O79/O167's sense — a head, a count and a digest, no drawer
+   bytes, all but the digest already on `/v1 …/stats` and, since
+   `undercroft_status` serializes `VaultStats` whole (`mcp.rs:892-895`,
+   `manage.rs:69-127`), on MCP. A V1 head is an HMAC under the record-tag
+   key; already exposed on stats and in the manifest, so no new exposure.
+7. **Signing.** Optional, with the Ed25519 identity `undercroft bundle
+   sign-keygen` mints (`main.rs:944-949`), on the export/attestation
+   precedent (`sender` AND `sig`, or the document is "unsigned", never
+   "verified"). It buys the witness STORE's integrity — a writer to the store
+   cannot substitute a witness blessing the rolled-back state — and only if
+   the key is off-machine: its default path is `<data-dir>/bundle-sign.key`
+   (`main.rs:2151`), beside `master.key`, which nothing enforces or checks.
+   Unsigned, the witness's integrity is the store's append-only property,
+   which is the threat model's premise and sufficient.
+8. **Sequencing.** O246 lands FIRST: cheaper (`init_chain` already holds
+   `Healed { behind_by }` in `anchor_at_open`, `lib.rs:4598`; the writable
+   path wants the `unhealed` line the read-only path writes), independent
+   (per-open, where the witness is cadence-bounded), and the procedure needs
+   it. O244 stands as ruled. The threat model's "planned mitigation" is
+   re-worded in this unit to say what a witness closes and that a sound
+   procedure needs a digest no surface emits today.
+9. **Versioning, if built.** An emit of the bare `(head, writes)` pair alone
+   is a CLI drift closure of what MCP and `/v1` already serialize — PATCH by
+   the 2026-09-08 ruling's own words. The digest and the check are input
+   and a verdict the engine has never had — MINOR. A push adds an outward
+   path (`UNDERCROFT_WITNESS_URL`/`_CA`, `Protects`, `config check`, the
+   transport gates) — MINOR, and the maintainer's.
+10. **The gate, concretely**, replacing the entry's one-liner. Fixture from
+    `database_rollback_is_detected_at_open` (`lib.rs:13577-13617`) with the
+    manifest COPIED after write two rather than left ahead (a manual row
+    delete alone trips `ManifestTampered` and passes for the wrong reason):
+    three writes; witness W after the third; restore the copied
+    `(vault.db, vault.json)` pair; **premise arm**: `verify().ok()` TRUE and
+    the open reports `Current` — nothing in the vault can see it; **gate
+    arm**: `check(W)` → `rolled_back`, `rows_now < rows`. Then: a fourth
+    write → `extends { rows_since: 1 }`; `vault rotate` then `check(W)` →
+    `extends` with the head no longer corroborating and NEVER `rolled_back`
+    (the O13 arm); the O240 un-switch through `unswitch_chain_for_test`
+    (`lib.rs:4614-4646`) with a post-switch witness → `rolled_back` on the
+    read-only check AND after a writable re-switch, and a pre-switch witness
+    → `extends`, pinned as a cost; a planted row without `writes` → the
+    check positions by rows (P4); a fresh vault → 409; a key-holder append
+    after W → `extends`, pinned as a `Cost` so item 3 is recorded rather
+    than absorbed; end to end through the CLI and `/v1` — `tests/e2e.sh`'s
+    tamper section drives a record tamper and a manifest MAC flip and NO
+    rollback, so `backup create`/`restore --force` is the primitive to build
+    it from.
+
+**Claims refuted, including the brief's — the integrator's own.**
+
+- The brief's F1 ("nothing new is needed for the check") — true only inside
+  one key generation; the spine above.
+- The brief's F2 and two lenses read the forged-append residual as a
+  key-holder's append; it is a live-handle window (item 3). The security
+  lens read it correctly.
+- The brief's F6 — FALSE twice: MCP serializes the chain head, and
+  `--read-only` is a GLOBAL flag (`main.rs:75-76`) reaching `open_store`
+  (`:1406-1408`), so `vault status` and `stats` CAN be taken without
+  healing. The literal grep for `chain_head` in `mcp.rs` was a substring
+  gate over a serde derive — "a struct is not a surface", inverted.
+- The brief's F9 — the command is `bundle sign-keygen`, not `keygen`, and
+  the key defaults onto the vault's own disk.
+- The brief's Q1 framing presumed an unrotated vault, which is what hid the
+  O13 shape all three lenses had to reconstruct; and its Q7 offered
+  "procedure-only = docs change" as if sound, which it is not (the spine).
+- The memory lens's fixture pointer `chain.rs:1289` is the inconsistent-pair
+  test (commitment deleted, `head_v2` kept), not O240's un-switch.
+- Three records over-claim what the witness closes (item 3); O240's claim
+  holds for a post-switch witness only.
+
+**Dissent.** None on the design; the memory lens's marker-plus-`Superseded`
+shape was refuted on O13 and the code and is recorded as the rejected
+alternative. The security lens's prior on MCP exposure is "no" (an agent's
+memory IS this vault, so it cannot hold an off-machine witness); the
+engineering lens finds no boundary argument against it (the check moves no
+evidence; `undercroft_check_erasure_receipt` is the agent-held-document
+precedent). That is a product question and travels to the maintainer as a
+split, not a verdict.
+
+**What would make this verdict fail silently.** A check that compares the
+head only (green on every unrotated vault, a rollback alarm on every rotated
+one, and the second is what an operator sees first); a check that suppresses
+`!anchor_seen` after any `rotate/` record (reopens the window the rotation
+covers); a check positioned by `writes`; a `verify` leg with "no witness →
+pass"; a witness emitted from a writable open over a lowered anchor; a
+missing witness read as "nothing to compare"; a witness kept on the vault's
+own disk; and the three over-claims left standing, so nobody looks for the
+mechanism that would close the append direction (a per-row out-of-band log
+with a credential not on the disk — O241's (S2) one hop out, and a different
+product).
+
+**What remains, and is filed rather than absorbed.** O246 (first). The
+build itself, which waits on the maintainer's answer below. The append
+direction, which no witness closes and which is now stated in the records
+that said otherwise.
+
+**Escalated to the maintainer — what a surface offers, with the panel's
+analysis attached.**
+
+> **(1) Should the engine assist the witness, and with how much of it?**
+> (a) Procedure only, documented with its stated weakness: sound only until
+> the first key rotation, which A2 can force, because no surface emits the
+> digest today. (b) `vault witness emit` + `vault witness check` and
+> `POST …/witness` — the digest, the typed verdict, read-only, MINOR, the
+> gate above. (c) (b) plus a push (`--to <url>` / `UNDERCROFT_WITNESS_URL`
+> with a `_CA` pin) — an outward path under the transport policy, whose
+> remote must refuse overwrites or the push buys nothing.
+> **(2) If (b) or (c): is the check offered over MCP** (38 → 39 published
+> tools; the lenses split, above)?
 
 ### O246 — a writable open heals a rolled-back manifest and reports nothing, while a read-only open reports it
 
@@ -24313,9 +24606,7 @@ route is O241's, and the two should be decided together.
 **Gate**: a switched vault, rolled back as above, is reported rather than
 re-blessed. **Counterfactual**: today, the next open re-switches it.
 
-manifest gains an authenticated statement about the chain.
-
-**RULED 2026-09-21 together with O241; the record is in that entry.** The marker is refused because it buys exactly zero: this attack must restore the matching pre-switch `vault.json`, and a marker added to that file is restored with it. The un-switch itself is real and stays, as a sharpened residual in `docs/THREAT_MODEL.md` A2 and in `docs/security.md`: a rollback also downgrades the chain REGIME, and the next writable open re-blesses the truncated history, so a rolled-back vault reads `intact` rather than visibly rewound. The mechanism that would close it is the external witness, filed as O245.
+**RULED 2026-09-21 together with O241; the record is in that entry.** The marker is refused because it buys exactly zero: this attack must restore the matching pre-switch `vault.json`, and a marker added to that file is restored with it. The un-switch itself is real and stays, as a sharpened residual in `docs/THREAT_MODEL.md` A2 and in `docs/security.md`: a rollback also downgrades the chain REGIME, and the next writable open re-blesses the truncated history, so a rolled-back vault reads `intact` rather than visibly rewound. The mechanism that would close it is the external witness, filed as O245 — **sharpened beside by O245's ruling of 2026-09-23: only a witness taken AFTER the switch.** The re-switch mints a commitment with a fresh time and a digest over the truncated rows, so a post-switch witness diverges at the commitment; a pre-switch witness names rows the un-switch leaves untouched, is reached, and is blind to it. (A stray half-sentence that sat between the counterfactual and this paragraph — the tail of an edit, describing nothing — was removed in the same unit.)
 
 
 ### O173 — CLOSED by doctrine 2026-09-14: where the reading runs out, a ruling panel decides, and the ruling is written into the entry that owns it
