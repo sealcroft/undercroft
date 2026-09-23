@@ -140,7 +140,12 @@ well, where only a tampered count fails.
    declined to repair is printed as a warning and readable afterwards on
    `undercroft stats` (and `GET /v1/vaults/{id}/stats`) as `unhealed` — during
    an incident, read it: "a torn `vault.json.next` was left in place" tells
-   you a rotation was in flight when the incident began. Since 1.2.0 the admin
+   you a rotation was in flight when the incident began; and since 1.6.2
+   (ROADMAP O246) a WRITABLE open reports on the same list the manifest
+   anchor heal it performed and how far behind the anchor was — a crash is
+   the ordinary cause, and a genuine older `vault.json` restored beside a
+   current database looks identical, so treat it as evidence to read during
+   an incident rather than as an alarm. Since 1.2.0 the admin
    console at `GET /ui` shows it too, as an UNHEALED panel that appears only
    when there is something to say, beside a POSTURE gauge naming the role the
    handle was opened under. Before that the console showed a clean, complete-

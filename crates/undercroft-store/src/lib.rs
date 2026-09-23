@@ -3144,9 +3144,12 @@ pub struct VaultStore {
     /// warning per search would bury the one line that matters.
     ro_prefilter_warned: std::cell::RefCell<std::collections::HashSet<&'static str>>,
     /// What this open found and deliberately did **not** repair, in the
-    /// operator's words (R4). Empty on a writable open, which heals each of
-    /// them instead — except for at-rest-migration rows the open skipped
-    /// because they fail verification (A10/U12), which both postures report
+    /// operator's words (R4) — plus, since ROADMAP O246, the one repair a
+    /// WRITABLE open makes that is evidence: a manifest anchor it found
+    /// behind and fast-forwarded, stated in the past tense. Otherwise empty
+    /// on a writable open, which heals the rest silently — except for
+    /// at-rest-migration rows the open skipped because they fail
+    /// verification (A10/U12), which both postures report
     /// (see [`unhealed`](Self::unhealed)). Warned once at open and readable afterwards, so
     /// a long-lived read-only server can put the same sentences on a status
     /// surface rather than only in a log line nobody kept.
@@ -3298,10 +3301,12 @@ impl VaultStore {
     }
 
     /// Repairs this open found and declined to make, in the operator's
-    /// words (R4). Empty on a writable open except for at-rest-migration
-    /// rows the open skipped because they fail verification (A10/U12),
-    /// which a writable open reports and retries rather than launders —
-    /// `note_unblinded_kg` runs on both postures.
+    /// words (R4), and the one repair a writable open makes that is itself
+    /// evidence — a lagging manifest anchor it fast-forwarded (ROADMAP
+    /// O246; each note says which). Otherwise empty on a writable open
+    /// except for at-rest-migration rows the open skipped because they fail
+    /// verification (A10/U12), which a writable open reports and retries
+    /// rather than launders — `note_unblinded_kg` runs on both postures.
     pub fn unhealed(&self) -> &[String] {
         &self.unhealed
     }
@@ -4596,10 +4601,39 @@ impl VaultStore {
              );",
         )?;
         self.anchor_at_open = self.reconcile_chain(true)?;
-        if self.anchor_at_open == AnchorState::Unseeded {
-            // Legacy adoption (pre-chain_meta database) or a fresh vault:
-            // seed from the manifest, which was authoritative until now.
-            chain::seed(&self.conn, self.vault.chain_head_hex(), self.vault.writes())?;
+        match self.anchor_at_open {
+            AnchorState::Unseeded => {
+                // Legacy adoption (pre-chain_meta database) or a fresh vault:
+                // seed from the manifest, which was authoritative until now.
+                chain::seed(&self.conn, self.vault.chain_head_hex(), self.vault.writes())?;
+            }
+            // **The writable open SAYS what it healed** (ROADMAP O246). The
+            // read-only open reports a lagging anchor on `unhealed`; this
+            // path healed it and, until O246, discarded the verdict into a
+            // field that only `vault anchor` and one orchestrator route read
+            // — so the ONE observable of A2's first step (a genuine older
+            // `vault.json` restored beside a current database lowers the
+            // anchor, and the next writable open fast-forwards it) was
+            // consumed in silence, on the posture that heals. A crash
+            // between a commit and its anchor is the ordinary cause and
+            // must not alarm, so this REPORTS and refuses nothing. The note
+            // is a fact about THIS open and stays for the handle's lifetime,
+            // which on a cached server is the M3 shape — and M3's defect was
+            // a route claiming a CURRENT lag on every call, which a sentence
+            // in the past tense does not.
+            AnchorState::Healed { behind_by } => {
+                let note = format!(
+                    "the manifest rollback anchor was {behind_by} record(s) behind the \
+                     committed chain head when this handle opened, and the open \
+                     fast-forwarded it. A crash between a commit and its anchor is the \
+                     ordinary cause; a genuine OLDER `vault.json` restored beside a \
+                     current database lowers the anchor the same way, and this line is \
+                     the only evidence of either (ROADMAP O246)"
+                );
+                undercroft_obs::diag_warn!("{note}");
+                self.unhealed.push(note);
+            }
+            AnchorState::Current => {}
         }
         Ok(())
     }
@@ -21399,6 +21433,62 @@ mod tests {
         std::fs::rename(vdir.join("vault.db"), vdir.join("palace.db")).unwrap();
         assert!(!vdir.join("vault.db").exists() && vdir.join("palace.db").exists());
         (dir, mgr, vdir)
+    }
+
+    /// **ROADMAP O246's gate: a WRITABLE open over a lowered anchor heals
+    /// it and SAYS so.** The fixture is A2's manifest-alone step verbatim —
+    /// a genuine older `vault.json` restored beside a current database — and
+    /// the premise arm is the counterfactual the entry names: `verify` is
+    /// green and the open reports `Healed`, so nothing in the vault can see
+    /// the restore except the line this test requires. Before O246 the
+    /// `unhealed` list was empty here, which is exactly the assertion that
+    /// fails on the old tree. A clean reopen afterwards says nothing, so the
+    /// line is about what THIS open found and not a fixture that always
+    /// prints.
+    #[test]
+    fn a_writable_open_reports_the_anchor_heal_it_performed() {
+        let (dir, mut s) = store(SecurityLevel::HmacOnly);
+        s.upsert(&drawer("w", "r", "first note", 0)).unwrap();
+        let vdir = dir.path().join("vaults/test");
+        let older = std::fs::read(vdir.join("vault.json")).unwrap();
+        s.upsert(&drawer("w", "r", "second note", 1)).unwrap();
+        s.upsert(&drawer("w", "r", "third note", 2)).unwrap();
+        drop(s);
+        // A2's first step: the manifest ALONE is restored, the database is
+        // current, and the pair need never be consistent (O241 ruling 6).
+        std::fs::write(vdir.join("vault.json"), &older).unwrap();
+
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let s = VaultStore::open(mgr.unlock("test").unwrap()).unwrap();
+        // PREMISE: the open found the anchor two records behind and healed
+        // it on disk, and `verify` sees nothing — the entry's counterfactual.
+        assert_eq!(s.anchor_at_open(), AnchorState::Healed { behind_by: 2 });
+        assert_eq!(
+            s.vault.anchored_head().unwrap(),
+            chain::require_head(&s.conn).unwrap().head,
+            "the writable open fast-forwarded the anchor on disk"
+        );
+        assert!(
+            s.verify().unwrap().ok(),
+            "verify is green over a restored older manifest, by construction"
+        );
+        let notes = s.stats().unwrap().unhealed;
+        assert!(
+            notes
+                .iter()
+                .any(|n| n.contains("2 record(s) behind") && n.contains("fast-forwarded")),
+            "the writable open must report the heal it performed: {notes:?}"
+        );
+        drop(s);
+
+        // A reopen over the healed anchor is `Current` and reports nothing.
+        let s = VaultStore::open(mgr.unlock("test").unwrap()).unwrap();
+        assert_eq!(s.anchor_at_open(), AnchorState::Current);
+        assert!(
+            s.stats().unwrap().unhealed.is_empty(),
+            "a current anchor is not news: {:?}",
+            s.stats().unwrap().unhealed
+        );
     }
 
     /// ROADMAP O7's gate: a vault created before the rename opens with no

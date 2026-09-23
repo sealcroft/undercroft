@@ -4173,6 +4173,97 @@ touching anyone's existing corpus.
 integrity verdict, and two different model files must produce two different
 identities.
 
+## 1.6.2 — unreleased
+
+Fixes only, on the same test as `1.6.1`: a surface added to REPORT an
+existing silence adds no capability — the defect was the silence (the
+2026-09-08 ruling) — so this is PATCH.
+
+### O246 — CLOSED 2026-09-23: a writable open heals a rolled-back manifest and now says so; a read-only open already reported it
+
+**Filed 2026-09-21 by O241's ruling panel (the adversarial refuter).**
+`reconcile_chain` returns `Healed { behind_by }`; the READ-ONLY path pushes
+that onto `unhealed`, and `init_chain`'s writable path discards it into a
+field that only `vault anchor` and one orchestrator route read. No caller
+anywhere refuses on `behind_by`, and `chain_verdict` requires only
+`anchor_seen`, never `behind_by == 0`, so `verify` is green.
+
+That asymmetry is defensible — a lagging anchor after a crash is the ordinary
+case and must not alarm — but it is the one observable of the attack O241's
+ruling sharpened into A2: restoring a genuine older `vault.json` beside a
+current database lowers the anchor, and the next writable open silently
+fast-forwards it. The evidence of the rollback is consumed in silence by the
+heal, on the posture that heals.
+
+**Shape**: the writable open says what it healed, on `unhealed` beside the
+read-only path's line, so the alarm stops being free to erase. Whether it
+should REFUSE above some `behind_by` is a separate and probably wrong idea —
+the crash window is unbounded in principle — and the entry does not propose
+it.
+
+**Gate**: a writable open over a lowered anchor reports the heal and its
+`behind_by` on all four renderers.
+**Counterfactual**: today it heals and says nothing.
+
+#### BUILT 2026-09-23, to the shape ruled twice (this entry, and O245's ruling item 8: O246 lands first)
+
+**Prior rulings read and followed, none refuted.** O245's ruling (2026-09-23)
+sequenced this entry first and named its shape verbatim; O241 ruling 6 is the
+attack it observes; **M3** is the one tension the reading found, and M3
+settles it: M3's defect was `POST …/anchor` on a cached handle claiming a
+CURRENT lag on every later call, and the fix there was a condition (*did this
+request cause the open*). This note is a statement about what THIS open
+found, in the past tense — "was N behind when this handle opened, and the
+open fast-forwarded it" — which stays true for the handle's lifetime exactly
+as the read-only line does, and the e2e arm pins that it persists on a
+writable `serve-http` rather than treating persistence as a defect.
+
+**What landed.** `init_chain` now matches the open's `AnchorState`: on
+`Healed { behind_by }` it warns once at open and pushes one note onto
+`unhealed`, naming both readings — the ordinary crash between a commit and
+its anchor, and a genuine older `vault.json` restored beside a current
+database — because the engine has no evidence separating them and saying
+one would be inference. It refuses nothing, exactly as the entry says. The
+field's two doc comments said the list was empty on a writable open; both
+now say what it carries and that each note says which. `ui.html`'s panel
+header said "did not repair"; it now says the list holds declined repairs or
+an anchor the open fast-forwarded, each note saying which. The same sentence
+moved on `docs/AGENTS.md`, `docs/remote-server.md`, `docs/security.md`,
+`docs/THREAT_MODEL.md` (A2's sharpening and the R4 paragraph),
+`website/src/runbook.md` and `docs/MULTI_TENANCY.md`.
+
+**The cost, stated rather than absorbed.** The list is called `unhealed` and
+this note describes something healed; the ruled shape put it on that list
+"beside the read-only path's line", a separate `VaultStats` field would touch
+`HAND_PROJECTED` on four renderers for one sentence, and the CLI prints the
+list under an `unhealed:` label that an e2e arm greps for on another note.
+The name is kept and every doc that describes the list now says it carries
+this one repair too. And a monitor keyed on `unhealed` being empty on a
+writable open sees this line after every crash-heal — which is the entry's
+purpose, and is recorded in the CHANGELOG so it is not read as a regression.
+
+**Gate met.** `a_writable_open_reports_the_anchor_heal_it_performed`
+(store): three writes, the manifest copied after the first and restored
+after the third (A2's manifest-alone step, the pair never consistent);
+PREMISE arms — the open reports `Healed { behind_by: 2 }`, the anchor on
+disk now names the committed head, and `verify().ok()` is TRUE, the entry's
+own counterfactual; then the note is required, and a clean reopen reports
+`Current` with an empty list, so the line is about what the open found and
+not a fixture that always prints. Before the change the note assertion fails
+on exactly that fixture. e2e: five arms through the two surfaces that open
+WRITABLE — `undercroft stats` reports the heal, `verify` is green on the
+restored manifest, the next `stats` reports nothing, and a writable
+`serve-http`'s `/v1 …/stats` carries the note on the first call and still on
+the second. The "all four renderers" half is `VaultStats.unhealed`'s existing
+projection (CLI, `/v1`, `ui.html`'s panel, MCP `undercroft_status`), which
+the parity table already holds; the orchestrator's fleet overview is a
+summary by construction and reads `unhealed` through the engine's `/v1`.
+
+**Versioning.** PATCH, on the 2026-09-08 ruling; M3 was MINOR because a
+NUMBER an existing caller read changed value, where this adds a line to a
+list documented as what the open found. Nothing can stop a deployment, so
+no `UPGRADING.md` entry.
+
 ## 1.6.1 — released 2026-09-22
 
 Fixes only. Each makes an existing silence visible — a surface added to
@@ -24137,32 +24228,6 @@ analysis attached.**
 > remote must refuse overwrites or the push buys nothing.
 > **(2) If (b) or (c): is the check offered over MCP** (38 → 39 published
 > tools; the lenses split, above)?
-
-### O246 — a writable open heals a rolled-back manifest and reports nothing, while a read-only open reports it
-
-**Filed 2026-09-21 by O241's ruling panel (the adversarial refuter).**
-`reconcile_chain` returns `Healed { behind_by }`; the READ-ONLY path pushes
-that onto `unhealed`, and `init_chain`'s writable path discards it into a
-field that only `vault anchor` and one orchestrator route read. No caller
-anywhere refuses on `behind_by`, and `chain_verdict` requires only
-`anchor_seen`, never `behind_by == 0`, so `verify` is green.
-
-That asymmetry is defensible — a lagging anchor after a crash is the ordinary
-case and must not alarm — but it is the one observable of the attack O241's
-ruling sharpened into A2: restoring a genuine older `vault.json` beside a
-current database lowers the anchor, and the next writable open silently
-fast-forwards it. The evidence of the rollback is consumed in silence by the
-heal, on the posture that heals.
-
-**Shape**: the writable open says what it healed, on `unhealed` beside the
-read-only path's line, so the alarm stops being free to erase. Whether it
-should REFUSE above some `behind_by` is a separate and probably wrong idea —
-the crash window is unbounded in principle — and the entry does not propose it.
-
-**Gate**: a writable open over a lowered anchor reports the heal and its
-`behind_by` on all four renderers.
-**Counterfactual**: today it heals and says nothing.
-
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 

@@ -3766,6 +3766,60 @@ check "O251: and the vault the seeded verdict vouched for still verifies" 0 "VER
   env UNDERCROFT_HOME="$O251_HOME" "$BIN" verify
 rm -rf "$O251_HOME"
 
+# ROADMAP O246: a WRITABLE open heals a lowered manifest anchor and now SAYS
+# so, on `unhealed`, beside the read-only line R4 built. The fixture is A2's
+# first step verbatim — a genuine OLDER `vault.json` restored beside a current
+# database — and the premise is the entry's own counterfactual: `verify` is
+# green over it, so the line the open prints is the only evidence. Driven
+# through the two surfaces that open WRITABLE: `undercroft stats` (a fresh
+# process, so the open and the report are one command) and a writable
+# `serve-http`, whose cached handle keeps the note for its lifetime — a fact
+# about THAT open, in the past tense, which is what keeps this on the right
+# side of M3 (a route claiming a CURRENT lag on every call).
+O246_HOME="$(mktemp -d)"
+UNDERCROFT_HOME="$O246_HOME" "$BIN" init >/dev/null 2>&1
+o246() { UNDERCROFT_HOME="$O246_HOME" "$BIN" "$@"; }
+o246 remember "the lighthouse keeper logged the first fog of autumn" --wing notes >/dev/null 2>&1
+cp "$O246_HOME/vaults/default/vault.json" "$O246_HOME/older-vault.json"
+o246 remember "the second entry names the relief keeper" --wing notes >/dev/null 2>&1
+o246 remember "the third entry records the lamp oil delivery" --wing notes >/dev/null 2>&1
+cp "$O246_HOME/older-vault.json" "$O246_HOME/vaults/default/vault.json"
+# PREMISE (the counterfactual): nothing in the vault can see the restore.
+# `verify` opens WRITABLE on the CLI, so this is also the open that heals —
+# the report below has to come from THIS command's output, or it is lost.
+O246_OUT="$(o246 stats 2>&1)"
+if grep -q "unhealed: the manifest rollback anchor was [1-9][0-9]* record(s) behind the committed chain head when this handle opened, and the open fast-forwarded it" <<<"$O246_OUT"; then
+  echo "ok    O246: a writable open reports the anchor heal it performed (CLI stats)"; PASS=$((PASS+1))
+else
+  echo "FAIL  O246: a writable open reports the anchor heal it performed (CLI stats)"; echo "$O246_OUT" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+check "O246 premise: verify is green over the restored older manifest" 0 "VERIFY OK" -- o246 verify
+O246_AGAIN="$(o246 stats 2>&1)"
+if ! grep -q "unhealed" <<<"$O246_AGAIN"; then
+  echo "ok    O246: the next open finds the anchor current and reports nothing"; PASS=$((PASS+1))
+else
+  echo "FAIL  O246: the next open finds the anchor current and reports nothing"; echo "$O246_AGAIN" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+# The same step again, served by a writable long-lived process this time.
+cp "$O246_HOME/older-vault.json" "$O246_HOME/vaults/default/vault.json"
+UNDERCROFT_HOME="$O246_HOME" "$BIN" serve-http --host 127.0.0.1 --port 18884 >/dev/null 2>&1 &
+O246_PID=$!
+for _ in $(seq 1 40); do curl -sf http://127.0.0.1:18884/healthz >/dev/null 2>&1 && break; sleep 0.25; done
+O246_S1="$(curl -s http://127.0.0.1:18884/v1/vaults/default/stats)"
+O246_S2="$(curl -s http://127.0.0.1:18884/v1/vaults/default/stats)"
+kill "$O246_PID" 2>/dev/null; wait "$O246_PID" 2>/dev/null
+if grep -q 'record(s) behind the committed chain head when this handle opened, and the open fast-forwarded it' <<<"$O246_S1"; then
+  echo "ok    O246: /v1 stats on a writable server reports the heal its open performed"; PASS=$((PASS+1))
+else
+  echo "FAIL  O246: /v1 stats on a writable server reports the heal its open performed"; echo "$O246_S1" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+if grep -q 'and the open fast-forwarded it' <<<"$O246_S2"; then
+  echo "ok    O246: the note is a fact about the open and stays for the handle's lifetime"; PASS=$((PASS+1))
+else
+  echo "FAIL  O246: the note is a fact about the open and stays for the handle's lifetime"; echo "$O246_S2" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+rm -rf "$O246_HOME"
+
 echo
 echo "e2e results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

@@ -223,8 +223,10 @@ attacker need capture nothing to do it: `backup create` copies the whole
 vault directory and keeps up to ten genuine, validly-MAC'd
 `(vault.db, vault.json)` pairs on the same disk, and a manifest is rejected
 only for a foreign vault id. Two consequences follow and are filed rather
-than absorbed: the writable open consumes the one observable of this in
-silence while a read-only open reports it (O246), and an authenticated
+than absorbed: the writable open used to consume the one observable of this
+in silence while a read-only open reported it — since 1.6.2 (O246) it
+reports the heal it performed, and how far behind the anchor was, on
+`unhealed` — and an authenticated
 statement placed IN the manifest — a key census or a regime marker — is
 restored along with it, which is why both were refused (O240, O241).
 
@@ -322,7 +324,8 @@ with its `vault.json.next` left in place, and a prefilter loads an index but
 never builds one. That last operation is the one the incident runbook's own
 "freeze writes" step used to perform: a read-only open could **delete** a
 writer's staging manifest (A32). What the open declined to repair is warned
-and then readable as `unhealed` on every stats surface.
+and then readable as `unhealed` on every stats surface; since 1.6.2 (ROADMAP
+O246) a writable open reports there the anchor heal it made, too.
 
 **Residual**: TLS termination is deliberately delegated to the
 operator's proxy (documented deployment guidance); the engine does not
