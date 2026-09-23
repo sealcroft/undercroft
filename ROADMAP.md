@@ -24016,100 +24016,6 @@ honestly at the two callers.
 `Namespace::ALL` variant is driven through it.
 **Counterfactual**: today it panics on the first variant.
 
-## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
-
-Code comments and documents across this tree cite ids of the form
-`ROADMAP <letter><number>`: **A** (audit findings), **C** (the completeness
-audit), **R** (read-only-posture residuals), **U** (at-rest units), **M**
-(the `1.2.0` units — three round-four rows too large for a PATCH, and what
-closing them found), **O** (work filed after 1.0.0). Most of the ids
-cited across the tree resolve to no heading here, which reads as rot and is
-not: **an `A`/`C`/`R`/`U` entry lives in this file only while the item is
-OPEN.** (Count them yourself if you need to — `grep -rhoE 'ROADMAP [ACRUMO][0-9]+' . | sort -u`.
-The first draft of this paragraph put the number in prose, which is the exact
-thing this file tells you not to trust, and it was wrong twice over.) When it
-closes, the entry leaves — for those four letters the file is a list of work,
-not an archive — and the narrative moves to the CHANGELOG section of the
-release that closed it. **`M` and `O` are the exception**: a closed entry
-that has a heading keeps it — since O101 (2026-09-06), under the release that
-shipped it, or under `Unversioned` for a decision no release carries. Not every
-one was given a heading — most `M` ids past M25 have none and are narrated in
-CHANGELOG — so the CHANGELOG search below stays the fallback for any letter.
-
-So a citation is a **breadcrumb into the history, not a pointer to a
-heading**, and the authoritative description of any closed item is the
-comment at the citation site itself, which is written to stand alone. If you
-are following one and want more, search CHANGELOG.md for the id.
-
-**For the ids below that search finds nothing, and the citation site is the
-whole record.** Checked 2026-09-14 with `git grep -w` over the tracked tree:
-each appeared in code comments or test headings and, before this table, in no
-document — not this file, not CHANGELOG. They closed inside units whose commit messages name the
-unit rather than the id, so the site's own words are the description and the
-commit, found by `git log -S` on those words, is where the diff lives:
-
-| id | cited at | what the site says | first cited in |
-|---|---|---|---|
-| `A11` | `undercroft-store` `kg.rs` (tests) | the graph is a content path, and it is screened | `4a4ef2c`, 2026-08-05 |
-| `A14` | `undercroft-store` `lib.rs` (tests) | `meta.filed_at`, the retention and recency clock, was chosen by the import payload | `4a4ef2c`, 2026-08-05 |
-| `A15` | `undercroft-store` `lib.rs` (tests) | named only for its "native half", which the site describes together with `A25`; no tracked text describes the rest | `4a4ef2c`, 2026-08-05 |
-| `A18` | `undercroft-store` `kg.rs` (tests) | entity rows are writes: they append a chain record, and `verify` walks them | `4a4ef2c`, 2026-08-05 |
-| `A20` | `pqidx.rs`, `fdeidx.rs`, `latestage.rs` | a codebook and the rows it recodes commit in one transaction, not one fsync per row | `4a4ef2c`, 2026-08-05 |
-| `A22` | CLI `main.rs` and `tenant.rs` (tests), orchestrator `main.rs` | an integrity verdict found at open exits as one on every command, not only the checking ones; `rotate`'s `/v1` error classes | `4a4ef2c`, 2026-08-05 |
-| `A24` | CLI `tenant.rs` (tests) | the import attestation | `4a4ef2c`, 2026-08-05 |
-| `A25` | `undercroft-store` `lib.rs` (tests) | an import took the payload's drawer `id` verbatim, and that id is an AEAD associated-data component | `4a4ef2c`, 2026-08-05 |
-| `A27` | `latestage.rs` | the token codebook's training draw is capped per source | `4a4ef2c`, 2026-08-05 |
-| `U2` | `undercroft-store` `rotate.rs` (tests) | the no-moved-reference gate covers `canonical_key` and the two policy tables | `55af8d1`, 2026-08-06 |
-| `U3` | `undercroft-store` `kg.rs` (tests) | an offline relabel of an audit row fails `verify` | `55af8d1`, 2026-08-06 |
-| `U6` | `undercroft-store` `kg.rs` | the migration's completion marker is written after the `VACUUM` | `55af8d1`, 2026-08-06 |
-| `U7` | `undercroft-store` `kg.rs` | the marker is withheld while any row is pending, and the pending rows are reported | `55af8d1`, 2026-08-06 |
-
-"First cited in" is what `git log -S` answers, and it is not proof of closure:
-`4a4ef2c` is titled as closing every open audit item and `55af8d1` as the U12
-unit, which is the evidence the column rests on. An id cited later that no
-document describes gets a row here in the same unit.
-
-Two consequences, both binding:
-
-- **Cite an id only beside a description that stands without it.** A comment
-  whose whole content is "see ROADMAP C14" tells a future reader nothing
-  once C14 closes.
-- **A newly OPENED item gets a heading here**, so an open item is always
-  resolvable. That is what the entries under `## Open` above are.
-
----
-
----
-
-## The round-three audit — T1–T15, ALL CLOSED 2026-08-09
-
-The seven-dimension audit run against the round-three fixes found eleven
-regressions inside them (all closed in the same unit, described in CHANGELOG)
-and fifteen further items. **This section listed those fifteen as open work;
-every one is now closed**, because the maintainer's rule is that nothing
-merges until it is fixed — not "recorded with a shape".
-
-| | What | How it closed |
-|---|---|---|
-| T1 | `UNDERCROFT_ADMISSION` and `_SEMANTIC_GATE` warned and ignored | Both refuse and `.trim()`; the file holds ONE doctrine now, and the semantic gate's comment stating the opposite is gone |
-| T2 | Four CA pins, three empty-value behaviours | `undercroft_net::declared_pin` — one rule, and an empty declaration refuses everywhere |
-| T3 | `undercroft-llm` built its own client | It calls `agent_from_env`; the gate is workspace-wide, with two named-and-checked exemptions |
-| T4 | `UNDERCROFT_INDEX_CA` resolved per call | `pin_from_env` caches per process, `Result` and all |
-| T5 | `migrate_embedding_space` and `repair` recorded nothing | `audit_migration_standalone`; both bind what they moved and skipped |
-| T6 | Tamper decision read a cached manifest | `Vault::anchored_head` — from disk, MAC-verified; `reconcile_chain` and `verify` both use it |
-| T7 | Vault trust floor narrowed `search` silently | `Exclusions::measure` reads the EFFECTIVE floor; the e2e that pinned the silence now pins the disclosure |
-| T8 | Projections uninventoried; orchestrator root unreachable | Projecting paths are crates-relative; five entries added — and the gate immediately found `DrawerSummary.source_file` and `Tenant.level` genuinely missing |
-| T9 | `forget --backend` was CLI-only | `POST /v1/…/forget` takes `backend`, so the ops plane reaches it too |
-| T10 | Engine refusals flattened to 502 | `engine_response` keeps the engine's status AND its `class`; a local transport refusal says so |
-| T11 | clap usage errors exited 2 | Both binaries exit 1; the e2e check that PINNED the collision now pins the doctrine |
-| T12 | Two integrity verdicts outside the doctrine | `supersessions` answers `ok`; `Unsealable` exits 2 on every subcommand |
-| T13 | Coverage the fixes did not get | Nine new e2e arms across both suites, incl. the CA refusal, the usage-exit doctrine, and the migration record seen by the operator and refused to the agent |
-| T14 | No inventory for the ops parity axis | `OPS_DELIBERATELY_ABSENT`, counted against the engine's capabilities in both directions, every absence carrying a reason |
-| T15 | Residues stated | The query-vector egress boundary and the CA-rotation restart, both written where the code is |
-
-**Two of these found live drifts while being closed** — `DrawerSummary.source_file`
-never reached the CLI, and `Tenant.level` was dropped from `tenant-list`, which
-is the field that exists because a migration has to ask for it. Both are fixed.
 ### O247 — the `rotate/` boundary rejects a FOREIGN keycheck and not a COPIED one, and no gate exercises the copied variant
 
 **Filed 2026-09-21 by O242's ruling panel (the security lens); verified by the
@@ -24232,6 +24138,102 @@ mirror.
 
 
 ---
+
+
+## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
+
+Code comments and documents across this tree cite ids of the form
+`ROADMAP <letter><number>`: **A** (audit findings), **C** (the completeness
+audit), **R** (read-only-posture residuals), **U** (at-rest units), **M**
+(the `1.2.0` units — three round-four rows too large for a PATCH, and what
+closing them found), **O** (work filed after 1.0.0). Most of the ids
+cited across the tree resolve to no heading here, which reads as rot and is
+not: **an `A`/`C`/`R`/`U` entry lives in this file only while the item is
+OPEN.** (Count them yourself if you need to — `grep -rhoE 'ROADMAP [ACRUMO][0-9]+' . | sort -u`.
+The first draft of this paragraph put the number in prose, which is the exact
+thing this file tells you not to trust, and it was wrong twice over.) When it
+closes, the entry leaves — for those four letters the file is a list of work,
+not an archive — and the narrative moves to the CHANGELOG section of the
+release that closed it. **`M` and `O` are the exception**: a closed entry
+that has a heading keeps it — since O101 (2026-09-06), under the release that
+shipped it, or under `Unversioned` for a decision no release carries. Not every
+one was given a heading — most `M` ids past M25 have none and are narrated in
+CHANGELOG — so the CHANGELOG search below stays the fallback for any letter.
+
+So a citation is a **breadcrumb into the history, not a pointer to a
+heading**, and the authoritative description of any closed item is the
+comment at the citation site itself, which is written to stand alone. If you
+are following one and want more, search CHANGELOG.md for the id.
+
+**For the ids below that search finds nothing, and the citation site is the
+whole record.** Checked 2026-09-14 with `git grep -w` over the tracked tree:
+each appeared in code comments or test headings and, before this table, in no
+document — not this file, not CHANGELOG. They closed inside units whose commit messages name the
+unit rather than the id, so the site's own words are the description and the
+commit, found by `git log -S` on those words, is where the diff lives:
+
+| id | cited at | what the site says | first cited in |
+|---|---|---|---|
+| `A11` | `undercroft-store` `kg.rs` (tests) | the graph is a content path, and it is screened | `4a4ef2c`, 2026-08-05 |
+| `A14` | `undercroft-store` `lib.rs` (tests) | `meta.filed_at`, the retention and recency clock, was chosen by the import payload | `4a4ef2c`, 2026-08-05 |
+| `A15` | `undercroft-store` `lib.rs` (tests) | named only for its "native half", which the site describes together with `A25`; no tracked text describes the rest | `4a4ef2c`, 2026-08-05 |
+| `A18` | `undercroft-store` `kg.rs` (tests) | entity rows are writes: they append a chain record, and `verify` walks them | `4a4ef2c`, 2026-08-05 |
+| `A20` | `pqidx.rs`, `fdeidx.rs`, `latestage.rs` | a codebook and the rows it recodes commit in one transaction, not one fsync per row | `4a4ef2c`, 2026-08-05 |
+| `A22` | CLI `main.rs` and `tenant.rs` (tests), orchestrator `main.rs` | an integrity verdict found at open exits as one on every command, not only the checking ones; `rotate`'s `/v1` error classes | `4a4ef2c`, 2026-08-05 |
+| `A24` | CLI `tenant.rs` (tests) | the import attestation | `4a4ef2c`, 2026-08-05 |
+| `A25` | `undercroft-store` `lib.rs` (tests) | an import took the payload's drawer `id` verbatim, and that id is an AEAD associated-data component | `4a4ef2c`, 2026-08-05 |
+| `A27` | `latestage.rs` | the token codebook's training draw is capped per source | `4a4ef2c`, 2026-08-05 |
+| `U2` | `undercroft-store` `rotate.rs` (tests) | the no-moved-reference gate covers `canonical_key` and the two policy tables | `55af8d1`, 2026-08-06 |
+| `U3` | `undercroft-store` `kg.rs` (tests) | an offline relabel of an audit row fails `verify` | `55af8d1`, 2026-08-06 |
+| `U6` | `undercroft-store` `kg.rs` | the migration's completion marker is written after the `VACUUM` | `55af8d1`, 2026-08-06 |
+| `U7` | `undercroft-store` `kg.rs` | the marker is withheld while any row is pending, and the pending rows are reported | `55af8d1`, 2026-08-06 |
+
+"First cited in" is what `git log -S` answers, and it is not proof of closure:
+`4a4ef2c` is titled as closing every open audit item and `55af8d1` as the U12
+unit, which is the evidence the column rests on. An id cited later that no
+document describes gets a row here in the same unit.
+
+Two consequences, both binding:
+
+- **Cite an id only beside a description that stands without it.** A comment
+  whose whole content is "see ROADMAP C14" tells a future reader nothing
+  once C14 closes.
+- **A newly OPENED item gets a heading here**, so an open item is always
+  resolvable. That is what the entries under `## Open` above are.
+
+---
+
+---
+
+## The round-three audit — T1–T15, ALL CLOSED 2026-08-09
+
+The seven-dimension audit run against the round-three fixes found eleven
+regressions inside them (all closed in the same unit, described in CHANGELOG)
+and fifteen further items. **This section listed those fifteen as open work;
+every one is now closed**, because the maintainer's rule is that nothing
+merges until it is fixed — not "recorded with a shape".
+
+| | What | How it closed |
+|---|---|---|
+| T1 | `UNDERCROFT_ADMISSION` and `_SEMANTIC_GATE` warned and ignored | Both refuse and `.trim()`; the file holds ONE doctrine now, and the semantic gate's comment stating the opposite is gone |
+| T2 | Four CA pins, three empty-value behaviours | `undercroft_net::declared_pin` — one rule, and an empty declaration refuses everywhere |
+| T3 | `undercroft-llm` built its own client | It calls `agent_from_env`; the gate is workspace-wide, with two named-and-checked exemptions |
+| T4 | `UNDERCROFT_INDEX_CA` resolved per call | `pin_from_env` caches per process, `Result` and all |
+| T5 | `migrate_embedding_space` and `repair` recorded nothing | `audit_migration_standalone`; both bind what they moved and skipped |
+| T6 | Tamper decision read a cached manifest | `Vault::anchored_head` — from disk, MAC-verified; `reconcile_chain` and `verify` both use it |
+| T7 | Vault trust floor narrowed `search` silently | `Exclusions::measure` reads the EFFECTIVE floor; the e2e that pinned the silence now pins the disclosure |
+| T8 | Projections uninventoried; orchestrator root unreachable | Projecting paths are crates-relative; five entries added — and the gate immediately found `DrawerSummary.source_file` and `Tenant.level` genuinely missing |
+| T9 | `forget --backend` was CLI-only | `POST /v1/…/forget` takes `backend`, so the ops plane reaches it too |
+| T10 | Engine refusals flattened to 502 | `engine_response` keeps the engine's status AND its `class`; a local transport refusal says so |
+| T11 | clap usage errors exited 2 | Both binaries exit 1; the e2e check that PINNED the collision now pins the doctrine |
+| T12 | Two integrity verdicts outside the doctrine | `supersessions` answers `ok`; `Unsealable` exits 2 on every subcommand |
+| T13 | Coverage the fixes did not get | Nine new e2e arms across both suites, incl. the CA refusal, the usage-exit doctrine, and the migration record seen by the operator and refused to the agent |
+| T14 | No inventory for the ops parity axis | `OPS_DELIBERATELY_ABSENT`, counted against the engine's capabilities in both directions, every absence carrying a reason |
+| T15 | Residues stated | The query-vector egress boundary and the CA-rotation restart, both written where the code is |
+
+**Two of these found live drifts while being closed** — `DrawerSummary.source_file`
+never reached the CLI, and `Tenant.level` was dropped from `tenant-list`, which
+is the field that exists because a migration has to ask for it. Both are fixed.
 
 ## Unversioned — decisions and external actions, not code
 
