@@ -312,7 +312,9 @@ cold handle. The connection is now `SQLITE_OPEN_READ_ONLY` under `PRAGMA
 query_only=ON`; the schema is checked rather than created, a lagging manifest
 anchor is reported rather than healed, and a staged rotation is honoured in
 memory with its file untouched. Whatever the open declined to repair appears
-as `unhealed` on `GET /v1/vaults/{id}/stats` beside `read_only`. Two
+as `unhealed` on `GET /v1/vaults/{id}/stats` beside `read_only` — and since
+1.6.2 (ROADMAP O246) a writable server's open reports there, in the past
+tense, the anchor heal it performed and how far behind the anchor was. Two
 conditions refuse with **409** instead: a manifest whose `vault.db` is
 absent, and a schema this build would have had to migrate.
 

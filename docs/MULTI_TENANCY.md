@@ -105,7 +105,9 @@ What it means now:
   created or altered, no `chain_meta` seeded, no anchor fast-forwarded,
   no FTS rebuilt, and no `vault.json.next` promoted or deleted. Each is
   detected and reported instead — as a warning at open and as `unhealed`
-  on `GET /v1/vaults/{id}/stats` alongside `read_only`. A prefilter loads
+  on `GET /v1/vaults/{id}/stats` alongside `read_only` (where, since 1.6.2,
+  a WRITABLE open also reports the anchor heal it performed — ROADMAP
+  O246). A prefilter loads
   an existing index and never builds one (R1), falling back to the exact
   scan and saying so once per tier. Two conditions refuse rather than
   report, both 409: an absent `vault.db` under a present manifest, and a

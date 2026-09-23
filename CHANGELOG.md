@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.6.2 — unreleased
+
+PATCH: a fix whose only observable change is that a silence is gone. A
+surface added to REPORT an existing defect adds no capability (the
+2026-09-08 ruling); nothing that worked before behaves differently, no
+default moves, and no declaration can stop a start-up.
+
+### A writable open says what it healed (O246)
+
+A lagging manifest rollback anchor is an ordinary crash artifact, and the
+writable open has always fast-forwarded it in silence while a read-only open
+reported it on `unhealed`. O241's ruling sharpened that silence into A2's
+first step: a genuine **older** `vault.json` restored beside a current
+database lowers the anchor the same way, the next writable open heals it,
+`verify` stays green by construction, and the only evidence of the restore
+was consumed by the heal on the posture that heals. The writable open now
+reports, on `unhealed` and as a warning at open, that the anchor was N
+record(s) behind when this handle opened and that it fast-forwarded it — a
+fact about that open, in the past tense, which is what keeps it on the right
+side of M3 (a route claiming a *current* lag on every call). It refuses
+nothing: the crash window is unbounded in principle and a crash must not
+alarm. Read it as evidence — on `undercroft stats`, `undercroft_status`,
+`GET /v1/…/stats` and the admin console — and note that a monitor keyed on
+`unhealed` being empty on a writable open will now see this line after every
+crash-heal, which is the point. Gated by a store unit test over the restored
+manifest (premise: `verify` green, the open reports `Healed`) and by e2e arms
+through `undercroft stats` and a writable `serve-http`, where the note stays
+for the handle's lifetime.
+
 ## 1.6.1 — 2026-09-22
 
 PATCH: fixes only. Each adds a surface that REPORTS an existing silence, and
