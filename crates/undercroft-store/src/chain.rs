@@ -680,32 +680,76 @@ pub(crate) const KEYCHECK_LABEL_LEN: usize = 16;
 /// reading zero as "no rotation, therefore forged" recreates the defect), and
 /// a planted `rotate/` label inflates it without changing any verdict.
 pub(crate) fn rotations_since(conn: &Connection, seq: i64) -> Result<i64, StoreError> {
-    let (lo, hi) = prefix_range(Namespace::Rotate);
-    Ok(conn.query_row(
-        "SELECT COUNT(*) FROM audit \
-          WHERE seq > ?1 AND record_id >= ?2 AND record_id < ?3",
-        params![seq, lo, hi],
-        |r| r.get(0),
-    )?)
+    let (clause, ps) = prefix_range(Namespace::Rotate).clause(2);
+    let sql = format!("SELECT COUNT(*) FROM audit WHERE seq > ?1 AND {clause}");
+    let mut args = vec![rusqlite::types::Value::Integer(seq)];
+    args.extend(ps.into_iter().map(rusqlite::types::Value::Text));
+    Ok(conn.query_row(&sql, rusqlite::params_from_iter(args), |r| r.get(0))?)
 }
 
-/// A namespace's labels as a half-open range: `prefix` up to the same string
-/// with its closing `/` replaced by the next byte, `0`.
-pub(crate) fn prefix_range(ns: Namespace) -> (String, String) {
-    let lo = ns.prefix().to_string();
-    let hi = format!("{}0", &lo[..lo.len() - 1]);
-    (lo, hi)
+/// How a namespace's labels are SELECTED out of `audit` (ROADMAP O243).
+///
+/// Every prefixed namespace is a half-open range — `prefix` up to the same
+/// string with its closing `/` replaced by the next byte, `0` — and the one
+/// BARE namespace, `Namespace::Drawer`, whose prefix is empty, is not: its
+/// labels are the ids that carry no `/` at all, which no range over
+/// `record_id` can express. `prefix_range` used to compute the range for
+/// every namespace and panicked on the bare one (`lo.len() - 1` underflows,
+/// and the slice bound fails in both profiles); unreachable only because its
+/// three callers happened to pass prefixed namespaces, which is a property
+/// of the call sites and not of the function. A second variant, rather than
+/// a refusal, because `chain_keys(Namespace::Drawer)` has an honest answer
+/// — the bare labels — and a census over `Namespace::ALL` should get it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LabelRange {
+    /// `record_id >= lo AND record_id < hi`.
+    Prefixed {
+        /// The namespace's prefix, `/` included.
+        lo: String,
+        /// The exclusive upper bound.
+        hi: String,
+    },
+    /// The bare namespace: labels with no `/`.
+    Bare,
 }
 
-/// Every distinct label a namespace's records carry, by the same range.
+impl LabelRange {
+    /// The SQL predicate over `record_id`, its positional parameters numbered
+    /// from `?{first}`, and those parameters in order. A caller appends it to
+    /// its own `WHERE` and passes the parameters after its own.
+    pub(crate) fn clause(&self, first: usize) -> (String, Vec<String>) {
+        match self {
+            LabelRange::Prefixed { lo, hi } => (
+                format!("record_id >= ?{first} AND record_id < ?{}", first + 1),
+                vec![lo.clone(), hi.clone()],
+            ),
+            LabelRange::Bare => ("instr(record_id, '/') = 0".to_string(), Vec::new()),
+        }
+    }
+}
+
+/// A namespace's label selection — see [`LabelRange`]. Never panics: the
+/// bare namespace answers `Bare`, and every prefixed one's prefix ends in
+/// the `/` the upper bound replaces, which the test over `Namespace::ALL`
+/// pins.
+pub(crate) fn prefix_range(ns: Namespace) -> LabelRange {
+    let lo = ns.prefix();
+    match lo.strip_suffix('/') {
+        None => LabelRange::Bare,
+        Some(stem) => LabelRange::Prefixed {
+            lo: lo.to_string(),
+            hi: format!("{stem}0"),
+        },
+    }
+}
+
+/// Every distinct label a namespace's records carry, by the same selection.
 pub(crate) fn chain_keys(conn: &Connection, ns: Namespace) -> Result<Vec<String>, StoreError> {
-    let (lo, hi) = prefix_range(ns);
-    let mut stmt = conn.prepare(
-        "SELECT DISTINCT record_id FROM audit \
-         WHERE record_id >= ?1 AND record_id < ?2 ORDER BY record_id",
-    )?;
+    let (clause, ps) = prefix_range(ns).clause(1);
+    let sql = format!("SELECT DISTINCT record_id FROM audit WHERE {clause} ORDER BY record_id");
+    let mut stmt = conn.prepare(&sql)?;
     let keys = stmt
-        .query_map([lo.as_str(), hi.as_str()], |r| r.get(0))?
+        .query_map(rusqlite::params_from_iter(ps.iter()), |r| r.get(0))?
         .collect::<Result<_, _>>()?;
     Ok(keys)
 }
@@ -1146,6 +1190,80 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap()
+    }
+
+    /// **ROADMAP O243's gate: every `Namespace::ALL` variant is driven
+    /// through `prefix_range`, and the bare one does not panic.** Before the
+    /// fix the first variant, `Drawer`, panicked on `lo.len() - 1`. The
+    /// prefixed arms pin the range's shape against each namespace's own
+    /// spelling, and a seeded store shows the selections partition the
+    /// table: `chain_keys(Drawer)` answers the bare drawer labels and no
+    /// prefixed one, `chain_keys(Trust)` the `trust/` labels alone.
+    #[test]
+    fn every_namespace_selects_its_labels_and_the_bare_one_does_not_panic() {
+        let mut bare = 0;
+        for ns in Namespace::ALL.iter().copied() {
+            let range = prefix_range(ns);
+            let prefix = ns.prefix();
+            match &range {
+                LabelRange::Bare => {
+                    assert!(prefix.is_empty(), "{ns:?}: only an empty prefix is bare");
+                    bare += 1;
+                }
+                LabelRange::Prefixed { lo, hi } => {
+                    assert_eq!(lo, prefix, "{ns:?}: the range starts at the prefix");
+                    assert!(
+                        prefix.ends_with('/'),
+                        "{ns:?}: a prefix ends in the slash the bound replaces"
+                    );
+                    assert_eq!(
+                        hi,
+                        &format!("{}0", &prefix[..prefix.len() - 1]),
+                        "{ns:?}: the bound is the prefix with its slash replaced by `0`"
+                    );
+                    assert!(lo < hi, "{ns:?}: the range is non-empty");
+                }
+            }
+            // The clause is well-formed SQL for both shapes: prepare it.
+            let (clause, ps) = range.clause(1);
+            let (_d, s) = fresh(SecurityLevel::HmacOnly);
+            let sql = format!("SELECT COUNT(*) FROM audit WHERE {clause}");
+            let n: i64 = s
+                .conn
+                .query_row(&sql, rusqlite::params_from_iter(ps.iter()), |r| r.get(0))
+                .unwrap_or_else(|e| panic!("{ns:?}: the clause does not prepare: {e}"));
+            assert!(n >= 0);
+        }
+        assert_eq!(bare, 1, "exactly one namespace is bare: Drawer");
+
+        // The selections partition a real table.
+        let (_d, mut s) = fresh(SecurityLevel::HmacOnly);
+        s.upsert(&drawer("first", 0)).unwrap();
+        s.upsert(&drawer("second", 1)).unwrap();
+        s.set_wing_trust("wing", "quarantined").unwrap();
+        let drawers = chain_keys(&s.conn, Namespace::Drawer).unwrap();
+        assert_eq!(drawers.len(), 2, "two bare drawer labels: {drawers:?}");
+        assert!(drawers.iter().all(|k| !k.contains('/')), "{drawers:?}");
+        let trust = chain_keys(&s.conn, Namespace::Trust).unwrap();
+        assert_eq!(trust, vec!["trust/wing".to_string()]);
+        let rotations = chain_keys(&s.conn, Namespace::Rotate).unwrap();
+        assert!(rotations.is_empty(), "{rotations:?}");
+        assert_eq!(rotations_since(&s.conn, 0).unwrap(), 0);
+        // Every namespace's keys together cover every label exactly once.
+        let total: usize = Namespace::ALL
+            .iter()
+            .map(|ns| chain_keys(&s.conn, *ns).unwrap().len())
+            .sum();
+        let distinct: i64 = s
+            .conn
+            .query_row("SELECT COUNT(DISTINCT record_id) FROM audit", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(
+            total as i64, distinct,
+            "the namespace selections partition the labels"
+        );
     }
 
     /// The production prefix digest over the first `n` rows (ROADMAP O245),

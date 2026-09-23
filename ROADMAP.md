@@ -4176,8 +4176,9 @@ identities.
 ## 1.7.0 — unreleased
 
 MINOR: O245 adds capability the product never had — a witness the engine
-emits and checks — and O246 rides with it as the fix it is (a surface added
-to REPORT an existing silence, the 2026-09-08 ruling).
+emits and checks — and two fixes ride with it: O246 (a surface added to
+REPORT an existing silence, the 2026-09-08 ruling) and O243 (a latent panic
+removed).
 
 ### O245 — CLOSED 2026-09-23: the external witness the threat model called "the planned mitigation" is ruled, escalated, decided (emit + check, no MCP) and built
 
@@ -4571,6 +4572,76 @@ the product never had. The release section became `## 1.7.0 — unreleased`,
 absorbing O246's fix. Nothing can stop a deployment, so no `UPGRADING.md`
 entry. `docs/THREAT_MODEL.md` A2 now says what ships instead of "planned";
 the runbook carries the procedure as step 6 of Prevent.
+
+### O243 — CLOSED 2026-09-23: `chain::prefix_range` no longer panics on the bare namespace — it answers a selection, not a range
+
+**Filed 2026-09-21 by O241's ruling panel (the security lens); verified by the
+integrator and by the refuter.** `prefix_range` computes
+`&lo[..lo.len() - 1]` to build its half-open upper bound, and
+`Namespace::Drawer`'s prefix is `""`, so `lo.len() - 1` underflows a `usize`
+and the slice bound panics. Both profiles panic: release wraps to
+`usize::MAX` and the slice bound fails anyway.
+
+**Unreachable today, and that is a property of three call sites rather than of
+the function**: `rotations_since` passes `Rotate`; `resurrected_rows` filters
+`is_destruction()` first, and `Namespace::Del` is the only one, exhaustively;
+and `chain_keys`'s two production callers pass `Retention` and `Trust`. So it
+is a latent panic in a `pub(crate)` function with no guard and no gate, on a
+tree whose doctrine is that a reachable-by-the-next-caller defect is a defect.
+
+Two things make it worth closing rather than noting. **O205 has a second
+destruction namespace filed**, and nothing checks that its prefix is
+non-empty; if it is empty, `resurrected_rows` reaches this. And **the first
+thing any per-namespace census would do is iterate `Namespace::ALL` into
+`prefix_range`**, which panics on entry one — recorded because O241 was
+refused, so nobody will meet it that way now.
+
+**Shape**: an empty prefix has no upper bound to compute — the whole table is
+its range — so the function returns a range with no `hi`, or the bare
+namespace is refused as having no prefix range at all, whichever reads
+honestly at the two callers.
+
+**Gate**: `prefix_range(Namespace::Drawer)` does not panic, and every
+`Namespace::ALL` variant is driven through it.
+**Counterfactual**: today it panics on the first variant.
+
+
+#### BUILT 2026-09-23, to the entry's first shape: the bare namespace has a selection, not a range
+
+**Prior rulings read.** None owns this question; O80 (a namespace is a TYPE,
+and `prefix()` states the spelling once) is what makes the fix one function.
+The entry offered two shapes — a range with no upper bound, or a refusal —
+and the reading chose neither literally: "the whole table" is NOT the bare
+namespace's range, because every prefixed label also sorts above the empty
+string, so a `chain_keys(Drawer)` that answered the whole table would answer
+wrongly; and a refusal would leave the one honest answer — the labels with no
+`/` — unreachable. `prefix_range` now returns `LabelRange::{Prefixed { lo,
+hi }, Bare}`, derived by `strip_suffix('/')` on the spelling rather than by
+slicing at `len() - 1`, and `LabelRange::clause(first)` renders the SQL
+predicate each shape means — the half-open range, or `instr(record_id, '/')
+= 0` — with its positional parameters, so the three callers (`chain_keys`,
+`rotations_since`, `resurrected_rows`) append one predicate and never carry
+the arithmetic themselves. A destruction namespace classified later is
+scanned whatever its prefix is, which is the O205 case the filing named.
+
+**Gate met.** `every_namespace_selects_its_labels_and_the_bare_one_does_not_panic`
+drives every `Namespace::ALL` variant through `prefix_range`: exactly one is
+`Bare` (the empty prefix), every prefixed one's `lo` is its own spelling
+ending in `/` and its `hi` that spelling with the slash replaced by `0`, and
+each clause PREPARES against a real table. Then, on a seeded store, the
+selections PARTITION the labels: `chain_keys(Drawer)` answers the two bare
+drawer labels and nothing with a slash, `chain_keys(Trust)` the one `trust/`
+label, and the per-namespace counts sum to `COUNT(DISTINCT record_id)`.
+Counterfactual: before the change the first variant panicked on entry.
+
+**Cost stated.** `rotations_since` builds its SQL per call instead of using
+a literal; the query is one indexed COUNT on an operator path and the string
+is a few dozen bytes. `resurrected_rows` prepares per destruction namespace,
+as it already did.
+
+**Versioning.** PATCH: a latent panic is gone and nothing observable moves.
+Rides in `1.7.0 — unreleased`. No `UPGRADING.md` entry: nothing can stop a
+deployment.
 
 ### O246 — CLOSED 2026-09-23: a writable open heals a rolled-back manifest and now says so; a read-only open already reported it
 
@@ -23983,38 +24054,6 @@ the tunnel was new. Existing surplus records stay (the trail is append-only).
 
 **Gate**: a repeated create appends nothing and the tunnel's newest record
 carries the row's tag. **Counterfactual**: today, two records.
-
-### O243 — `chain::prefix_range` panics on the one namespace whose prefix is empty
-
-**Filed 2026-09-21 by O241's ruling panel (the security lens); verified by the
-integrator and by the refuter.** `prefix_range` computes
-`&lo[..lo.len() - 1]` to build its half-open upper bound, and
-`Namespace::Drawer`'s prefix is `""`, so `lo.len() - 1` underflows a `usize`
-and the slice bound panics. Both profiles panic: release wraps to
-`usize::MAX` and the slice bound fails anyway.
-
-**Unreachable today, and that is a property of three call sites rather than of
-the function**: `rotations_since` passes `Rotate`; `resurrected_rows` filters
-`is_destruction()` first, and `Namespace::Del` is the only one, exhaustively;
-and `chain_keys`'s two production callers pass `Retention` and `Trust`. So it
-is a latent panic in a `pub(crate)` function with no guard and no gate, on a
-tree whose doctrine is that a reachable-by-the-next-caller defect is a defect.
-
-Two things make it worth closing rather than noting. **O205 has a second
-destruction namespace filed**, and nothing checks that its prefix is
-non-empty; if it is empty, `resurrected_rows` reaches this. And **the first
-thing any per-namespace census would do is iterate `Namespace::ALL` into
-`prefix_range`**, which panics on entry one — recorded because O241 was
-refused, so nobody will meet it that way now.
-
-**Shape**: an empty prefix has no upper bound to compute — the whole table is
-its range — so the function returns a range with no `hi`, or the bare
-namespace is refused as having no prefix range at all, whichever reads
-honestly at the two callers.
-
-**Gate**: `prefix_range(Namespace::Drawer)` does not panic, and every
-`Namespace::ALL` variant is driven through it.
-**Counterfactual**: today it panics on the first variant.
 
 ### O247 — the `rotate/` boundary rejects a FOREIGN keycheck and not a COPIED one, and no gate exercises the copied variant
 
