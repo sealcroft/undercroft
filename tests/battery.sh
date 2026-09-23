@@ -1023,6 +1023,7 @@ UNVERSIONED_CLOSED=(
   "O173|closed by doctrine: how an unanswered design question is ruled and where the ruling is recorded"
   "O240|closed by RULING: a manifest regime marker is restored with the manifest, so it buys nothing"
   "O241|closed by RULING: a manifest census cannot authenticate a point question over an unbounded key space"
+  "O244|closed by RULING: audit compaction refused; the replacement gate was met by O250 and the witness it was sequenced behind built by O245"
 )
 ROADMAP_DRIFT=$(roadmap_scan ROADMAP.md)
 # The premise BEFORE the roster (ROADMAP O162). It used to run after it, so a
