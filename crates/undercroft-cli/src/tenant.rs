@@ -530,6 +530,8 @@ impl Tenancy {
             ("POST", &["v1", "vaults", id, "verify-forgetting"]) => {
                 self.verify_forgetting(id, req, body, now)
             }
+            ("GET", &["v1", "vaults", id, "witness"]) => self.witness_emit(id, req, now),
+            ("POST", &["v1", "vaults", id, "witness"]) => self.witness_check(id, req, body, now),
             ("POST", &["v1", "vaults", id, "admission"]) => self.admission_rule(id, req, body, now),
             ("GET", &["v1", "vaults", id, "retention"]) => self.retention_list(id, req, now),
             ("POST", &["v1", "vaults", id, "retention"]) => self.retention_set(id, req, body, now),
@@ -1995,6 +1997,76 @@ impl Tenancy {
             out["sender"] = json!(att.sender);
         }
         Ok((200, Body::Json(out)))
+    }
+
+    /// `GET /v1/vaults/{id}/witness` — emit a witness of this vault's audit
+    /// chain (ROADMAP O245): the row count and an unkeyed digest over the
+    /// rows' preserved bytes as the binding, the head and the anchored pair
+    /// as corroboration. A read; never signed here, because the signing
+    /// identity is a file on the operator's machine, not the server's.
+    ///
+    /// This is the route a fleet takes its cadence witness through: a
+    /// long-lived server never re-opens, so the CLI's read-only open is not
+    /// available to it, and the document is about the DATABASE, which no
+    /// heal moves. A refusal (an unwitnessable chain: no rows, or a pending
+    /// blinding walk) is 400 out of `store_err`.
+    fn witness_emit(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let store = self.store_for(id)?;
+        let w = store.witness_emit().map_err(store_err)?;
+        let out = serde_json::to_value(&w)
+            .map_err(|e| RestError::new(500, format!("serialising witness: {e}")))?;
+        Ok((200, Body::Json(out)))
+    }
+
+    /// `POST /v1/vaults/{id}/witness` — check a witness against THIS vault
+    /// (ROADMAP O245), on `verify-forgetting`'s shape: a malformed body is
+    /// the caller's 400; a document naming another vault or carrying a
+    /// signature that does not verify is **409 + `class: "integrity"`** out
+    /// of `store_err`; and the verdict is a TYPED field. `extends` answers
+    /// 200 with `rows_since`, `head_corroborated` (false after a key
+    /// rotation re-stepped the witnessed head — corroboration lost, not a
+    /// rollback) and `rotations_since`; `rolled_back` answers **409 +
+    /// `class: "integrity"`**, the wire form of the CLI's exit 2, with the
+    /// two heights and whether the witnessed rows were rewritten in the
+    /// message, because a rollback is the verdict this route exists for and
+    /// a 200 would let a monitor keyed on status read it as clean.
+    fn witness_check(&mut self, id: &str, req: &Request, body: &str, now: i64) -> RestResult {
+        self.assert_or_401(id, req, now)?;
+        let w: undercroft_store::ChainWitness = serde_json::from_str(body)
+            .map_err(|e| RestError::new(400, format!("body is not a witness: {e}")))?;
+        let store = self.store_for(id)?;
+        let signed = w.signed();
+        match store.witness_check(&w).map_err(store_err)? {
+            undercroft_store::WitnessVerdict::Extends {
+                rows_since,
+                head_corroborated,
+                rotations_since,
+            } => Ok((
+                200,
+                Body::Json(json!({
+                    "verdict": "extends",
+                    "rows_witnessed": w.rows,
+                    "rows_since": rows_since,
+                    "head_corroborated": head_corroborated,
+                    "rotations_since": rotations_since,
+                    "signed": signed,
+                })),
+            )),
+            undercroft_store::WitnessVerdict::RolledBack {
+                rows_witnessed,
+                rows_now,
+                rewritten,
+            } => Err(RestError::new(
+                409,
+                format!(
+                    "rolled_back: the witness names {rows_witnessed} audit record(s), the chain \
+                     now holds {rows_now}, rewritten={rewritten} — `verify` cannot see this; \
+                     restore a backup taken after the witness, or treat the vault as rewound"
+                ),
+            )
+            .integrity()),
+        }
     }
 
     /// `GET /v1/vaults/{id}/admission` — every drawer awaiting an
@@ -3506,11 +3578,12 @@ fn b64decode(s: &str) -> Result<Vec<u8>, base64::DecodeError> {
 /// opposite of the per-handler guard this replaced, where forgetting a line
 /// opened a write door and nothing said so.
 ///
-/// The three exceptions are POST for cost or for a caller-supplied document,
+/// The four exceptions are POST for cost or for a caller-supplied document,
 /// never for effect: `search` reads (its optional read-audit record is
 /// already suppressed by `open_read_only`), `verify` walks HMACs and replays
-/// the chain, and `verify-forgetting` checks an attestation that has to
-/// travel in a body. `GET .../export` is a
+/// the chain, `verify-forgetting` checks an attestation that has to
+/// travel in a body, and `witness` checks a chain witness the same way
+/// (ROADMAP O245). `GET .../export` is a
 /// read here too — the egress chain record it would otherwise write is
 /// skipped on a read-only server, which warns and serves.
 fn mutates(method: &str, segs: &[&str]) -> bool {
@@ -3531,6 +3604,11 @@ fn mutates(method: &str, segs: &[&str]) -> bool {
             // function was written to end, reintroduced by the route that
             // closes a different one.
             | ("POST", &["v1", "vaults", _, "verify-forgetting"])
+            // **The fourth POST that reads** (ROADMAP O245): the witness is
+            // the CALLER's document and travels in a body; `witness_check`
+            // takes `&self` and walks `audit` twice, writing nothing. The
+            // emit is a GET and needs no entry.
+            | ("POST", &["v1", "vaults", _, "witness"])
     )
 }
 

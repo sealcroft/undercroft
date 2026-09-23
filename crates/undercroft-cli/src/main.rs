@@ -308,6 +308,16 @@ enum Command {
         #[arg(long, default_value = "default")]
         vault: String,
     },
+    /// The external witness of the audit chain (ROADMAP O245): emit a
+    /// small document to keep OFF this machine, and check one brought back
+    /// — a vault rolled back to a genuine earlier state is reported against
+    /// it, which nothing inside the vault can see. Always opens read-only.
+    Witness {
+        #[command(subcommand)]
+        action: WitnessAction,
+        #[arg(long, global = true, default_value = "default")]
+        vault: String,
+    },
     /// Review writes the admission screen quarantined (an operator
     /// surface; enable screening with UNDERCROFT_ADMISSION=quarantine)
     Admission {
@@ -811,6 +821,31 @@ enum IndexAction {
     Status {
         /// qdrant | chroma | pgvector | milvus | weaviate
         backend: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum WitnessAction {
+    /// Emit a witness of the audit chain as it stands: the row count and an
+    /// unkeyed digest over the rows' preserved bytes (which survive a key
+    /// rotation — the chain head does not), plus the head, regime and the
+    /// manifest anchor as corroboration. JSON on stdout, or to --out.
+    Emit {
+        /// Write the witness here instead of stdout (keep it OFF this
+        /// machine — a witness on the vault's own disk is restored with it)
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// Sign it with a bundle signing identity (`bundle sign-keygen`),
+        /// so a writer to the witness store cannot substitute one
+        #[arg(long)]
+        sign: Option<PathBuf>,
+    },
+    /// Check a witness against this vault. Exit 0 when the chain extends
+    /// it; exit 2 — the integrity verdict — when the vault has been rolled
+    /// back below it or its witnessed rows were rewritten
+    Check {
+        /// Witness JSON written by `witness emit`
+        file: PathBuf,
     },
 }
 
@@ -2901,6 +2936,101 @@ fn run(cli: Cli) -> Result<()> {
                          Run `undercroft verify` to check the trail itself.",
                         att.drawers.len()
                     )
+                }
+            }
+        }
+        Command::Witness { action, vault } => {
+            // **Read-only whatever the flags** (ROADMAP O245's ruling): a
+            // writable open heals the anchor, relabels and re-switches before
+            // anything reads, and an emit over a lowered anchor would consume
+            // O246's evidence in silence. The check compares the DATABASE,
+            // which no heal moves, so the posture costs it nothing.
+            let store = open_store_as(&data_dir(&cli), vault, Posture::ReadOnly)?;
+            match action {
+                WitnessAction::Emit { out, sign } => {
+                    let mut w = store.witness_emit()?;
+                    if let Some(identity) = sign {
+                        let secret = std::fs::read_to_string(identity).with_context(|| {
+                            format!("reading signing identity {}", identity.display())
+                        })?;
+                        w.sign(secret.trim())?;
+                    }
+                    let json = serde_json::to_string_pretty(&w)?;
+                    match out {
+                        Some(path) => {
+                            std::fs::write(path, format!("{json}\n"))
+                                .with_context(|| format!("writing {}", path.display()))?;
+                            eprintln!(
+                                "Witness of vault '{}' at {} audit record(s) written to {} — \
+                                 keep it off this machine.",
+                                w.vault,
+                                w.rows,
+                                path.display()
+                            );
+                        }
+                        None => println!("{json}"),
+                    }
+                }
+                WitnessAction::Check { file } => {
+                    let raw = std::fs::read_to_string(file)
+                        .with_context(|| format!("reading {}", file.display()))?;
+                    let w: undercroft_store::ChainWitness = serde_json::from_str(&raw)
+                        .with_context(|| format!("{} is not a witness", file.display()))?;
+                    // A foreign vault or a bad signature is an error in the
+                    // integrity family and exits 2 through `integrity_verdict`
+                    // like every other; the two VERDICTS are handled here.
+                    let signature = if w.signed() {
+                        let who: String =
+                            w.sender.as_deref().unwrap_or("").chars().take(16).collect();
+                        format!("; signature verified, sender {who}…")
+                    } else {
+                        "; unsigned".to_string()
+                    };
+                    match store.witness_check(&w)? {
+                        undercroft_store::WitnessVerdict::Extends {
+                            rows_since,
+                            head_corroborated,
+                            rotations_since,
+                        } => {
+                            let corroboration = if head_corroborated {
+                                "the witnessed head is on the chain".to_string()
+                            } else {
+                                format!(
+                                    "the witnessed head is no longer on the chain, which a key \
+                                     rotation explains — this vault records {rotations_since} \
+                                     rotation(s) after the witnessed row — and the digest still \
+                                     binds"
+                                )
+                            };
+                            println!(
+                                "WITNESS OK: the audit chain extends the witness taken at {} \
+                                 record(s) by {rows_since} record(s); {corroboration}{signature}",
+                                w.rows
+                            );
+                        }
+                        // **The integrity verdict.** Exit 2, the code `verify`
+                        // reserves for "tampering detected": a rollback is not a
+                        // run error a compliance script should retry.
+                        undercroft_store::WitnessVerdict::RolledBack {
+                            rows_witnessed,
+                            rows_now,
+                            rewritten,
+                        } => {
+                            let how = if rewritten {
+                                "the rows below the witnessed height are not the ones witnessed \
+                                 (a fork, a rewrite, or a re-switched chain)"
+                            } else {
+                                "the chain is shorter than the witness"
+                            };
+                            println!(
+                                "WITNESS FAILED: the vault was rolled back — the witness names \
+                                 {rows_witnessed} audit record(s), the chain now holds {rows_now}, \
+                                 and {how}{signature}. `verify` cannot see this; restore a backup \
+                                 taken after the witness, or treat the vault as rewound."
+                            );
+                            std::process::exit(EXIT_INTEGRITY.into());
+                        }
+                    }
                 }
             }
         }

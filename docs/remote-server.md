@@ -117,7 +117,7 @@ the same bearer, for programmatic (non-MCP) callers and for orchestration
 platforms that use one **vault per tenant**. One palace per process stays
 the model — tenancy is vaults, not palaces.
 
-**All 56 routes**, counted against `route()` in
+**All 58 routes**, counted against `route()` in
 `crates/undercroft-cli/src/tenant.rs` rather than remembered — and the LIST is
 GATED now (ROADMAP O45), because "rather than remembered" was exactly what
 happened: this list said 35 and omitted
@@ -228,7 +228,8 @@ GET    /v1/vaults/{id}/closets          the closet index (wing?)
 GET    /v1/vaults/{id}/hallways         entity co-occurrence (wing, top?)
 
 ── operator plane (mostly never on MCP — verify-forgetting is the one
-   exception since 1.2.0/O68, as undercroft_check_erasure_receipt) ───────
+   exception since 1.2.0/O68, as undercroft_check_erasure_receipt; the
+   witness routes are off MCP by the maintainer's ruling, O245) ─────────
 POST   /v1/vaults/{id}/backups          snapshot this vault (409 if it fails verify)
 GET    /v1/vaults/{id}/backups          this vault's snapshots
 POST   /v1/vaults/{id}/backups/restore  {name}; 400 if the backup holds another
@@ -242,6 +243,16 @@ GET    /v1/vaults/{id}/retention        policies per wing/room
 POST   /v1/vaults/{id}/retention        set one
 POST   /v1/vaults/{id}/retention/sweep  enforce; returns a proof receipt
 POST   /v1/vaults/{id}/forget           provable destruction + attestation
+GET    /v1/vaults/{id}/witness          emit a witness of the audit chain (O245):
+                                        rows + an unkeyed digest over their
+                                        preserved bytes as the binding, head +
+                                        anchor as corroboration; keep it OFF
+                                        this machine
+POST   /v1/vaults/{id}/witness          check a witness (body) against this
+                                        vault: 200 {verdict:"extends", rows_since,
+                                        head_corroborated, rotations_since}, or
+                                        409 class integrity when rolled back
+                                        or naming another vault; a read
 POST   /v1/vaults/{id}/verify-forgetting  check an attestation this vault
                                         issued: Verified, or Recorded when a
                                         key rotation has destroyed the replay
@@ -297,9 +308,10 @@ filter on one port, and the gate sits **in front of dispatch** rather than
 at the top of each mutating handler — because the per-handler version had
 thirteen guards for fourteen mutating routes and `POST …/kg/authority`
 never got one. It **fails closed**: every `GET` is served, and every
-non-GET is refused with 403 *unless it is one of three named reads* —
-`POST …/search`, `POST …/verify` and `POST …/verify-forgetting` (POST for
-cost or for a caller-supplied document, never for effect).
+non-GET is refused with 403 *unless it is one of four named reads* —
+`POST …/search`, `POST …/verify`, `POST …/verify-forgetting` and
+`POST …/witness` (POST for cost or for a caller-supplied document, never
+for effect; the fourth arrived with O245).
 A route added later is refused until someone deliberately names it. This
 paragraph used to say "only reads (stats, search, export) are served",
 which under-listed the reads and omitted `verify` entirely.
@@ -313,7 +325,7 @@ query_only=ON`; the schema is checked rather than created, a lagging manifest
 anchor is reported rather than healed, and a staged rotation is honoured in
 memory with its file untouched. Whatever the open declined to repair appears
 as `unhealed` on `GET /v1/vaults/{id}/stats` beside `read_only` — and since
-1.6.2 (ROADMAP O246) a writable server's open reports there, in the past
+1.7.0 (ROADMAP O246) a writable server's open reports there, in the past
 tense, the anchor heal it performed and how far behind the anchor was. Two
 conditions refuse with **409** instead: a manifest whose `vault.db` is
 absent, and a schema this build would have had to migrate.

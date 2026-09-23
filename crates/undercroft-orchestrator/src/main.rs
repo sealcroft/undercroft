@@ -133,13 +133,14 @@ enum Command {
         id: String,
         /// One of: verify, repair, anchor, supersessions, admission,
         /// admission-rule, trust, trust-set, retention, retention-set,
-        /// retention-sweep, forget, verify-forgetting, authority,
-        /// backup-create, backups, backup-restore
+        /// retention-sweep, forget, verify-forgetting, witness,
+        /// witness-check, authority, backup-create, backups, backup-restore
         op: String,
         /// JSON body for the operations that take one (rulings, trust and
         /// retention assignment, forget, the authority declaration, the
-        /// attestation document verify-forgetting checks, and the backup
-        /// `name` backup-restore restores)
+        /// attestation document verify-forgetting checks, the witness
+        /// document witness-check checks, and the backup `name`
+        /// backup-restore restores)
         #[arg(long)]
         body: Option<String>,
     },

@@ -28,6 +28,7 @@ pub mod remote;
 mod replay;
 pub mod retention;
 mod rotate;
+pub mod witness;
 
 pub use admission::{DestinationState, PendingAdmission, QUARANTINE_WING};
 pub use forget::{AttestationVerdict, ForgetAttestation, MirrorDelete};
@@ -39,6 +40,7 @@ pub use manage::{
 pub use pqidx::WING_PQ_MIN_DEFAULT;
 pub use remote::PlaintextPush;
 pub use rotate::RotationReport;
+pub use witness::{ChainWitness, WitnessVerdict, WITNESS_VERSION};
 
 use rusqlite::{params, Connection, OptionalExtension};
 use time::format_description::well_known::Rfc3339;

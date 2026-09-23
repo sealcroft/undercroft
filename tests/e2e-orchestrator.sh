@@ -329,6 +329,13 @@ body_has "ops anchor"        '"anchored"'  -- -X POST "${ADMIN[@]}" "$O/admin/te
 body_has "ops supersessions" 'supersessions' -- "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/supersessions"
 body_has "ops admission list" 'pending'    -- "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/admission"
 body_has "ops trust list"    'assignments' -- "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/trust"
+# The external witness (ROADMAP O245): emitted and checked through the
+# operator plane, which is the only door a fleet operator has for it — the
+# maintainer ruled it off MCP, and the tenant plane must not offer a rollback
+# check to the party whose rollback it would detect.
+body_has "ops witness emit"  '"prefix_digest"' -- "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/witness"
+OPS_W="$(curl -s "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/witness")"
+body_has "ops witness check" '"verdict":"extends"' -- -X POST "${ADMIN[@]}" -d "$OPS_W" "$O/admin/tenants/$OPS_ID/ops/witness"
 # Backups on the OPERATOR plane (ROADMAP O68). They are `Absence::Boundary` on
 # MCP and must never reach the tenant data plane, so this is the only door a
 # fleet operator has — which is the entire justification for the routes.

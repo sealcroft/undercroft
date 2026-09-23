@@ -202,7 +202,7 @@ this project, which is why the two codebases share concepts but not code
 
 **Multi-tenancy & fleet operation:**
 
-- Versioned `/v1` REST engine, **56 routes**: per-vault assertions,
+- Versioned `/v1` REST engine, **58 routes**: per-vault assertions,
   external embeddings, dedup-refresh, lossless export/import (vectors +
   token artifacts ride along — restore is a copy, not a re-embed), the
   full agent-facing memory surface (diary, tunnels, closets, hallways,

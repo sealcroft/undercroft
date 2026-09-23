@@ -420,6 +420,15 @@ pub const SURFACE_ABSENCES: &[(&str, &str, Absence, &str)] = &[
     // than cross-referenced because this inventory must PARTITION the CLI
     // surface: an anchor missing from both lists is what the gate catches,
     // and "it is in another list" would be a hole in the arithmetic.
+    // The external witness (ROADMAP O245), ruled off MCP by the maintainer
+    // on 2026-09-23: an agent's memory IS this vault, so it cannot hold an
+    // off-machine witness, and a check offered to the party whose rollback
+    // it would detect is no witness. Both are on `/v1` (`GET`/`POST
+    // …/witness`) and forwarded on the orchestrator's operator plane.
+    ("WitnessAction::Emit", "mcp", Absence::Boundary,
+     "a witness must leave the machine; an agent whose memory is this vault cannot hold one"),
+    ("WitnessAction::Check", "mcp", Absence::Boundary,
+     "a rollback check offered to the party whose rollback it would detect is no witness"),
     ("AdmissionAction::List", "mcp", Absence::Boundary,
      "an agent must not read the queue that exists to contain its own diverted writes"),
     ("AdmissionAction::Allow", "mcp", Absence::Boundary,

@@ -206,11 +206,15 @@ alone: a key rotation re-derives the keys both chain steps fold under, so
 every historical head moves, and this attacker holds the key and can
 rotate — a head-only witness reports "superseded" on exactly the rollback
 it exists to catch. A sound witness carries the row count and an unkeyed
-digest over the audit rows' preserved bytes, which no surface emits
-today. And it closes the REWIND direction only: a rollback or erasure at
-or below the witnessed height is reported, anything appended above it is
-writes since the witness. Whether the engine assists the procedure is
-escalated in that entry; until then this is stated, not hidden.
+digest over the audit rows' preserved bytes, and since 1.7.0 the engine
+emits and checks exactly that: `undercroft witness emit` / `check` (always
+read-only) and `GET`/`POST /v1/vaults/{id}/witness`, forwarded on the
+orchestrator's operator plane and, by the maintainer's ruling, not offered
+over MCP. It closes the REWIND direction only: a rollback or erasure at or
+below the witnessed height is reported (exit 2, 409 `class: "integrity"`),
+anything appended above it is writes since the witness. What remains is
+the operator's procedure — a cadence, a store the attacker cannot write,
+compare before emit — and that is stated in the runbook, not hidden.
 
 **Sharpened 2026-09-21 by O241's ruling, because "together" was narrower
 than the truth.** The **manifest alone** suffices to lower the anchor: a
@@ -224,7 +228,7 @@ vault directory and keeps up to ten genuine, validly-MAC'd
 `(vault.db, vault.json)` pairs on the same disk, and a manifest is rejected
 only for a foreign vault id. Two consequences follow and are filed rather
 than absorbed: the writable open used to consume the one observable of this
-in silence while a read-only open reported it — since 1.6.2 (O246) it
+in silence while a read-only open reported it — since 1.7.0 (O246) it
 reports the heal it performed, and how far behind the anchor was, on
 `unhealed` — and an authenticated
 statement placed IN the manifest — a key census or a regime marker — is
@@ -284,7 +288,7 @@ one port. Both stores `serve-http` opens — the `/mcp` handle and every
 runs and read auditing is force-disabled with a warning rather than
 silently. The REST gate sits **in front of dispatch**, not at the top
 of each mutating handler, and it **fails closed**: every non-GET is
-refused unless it is on a three-entry allowlist (`POST …/search`,
+refused unless it is on a four-entry allowlist (`POST …/search`,
 `POST …/verify-forgetting` — a caller-supplied attestation that has to
 travel in a body — and `POST …/verify` — which walks every record's HMAC,
 replays the whole
@@ -324,7 +328,7 @@ with its `vault.json.next` left in place, and a prefilter loads an index but
 never builds one. That last operation is the one the incident runbook's own
 "freeze writes" step used to perform: a read-only open could **delete** a
 writer's staging manifest (A32). What the open declined to repair is warned
-and then readable as `unhealed` on every stats surface; since 1.6.2 (ROADMAP
+and then readable as `unhealed` on every stats surface; since 1.7.0 (ROADMAP
 O246) a writable open reports there the anchor heal it made, too.
 
 **Residual**: TLS termination is deliberately delegated to the

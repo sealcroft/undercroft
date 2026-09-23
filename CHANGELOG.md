@@ -1,11 +1,56 @@
 # Changelog
 
-## 1.6.2 — unreleased
+## 1.7.0 — unreleased
 
-PATCH: a fix whose only observable change is that a silence is gone. A
-surface added to REPORT an existing defect adds no capability (the
-2026-09-08 ruling); nothing that worked before behaves differently, no
-default moves, and no declaration can stop a start-up.
+MINOR: one new capability, backward compatible, and one fix. The witness
+commands and routes are new; nothing that worked before behaves differently,
+no default moves, and no declaration can stop a start-up.
+
+### The external witness: `undercroft witness emit` / `check`, `GET`/`POST /v1/…/witness` (O245)
+
+The threat model's A2 residual has called an external witness "the planned
+mitigation" since the audit chain shipped: an attacker with full disk control
+who restores a genuine earlier `(vault.db, vault.json)` pair rewinds the vault
+to a state that was genuine at the time, and nothing inside the vault can
+tell that from the machine having been off — `verify` is green by
+construction. The witness is a small document the vault emits about its audit
+chain, kept somewhere that attacker cannot write, and checked against the
+vault later: a rollback below the witnessed height is reported.
+
+**What it binds, and why not the chain head.** Both chain steps are keyed, a
+key rotation re-derives those keys and re-steps every head, and this attacker
+holds the key and can rotate — so a witness carrying only the head would
+report "superseded" on exactly the rollback it exists to catch. The binding
+is the ROW count plus an unkeyed, count-bound digest over the rows' preserved
+`(record_id, tag, at)` bytes, which a rotation leaves untouched; the head
+travels as corroboration and a check says when a rotation has retired it,
+never calling that a rollback. Ruled by a three-lens panel plus a refuter and
+probed before it was built.
+
+**What it closes, exactly.** The REWIND direction: A2's pair restore, its
+manifest-alone-then-database two-step, O240's un-switch (for a witness taken
+after the v2 switch), and O244's keyless erasure below the witnessed height.
+Anything appended above the witness, forged or not, is "writes since the
+witness"; three records that said a witness closes the forged-append residual
+were corrected when this was ruled.
+
+**The surfaces**, by the maintainer's ruling: `undercroft witness emit`
+(JSON on stdout or `--out`, optionally `--sign`ed with the `bundle
+sign-keygen` identity so a writer to the witness store cannot substitute one)
+and `undercroft witness check <file>` — both open READ-ONLY whatever the
+flags, because a writable open heals the anchor before anything reads —
+plus `GET /v1/vaults/{id}/witness` and `POST /v1/vaults/{id}/witness`,
+forwarded on the orchestrator's operator plane. **Not on MCP**: an agent's
+memory is this vault, so it cannot hold an off-machine witness. The verdict
+is typed: `extends` (exit 0 / 200, with `rows_since`, `head_corroborated`
+and `rotations_since`) or `rolled_back` (exit 2 / 409 `class: "integrity"`,
+naming both heights and whether the witnessed rows were rewritten); a
+document naming another vault is 409 too, because a vault destroyed and
+re-created under the same name is an erasure. An emit refuses a chain with
+no rows and a sealed vault whose blinding walk is still pending, since that
+walk relabels audit rows. Keep the file OFF the machine — under the data
+directory it is restored with the backup — and compare before you emit,
+into a store that keeps every witness.
 
 ### A writable open says what it healed (O246)
 
