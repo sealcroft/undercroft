@@ -360,13 +360,18 @@ impl VaultStore {
             .copied()
             .filter(|n| n.is_destruction())
         {
-            let (lo, hi) = chain::prefix_range(ns);
-            let mut stmt = self.conn.prepare(
-                "SELECT record_id, MAX(seq) FROM audit \
-                  WHERE record_id >= ?1 AND record_id < ?2 GROUP BY record_id",
-            )?;
+            // The namespace's own selection (ROADMAP O243): a range for a
+            // prefixed namespace, the no-slash predicate for the bare one —
+            // so a destruction namespace classified later is scanned
+            // whatever its prefix is, and never panics this leg.
+            let (clause, ps) = chain::prefix_range(ns).clause(1);
+            let sql =
+                format!("SELECT record_id, MAX(seq) FROM audit WHERE {clause} GROUP BY record_id");
+            let mut stmt = self.conn.prepare(&sql)?;
             let dead: Vec<(String, i64)> = stmt
-                .query_map([lo.as_str(), hi.as_str()], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .query_map(rusqlite::params_from_iter(ps.iter()), |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })?
                 .collect::<Result<_, _>>()?;
             drop(stmt);
             let head = format!("{}{infix}", ns.prefix());

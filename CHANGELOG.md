@@ -52,6 +52,21 @@ walk relabels audit rows. Keep the file OFF the machine — under the data
 directory it is restored with the backup — and compare before you emit,
 into a store that keeps every witness.
 
+### A latent panic in the audit chain's namespace ranges is gone (O243)
+
+`chain::prefix_range` turned a namespace's label prefix into a half-open
+`record_id` range by slicing off the prefix's closing `/`, and the one
+namespace with no prefix at all — a drawer's bare id — made that slice
+underflow and panic in both profiles. Nothing reached it: its three callers
+happened to pass prefixed namespaces, which is a property of the call sites
+and not of the function, and the day a per-namespace walk iterated the whole
+vocabulary it would have panicked on the first entry. The function now
+answers a SELECTION rather than a range — the half-open range for a prefixed
+namespace, and "labels with no `/`" for the bare one, which is the honest
+answer a range cannot express — and each caller appends the predicate it is
+handed. Gated by a test that drives every namespace through it and shows the
+selections partition a real table's labels.
+
 ### A writable open says what it healed (O246)
 
 A lagging manifest rollback anchor is an ordinary crash artifact, and the
