@@ -117,6 +117,22 @@ stateDiagram-v2
   (the healed crash case), never ahead (the alarm case). The anchor itself
   is written durably (fsync before the atomic rename, directory synced
   after), and key material is fsynced at creation.
+- **The external witness** (`undercroft witness emit` / `check`,
+  `GET`/`POST /v1/vaults/{id}/witness` — ROADMAP O245): what the anchor
+  reconciliation above cannot see is a vault rolled back to a GENUINE
+  earlier state, both files restored together, and the witness is the
+  document that sees it — emitted by the vault, kept where the offline
+  attacker cannot write, checked on return. It binds the audit row count
+  and an unkeyed, count-bound digest over the rows' preserved
+  `(record_id, tag, at)` bytes, deliberately NOT the chain head: both chain
+  steps are keyed, a rotation re-steps every head, and this attacker holds
+  the key and can rotate, so a head-only witness would read "superseded" on
+  the rollback it exists to catch. The head rides as corroboration and the
+  check says when a rotation has retired it. It closes the rewind direction
+  below the witnessed height and nothing above it: an append after the
+  witness, forged or not, is writes since the witness. Always read-only on
+  the CLI; a rollback is exit 2 / 409 `class: "integrity"`; off MCP by
+  ruling, since an agent's memory is this vault.
 - **Key rotation** (`undercroft vault rotate <name>`): the vault gets a
   fresh salt ⇒ fresh enc/mac/manifest keys; every sealed blob is
   re-encrypted byte-exact at the seal layer (AAD domains preserved) and
@@ -180,7 +196,7 @@ stateDiagram-v2
   is now `SQLITE_OPEN_READ_ONLY` under `PRAGMA query_only=ON`, the schema
   is checked rather than created, a lagging anchor is reported rather than
   healed, and a staged rotation is left on disk; what was declined is
-  readable as `unhealed` on every stats surface — where, since 1.6.2
+  readable as `unhealed` on every stats surface — where, since 1.7.0
   (ROADMAP O246), a writable open also states the anchor heal it made and
   how far behind the anchor was, because that heal is the one observable
   of a restored older manifest. An absent `vault.db`

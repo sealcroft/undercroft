@@ -429,6 +429,63 @@ pub(crate) fn replay(
     })
 }
 
+/// What a prefix scan folded (ROADMAP O245).
+#[derive(Debug, Clone)]
+pub(crate) struct Prefix {
+    /// Every row in `audit`, whatever `at` asked for.
+    pub rows: u64,
+    /// The unkeyed digest over ALL rows.
+    pub digest: [u8; 32],
+    /// The digest after the first `at` rows, when `at` was given and the
+    /// table holds at least that many; `None` otherwise.
+    pub at_digest: Option<[u8; 32]>,
+    /// The `seq` of the `at`-th row, on the same condition.
+    pub at_seq: Option<i64>,
+}
+
+/// **An unkeyed, count-bound digest over the audit rows' preserved bytes,
+/// in `seq` order** (ROADMAP O245): `CommitmentDigest`'s recipe over EVERY
+/// row, whatever its regime, optionally snapshotted after the first `at`
+/// rows in the same pass.
+///
+/// This is what an external witness binds, and the reason is O13's: a
+/// rotation re-derives the keys both chain steps fold under and re-steps
+/// every head (`rotate.rs`), so a witness carrying only a head is
+/// unreachable after the first `vault rotate` — and the attacker A2 names
+/// holds the key and can rotate. The row BYTES are what a rotation preserves
+/// verbatim, so a digest over them survives it, and the count is folded so a
+/// prefix and a longer chain cannot share one. Two things it does not
+/// survive, stated: the A10 relabel (`kg.rs` rewrites `record_id` on a
+/// sealed vault whose blinding walk has not completed — the emit refuses
+/// while that is pending), and any rewrite of a witnessed row, which is the
+/// point.
+pub(crate) fn prefix(conn: &Connection, at: Option<u64>) -> Result<Prefix, StoreError> {
+    let mut digest = CommitmentDigest::new();
+    let mut rows = 0u64;
+    let mut at_digest = None;
+    let mut at_seq = None;
+    let mut stmt = conn.prepare("SELECT seq, record_id, tag, at FROM audit ORDER BY seq")?;
+    let mut cursor = stmt.query([])?;
+    while let Some(row) = cursor.next()? {
+        let seq: i64 = row.get(0)?;
+        let (record_id, _, _) = bytes_of(row.get_ref(1)?);
+        let (tag, _, _) = bytes_of(row.get_ref(2)?);
+        let (at_bytes, _, _) = bytes_of(row.get_ref(3)?);
+        digest.push(&record_id, &tag, &at_bytes);
+        rows += 1;
+        if at == Some(rows) {
+            at_digest = Some(digest.finish());
+            at_seq = Some(seq);
+        }
+    }
+    Ok(Prefix {
+        rows,
+        digest: digest.finish(),
+        at_digest,
+        at_seq,
+    })
+}
+
 /// What [`switch`] did.
 pub(crate) enum SwitchOutcome {
     /// The commitment was appended; the caller commits and anchors.
@@ -1091,26 +1148,18 @@ mod tests {
             .unwrap()
     }
 
-    /// An unkeyed digest over the first `n` audit rows' preserved bytes —
-    /// `(record_id, tag, at)`, the `CommitmentDigest` recipe — for the
-    /// ROADMAP O245 probes below. Not a production function.
+    /// The production prefix digest over the first `n` rows (ROADMAP O245),
+    /// as the witness binds it.
     fn prefix_digest(conn: &Connection, n: usize) -> [u8; 32] {
-        let mut d = CommitmentDigest::new();
-        let mut stmt = conn
-            .prepare("SELECT record_id, tag, at FROM audit ORDER BY seq LIMIT ?1")
-            .unwrap();
-        let mut rows = stmt.query(params![n as i64]).unwrap();
-        while let Some(row) = rows.next().unwrap() {
-            let (rid, _, _) = bytes_of(row.get_ref(0).unwrap());
-            let (tag, _, _) = bytes_of(row.get_ref(1).unwrap());
-            let (at, _, _) = bytes_of(row.get_ref(2).unwrap());
-            d.push(&rid, &tag, &at);
-        }
-        d.finish()
+        prefix(conn, Some(n as u64))
+            .unwrap()
+            .at_digest
+            .expect("the fixture holds at least n rows")
     }
 
     /// **ROADMAP O245, probes P1 and P4 — named by the ruling panel's
-    /// refuter, run by the integrator.** P1: a key rotation moves every
+    /// refuter, run by the integrator, and now the pin under the witness
+    /// the entry builds.** P1: a key rotation moves every
     /// intermediate chain head (both regimes step under a key the rotation
     /// re-derives), so a witness carrying only a head is unreachable after
     /// the first `vault rotate`; an unkeyed digest over the preserved

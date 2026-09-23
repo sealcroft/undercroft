@@ -458,6 +458,12 @@ const OPS_ROUTES: &[(&str, &str)] = &[
     // right-to-erasure receipt an operator cannot verify through the only
     // door they have is the same defect this table's own comment describes.
     ("POST", "verify-forgetting"),
+    // The external witness (ROADMAP O245): a fleet operator's cadence
+    // witness is taken and checked through this plane, since a served
+    // engine never re-opens and the tenant plane must not offer a rollback
+    // check to the party whose rollback it would detect.
+    ("GET", "witness"),
+    ("POST", "witness"),
     ("GET", "admission"),
     ("POST", "admission"),
     ("GET", "retention"),
@@ -587,6 +593,10 @@ pub(crate) fn ops_alias(op: &str) -> Option<(&'static str, &'static str)> {
         "retention-sweep" => ("POST", "retention/sweep"),
         "forget" => ("POST", "forget"),
         "verify-forgetting" => ("POST", "verify-forgetting"),
+        // The external witness (ROADMAP O245): emit through the operator
+        // plane, and check a document brought back through it.
+        "witness" => ("GET", "witness"),
+        "witness-check" => ("POST", "witness"),
         // The golden-values authority tier (ROADMAP O67). Added WITH its
         // route, because `every_ops_alias_is_an_allowed_route_and_every_route_has_an_alias`
         // refused the route without it — "on the admin plane with no CLI
@@ -2742,6 +2752,8 @@ mod tests {
             "retention-sweep",
             "forget",
             "verify-forgetting",
+            "witness",
+            "witness-check",
             "repair",
             // ROADMAP O67, and it was added here because THIS TEST refused
             // the route otherwise: "on the admin plane with no CLI alias —

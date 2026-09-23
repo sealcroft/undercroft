@@ -1315,7 +1315,20 @@ Consequences that are binding, not advisory:
   row defeats it, because `record_id` is outside the chain hash — O233),
   bulk ingest
   (`upsert_many`: one transaction + one manifest anchor per batch —
-  advisory encode paths must never BEGIN or batching breaks)
+  advisory encode paths must never BEGIN or batching breaks),
+  **and the external witness (witness.rs, ROADMAP O245)** — `ChainWitness`
+  + `WitnessVerdict::{Extends, RolledBack}`, `witness_emit`/`witness_check`.
+  The binding is `rows` + an unkeyed count-bound digest over the audit rows'
+  preserved bytes (`chain::prefix`), NEVER the head: both steps are keyed, a
+  rotation re-steps every head, and A2 holds the key — a head-only witness
+  reads "superseded" on the rollback it exists to catch (O13's shape). It
+  closes the REWIND direction below the witnessed height and nothing above
+  it; three records that said it closes forged-append were corrected beside.
+  Own door on the `verify-forgetting` precedent, CLI always read-only, typed
+  verdict, foreign vault = integrity finding; on `/v1` as `GET`/`POST
+  …/witness` (the fourth POST that reads) and the orchestrator's ops plane;
+  **not on MCP** by the maintainer's ruling. The emit refuses a genesis
+  chain and a pending A10 walk, whose relabel moves the digest)
 - `crates/undercroft-config` — the declaration resolvers the engine and the
   control plane SHARE (`resolve_orch_key`, `resolve_admin_token`,
   `resolve_rate_limit`, `resolve_orch_addr`, `resolve_metrics_addr`,
@@ -1688,7 +1701,7 @@ Consequences that are binding, not advisory:
   canonical holder and appended to the chain while answering 200 — while
   the identical capability over `/mcp` in the same process refused. It
   fails CLOSED (anything not GET is a write unless named), and the
-  **three** named exceptions are `POST …/search`, `POST …/verify` and
+  **four** named exceptions are `POST …/search`, `POST …/verify`, `POST …/witness` (ROADMAP O245, the caller's witness travels in a body) and
   `POST …/verify-forgetting` — all POST for cost or for a caller-supplied
   document, never for effect: search reads, verify walks every record's
   HMAC and replays the chain, and verify-forgetting POSTs only because the
@@ -2264,8 +2277,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (1036 run,
-                                      # 4 #[ignore]d = 1040 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (1044 run,
+                                      # 4 #[ignore]d = 1048 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2387,8 +2400,8 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (620 checks)
-docker compose run --rm orchestrator-e2e  # two engines + orchestrator (167 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (631 checks)
+docker compose run --rm orchestrator-e2e  # two engines + orchestrator (169 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (157 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
@@ -3338,8 +3351,9 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   so the two can never disagree about what MCP is allowed to reach.
   **The CLI axis had no such inventory at all until M16**, so every CLI-only
   capability was an unrecorded gap by construction — measured, **74** CLI
-  operations of which `parity.rs` named **17**. `SURFACE_ABSENCES` +
-  `SURFACE_COMPLETE` now PARTITION it (41 rows over 41 anchors — 34
+  operations of which `parity.rs` named **17** (76 since O245 added the two
+  witness operations). `SURFACE_ABSENCES` +
+  `SURFACE_COMPLETE` now PARTITION it (43 rows over 43 anchors — 36
   `Boundary`, 7 `Structural`, 0 `Drift` — plus 33 reachable everywhere = 74.
   This parenthesis said 62/59/15 until 2026-09-05, figures from before the 21
   `Drift` rows closed and left the table, and before that said **63** rows

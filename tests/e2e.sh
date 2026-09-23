@@ -3820,6 +3820,88 @@ else
 fi
 rm -rf "$O246_HOME"
 
+# ROADMAP O245: the external witness. A vault rolled back to a GENUINE
+# earlier state — both files restored together, the pair consistent — is
+# invisible to everything inside the vault (`verify` is green by
+# construction, the premise arm below) and is REPORTED against a witness
+# taken before the rollback. The binding is the row count plus an unkeyed
+# digest over the rows' preserved bytes, because a key rotation re-steps
+# every chain head and the attacker A2 names holds the key: the rotation arm
+# pins that corroboration is lost and the verdict stays OK. Driven through
+# the two surfaces the maintainer ruled it onto — the CLI and `/v1` — and
+# NOT MCP, by the same ruling.
+O245_HOME="$(mktemp -d)"
+UNDERCROFT_HOME="$O245_HOME" "$BIN" init >/dev/null 2>&1
+o245() { UNDERCROFT_HOME="$O245_HOME" "$BIN" "$@"; }
+o245 remember "the first ledger entry names the harbour master" --wing notes >/dev/null 2>&1
+o245 remember "the second ledger entry names the pilot boat" --wing notes >/dev/null 2>&1
+o245 witness emit --out "$O245_HOME/w2.json" 2>/dev/null
+if grep -q '"prefix_digest"' "$O245_HOME/w2.json" 2>/dev/null && grep -q '"rows"' "$O245_HOME/w2.json"; then
+  echo "ok    O245: witness emit writes a document carrying the binding fields"; PASS=$((PASS+1))
+else
+  echo "FAIL  O245: witness emit writes a document carrying the binding fields"; cat "$O245_HOME/w2.json" 2>&1 | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+cp "$O245_HOME/vaults/default/vault.db" "$O245_HOME/db-at-2"
+cp "$O245_HOME/vaults/default/vault.json" "$O245_HOME/json-at-2"
+o245 remember "the third ledger entry names the lamp trimmer" --wing notes >/dev/null 2>&1
+check "O245: a later state extends the witness" 0 "WITNESS OK: the audit chain extends the witness taken at" -- o245 witness check "$O245_HOME/w2.json"
+o245 witness emit --out "$O245_HOME/w3.json" 2>/dev/null
+# The rollback: the genuine earlier pair restored together.
+cp "$O245_HOME/db-at-2" "$O245_HOME/vaults/default/vault.db"
+cp "$O245_HOME/json-at-2" "$O245_HOME/vaults/default/vault.json"
+rm -f "$O245_HOME/vaults/default/vault.db-wal" "$O245_HOME/vaults/default/vault.db-shm"
+check "O245 premise: verify is green on a genuine rolled-back pair" 0 "VERIFY OK" -- o245 verify
+check "O245: the witness taken before the rollback reports it (exit 2)" 2 "WITNESS FAILED: the vault was rolled back" -- o245 witness check "$O245_HOME/w3.json"
+check "O245: the witness of the restored state is extended by nothing" 0 "by 0 record(s)" -- o245 witness check "$O245_HOME/w2.json"
+# A key rotation — which A2 can perform — loses the head's corroboration and
+# is NOT a rollback: the digest still binds. The O13 arm.
+o245 vault rotate default >/dev/null 2>&1
+check "O245: a key rotation loses head corroboration and is not a rollback" 0 "which a key rotation explains" -- o245 witness check "$O245_HOME/w2.json"
+# The same two doors on /v1, on a writable server: GET emits, POST checks,
+# a rollback and a foreign vault are 409 + class integrity.
+UNDERCROFT_HOME="$O245_HOME" "$BIN" serve-http --host 127.0.0.1 --port 18885 >/dev/null 2>&1 &
+O245_PID=$!
+for _ in $(seq 1 40); do curl -sf http://127.0.0.1:18885/healthz >/dev/null 2>&1 && break; sleep 0.25; done
+O245_GET="$(curl -s http://127.0.0.1:18885/v1/vaults/default/witness)"
+if grep -q '"prefix_digest"' <<<"$O245_GET" && grep -q '"anchored_head"' <<<"$O245_GET"; then
+  echo "ok    O245: GET /v1 …/witness emits the document"; PASS=$((PASS+1))
+else
+  echo "FAIL  O245: GET /v1 …/witness emits the document"; echo "$O245_GET" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+O245_POST="$(curl -s -X POST http://127.0.0.1:18885/v1/vaults/default/witness -H 'content-type: application/json' --data-binary @"$O245_HOME/w2.json")"
+if grep -q '"verdict":"extends"' <<<"$O245_POST" && grep -q '"head_corroborated":false' <<<"$O245_POST"; then
+  echo "ok    O245: POST /v1 …/witness answers a typed extends verdict with corroboration lost"; PASS=$((PASS+1))
+else
+  echo "FAIL  O245: POST /v1 …/witness answers a typed extends verdict with corroboration lost"; echo "$O245_POST" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+O245_RB="$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:18885/v1/vaults/default/witness -H 'content-type: application/json' --data-binary @"$O245_HOME/w3.json")"
+O245_RB_BODY="$(curl -s -X POST http://127.0.0.1:18885/v1/vaults/default/witness -H 'content-type: application/json' --data-binary @"$O245_HOME/w3.json")"
+if [ "$O245_RB" = 409 ] && grep -q '"integrity"' <<<"$O245_RB_BODY" && grep -q 'rolled_back' <<<"$O245_RB_BODY"; then
+  echo "ok    O245: a rollback is 409 + class integrity on /v1"; PASS=$((PASS+1))
+else
+  echo "FAIL  O245: a rollback is 409 + class integrity on /v1 (got $O245_RB)"; echo "$O245_RB_BODY" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+sed 's/"vault": *"default"/"vault": "somebody-else"/' "$O245_HOME/w2.json" > "$O245_HOME/foreign.json"
+O245_FOREIGN="$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:18885/v1/vaults/default/witness -H 'content-type: application/json' --data-binary @"$O245_HOME/foreign.json")"
+if [ "$O245_FOREIGN" = 409 ]; then
+  echo "ok    O245: a witness of another vault is 409 on /v1 — a re-created vault is an erasure"; PASS=$((PASS+1))
+else
+  echo "FAIL  O245: a witness of another vault is 409 on /v1 (got $O245_FOREIGN)"; FAIL=$((FAIL+1))
+fi
+kill "$O245_PID" 2>/dev/null; wait "$O245_PID" 2>/dev/null
+# And a READ-ONLY server serves the check: it is the fourth POST that reads.
+UNDERCROFT_HOME="$O245_HOME" "$BIN" serve-http --host 127.0.0.1 --port 18886 --read-only >/dev/null 2>&1 &
+O245_RO_PID=$!
+for _ in $(seq 1 40); do curl -sf http://127.0.0.1:18886/healthz >/dev/null 2>&1 && break; sleep 0.25; done
+O245_RO="$(curl -s -X POST http://127.0.0.1:18886/v1/vaults/default/witness -H 'content-type: application/json' --data-binary @"$O245_HOME/w2.json")"
+kill "$O245_RO_PID" 2>/dev/null; wait "$O245_RO_PID" 2>/dev/null
+if grep -q '"verdict":"extends"' <<<"$O245_RO"; then
+  echo "ok    O245: a read-only server answers the witness check rather than refusing a read"; PASS=$((PASS+1))
+else
+  echo "FAIL  O245: a read-only server answers the witness check rather than refusing a read"; echo "$O245_RO" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+rm -rf "$O245_HOME"
+
 echo
 echo "e2e results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

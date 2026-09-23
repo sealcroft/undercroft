@@ -140,7 +140,7 @@ well, where only a tampered count fails.
    declined to repair is printed as a warning and readable afterwards on
    `undercroft stats` (and `GET /v1/vaults/{id}/stats`) as `unhealed` — during
    an incident, read it: "a torn `vault.json.next` was left in place" tells
-   you a rotation was in flight when the incident began; and since 1.6.2
+   you a rotation was in flight when the incident began; and since 1.7.0
    (ROADMAP O246) a WRITABLE open reports on the same list the manifest
    anchor heal it performed and how far behind the anchor was — a crash is
    the ordinary cause, and a genuine older `vault.json` restored beside a
@@ -231,6 +231,24 @@ Only return the server to read-write once `verify` is clean.
   interval — that early signal is the point.
 - **Use per-vault assertions** for multi-tenant deployments so a compromised
   client can't reach another tenant's vault.
+
+6. **Witness the chain off-machine, on a cadence** (ROADMAP O245). The one
+   rollback the anchor cannot see is a genuine earlier `(vault.db,
+   vault.json)` pair restored together — `verify` is green on it by
+   construction. `undercroft witness emit --out <file>` (or `GET
+   /v1/vaults/{id}/witness` on a served vault) writes a small document that
+   binds the audit row count and an unkeyed digest over the rows' preserved
+   bytes; keep it somewhere the machine cannot write (a commit in another
+   repository, an append-only log, mail to yourself — never under the data
+   directory, which a backup restores with the vault), one file per emit,
+   and **check before you emit**: `undercroft witness check <file>` (or
+   `POST …/witness` with the document as the body) answers `WITNESS OK` when
+   the chain extends it and `WITNESS FAILED`, exit 2, when the vault has been
+   rolled back below it. A key rotation does not fail the check — it retires
+   the head's corroboration and the check says so. Sign with `--sign` and
+   the `bundle sign-keygen` identity if others can write to the witness
+   store, and keep that key off the machine too, since it defaults to living
+   beside `master.key`.
 
 ## The guarantee
 

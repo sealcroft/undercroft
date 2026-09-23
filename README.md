@@ -348,6 +348,8 @@ undercroft trust set|list <wing>      # deployment-assigned wing trust (candidat
 undercroft retention set|list|clear|sweep  # per wing/room max age; sweep is explicit
 undercroft forget <id...> [--sign]    # destroy + chain-attested receipt (RTBF)
 undercroft verify-forgetting <receipt># replay a receipt (reduced verdict after a rotation)
+undercroft witness emit [--out f] [--sign id] # witness the audit chain; keep the file OFF this machine
+undercroft witness check <file>       # rolled back below the witness → exit 2; verify cannot see it
 undercroft export [--vault]           # decrypted JSONL to stdout
 undercroft export --to <pub> --out f  # sealed bundle only that recipient can open
 undercroft import <file.jsonl>        # migrate from undercroft or mempalace exports
