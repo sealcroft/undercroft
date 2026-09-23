@@ -2,9 +2,10 @@
 
 ## 1.7.0 — unreleased
 
-MINOR: one new capability, backward compatible, and one fix. The witness
+MINOR: one new capability, backward compatible, and three fixes. The witness
 commands and routes are new; nothing that worked before behaves differently,
-no default moves, and no declaration can stop a start-up.
+no default moves, and no declaration can stop a start-up. (This line said
+"one fix" while O243 and O246 were both below it; corrected with O247.)
 
 ### The external witness: `undercroft witness emit` / `check`, `GET`/`POST /v1/…/witness` (O245)
 
@@ -32,7 +33,8 @@ manifest-alone-then-database two-step, O240's un-switch (for a witness taken
 after the v2 switch), and O244's keyless erasure below the witnessed height.
 Anything appended above the witness, forged or not, is "writes since the
 witness"; three records that said a witness closes the forged-append residual
-were corrected when this was ruled.
+were corrected when this was ruled — and four more that said the same were
+found and corrected beside by O247, below.
 
 **The surfaces**, by the maintainer's ruling: `undercroft witness emit`
 (JSON on stdout or `--out`, optionally `--sign`ed with the `bundle
@@ -88,6 +90,45 @@ crash-heal, which is the point. Gated by a store unit test over the restored
 manifest (premise: `verify` green, the open reports `Healed`) and by e2e arms
 through `undercroft stats` and a writable `serve-http`, where the note stays
 for the handle's lifetime.
+
+### A copied `rotate/` label is refused by the chain replay, and a gate now says which mechanism refuses it (O247)
+
+O239 bound the audit chain's rotation boundary to the key the handle holds,
+so a planted `rotate/` row carrying a FOREIGN keycheck no longer lifts it. It
+cannot reject a COPY of the real label — `meta.keycheck` holds that label in
+clear on every vault, and so does `audit.record_id` once a vault has rotated
+— and nothing exercised that spelling. A new gate shows that a copied label
+DOES lift the boundary, and that when another connection wrote it the full
+chain replay is what refuses it, named by the refusal's wording and by the
+replay count; a control shows the label equality refusing a foreign label
+when no replay runs. No behaviour changes.
+
+The ruling panel measured further than the entry asked, and filed what it
+found rather than half-landing it:
+
+- **O252** — between replays (a writer editing the database beneath SQLite,
+  which moves no change cookie), a writer WITHOUT the key re-points a label's
+  newest record by copying an older record forward, relabelling or deleting,
+  most of which move no height: a replayed retention policy governs, the
+  sweep destroys a drawer the declared policy keeps and reports `ok`, and a
+  returning read serves a replayed drawer. Pinned as a known cost, with the
+  candidates for its own ruling. Part of it is a promise O237's ruling made
+  and its build did not keep: an older tag promoted to newest was to be a
+  finding.
+- **O253** — a legitimate concurrent writer makes the guard refuse deciding
+  reads as tampering and `verify` report a broken chain, because the replay
+  and the committed head are read in two snapshots: 64 false refusals and 41
+  false chain verdicts in six seconds against a 4,002-row trail, clean the
+  moment the writer stopped.
+
+Records that overstated the guard are corrected beside the text they
+correct, in the code, `CLAUDE.md`, the threat model, `docs/security.md` and
+the ROADMAP: the append-only invariant does not run on the drawer read path;
+the live-handle window is wider than an append; "no in-band structure changes
+that" holds only against a writer who holds the key; and an external witness
+does not close the append direction. The threat model's A2 now says which
+deployments put the key within that attacker's reach. Three stray sentence
+fragments are gone.
 
 ## 1.6.1 — 2026-09-22
 
@@ -351,6 +392,17 @@ key can, and no in-band structure changes that: O241 was filed to close it
 with an authenticated census in the manifest and has since been RULED
 against, because a census catches a key that vanishes and never one that
 appears. The mechanism that would close it is an out-of-band witness (O245).
+
+> **Corrected 2026-09-24, ROADMAP O247** — the text above is left as it
+> shipped. Three of its claims are wrong. An out-of-band witness does not
+> close this: it commits to a prefix of the rows, so a row appended above it
+> is "writes since the witness" (O245's ruling, item 3). "No in-band
+> structure changes that" holds only against a writer who holds the key;
+> against one who does not, the live handle holds what that writer lacks, and
+> in-band answers exist (O252). And the window is wider than an append: under
+> an unmoved cookie a relabel or a delete that moves no height re-points a
+> label's newest record, so a replayed policy governs, the sweep destroys and
+> a replayed drawer is served (O252, measured).
 
 ### a forged `rotate/` label no longer lifts the rotation boundary, because it is bound to the key the handle holds (O239)
 

@@ -4285,6 +4285,17 @@ impl VaultStore {
     /// a flag trusts every writer to remember, and `rotate.rs` appends
     /// through its own `INSERT` rather than that function (ROADMAP O80). The
     /// head and the height are what an append actually moves.
+    ///
+    /// **The `rotate.rs` half was stale on the day it was written** (found by
+    /// ROADMAP O247's refuter, 2026-09-24): rotation has appended through
+    /// `chain::insert_record` since `83518ff`, before O251 landed. The
+    /// conclusion stands — the rotation and the version-2 switch both bypass
+    /// `chain_append`, so a flag THERE still misses two writers — but the
+    /// argument no longer rules out a flag inside `insert_record`, which
+    /// reaches every writer. Such a flag errs SAFE here (a counted append
+    /// that rolled back costs a wasted replay) and UNSAFE for an append
+    /// trigger (it absorbs one forged row), which is why ROADMAP O252 does
+    /// not rest on one.
     fn adopt_open_verdict(&mut self) {
         let Some(offered) = self.open_verdict.take() else {
             return;

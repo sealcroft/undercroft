@@ -179,6 +179,15 @@ exists for grep-ability and is labeled, not a default.
 *Capability*: read–write access to database and manifest at rest.
 *Goal*: alter a memory, forge a record, delete evidence, or roll the
 vault back to an earlier state without detection.
+*Whether this attacker holds the key* (stated 2026-09-24, ROADMAP O247 — the
+paragraphs below assumed both answers in different places): on a deployment
+that keeps `master.key` in a file beside the database, write access to the
+data directory usually reads the key too, and this attacker is then a
+KEY-HOLDER, who can rotate and can forge a record the chain accepts; only an
+out-of-band record helps against that. On a passphrase deployment
+(`UNDERCROFT_PASSPHRASE`, where only `kdf.salt` is on disk) or with the key
+on other storage, it is not — and the in-band checks (the record HMACs, the
+chain replay, the label guard) are what stand against it.
 
 **Defense (shipped)**: tamper is **detected on read, not merely
 resisted**. Any record, KG triple, or tunnel that fails its HMAC
@@ -559,6 +568,29 @@ against closing it with an authenticated census in the manifest — a census
 catches a key that VANISHES and never one that APPEARS, and the manifest is
 restorable from the vault's own backups — so the mechanism that would close
 it is an out-of-band witness (O245).
+
+*Corrected 2026-09-24 by ROADMAP O247's ruling, beside the paragraph above
+rather than in place of it.* Three of its claims were wrong. **The per-key
+invariant does not run on the returning read**: the version check finds a
+drawer's records in its own query and pins none of them, so the invariant
+covers the policy readers, the forgetting path and the rotation boundary.
+**What remains is wider than an append**: between replays (the change cookie
+does not move for a writer beneath SQLite) a writer without the key
+re-points a label's newest record by copying an older record forward,
+relabelling a later one in place, or deleting the newest record of a label
+the handle has not looked up — most of which move no height — and then a
+replayed retention policy governs, the sweep destroys a drawer the declared
+policy keeps while reporting success, and a returning read serves a replayed
+drawer. Measured, pinned as a known cost, and filed as ROADMAP O252. **And an
+out-of-band witness does not close it**: a witness commits to a prefix of the
+rows, so anything appended above it is writes since the witness (O245's
+ruling). The honest statement of the defence is narrower: this guard
+protects against a writer who does NOT hold the vault key (see A2's
+capability line), and against such a writer in-band answers exist — the live
+handle holds what that writer lacks — which is O252's to rule. Separately, a
+legitimate CONCURRENT writer makes the guard refuse and `verify` report a
+broken chain, because the replay and the committed head are read in two
+snapshots; that false alarm is ROADMAP O253.
 
 The chain also carries what left and what was read. Every export
 appends an `egress/export` record binding the surface, the recipient

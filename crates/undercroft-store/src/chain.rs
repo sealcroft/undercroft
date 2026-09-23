@@ -785,7 +785,12 @@ pub(crate) fn chain_keys(conn: &Connection, ns: Namespace) -> Result<Vec<String>
 //   `#[cfg(test)]`), so for a label this handle has already looked at, a
 //   record that VANISHES, a newest record that moves BACKWARDS, or a tag
 //   that changes under a seq this handle already read is always tampering.
-//   It costs O(keys) over rows the scan already fetches.
+//   It costs O(keys) over rows the scan already fetches. **"Every guarded
+//   read" means every read that looks a label up THROUGH this handle** —
+//   the policy scans, the forget path and the `rotate/` boundary.
+//   `refuse_replayed` finds a drawer's records in its own SQL and pins none
+//   of them, so on the returning read the invariant covers the `rotate/`
+//   label alone (ROADMAP O252, measured; corrected 2026-09-24).
 //
 // [`data_version`] is the ACCELERATOR between them and never the boundary
 // (A28's shape one more time). It is measured sound for a writer that goes
@@ -819,6 +824,31 @@ pub(crate) fn chain_keys(conn: &Connection, ns: Namespace) -> Result<Vec<String>
 // blindness not at all. What would close the append direction is a
 // per-row out-of-band log under a credential that is not on the disk,
 // which is not a copy of a chain fact and not this tree's.
+//
+// **And the window is wider than an APPEND, which the paragraph above
+// undercounts — measured by ROADMAP O247's panel (2026-09-24), owned by
+// O252.** Under an unmoved cookie the invariant sees three things only — a
+// label that vanishes, a newest record that moves BACK, a tag that changes
+// at a seq already read — and only for labels this handle has pinned. So a
+// writer without the key re-points a label's newest record by any edit that
+// moves it FORWARD or touches a label not yet pinned: an older record
+// copied forward, a later record relabelled in (no height moves at all), a
+// copied `rotate/` label (O247: `meta.keycheck` holds it in clear on every
+// vault), the newest record of an unpinned label deleted. Measured: the
+// replayed policy governs, the sweep destroys a drawer its declared policy
+// keeps and reports `ok`, and a returning read serves a replayed drawer even
+// after a relabel-out or a delete, because the drawer path pins nothing.
+// Its gate is `o252_under_an_unmoved_cookie_an_edited_label_decides_a_policy_and_a_drawer`,
+// pinned as a cost. O237 ruling 1 promised more than was built — "an older
+// tag promoted to newest is ALWAYS a finding" — and the copy-forward is
+// exactly that case. **"No in-band structure changes that" is too wide as
+// well**: against a writer WITHOUT the key, in-band answers exist (O252
+// names them — that promise kept, a tail fold under the handle's own key, a
+// per-row MAC over position, deciding from an authenticated in-memory
+// image); the out-of-band log above is the answer against a KEY-HOLDER. The
+// whole guard defends against a writer who does not hold the key, and on a
+// deployment that keeps `master.key` in a file beside the database, a
+// writer who can edit the database can usually read that file too.
 //
 // **"Or another connection commits" got NARROWER on `serve-http`, and that
 // is stated rather than absorbed** (ROADMAP O242). That process used to
@@ -1028,6 +1058,17 @@ impl crate::VaultStore {
     /// SMALLER or `None`, i.e. strictly more checking: a vault that never
     /// rotated, or that was rotated by a binary older than A19 (which
     /// appended no record at all), answers `None` exactly as before.
+    ///
+    /// **A COPY of this key's own label is not rejected** (ROADMAP O247).
+    /// The label sits in clear — in `meta.keycheck` on every vault a writable
+    /// open has touched, and in `audit.record_id` once the vault has rotated
+    /// — so a row appended under it lifts the boundary to its seq, and a copy
+    /// of the real rotation record carries a genuine tag. What refuses it is
+    /// the replay, and only the replay: `a_copied_rotation_record_is_refused_by_the_replay_and_not_by_its_label`.
+    /// Freezing the boundary at the last replay was ruled NOT to be built
+    /// here, because every outcome it would prevent is reachable at equal
+    /// cost by the edits ROADMAP O252 files; it is one component of that
+    /// entry's fix.
     pub(crate) fn rotation_boundary(&self, on: LabelUse) -> Result<Option<i64>, StoreError> {
         let label = rotation_label(&self.vault);
         Ok(self.newest_record(&label, on)?.map(|r| r.seq))
@@ -2280,12 +2321,449 @@ mod tests {
             None,
             "ROADMAP O239: a foreign keycheck is not this handle's rotation"
         );
+        let before = store.replays();
         let err = store.retention_policies().unwrap_err();
         assert!(
             matches!(&err, StoreError::IntegrityFinding(m)
                      if m.contains("does not authenticate its own labels")),
             "{err}"
         );
+        // ROADMAP O247: and it is the RE-REPLAY that refused, named by count
+        // as well as by wording — the arms below tell the two mechanisms
+        // apart, and this one must say which it is too.
+        assert_eq!(
+            store.replays(),
+            before + 1,
+            "the foreign commit re-replayed"
+        );
+    }
+
+    // ── ROADMAP O247 and O252: a COPIED `rotate/` label, and the class it is
+    //    one spelling of ─────────────────────────────────────────────────
+
+    /// The `rotate/` label an OFFLINE READER copies, read from the clear
+    /// bytes it would read — `meta.keycheck`, which every writable open seeds
+    /// (`reconcile_rotation`) — and never from the handle's own vault, which
+    /// would prove nothing about what is on disk.
+    fn rotation_label_on_disk(conn: &Connection) -> String {
+        let keycheck: String = conn
+            .query_row("SELECT value FROM meta WHERE key = 'keycheck'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        Namespace::Rotate.record(&keycheck[..KEYCHECK_LABEL_LEN])
+    }
+
+    /// A retention declaration's row, as O230's replay writes it back.
+    type PolicyRow = (u32, Vec<u8>, String);
+
+    fn policy_row(conn: &Connection, wing: &str) -> PolicyRow {
+        conn.query_row(
+            "SELECT max_age_days, tag, assigned_at FROM retention_policy WHERE wing = ?1",
+            params![wing],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap()
+    }
+
+    fn write_policy_back(conn: &Connection, wing: &str, row: &PolicyRow) {
+        let n = conn
+            .execute(
+                "UPDATE retention_policy SET max_age_days = ?1, tag = ?2, assigned_at = ?3 \
+                 WHERE wing = ?4",
+                params![row.0, row.1, row.2, wing],
+            )
+            .unwrap();
+        assert_eq!(n, 1, "premise: the older policy row is written back");
+    }
+
+    /// `scratch` declared at 30 days and then at 365; returns the 30-day row
+    /// an offline writer would write back.
+    fn a_replayable_policy(store: &mut VaultStore) -> PolicyRow {
+        store.set_retention("scratch", None, 30).unwrap();
+        let old = policy_row(&store.conn, "scratch");
+        store.set_retention("scratch", None, 365).unwrap();
+        old
+    }
+
+    fn records_under(conn: &Connection, label: &str) -> i64 {
+        conn.query_row(
+            "SELECT COUNT(*) FROM audit WHERE record_id = ?1",
+            params![label],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// **ROADMAP O247's gate: a `rotate/` row carrying THIS handle's own
+    /// keycheck.** O239's equality rejects a FOREIGN label and cannot reject
+    /// a COPY of the real one, because the label sits in clear — in
+    /// `audit.record_id` once the vault has rotated, and in `meta.keycheck` on
+    /// every vault a writable open has touched. So the arm asserts first that
+    /// the copy LIFTS the boundary, then which mechanism refuses: the full
+    /// re-replay `PRAGMA data_version` triggers when another connection
+    /// commits, named by its wording and by the replay count. On a rotated
+    /// vault the copy is the REAL rotation record, label, tag and time,
+    /// because a copy carries a genuine tag and only its position gives it
+    /// away — which only a replay authenticates.
+    ///
+    /// `verify` fails on `chain_ok` ALONE here: its policy leg is blind above
+    /// the lifted boundary. That is pinned as a cost, because a verdict that
+    /// survives on one leg is the reason nobody notices the other going dark.
+    #[test]
+    fn a_copied_rotation_record_is_refused_by_the_replay_and_not_by_its_label() {
+        for rotated in [false, true] {
+            let (dir, mut store) = fresh(SecurityLevel::Sealed);
+            if rotated {
+                rotate(&dir, &mut store).unwrap();
+            }
+            let old = a_replayable_policy(&mut store);
+            store.retention_policies().unwrap();
+            let label = rotation_label_on_disk(&store.conn);
+            assert_eq!(
+                label,
+                rotation_label(&store.vault),
+                "premise: the label on disk IS this handle's own"
+            );
+            assert_eq!(
+                records_under(&store.conn, &label),
+                i64::from(rotated),
+                "premise: a real rotation record exists exactly when the vault rotated"
+            );
+            let db = dir.path().join("vaults/r/vault.db");
+            let other = Connection::open(&db).unwrap();
+            if rotated {
+                other
+                    .execute(
+                        "INSERT INTO audit (record_id, tag, at) \
+                         SELECT record_id, tag, at FROM audit WHERE record_id = ?1",
+                        params![label],
+                    )
+                    .unwrap();
+            } else {
+                other
+                    .execute(
+                        "INSERT INTO audit (record_id, tag, at) \
+                         VALUES (?1, X'00', '2030-01-01T00:00:00Z')",
+                        params![label],
+                    )
+                    .unwrap();
+            }
+            let planted = other.last_insert_rowid();
+            write_policy_back(&other, "scratch", &old);
+            drop(other);
+            // PREMISES. Both declarations are still on the chain, so nothing
+            // below is attributable to a record the plant removed; and the
+            // copy IS the boundary now — without this the arm passes on a
+            // mis-derived label too, since the replay refuses a foreign one
+            // just the same.
+            assert_eq!(records_under(&store.conn, "retention/scratch"), 2);
+            assert_eq!(
+                store.rotation_boundary(LabelUse::Report).unwrap(),
+                Some(planted),
+                "rotated={rotated}: the equality accepts a copy"
+            );
+            let before = store.replays();
+            let err = store.retention_policies().unwrap_err();
+            assert!(
+                matches!(&err, StoreError::IntegrityFinding(m)
+                         if m.contains("do not replay to the committed head")
+                            && !m.contains("append-only")
+                            && !m.contains("not the newest declaration")),
+                "rotated={rotated}: the refusal is the replay's: {err}"
+            );
+            assert_eq!(
+                store.replays(),
+                before + 1,
+                "rotated={rotated}: and a replay ran to make it"
+            );
+            let report = store.verify().unwrap();
+            assert!(!report.chain_ok && !report.ok(), "rotated={rotated}");
+            assert!(
+                report.policy_drift.is_empty(),
+                "Verdict::Cost (ROADMAP O252) — rotated={rotated}: the policy leg is \
+                 blind above the lifted boundary, so `verify` fails on `chain_ok` \
+                 alone: {:?}",
+                report.policy_drift
+            );
+        }
+    }
+
+    /// **The control: under an UNMOVED cookie a FOREIGN `rotate/` label is
+    /// refused by O239's equality and by nothing else.** The plant is made on
+    /// the handle's own connection, which is how this module stands in for a
+    /// writer beneath SQLite (ROADMAP O237 `#### BUILT`): `PRAGMA
+    /// data_version` does not move, so no replay re-runs, and the append-only
+    /// invariant sees a legitimate append. It is the one arm in which the
+    /// equality IS the mechanism, which is what makes "which mechanism
+    /// refuses" mean something in the arm above.
+    #[test]
+    fn under_an_unmoved_cookie_the_equality_refuses_a_foreign_rotation_record() {
+        for rotated in [false, true] {
+            let (dir, mut store) = fresh(SecurityLevel::Sealed);
+            if rotated {
+                rotate(&dir, &mut store).unwrap();
+            }
+            let old = a_replayable_policy(&mut store);
+            store.retention_policies().unwrap();
+            let (replays, cookie) = (store.replays(), data_version(&store.conn).unwrap());
+            let boundary = store.rotation_boundary(LabelUse::Report).unwrap();
+            store
+                .conn
+                .execute(
+                    "INSERT INTO audit (record_id, tag, at) \
+                     VALUES ('rotate/deadbeefdeadbeef', X'00', '2030-01-01T00:00:00Z')",
+                    [],
+                )
+                .unwrap();
+            write_policy_back(&store.conn, "scratch", &old);
+            assert_eq!(
+                data_version(&store.conn).unwrap(),
+                cookie,
+                "premise: the cookie did not move"
+            );
+            assert_eq!(
+                store.rotation_boundary(LabelUse::Report).unwrap(),
+                boundary,
+                "rotated={rotated}: a foreign label moves nothing"
+            );
+            let err = store.retention_policies().unwrap_err();
+            assert!(
+                matches!(&err, StoreError::IntegrityFinding(m)
+                         if m.contains("not the newest declaration")),
+                "rotated={rotated}: the policy comparison refuses: {err}"
+            );
+            assert_eq!(
+                store.replays(),
+                replays,
+                "rotated={rotated}: no replay re-ran, so the equality refused it"
+            );
+        }
+    }
+
+    type DrawerRow = (String, Vec<u8>, Vec<u8>, Vec<u8>);
+
+    fn drawer_row(conn: &Connection, id: &str) -> DrawerRow {
+        conn.query_row(
+            "SELECT meta_json, content, embedding, tag FROM drawers WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap()
+    }
+
+    fn write_drawer_back(conn: &Connection, id: &str, row: &DrawerRow) {
+        let n = conn
+            .execute(
+                "UPDATE drawers SET meta_json = ?1, content = ?2, embedding = ?3, tag = ?4 \
+                 WHERE id = ?5",
+                params![row.0, row.1, row.2, row.3, id],
+            )
+            .unwrap();
+        assert_eq!(n, 1, "premise: the older drawer row is written back");
+    }
+
+    /// **ROADMAP O252, pinned rather than absorbed: under an UNMOVED cookie a
+    /// writer WITHOUT the key makes a replayed policy GOVERN, the sweep
+    /// DESTROY with `ok: true`, and a replayed drawer SERVE — through any
+    /// edit that re-points a label's newest record, most of which move no
+    /// height and none of which needs a `rotate/` row.** O247 is one spelling
+    /// of this; the others cost the same. Every arm is made on the handle's
+    /// own connection (the cookie does not move, asserted), asserts the
+    /// replayed VALUE rather than `is_ok()`, and ends with `verify` still
+    /// seeing it — because a replay does, and none ran here.
+    ///
+    /// `Verdict::Cost`: a fix for O252 fails this test, and the fix must
+    /// invert the arm it closes and say so, never delete it.
+    #[test]
+    fn o252_under_an_unmoved_cookie_an_edited_label_decides_a_policy_and_a_drawer() {
+        let filed = (time::OffsetDateTime::now_utc() - time::Duration::days(100))
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap();
+        for how in [
+            "a copied rotate/ label",
+            "an older record copied forward",
+            "a later record relabelled in",
+            "the newest record of an unpinned label deleted",
+        ] {
+            let (_dir, mut store) = fresh(SecurityLevel::Sealed);
+            store.set_wing_trust("secret", "quarantined").unwrap();
+            let old = a_replayable_policy(&mut store);
+            let mut aged = Drawer::new(
+                "scratch",
+                "r",
+                "a note filed a hundred days ago".into(),
+                Some("t.md".into()),
+                0,
+                "t",
+            );
+            aged.meta.filed_at = filed.clone();
+            store.upsert(&aged).unwrap();
+            let later = drawer("an ordinary later write", 0);
+            store.upsert(&later).unwrap();
+            // The first replay — pinning `retention/scratch`, except in the
+            // arm whose point is that it was never pinned.
+            let unpinned = how.starts_with("the newest");
+            if unpinned {
+                store.wing_trusts().unwrap();
+            } else {
+                let preview = store.retention_sweep(true).unwrap();
+                assert_eq!(
+                    preview
+                        .policies
+                        .iter()
+                        .map(|p| p.expired.len())
+                        .sum::<usize>(),
+                    0,
+                    "premise: under the declared 365 days nothing expires"
+                );
+            }
+            let (replays, cookie) = (store.replays(), data_version(&store.conn).unwrap());
+            match how {
+                "a copied rotate/ label" => {
+                    let label = rotation_label_on_disk(&store.conn);
+                    store
+                        .conn
+                        .execute(
+                            "INSERT INTO audit (record_id, tag, at) \
+                             VALUES (?1, X'00', '2030-01-01T00:00:00Z')",
+                            params![label],
+                        )
+                        .unwrap();
+                }
+                "an older record copied forward" => {
+                    store
+                        .conn
+                        .execute(
+                            "INSERT INTO audit (record_id, tag, at) \
+                             SELECT record_id, tag, at FROM audit \
+                             WHERE record_id = 'retention/scratch' ORDER BY seq LIMIT 1",
+                            [],
+                        )
+                        .unwrap();
+                }
+                "a later record relabelled in" => {
+                    store
+                        .conn
+                        .execute(
+                            "UPDATE audit SET record_id = 'retention/scratch', tag = ?1, at = ?2 \
+                             WHERE seq = (SELECT MAX(seq) FROM audit WHERE record_id = ?3)",
+                            params![old.1, old.2, later.id],
+                        )
+                        .unwrap();
+                }
+                _ => {
+                    store
+                        .conn
+                        .execute(
+                            "DELETE FROM audit WHERE seq = \
+                             (SELECT MAX(seq) FROM audit WHERE record_id = 'retention/scratch')",
+                            [],
+                        )
+                        .unwrap();
+                }
+            }
+            write_policy_back(&store.conn, "scratch", &old);
+            assert_eq!(
+                data_version(&store.conn).unwrap(),
+                cookie,
+                "premise ({how}): the cookie did not move"
+            );
+            let governs: Vec<u32> = store
+                .retention_policies()
+                .unwrap()
+                .iter()
+                .map(|p| p.max_age_days)
+                .collect();
+            assert_eq!(
+                governs,
+                vec![30],
+                "Verdict::Cost (ROADMAP O252) — {how}: the replayed policy governs"
+            );
+            let sweep = store.retention_sweep(false).unwrap();
+            assert_eq!(
+                (sweep.destroyed, sweep.ok),
+                (1, true),
+                "Verdict::Cost (ROADMAP O252) — {how}: the sweep destroys a drawer the \
+                 declared policy keeps, and reports ok"
+            );
+            assert!(store
+                .get(
+                    &aged.id,
+                    crate::Read::Internal(crate::InternalRead::Verification)
+                )
+                .unwrap()
+                .is_none());
+            assert_eq!(
+                store.replays(),
+                replays,
+                "premise ({how}): no replay ran, which is the whole window"
+            );
+            assert!(
+                !store.verify().unwrap().chain_ok,
+                "{how}: and a replay does see it"
+            );
+        }
+
+        // The returning read. `refuse_replayed` finds a drawer's records in
+        // its own SQL and remembers nothing per label, so even an edit the
+        // append-only invariant catches on a policy label is unseen here.
+        for how in [
+            "an older record copied forward",
+            "the newest record relabelled out",
+            "the newest record deleted",
+        ] {
+            let (_dir, mut store) = fresh(SecurityLevel::Sealed);
+            let first = drawer("the account number is 1111", 0);
+            store.upsert(&first).unwrap();
+            let replayed = drawer_row(&store.conn, &first.id);
+            store
+                .upsert(&drawer("the account number is 2222 (corrected)", 0))
+                .unwrap();
+            assert!(store
+                .get(&first.id, crate::Read::Returned(crate::ReadOp::Get))
+                .unwrap()
+                .expect("premise: the corrected drawer reads")
+                .content
+                .contains("2222"));
+            let (replays, cookie) = (store.replays(), data_version(&store.conn).unwrap());
+            let sql = match how {
+                "an older record copied forward" => {
+                    "INSERT INTO audit (record_id, tag, at) SELECT record_id, tag, at \
+                     FROM audit WHERE record_id = ?1 ORDER BY seq LIMIT 1"
+                }
+                "the newest record relabelled out" => {
+                    "UPDATE audit SET record_id = 'read/x' WHERE seq = \
+                     (SELECT MAX(seq) FROM audit WHERE record_id = ?1)"
+                }
+                _ => {
+                    "DELETE FROM audit WHERE seq = \
+                     (SELECT MAX(seq) FROM audit WHERE record_id = ?1)"
+                }
+            };
+            store.conn.execute(sql, params![first.id]).unwrap();
+            write_drawer_back(&store.conn, &first.id, &replayed);
+            assert_eq!(
+                data_version(&store.conn).unwrap(),
+                cookie,
+                "premise ({how}): the cookie did not move"
+            );
+            let served = store
+                .get(&first.id, crate::Read::Returned(crate::ReadOp::Get))
+                .unwrap()
+                .expect("the drawer reads");
+            assert!(
+                served.content.contains("1111"),
+                "Verdict::Cost (ROADMAP O252) — {how}: a returning read serves the \
+                 replayed drawer: {:?}",
+                served.content
+            );
+            assert_eq!(store.replays(), replays, "premise ({how}): no replay ran");
+            assert!(
+                !store.verify().unwrap().chain_ok,
+                "{how}: and a replay does see it"
+            );
+        }
     }
 
     /// **The guard is on the SCANS, so `verify` still reports.** The two
