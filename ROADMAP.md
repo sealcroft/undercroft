@@ -3998,7 +3998,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**286** of the **301** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**287** of the **302** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -24592,6 +24592,8 @@ and looped, because a race gate that passes once is not a measurement.
 
 **Relations:** sequenced before O256 — a backup taken inside the snapshot it verified needs this entry's snapshot helper.
 
+**Relations:** sequenced after O257 — a rotation that can destroy the vault's keys outranks this false refusal; the ruled sequence is O254, O257, then this entry.
+
 #### RULED 2026-09-24 by a three-lens panel (agentic memory architecture, security, software engineering) plus an adversarial refuter
 
 **The question.** What shape makes every integrity judgement read what it
@@ -24856,6 +24858,138 @@ eight seconds.
 
 **Relations:** sequenced before O255 — the erasure path anchors once per destroyed id, so its receipt cannot be made whole while an anchor can fail after a commit.
 
+**Relations:** sequenced before O257 — that entry's rotation decisions run inside this entry's post-commit lock and through its one manifest writer.
+
+#### RULED 2026-09-24 by a three-lens panel (agentic memory architecture, security, software engineering) plus an adversarial refuter
+
+**The question.** How manifest writes are serialised, whether the anchor may
+move down, what a committed write reports when its anchor fails, what a handle
+whose keys another handle rotated may write, and whether `vault.json.next`
+belongs here. Working material in the session scratchpad; nothing is built by
+this record.
+
+**Measured.** The filed 53/456 failed opens and 27 failed committed writes;
+`std::fs::File::lock` compiles on the pinned toolchain (1.90); and **PROBE-254R**
+— one handle opened, a second rotates and writes, then the first writes once:
+the manifest salt went `f35f6159` → `dd8d9114` → back to `f35f6159`, the stale
+write returned Ok, the vault reopened under the OLD key and the post-rotation
+drawer and the graph secret no longer decrypt. The rotation half is filed as
+**O257**. (In one process, which `deny_co_resident` refuses on `serve-http`
+since O242 — the real case is a CLI `vault rotate` beside a server, unmeasured
+across processes: probe P1 below.)
+
+**Prior rulings.** M19 (anchor after the commit) — FOLLOWED. A32 — its
+reasoning FOLLOWED and extended to the writable path, in O257. O69's hold —
+followed as a pattern, REFUTED as reusable for rotation as it stands (its
+exclusive connection would lock out the rotating store's own). O238 / O241
+ruling 4 — FOLLOWED, the write-side hole closed: `anchored_writes` swallows
+`ManifestTooNew`, so an older process would write an older `version` back
+(latent while `MANIFEST_VERSION` is 1). O246 — its note must name concurrent
+writers (O253). O122's "count, do not fail" — FOLLOWED for I/O failures. The
+brief's own ruling-search found none inside this entry.
+
+**The ruled shape.**
+
+1. **One store-side door, `anchor()`, the ONLY caller of `anchor_manifest`**,
+   taking NO head argument (a helper that trusts a caller's head re-admits
+   lowering) and refusing, as a TYPED error, when not in autocommit (a
+   `debug_assert!` is refuted — the suites run `--release`). It runs AFTER the
+   data transaction's COMMIT: `BEGIN IMMEDIATE` under a drop guard that rolls
+   back (the `RotationTx` shape); read the committed head, `writes` and
+   keycheck; read `vault.json` through `Manifest::parse` and MAC-verify it
+   under this handle's key; classify (item 3); skip if the file already names
+   the committed head; otherwise write a temp file named with a RANDOM NONCE and
+   created with `create_new` (so a planted symlink is refused and two
+   containers sharing a volume cannot collide — pid 1 is everyone's), fsync,
+   rename, sync the directory; `ROLLBACK`. **SQLite's write lock over a
+   sidecar `File::lock`, settled by evidence**: every decision here compares the
+   file with COMMITTED database state — the head, the keycheck, promote versus
+   discard — and only the database's own lock makes that comparison atomic with
+   the file operation; a second lock would impose a lock order on ~30 sites.
+   The lenses' objections to the sidecar (unlink splits it; holdable) are
+   overstated — nothing legitimate unlinks it and A2 dominates — and are not
+   the reason. Its cost is the two existing fsyncs held under the write lock;
+   no new fsync. Never ahead: a write lock in WAL requires the newest
+   snapshot, so the head read is committed.
+2. **Monotonic in normal operation, never by trusting the file.** The door
+   always writes `chain_meta`'s committed head; it REFUSES to overwrite a
+   manifest that fails parse or MAC under the handle's key, carries a `version`
+   above this binary's, or carries `writes` above the committed height — the
+   last a tripwire, not a rollback boundary (`writes` is unauthenticated and an
+   A2 attacker edits it; a SQL rollback beneath a live handle is followed down,
+   as today).
+3. **A committed write whose anchor fails returns Ok — split by class.** I/O
+   class (read errors other than a parse failure, rename/fsync errors, a busy
+   timeout — SQLite's busy handler is unfair and a 5 s wait behind a rotation,
+   a `repair` or a VACUUM is harmless because any later anchor covers it):
+   Ok, counted, warned, never refused. Integrity class (the on-disk manifest
+   missing or unparseable, its MAC failing under this handle's key, the
+   keycheck not this handle's, a version too new, `writes` above committed):
+   the committed write still returns Ok with a warning, but the HANDLE LATCHES
+   and refuses every later write with a typed integrity error — a stale
+   handle's next write would be sealed under retired keys. The memory lens's
+   blanket "re-anchor or refuse before every write" is REJECTED: an outage
+   mode (a Windows sharing violation) for no detection gain.
+4. **A stale handle is stopped by BOTH checks, inside the lock.** Keycheck
+   alone is defeated by `reconcile_rotation`'s re-seed (an open that unlocked
+   before staging reconciles between the rotation's COMMIT and its promote and
+   writes the OLD keycheck); MAC alone is defeated by the promote running
+   outside any lock. So both, and every replacement of `vault.json` — the
+   anchor, `create`, both promotes — goes through this door.
+5. **Surfaced, never silent**: the lag (committed `writes` − the MAC-verified
+   on-disk `writes`) live on `VaultStats` and all four renderers, a failure
+   counter, and an alert on the COUNTER — never on lag, which is permanently
+   non-zero under read-audit.
+6. **Orphan temp files** swept only under the lock, only past an age
+   threshold, never the legacy fixed name (a 1.6.x process still writes it).
+7. **`vault.json.next`**: its STAGING write follows the same discipline here
+   (nonce temp, fsync, rename); the DECISIONS about it are O257's.
+
+**Claims refuted, including the brief's.** "Every call `?`s": `manage.rs`
+warns at one site; "~a dozen sites": 26 production callers, plus `create`, the
+staging write, two promotes and a discard; `anchored_head` falls back on ANY
+read error, not only a missing file; the stale manifest was not merely
+reasoned — `tenant.rs` records it and PROBE-254R measured it; the lenses' "fcntl
+is per-process" — `File::lock` is flock/`LockFileEx`, per open file; "keycheck
+inside (C) is sufficient" — refuted above; "O69's hold is reusable for rotation
+as is" — refuted above; the open's heal anchors a MISMATCHED pair today (head
+and `writes` read separately), which this door fixes; a failure-injection gate
+at "the temp path" cannot fire once the name is random — the seam is a
+`test-fixture` feature on the vault crate (O134a's precedent).
+
+**The gate owed by the build.** Two PROCESSES anchoring in a loop with a third
+parsing and MAC-verifying every iteration (zero failed writes, zero unparseable
+reads, `writes` non-decreasing), forced digit crossings, looped ≥10×; the O253
+open probe clean of io errors; a stale handle after another process rotates
+refuses and the salt survives; a too-new `version` untouched; the two classes
+driven through the `test-fixture` seam (I/O: Ok, counted, next write accepted;
+integrity: Ok, the handle latches); a source count across crates of every
+writer of `vault.json`/`.next` and every caller of `anchor_manifest`; fsync
+count unchanged; save p50/p99 and `SQLITE_BUSY` with 1, 2 and 4 writers (P2).
+**Probes owed**: P1 (PROBE-254R across processes, with the re-seed and discard
+windows), P2, P3 (whether `locking_mode=EXCLUSIVE` + `BEGIN EXCLUSIVE` on an
+already-open WAL connection sees an idle reader in another process — O257's
+fence), P4 (a thread holding a write transaction on one connection and writing
+through another — it would now stall 5 s at the anchor), P5 (Windows
+rename-over while another process holds `vault.json` open).
+
+**Dissent.** The engineering lens preferred the sidecar lock on cost; settled by
+the atomicity argument, with its cost measured by P2. The memory lens's
+blanket refusal lost to the class split. None on the core.
+
+**Fails silently if**: the door trusts a caller's head; the anchor is
+"optimised" into the data transaction before COMMIT; any `vault.json` writer
+survives outside the door; the classes are swapped; the stale check is
+keycheck-only or MAC-only; the alert fires on lag; the injection gate cannot
+reach the random name; writers of mixed builds share a vault; Windows is proven
+only by `windows-check`, which compiles and runs nothing, and `sync_dir` is a
+no-op there — a residual to write down.
+
+**Sequence**: **O254 → O257 → O253 → O255 → O256** — O257 is permanent silent
+loss and needs this door. **Versioning**: PATCH inside the unreleased `1.7.0`;
+`UPGRADING.md` owed — every writer on a vault must run the same build, which
+`config check` cannot see (it inspects no running process).
+
 ### O255 — the destruction paths decide and attest outside the write lock that acts, so an erasure receipt minted beside a concurrent writer can never verify
 
 **Filed 2026-09-24 by O253's panel; measured by the integrator.**
@@ -24922,6 +25056,61 @@ out-of-state copies comes first.
 **Counterfactual**: to be measured — the filing is from reading.
 
 **Relations:** sequenced after O253 — a backup taken inside the snapshot it verified needs that entry's snapshot helper.
+
+### O257 — a key rotation beside a live handle can destroy the rotated salt, so the vault's data is sealed under keys no manifest can derive
+
+**Filed 2026-09-24 by O254's panel; measured by the integrator.** `rotate_keys`
+documents "do not rotate a vault another process is serving", and nothing
+enforces it: the CLI's `vault rotate` takes no hold, and `/v1` refuses only the
+same process's co-resident vault (`deny_co_resident`). A rotation mints a FRESH
+random salt that lives only in the new manifest; a handle opened before the
+rotation still holds the old manifest in memory, and its next anchor writes
+that whole manifest back.
+
+**Measured (PROBE-254R, two handles in one process)**: the manifest salt went
+`f35f6159` → `dd8d9114` after the rotation, then back to `f35f6159` after ONE
+ordinary write on the stale handle — which returned Ok. The vault reopened
+under the OLD key, the drawer written after the rotation failed its integrity
+check, and `verify` failed to decrypt the graph secret. The rotated data is
+sealed under keys that no manifest can derive: permanent, silent loss. The
+cross-process case — a CLI `vault rotate` beside a running server, then one
+save through the server — is the ordinary shape and is O254's probe P1.
+
+**Three more ways to the same loss, by reading (O254's panel)**:
+
+- **The keycheck re-seed**: `reconcile_rotation` overwrites a present,
+  different `meta.keycheck`, so an open that unlocked before the rotation staged
+  and reconciles between its COMMIT and its promote writes the OLD keycheck —
+  and becomes a stale handle that a keycheck test passes.
+- **The staging discard**: another process's writable open during the
+  rotation's staging-to-commit window attaches the valid `vault.json.next`,
+  sees the old keycheck in its snapshot and deletes the file; the rotation
+  commits and `promote_manifest` fails — the new salt is gone. A32 closed this
+  for the read-only path only.
+- **A stale handle's database writes**: after another handle's rotation it keeps
+  COMMITTING rows under retired keys, which fail every later read.
+
+**Shape, as O254's ruling scopes it**: an exclusive posture for rotation (O69's
+hold is the pattern but not reusable as is — probe P3 in O254); a keycheck
+check at every write door; `reconcile_rotation` deciding under the post-commit
+lock and REFUSING, never re-seeding, a present different keycheck; an
+idempotent promote that writes the new manifest from the rotation's in-memory
+`next`, so it does not depend on `.next` surviving; and a writable unlock —
+`rotation_candidate`'s included — that REPORTS an unauthenticated `.next`
+rather than deleting it. Every write of `vault.json` goes through O254's door.
+
+**Until it lands**: never run `vault rotate` while any other process has the
+vault open. `docs/THREAT_MODEL.md` says so beside the rotation claims.
+
+**Gate**: a rotation beside a live second PROCESS that then saves — the
+rotation is refused, or the save is refused, and the rotated salt survives; the
+re-seed and discard windows driven through a test barrier; every existing
+rotation test still green.
+**Counterfactual**: today, one ordinary write reverts the salt (measured).
+
+**Relations:** sequenced after O254 — every write of `vault.json` this fix makes goes through that entry's post-commit door.
+
+**Relations:** sequenced before O253 — a rotation that can destroy the vault's keys outranks a false refusal, and the sequence ruled is O254, this entry, then O253.
 
 
 ---
