@@ -744,6 +744,13 @@ impl VaultStore {
     /// admit a document that quietly omitted a record from the middle of its
     /// own interval, which is precisely the claim it exists to support.
     ///
+    /// **"By construction" is false beside a concurrent writer** (ROADMAP
+    /// O255, corrected 2026-09-24): each drawer is destroyed in its own
+    /// transaction, so another handle's commit lands inside the interval and
+    /// the receipt fails this very check — measured, 20 of 20 receipts minted
+    /// beside a `trust set` writer are unverifiable, and each carries that
+    /// writer's labels. The fix holds one write lock across the destruction.
+    ///
     /// Several rows can legitimately match one attested record: a drawer id
     /// is deterministic, so a drawer may be mined, destroyed, re-mined and
     /// destroyed again, and both tombstones carry the same `record_id` and

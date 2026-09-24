@@ -188,6 +188,11 @@ impl HeadState {
     /// `chain_meta` ONCE and derive both. Two reads would agree on every
     /// quiet vault and could straddle a concurrent commit on a busy one,
     /// which is one function disagreeing with itself about its own chain.
+    ///
+    /// **"Once" is three statements** ([`head_state`] reads the regime and
+    /// two keys), so it is still three snapshots on a busy vault and can
+    /// straddle another handle's version-2 switch (ROADMAP O253, corrected
+    /// 2026-09-24). The fix is one read snapshot around the whole judgement.
     pub(crate) fn into_committed(self) -> Result<Option<Head>, StoreError> {
         match self {
             HeadState::Unseeded => Ok(None),

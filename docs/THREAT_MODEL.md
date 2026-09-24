@@ -202,7 +202,15 @@ not in the replayed chain at all is a **rollback alarm**
 false-fire: WAL + `synchronous=FULL` guarantee data+chain reach disk
 before the anchor can, so power loss lands in the healed case by
 construction. Deletions write keyed tombstones — absence is also
-evidence.
+evidence. *Known defect, filed 2026-09-24 as ROADMAP O254*: that
+guarantee holds for ONE writer. Two writable handles on one vault anchor
+through one shared temporary file, so one can truncate the file the other
+is renaming into place — a committed write is then reported as failed, a
+concurrent reader can find `vault.json` empty or corrupt, and a manifest
+left corrupt (by overlapping writes, or by a power loss inside that window)
+makes the vault unopenable until it is restored from `backups/`. Separately,
+a concurrent writer can make the label guard and `verify` report a broken
+chain that is not broken (ROADMAP O253).
 
 **Residual (documented)**: an attacker with full disk control who
 restores a **consistent old database + manifest pair together** rewinds
@@ -466,7 +474,7 @@ enclave execution) compose with undercroft but are not provided by it.
 | Record integrity | HMAC-SHA256 per record, verified before every return | A2 forgery, A5 result forgery |
 | Audit chain | hash chain advanced in the data transaction; MAC'd manifest anchor; open-time reconciliation (crash ≠ rollback) | A2 rollback/truncation, A7 forensics |
 | Durability pinning | WAL + `synchronous=FULL`; fsync'd atomic manifest rename; fsync'd key files | keeps A2 detection sound under power loss |
-| Key rotation | one-transaction byte-exact reseal of every artifact + re-tag of every HMAC'd table + chain re-key; two-phase manifest swap, crash-safe; the rotation appends its own chain record, and refuses a vault whose tags, chain, receipts or policy rows `verify` fails, rather than re-key tampering into authentic data (O232) | key-compromise recovery; A1 going forward |
+| Key rotation | one-transaction byte-exact reseal of every artifact + re-tag of every HMAC'd table + chain re-key; two-phase manifest swap, crash-safe; the rotation appends its own chain record, and refuses a vault whose tags, chain, receipts or policy rows `verify` fails, rather than re-key tampering into authentic data (O232). **Known defect, ROADMAP O257 (filed 2026-09-24): never rotate while another process has the vault open** — one ordinary write from a handle opened before the rotation writes the old manifest back and destroys the rotated salt, leaving the data sealed under keys no manifest can derive (measured); nothing enforces the prohibition yet | key-compromise recovery; A1 going forward |
 | Export bundles | hybrid X25519 + ML-KEM-768 ephemeral-static → HKDF → XChaCha20-Poly1305; header + KEM ct as AAD (v2; legacy X25519 v1 still opens) | A1 for backups in transit/at rest, incl. harvest-now-decrypt-later |
 | Server auth | bearer + per-vault HMAC assertion (vault id in the MAC, constant-time, bare 401s); `--read-only` decided once in front of dispatch, failing closed | A4 |
 | Write-path admission | deterministic tier-1 screen at the one write choke point (a required `Screen` argument every caller must state); flagged writes diverted to the retrieval-excluded quarantine wing; allow/deny chain-audited | A7 ingest |
@@ -960,7 +968,14 @@ straight, each carrying what it actually is.
   `POST /v1/vaults/{id}/verify-forgetting`, the fleet's
   `ops/verify-forgetting`, and the admin console — where until 1.1.0 the
   HTTP plane could MINT a receipt and only the CLI could check one
-  (ROADMAP O14).
+  (ROADMAP O14). **Known defect, filed 2026-09-24 as ROADMAP O255**: a
+  receipt minted while another handle commits to the same vault cannot
+  verify — each drawer is destroyed in its own transaction, so the other
+  writer's record lands inside the attested interval (measured, 20 of 20),
+  and the receipt carries that writer's labels to the data subject. The
+  sweep shares the shape: it decides on one state and destroys on a later
+  one. Until O255 lands, run `forget` and a sweep with no other writer on
+  the vault.
 - **Memory-poisoning defense (C3.3) — BUILT (2026-08-03/04)**:
   write-path admission control — provenance on every write, a
   deterministic (optionally classifier-assisted) detector at the write
