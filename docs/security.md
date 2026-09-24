@@ -153,7 +153,12 @@ stateDiagram-v2
   (`vault.json.next` staged durably, promoted only after the commit; a
   `keycheck` marker in the database tells a crashed rotation's reopen
   which side committed). A crash at any moment leaves the vault openable
-  under exactly one key generation. Audit tags of superseded content are
+  under exactly one key generation. **Since 1.7.0 it holds the vault alone** (ROADMAP
+  O257): an exclusive lock on the rotating store's own connection, from
+  before its checks until the new manifest is written, refuses the rotation
+  (exit 1, 409 without a class) while any other process or handle has the
+  vault open, and every audited write checks that the database's
+  key-generation marker is still its handle's before it commits. Audit tags of superseded content are
   preserved verbatim (their plaintext is gone by design); the chain over
   them is what rotates. Remote-index copies hold old-key ciphertext
   afterwards — re-run `index push`. **A rotation refuses a vault that

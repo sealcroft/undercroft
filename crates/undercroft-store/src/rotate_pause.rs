@@ -17,9 +17,11 @@ use std::path::Path;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Phase {
     /// `vault.json.next` is durable; the re-seal has not committed and the
-    /// rotation still holds its write lock.
+    /// rotation holds the vault exclusively (ROADMAP O257).
     Staged,
-    /// The re-seal committed and released the lock; nothing is promoted.
+    /// The re-seal committed; nothing is promoted, and the rotation STILL
+    /// holds the vault exclusively — the lock survives the commit in
+    /// exclusive locking mode (ROADMAP O257).
     Committed,
 }
 

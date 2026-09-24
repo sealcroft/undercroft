@@ -5345,6 +5345,481 @@ beside two writers failed `constraint failed` in the gate's second round, from
 a statement not yet identified — recorded in O253, whose unit owns concurrent
 opens.
 
+### O257 — CLOSED 2026-09-24: a key rotation holds the vault alone and refuses beside any other holder, and a handle whose keys are not the vault's commits nothing
+
+**Filed 2026-09-24 by O254's panel; measured by the integrator.** `rotate_keys`
+documents "do not rotate a vault another process is serving", and nothing
+enforces it: the CLI's `vault rotate` takes no hold, and `/v1` refuses only the
+same process's co-resident vault (`deny_co_resident`). A rotation mints a FRESH
+random salt that lives only in the new manifest; a handle opened before the
+rotation still holds the old manifest in memory, and its next anchor writes
+that whole manifest back.
+
+**Measured (PROBE-254R, two handles in one process)**: the manifest salt went
+`f35f6159` → `dd8d9114` after the rotation, then back to `f35f6159` after ONE
+ordinary write on the stale handle — which returned Ok. The vault reopened
+under the OLD key, the drawer written after the rotation failed its integrity
+check, and `verify` failed to decrypt the graph secret. The rotated data is
+sealed under keys that no manifest can derive: permanent, silent loss. The
+cross-process case — a CLI `vault rotate` beside a running server, then one
+save through the server — is the ordinary shape and is O254's probe P1.
+
+**Three more ways to the same loss, by reading (O254's panel)**:
+
+- **The keycheck re-seed**: `reconcile_rotation` overwrites a present,
+  different `meta.keycheck`, so an open that unlocked before the rotation staged
+  and reconciles between its COMMIT and its promote writes the OLD keycheck —
+  and becomes a stale handle that a keycheck test passes.
+- **The staging discard**: another process's writable open during the
+  rotation's staging-to-commit window attaches the valid `vault.json.next`,
+  sees the old keycheck in its snapshot and deletes the file; the rotation
+  commits and `promote_manifest` fails — the new salt is gone. A32 closed this
+  for the read-only path only.
+- **A stale handle's database writes**: after another handle's rotation it keeps
+  COMMITTING rows under retired keys, which fail every later read.
+
+**Shape, as O254's ruling scopes it**: an exclusive posture for rotation (O69's
+hold is the pattern but not reusable as is — probe P3 in O254); a keycheck
+check at every write door; `reconcile_rotation` deciding under the post-commit
+lock and REFUSING, never re-seeding, a present different keycheck; an
+idempotent promote that writes the new manifest from the rotation's in-memory
+`next`, so it does not depend on `.next` surviving; and a writable unlock —
+`rotation_candidate`'s included — that REPORTS an unauthenticated `.next`
+rather than deleting it. Every write of `vault.json` goes through O254's door.
+
+**Until it lands**: never run `vault rotate` while any other process has the
+vault open. `docs/THREAT_MODEL.md` says so beside the rotation claims.
+
+**Gate**: a rotation beside a live second PROCESS that then saves — the
+rotation is refused, or the save is refused, and the rotated salt survives; the
+re-seed and discard windows driven through a test barrier; every existing
+rotation test still green.
+**Counterfactual**: today, one ordinary write reverts the salt (measured).
+
+Built after O254, which closed on 2026-09-24: every write of `vault.json` this fix makes goes through that entry's post-commit door (`VaultStore::anchor`) and its one writer (`write_manifest_file`), and O254's probe P3 answered the fence question below.
+
+**Sequencing, while this entry was open** (the marker became prose when it
+closed, on O245's precedent): it came before O253 — a rotation that can
+destroy the vault's keys outranks a false refusal.
+
+#### RULED 2026-09-24 by a three-lens panel (agentic memory architecture, security, SQLite engineering) plus an adversarial refuter
+
+**The question.** O254's panel scoped five components (the "Shape" paragraph
+above) and ruled none of their mechanics: how the exclusive posture is taken,
+held and released, and what its refusal is; where the keycheck is checked on
+the write path; how `reconcile_rotation` tells a race from tampering once it
+may no longer re-seed; what an idempotent promote writes and removes; who, if
+anyone, deletes an unauthenticated `vault.json.next`; and what the gate must
+drive. Working material (brief, the three answers, the refuter's) is in the
+session scratchpad; this record is the ruling.
+
+**Prior rulings found and their disposition** (searched `rul(ed|ing)` in this
+entry, O254, O69, O232, O238, O242, A32 and O246): **O254** items 1–3 FOLLOWED
+(one door under SQLite's lock, the anchor may not move down, a committed
+operation whose post-commit file step fails answers Ok, counted); item 4
+("both promotes go through this door") REFINED rather than followed — the
+door verifies the manifest's MAC under the HANDLE's key, and a promote
+replaces a manifest under the old key with one under the new, so it can never
+pass that check; the promote goes through the one writer, under the lock,
+behind its own check (the committed keycheck equals the promoting key).
+**O69** refuse-while-held, no override: FOLLOWED, and its refusal is typed.
+**O232** verify-first inside the rotation's lock: FOLLOWED — the fence comes
+before the verify. **A32** report-rather-than-heal on the read-only path:
+FOLLOWED and extended to the writable unlock. **O238 / O241 ruling 4**: found
+VIOLATED by the tree — a writable unlock deletes a too-new `.next` (below) —
+and restored. **O242**'s `deny_co_resident` STAYS: the fence runs on the
+handle it would have to refuse, so it cannot see a co-resident `/mcp`; the
+maintainer's escalation on `/v1` rotate is untouched.
+
+**Probes run before the refuter sat** (Docker, rusqlite 0.32.1's bundled
+SQLite, Linux; `o257_probe_*` in `anchor_tests.rs`, measured twice):
+- **PA** — `locking_mode=EXCLUSIVE` + `BEGIN EXCLUSIVE` + a write + `COMMIT`
+  on the store's own connection: another PROCESS's open waited its full busy
+  timeout and failed at 5.01 s — **the lock survives COMMIT**; after
+  `locking_mode=NORMAL` and a table read it opened in 3.7 ms.
+- **PB / PB2** — an idle second connection, and a second `VaultStore`, in the
+  SAME process: `BEGIN EXCLUSIVE` refused busy — the fence sees them too.
+- **PC** — an opener arriving during a 1.5 s hold waited and opened at 1.54 s;
+  during a 7 s hold it failed at 5 s.
+- **P6** — another process's `SQLITE_OPEN_READ_ONLY` connection (a
+  `--read-only` server's shape) is SEEN; an `immutable=1` connection is NOT.
+  **P6b** — a refused fence, then NORMAL + a read: another process opens in
+  3.5 ms (Linux).
+- **P8** — the hold lasts **148 ms** at 5,000 sealed drawers and **2.56 s** at
+  102,000 (hash embedder, no derived tiers): an open arriving mid-rotation
+  waits and succeeds below roughly 2×10⁵ drawers.
+- **P-RO** — a read-only open in another process during a 7 s hold, after a
+  write the WAL still held: 5,008 ms, then `connect_read_only`'s BUSY
+  fell back to `immutable=1` and the open REFUSED with a false
+  `ReadOnlyUnmigrated` ("this vault's schema predates this build … open it
+  with a writable process to migrate") — the immutable view reads the main
+  file without the WAL. On a checkpointed vault it would serve a frozen
+  snapshot instead. Not run: Windows (nothing here builds on the host).
+
+**Claims refuted, the brief's and the lenses' included.**
+- *The re-seed "becomes a stale handle that a keycheck test passes"* (this
+  entry's body): the re-seeding open FAILS a moment later, at
+  `reconcile_chain`, as a false integrity verdict — and it has already
+  WRITTEN the old keycheck, in autocommit, after its lock scope ended. It
+  writes before it refuses.
+- *"A too-new staging manifest is left alone"* (`unlock_as`'s comment and
+  O238's record): `Manifest::parse(..).ok()` maps `ManifestTooNew` to `None`,
+  and a writable unlock then deletes the file. No test covered it; latent
+  while `MANIFEST_VERSION` is 1, it is this entry's loss on a rollback to an
+  older binary. Corrected beside O238's record.
+- *"P3 settles the fence"* (the brief): P3 proved acquisition and never
+  release, and ROLLED BACK rather than committed; PA and P6b measure both.
+- *The brief's Q3 discriminator* ("`vault.json` still verifies ⇒ integrity"):
+  an unlock before a rotation staged, and that rotation crashing after COMMIT,
+  leaves `vault.json` verifying under the stale key beside a promotable
+  `.next` — a false exit 2 (security lens).
+- *The panel's own Q3 integrity branch* (refuter): the pre-O257 re-seed leaves
+  an INTACT vault on disk — rotated manifest, rotated data, the old keycheck —
+  which 1.6.x heals at the next writable open. "Refuse, never re-seed" would
+  answer it exit 2: by `CLAUDE.md`'s own test a MAJOR change. Settled by a
+  data check, below.
+- *"Race when `.next` differs from what the unlock ATTACHED"* (the draft):
+  once an unauthenticated `.next` is left on disk it is never attached, so an
+  unchanged torn file beside a foreign keycheck would read as a race on every
+  retry — a tamper verdict turned into an exit-1 "reopen" loop. The comparison
+  is with what the unlock READ.
+- *Reading `locking_mode` back as `normal` proves the release* (every lens):
+  the pragma returns the pager's flag; the release is
+  `sqlite3WalExclusiveMode(pWal, 0)`, which can fail to re-take the WAL read
+  lock and stay exclusive while the pragma reads `normal`. Only another
+  connection can see a release.
+- *"A handle left EXCLUSIVE keeps a lock on its next read"* (security lens):
+  in WAL mode the database lock is taken in `sqlite3PagerBegin`, i.e. the next
+  WRITE. The conclusion stands; the mechanism was wrong.
+- *"An `immutable=1` holder exists only on a write-protected mount"* (the
+  draft): false today (P-RO: BUSY falls back to it on a writable mount), and
+  after the fix still reachable wherever `-shm` exists and this uid cannot
+  write it (a host shell beside a container running as uid 10001).
+- *A failed promote must answer an error* (security lens): contradicts O254
+  item 3 without refuting it, and an error invites a retry that performs a
+  SECOND rotation.
+- `store_err` has no `ManifestTooNew` arm (`vault_err` does), so a too-new
+  `.next` refused inside a store open would answer 500 on `/v1`, not O238's 409.
+
+**The ruled shape.**
+
+1. **The fence (Q1).** `rotate_keys` takes an exclusive hold on the store's
+   OWN connection before anything else it does (after the vault-id and
+   retired checks): `locking_mode=EXCLUSIVE` read back (else `Invalid`,
+   O69's wording), `BEGIN EXCLUSIVE`, the connection's busy timeout left as it
+   is (5 s — settled by evidence 2–2 in the lenses, the refuter deciding:
+   changing a shared `/v1` connection's timeout is a second state to restore,
+   and a leaked 500 ms worsens O258's measured starvation on every later
+   write; the wait also absorbs a short holder). The hold spans the keycheck
+   and on-disk-manifest checks, the pre-rotation verify, staging, COMMIT (PA)
+   and the promote. Busy there is a NEW `StoreError::VaultHeld` — 409 with NO
+   class on `/v1`, exit 1 on the CLI (the `ReadOnlyUnmigrated` and
+   `ManifestTooNew` precedent: nothing is wrong with the vault), naming the
+   holders an operator meets (`serve-http`, `serve-mcp` — an MCP client keeps
+   it alive — `daemon --watch`, a `mine`, a read-only replica). `Invalid`
+   (400) and a bare SQLite busy (500) lost on class. **O69's
+   `hold_vault_exclusively` mints the same variant on its busy arm only**, so
+   its other refusals (no database, two databases, an I/O error) stop reading
+   "in use" on both surfaces.
+2. **Release is PROVEN, not read back.** On every exit: ROLLBACK if a
+   transaction is open, `locking_mode=NORMAL`, a statement that reads a table;
+   then a second connection with a zero busy timeout reads one row, and if it
+   cannot, the store REPLACES its own connection — closing is the one release
+   that works on every platform and every path, and it is what D2 (below)
+   needs. The fallback is counted, so a gate can tell "released" from
+   "released by reconnecting". **`/v1` evicts the Tenancy's cached handle
+   after every rotate**, whatever the outcome (`backup_restore`'s precedent).
+3. **The write door (Q2).** `chain_append` — every audited mutation, the
+   read-audit append included (`audit_read` never anchors, so a stale handle
+   never retired there) — reads `meta.keycheck` inside the caller's IMMEDIATE
+   transaction and refuses unless it is EXACTLY this handle's, absent included
+   (the anchor's rule), as `IntegrityFinding`. No latch: it is re-evaluated per
+   write. The two other `insert_record` callers — the rotation's own row,
+   behind the fence, and the version-2 switch, at open after item 4 — are
+   pinned at three. Reachable after item 1 only through an older build's
+   rotation, a filesystem whose locks SQLite cannot take, or an offline edit
+   of `meta.keycheck`; it is the one check that reads DATA rather than locks.
+4. **`reconcile_rotation` (Q3, Q6)** runs whole under one `WriteLock`, the
+   seeding of an ABSENT keycheck included, and never overwrites a present one.
+   The unlock records what it READ of `.next` (absent, or a SHA-256 of the
+   bytes). Under the lock: a pending twin whose keycheck the database holds is
+   PROMOTED (item 5); one the database does not hold, with the database on this
+   handle's keycheck, is DISCARDED — only if `.next` is still byte-for-byte
+   what the unlock read. Then, for a present keycheck that is not the handle's:
+   **race** — `vault.json` no longer verifies under this handle's key, or
+   `.next` is not what the unlock read — a NEW typed non-integrity refusal
+   ("the vault's keys were rotated while this process opened it; reopen"), 409
+   with no class, exit 1, which the CLI's `open_store_as` and `/v1`'s
+   `store_for` retry ONCE and never again; otherwise **the data decides**: if
+   the audit chain replays to its committed head under this handle's keys, the
+   database answers to them — the state a pre-O257 re-seed left, or an edited
+   keycheck column — and the keycheck is re-seeded WITH a note on
+   `unhealed`; if not, it is an integrity verdict (exit 2, 409 + class): a
+   rolled-back manifest, a lost promote, a database from another generation.
+   `RotationVerdict` gains `Foreign`, shared by both postures.
+5. **The idempotent promote (Q4)** is one `Vault::promote`, for the rotation
+   (its in-memory `next`) and for `reconcile_rotation` (the attached twin):
+   `vault.json` already verifying under the promoting key ⇒ nothing written
+   (so a stale twin can never lower an anchor another handle moved); otherwise
+   the manifest is written through `write_manifest_file`, authorised by the
+   committed keycheck under the lock (which also heals a corrupt or missing
+   `vault.json`). `.next` is removed afterwards only if it is byte-for-byte what
+   this promoter staged or read. Inside the rotation a failed write is retried,
+   bounded, under the hold; if it still fails the rotation answers Ok (O254
+   item 3) with `RotationReport` carrying the deferral on every renderer and a
+   note on `unhealed`, `.next` untouched for the next writable open —
+   `IntegrityFinding` only if `.next` is gone and `vault.json` does not verify
+   under the new keys. A `.next` naming the SAME generation as `vault.json` (a
+   crash between the write and the remove) is settled, never a deferred
+   promotion.
+6. **No unlock deletes (Q5), 3–1 against locked deletion, settled on
+   evidence**: an unauthenticated `.next` of this era is a planted file
+   (evidence), a newer build's (O238 forbids deleting it) or a torn pre-1.7
+   in-place write — the last indistinguishable from the first, and SQLite's
+   lock excludes no build that writes without it. It is REPORTED on every
+   open, writable ones included (vault notes now reach `VaultStats.unhealed`
+   on both postures), a too-new one with its own `Unhealed` variant, and the
+   next rotation stages over it under its hold. The report's wording tells the
+   operator how to judge it rather than inviting a blind `rm`.
+7. **Every BUSY is said, never swallowed (D1 and its siblings).**
+   `connect_read_only` falls back to `immutable=1` for everything EXCEPT a
+   busy database, which is `VaultHeld`; a writable open's first statement
+   answers busy as `VaultHeld` too; `recorded_embedder` and the read-only
+   open's keycheck read propagate their errors rather than reading "absent".
+   The read-only open applies item 4's classification without the lock and
+   REFUSES a race or an integrity state instead of serving false integrity
+   errors. `store_err` gains the `ManifestTooNew` arm.
+
+**Dissent.** The memory and security lenses preferred a 500 ms fail-fast
+(settled above). The security lens preferred locked deletion of a torn
+`.next` (settled above) and an error for a failed promote (refuted above).
+The memory lens would have refused only a PRESENT foreign keycheck at the
+write door; absent is refused too, as the anchor already does. None on the
+fence itself.
+
+**Fails silently if**: the release is "proven" by the pragma; a `/v1`-only
+release test (the eviction closes the connection and proves nothing about the
+restore); a refusal arm that asserts refusal without `VaultHeld` (a verify
+blocker or the rotating store's own busy open would pass it); Q3 without the
+data check (a false exit 2) or with attach-based comparison (a reopen loop);
+the D1 fix built without re-running
+`a_vault_whose_wal_index_cannot_be_created_is_read_as_an_immutable_snapshot`;
+a test seam written inline in `rotate.rs` (it blinds
+`rotation_names_every_key_derived_artifact` — O254 finding 4); every writer
+not running this build; a filesystem whose locks do not work — NFS, SMB, and
+**a Windows host beside a Docker Desktop container on one bind mount, whose
+locks are not shared** — where the fence grants falsely and item 3 is the
+backstop.
+
+**The gate.** Through the release binary: `vault rotate` beside an idle
+`serve-http` is refused (exit 1, `VaultHeld`'s text), the salt byte-identical,
+no `.next`, the server's next save 200 and a fresh open clean — the O254 cost
+arm and its premise INVERTED, never deleted; the server stopped, the rotation
+succeeds and a later save lands. In the store, across processes: a refused
+rotation changes nothing (salt, keycheck, height, no `.next`, no `rotate/`
+row); the hold is HELD at the Staged and Committed pauses (a child's writable
+AND read-only opens answer `VaultHeld`, never through `immutable`); it is
+RELEASED after every exit — success, `VaultHeld`, a verify blocker, an
+injected staging fault, an injected promote fault, a panicking pause hook —
+another process writes within a second AND the reconnect fallback was not
+taken; the fallback itself, forced, releases; item 3 by a raw-SQL simulation of
+an older build's rotation beside a live handle (a save and a read-audited read
+refused, nothing committed); item 4's race, heal (the P1 post-state opens and
+heals) and integrity (a manifest restored from before a rotation, and an
+unchanged torn `.next` beside a foreign keycheck, each exit 2 with the keycheck
+not rewritten) arms; item 5's crash between write and remove, a planted older
+`.next` never lowering the anchor, and the R1/R2 sequence through the pause
+hooks plus `fixture::fail_next(Rename)`; item 6's torn and too-new `.next`
+surviving the unlock, `rotation_candidate` and the open, reported. The
+in-process two-handle tests are RE-SHAPED (a second handle refuses the
+rotation, which then succeeds once it is dropped), never deleted.
+Counterfactuals: no fence; no NORMAL restore and a `SELECT 1` release (each
+must fail the release arm's no-fallback assertion); the re-seed restored.
+Multi-process arms looped ≥10×. **Probes owed**: none on Linux; Windows — D2
+and P5 — stays a stated residual, the reconnect fallback being the mitigation.
+
+**Residuals, stated.** **D2** (read from the bundled source, unrun): on
+Windows a refused `BEGIN EXCLUSIVE` leaves the connection holding SQLite's
+PENDING byte, which NORMAL plus a read does not release and which blocks new
+openers for as long as it is held — including the whole 5 s wait; the proof
+connection sees it and the store reconnects. An `immutable=1` reader holds no
+lock and is invisible to the fence; after item 7 it arises only where the
+`-shm` exists and this uid cannot write it. Unaudited derived writes by a stale
+handle (O254's residual). `backup create` drops its store before its raw copy,
+so a rotation can run during the copy — O256's. Opens during a rotation longer
+than the busy timeout (above roughly 2×10⁵ sealed drawers, P8) are refused as
+`VaultHeld` and retried by the operator.
+
+**Versioning**: PATCH inside the unreleased `1.7.0` — `rotate_keys` has always
+stated that nothing else may hold the vault, and this enforces it; PATCH
+depends on item 4's data check, without which an intact vault 1.6.x opens would
+refuse. **`UPGRADING.md`** owes an entry (a rotation beside any holder now
+refuses, exit 1 / 409, where it used to exit 0 and destroy the vault; an open
+during a long rotation refuses as `VaultHeld`; `config check` can see neither)
+and the O254 entry's "does not yet stop" sentence rewritten.
+
+#### BUILT 2026-09-24, to the ruling — with two findings its own gates made, one of them a defect of mine
+
+**The fence.** `ExclusiveHold` (store `lib.rs`) takes the rotating store's own
+connection into `locking_mode=EXCLUSIVE`, read back, and `BEGIN EXCLUSIVE`;
+`rotate_keys` takes it before anything else it does, checks the committed
+keycheck and the on-disk manifest are still the handle's, runs O232's verify
+and the whole re-seal inside it, commits (the lock survives), and writes the
+new manifest before dropping it. Busy there is `StoreError::VaultHeld` — 409
+with no class on `/v1`, exit 1 on the CLI — and O69's `hold_vault_exclusively`
+mints the same variant on its busy arm alone, so both restore surfaces stop
+reading a missing or doubled database as "in use". Every exit goes through
+`prove_released`: a zero-timeout second connection reads a row, and a handle
+whose release it cannot see replaces its connection (`connect_writable`, now
+the one way a writable connection is configured), counted on
+`lock_reconnects`. `/v1` evicts its cached handle after every rotate.
+
+**The write door.** `chain_append` reads `meta.keycheck` inside the caller's
+IMMEDIATE transaction and refuses anything but this handle's own, absent
+included, as `IntegrityFinding` — the read-audit append among them. No latch.
+
+**`reconcile_rotation`.** Every decision and every write under one
+`WriteLock`, committed only on success; a present foreign marker is decided
+by `settle_foreign_keycheck` — race (`StaleUnlock`, which `open_store_as` and
+`store_for` retry once), heal when `chain_answers_to` replays the chain to its
+committed head under the handle's keys, integrity otherwise — and the
+read-only open applies the same classification without the lock.
+`RotationVerdict` gained `Foreign`; a staged file naming `vault.json`'s own
+generation is settled.
+
+**The vault crate.** `Vault::promote` writes the manifest from memory through
+`write_manifest_file`, skips a `vault.json` already verifying under the
+promoting key, refuses a too-new one, and removes `.next` through
+`remove_staged_if_unchanged`, which deletes only the bytes this handle staged
+or its unlock read (`staged_seen`, a SHA-256). `promote_manifest` and
+`discard_pending_file` are gone; the crate renames in ONE place and deletes in
+three, none in an unlock. The rotation retries a failed promote five times
+under the hold, then answers Ok with `RotationReport.promote_deferred` (printed
+by the CLI as `manifest promoted: DEFERRED`, serialized whole on `/v1`) and a
+note on `unhealed`. `unlock_as` deletes nothing: a torn `.next` is
+`Unhealed::TornStagingManifest` on BOTH postures, a too-new one the new
+`Unhealed::StagingManifestTooNew`, and a writable open now carries the vault's
+notes to `VaultStats.unhealed`. `connect_read_only` and a writable open's first
+statement answer a busy database as `VaultHeld`; `recorded_embedder` and the
+read-only keycheck read propagate busy. `store_err` gained `VaultHeld`,
+`StaleUnlock` and `ManifestTooNew` (409, no class). The fixture gained
+`fail_times`.
+
+**The gate** (`anchor_tests.rs`, the O257 section, and the vault crate):
+`a_rotation_beside_another_process_is_refused_and_every_exit_releases_the_vault`
+— beside an idle process and a `SQLITE_OPEN_READ_ONLY` one, `VaultHeld` with
+salt, keycheck, height and `rotate/` rows unchanged and no `.next`; then after
+each exit — both refusals, a verify blocker, an injected staging fault, a
+panicking pause hook, a promote failing all five attempts (Ok, deferred,
+promoted by the next process's open), a success — another PROCESS opens and
+writes within ten seconds and `lock_reconnects` is 0.
+`the_fence_holds_at_both_pauses_against_writable_and_read_only_opens` — at
+Staged and at Committed, a writable and a read-only open in another process
+both answer `VaultHeld`, the read-only one never through `immutable=1`.
+`a_handle_whose_keys_the_database_no_longer_holds_writes_nothing` — a foreign
+and an absent marker each refuse a save, an audited write and a read under
+read-audit, commit nothing, and latch nothing.
+`a_foreign_keycheck_heals_refuses_as_integrity_or_reads_as_a_race_by_the_evidence`
+— the pre-1.7 re-seed's leftover heals (read-only: serves and notes, writes
+nothing); a manifest restored from before a rotation is integrity on both
+postures, with and without an unchanged torn `.next` beside it, the marker
+never rewritten. `an_open_that_attached_an_older_staging_file_never_deletes_a_newer_one`
+— the R1/R2 sequence: `StaleUnlock`, R2's staged file byte-identical, and the
+reopen promotes it. `a_staged_file_of_the_current_generation_is_removed_and_never_lowers_the_anchor`.
+Re-shaped, never deleted: O254's in-process PROBE-254R is now
+`a_second_handle_in_the_process_refuses_the_rotation_until_it_is_dropped`, its
+retire arm kept as `a_manifest_another_key_generation_wrote_retires_the_handle`
+(a manifest planted from a second installation holding the same key — the one
+route a retire still has); P1's re-seed test is INVERTED to
+`p1_an_open_that_read_the_vault_before_a_rotation_is_told_to_reopen_and_writes_nothing`
+(held by the fence, told to reopen, the keycheck untouched, the rotating handle
+NOT retired); P1's staging-window test asserts the open is held by the fence
+(`!is_finished()`), which its O254 form could not tell from waiting at
+reconcile; `a_read_only_open_leaves_a_writers_staging_manifest_alone`'s
+premise arm is INVERTED — a writable open now keeps and reports the file.
+Vault crate: `the_promote_is_idempotent_never_lowers_and_removes_only_its_own_staged_file`
+and `no_unlock_deletes_a_staging_manifest_it_cannot_authenticate` (the too-new
+arm is the O238 defect's counterfactual). The source gate counts one rename,
+five `write_manifest_file(`, three `fs::remove_file(` and none in `unlock_as`,
+and requires every `.promote()`/`.remove_staged_if_unchanged()` to sit in
+`reconcile_rotation` or between the fence's take and its drop. Through the
+release binary (`tests/e2e.sh`): the O254 premise arm and cost arm are
+INVERTED — `vault rotate` beside the live server exits 1 `held by another
+process`, the salt byte-identical, both server saves 200 and nothing retired;
+the server stopped, the rotation succeeds (`manifest promoted: yes`), a fresh
+open is clean and verifies — and `/v1` rotate beside a second server holding
+the vault is 409 without a class, 200 once it stops, after which another
+process writes and the rotating server serves the vault.
+
+**Loops** (the ruling asked ≥10): the `anchor_tests` module 20 runs, 19 green;
+O254's multi-process gate alone 12 of 12. The one failure was O254's gate: a
+writer child's initial `VaultStore::open` failed while the whole module ran in
+parallel. Its text is LOST — my loop overwrote the log, **my mistake** — so its
+cause is not established; its shape is the writable-open flake O254's record
+already notes beside two writers (under O253), and the only code this unit put
+on that open path (the reconcile's fast path, below) takes no lock. Not seen in
+the 22 runs after it.
+
+**The battery at the final tree**: `test` 1070 run (8 ignored — O257's two
+probes are the new ones), `e2e` 646, `orchestrator-e2e` 169, `e2e-telemetry`
+57, `backends-e2e` 157, `obs-config` 17, `site` 7, `tls-pins` 31, `lint` and
+`arch-check` green. Its first pass found two more e2e arms pinning the old
+deletion — "a writable open reports nothing unhealed" and M18's "a writable
+vault list discards it" — both INVERTED (the first keeps its premise as a
+second arm: with no staged file, nothing is reported), then `e2e` re-run
+through the battery (646 of 646) and `site` after the landing figures moved.
+
+**Counterfactuals, each in a copy of the tree, each anchor counted.** Swapping
+only `BEGIN EXCLUSIVE` for `BEGIN IMMEDIATE` stayed GREEN — a partial result
+read as a diagnostic, not a pass: in exclusive locking mode SQLite takes the
+file lock at the first transaction whatever the `BEGIN` says, so the MODE is
+the fence. Removing the mode (read-back faked) fails four tests: the
+in-process fence, the cross-process fence and its release, the held re-seed
+window, and the fence at both pauses. No NORMAL restore, and `SELECT 1` as the
+release, each fail the release test (the no-reconnect assertion — without it
+the fallback would have released and passed). The blind re-seed restored fails
+three: the evidence test, R1/R2 and the re-seed window. No write door fails
+the write-door test.
+
+**Findings.**
+1. **My defect, caught by a gate**: the ruling's "whole under one `WriteLock`",
+   built literally, made EVERY writable open take the write lock — and O254's
+   multi-process gate failed at once: an open beside two busy writers starved
+   past its busy timeout (O258's tail) and a writer child died. The reconcile
+   now recognises the no-op case — nothing staged, the marker already the
+   handle's — without the lock: it writes nothing, and the fence guarantees the
+   marker cannot move while this connection is open. Every decision that can
+   write still runs under it. A stated narrowing of the ruling's letter.
+2. **A test the ruling's gate list missed**:
+   `a_read_only_open_leaves_a_writers_staging_manifest_alone` pinned, as its
+   premise, that a writable open DELETES a torn `.next` — exactly what Q5
+   inverts. Found by the suite, inverted, not deleted.
+3. **A stale figure in passing**: the platform-views key-rotation diagram said
+   `rotation_candidate: fresh salt, 4 keys`; there are five since O233's chain
+   subkey. Corrected with this unit's diagram edits.
+
+**A real corpus**, through a release binary freshly built and probed for the
+fence's refusal text: the LoCoMo feed mined into three wings (255 drawers,
+256 chain records). `vault rotate` beside a live `serve-http` exited 1 `held by
+another process` after **5.0 s** — the connection's busy timeout, which the
+ruling kept, so a refusal costs that wait — with the salt byte-identical and
+five `/v1` saves through the server all 200. With the server stopped the
+rotation ran in **49 ms** over 260 drawers (`manifest promoted: yes`), `verify`
+answered `VERIFY OK`, the anchor lag was 0, search served the rotated vault,
+and `vault.json` was the only manifest file left. Small (260 drawers), and
+stated as such; P8's 2.56 s at 102,000 is the larger figure.
+
+**Residuals, stated.** D2 (Windows' PENDING byte after a refused fence) is
+read from source and unrun; the reconnect is the mitigation, and nothing here
+builds or runs on Windows. An `immutable=1` reader is invisible to the fence.
+A filesystem whose locks do not work, and a Windows host beside a Docker
+Desktop container on one bind mount, defeat it; the write door is the
+backstop there. A rotating handle whose promote was DEFERRED retires on its
+own next write (its keys are the new generation's, the manifest on disk still
+the old) until the next open promotes — `/v1` evicts it and the CLI exits, so
+only a library caller meets it. `backup create`'s raw copy is outside the fence
+(noted in O256). The multi-process gate's one unexplained failure, above.
+
 ## 1.6.1 — released 2026-09-22
 
 Fixes only. Each makes an existing silence visible — a surface added to
@@ -5749,6 +6224,17 @@ the torn branch DELETES it on a writable open. Without this, an older binary
 opening a vault mid-rotation under a newer one would destroy that rotation's
 in-progress state. It is A32's lesson one file over, and it costs one call
 site.
+
+**Corrected 2026-09-24 by ROADMAP O257's panel, beside rather than in place of
+the paragraph above: the too-new staging manifest WAS still deleted.** The
+unlock called `Manifest::parse(&raw).ok()`, which turned `ManifestTooNew` into
+`None` — the same value as a torn file — and a writable unlock then removed it
+exactly as the paragraph says this change prevented. No test drove a too-new
+`.next`, so the claim was never checked; it was latent while
+`MANIFEST_VERSION` is 1, and it is the O257 loss on a rollback to an older
+binary. O257 made every unlock report and delete nothing, gave the too-new
+case its own `Unhealed::StagingManifestTooNew`, and pinned it in
+`no_unlock_deletes_a_staging_manifest_it_cannot_authenticate`.
 
 **The gate**: a manifest carrying `MANIFEST_VERSION + 1` with a valid MAC
 refuses as `ManifestTooNew`, naming both versions; the fresh anchor read
@@ -24945,7 +25431,7 @@ Sequenced after O254, which closed on 2026-09-24: the open-path gate here must d
 
 **Relations:** sequenced before O256 — a backup taken inside the snapshot it verified needs this entry's snapshot helper.
 
-**Relations:** sequenced after O257 — a rotation that can destroy the vault's keys outranks this false refusal; the ruled sequence puts that entry first, then this one.
+Sequenced after O257, which closed on 2026-09-24: a rotation that could destroy the vault's keys outranked this false refusal.
 
 #### RULED 2026-09-24 by a three-lens panel (agentic memory architecture, security, software engineering) plus an adversarial refuter
 
@@ -25222,62 +25708,14 @@ exactly the verified state; the probe that measures today's torn or
 out-of-state copies comes first.
 **Counterfactual**: to be measured — the filing is from reading.
 
+**Added 2026-09-24 by O257's refuter**: O257's rotation fence does not cover
+this path. `backup create` drops its store before the raw copy, so it holds no
+connection while it copies, and a key rotation can take the vault and run in
+the middle of the copy — which then pairs one generation's manifest with the
+other's rows. The shape above (the copy taken inside the verified snapshot,
+under a connection) closes that too, since a connection is what the fence sees.
+
 **Relations:** sequenced after O253 — a backup taken inside the snapshot it verified needs that entry's snapshot helper.
-
-### O257 — a key rotation beside a live handle can destroy the rotated salt, so the vault's data is sealed under keys no manifest can derive
-
-**Filed 2026-09-24 by O254's panel; measured by the integrator.** `rotate_keys`
-documents "do not rotate a vault another process is serving", and nothing
-enforces it: the CLI's `vault rotate` takes no hold, and `/v1` refuses only the
-same process's co-resident vault (`deny_co_resident`). A rotation mints a FRESH
-random salt that lives only in the new manifest; a handle opened before the
-rotation still holds the old manifest in memory, and its next anchor writes
-that whole manifest back.
-
-**Measured (PROBE-254R, two handles in one process)**: the manifest salt went
-`f35f6159` → `dd8d9114` after the rotation, then back to `f35f6159` after ONE
-ordinary write on the stale handle — which returned Ok. The vault reopened
-under the OLD key, the drawer written after the rotation failed its integrity
-check, and `verify` failed to decrypt the graph secret. The rotated data is
-sealed under keys that no manifest can derive: permanent, silent loss. The
-cross-process case — a CLI `vault rotate` beside a running server, then one
-save through the server — is the ordinary shape and is O254's probe P1.
-
-**Three more ways to the same loss, by reading (O254's panel)**:
-
-- **The keycheck re-seed**: `reconcile_rotation` overwrites a present,
-  different `meta.keycheck`, so an open that unlocked before the rotation staged
-  and reconciles between its COMMIT and its promote writes the OLD keycheck —
-  and becomes a stale handle that a keycheck test passes.
-- **The staging discard**: another process's writable open during the
-  rotation's staging-to-commit window attaches the valid `vault.json.next`,
-  sees the old keycheck in its snapshot and deletes the file; the rotation
-  commits and `promote_manifest` fails — the new salt is gone. A32 closed this
-  for the read-only path only.
-- **A stale handle's database writes**: after another handle's rotation it keeps
-  COMMITTING rows under retired keys, which fail every later read.
-
-**Shape, as O254's ruling scopes it**: an exclusive posture for rotation (O69's
-hold is the pattern but not reusable as is — probe P3 in O254); a keycheck
-check at every write door; `reconcile_rotation` deciding under the post-commit
-lock and REFUSING, never re-seeding, a present different keycheck; an
-idempotent promote that writes the new manifest from the rotation's in-memory
-`next`, so it does not depend on `.next` surviving; and a writable unlock —
-`rotation_candidate`'s included — that REPORTS an unauthenticated `.next`
-rather than deleting it. Every write of `vault.json` goes through O254's door.
-
-**Until it lands**: never run `vault rotate` while any other process has the
-vault open. `docs/THREAT_MODEL.md` says so beside the rotation claims.
-
-**Gate**: a rotation beside a live second PROCESS that then saves — the
-rotation is refused, or the save is refused, and the rotated salt survives; the
-re-seed and discard windows driven through a test barrier; every existing
-rotation test still green.
-**Counterfactual**: today, one ordinary write reverts the salt (measured).
-
-Built after O254, which closed on 2026-09-24: every write of `vault.json` this fix makes goes through that entry's post-commit door (`VaultStore::anchor`) and its one writer (`write_manifest_file`), and O254's probe P3 answered the fence question below.
-
-**Relations:** sequenced before O253 — a rotation that can destroy the vault's keys outranks a false refusal, and the sequence ruled is this entry, then that one.
 
 ### O258 — a writer waiting on the database lock can be starved past the 5 s busy timeout, and O254's anchor lock makes that likelier
 

@@ -2218,17 +2218,26 @@ else
   echo "FAIL  read-only server leaves the vault byte-identical"
   diff <(echo "$RO_BEFORE") <(echo "$RO_AFTER") | sed 's/^/      /'; FAIL=$((FAIL+1))
 fi
-# It has to SAY what it left, on a surface an operator reaches. Premise
-# first: the same command against a writable open reports nothing, so this
-# is about the posture and not about a line that is always printed.
+# It has to SAY what it left, on a surface an operator reaches. This arm was
+# "a writable open reports nothing unhealed", because a writable open used to
+# DELETE the torn staging file; ROADMAP O257 inverted that — no open deletes a
+# staging manifest it cannot authenticate, on either posture — so the writable
+# open now keeps it and REPORTS it too.
+out="$("$BIN" stats 2>&1)"
+if grep -q "unhealed: vault.json.next does not authenticate" <<<"$out" && [ -f "$RO_VAULT/vault.json.next" ]; then
+  echo "ok    O257: a writable open keeps the torn staging file and reports it"; PASS=$((PASS+1))
+else
+  echo "FAIL  O257: a writable open keeps the torn staging file and reports it"; echo "$out" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+# Premise, kept: without the file a writable open reports nothing, so the line
+# is about the file and not one that is always printed.
+rm -f "$RO_VAULT/vault.json.next"
 out="$("$BIN" stats 2>&1)"
 if ! grep -q "unhealed" <<<"$out"; then
-  echo "ok    a writable open reports nothing unhealed"; PASS=$((PASS+1))
+  echo "ok    a writable open with nothing to report reports nothing unhealed"; PASS=$((PASS+1))
 else
-  echo "FAIL  a writable open reports nothing unhealed"; echo "$out" | sed 's/^/      /'; FAIL=$((FAIL+1))
+  echo "FAIL  a writable open with nothing to report reports nothing unhealed"; echo "$out" | sed 's/^/      /'; FAIL=$((FAIL+1))
 fi
-# The writable `stats` above discarded the torn staging file, which is the
-# other half of the claim — so plant it again for the read-only reading.
 printf '{"half-written":' > "$RO_VAULT/vault.json.next"
 "$BIN" serve-http --host 127.0.0.1 --port 18766 --read-only 2>"$UNDERCROFT_HOME/ro.log" &
 RO_PID=$!
@@ -2270,17 +2279,17 @@ else
   echo "FAIL  --read-only CLI leaves the vault byte-identical"
   diff <(echo "$CLI_RO_BEFORE") <(echo "$CLI_RO_AFTER") | sed 's/^/      /'; FAIL=$((FAIL+1))
 fi
-# THE COUNTERFACTUAL, and it is what makes the arm above mean something: the
-# SAME command without the flag destroys the staging manifest. `vault list`
-# specifically, because it bypassed the posture entirely and did this to
-# EVERY vault on the host — the most natural first command in an incident,
-# touching everything it was asked about and everything it was not.
+# This was THE COUNTERFACTUAL for the arm above — the same command without
+# the flag destroyed the staging manifest, `vault list` on EVERY vault on the
+# host. ROADMAP O257 removed that deletion from every posture, so the arm is
+# INVERTED rather than deleted: a writable `vault list` now keeps the file too.
+# What stops the read-only arm passing vacuously is its own parse premise.
 if [ -f "$RO_VAULT/vault.json.next" ]; then
   "$BIN" vault list >/dev/null 2>&1 || true
-  if [ ! -f "$RO_VAULT/vault.json.next" ]; then
-    echo "ok    a writable vault list discards it (the defect M18 closed)"; PASS=$((PASS+1))
+  if [ -f "$RO_VAULT/vault.json.next" ]; then
+    echo "ok    O257: a writable vault list keeps it too (M18's defect is gone on every posture)"; PASS=$((PASS+1))
   else
-    echo "FAIL  a writable vault list discards it (the defect M18 closed)"; FAIL=$((FAIL+1))
+    echo "FAIL  O257: a writable vault list deleted the staging manifest"; FAIL=$((FAIL+1))
   fi
 else
   echo "FAIL  premise: --read-only already removed the staging manifest"; FAIL=$((FAIL+1))
@@ -3932,48 +3941,88 @@ else
   echo "FAIL  O254: /v1 stats carries anchor_lag and anchor_failures (save $O254_S0)"; echo "$O254_ST0" | sed 's/^/      /'; FAIL=$((FAIL+1))
 fi
 O254_SALT0="$(o254_salt)"
-check "O254 premise: the CLI rotates the vault beside the live server" 0 "Rotated vault 'default'" -- \
-  env UNDERCROFT_HOME="$O254_HOME" "$BIN" vault rotate default
-O254_SALT1="$(o254_salt)"
-if [ -n "$O254_SALT0" ] && [ -n "$O254_SALT1" ] && [ "$O254_SALT0" != "$O254_SALT1" ]; then
-  echo "ok    O254 premise: the rotation wrote a new salt"; PASS=$((PASS+1))
+# ROADMAP O257 INVERTS what follows. Until it, this rotation SUCCEEDED beside the
+# live server (the premise arm), the server's first save after it was stored and
+# chained under the RETIRED chain key, its second was refused 409, and a fresh
+# open then refused the whole vault as an integrity verdict (the pinned cost).
+# The rotation now holds the vault exclusively and is refused while any other
+# process has it open — changing nothing — and the server writes on.
+check "O257: the CLI rotation beside the live server is refused and changes nothing" 1 \
+  "held by another process" -- env UNDERCROFT_HOME="$O254_HOME" "$BIN" vault rotate default
+if [ -n "$O254_SALT0" ] && [ "$(o254_salt)" = "$O254_SALT0" ] && \
+   [ ! -e "$O254_HOME/vaults/default/vault.json.next" ]; then
+  echo "ok    O257: the refused rotation left the salt byte-identical and staged nothing"; PASS=$((PASS+1))
 else
-  echo "FAIL  O254 premise: the rotation wrote a new salt ('$O254_SALT0' → '$O254_SALT1')"; FAIL=$((FAIL+1))
+  echo "FAIL  O257: the refused rotation moved the salt or staged a manifest ('$O254_SALT0' → '$(o254_salt)')"; FAIL=$((FAIL+1))
 fi
-O254_S1="$(o254_save "the first save after the rotation")"
-O254_S2="$(o254_save "the second save after the rotation")"
+O254_S1="$(o254_save "the first save after the refused rotation")"
+O254_S2="$(o254_save "the second save after the refused rotation")"
 O254_ST="$(curl -s http://127.0.0.1:18887/v1/vaults/default/stats)"
+if [ "$O254_S1" = 200 ] && [ "$O254_S2" = 200 ] && grep -q '"anchor_failures":0' <<<"$O254_ST" \
+   && ! grep -q 'stopped writing' <<<"$O254_ST"; then
+  echo "ok    O257: the server writes on — both saves 200, nothing retired (INVERTED from O254's 200 then 409)"; PASS=$((PASS+1))
+else
+  echo "FAIL  O257: the server must write on after a refused rotation, got $O254_S1 then $O254_S2"; echo "$O254_ST" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
 kill "$O254_PID" 2>/dev/null; wait "$O254_PID" 2>/dev/null
-if [ "$(o254_salt)" = "$O254_SALT1" ]; then
-  echo "ok    O254: the rotated salt survives the stale server's saves"; PASS=$((PASS+1))
+# The O69 lesson: a fence indistinguishable from one that always refuses is not
+# a fence. With the server stopped, the same rotation runs.
+check "O257: with the server stopped, the rotation succeeds" 0 "manifest promoted:   yes" -- \
+  env UNDERCROFT_HOME="$O254_HOME" "$BIN" vault rotate default
+if [ -n "$(o254_salt)" ] && [ "$(o254_salt)" != "$O254_SALT0" ]; then
+  echo "ok    O257: the rotation wrote a new salt"; PASS=$((PASS+1))
 else
-  echo "FAIL  O254: the stale server wrote the retired salt back ($(o254_salt))"; FAIL=$((FAIL+1))
+  echo "FAIL  O257: the rotation wrote a new salt ('$O254_SALT0' → '$(o254_salt)')"; FAIL=$((FAIL+1))
 fi
-if [ "$O254_S1" = 200 ] && [ "$O254_S2" = 409 ]; then
-  echo "ok    O254: the stale server's first save is stored, then it refuses every write (409)"; PASS=$((PASS+1))
-else
-  echo "FAIL  O254: expected 200 then 409 from the stale server, got $O254_S1 then $O254_S2"; FAIL=$((FAIL+1))
-fi
-if grep -q 'stopped writing' <<<"$O254_ST" && grep -q '"anchor_failures":1' <<<"$O254_ST"; then
-  echo "ok    O254: the retired server says why on unhealed and counts the failed anchor"; PASS=$((PASS+1))
-else
-  echo "FAIL  O254: the retired server says why on unhealed and counts the failed anchor"; echo "$O254_ST" | sed 's/^/      /'; FAIL=$((FAIL+1))
-fi
-# COST, pinned for O257 to invert (measured, not predicted): the ONE save the
-# stale server committed before its anchor saw the rotation stepped the audit
-# chain under the RETIRED chain key, so the next open refuses the whole vault
-# as an integrity verdict. The rotated salt survives — asserted above — and
-# every row the rotation sealed is intact under it; what O254 does not stop is
-# that first write, which is O257's "keycheck check at every write door".
-# Before O254 the same scenario also wrote the retired salt back.
-check "O254 cost (O257): after the stale server's one save, a fresh open refuses the vault" 2 \
-  "integrity failure on record audit-chain head" -- o254 stats
+# INVERTED from the O254 cost arm, which pinned exit 2 here: every save the
+# server stored is intact under the rotated keys, and the vault opens clean.
+check "O257 (O254's cost, inverted): a fresh open after the rotation is clean" 0 \
+  "anchor lag: 0 committed record(s) not yet anchored" -- o254 stats
+check "O257: the rotated vault verifies" 0 "" -- o254 verify
 O254_TMPS="$(find "$O254_HOME/vaults/default" -name 'vault.json*.tmp*' | wc -l)"
 if [ "$O254_TMPS" -eq 0 ]; then
   echo "ok    O254: no manifest temp file is left behind"; PASS=$((PASS+1))
 else
   echo "FAIL  O254: $O254_TMPS manifest temp file(s) left behind"; FAIL=$((FAIL+1))
 fi
+# The /v1 surface: a vault the rotating server does not serve over /mcp, held by a
+# SECOND server process. The rotate route answers 409 WITHOUT the integrity class
+# — a running server is not tampering — and once the holder is gone it rotates,
+# closes its handle, and another process then writes to the vault.
+o254 vault create other >/dev/null 2>&1
+o254 remember "a memory in the other vault" --vault other --wing notes >/dev/null 2>&1
+UNDERCROFT_HOME="$O254_HOME" "$BIN" serve-http --host 127.0.0.1 --port 18887 >/dev/null 2>&1 &
+O257_A=$!
+UNDERCROFT_HOME="$O254_HOME" "$BIN" serve-http --host 127.0.0.1 --port 18889 --vault other >/dev/null 2>&1 &
+O257_B=$!
+for _ in $(seq 1 40); do
+  curl -sf http://127.0.0.1:18887/healthz >/dev/null 2>&1 && curl -sf http://127.0.0.1:18889/healthz >/dev/null 2>&1 && break
+  sleep 0.25
+done
+O257_R="$(curl -s -w '\n%{http_code}' -X POST http://127.0.0.1:18887/v1/vaults/other/rotate)"
+if [ "$(tail -1 <<<"$O257_R")" = 409 ] && grep -q 'held by another process' <<<"$O257_R" \
+   && ! grep -q '"class"' <<<"$O257_R"; then
+  echo "ok    O257: /v1 rotate beside another process holding the vault is 409, no integrity class"; PASS=$((PASS+1))
+else
+  echo "FAIL  O257: /v1 rotate beside a holder must be 409 without a class"; echo "$O257_R" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+kill "$O257_B" 2>/dev/null; wait "$O257_B" 2>/dev/null
+O257_R="$(curl -s -w '\n%{http_code}' -X POST http://127.0.0.1:18887/v1/vaults/other/rotate)"
+if [ "$(tail -1 <<<"$O257_R")" = 200 ] && grep -q '"promote_deferred":null' <<<"$O257_R"; then
+  echo "ok    O257: /v1 rotate succeeds once nothing else holds the vault"; PASS=$((PASS+1))
+else
+  echo "FAIL  O257: /v1 rotate must succeed once the holder is gone"; echo "$O257_R" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+# The release, proven by another PROCESS while the rotating server still runs.
+check "O257: another process writes to the vault right after the /v1 rotation" 0 "" -- \
+  o254 remember "written by another process after the rotation" --vault other --wing notes
+O257_S="$(curl -s http://127.0.0.1:18887/v1/vaults/other/stats)"
+if grep -q '"drawers":2' <<<"$O257_S"; then
+  echo "ok    O257: the rotating server reopens the vault and sees the other process's write"; PASS=$((PASS+1))
+else
+  echo "FAIL  O257: the rotating server must serve the rotated vault"; echo "$O257_S" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+kill "$O257_A" 2>/dev/null; wait "$O257_A" 2>/dev/null
 rm -rf "$O254_HOME"
 
 echo

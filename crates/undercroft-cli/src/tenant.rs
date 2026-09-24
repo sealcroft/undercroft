@@ -1584,14 +1584,27 @@ impl Tenancy {
         // retry layer keyed on the class cannot tell those apart.
         let candidate = self.manager.rotation_candidate(id).map_err(vault_err)?;
         let store = self.store_for(id)?;
-        let report = store.rotate_keys(candidate).map_err(store_err)?;
+        let rotated = store.rotate_keys(candidate).map_err(store_err);
         // The DATABASE's head, never `Vault::chain_head_hex()` — the
         // handle's cached manifest field, loaded once at unlock and never
         // reloaded, which CLAUDE.md names as forbidden for a reporting
         // surface. This route and `vault status` were the last two callers
         // (ROADMAP A21). They agreed with the truth only because a rotation
         // re-anchors on its way out.
-        let (chain_head, _) = store.chain_state().map_err(store_err)?;
+        let chain_head = match &rotated {
+            Ok(_) => Some(store.chain_state().map_err(store_err)),
+            Err(_) => None,
+        };
+        // **The handle is closed after every rotate, whatever the outcome
+        // (ROADMAP O257)**, `backup_restore`'s precedent: the rotation's
+        // exclusive hold is released and proven inside the store, and closing
+        // the connection is the one release that works on every platform and
+        // every path — a server whose cached handle stayed exclusive would
+        // lock every other process out of the vault in silence. The next
+        // request reopens it from the current manifest.
+        self.stores.remove(id);
+        let report = rotated?;
+        let (chain_head, _) = chain_head.expect("computed on success")?;
         Ok((
             200,
             Body::Json(json!({
@@ -2396,8 +2409,14 @@ impl Tenancy {
         self.stores.remove(id);
         let _hold = if dst.exists() {
             Some(
-                undercroft_store::hold_vault_exclusively(&dst)
-                    .map_err(|_| RestError::new(409, "vault is in use — stop the server first"))?,
+                // Only a HELD vault is "in use" (ROADMAP O257); a missing or
+                // doubled database, or an I/O error, is classed as itself.
+                undercroft_store::hold_vault_exclusively(&dst).map_err(|e| match e {
+                    StoreError::VaultHeld(_) => {
+                        RestError::new(409, "vault is in use — stop the server first")
+                    }
+                    other => store_err(other),
+                })?,
             )
         } else {
             None
@@ -3351,38 +3370,51 @@ impl Tenancy {
             // the class saw an internal error and hammered a tampered
             // vault. Behaviour-neutral for everything else: both mappers
             // fall through to 500.
-            // The posture reaches the unlock too: unlocking removes a
-            // `vault.json.next` it cannot authenticate, and a `--read-only`
+            // The posture reaches the unlock too: unlocking used to remove a
+            // `vault.json.next` it could not authenticate, and a `--read-only`
             // server is exactly the role the incident runbook starts while a
-            // writer may be mid-rotation (ROADMAP A32/R4).
-            let vault = if self.read_only {
-                self.manager
-                    .unlock_as(vault_id, undercroft_vault::Access::ReadOnly)
-            } else {
-                self.manager.unlock(vault_id)
-            }
-            .map_err(vault_err)?;
-            let embedder =
-                (self.factory)(&vault).map_err(|e| RestError::new(500, e.to_string()))?;
-            // A read-only server must not rewrite the vault it is serving —
-            // an embedder migration is a bulk write, and the operator asked
-            // this process not to make any.
-            let opened = if self.read_only {
-                VaultStore::open_read_only(vault, embedder)
-            } else {
-                VaultStore::open_with_embedder(vault, embedder)
+            // writer may be mid-rotation (ROADMAP A32/R4). No unlock deletes
+            // anything since ROADMAP O257; the posture still decides what the
+            // store's open may heal.
+            // An open that read the vault just before another process rotated
+            // its keys is told to reopen (ROADMAP O257), and does, ONCE: the
+            // reopen reads the current manifest, and a second race in a row is
+            // said rather than chased.
+            let mut attempts = 0;
+            let mut store = loop {
+                attempts += 1;
+                let vault = if self.read_only {
+                    self.manager
+                        .unlock_as(vault_id, undercroft_vault::Access::ReadOnly)
+                } else {
+                    self.manager.unlock(vault_id)
+                }
+                .map_err(vault_err)?;
+                let embedder =
+                    (self.factory)(&vault).map_err(|e| RestError::new(500, e.to_string()))?;
+                // A read-only server must not rewrite the vault it is serving —
+                // an embedder migration is a bulk write, and the operator asked
+                // this process not to make any.
+                let opened = if self.read_only {
+                    VaultStore::open_read_only(vault, embedder)
+                } else {
+                    VaultStore::open_with_embedder(vault, embedder)
+                };
+                // `store_err`'s wrapped-manifest arm was DEAD CODE until this
+                // line: `StoreError::Vault(ManifestTampered)` is raised in
+                // exactly one place — `init_chain`, where a manifest anchor
+                // that is NOT an ancestor of the committed head means the
+                // database was rolled back under a still-valid manifest — and
+                // it reaches a caller only through this open. The arm was
+                // written, tested as a function, and unreachable from any
+                // route. `init_chain`'s neighbouring verdict, `Integrity` for a
+                // head that disagrees with its own audit rows, arrives here too
+                // and takes the same 409.
+                match opened {
+                    Err(StoreError::StaleUnlock(_)) if attempts == 1 => continue,
+                    other => break other.map_err(store_err)?,
+                }
             };
-            // `store_err`'s wrapped-manifest arm was DEAD CODE until this
-            // line: `StoreError::Vault(ManifestTampered)` is raised in
-            // exactly one place — `init_chain`, where a manifest anchor
-            // that is NOT an ancestor of the committed head means the
-            // database was rolled back under a still-valid manifest — and
-            // it reaches a caller only through this open. The arm was
-            // written, tested as a function, and unreachable from any
-            // route. `init_chain`'s neighbouring verdict, `Integrity` for a
-            // head that disagrees with its own audit rows, arrives here too
-            // and takes the same 409.
-            let mut store = opened.map_err(store_err)?;
             if let Some(make_reranker) = &self.reranker {
                 store.set_reranker(Some(make_reranker()));
             }
@@ -3849,6 +3881,18 @@ fn store_err(e: StoreError) -> RestError {
         StoreError::DatabaseMissing { .. }
         | StoreError::DatabaseAmbiguous { .. }
         | StoreError::ReadOnlyUnmigrated { .. } => 409,
+        // Two conditions of the vault's CURRENT state rather than of the
+        // request, and neither a verdict about stored evidence (ROADMAP
+        // O257): another process holds the vault (a rotation refused beside a
+        // server, an open while a rotation holds it), or this process read the
+        // vault before another rotated its keys. 409 with NO integrity class
+        // — a retry layer must not page a tamper alert for a running server —
+        // and the CLI exits 1 on both, `ReadOnlyUnmigrated`'s shape.
+        StoreError::VaultHeld(_) | StoreError::StaleUnlock(_) => 409,
+        // A manifest a NEWER build wrote, refused inside a store open (a
+        // too-new staging manifest a promote met): age, not tamper — the same
+        // 409 `vault_err` answers for one refused at unlock (ROADMAP O238).
+        StoreError::Vault(undercroft_vault::VaultError::ManifestTooNew { .. }) => 409,
         // "That record is not here" has ONE status class across every
         // route: `forget` and `admission` used to answer 400 for it while
         // GET/PUT on the same id answered 404, so a client could not key

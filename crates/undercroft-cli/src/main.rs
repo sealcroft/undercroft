@@ -1443,12 +1443,33 @@ fn open_store(cli: &Cli, vault: &str) -> Result<VaultStore> {
 }
 
 fn open_store_as(dir: &std::path::Path, vault: &str, posture: Posture) -> Result<VaultStore> {
+    // An open that read the vault just before another process rotated its
+    // keys is told to reopen (ROADMAP O257), and does, ONCE: the reopen reads
+    // the current manifest, and a second race in a row is said rather than
+    // chased.
+    match open_store_once(dir, vault, posture) {
+        Err(e)
+            if e.chain().any(|link| {
+                matches!(
+                    link.downcast_ref::<undercroft_store::StoreError>(),
+                    Some(undercroft_store::StoreError::StaleUnlock(_))
+                )
+            }) =>
+        {
+            open_store_once(dir, vault, posture)
+        }
+        other => other,
+    }
+}
+
+fn open_store_once(dir: &std::path::Path, vault: &str, posture: Posture) -> Result<VaultStore> {
     let mgr = manager_at(dir, posture)?;
-    // The posture reaches the UNLOCK, not only the store open. Unlocking is
-    // not passive: it deletes a `vault.json.next` it cannot authenticate, so
-    // a read-only process that stated its posture only one call later had
+    // The posture reaches the UNLOCK, not only the store open. Unlocking was
+    // not passive: it deleted a `vault.json.next` it could not authenticate,
+    // so a read-only process that stated its posture only one call later had
     // already destroyed a concurrent writer's staging manifest by the time
-    // the store could decline to (ROADMAP A32/R4).
+    // the store could decline to (ROADMAP A32/R4). No unlock deletes anything
+    // since ROADMAP O257; the posture still decides what the open may heal.
     let v = match posture {
         Posture::ReadOnly => mgr.unlock_as(vault, undercroft_vault::Access::ReadOnly)?,
         Posture::ReadWrite => mgr.unlock(vault)?,
@@ -2037,7 +2058,10 @@ fn integrity_verdict(e: &anyhow::Error) -> bool {
                     // it exits 1 like a posture error rather than 2 like a
                     // tamper verdict. Telling an operator to page someone
                     // because their binary is old would be the opposite of
-                    // what the refusal means.
+                    // what the refusal means. `S::VaultHeld` and
+                    // `S::StaleUnlock` are absent for the same reason (ROADMAP
+                    // O257): another process holding the vault, or a rotation
+                    // racing this open, says nothing about stored evidence.
                     | S::Vault(
                         V::ManifestTampered
                             | V::CorruptManifest(_)
@@ -2377,6 +2401,17 @@ fn run(cli: Cli) -> Result<()> {
                 // field — the third and last A21 caller.
                 let (chain_head, _) = store.chain_state()?;
                 println!("  new chain head:      {chain_head}");
+                // ROADMAP O257: a committed rotation whose new manifest could
+                // not be written is Ok — an error would invite a second
+                // rotation — and says so here rather than only in a log.
+                match &report.promote_deferred {
+                    None => println!("  manifest promoted:   yes"),
+                    Some(why) => println!(
+                        "  manifest promoted:   DEFERRED ({why}) — the rotation committed; \
+                         vault.json.next is intact and the next command on this vault promotes \
+                         it. Do NOT delete it."
+                    ),
+                }
                 println!(
                     "If this vault was pushed to a remote index, re-run: undercroft index push"
                 );
@@ -4464,6 +4499,12 @@ fn run(cli: Cli) -> Result<()> {
                     // by then there is nothing left to protect.
                     let _hold = if dst.exists() {
                         Some(undercroft_store::hold_vault_exclusively(&dst).map_err(|e| {
+                            // Only a HELD vault is "in use" (ROADMAP O257): a
+                            // missing or doubled database, or an I/O error,
+                            // used to read as one too.
+                            if !matches!(e, undercroft_store::StoreError::VaultHeld(_)) {
+                                return anyhow::Error::from(e);
+                            }
                             anyhow::anyhow!(
                                 concat!(
                                     "vault '{}' is in use by another process — refusing to ",
@@ -4474,7 +4515,7 @@ Restoring beneath a running server DESTROYS ",
                                     "would unlink, and the vault becomes unopenable. Stop the server, ",
                                     "then retry.
 
-SQLite reported: {}"
+The store reported: {}"
                                 ),
                                 vault_name,
                                 e
@@ -5029,12 +5070,13 @@ mod tests {
     /// implemented, not merely on this one.
     #[test]
     fn config_check_accepts_only_embedder_names_the_opener_implements() {
-        // The arms `open_store_as` actually has, read off the source so this
-        // cannot drift from the match it describes.
+        // The arms the opener actually has, read off the source so this
+        // cannot drift from the match it describes. They live in
+        // `open_store_once` since ROADMAP O257 split out the race retry.
         let src = include_str!("main.rs");
         let opener = src
-            .split_once("fn open_store_as")
-            .expect("premise: open_store_as exists")
+            .split_once("fn open_store_once")
+            .expect("premise: open_store_once exists")
             .1;
         let opener = &opener[..opener
             .find(

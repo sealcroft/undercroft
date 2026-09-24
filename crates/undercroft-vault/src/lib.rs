@@ -236,12 +236,14 @@ impl Manifest {
 
 /// What a caller intends to do with the vault it is unlocking.
 ///
-/// Unlocking is not a passive act: it reconciles the filesystem side of a key
-/// rotation, and it removes a `vault.json.next` it cannot authenticate. Both
-/// are writes, and both used to happen whatever the caller's posture was —
-/// so a replica started to *freeze* writes during incident response could
-/// delete a writer's staging manifest on the way up (ROADMAP A32). Stating
-/// the posture is how a read-only caller gets detection instead of healing.
+/// Opening a vault is not a passive act: the store reconciles the filesystem
+/// side of a key rotation, and an unlock used to remove a `vault.json.next`
+/// it could not authenticate. Both are writes, and both used to happen
+/// whatever the caller's posture was — so a replica started to *freeze*
+/// writes during incident response could delete a writer's staging manifest
+/// on the way up (ROADMAP A32). Stating the posture is how a read-only caller
+/// gets detection instead of healing. Since ROADMAP O257 no unlock deletes
+/// anything on either posture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Access {
     /// The caller may write. Reconciliation heals, as it always has.
@@ -286,8 +288,15 @@ pub enum DbLayout {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unhealed {
     /// A `vault.json.next` that is unreadable, belongs to another vault, or
-    /// fails its MAC — a torn leftover a writable unlock deletes.
+    /// fails its MAC. Reported on EVERY posture and never deleted (ROADMAP
+    /// O257): a file this build cannot authenticate is inert, and it is either
+    /// evidence (a planted file) or a torn pre-1.7 in-place write, which no
+    /// reader can tell apart. The next key rotation stages over it.
     TornStagingManifest,
+    /// A `vault.json.next` written by a NEWER build than this one (ROADMAP
+    /// O238, O257): another build's rotation is pending, and this build may
+    /// neither promote nor delete it. Reported on every posture.
+    StagingManifestTooNew,
     /// A rotation whose re-seal COMMITTED: its keys were adopted in memory
     /// so this process can read the database, but `vault.json.next` was not
     /// renamed over `vault.json`.
@@ -309,8 +318,16 @@ impl std::fmt::Display for Unhealed {
                  needs a WAL checkpoint first); a writable open will rename it to vault.db",
             ),
             Unhealed::TornStagingManifest => f.write_str(
-                "a torn vault.json.next was left in place (removing it is a write); \
-                 a writable open will discard it",
+                "vault.json.next does not authenticate under this vault's keys and was left in \
+                 place (ROADMAP O257): it is a torn write from a build before 1.7.0, or a file \
+                 something other than Undercroft put there. Nothing reads it. The next \
+                 `undercroft vault rotate` replaces it; to remove it by hand, first stop every \
+                 process that has the vault open and check `undercroft verify` passes",
+            ),
+            Unhealed::StagingManifestTooNew => f.write_str(
+                "vault.json.next was written by a NEWER build of Undercroft than this one: that \
+                 build's key rotation is pending, and this build neither promotes nor deletes \
+                 it (ROADMAP O238, O257). Open the vault with the newer build",
             ),
             Unhealed::RotationPromotionDeferred => f.write_str(
                 "a committed key rotation was adopted in memory only — vault.json.next \
@@ -338,6 +355,12 @@ pub enum RotationVerdict {
     /// The marker still names the current generation: the rotation never
     /// committed and the staging file is a leftover.
     Abandoned,
+    /// The marker is present and names NEITHER this handle's generation nor
+    /// the staged one (ROADMAP O257): another process rotated the vault after
+    /// this unlock read it, or the manifest and the database disagree. What it
+    /// means is decided by the store, which can read the rest of the evidence
+    /// — this verdict only says the keycheck alone cannot settle it.
+    Foreign,
 }
 
 /// Which audit-chain step a row takes (ROADMAP O233).
@@ -427,6 +450,13 @@ impl std::fmt::Display for AnchorFault {
     }
 }
 
+/// A SHA-256 of a staged manifest's bytes — how a handle remembers WHICH
+/// `vault.json.next` it staged or read (ROADMAP O257).
+fn digest_of(bytes: &[u8]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes).into()
+}
+
 /// Write `bytes` durably as `<dir>/<name>`, the ONE way a manifest file is
 /// written (ROADMAP O254): a temp file named with a random nonce and created
 /// with `create_new`, fsync, rename over `name`, directory sync.
@@ -509,13 +539,22 @@ pub mod fixture {
 
     thread_local! {
         static ARMED: Cell<Option<Fault>> = const { Cell::new(None) };
+        static REMAINING: Cell<u32> = const { Cell::new(0) };
     }
 
     /// Arm `fault` for this thread's next manifest operation that reaches that
     /// step. Consumed when it fires; thread-local, so parallel tests cannot
     /// trip each other's.
     pub fn fail_next(fault: Fault) {
-        ARMED.with(|armed| armed.set(Some(fault)));
+        fail_times(fault, 1);
+    }
+
+    /// Arm `fault` for this thread's next `times` manifest operations that
+    /// reach that step — a rotation retries its promote (ROADMAP O257), and a
+    /// test of the deferral must fail every attempt.
+    pub fn fail_times(fault: Fault, times: u32) {
+        ARMED.with(|armed| armed.set((times > 0).then_some(fault)));
+        REMAINING.with(|left| left.set(times));
     }
 
     /// Whether an armed fault is still waiting to fire.
@@ -528,7 +567,14 @@ pub mod fixture {
             if armed.get() != Some(step) {
                 return Ok(());
             }
-            armed.set(None);
+            let left = REMAINING.with(|left| {
+                let n = left.get().saturating_sub(1);
+                left.set(n);
+                n
+            });
+            if left == 0 {
+                armed.set(None);
+            }
             Err(std::io::Error::other(format!(
                 "injected {step:?} failure (the ROADMAP O254 test fixture)"
             )))
@@ -574,12 +620,23 @@ pub struct Vault {
     /// against the database's keycheck: rotation committed ⇒ promote,
     /// not committed ⇒ discard.
     pending: Option<Box<Vault>>,
-    /// Filesystem repairs this unlock declined to make because the caller
-    /// declared [`Access::ReadOnly`]. Empty on every writable open.
+    /// What this unlock found and did not repair: on a read-only posture every
+    /// filesystem repair it declined, and on EITHER posture a staging manifest
+    /// it could not authenticate (ROADMAP O257).
     unhealed: Vec<Unhealed>,
     /// Why this handle may no longer write (ROADMAP O254), set when its
     /// anchor met an [`AnchorFault::Integrity`]. `None` on every unlock.
     retired: Option<String>,
+    /// This generation's keycheck marker, computed once — the write door
+    /// compares it on every audited write (ROADMAP O257).
+    keycheck: String,
+    /// What this handle last knew of `vault.json.next` (ROADMAP O257): a
+    /// SHA-256 of the bytes the unlock READ (whether or not they
+    /// authenticated), or of the bytes a rotation STAGED; `None` when there
+    /// was no such file. A staged file is only ever promoted or removed when
+    /// it is still exactly these bytes, and a file that changed since is how
+    /// the store tells a rotation racing this open from tampering.
+    staged_seen: Option<[u8; 32]>,
 }
 
 impl Vault {
@@ -650,8 +707,9 @@ impl Vault {
         !matches!(self.db_layout(), DbLayout::Absent)
     }
 
-    /// Filesystem repairs a read-only unlock found and declined to make.
-    /// Empty on a writable open, which heals them instead.
+    /// What this unlock found and did not repair: a read-only unlock's
+    /// declined repairs, and on either posture a staging manifest it could not
+    /// authenticate or that a newer build wrote (ROADMAP O257).
     pub fn unhealed(&self) -> &[Unhealed] {
         &self.unhealed
     }
@@ -1044,7 +1102,17 @@ impl Vault {
     /// its `meta` table and flips it inside the rotation transaction — the
     /// committed marker that open-time reconciliation compares against.
     pub fn keycheck_hex(&self) -> String {
-        hex::encode(record_hmac(&self.mac_key, b"undercroft.v1/keycheck"))
+        self.keycheck.clone()
+    }
+
+    /// [`keycheck_hex`](Self::keycheck_hex) without the copy — what the store's
+    /// write door compares on every audited write (ROADMAP O257).
+    pub fn keycheck(&self) -> &str {
+        &self.keycheck
+    }
+
+    fn keycheck_of(mac_key: &SecretKey) -> String {
+        hex::encode(record_hmac(mac_key, b"undercroft.v1/keycheck"))
     }
 
     /// Re-seal one at-rest blob from this vault's keys to `next`'s, without
@@ -1091,13 +1159,26 @@ impl Vault {
     /// [`anchor_manifest`](Self::anchor_manifest): the arithmetic is pure and
     /// the effect is not, so a caller that must not write can still learn the
     /// verdict and report it.
+    ///
+    /// A staged file naming the SAME generation as `vault.json` is what a
+    /// promote leaves when it stops between writing the manifest and removing
+    /// the staged file (ROADMAP O257): nothing is pending, and reading it as a
+    /// deferred promotion would report one that already happened.
     pub fn rotation_verdict(&self, db_keycheck: Option<&str>) -> RotationVerdict {
-        match &self.pending {
+        let own = self.keycheck.as_str();
+        let settled_or_foreign = || match db_keycheck {
             None => RotationVerdict::Settled,
-            Some(pending) if db_keycheck == Some(pending.keycheck_hex().as_str()) => {
-                RotationVerdict::Committed
+            Some(k) if k == own => RotationVerdict::Settled,
+            Some(_) => RotationVerdict::Foreign,
+        };
+        match &self.pending {
+            None => settled_or_foreign(),
+            Some(p) if p.manifest.salt_hex == self.manifest.salt_hex => settled_or_foreign(),
+            Some(p) if db_keycheck == Some(p.keycheck.as_str()) => RotationVerdict::Committed,
+            Some(_) if db_keycheck.is_none() || db_keycheck == Some(own) => {
+                RotationVerdict::Abandoned
             }
-            Some(_) => RotationVerdict::Abandoned,
+            Some(_) => RotationVerdict::Foreign,
         }
     }
 
@@ -1113,11 +1194,13 @@ impl Vault {
     /// database is already sealed under the staged keys, so a reader that
     /// kept the old ones would fail every AEAD open and read the vault as
     /// corrupt. Adopting them costs nothing on disk and is what keeps
-    /// "detect and report" from meaning "serve garbage".
+    /// "detect and report" from meaning "serve garbage". A
+    /// [`Foreign`](RotationVerdict::Foreign) verdict changes nothing here: the
+    /// store reads the rest of the evidence and decides (ROADMAP O257).
     pub fn reconcile_read_only(&mut self, db_keycheck: Option<&str>) -> RotationVerdict {
         let verdict = self.rotation_verdict(db_keycheck);
         match verdict {
-            RotationVerdict::Settled => {}
+            RotationVerdict::Settled | RotationVerdict::Foreign => self.pending = None,
             RotationVerdict::Committed => {
                 let pending = self.pending.take().expect("verdict saw a pending twin");
                 let notes = std::mem::take(&mut self.unhealed);
@@ -1146,7 +1229,8 @@ impl Vault {
     /// rename, directory sync — so a reader never meets a half-written
     /// staging file. It used to be written IN PLACE through `File::create`,
     /// which truncates: an unlock racing the write read a torn `.next` and a
-    /// writable one deleted it as garbage.
+    /// writable one deleted it as garbage. What was staged is remembered, so
+    /// the promote removes that file and no other (ROADMAP O257).
     pub fn save_manifest_pending(&mut self, head_hex: &str, writes: u64) -> Result<(), VaultError> {
         self.manifest.chain_head_hex = head_hex.to_string();
         self.manifest.writes = writes;
@@ -1155,45 +1239,102 @@ impl Vault {
         let json = serde_json::to_vec_pretty(&self.manifest)
             .map_err(|e| VaultError::CorruptManifest(e.to_string()))?;
         write_manifest_file(&self.dir, STAGING_FILE, &json)?;
+        self.staged_seen = Some(digest_of(&json));
         Ok(())
     }
 
-    /// Promote a committed rotation: `vault.json.next` becomes the manifest.
+    /// Promote a committed rotation (ROADMAP O257): make `vault.json` this
+    /// generation's manifest, then remove `vault.json.next` if it is still
+    /// exactly the bytes this handle staged or read.
     ///
-    /// A **write** (rename + directory sync). A caller that promised not to
-    /// write calls [`reconcile_read_only`](Self::reconcile_read_only) instead.
-    /// The store calls it under the database's write lock (ROADMAP O254), the
-    /// lock every anchor holds, so a promote and an anchor cannot interleave.
-    pub fn promote_manifest(&self) -> Result<(), VaultError> {
-        fs::rename(self.pending_path(), self.dir.join(MANIFEST_FILE))?;
-        keys::sync_dir(&self.dir)?;
+    /// **Written from memory, not renamed from the staged file**, so a
+    /// rotation's promote no longer depends on `.next` surviving until it
+    /// runs, and one implementation serves both callers — the rotation, with
+    /// the generation it just committed, and the store's open, with the twin
+    /// the unlock attached. **Idempotent and never lowering**: a `vault.json`
+    /// that already verifies under this generation's key is left alone, since
+    /// only a handle holding these keys can have written it and it may carry
+    /// an anchor newer than the staged one. A too-new `vault.json` is refused
+    /// rather than overwritten (ROADMAP O238).
+    ///
+    /// The CALLER authorises it: under the database's write lock, the
+    /// committed keycheck must be this generation's. That is also what lets it
+    /// heal a missing or corrupt `vault.json` — the database is the evidence
+    /// of which generation the vault is in. A crash between the write and the
+    /// removal leaves both files naming one generation, which
+    /// [`rotation_verdict`](Self::rotation_verdict) reads as settled.
+    pub fn promote(&self) -> Result<(), VaultError> {
+        let current = match fs::read(self.dir.join(MANIFEST_FILE)) {
+            Ok(raw) => match Manifest::parse(&raw) {
+                Ok(m) => m.id == self.id && self.mac_verifies(&m),
+                Err(e @ VaultError::ManifestTooNew { .. }) => return Err(e),
+                Err(_) => false,
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+            Err(e) => return Err(e.into()),
+        };
+        if !current {
+            let json = serde_json::to_vec_pretty(&self.manifest)
+                .map_err(|e| VaultError::CorruptManifest(e.to_string()))?;
+            write_manifest_file(&self.dir, MANIFEST_FILE, &json)?;
+        }
+        self.remove_staged_if_unchanged()?;
         Ok(())
     }
 
-    /// Whether a staged rotation manifest (`vault.json.next`) is on disk.
-    pub fn has_staged_file(&self) -> bool {
-        self.pending_path().exists()
+    /// Remove `vault.json.next` if — and only if — it is still exactly the
+    /// bytes this handle staged or its unlock read (ROADMAP O257). Returns
+    /// whether it removed anything.
+    ///
+    /// A **write** (unlink + directory sync), made by the store under the
+    /// database's write lock. Removing whatever file happened to be there was
+    /// the defect: an open that attached one rotation's abandoned staging file
+    /// could delete a LATER rotation's whose promote had failed, and the new
+    /// salt was then in no file at all.
+    pub fn remove_staged_if_unchanged(&self) -> Result<bool, VaultError> {
+        let Some(seen) = self.staged_seen else {
+            return Ok(false);
+        };
+        if self.staged_on_disk()? != Some(seen) {
+            return Ok(false);
+        }
+        match fs::remove_file(self.pending_path()) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(e) => return Err(e.into()),
+        }
+        keys::sync_dir(&self.dir)?;
+        Ok(true)
+    }
+
+    /// A SHA-256 of `vault.json.next` as it is on disk NOW, `None` when there
+    /// is no such file (ROADMAP O257).
+    pub fn staged_on_disk(&self) -> Result<Option<[u8; 32]>, VaultError> {
+        match fs::read(self.pending_path()) {
+            Ok(raw) => Ok(Some(digest_of(&raw))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// What this handle last knew of `vault.json.next`: a SHA-256 of the
+    /// bytes its unlock read or its rotation staged, `None` for no file.
+    pub fn staged_seen(&self) -> Option<[u8; 32]> {
+        self.staged_seen
     }
 
     /// Whether the manifest on disk verifies under THIS vault's key — the
-    /// question a rotation asks when its staged file is gone, to learn
-    /// whether another open promoted it (ROADMAP O254).
+    /// question a rotation asks when its promote failed, and the store asks
+    /// of a foreign keycheck, to learn whether another process moved the
+    /// manifest since this handle read it (ROADMAP O254, O257).
     pub fn manifest_on_disk_is_mine(&self) -> bool {
         self.verified_disk_manifest().is_ok()
     }
 
-    /// Remove a staging manifest from a rotation that never committed.
-    ///
-    /// A **write** (unlink + directory sync), and the one that destroys a
-    /// concurrent writer's in-flight rotation if it runs from the wrong
-    /// posture. See [`reconcile_read_only`](Self::reconcile_read_only).
-    pub fn discard_pending_file(&self) -> Result<(), VaultError> {
-        let p = self.pending_path();
-        if p.exists() {
-            fs::remove_file(&p)?;
-            keys::sync_dir(&self.dir)?;
-        }
-        Ok(())
+    fn mac_verifies(&self, m: &Manifest) -> bool {
+        hex::decode(&m.manifest_mac_hex)
+            .map(|mac| verify_hmac(&self.manifest_key, &m.canonical(), &mac).is_ok())
+            .unwrap_or(false)
     }
 
     /// The chain head of the manifest currently ON DISK, **MAC-verified**.
@@ -1475,12 +1616,11 @@ impl VaultManager {
 
     /// [`unlock`](Self::unlock) with the caller's posture stated.
     ///
-    /// Under [`Access::ReadOnly`] the one filesystem repair unlock performs —
-    /// deleting a `vault.json.next` that does not authenticate — is skipped
-    /// and recorded on [`Vault::unhealed`] instead. That file is unreadable
-    /// *to us*; it is not necessarily garbage to the process that is writing
-    /// it right now, and a replica is exactly the role most likely to meet
-    /// one mid-rotation.
+    /// An unlock writes nothing on either posture (ROADMAP O257). It used to
+    /// delete a `vault.json.next` it could not authenticate when writable —
+    /// the one filesystem repair it made, outside any lock — and now reports
+    /// it on [`Vault::unhealed`] instead: that file is unreadable *to us*,
+    /// which does not make it garbage to whoever wrote it.
     ///
     /// A manager opened read-only unlocks read-only whatever `access` says
     /// (ROADMAP O204): the posture belongs to the path, not to the call.
@@ -1514,35 +1654,46 @@ impl VaultManager {
             return Err(VaultError::ManifestTampered);
         }
         // Attach a pending rotation manifest (vault.json.next) for the
-        // store's open-time reconciliation. An unreadable, mismatched, or
-        // MAC-invalid staging file is a torn leftover — remove it here.
+        // store's open-time reconciliation, and remember exactly which bytes
+        // were read, authenticated or not: the store promotes or removes a
+        // staged file only while it is still those bytes, and a file that
+        // changed since is how it tells a rotation racing this open from
+        // tampering (ROADMAP O257).
+        //
+        // **No unlock deletes it, on either posture** (ROADMAP O257). A
+        // writable unlock used to remove every staging file it could not
+        // authenticate, outside any lock — including a TOO-NEW one, because
+        // `Manifest::parse(..).ok()` turned `ManifestTooNew` into "torn",
+        // contrary to this comment's own claim and O238's record. A file this
+        // build cannot authenticate is inert and is either evidence or a torn
+        // pre-1.7 write, which no reader can tell apart; it is reported, and
+        // the next rotation stages over it.
         let pending_path = vault.pending_path();
-        if pending_path.exists() {
-            vault.pending = fs::read(&pending_path)
-                .ok()
-                // A too-new staging manifest is NOT torn, so it must not
-                // be deleted: `parse` refusing it here makes this build leave
-                // a newer one's in-progress rotation alone (A32's shape, one
-                // file over). It is reported as unhealed rather than healed.
-                .and_then(|raw| Manifest::parse(&raw).ok())
-                .filter(|pm| pm.id == vault.id)
-                .and_then(|pm| self.assemble(vault.dir.clone(), pm).ok())
-                .filter(|pv| {
-                    hex::decode(&pv.manifest.manifest_mac_hex)
-                        .map(|mac| {
-                            verify_hmac(&pv.manifest_key, &pv.manifest.canonical(), &mac).is_ok()
-                        })
-                        .unwrap_or(false)
-                })
-                .map(Box::new);
-            if vault.pending.is_none() {
-                match access {
-                    Access::ReadWrite => {
-                        let _ = fs::remove_file(&pending_path);
+        match fs::read(&pending_path) {
+            Ok(raw) => {
+                vault.staged_seen = Some(digest_of(&raw));
+                match Manifest::parse(&raw) {
+                    Err(VaultError::ManifestTooNew { .. }) => {
+                        vault.unhealed.push(Unhealed::StagingManifestTooNew)
                     }
-                    Access::ReadOnly => vault.unhealed.push(Unhealed::TornStagingManifest),
+                    parsed => {
+                        vault.pending = parsed
+                            .ok()
+                            .filter(|pm| pm.id == vault.id)
+                            .and_then(|pm| self.assemble(vault.dir.clone(), pm).ok())
+                            .filter(|pv| pv.mac_verifies(&pv.manifest))
+                            .map(|mut pv| {
+                                pv.staged_seen = vault.staged_seen;
+                                Box::new(pv)
+                            });
+                        if vault.pending.is_none() {
+                            vault.unhealed.push(Unhealed::TornStagingManifest);
+                        }
+                    }
                 }
             }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
         }
         // ROADMAP O7: a database still under its pre-1.5.0 name. The rename
         // is the store's, at its writable open (it checkpoints the WAL
@@ -1561,9 +1712,11 @@ impl VaultManager {
         }
         let id = manifest.id.clone();
         let master = self.master()?;
+        let mac_key = derive_vault_key(master, &salt, &id, "mac");
         Ok(Vault {
             enc_key: derive_vault_key(master, &salt, &id, "enc"),
-            mac_key: derive_vault_key(master, &salt, &id, "mac"),
+            keycheck: Vault::keycheck_of(&mac_key),
+            mac_key,
             manifest_key: derive_vault_key(master, &salt, &id, "manifest"),
             sample_key: derive_vault_key(master, &salt, &id, "sample"),
             chain_key: derive_vault_key(master, &salt, &id, "chain"),
@@ -1574,6 +1727,7 @@ impl VaultManager {
             pending: None,
             unhealed: Vec::new(),
             retired: None,
+            staged_seen: None,
         })
     }
 
@@ -1585,10 +1739,9 @@ impl VaultManager {
     /// a different sample; rotation itself only re-seals, never re-quantizes,
     /// so nothing already on disk changes.
     /// Nothing is staged here — the store's rotation stages the manifest
-    /// once it has replayed the chain under the new keys. The unlock is
-    /// writable, so a torn staging manifest (`vault.json.next`) met on the
-    /// way is removed — which is why a manager opened read-only refuses this
-    /// before it unlocks anything (ROADMAP O204).
+    /// once it has replayed the chain under the new keys, while it holds the
+    /// vault exclusively (ROADMAP O257). A manager opened read-only refuses
+    /// this before it unlocks anything (ROADMAP O204).
     pub fn rotation_candidate(&self, id: &str) -> Result<Vault, VaultError> {
         self.writable("rotating a vault's keys writes to the data directory")?;
         let current = self.unlock(id)?;
@@ -2463,7 +2616,7 @@ mod tests {
         }
         assert_eq!(manifest_bytes(dir.path(), "v"), unpromoted);
 
-        next.promote_manifest().unwrap();
+        next.promote().unwrap();
         let rotated = manifest_bytes(dir.path(), "v");
         assert_ne!(
             next.keycheck_hex(),
@@ -2682,35 +2835,127 @@ mod tests {
         assert!(v.database_exists());
     }
 
-    /// R4: unlocking is not passive. A staging manifest that does not
-    /// authenticate is deleted by a writable unlock — correct there, and a
-    /// filesystem write a read-only caller must not perform, because the file
-    /// it cannot authenticate may be one a writer is in the middle of staging.
-    ///
-    /// Both arms run so the test cannot pass by the removal simply never
-    /// happening.
+    /// **ROADMAP O257, the promote.** Written from memory, idempotent, never
+    /// lowering, and removing the staged file only while it is exactly the
+    /// bytes this generation staged — plus the verdicts a leftover and a
+    /// foreign keycheck read as.
     #[test]
-    fn a_read_only_unlock_leaves_a_torn_staging_manifest_alone() {
+    fn the_promote_is_idempotent_never_lowers_and_removes_only_its_own_staged_file() {
         let dir = tempdir().unwrap();
         let mgr = VaultManager::open(dir.path(), None).unwrap();
-        mgr.create("t", SecurityLevel::Sealed).unwrap();
+        mgr.create("v", SecurityLevel::Sealed).unwrap();
+        let vdir = dir.path().join("vaults/v");
+        let staging = vdir.join(STAGING_FILE);
+        let old = mgr.unlock("v").unwrap();
+        let mut next = mgr.rotation_candidate("v").unwrap();
+        next.save_manifest_pending(&Vault::chain_genesis_hex(), 3)
+            .unwrap();
+        assert!(staging.exists() && next.staged_seen().is_some(), "premise");
+
+        // Promoted from memory even when the staged file is gone.
+        fs::remove_file(&staging).unwrap();
+        next.promote().unwrap();
+        assert!(next.manifest_on_disk_is_mine(), "written from memory");
+        assert!(!old.manifest_on_disk_is_mine());
+
+        // Idempotent and never lowering: an anchor the new generation wrote
+        // after the promote survives a second promote of the staged state.
+        let kc = next.keycheck_hex();
+        next.anchor_manifest("ab", 9, Some(kc.as_str())).unwrap();
+        let anchored = fs::read(vdir.join(MANIFEST_FILE)).unwrap();
+        next.promote().unwrap();
+        assert_eq!(fs::read(vdir.join(MANIFEST_FILE)).unwrap(), anchored);
+
+        // A staged file that is not the bytes this generation staged is left
+        // where it is; the same bytes are removed.
+        fs::write(&staging, b"some other rotation's staging file").unwrap();
+        assert!(!next.remove_staged_if_unchanged().unwrap());
+        assert!(staging.exists(), "another file must survive");
+        let mut again = mgr.rotation_candidate("v").unwrap();
+        again
+            .save_manifest_pending(&Vault::chain_genesis_hex(), 9)
+            .unwrap();
+        assert!(!next.remove_staged_if_unchanged().unwrap());
+        assert!(again.remove_staged_if_unchanged().unwrap());
+        assert!(!staging.exists());
+
+        // A too-new vault.json is refused, never overwritten (O238).
+        let path = vdir.join(MANIFEST_FILE);
+        let mut m = Manifest::parse(&fs::read(&path).unwrap()).unwrap();
+        m.version = MANIFEST_VERSION + 1;
+        m.manifest_mac_hex = hex::encode(record_hmac(&next.manifest_key, &m.canonical()));
+        let too_new = serde_json::to_vec(&m).unwrap();
+        fs::write(&path, &too_new).unwrap();
+        assert!(matches!(
+            again.promote(),
+            Err(VaultError::ManifestTooNew { .. })
+        ));
+        assert_eq!(fs::read(&path).unwrap(), too_new);
+        fs::write(&path, &anchored).unwrap();
+
+        // Verdicts. A staged file naming vault.json's own generation — a crash
+        // between the promote's write and its removal — is settled.
+        fs::write(&staging, &anchored).unwrap();
+        let u = mgr.unlock("v").unwrap();
+        assert!(u.has_pending(), "premise: the leftover authenticates");
+        assert_eq!(u.rotation_verdict(Some(&kc)), RotationVerdict::Settled);
+        assert_eq!(
+            u.rotation_verdict(Some(&old.keycheck_hex())),
+            RotationVerdict::Foreign
+        );
+        fs::remove_file(&staging).unwrap();
+        let u = mgr.unlock("v").unwrap();
+        assert_eq!(u.rotation_verdict(None), RotationVerdict::Settled);
+        assert_eq!(
+            u.rotation_verdict(Some("0000")),
+            RotationVerdict::Foreign,
+            "a keycheck that is neither generation's"
+        );
+    }
+
+    /// R4, then ROADMAP O257: no unlock deletes a staging manifest, on either
+    /// posture. R4 stopped the READ-ONLY unlock deleting one it could not
+    /// authenticate, because it may be one a writer is in the middle of
+    /// staging; O257 stopped the WRITABLE unlock too — it deleted every such
+    /// file outside any lock, a too-new one included (`parse(..).ok()` read
+    /// `ManifestTooNew` as "torn", contrary to O238's record). The writable arm
+    /// used to assert the deletion; it is inverted here, not removed, and the
+    /// too-new arm is the counterfactual for the O238 defect.
+    #[test]
+    fn no_unlock_deletes_a_staging_manifest_it_cannot_authenticate() {
+        let dir = tempdir().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let v = mgr.create("t", SecurityLevel::Sealed).unwrap();
         let staging = dir.path().join("vaults/t/vault.json.next");
 
         std::fs::write(&staging, b"not a manifest").unwrap();
-        let v = mgr.unlock_as("t", Access::ReadOnly).unwrap();
-        assert!(
-            staging.exists(),
-            "a read-only unlock must not remove a staging manifest"
-        );
-        assert_eq!(v.unhealed(), [Unhealed::TornStagingManifest].as_slice());
-        assert!(!v.has_pending());
+        for access in [Access::ReadOnly, Access::ReadWrite] {
+            let u = mgr.unlock_as("t", access).unwrap();
+            assert!(staging.exists(), "{access:?}: the unlock removed it");
+            assert_eq!(u.unhealed(), [Unhealed::TornStagingManifest].as_slice());
+            assert!(!u.has_pending());
+            assert!(u.staged_seen().is_some(), "{access:?}: the bytes it read");
+        }
+        mgr.rotation_candidate("t").unwrap();
+        assert!(staging.exists(), "rotation_candidate removed it");
 
-        // Counterfactual: the writable posture still heals it.
-        let v = mgr.unlock_as("t", Access::ReadWrite).unwrap();
-        assert!(!staging.exists(), "a writable unlock discards a torn file");
-        assert!(v.unhealed().is_empty());
-        // ...and the default door is the writable one.
-        assert!(mgr.unlock("t").unwrap().unhealed().is_empty());
+        // A too-new staging manifest: another build's rotation is pending.
+        let mut m =
+            Manifest::parse(&fs::read(dir.path().join("vaults/t/vault.json")).unwrap()).unwrap();
+        m.version = MANIFEST_VERSION + 1;
+        m.manifest_mac_hex = hex::encode(record_hmac(&v.manifest_key, &m.canonical()));
+        let too_new = serde_json::to_vec(&m).unwrap();
+        fs::write(&staging, &too_new).unwrap();
+        for access in [Access::ReadOnly, Access::ReadWrite] {
+            let u = mgr.unlock_as("t", access).unwrap();
+            assert_eq!(fs::read(&staging).unwrap(), too_new, "{access:?}");
+            assert_eq!(u.unhealed(), [Unhealed::StagingManifestTooNew].as_slice());
+        }
+        // With no staging file there is nothing to report.
+        fs::remove_file(&staging).unwrap();
+        let u = mgr.unlock("t").unwrap();
+        assert!(u.unhealed().is_empty());
+        assert!(u.staged_seen().is_none());
     }
 
     /// A32: a rotation whose re-seal COMMITTED but whose manifest rename was
@@ -2887,8 +3132,9 @@ mod tests {
 
     /// ROADMAP O204 — the posture reaches the manager, so a read-only
     /// process performs none of its writes (probes P10 and P11): not a
-    /// create, not a delete, and not the staging-manifest deletion that
-    /// `rotation_candidate`'s writable unlock performs.
+    /// create, not a delete, and no rotation candidate. (The staging-manifest
+    /// deletion `rotation_candidate`'s writable unlock used to perform is gone
+    /// on every posture since ROADMAP O257.)
     #[test]
     fn a_read_only_manager_refuses_every_write_before_its_effect() {
         let dir = tempdir().unwrap();
@@ -2919,10 +3165,11 @@ mod tests {
         assert!(staging.exists(), "the manager's posture bounds the call's");
         assert_eq!(v.unhealed(), [Unhealed::TornStagingManifest].as_slice());
 
-        // Counterfactual: a writable manager's rotation_candidate removes it.
+        // A writable manager's rotation_candidate succeeds — the refusal above
+        // is the posture's — and, since ROADMAP O257, deletes nothing either.
         let rw = VaultManager::open(root, None).unwrap();
         rw.rotation_candidate("t").unwrap();
-        assert!(!staging.exists());
+        assert!(staging.exists());
     }
 
     /// ROADMAP O204 (probe P5) — a read-only open of a directory that holds
