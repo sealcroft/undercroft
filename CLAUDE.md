@@ -689,8 +689,10 @@ Consequences that are binding, not advisory:
   replay-at-open charges every process an unbounded cost for a protection
   that covers a server only at boot (A31); and never per read, which is
   +240% on O234's own measured budget. **Plus a per-key APPEND-ONLY PREFIX
-  invariant on every guarded read**, at O(keys) over rows the scan already
-  fetches: `audit` is append-only in production, so a key that vanishes, a
+  invariant on every guarded read** (every read that looks a label up
+  THROUGH the handle — `refuse_replayed` finds drawer records in its own SQL
+  and pins none, corrected by O247's ruling), at O(keys) over rows the scan
+  already fetches: `audit` is append-only in production, so a key that vanishes, a
   newest record that moves backwards or a tag that changes under a seq
   already read is always tampering. Not an incremental replay from a
   watermark, which is UNSOUND here because the attack rewrites rows BELOW
@@ -736,7 +738,20 @@ Consequences that are binding, not advisory:
   VANISHES and never one that APPEARS, which is the direction this residual
   runs, and because the manifest is restorable from the vault's own
   `backups/`. The mechanism that would close it is an out-of-band witness,
-  O245),
+  O245. **Both of those last claims were wrong, and O247's ruling
+  (2026-09-24) corrected them beside:** a witness commits to a prefix of the
+  rows and does not close an append (O245 ruling item 3); "no in-band
+  structure" holds only against a KEY-HOLDER, since against a writer without
+  the key the live handle holds what it lacks; and the window is wider than
+  an append — under an unmoved cookie a relabel or a delete that moves no
+  height re-points a label's newest record, and a replayed policy governs,
+  the sweep destroys with `ok: true` and a replayed drawer is served
+  (O252, measured and pinned as a cost). **The whole guard defends against
+  a writer who does NOT hold the key** — on a deployment keeping
+  `master.key` in a file beside the database, a writer who can edit the
+  database can usually read the key as well. And a legitimate CONCURRENT
+  writer makes it refuse as tampering, because the replay and the committed
+  head are read in two snapshots (O253, measured)),
   verify (**`VerifyReport` is the whole verdict and it has NINE legs**: record
   HMACs, the chain replay, the label commitment (O233), drawer supersession
   receipts, **KG fact receipts**, orphan graph labels, mirror drift,
@@ -2277,8 +2292,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (1045 run,
-                                      # 4 #[ignore]d = 1049 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (1048 run,
+                                      # 4 #[ignore]d = 1052 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote

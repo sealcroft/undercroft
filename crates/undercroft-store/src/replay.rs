@@ -453,6 +453,15 @@ impl VaultStore {
         // lifts the boundary arm 1 stops at. This is the hottest label
         // decision in the tree, so it is where the door belongs — one full
         // replay per handle, then a per-key append-only check.
+        //
+        // **The per-key half reaches only the `rotate/` label here**
+        // (corrected 2026-09-24, ROADMAP O252): `version_boundary` looks that
+        // one up through the guard, and every drawer record below is found
+        // by this function's own SQL and pinned by nothing. So under an
+        // unmoved cookie a relabel-out or a delete of a drawer's newest write
+        // record — which the invariant refuses on a pinned policy label — is
+        // unseen here, and the replayed drawer is served. Measured, and
+        // pinned as a cost in `chain.rs`.
         self.require_authenticated_labels()?;
         // **A consulted set is not bounded by anything the caller controls,
         // and one `IN` list is.** An unscoped search on a vault with no

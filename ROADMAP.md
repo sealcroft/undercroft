@@ -3998,7 +3998,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**281** of the **296** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**283** of the **298** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4176,9 +4176,10 @@ identities.
 ## 1.7.0 — unreleased
 
 MINOR: O245 adds capability the product never had — a witness the engine
-emits and checks — and two fixes ride with it: O246 (a surface added to
-REPORT an existing silence, the 2026-09-08 ruling) and O243 (a latent panic
-removed).
+emits and checks — and three fixes ride with it: O246 (a surface added to
+REPORT an existing silence, the 2026-09-08 ruling), O243 (a latent panic
+removed) and O247 (a gate that names which mechanism refuses a copied
+`rotate/` label, and records corrected beside — no behaviour moves).
 
 ### O245 — CLOSED 2026-09-23: the external witness the threat model called "the planned mitigation" is ruled, escalated, decided (emit + check, no MCP) and built
 
@@ -4346,7 +4347,16 @@ maintainer chooses.**
    also remove or reorder anything at or below a witnessed point. Corrected
    in this unit: `chain.rs:712` and `:735-736` (which also said O246's
    manifest rollback closes on the witness — false, a witness compares the
-   database), and O244's residual sentence, beside.
+   database), and O244's residual sentence, beside. **Sharpened beside by
+   O247's ruling (2026-09-24):** the per-row out-of-band log named below is
+   the answer against a KEY-HOLDER. Against a writer WITHOUT the key the live
+   handle holds what that writer lacks, so in-band answers exist, and O252
+   names them; and the live-handle window is wider than an append — a label's
+   newest record can be re-pointed by a relabel or a delete that moves no
+   height (O252, measured). Nor was the correction above complete: four more
+   records said the witness closes it (`CLAUDE.md`, `docs/THREAT_MODEL.md`,
+   O242's "What remains", the released `1.6.0` CHANGELOG), each corrected
+   beside in O247's unit.
 4. **The A10 relabel moves the digest, and nobody but the refuter saw it.**
    `kg.rs:1508-1512` is a production `UPDATE audit SET record_id`, run by a
    writable open BEFORE the switch (`lib.rs:3878`, `:3881`) on a sealed
@@ -4728,6 +4738,260 @@ NUMBER an existing caller read changed value, where this adds a line to a
 list documented as what the open found. Nothing can stop a deployment, so
 no `UPGRADING.md` entry.
 
+### O247 — CLOSED 2026-09-24: a copied `rotate/` label is refused by the replay, and the gate now names that mechanism; the class it is one spelling of is O252
+
+**Filed 2026-09-21 by O242's ruling panel (the security lens); verified by the
+integrator and by the refuter.** O239 bounded the version-replay boundary to
+`rotate/{keycheck_hex()[..16]}` for the key the handle holds, which is what
+killed the forged-`rotate/` lever O237 measured. But that label sits **in
+clear in `audit.record_id`**, so an offline writer on a ROTATED vault can read
+the real keycheck out of the table and append a row under the REAL label at a
+higher seq; `rotation_boundary` takes it, because `newest_record` is a
+`MAX(seq)` over the label. The equality rejects a label that is not this
+key's; it cannot reject a copy of one that is.
+
+**It is not live today, and the reason is the thing that could change.** Such
+an append is an ordinary SQLite commit, so it moves `PRAGMA data_version` and
+trips the re-replay, which catches it — the append-only invariant does not,
+because an append is legitimate by construction (`chain.rs`'s own comment).
+So the variant is reachable only through the residual O237 already states: a
+writer editing pages beneath SQLite. O242 does not arm it, and both options
+O242 rejected — advancing a sibling's verdict, and dropping the re-replay —
+would have.
+
+**What is actually missing is the GATE.**
+`a_forged_rotation_record_is_refused_by_the_guard_as_well` inserts
+`rotate/deadbeefdeadbeef`, a foreign keycheck, so the copied-keycheck variant
+is exercised NOWHERE in the tree, and a future change to the boundary could
+retire the protection with every test green.
+
+**Shape, for a ruling panel**: an arm on the existing gate that copies the
+handle's own keycheck (which a test can derive), so the boundary is proved to
+rest on the re-replay rather than on the label's spelling; and, separately,
+whether the boundary should be bound to something an offline reader cannot
+copy — which is the same freshness problem O241 refused an in-band answer to
+and O245 names the out-of-band one for.
+
+**Gate**: a forged `rotate/` row carrying THIS handle's own keycheck is
+refused, and the test states which mechanism refuses it.
+**Counterfactual**: today only the foreign-keycheck spelling is driven.
+
+#### RULED 2026-09-24 by a three-lens panel (agentic memory architecture, security, software engineering) plus an adversarial refuter
+
+**The question.** The entry's two: what gate proves which mechanism refuses a
+`rotate/` row carrying THIS handle's own keycheck, and whether the boundary
+should be bound to something an offline reader cannot copy. The brief, the
+lenses' answers and the refuter's pack are in the session scratchpad —
+material, never the record.
+
+**Measured before the panel sat and at its request** (release build, sealed
+vaults; the probes were temporary tests, replaced by the gate below):
+
+- The copied label LIFTS the boundary on an unrotated vault (`None` → the
+  planted seq) and on a rotated one (the real rotation's seq → the planted
+  seq). An offline reader finds it on EVERY vault a writable open has
+  touched, because `reconcile_rotation` seeds `meta.keycheck` in clear — not
+  only "on a ROTATED vault … out of the table", as the filing says.
+- From a SECOND connection the re-replay that `PRAGMA data_version` triggers
+  refuses it ("do not replay to the committed head", replays 1 → 2), and
+  `verify` fails on `chain_ok` ALONE: its policy leg is blind above the
+  lifted boundary (`policy_drift` empty).
+- Under an UNMOVED cookie — the plant made on the handle's own connection,
+  this tree's stand-in for a writer beneath SQLite (O237 `#### BUILT`) — a
+  FOREIGN label is refused by the equality ("not the newest declaration", no
+  replay), while the COPIED label makes the replayed 30-day policy govern and
+  the sweep destroy a drawer filed a hundred days ago, reporting `ok: true`.
+- And the copy is one spelling of a class, none of whose other members needs
+  a `rotate/` row: an older record copied forward, a later record relabelled
+  in (height, `sqlite_sequence` and cookie all unmoved), the newest record of
+  a label the handle has not pinned deleted. Each was measured governing, and
+  each was measured destroying through the sweep with `ok: true`. On the
+  returning read a copy-forward, a relabel-out and a delete of a drawer's
+  newest write record each SERVE the replayed drawer, because
+  `refuse_replayed` finds drawer records in its own SQL and pins none of
+  them; the same relabel-out on a PINNED policy label is refused ("moved
+  back"), which is the control. Filed as **O252**.
+- And, out of scope and filed as **O253**: a LEGITIMATE concurrent writer
+  makes the guard refuse and `verify` fail — 64 false refusals in 1,489
+  deciding reads and 41 false `chain_ok = false` over 4,002 audit rows while
+  a second handle made 407 ordinary commits; clean the moment it stopped.
+
+**Prior rulings found, and their disposition.**
+
+- **O237 rulings 2, 3 and 6** — FOLLOWED. This entry is ruling 2's stated
+  consequence: the cookie is the accelerator, and between cookie moves
+  nothing sees an append.
+- **O237 ruling 1** — the mechanism FOLLOWED; its third clause, "an older tag
+  promoted to newest is ALWAYS a finding", was NOT BUILT, and no record said
+  so. `hold_append_only` finds a tag that changed under a seq already read; a
+  copy-forward promotes an older tag at a NEW seq and passes. A fix to
+  something already promised is one where the documents lead, so O252 owes
+  it — built, or refuted beside O237, never absorbed. Corrected beside in
+  O237's `#### BUILT`.
+- **O239** — FOLLOWED; measured refusing the foreign spelling and nothing else.
+- **O241 items 1-3** — FOLLOWED: nothing on disk answers this, because the
+  manifest is restorable.
+- **O242 (B), (C), (D) and (L)** — FOLLOWED; nothing here revives them. The
+  security lens called O242 (B)'s "the design space is closed" REFUTED in
+  extent; the refuter took it as CHALLENGED only — deciding from an
+  authenticated in-memory image would not re-read rows below a mark, but
+  `refuse_replayed`'s arms read a label's whole history and the memory cost at
+  10⁶ rows is unmeasured. O252 owes the evidence.
+- **O242's "O245 is what closes it"** — REFUTED by O245 ruling item 3;
+  corrected beside.
+- **O245 ruling item 3** — FOLLOWED and SHARPENED beside: its per-row
+  out-of-band log is the answer against a KEY-HOLDER; against a writer
+  without the key, in-band answers exist and O252 names them.
+- **O251** — FOLLOWED; the second ground of its comment is stale in letter
+  (below) and corrected beside, in the code and in its record.
+- **O233 (S2)** — FOLLOWED for `verify`. Its "localisation only" ground was
+  judged against `verify` and not against a live handle, so it does not reach
+  this question; a per-row MAC in O252 must still answer O233's "covering seq
+  in the step" loss and O241's "(S2) closes the design space" first.
+
+**Options, each with its cost.**
+
+- **(A) the gate, the records re-stated beside, the class filed — WON.** Tests
+  and documents; no behaviour moves.
+- **(B) freeze the DECIDE-path boundary at the last replay — LOST inside this
+  entry, settled by evidence rather than by count** (two lenses for; one lens
+  and the refuter against). It is sound, it costs nothing on the hot path, and
+  it IS the one binding an offline reader cannot copy: the handle's own
+  authenticated observation, held in memory. But it removes no outcome the
+  attacker can reach. The relabel-in, the copy-forward and the unpinned delete
+  each reach the same governed policy and the same destroying sweep at the
+  same cost — one row per key, beside the one row per key the attacker
+  already writes back — and on the drawer path the `rotate/` spelling is
+  already refused by the version check's unbounded arm. What it buys is
+  AMPLIFICATION: one planted row lifts every key's boundary at once. What it
+  costs is a second source for the boundary and a new hazard on O251's seed
+  path — an `OpenVerdict` that defaulted the boundary to `None` would make
+  every search on a rotated, read-audited deployment refuse. A gate on an
+  observable the attacker need not move is this project's most expensive
+  defect class. It is recorded in O252 as a component, with its timing —
+  computed INSIDE the replay, because a freeze on first use takes a plant
+  made after the verdict is cached (measured) — and with the refuter's check
+  that a verdict keyed by the label needs no invalidation on an own rotation.
+- **(C) an append trigger on the chain's height, with own-append accounting —
+  LOST.** A relabel-in moves no height; and every accounting has an unsafe
+  direction — rusqlite's `hooks` feature is not enabled and `commit_hook`
+  fires before the commit completes; a count inside `insert_record` counts
+  inserts that roll back (`RotationTx` rolls back after its own insert, and
+  `audit_read` runs its own transaction); O251's head and height cannot tell
+  an own append from a foreign one. A counted-but-rolled-back insert absorbs
+  exactly one forged append.
+- **(C′) a tail fold under the handle's own key** — named by two lenses, NOT
+  built: it needs no accounting and cannot false-alarm, but it covers the
+  append form only. Filed in O252 as that form's candidate.
+- **(D) file the class** — WON, as O252.
+
+**Claims refuted, including the brief's.**
+
+- The filing's "on a ROTATED vault … out of the table": the label is in
+  `meta.keycheck` on every vault a writable open has touched.
+- The filing's "O245 names the out-of-band one for": O245 ruling item 3 found
+  the witness closes the rewind direction and not the append one.
+- The brief's "in every case the only mechanism that refuses is a full
+  replay": false for the foreign spelling under an unmoved cookie, where the
+  equality refuses.
+- The brief's class, "a forged APPEND made by copying bytes already in the
+  table": neither the append nor the copy is needed.
+- The brief's (C) "narrows the residual to a record the handle has not yet
+  looked up": a relabel INTO a pinned label moves its newest record forward
+  and passes, and on the drawer path every label is unpinned.
+- "A per-key append-only invariant on every guarded read" (`CLAUDE.md`,
+  `chain.rs`, O237 `#### BUILT` item 2): the drawer path pins nothing.
+- "No in-band structure changes that" (`chain.rs`, `CLAUDE.md`, the released
+  `1.6.0` CHANGELOG): true against a key-holder, false against a writer
+  without the key.
+- O251's "`rotate.rs` appends through its own `INSERT`": stale since
+  `83518ff` (2026-09-20), two days before O251 landed.
+- The `1.7.0` CHANGELOG's "three records … corrected": four more said the
+  same thing, so the set was not complete.
+
+**Probes run by the integrator**, all at the lenses' or the refuter's request
+and all measured: the four above; the relabel-in (into the policy label and
+into the copied `rotate/` label); the relabel-out and the delete on the drawer
+path, with the relabel-out on a pinned policy label as the control; the
+unpinned delete; the verdict cached before the plant; the sweep under every
+spelling; and the concurrent writer. **Not run**: a real byte-level page edit
+under a live WAL handle (the own-connection plant is O237's established
+stand-in, and the security lens and the refuter both name the real edit as
+O252's severity probe); a false-alarm sweep across rotations for (B), which
+is not built; an `is_autocommit` survey, which is O252's, for the tail fold.
+
+**Dissent.** The agentic-memory and engineering lenses would build (B) here,
+on "a gap is a gap". The answer is that the gap is the CLASS, filed as O252
+with (B) among its components, and a boundary-only fix would have left it
+exactly as wide. The security lens's "refuted in extent" findings were taken
+as challenges O252 must answer.
+
+**What would make this verdict fail silently**: a gate deriving the copied
+label from the vault object rather than the file; the second-connection arm
+without its "the copy IS the boundary" premise, since the replay refuses a
+foreign label just the same; cost pins asserting only `is_ok()`, or without
+the unmoved-cookie and unchanged-replay premises; a drawer pin driven with an
+internal read, which returns early; "on every guarded read" left standing
+anywhere; and O252 answered with the out-of-band log alone, which skips the
+in-band answers a writer without the key leaves open.
+
+#### BUILT 2026-09-24, to the ruling: the gate, the class pinned as a cost, the records corrected beside
+
+**The gate**, in `crates/undercroft-store/src/chain.rs`:
+
+- `a_copied_rotation_record_is_refused_by_the_replay_and_not_by_its_label`,
+  on an unrotated and a rotated vault — the copied label read from
+  `meta.keycheck`'s clear bytes and asserted equal to the handle's own; on the
+  rotated vault the REAL rotation record copied verbatim, tag and time
+  included; premises that both declarations are still on the chain and that
+  the copy IS the boundary now; then the refusal's wording ("do not replay to
+  the committed head", and neither "append-only" nor "not the newest
+  declaration"), exactly one replay, and `verify` failing on `chain_ok` with
+  `policy_drift` empty, pinned as a cost.
+- `under_an_unmoved_cookie_the_equality_refuses_a_foreign_rotation_record`,
+  the control, on both vaults — the cookie asserted unmoved, the boundary
+  unmoved, the refusal "not the newest declaration", and no replay.
+- `o252_under_an_unmoved_cookie_an_edited_label_decides_a_policy_and_a_drawer`
+  — O252 pinned as `Verdict::Cost`, never absorbed: four spellings on the
+  policy path (the copied label, a copy-forward, a relabel-in, an unpinned
+  delete), each asserting the replayed VALUE (`[30]`), a sweep destroying one
+  drawer with `ok: true`, the cookie and the replay count unchanged, and
+  `verify` still failing; three on the returning read (a copy-forward, a
+  relabel-out, a delete), each serving the replayed drawer. The aged drawer
+  is dated a hundred days before NOW, with a premise that under the declared
+  365 days nothing expires, so the test cannot pass for the wrong reason as
+  the calendar moves.
+- `a_forged_rotation_record_is_refused_by_the_guard_as_well` now names its
+  mechanism by the replay count as well as by its wording.
+
+**Counterfactuals, run.** With the re-replay removed — a cached verdict reused
+whatever the cookie says, O242's rejected (D) — the copied-label gate and the
+foreign-label test FAIL (the replayed policy is returned) and the control and
+the pins pass. With the boundary restored to O239's `MAX(seq)` over the whole
+`rotate/` range, the control FAILS (a foreign label lifts it) and the gate
+passes, because the replay refuses either way. Each test fails when its own
+mechanism is removed and only then.
+
+**Records corrected beside, never in place**: `chain.rs`'s module
+documentation (the invariant's reach, the residual's width, "no in-band
+structure"), `rotation_boundary`'s documentation, `refuse_replayed`'s
+comment, O251's comment in `adopt_open_verdict`; in this file O237's
+`#### BUILT` (item 1, item 2 and its residual), O242's "What remains", O245
+ruling item 3 and O251's record; `CLAUDE.md`, `docs/THREAT_MODEL.md` (the O237
+paragraph, and A2's capability line, which never said whether this attacker
+holds the key), `docs/security.md`, and the CHANGELOG — a dated correction
+inside the released `1.6.0` section beside the paragraph it corrects, with
+the shipped text left as shipped, and the unreleased `1.7.0` line fixed.
+
+**Removed, and recorded here**: three stray fragments no gate reads — a line
+fused onto `TrustScan`'s rustdoc in `retention.rs`, left when O234 (`ea5af7c`)
+moved `prefix_range`'s documentation out of that file; and two orphaned
+sentence tails in this file, inside O239 and O241, both left by O239's commit
+(`02d7cc1`).
+
+**Versioning**: PATCH, inside the unreleased `1.7.0` — a gate and records,
+no behaviour; `UPGRADING.md` owes nothing.
+
 ## 1.6.1 — released 2026-09-22
 
 Fixes only. Each makes an existing silence visible — a surface added to
@@ -4938,6 +5202,13 @@ head and height instead. Both are read after every open-time append has run.
 Deliberately NOT a flag set by `chain_append`: a flag trusts every writer to
 remember, and `rotate.rs` appends through its own `INSERT` rather than that
 function (O80). The head and the height are what an append actually moves.
+**Corrected beside 2026-09-24 (O247's refuter): the `rotate.rs` half was
+stale on the day it was written** — rotation has appended through
+`chain::insert_record` since `83518ff` (2026-09-20). The conclusion stands on
+the first half and on the rotation and the version-2 switch both bypassing
+`chain_append`; a flag inside `insert_record` would reach every writer, and
+would err SAFE here (a wasted replay) and UNSAFE for an append trigger (a
+rolled-back insert absorbs one forged row), which O252 records.
 
 **What the unsound version would have done, measured rather than argued.**
 With the check replaced by `true`, `an_open_that_appended_after_its_replay_
@@ -5492,7 +5763,10 @@ else.**
   like every other one. `chain.rs:641-658` is amended in the same unit,
   because its "until it is re-opened or another connection commits" stops
   describing a routine event on the tree's own shipped recipe. O245 is what
-  closes it.
+  closes it. **REFUTED beside 2026-09-24 (O247's ruling, on O245 ruling item
+  3):** a witness compares a prefix of the rows and does not close a forged
+  append for a live handle, and the manifest half closes on O246, not on a
+  witness. The window is also wider than an append — O252.
 - **O239's keycheck equality rejects a FOREIGN label, not a COPIED one.**
   `rotate/{keycheck_hex()[..16]}` sits in clear in `audit.record_id`, so an
   offline writer reads the real keycheck and appends under the real label; the
@@ -5883,9 +6157,18 @@ the mirror marker followed; `refuse_replayed` adopted it.
    moves back, or a tag that changes under a seq already read is a finding.
    The SET half is load-bearing and the filing did not name it: the exploit
    deletes the policy row AND relabels its record, so the key is in neither
-   place afterwards and no per-key lookup is ever made for it.
+   place afterwards and no per-key lookup is ever made for it. **Corrected
+   beside 2026-09-24 (O247's refuter):** the ruling's third clause — "an
+   older tag promoted to newest is ALWAYS a finding" — was NOT built, and
+   nothing said so. A copy-forward promotes an older tag at a NEW seq, which
+   the three findings above do not include, and it passes (measured). O252
+   owes it, built or refuted beside the ruling.
 2. **`data_version` is the accelerator.** It short-circuits the replay and
    gates nothing else; the append-only check runs on every guarded read.
+   **Corrected beside 2026-09-24:** on every guarded read that looks a label
+   up THROUGH the handle — `refuse_replayed` finds drawer records in its own
+   SQL and pins none of them, so on the returning read the check covers the
+   `rotate/` label alone (O252, measured).
 3. **`IntegrityFinding`, with the carve-out.** Exit 2, 409
    `class: "integrity"`, naming `undercroft verify`. `Regime::V1` /
    `LabelCommitment::Pending` does not refuse — the condition is the one
@@ -5991,7 +6274,13 @@ has already replayed until it is re-opened or another connection commits.
 Only a replay can tell a forged append from a real one, because only the MAC
 key can. It is recorded in `chain.rs`'s own module documentation and it is
 what O241 would remove, by putting an authenticated key census in the MAC'd
-manifest and retiring the replay altogether.
+manifest and retiring the replay altogether. **Corrected beside 2026-09-24
+(O247's ruling):** O241 was refused on 2026-09-21 and removes nothing, and
+O245's witness does not close it either (O245 ruling item 3). And the
+residual is wider than an APPEND: under an unmoved cookie a relabel or a
+delete that moves no height re-points a label's newest record, a replayed
+policy governs, the sweep destroys and a replayed drawer is served — O252,
+measured.
 
 **Reported as mine.** O239's commit moved no CHANGELOG entry; this unit adds
 one for it, because the entry is part of the same pull request and a shipped
@@ -6046,8 +6335,6 @@ decision, or the two disagree about what a rotation is.
 
 **Gate**: the measurement above, both arms, plus a false-alarm arm over a real
 rotation. **Counterfactual**: today, the planted label wins.
-
-guard built over the loose range inherits the lever it exists to close.
 
 #### BUILT 2026-09-20, as ruled
 
@@ -24055,44 +24342,6 @@ the tunnel was new. Existing surplus records stay (the trail is append-only).
 **Gate**: a repeated create appends nothing and the tunnel's newest record
 carries the row's tag. **Counterfactual**: today, two records.
 
-### O247 — the `rotate/` boundary rejects a FOREIGN keycheck and not a COPIED one, and no gate exercises the copied variant
-
-**Filed 2026-09-21 by O242's ruling panel (the security lens); verified by the
-integrator and by the refuter.** O239 bounded the version-replay boundary to
-`rotate/{keycheck_hex()[..16]}` for the key the handle holds, which is what
-killed the forged-`rotate/` lever O237 measured. But that label sits **in
-clear in `audit.record_id`**, so an offline writer on a ROTATED vault can read
-the real keycheck out of the table and append a row under the REAL label at a
-higher seq; `rotation_boundary` takes it, because `newest_record` is a
-`MAX(seq)` over the label. The equality rejects a label that is not this
-key's; it cannot reject a copy of one that is.
-
-**It is not live today, and the reason is the thing that could change.** Such
-an append is an ordinary SQLite commit, so it moves `PRAGMA data_version` and
-trips the re-replay, which catches it — the append-only invariant does not,
-because an append is legitimate by construction (`chain.rs`'s own comment).
-So the variant is reachable only through the residual O237 already states: a
-writer editing pages beneath SQLite. O242 does not arm it, and both options
-O242 rejected — advancing a sibling's verdict, and dropping the re-replay —
-would have.
-
-**What is actually missing is the GATE.**
-`a_forged_rotation_record_is_refused_by_the_guard_as_well` inserts
-`rotate/deadbeefdeadbeef`, a foreign keycheck, so the copied-keycheck variant
-is exercised NOWHERE in the tree, and a future change to the boundary could
-retire the protection with every test green.
-
-**Shape, for a ruling panel**: an arm on the existing gate that copies the
-handle's own keycheck (which a test can derive), so the boundary is proved to
-rest on the re-replay rather than on the label's spelling; and, separately,
-whether the boundary should be bound to something an offline reader cannot
-copy — which is the same freshness problem O241 refused an in-band answer to
-and O245 names the out-of-band one for.
-
-**Gate**: a forged `rotate/` row carrying THIS handle's own keycheck is
-refused, and the test states which mechanism refuses it.
-**Counterfactual**: today only the foreign-keycheck spelling is driven.
-
 ### O248 — an append-only refusal on a legacy chain names a remedy that reports nothing, and its evidence dies with the handle
 
 **Filed 2026-09-21 by O242's ruling panel (the agentic-memory lens).** O237's
@@ -24174,6 +24423,170 @@ first is what the code already meant to do.
 or the second one names the collision instead of failing the O175 assertion.
 **Counterfactual**: today the second run fails as though the engine leaked a
 mirror.
+
+### O252 — under an unmoved cookie, a writer without the key re-points a label's newest record, and a replayed policy governs, the sweep destroys and a replayed drawer is served
+
+**Filed 2026-09-24 by O247's ruling panel; measured by the integrator.** The
+live-handle residual O237 states is "a forged APPEND is invisible to a handle
+that already replayed". That undercounts it. Between cookie moves the label
+guard sees exactly what `hold_append_only` pins — a label that vanishes, a
+newest record that moves BACK, a tag that changes at a seq already read —
+and only for labels a deciding read looked up through the handle. So a writer
+who can edit the database's pages beneath SQLite, and who holds no key,
+re-points a label's newest record by any edit that moves it FORWARD or that
+touches a label not yet pinned, and needs to copy nothing and forge nothing:
+the tag it needs is in the row it is writing back.
+
+**Measured, every arm on the handle's own connection with `PRAGMA
+data_version` and the replay count asserted unchanged** — the tree's
+stand-in for a writer beneath SQLite (O237 `#### BUILT`) — and every arm
+still failing `verify`, because a replay sees it:
+
+- **The policy path.** With `scratch` declared at 30 days and then at 365, and
+  the 30-day row written back, `retention_policies()` returns `[30]` and
+  `retention_sweep` DESTROYS a drawer filed a hundred days ago, reporting
+  `ok: true` with no drift, through each of four edits: a copied `rotate/`
+  label (O247 — `meta.keycheck` carries it in clear on every vault); the
+  label's OLDER record copied forward; a later, unrelated record relabelled
+  in place into the label with the older tag (height, `sqlite_sequence` and
+  cookie all unmoved); and the label's newest record deleted before any
+  deciding read had pinned it.
+- **The returning read.** A drawer corrected from 1111 to 2222, the 1111 row
+  written back: `get` serves 1111 after the older write record is copied
+  forward, after the newest is relabelled out, and after it is deleted.
+  `refuse_replayed` finds a drawer's records in its own SQL and pins none of
+  them; the same relabel-out on a PINNED policy label is refused ("moved
+  back"), which is the control.
+
+The gate that holds all of it is
+`o252_under_an_unmoved_cookie_an_edited_label_decides_a_policy_and_a_drawer`
+in `crates/undercroft-store/src/chain.rs`, pinned as `Verdict::Cost`: a fix
+here fails it, and the fix inverts the arm it shuts and says so.
+
+**Part of it is a promise made and not kept.** O237 ruling 1 says "an older
+tag promoted to newest is ALWAYS a finding"; the build narrowed that to a
+tag changed under a seq already read, and nothing recorded it. The
+copy-forward is exactly the promised case. A fix to something already
+promised is one where the documents lead, so this entry owes that clause —
+built, or refuted beside O237 with evidence.
+
+**Who the attacker is, stated rather than implied.** The whole label guard
+defends against a writer who does NOT hold the vault key. On a deployment
+that keeps `master.key` in a file beside the database, a writer who can edit
+the database can usually read that file too, and is then a key-holder,
+against whom no in-band check helps and O245's out-of-band per-row log is
+the only answer. The attacker this entry is about exists where the key is
+not on that disk: a passphrase deployment (`UNDERCROFT_PASSPHRASE`, where
+only `kdf.salt` is), or a key file on other storage. `docs/THREAT_MODEL.md` A2
+now says which is which.
+
+**Candidates, for this entry's own panel** — none is ruled:
+
+- **(G) keep O237's promise**: on each guarded lookup, one indexed probe for
+  whether the newest record's tag also appears at a lower seq under the same
+  label. It shuts the copy-forward and the relabel-in (both carry an older
+  tag forward) and leaves a delete or a relabel-out on an unpinned label. It
+  must exclude destruction labels, whose tags legitimately repeat (destroy,
+  re-mine, destroy), and its false-alarm rate on ordinary re-saves must be
+  MEASURED before it is believed — timestamps inside the tags make a
+  collision rare, not impossible.
+- **(B) freeze the `rotate/` boundary at the last replay** (O247's ruling,
+  lost there): computed INSIDE `chain::replay` from the same cursor, carried
+  `Replay` → `OpenVerdict` → `Replayed`, the verdict keyed by the label so an
+  own rotation forces a replay, `Report` still reading live. It buys
+  amplification only — one planted row lifts every key's boundary — and the
+  seed path must carry it or every search on a rotated, read-audited vault
+  refuses.
+- **(C′) a tail fold under the handle's own key**: on a guarded read with an
+  unmoved cookie and a grown `MAX(seq)`, step only the new rows from the
+  head the last replay authenticated and compare with `chain_meta`'s head;
+  unequal falls back to a FULL replay, never a refusal on its own. No
+  own-append accounting, no false alarm by construction, the append form
+  only; whether it leaves O237 ruling 1 and O242 (B) intact — it replaces no
+  replay — is this entry's panel's to rule. It reads rows and a head, so it
+  inherits O253.
+- **(E) a per-row MAC over (seq, label, tag, time)**: O(1) per row checked,
+  shuts every forward spelling and every in-place edit, leaves a delete or a
+  relabel-out on an unpinned label; needs a migration, a re-key at every
+  rotation, and a fence for the rows a `1.6.x` binary writes without it. It
+  must first answer O233's (S2) "covering seq in the step" loss and O241's
+  "(S2) closes the design space".
+- **(F) decide from an image the replay authenticated, held in memory**,
+  extended by stepping new rows forward: never re-reads rows below the mark,
+  so it challenges O242 (B)'s "the design space is closed"; its memory cost at
+  10⁶ audit rows is UNMEASURED and `refuse_replayed`'s arms read a label's
+  whole history, not just its newest record.
+- **(C) an append trigger with own-append accounting** — lost in O247's
+  ruling, recorded so it is not re-proposed: a relabel-in moves no height, and
+  every accounting has an unsafe direction.
+
+**Probes owed to the panel**: (G)'s false-alarm rate over a real corpus with
+re-mines and destroy-and-re-mine; the memory of (F) at 10⁶ rows; an
+`is_autocommit()` survey at `require_authenticated_labels` across the suite
+(the tail fold may advance only outside a transaction); and a REAL page edit
+under a live WAL handle — changed pages transplanted after a `TRUNCATE`
+checkpoint — so the severity line rests on a writer beneath SQLite and not
+only on the own-connection stand-in.
+
+**Gate**: every arm of the pinned test inverted — refused, or served the
+current value — with the cookie still unmoved, and a false-alarm sweep across
+rotations, re-mines, a legitimate `retention clear` and an hmac-only vault
+expecting zero.
+**Counterfactual**: today every arm governs, destroys or serves.
+
+**Relations:** shares a diff surface with O253 — both edit the label guard's replay path in `chain.rs`, and a tail fold that reads rows and a head in two snapshots inherits that entry's false alarm.
+
+### O253 — a legitimate concurrent writer makes the label guard refuse and `verify` report a broken chain, because the replay and the head are read in two snapshots
+
+**Filed 2026-09-24 by O247's refuter (reasoned) and measured by the
+integrator.** `chain_verdict` reads the regime, replays every `audit` row
+and then reads the committed head as THREE autocommit statements, each its
+own WAL read snapshot (`lib.rs`, `chain_verdict`; `chain::replay`;
+`chain::head_state`). A commit that lands anywhere inside the replay — which
+takes ~88 ms at 10⁵ rows and ~836 ms at 10⁶ — moves the committed head past
+the rows the replay folded, so `chain::verdict` compares a head it did not
+fold against one it did and answers `chain_ok = false`. Every FOREIGN commit
+also moves `PRAGMA data_version`, so the next deciding read replays again:
+under a steady writer the guard keeps re-entering the window.
+
+**Measured.** A sealed vault with 4,002 audit rows; a second handle on a
+second thread making ordinary `trust set` commits (407 in six seconds);
+this handle making deciding reads for the same six seconds: **64 of 1,489
+deciding reads refused as tampering** ("its records do not replay to the
+committed head … restore a backup that verifies"), across 260 replays, and
+**41 `verify` runs with `chain_ok = false`**. The writer stopped, and the
+vault reopened clean, with `verify` OK. Nothing was tampered with.
+
+**Why it matters more than an availability defect.** The refusal is an
+INTEGRITY verdict — exit 2, 409 `class: "integrity"` — whose stated remedy
+is to restore a backup, i.e. to throw away every write since it. `verify`'s
+chain leg answers the same way, and `backup create` gates on `verify`, so a
+backup taken while a writer runs can refuse. The deployment is ordinary and
+documented: `undercroft mine` or `daemon run --watch` beside a running
+server, a `trust set` against one, two servers on one vault (O242's
+remaining class, "any external concurrent writer"). The window grows
+linearly with `audit`, which has no compaction (O244), so the false-alarm
+rate grows with the vault's age. O237's false-alarm sweep ran its concurrent
+arms sequentially, which is why nothing saw it.
+
+**Shape**: every judgement that reads rows and a head must read them in ONE
+snapshot — one read transaction around the regime, the replay and the head,
+wherever the handle is not already inside one. The unit must enumerate every
+multi-statement chain judgement and state each one's snapshot:
+`chain_verdict`, `verify`'s chain leg, `reconcile_chain` at open (which reads
+the head BEFORE its replay), the witness check (O245's two walks), and the
+rotation's inner check (inside its own write transaction, so presumably
+consistent — to be stated, not assumed). And the cookie must still be read
+BEFORE the snapshot opens, or a foreign commit between them is skipped
+rather than wasted (O237's ordering argument).
+
+**Gate**: the measured probe — a steady legitimate writer beside a handle
+forced to replay — with ZERO integrity refusals and zero `chain_ok = false`,
+driven at a size where the replay takes long enough to straddle a commit,
+and looped, because a race gate that passes once is not a measurement.
+**Counterfactual**: today, 64 refusals and 41 false verdicts in six seconds.
+
+**Relations:** shares a diff surface with O252 — both edit the label guard's replay path in `chain.rs`, and a tail fold that reads rows and a head in two snapshots inherits this entry's false alarm.
 
 
 ---
@@ -24646,8 +25059,6 @@ window; and it does not cover O239's boundary variant, where nothing vanishes.
 **Gate**: the O237 exploit is caught with no `chain::replay` on the read path,
 and a rotation, a switch and a legitimate policy clear all pass.
 **Counterfactual**: O237's guard, which pays the replay.
-
-manifest gains an authenticated statement about the chain.
 
 #### RULED 2026-09-21 by a three-lens panel (agentic memory architecture, security, software engineering) plus an adversarial refuter — together with O240
 

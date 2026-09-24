@@ -658,7 +658,6 @@ pub(crate) fn refuse_on_findings(
     )))
 }
 
-/// A namespace's labels as a half-open range: `prefix` up to the same string
 /// Every `wing_trust` row as `(wing, trust)`, and every finding.
 pub(crate) type TrustScan = (Vec<(String, String)>, Vec<PolicyFinding>);
 

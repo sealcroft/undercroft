@@ -71,7 +71,19 @@ modification: every read verifies, `verify` audits everything.
   refuses to re-tag one that does not verify. Residual: an APPEND is
   legitimate, so only a replay can tell a forged appended record from a real
   one, and one written beneath SQLite is unseen by a handle that has already
-  replayed until it re-opens.
+  replayed until it re-opens. *Corrected 2026-09-24 (ROADMAP O247), beside
+  the text above:* the per-key invariant runs on the reads that look a label
+  up through the handle — the policy readers, the forgetting path, the
+  rotation boundary — and NOT on the returning read's version check, which
+  pins no drawer label. And the residual is wider than an append: between
+  replays a writer without the key re-points a label's newest record by a
+  copy-forward, a relabel or a delete, most of which move no height, and a
+  replayed policy then governs, the sweep destroys while reporting success,
+  and a replayed drawer is served — measured, pinned as a cost, ROADMAP O252.
+  The guard defends against a writer who does not hold the key; a
+  deployment that keeps `master.key` beside the database gives most such
+  writers the key. A legitimate concurrent writer can also make it refuse as
+  tampering (ROADMAP O253).
 - **Duplicate detection** uses keyed fingerprints (truncated HMAC), so
   stored fingerprints reveal nothing offline.
 
