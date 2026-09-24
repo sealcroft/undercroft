@@ -41,3 +41,6 @@ instant-distance = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# The anchor's failure-injection seam (ROADMAP O254): a DEV-dependency, so the
+# feature reaches this crate's tests and never a production build.
+undercroft-vault = { path = "../undercroft-vault", features = ["test-fixture"] }

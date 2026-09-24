@@ -493,13 +493,10 @@ pub(crate) fn prefix(conn: &Connection, at: Option<u64>) -> Result<Prefix, Store
 
 /// What [`switch`] did.
 pub(crate) enum SwitchOutcome {
-    /// The commitment was appended; the caller commits and anchors.
-    Switched {
-        /// The new live head, which the manifest must now anchor.
-        head: String,
-        /// The committed record count, the commitment included.
-        writes: u64,
-    },
+    /// The commitment was appended; the caller commits and anchors — through
+    /// the post-commit door, which reads the head it anchors from the
+    /// committed database rather than taking one (ROADMAP O254).
+    Switched,
     /// Another handle switched first — nothing to do.
     Already,
     /// The chain was left on version 1, for the reason given.
@@ -563,7 +560,7 @@ pub(crate) fn switch(
     )?;
     let writes = writes(tx)? + 1;
     set_writes(tx, writes)?;
-    Ok(SwitchOutcome::Switched { head: next, writes })
+    Ok(SwitchOutcome::Switched)
 }
 
 /// The head after appending one row to `head`, with the step the chain's

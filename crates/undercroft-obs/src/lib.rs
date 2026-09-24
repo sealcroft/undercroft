@@ -253,6 +253,25 @@ pub fn rerank_failed(backend: &str, count: u64) {
     }
 }
 
+/// Record one post-commit manifest anchor that did not complete (ROADMAP
+/// O254). `class` is `io` or `integrity`, a closed vocabulary that matters
+/// because the two call for opposite responses: an `io` failure — the
+/// filesystem refused, or the write lock stayed busy past its timeout — is
+/// covered by the next anchor and the handle keeps writing; an `integrity`
+/// failure means the manifest on disk is not one this handle's keys may
+/// overwrite (another process rotated the vault, or the file was edited),
+/// and that handle now refuses every write.
+///
+/// The durable half of a signal whose live half is
+/// `VaultStats.anchor_failures`. An alert fires on THIS counter and never on
+/// the anchor's lag, which is permanently non-zero under read-audit — read
+/// records append without anchoring.
+#[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
+pub fn anchor_failed(class: &str) {
+    #[cfg(feature = "telemetry")]
+    imp::counter_add("undercroft_anchor_failures_total", 1, &[("class", class)]);
+}
+
 /// Record one FULL audit-chain replay by the label guard (ROADMAP O250).
 ///
 /// The durable half of a signal whose live half is
@@ -482,6 +501,7 @@ pub const GAUGE_NAMES: &[&str] = &[
 /// scraping. `the_series_inventory_matches_the_emit_sites` counts it against
 /// those literals in both directions, so it cannot rot into decoration.
 pub const COUNTER_NAMES: &[&str] = &[
+    "undercroft_anchor_failures_total",
     "undercroft_auth_rejections_total",
     "undercroft_chain_commits_total",
     "undercroft_chain_replays_total",

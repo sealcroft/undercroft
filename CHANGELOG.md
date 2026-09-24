@@ -2,10 +2,13 @@
 
 ## 1.7.0 — unreleased
 
-MINOR: one new capability, backward compatible, and three fixes. The witness
-commands and routes are new; nothing that worked before behaves differently,
-no default moves, and no declaration can stop a start-up. (This line said
-"one fix" while O243 and O246 were both below it; corrected with O247.)
+MINOR: one new capability, backward compatible, and four fixes. The witness
+commands and routes are new; no default moves and no declaration can stop a
+start-up. One fix changes what a deployment must do: every process writing a
+vault must run the same build, and a server whose vault another process
+rotated now stops writing rather than destroy the rotated salt (O254 —
+`UPGRADING.md`). (This line said "one fix" while O243 and O246 were both
+below it; corrected with O247.)
 
 ### The external witness: `undercroft witness emit` / `check`, `GET`/`POST /v1/…/witness` (O245)
 
@@ -129,6 +132,44 @@ that" holds only against a writer who holds the key; and an external witness
 does not close the append direction. The threat model's A2 now says which
 deployments put the key within that attacker's reach. Three stray sentence
 fragments are gone.
+
+### One door writes the manifest, and a handle whose keys another process rotated stops writing (O254)
+
+Every manifest anchor wrote the handle's CACHED manifest through one fixed
+`vault.json.tmp`, truncated by `File::create`, with nothing serialising
+handles or processes — and `serve-http` beside `mine`, a `trust set` beside a
+server and two servers on one vault all run two writable handles. Measured:
+53 of 456 opens and 27 committed writes failed `No such file or directory` in
+eight seconds, each write AFTER its commit had succeeded, so a retried API
+save stored the memory twice; and a handle opened before another's key
+rotation wrote the RETIRED salt back on its next write, leaving the vault
+unable to decrypt what the rotation sealed.
+
+Now `VaultStore::anchor()` is the one door and the only caller of
+`Vault::anchor_manifest`. It takes no head: after the COMMIT it holds the
+database's write lock, reads the committed head, height and keycheck, and the
+vault reads `vault.json`, MAC-verifies it under the handle's key and writes
+through a random-nonce `create_new` temp, fsync, rename and directory sync.
+A failed anchor never fails the write it follows: an I/O failure is counted
+and covered by the next anchor; an integrity failure — a keycheck or MAC that
+is not this handle's, a missing or too-new manifest, a height above the
+committed one — retires the handle, which then refuses every write with an
+integrity verdict and says why under `unhealed`. `anchor_lag` and
+`anchor_failures` are on every stats surface, `undercroft_anchor_failures_total{class}`
+is the durable series, and two alerts fire on it, never on the lag. Both
+rotation promotes, and the promote-or-discard decision at open, run under the
+same lock.
+
+Its own probes found more. SQLite refuses a DEFERRED transaction's upgrade to
+a write at once, without waiting: before this change 122 of 400 audited
+writes failed at two writer processes, and the door's longer lock made the
+loser fail all of them. The writable connection now begins every transaction
+IMMEDIATE, and the same load fails none. What remains is a busy-handler tail
+— a waiter can still starve past the 5 s timeout, refused before its commit,
+2 of 800 saves at four writers — filed as O258. And the rotation's first
+stale write is still committed under the retired keys, which the next open
+refuses: O257, next in the ruled sequence. **Every process writing one vault
+must run the same build** — `UPGRADING.md`.
 
 ## 1.6.1 — 2026-09-22
 

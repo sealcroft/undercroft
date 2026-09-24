@@ -741,6 +741,14 @@ impl Tenancy {
                 // keeps committing and every commit costs the next guarded
                 // read a walk of the whole `audit` table (O242).
                 "chain_replays": full.chain_replays,
+                // ROADMAP O254. `anchor_lag` is `null` when the manifest on
+                // disk does not verify, which is unknown and not zero, and it
+                // alarms on nothing: under read-audit it never rests at 0. The
+                // live half of `undercroft_anchor_failures_total` is
+                // `anchor_failures`, and a handle that stopped writing says
+                // why on `unhealed`.
+                "anchor_lag": full.anchor_lag,
+                "anchor_failures": full.anchor_failures,
             })),
         ))
     }

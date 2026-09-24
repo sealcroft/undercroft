@@ -3902,6 +3902,80 @@ else
 fi
 rm -rf "$O245_HOME"
 
+# ROADMAP O254: one post-commit door writes the manifest, under SQLite's write
+# lock, through a nonce temp, and refuses a vault.json its handle's keys may not
+# overwrite. Driven through the release binary: the anchor's lag and failure
+# count on the CLI and /v1, and PROBE-254R across PROCESSES — `vault rotate`
+# from the CLI beside a live writable server, then saves through the server.
+# Before O254 the server's next anchor wrote the RETIRED salt back over the
+# rotated manifest (measured in one process), and the vault could no longer
+# decrypt what the rotation sealed.
+O254_HOME="$(mktemp -d)"
+UNDERCROFT_HOME="$O254_HOME" "$BIN" init >/dev/null 2>&1
+o254() { UNDERCROFT_HOME="$O254_HOME" "$BIN" "$@"; }
+o254 remember "the tide table for the north quay" --wing notes >/dev/null 2>&1
+check "O254: the CLI reports the anchor's lag, and a healthy vault's is 0" 0 \
+  "anchor lag: 0 committed record(s) not yet anchored" -- o254 stats
+o254_salt() { sed -n 's/.*"salt_hex": *"\([0-9a-f]*\)".*/\1/p' "$O254_HOME/vaults/default/vault.json"; }
+UNDERCROFT_HOME="$O254_HOME" "$BIN" serve-http --host 127.0.0.1 --port 18887 >/dev/null 2>&1 &
+O254_PID=$!
+for _ in $(seq 1 40); do curl -sf http://127.0.0.1:18887/healthz >/dev/null 2>&1 && break; sleep 0.25; done
+o254_save() {
+  curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:18887/v1/vaults/default/drawers \
+    -d "{\"text\":\"$1\",\"wing\":\"notes\"}"
+}
+O254_S0="$(o254_save "saved through the server before the rotation")"
+O254_ST0="$(curl -s http://127.0.0.1:18887/v1/vaults/default/stats)"
+if [ "$O254_S0" = 200 ] && grep -q '"anchor_lag":0' <<<"$O254_ST0" && grep -q '"anchor_failures":0' <<<"$O254_ST0"; then
+  echo "ok    O254: /v1 stats carries anchor_lag and anchor_failures, both 0 on a healthy handle"; PASS=$((PASS+1))
+else
+  echo "FAIL  O254: /v1 stats carries anchor_lag and anchor_failures (save $O254_S0)"; echo "$O254_ST0" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+O254_SALT0="$(o254_salt)"
+check "O254 premise: the CLI rotates the vault beside the live server" 0 "Rotated vault 'default'" -- \
+  env UNDERCROFT_HOME="$O254_HOME" "$BIN" vault rotate default
+O254_SALT1="$(o254_salt)"
+if [ -n "$O254_SALT0" ] && [ -n "$O254_SALT1" ] && [ "$O254_SALT0" != "$O254_SALT1" ]; then
+  echo "ok    O254 premise: the rotation wrote a new salt"; PASS=$((PASS+1))
+else
+  echo "FAIL  O254 premise: the rotation wrote a new salt ('$O254_SALT0' → '$O254_SALT1')"; FAIL=$((FAIL+1))
+fi
+O254_S1="$(o254_save "the first save after the rotation")"
+O254_S2="$(o254_save "the second save after the rotation")"
+O254_ST="$(curl -s http://127.0.0.1:18887/v1/vaults/default/stats)"
+kill "$O254_PID" 2>/dev/null; wait "$O254_PID" 2>/dev/null
+if [ "$(o254_salt)" = "$O254_SALT1" ]; then
+  echo "ok    O254: the rotated salt survives the stale server's saves"; PASS=$((PASS+1))
+else
+  echo "FAIL  O254: the stale server wrote the retired salt back ($(o254_salt))"; FAIL=$((FAIL+1))
+fi
+if [ "$O254_S1" = 200 ] && [ "$O254_S2" = 409 ]; then
+  echo "ok    O254: the stale server's first save is stored, then it refuses every write (409)"; PASS=$((PASS+1))
+else
+  echo "FAIL  O254: expected 200 then 409 from the stale server, got $O254_S1 then $O254_S2"; FAIL=$((FAIL+1))
+fi
+if grep -q 'stopped writing' <<<"$O254_ST" && grep -q '"anchor_failures":1' <<<"$O254_ST"; then
+  echo "ok    O254: the retired server says why on unhealed and counts the failed anchor"; PASS=$((PASS+1))
+else
+  echo "FAIL  O254: the retired server says why on unhealed and counts the failed anchor"; echo "$O254_ST" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+# COST, pinned for O257 to invert (measured, not predicted): the ONE save the
+# stale server committed before its anchor saw the rotation stepped the audit
+# chain under the RETIRED chain key, so the next open refuses the whole vault
+# as an integrity verdict. The rotated salt survives — asserted above — and
+# every row the rotation sealed is intact under it; what O254 does not stop is
+# that first write, which is O257's "keycheck check at every write door".
+# Before O254 the same scenario also wrote the retired salt back.
+check "O254 cost (O257): after the stale server's one save, a fresh open refuses the vault" 2 \
+  "integrity failure on record audit-chain head" -- o254 stats
+O254_TMPS="$(find "$O254_HOME/vaults/default" -name 'vault.json*.tmp*' | wc -l)"
+if [ "$O254_TMPS" -eq 0 ]; then
+  echo "ok    O254: no manifest temp file is left behind"; PASS=$((PASS+1))
+else
+  echo "FAIL  O254: $O254_TMPS manifest temp file(s) left behind"; FAIL=$((FAIL+1))
+fi
+rm -rf "$O254_HOME"
+
 echo
 echo "e2e results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

@@ -178,6 +178,28 @@ pub struct VaultStats {
     /// `audit` table. The durable half is
     /// `undercroft_chain_replays_total`.
     pub chain_replays: u64,
+    /// How many committed chain records the manifest anchor on disk trails
+    /// the database by (ROADMAP O254): `chain_records` minus the height of
+    /// `vault.json`, read from disk and MAC-verified under this handle's key.
+    /// `None` when that file cannot be read or does not verify — unknown,
+    /// which is not the same claim as zero.
+    ///
+    /// **Not an alarm, and nothing alerts on it.** The anchor is allowed to
+    /// lag: a crash between a commit and its anchor leaves it behind, and
+    /// under `UNDERCROFT_READ_AUDIT=chain` every read appends a record with
+    /// no anchor, so on such a deployment this is never zero between writes.
+    /// What it answers is how much a rollback could strip before the next
+    /// open noticed; the failure that needs a human is
+    /// [`anchor_failures`](Self::anchor_failures).
+    pub anchor_lag: Option<u64>,
+    /// Post-commit anchors this handle could not complete since it opened
+    /// (ROADMAP O254), in either class — an I/O failure the next anchor
+    /// covers, or an integrity failure after which this handle refuses every
+    /// write and says why on `unhealed`. The HANDLE's number, the contract of
+    /// [`embed_failures`](Self::embed_failures): each CLI command is its own
+    /// handle, and a served process accumulates. The durable half, and the
+    /// one an alert fires on, is `undercroft_anchor_failures_total{class}`.
+    pub anchor_failures: u64,
     /// `sealed` or `hmac-only`.
     pub level: String,
     /// Size of the database file on disk, in bytes.
@@ -613,9 +635,9 @@ impl VaultStore {
                  assigned_at = excluded.assigned_at",
             params![wing, trust, tag.as_slice(), now],
         )?;
-        let (head, writes) = chain_append(&tx, &self.vault, Namespace::Trust, wing, &tag, &now)?;
+        chain_append(&tx, &self.vault, Namespace::Trust, wing, &tag, &now)?;
         tx.commit()?;
-        self.vault.anchor_manifest(&head, writes)?;
+        self.anchor()?;
         Ok(())
     }
 
@@ -947,8 +969,8 @@ impl VaultStore {
             None
         };
         tx.commit()?;
-        if let Some((head, writes)) = anchor {
-            self.vault.anchor_manifest(&head, writes)?;
+        if anchor.is_some() {
+            self.anchor()?;
             if let Some(cache) = self.emb_cache.borrow_mut().as_mut() {
                 cache.remove(id);
             }
@@ -1306,6 +1328,14 @@ impl VaultStore {
             // O250: read live from the label guard, exactly as the three
             // model counts above are read live from their backends.
             chain_replays: self.replays(),
+            // O254: against the same `writes` binding, and the file's height
+            // only once its MAC verifies — an unverifiable manifest is an
+            // unknown lag, never a zero one.
+            anchor_lag: self
+                .vault
+                .anchored_writes()
+                .map(|anchored| writes.saturating_sub(anchored)),
+            anchor_failures: self.anchor_failures(),
             level: self.vault.level().to_string(),
             db_bytes,
             codebooks: self.codebook_generations(),
@@ -1588,7 +1618,7 @@ impl VaultStore {
         // before each embed, so both exits below record what actually left.
         let mut sent = 0u64;
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
-        let (fixed, head, writes) = match self.repair_stmts(&mut sent) {
+        let (fixed, _, _) = match self.repair_stmts(&mut sent) {
             Ok(v) => v,
             Err(e) => {
                 let _ = self.conn.execute_batch("ROLLBACK");
@@ -1602,19 +1632,15 @@ impl VaultStore {
             return Err(e.into());
         }
         // The egress record, with nothing fallible between the COMMIT and it.
-        // The anchor then names the NEWEST head — the record's, when it landed
-        // — because `anchor_manifest` overwrites without a check: anchoring the
-        // repair's older head after the record would regress the manifest and
-        // leave the record a tail a rollback could strip.
+        // The anchor after it names the NEWEST committed head, the record's
+        // when it landed: the door reads the head under the write lock and
+        // takes none from a caller (ROADMAP O254), so the older-head
+        // regression this site once had to order around cannot be written.
         let recorded = self.audit_embed_egress("repair", surface, sent);
-        let (head, writes) = match &recorded {
-            Some(Ok(newest)) => newest.clone(),
-            _ => (head, writes),
-        };
         // Outside the transaction, in the order `audit_migration_standalone`
         // uses: the manifest anchor is out-of-database evidence and must
         // never run ahead of a commit that did not happen.
-        self.vault.anchor_manifest(&head, writes)?;
+        self.anchor()?;
         self.conn.execute_batch("VACUUM;")?;
         if let Some(Err(audit)) = recorded {
             // `index_push`'s success-path shape: the work committed, and the
@@ -1635,8 +1661,12 @@ impl VaultStore {
     fn record_aborted_repair_egress(&mut self, surface: &str, sent: u64) {
         match self.audit_embed_egress("repair", surface, sent) {
             None => {}
-            Some(Ok((head, writes))) => {
-                if let Err(e) = self.vault.anchor_manifest(&head, writes) {
+            // The door counts and warns on a failed anchor itself and never
+            // fails the write it follows (ROADMAP O254); what can still fail
+            // is its refusal to run inside a transaction, and this runs after
+            // the ROLLBACK.
+            Some(Ok(_)) => {
+                if let Err(e) = self.anchor() {
                     undercroft_obs::diag_warn!(
                         "the aborted repair's egress record could not be anchored ({e}); \
                          {sent} drawer(s) DID leave the vault for the embedder"
@@ -1811,10 +1841,9 @@ impl VaultStore {
              ON CONFLICT(id) DO NOTHING",
             params![id, from_wing, to_wing, label, tag.as_slice(), created],
         )?;
-        let (head, writes) =
-            chain_append(&tx, &self.vault, Namespace::Tunnel, &id, &tag, &created)?;
+        chain_append(&tx, &self.vault, Namespace::Tunnel, &id, &tag, &created)?;
         tx.commit()?;
-        self.vault.anchor_manifest(&head, writes)?;
+        self.anchor()?;
         Ok(id)
     }
 
@@ -1879,8 +1908,8 @@ impl VaultStore {
             None
         };
         tx.commit()?;
-        if let Some((head, writes)) = anchor {
-            self.vault.anchor_manifest(&head, writes)?;
+        if anchor.is_some() {
+            self.anchor()?;
         }
         Ok(n > 0)
     }

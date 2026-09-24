@@ -179,7 +179,14 @@ GET    /v1/vaults/{id}/stats            (records AND drawers — one drawer
                                          never deletes and never refuses;
                                          chain_replays — full audit-chain
                                          replays by this handle's label
-                                         guard, O250)
+                                         guard, O250;
+                                         anchor_lag — committed records the
+                                         MAC-verified manifest on disk
+                                         trails the database by, null when
+                                         it does not verify, alarms on
+                                         nothing; anchor_failures — this
+                                         handle's post-commit anchors that
+                                         failed, either class, O254)
 GET    /v1/vaults/{id}/stats/history    ?window=N   sample ring buffer
                                          (501 without --features telemetry)
 POST   /v1/vaults/{id}/drawers         {text, wing?, room?, vector?, dedup_threshold?}

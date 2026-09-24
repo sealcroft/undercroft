@@ -366,6 +366,190 @@ pub struct ChainLink<'a> {
     pub at: &'a str,
 }
 
+/// The manifest's filename inside a vault directory.
+pub const MANIFEST_FILE: &str = "vault.json";
+
+/// A key rotation's staged manifest, promoted over [`MANIFEST_FILE`] once the
+/// re-seal commits.
+pub const STAGING_FILE: &str = "vault.json.next";
+
+/// What separates a manifest file's name from the random nonce of the temp
+/// file it is written through (ROADMAP O254): `vault.json.tmp.<32 hex>`.
+///
+/// **Never the bare `vault.json.tmp`**, which is what every anchor before
+/// 1.7.0 wrote through — one fixed path, truncated by `File::create`, shared
+/// by every handle and process on the vault, so one handle's `rename` moved
+/// another's half-written file and a committed write reported failure. A
+/// 1.6.x process still writes that name, so nothing here matches or removes
+/// it.
+const TEMP_INFIX: &str = ".tmp.";
+
+/// What an anchor did when it succeeded (ROADMAP O254).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Anchored {
+    /// The manifest on disk already named the committed head and height, so
+    /// nothing was written.
+    Current,
+    /// A new manifest was written; `records` is how many chain records it
+    /// committed that the manifest on disk did not yet cover.
+    Written {
+        /// Chain records committed by this anchor — the chain-commit counter's
+        /// delta, measured against the MAC-verified manifest on disk.
+        records: u64,
+    },
+}
+
+/// Why an anchor wrote nothing (ROADMAP O254) — in two classes, because they
+/// call for opposite responses and swapping them fails silently either way.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnchorFault {
+    /// The filesystem refused a read or a write: a permission error, a full
+    /// disk, a sharing violation, an fsync or rename failure. Transient, and
+    /// harmless to defer — any later anchor covers everything committed
+    /// before it, exactly as a crash between commit and anchor already does —
+    /// so the write it follows is never refused on its account.
+    Io(String),
+    /// The manifest on disk is not one this handle may overwrite: missing,
+    /// unparseable, a version newer than this build writes, a MAC that does
+    /// not verify under this handle's key, a database keycheck that is not
+    /// this handle's, or a height above the committed one. Every one of
+    /// these is either another process having rotated this vault's keys or
+    /// tampering, and in both a write from this handle would be sealed under
+    /// keys the vault no longer answers to — so the handle stops writing.
+    Integrity(String),
+}
+
+impl std::fmt::Display for AnchorFault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AnchorFault::Io(why) | AnchorFault::Integrity(why) => f.write_str(why),
+        }
+    }
+}
+
+/// Write `bytes` durably as `<dir>/<name>`, the ONE way a manifest file is
+/// written (ROADMAP O254): a temp file named with a random nonce and created
+/// with `create_new`, fsync, rename over `name`, directory sync.
+///
+/// `create_new` refuses an existing path, so a symlink planted at the temp
+/// name is refused rather than followed, and two containers sharing a volume
+/// cannot collide on it — they would on a pid, since pid 1 is everyone's. The
+/// fsync before the rename and the directory sync after it are the anchor's
+/// durability contract, unchanged: a power loss must never reorder the rename
+/// ahead of the data and leave a torn anchor that reads as tamper.
+///
+/// A failure after the temp file exists removes it, best effort. What a crash
+/// leaves behind is swept by [`Vault::sweep_orphan_temps`], under the lock.
+fn write_manifest_file(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
+    use rand::RngCore;
+    use std::io::Write;
+    let mut nonce = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut nonce);
+    let tmp = dir.join(format!("{name}{TEMP_INFIX}{}", hex::encode(nonce)));
+    #[cfg(any(test, feature = "test-fixture"))]
+    fixture::fire(fixture::Fault::CreateTemp)?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)?;
+    let written = (|| {
+        file.write_all(bytes)?;
+        #[cfg(any(test, feature = "test-fixture"))]
+        fixture::fire(fixture::Fault::Fsync)?;
+        file.sync_all()?;
+        drop(file);
+        #[cfg(any(test, feature = "test-fixture"))]
+        fixture::fire(fixture::Fault::Rename)?;
+        fs::rename(&tmp, dir.join(name))
+    })();
+    if let Err(e) = written {
+        let _ = fs::remove_file(&tmp);
+        return Err(e);
+    }
+    keys::sync_dir(dir)
+}
+
+/// Whether `name` is a temp file [`write_manifest_file`] creates — the bare
+/// legacy `vault.json.tmp` is NOT one, deliberately.
+fn is_nonce_temp(name: &str) -> bool {
+    [STAGING_FILE, MANIFEST_FILE].iter().any(|base| {
+        name.strip_prefix(base)
+            .and_then(|rest| rest.strip_prefix(TEMP_INFIX))
+            .is_some_and(|nonce| {
+                nonce.len() == 32
+                    && nonce
+                        .bytes()
+                        .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+            })
+    })
+}
+
+/// Failure injection for the manifest writes (ROADMAP O254) — the seam the
+/// O254 gate drives, because a temp file named with a random nonce cannot be
+/// targeted from outside this crate. Compiled for this crate's own tests and
+/// under the `test-fixture` feature, which `undercroft-store` enables through
+/// a dev-dependency — the `cfg(any(test, …))` shape `undercroft-embed-onnx`'s
+/// fixture set (ROADMAP O134a). No production build carries it.
+#[cfg(any(test, feature = "test-fixture"))]
+pub mod fixture {
+    use std::cell::Cell;
+
+    /// Which step of this thread's NEXT manifest read or write fails.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Fault {
+        /// Reading `vault.json` fails with an I/O error other than "not found".
+        Read,
+        /// Creating the nonce temp file fails.
+        CreateTemp,
+        /// The temp file's fsync fails.
+        Fsync,
+        /// The rename over the manifest fails.
+        Rename,
+    }
+
+    thread_local! {
+        static ARMED: Cell<Option<Fault>> = const { Cell::new(None) };
+    }
+
+    /// Arm `fault` for this thread's next manifest operation that reaches that
+    /// step. Consumed when it fires; thread-local, so parallel tests cannot
+    /// trip each other's.
+    pub fn fail_next(fault: Fault) {
+        ARMED.with(|armed| armed.set(Some(fault)));
+    }
+
+    /// Whether an armed fault is still waiting to fire.
+    pub fn armed() -> Option<Fault> {
+        ARMED.with(|armed| armed.get())
+    }
+
+    pub(crate) fn fire(step: Fault) -> std::io::Result<()> {
+        ARMED.with(|armed| {
+            if armed.get() != Some(step) {
+                return Ok(());
+            }
+            armed.set(None);
+            Err(std::io::Error::other(format!(
+                "injected {step:?} failure (the ROADMAP O254 test fixture)"
+            )))
+        })
+    }
+
+    /// Write a manifest naming `head` and `writes`, MAC'd under `vault`'s key,
+    /// through the one writer and past EVERY check the anchor makes. It is how
+    /// a test lowers an anchor, plants a stale one, or restores a legacy
+    /// chain's — the moves the anchor exists to refuse.
+    pub fn write_anchor_unchecked(
+        vault: &mut super::Vault,
+        head: &str,
+        writes: u64,
+    ) -> Result<(), super::VaultError> {
+        vault.manifest.chain_head_hex = head.to_string();
+        vault.manifest.writes = writes;
+        vault.save_manifest()
+    }
+}
+
 /// An unlocked vault: derived keys + manifest state.
 pub struct Vault {
     id: String,
@@ -393,6 +577,9 @@ pub struct Vault {
     /// Filesystem repairs this unlock declined to make because the caller
     /// declared [`Access::ReadOnly`]. Empty on every writable open.
     unhealed: Vec<Unhealed>,
+    /// Why this handle may no longer write (ROADMAP O254), set when its
+    /// anchor met an [`AnchorFault::Integrity`]. `None` on every unlock.
+    retired: Option<String>,
 }
 
 impl Vault {
@@ -681,48 +868,166 @@ impl Vault {
     /// rollback (an anchor the database chain never produced) and heals by
     /// fast-forwarding — a power loss is not a tamper alarm, a restored old
     /// database still is.
-    /// Returns how many chain RECORDS this anchor committed — the value the
-    /// counter advances by. Returned so it can be asserted: it is otherwise
-    /// only observable through a metric that is a no-op in a default build,
-    /// which is why the two-handle over-count was invisible to every test.
-    pub fn anchor_manifest(&mut self, head_hex: &str, writes: u64) -> Result<u64, VaultError> {
-        // How many chain RECORDS this anchor commits. One anchor is not
-        // one record: `upsert_many` appends per drawer inside one
-        // transaction and anchors once at the end (256 records, one
-        // anchor), and read-audit records append with no anchor at all
-        // and are picked up by the next one. Counting anchors made the
-        // same 1,000-drawer NDJSON read as 1,000 commits through
-        // `/v1 …/import` and 4 through `undercroft import`, on a counter
-        // whose own contract says "once per mutation" — so the counter
-        // advances by the delta, which is exactly the chain's growth.
-        //
-        // **The subtrahend is read from DISK, not from this handle's cached
-        // field.** `self.manifest.writes` is only ever written by this
-        // handle's own `anchor_manifest`, so with two handles on one vault —
-        // which is exactly what `serve-http` runs, and the reason
-        // `audit_chain_height` was already moved off the cached manifest —
-        // each one measured the OTHER's growth from its own stale baseline
-        // and counted it again. Steady state was 2× with two handles, worse
-        // with more: a durable signal that was wrong rather than missing.
-        //
-        // The on-disk manifest is the last anchor ANY handle committed, so
-        // the delta against it is the chain's real growth since then. A crash
-        // between commit and anchor leaves records unanchored and the next
-        // anchor counts them — the behaviour this comment already claims for
-        // read-audit records. Unreadable or unparseable falls back to the
-        // cached field, i.e. the previous behaviour: a counter must never be
-        // the reason a write fails.
-        let committed = self.anchored_writes().unwrap_or(self.manifest.writes);
-        let records = writes.saturating_sub(committed);
-        self.manifest.chain_head_hex = head_hex.to_string();
-        self.manifest.writes = writes;
-        self.save_manifest()?;
-        // Emitted only after the anchor is durable, as before — the
-        // records it counts are already committed, so no rolled-back
-        // write can be counted.
+    ///
+    /// **Its one caller is the store's `anchor()` door (ROADMAP O254)**,
+    /// which holds SQLite's write lock around this call and reads `head_hex`,
+    /// `writes` and `db_keycheck` from the committed database under it. That
+    /// lock is what serialises anchors between handles and processes: every
+    /// anchor used to write the handle's whole CACHED manifest through one
+    /// fixed `vault.json.tmp`, so two handles collided on the temp file — a
+    /// committed write reported failure, measured 27 times in eight seconds
+    /// — and a handle opened before another's key rotation wrote the retired
+    /// salt back over the new one, measured, which leaves the vault unable to
+    /// decrypt what the rotation sealed (O257).
+    ///
+    /// So this is a read-modify-write of the file ON DISK, never a write of
+    /// the cache: the manifest is read, parsed and MAC-verified under this
+    /// handle's key; the database keycheck must be this handle's; its height
+    /// may not be above the committed one. Both key checks are needed — a
+    /// keycheck test alone is defeated by an open that re-seeds the old
+    /// keycheck, a MAC test alone by a promote that runs outside the lock.
+    /// Anything that fails them is [`AnchorFault::Integrity`] and nothing is
+    /// written; a filesystem refusal is [`AnchorFault::Io`].
+    ///
+    /// The chain-commit counter advances by the delta against the VERIFIED
+    /// manifest on disk — the last anchor any handle committed — so two
+    /// handles never count each other's records twice, and records a crash
+    /// left unanchored are counted by the next anchor.
+    pub fn anchor_manifest(
+        &mut self,
+        head_hex: &str,
+        writes: u64,
+        db_keycheck: Option<&str>,
+    ) -> Result<Anchored, AnchorFault> {
+        let own = self.keycheck_hex();
+        if db_keycheck != Some(own.as_str()) {
+            return Err(AnchorFault::Integrity(format!(
+                "the database's key-generation marker is not this handle's (database {}, handle \
+                 {}): another process rotated this vault's keys after this handle unlocked it",
+                db_keycheck.map_or("absent", |k| &k[..k.len().min(12)]),
+                &own[..12]
+            )));
+        }
+        let on_disk = self.verified_disk_manifest()?;
+        if on_disk.writes > writes {
+            return Err(AnchorFault::Integrity(format!(
+                "vault.json records {} chain record(s) and the database has committed {writes}: \
+                 the manifest is AHEAD of the database, so it was not written by an anchor of \
+                 this database",
+                on_disk.writes
+            )));
+        }
+        if on_disk.chain_head_hex == head_hex && on_disk.writes == writes {
+            self.manifest = on_disk;
+            return Ok(Anchored::Current);
+        }
+        let mut next = on_disk.clone();
+        next.chain_head_hex = head_hex.to_string();
+        next.writes = writes;
+        next.manifest_mac_hex = hex::encode(record_hmac(&self.manifest_key, &next.canonical()));
+        let json = serde_json::to_vec_pretty(&next)
+            .map_err(|e| AnchorFault::Io(format!("serializing the manifest: {e}")))?;
+        write_manifest_file(&self.dir, MANIFEST_FILE, &json)
+            .map_err(|e| AnchorFault::Io(format!("writing vault.json: {e}")))?;
+        let records = writes - on_disk.writes;
+        self.manifest = next;
+        // Emitted only after the anchor is durable — the records it counts
+        // are already committed, so no rolled-back write can be counted.
         undercroft_obs::chain_commit(records);
         undercroft_obs::event_chain_commit(self.id(), records);
-        Ok(records)
+        Ok(Anchored::Written { records })
+    }
+
+    /// The manifest on disk, parsed and MAC-verified under this handle's key,
+    /// or the anchor's verdict on why it cannot be overwritten.
+    fn verified_disk_manifest(&self) -> Result<Manifest, AnchorFault> {
+        #[cfg(any(test, feature = "test-fixture"))]
+        fixture::fire(fixture::Fault::Read)
+            .map_err(|e| AnchorFault::Io(format!("reading vault.json: {e}")))?;
+        let raw = match fs::read(self.dir.join(MANIFEST_FILE)) {
+            Ok(raw) => raw,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(AnchorFault::Integrity(
+                    "vault.json is missing: this vault's manifest was removed beneath a live \
+                     handle"
+                        .into(),
+                ))
+            }
+            Err(e) => return Err(AnchorFault::Io(format!("reading vault.json: {e}"))),
+        };
+        let manifest = Manifest::parse(&raw).map_err(|e| match e {
+            VaultError::ManifestTooNew { .. } => AnchorFault::Integrity(format!(
+                "{e} — a newer build is writing this vault, and every writer on one vault must \
+                 run the same build"
+            )),
+            other => AnchorFault::Integrity(format!("vault.json does not parse: {other}")),
+        })?;
+        if manifest.id != self.id {
+            return Err(AnchorFault::Integrity(format!(
+                "vault.json names vault {:?}, not {:?}",
+                manifest.id, self.id
+            )));
+        }
+        let verifies = hex::decode(&manifest.manifest_mac_hex)
+            .map(|mac| verify_hmac(&self.manifest_key, &manifest.canonical(), &mac).is_ok())
+            .unwrap_or(false);
+        if !verifies {
+            return Err(AnchorFault::Integrity(
+                "vault.json does not verify under this handle's key: another process rotated \
+                 this vault's keys after this handle unlocked it, or the file was edited"
+                    .into(),
+            ));
+        }
+        Ok(manifest)
+    }
+
+    /// Stop this handle writing (ROADMAP O254). The first reason stands.
+    pub fn retire(&mut self, why: String) {
+        self.retired.get_or_insert(why);
+    }
+
+    /// Why this handle may no longer write, once an anchor has found the
+    /// manifest on disk is not one its keys may overwrite. `None` otherwise.
+    pub fn retired(&self) -> Option<&str> {
+        self.retired.as_deref()
+    }
+
+    /// The chain height of the manifest currently ON DISK, MAC-verified under
+    /// this handle's key — the last anchor ANY handle committed. `None` when it
+    /// cannot be read or does not verify; the lag it feeds is then unknown,
+    /// and saying so is not the same as saying zero.
+    pub fn anchored_writes(&self) -> Option<u64> {
+        let raw = fs::read(self.dir.join(MANIFEST_FILE)).ok()?;
+        let manifest = Manifest::parse(&raw).ok()?;
+        let mac = hex::decode(&manifest.manifest_mac_hex).ok()?;
+        (manifest.id == self.id
+            && verify_hmac(&self.manifest_key, &manifest.canonical(), &mac).is_ok())
+        .then_some(manifest.writes)
+    }
+
+    /// Remove temp files a crashed manifest write left behind (ROADMAP O254),
+    /// returning how many were removed.
+    ///
+    /// The caller holds the database's write lock, which every manifest write
+    /// runs under — so no writer on this vault is mid-write, and anything
+    /// matching is an orphan. The age threshold is a second margin, not the
+    /// first, and the bare legacy `vault.json.tmp` is never touched: a 1.6.x
+    /// process still writes it, outside any lock.
+    pub fn sweep_orphan_temps(&self, older_than: std::time::Duration) -> std::io::Result<usize> {
+        let mut removed = 0;
+        for entry in fs::read_dir(&self.dir)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            if !name.to_str().is_some_and(is_nonce_temp) {
+                continue;
+            }
+            let age = entry.metadata()?.modified()?.elapsed().unwrap_or_default();
+            if age >= older_than {
+                fs::remove_file(entry.path())?;
+                removed += 1;
+            }
+        }
+        Ok(removed)
     }
 
     // A `verify_chain(&[tags]) -> bool` stood here, documented as the chain
@@ -829,13 +1134,19 @@ impl Vault {
     }
 
     fn pending_path(&self) -> PathBuf {
-        self.dir.join("vault.json.next")
+        self.dir.join(STAGING_FILE)
     }
 
     /// Fill this rotation candidate's chain state and durably stage it as
-    /// `vault.json.next` (fsync + directory sync). Called by the store
-    /// *before* the re-seal transaction commits; a crash before commit
-    /// leaves a stale staging file that reconciliation discards.
+    /// `vault.json.next`. Called by the store *before* the re-seal
+    /// transaction commits; a crash before commit leaves a stale staging file
+    /// that reconciliation discards.
+    ///
+    /// Through the one manifest writer (ROADMAP O254) — a nonce temp, fsync,
+    /// rename, directory sync — so a reader never meets a half-written
+    /// staging file. It used to be written IN PLACE through `File::create`,
+    /// which truncates: an unlock racing the write read a torn `.next` and a
+    /// writable one deleted it as garbage.
     pub fn save_manifest_pending(&mut self, head_hex: &str, writes: u64) -> Result<(), VaultError> {
         self.manifest.chain_head_hex = head_hex.to_string();
         self.manifest.writes = writes;
@@ -843,13 +1154,7 @@ impl Vault {
             hex::encode(record_hmac(&self.manifest_key, &self.manifest.canonical()));
         let json = serde_json::to_vec_pretty(&self.manifest)
             .map_err(|e| VaultError::CorruptManifest(e.to_string()))?;
-        {
-            use std::io::Write;
-            let mut f = fs::File::create(self.pending_path())?;
-            f.write_all(&json)?;
-            f.sync_all()?;
-        }
-        keys::sync_dir(&self.dir)?;
+        write_manifest_file(&self.dir, STAGING_FILE, &json)?;
         Ok(())
     }
 
@@ -857,10 +1162,24 @@ impl Vault {
     ///
     /// A **write** (rename + directory sync). A caller that promised not to
     /// write calls [`reconcile_read_only`](Self::reconcile_read_only) instead.
+    /// The store calls it under the database's write lock (ROADMAP O254), the
+    /// lock every anchor holds, so a promote and an anchor cannot interleave.
     pub fn promote_manifest(&self) -> Result<(), VaultError> {
-        fs::rename(self.pending_path(), self.dir.join("vault.json"))?;
+        fs::rename(self.pending_path(), self.dir.join(MANIFEST_FILE))?;
         keys::sync_dir(&self.dir)?;
         Ok(())
+    }
+
+    /// Whether a staged rotation manifest (`vault.json.next`) is on disk.
+    pub fn has_staged_file(&self) -> bool {
+        self.pending_path().exists()
+    }
+
+    /// Whether the manifest on disk verifies under THIS vault's key — the
+    /// question a rotation asks when its staged file is gone, to learn
+    /// whether another open promoted it (ROADMAP O254).
+    pub fn manifest_on_disk_is_mine(&self) -> bool {
+        self.verified_disk_manifest().is_ok()
     }
 
     /// Remove a staging manifest from a rotation that never committed.
@@ -919,37 +1238,16 @@ impl Vault {
         Ok(m.chain_head_hex)
     }
 
-    /// The `writes` height of the manifest currently ON DISK — the last
-    /// anchor any handle on this vault committed.
-    ///
-    /// Deliberately unauthenticated and deliberately not fatal: its only
-    /// consumer is the chain-commit counter's delta, which is telemetry. A
-    /// forged value can misreport a count and can reach nothing else, so
-    /// verifying the MAC here would trade a real failure mode (a write that
-    /// cannot complete because a metrics subtrahend would not load) for a
-    /// signal that is already outside HMAC coverage by construction.
-    fn anchored_writes(&self) -> Option<u64> {
-        let raw = fs::read(self.dir.join("vault.json")).ok()?;
-        Manifest::parse(&raw).ok().map(|m| m.writes)
-    }
-
+    /// Write this handle's manifest as it stands, through the one writer.
+    /// Reached by `create`, which has nothing on disk to check against, and
+    /// by the test fixture; every anchor goes through
+    /// [`anchor_manifest`](Self::anchor_manifest) and its checks instead.
     fn save_manifest(&mut self) -> Result<(), VaultError> {
         self.manifest.manifest_mac_hex =
             hex::encode(record_hmac(&self.manifest_key, &self.manifest.canonical()));
         let json = serde_json::to_vec_pretty(&self.manifest)
             .map_err(|e| VaultError::CorruptManifest(e.to_string()))?;
-        // Durable atomic replace: fsync the bytes before the rename and the
-        // directory entry after it, or a power loss can reorder the rename
-        // ahead of the data and leave a torn anchor that reads as tamper.
-        let tmp = self.dir.join("vault.json.tmp");
-        {
-            use std::io::Write;
-            let mut f = fs::File::create(&tmp)?;
-            f.write_all(&json)?;
-            f.sync_all()?;
-        }
-        fs::rename(&tmp, self.dir.join("vault.json"))?;
-        keys::sync_dir(&self.dir)?;
+        write_manifest_file(&self.dir, MANIFEST_FILE, &json)?;
         Ok(())
     }
 }
@@ -1275,6 +1573,7 @@ impl VaultManager {
             manifest,
             pending: None,
             unhealed: Vec::new(),
+            retired: None,
         })
     }
 
@@ -1853,7 +2152,8 @@ mod tests {
             .chain_step_hex(ChainStep::V1, &Vault::chain_genesis_hex(), link(&t1))
             .unwrap();
         let h2 = v.chain_step_hex(ChainStep::V1, &h1, link(&t2)).unwrap();
-        v.anchor_manifest(&h2, 2).unwrap();
+        let kc = v.keycheck_hex();
+        v.anchor_manifest(&h2, 2, Some(kc.as_str())).unwrap();
         assert_eq!(v.chain_head_hex(), h2, "the anchor is the replayed head");
         assert_eq!(v.writes(), 2);
     }
@@ -2006,7 +2306,8 @@ mod tests {
 
         // Handle A moves the anchor. B's cached copy is stale by
         // construction — that staleness is the defect.
-        a.anchor_manifest("aa11", 5).unwrap();
+        let kc = a.keycheck_hex();
+        a.anchor_manifest("aa11", 5, Some(kc.as_str())).unwrap();
         assert_eq!(
             b.chain_head_hex(),
             Vault::chain_genesis_hex(),
@@ -2029,6 +2330,254 @@ mod tests {
         );
     }
 
+    /// The records an anchor committed; a test's shorthand for the arm that
+    /// wrote.
+    fn records(anchored: Anchored) -> u64 {
+        match anchored {
+            Anchored::Written { records } => records,
+            Anchored::Current => 0,
+        }
+    }
+
+    fn manifest_bytes(dir: &Path, id: &str) -> Vec<u8> {
+        std::fs::read(dir.join(VAULTS_DIR).join(id).join(MANIFEST_FILE)).unwrap()
+    }
+
+    /// **ROADMAP O254: an anchor refuses, as INTEGRITY, every manifest it may
+    /// not overwrite — and leaves the file byte for byte as it found it.**
+    /// Each arm is one line of the ruling's integrity class. The premise arm
+    /// first: the same call with a healthy manifest writes.
+    #[test]
+    fn an_anchor_refuses_as_integrity_what_it_may_not_overwrite() {
+        let dir = tempdir().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        mgr.create("v", SecurityLevel::Sealed).unwrap();
+        let mut a = mgr.unlock("v").unwrap();
+        let kc = a.keycheck_hex();
+        assert_eq!(
+            a.anchor_manifest("aa", 3, Some(kc.as_str())),
+            Ok(Anchored::Written { records: 3 }),
+            "premise: a healthy manifest is written"
+        );
+        let path = dir.path().join("vaults/v/vault.json");
+        let healthy = std::fs::read(&path).unwrap();
+        let refuses = |a: &mut Vault, head: &str, writes: u64, kc: Option<&str>, why: &str| {
+            let before = std::fs::read(&path).ok();
+            match a.anchor_manifest(head, writes, kc) {
+                Err(AnchorFault::Integrity(_)) => {}
+                other => panic!("{why}: expected an integrity refusal, got {other:?}"),
+            }
+            assert_eq!(std::fs::read(&path).ok(), before, "{why}: the file moved");
+        };
+
+        // A keycheck that is not this handle's: another process rotated.
+        refuses(&mut a, "bb", 4, Some("00ff"), "foreign keycheck");
+        refuses(&mut a, "bb", 4, None, "absent keycheck");
+        // A height above the committed one: the manifest is ahead.
+        refuses(
+            &mut a,
+            "bb",
+            2,
+            Some(kc.as_str()),
+            "manifest ahead of the database",
+        );
+        // A MAC that does not verify under this handle's key.
+        std::fs::write(
+            &path,
+            String::from_utf8(healthy.clone())
+                .unwrap()
+                .replace("\"aa\"", "\"ab\""),
+        )
+        .unwrap();
+        refuses(&mut a, "bb", 4, Some(kc.as_str()), "an edited manifest");
+        // Unparseable, and missing.
+        std::fs::write(&path, b"{ not json").unwrap();
+        refuses(
+            &mut a,
+            "bb",
+            4,
+            Some(kc.as_str()),
+            "an unparseable manifest",
+        );
+        std::fs::remove_file(&path).unwrap();
+        refuses(&mut a, "bb", 4, Some(kc.as_str()), "a missing manifest");
+        // A version newer than this build writes.
+        let newer = String::from_utf8(healthy.clone())
+            .unwrap()
+            .replace("\"version\": 1", "\"version\": 2");
+        assert_ne!(
+            newer.as_bytes(),
+            healthy.as_slice(),
+            "premise: the version moved"
+        );
+        std::fs::write(&path, newer).unwrap();
+        refuses(
+            &mut a,
+            "bb",
+            4,
+            Some(kc.as_str()),
+            "a newer manifest version",
+        );
+
+        // And the healthy manifest, restored, is written again: the refusals
+        // above were about the FILE, not about this handle.
+        std::fs::write(&path, &healthy).unwrap();
+        assert_eq!(
+            a.anchor_manifest("bb", 4, Some(kc.as_str())),
+            Ok(Anchored::Written { records: 1 })
+        );
+        // A second anchor at the same head writes nothing.
+        let written = std::fs::read(&path).unwrap();
+        assert_eq!(
+            a.anchor_manifest("bb", 4, Some(kc.as_str())),
+            Ok(Anchored::Current)
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), written);
+    }
+
+    /// **PROBE-254R at the vault level (ROADMAP O254, O257).** A handle
+    /// unlocked before another's rotation used to write its whole cached
+    /// manifest — the RETIRED salt — back over the rotated one, and the vault
+    /// could then no longer decrypt what the rotation sealed. Both checks the
+    /// ruling requires are driven: the keycheck the rotation committed, and
+    /// the keycheck an open re-seeded back to the old value, where only the
+    /// MAC stops it.
+    #[test]
+    fn a_handle_opened_before_a_rotation_cannot_write_the_retired_salt_back() {
+        let dir = tempdir().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        mgr.create("v", SecurityLevel::Sealed).unwrap();
+        let mut stale = mgr.unlock("v").unwrap();
+        let old_kc = stale.keycheck_hex();
+        let mut next = mgr.rotation_candidate("v").unwrap();
+        next.save_manifest_pending("cc", 5).unwrap();
+
+        // Between the rotation's commit and its promote, `vault.json` is still
+        // the OLD manifest and its MAC verifies under the stale key: the
+        // keycheck the database committed is the only thing that can refuse.
+        let unpromoted = manifest_bytes(dir.path(), "v");
+        let committed_kc = next.keycheck_hex();
+        match stale.anchor_manifest("dd", 6, Some(committed_kc.as_str())) {
+            Err(AnchorFault::Integrity(_)) => {}
+            other => panic!("before the promote, the keycheck must refuse ({other:?})"),
+        }
+        assert_eq!(manifest_bytes(dir.path(), "v"), unpromoted);
+
+        next.promote_manifest().unwrap();
+        let rotated = manifest_bytes(dir.path(), "v");
+        assert_ne!(
+            next.keycheck_hex(),
+            old_kc,
+            "premise: the rotation moved the key generation"
+        );
+
+        for (kc, why) in [
+            (next.keycheck_hex(), "the committed rotation's keycheck"),
+            (old_kc.clone(), "an old keycheck re-seeded by a racing open"),
+        ] {
+            match stale.anchor_manifest("dd", 6, Some(kc.as_str())) {
+                Err(AnchorFault::Integrity(_)) => {}
+                other => panic!("{why}: the stale handle wrote ({other:?})"),
+            }
+            assert_eq!(
+                manifest_bytes(dir.path(), "v"),
+                rotated,
+                "{why}: the rotated salt must survive"
+            );
+        }
+        // The rotated handle itself still anchors.
+        let kc = next.keycheck_hex();
+        assert!(matches!(
+            next.anchor_manifest("dd", 6, Some(kc.as_str())),
+            Ok(Anchored::Written { records: 1 })
+        ));
+    }
+
+    /// **The I/O class (ROADMAP O254)**: every filesystem step the anchor
+    /// takes, failed through the fixture seam. Each is reported as I/O — never
+    /// integrity, which would stop a healthy handle writing — the manifest is
+    /// untouched, no temp file is left behind, and the NEXT anchor writes.
+    #[test]
+    fn an_anchor_reports_a_filesystem_failure_as_io_and_leaves_no_temp() {
+        let dir = tempdir().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        mgr.create("v", SecurityLevel::HmacOnly).unwrap();
+        let mut a = mgr.unlock("v").unwrap();
+        let kc = a.keycheck_hex();
+        let vdir = dir.path().join("vaults/v");
+        let mut writes = 0;
+        for fault in [
+            fixture::Fault::Read,
+            fixture::Fault::CreateTemp,
+            fixture::Fault::Fsync,
+            fixture::Fault::Rename,
+        ] {
+            writes += 1;
+            let before = manifest_bytes(dir.path(), "v");
+            fixture::fail_next(fault);
+            match a.anchor_manifest(&format!("h{writes}"), writes, Some(kc.as_str())) {
+                Err(AnchorFault::Io(_)) => {}
+                other => panic!("{fault:?}: expected an I/O fault, got {other:?}"),
+            }
+            assert_eq!(fixture::armed(), None, "premise: the {fault:?} fault fired");
+            assert_eq!(manifest_bytes(dir.path(), "v"), before, "{fault:?}");
+            let temps: Vec<_> = std::fs::read_dir(&vdir)
+                .unwrap()
+                .filter_map(|e| e.unwrap().file_name().into_string().ok())
+                .filter(|n| n.contains(".tmp"))
+                .collect();
+            assert!(temps.is_empty(), "{fault:?} left {temps:?}");
+            assert!(
+                matches!(
+                    a.anchor_manifest(&format!("h{writes}"), writes, Some(kc.as_str())),
+                    Ok(Anchored::Written { .. })
+                ),
+                "{fault:?}: the next anchor must write"
+            );
+        }
+    }
+
+    /// The sweep removes what a crashed write left, past its age, and NEVER
+    /// the bare legacy `vault.json.tmp` a 1.6.x process still writes.
+    #[test]
+    fn the_orphan_sweep_takes_nonce_temps_and_never_the_legacy_name() {
+        let dir = tempdir().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        let v = mgr.create("v", SecurityLevel::HmacOnly).unwrap();
+        let vdir = dir.path().join("vaults/v");
+        let nonce = "0123456789abcdef0123456789abcdef";
+        let orphans = [
+            format!("vault.json.tmp.{nonce}"),
+            format!("vault.json.next.tmp.{nonce}"),
+        ];
+        let kept = [
+            "vault.json.tmp".to_string(),
+            format!("vault.json.tmp.{}", &nonce[..31]),
+            format!("vault.json.tmp.{}", nonce.to_uppercase()),
+            format!("other.tmp.{nonce}"),
+        ];
+        for name in orphans.iter().chain(&kept) {
+            std::fs::write(vdir.join(name), b"x").unwrap();
+        }
+        assert_eq!(
+            v.sweep_orphan_temps(std::time::Duration::from_secs(3600))
+                .unwrap(),
+            0,
+            "a young temp is not swept"
+        );
+        assert_eq!(
+            v.sweep_orphan_temps(std::time::Duration::ZERO).unwrap(),
+            orphans.len()
+        );
+        for name in &orphans {
+            assert!(!vdir.join(name).exists(), "{name} survived");
+        }
+        for name in &kept {
+            assert!(vdir.join(name).exists(), "{name} was swept");
+        }
+        assert!(vdir.join("vault.json").exists());
+    }
+
     #[test]
     fn the_chain_commit_delta_counts_each_record_once_across_handles() {
         let dir = tempdir().unwrap();
@@ -2038,29 +2587,62 @@ mod tests {
         let mut b = mgr.unlock("two-handles").unwrap();
 
         // Handle A commits five records.
-        assert_eq!(a.anchor_manifest("aa", 5).unwrap(), 5);
+        assert_eq!(
+            records(
+                a.anchor_manifest("aa", 5, Some(a.keycheck_hex()).as_deref())
+                    .unwrap()
+            ),
+            5
+        );
         // Handle B commits ONE more. Its own cached baseline is still 0, so
         // this is the line that used to answer 6.
         assert_eq!(
-            b.anchor_manifest("bb", 6).unwrap(),
+            records(
+                b.anchor_manifest("bb", 6, Some(b.keycheck_hex()).as_deref())
+                    .unwrap()
+            ),
             1,
             "the delta is against the last anchor ANY handle committed, not \
              against this handle's memory of one"
         );
         // ...and back again, in both directions, because a fix that simply
         // moved the staleness to the other handle would pass a one-way test.
-        assert_eq!(a.anchor_manifest("cc", 9).unwrap(), 3);
-        assert_eq!(b.anchor_manifest("dd", 10).unwrap(), 1);
+        assert_eq!(
+            records(
+                a.anchor_manifest("cc", 9, Some(a.keycheck_hex()).as_deref())
+                    .unwrap()
+            ),
+            3
+        );
+        assert_eq!(
+            records(
+                b.anchor_manifest("dd", 10, Some(b.keycheck_hex()).as_deref())
+                    .unwrap()
+            ),
+            1
+        );
 
         // The total is the chain's real growth, which is the counter's
         // whole contract.
         let mut c = mgr.unlock("two-handles").unwrap();
-        assert_eq!(c.anchor_manifest("ee", 11).unwrap(), 1);
+        assert_eq!(
+            records(
+                c.anchor_manifest("ee", 11, Some(c.keycheck_hex()).as_deref())
+                    .unwrap()
+            ),
+            1
+        );
 
         // A crash between commit and anchor leaves records unanchored; the
         // NEXT anchor counts them. That is the same rule read-audit records
         // already rely on, and it must survive this change.
-        assert_eq!(c.anchor_manifest("ff", 14).unwrap(), 3);
+        assert_eq!(
+            records(
+                c.anchor_manifest("ff", 14, Some(c.keycheck_hex()).as_deref())
+                    .unwrap()
+            ),
+            3
+        );
 
         // Single-handle behaviour is untouched — the case every existing
         // deployment is in.
@@ -2068,8 +2650,20 @@ mod tests {
         let mgr2 = VaultManager::open(dir2.path(), None).unwrap();
         mgr2.create("one-handle", SecurityLevel::Sealed).unwrap();
         let mut only = mgr2.unlock("one-handle").unwrap();
-        assert_eq!(only.anchor_manifest("11", 1).unwrap(), 1);
-        assert_eq!(only.anchor_manifest("22", 257).unwrap(), 256);
+        assert_eq!(
+            records(
+                only.anchor_manifest("11", 1, Some(only.keycheck_hex()).as_deref())
+                    .unwrap()
+            ),
+            1
+        );
+        assert_eq!(
+            records(
+                only.anchor_manifest("22", 257, Some(only.keycheck_hex()).as_deref())
+                    .unwrap()
+            ),
+            256
+        );
     }
 
     #[test]

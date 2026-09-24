@@ -415,7 +415,7 @@ impl VaultStore {
         );
         let tag = self.vault.tag(canonical.as_bytes());
         let tx = self.conn.transaction()?;
-        let (head, writes) = crate::chain_append(
+        crate::chain_append(
             &tx,
             &self.vault,
             Namespace::Egress,
@@ -424,7 +424,7 @@ impl VaultStore {
             &now,
         )?;
         tx.commit()?;
-        self.vault.anchor_manifest(&head, writes)?;
+        self.anchor()?;
         Ok(())
     }
 

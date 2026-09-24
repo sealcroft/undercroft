@@ -100,6 +100,40 @@ tests:
               description: "75 full audit-chain replays in 15m on this instance. The guard is designed to replay once per handle, so a sustained rate means another connection keeps committing and every commit costs the next guarded read a walk of the whole audit table. Check for a second process writing the served vault."
               runbook_url: "https://sealcroft.com/undercroft/docs/runbook.html"
 
+  # ── ManifestAnchorHandleRetired / ManifestAnchorDeferred (ROADMAP O254) ──
+  # One integrity-class failure and one I/O-class failure inside the window.
+  # `sum by (instance)` keeps the label the inhibition scopes on; the `class`
+  # selector is in the expression, so it does not reach the alert.
+  - interval: 1m
+    input_series:
+      - series: 'undercroft_anchor_failures_total{job="undercroft",instance="undercroft:8765",service="undercroft",class="integrity"}'
+        values: "0+0x9 1+0x10"
+      - series: 'undercroft_anchor_failures_total{job="undercroft",instance="undercroft:8765",service="undercroft",class="io"}'
+        values: "0+0x9 1+0x10"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ManifestAnchorHandleRetired
+        exp_alerts:
+          - exp_labels:
+              alertname: ManifestAnchorHandleRetired
+              severity: critical
+              instance: undercroft:8765
+            exp_annotations:
+              summary: "A handle stopped writing: its manifest anchor refused the vault.json on disk"
+              description: "A post-commit anchor on this instance found a vault.json its keys may not overwrite, and that handle now refuses every write. Another process rotated this vault's keys beside it, or the manifest was edited or removed. The vault's stats name the vault under unhealed; restart the process, then run undercroft verify."
+              runbook_url: "https://sealcroft.com/undercroft/docs/runbook.html"
+      - eval_time: 15m
+        alertname: ManifestAnchorDeferred
+        exp_alerts:
+          - exp_labels:
+              alertname: ManifestAnchorDeferred
+              severity: warning
+              instance: undercroft:8765
+            exp_annotations:
+              summary: "Manifest anchors are being deferred"
+              description: "A post-commit anchor on this instance could not write vault.json (a filesystem refusal or a busy write lock). The write it followed is stored and the next anchor covers it. Check the vault directory's disk and permissions, and anything else holding vault.json open."
+              runbook_url: "https://sealcroft.com/undercroft/docs/runbook.html"
+
   # ── AuditChainStalled — writes landing, chain not advancing ───────────────
   # Both sides of the `and` must aggregate by the same label or the vector
   # match finds no counterpart and the rule silently never fires. That is a
@@ -325,6 +359,12 @@ tests:
         values: "4096+0x20"
       - series: 'undercroft_chain_replays_total{job="undercroft",instance="undercroft:8765",service="undercroft"}'
         values: "1+0x20"
+      # O254. Both classes PRESENT and flat — no anchor has failed. The lag is
+      # not a series at all, deliberately: nothing may alert on it.
+      - series: 'undercroft_anchor_failures_total{job="undercroft",instance="undercroft:8765",service="undercroft",class="integrity"}'
+        values: "0+0x20"
+      - series: 'undercroft_anchor_failures_total{job="undercroft",instance="undercroft:8765",service="undercroft",class="io"}'
+        values: "0+0x20"
     alert_rule_test:
       - eval_time: 15m
         alertname: UndercroftDown
@@ -358,4 +398,10 @@ tests:
         exp_alerts: []
       - eval_time: 15m
         alertname: AuditChainReplaysRepeating
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: ManifestAnchorHandleRetired
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: ManifestAnchorDeferred
         exp_alerts: []
