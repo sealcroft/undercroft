@@ -214,10 +214,9 @@ impl VaultStore {
                  assigned_at = excluded.assigned_at",
             params![wing, room, max_age_days, tag.as_slice(), now],
         )?;
-        let (head, writes) =
-            chain_append(&tx, &self.vault, Namespace::Retention, &rest, &tag, &now)?;
+        chain_append(&tx, &self.vault, Namespace::Retention, &rest, &tag, &now)?;
         tx.commit()?;
-        self.vault.anchor_manifest(&head, writes)?;
+        self.anchor()?;
         Ok(())
     }
 
@@ -241,7 +240,7 @@ impl VaultStore {
                 };
                 let canonical = format!("retention-clear\x1f{wing}\x1f{room}\x1f{now}");
                 let tag = self.vault.tag(canonical.as_bytes());
-                let (head, writes) = chain_append(
+                chain_append(
                     &tx,
                     &self.vault,
                     Namespace::RetentionClear,
@@ -250,7 +249,7 @@ impl VaultStore {
                     &now,
                 )?;
                 tx.commit()?;
-                self.vault.anchor_manifest(&head, writes)?;
+                self.anchor()?;
             }
             n
         };

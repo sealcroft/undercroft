@@ -1115,10 +1115,9 @@ impl VaultStore {
     ) -> Result<(), StoreError> {
         let at = crate::manage::now_rfc3339();
         let tx = self.conn.unchecked_transaction()?;
-        let (head, writes) =
-            Self::audit_migration(&tx, &self.vault, kind, version, &at, moved, skipped)?;
+        Self::audit_migration(&tx, &self.vault, kind, version, &at, moved, skipped)?;
         tx.commit()?;
-        self.vault.anchor_manifest(&head, writes)?;
+        self.anchor()?;
         Ok(())
     }
 
@@ -1562,8 +1561,8 @@ impl VaultStore {
         // a crash artifact and fast-forwards — the designed direction. The
         // anchor running AHEAD of the database is the combination that would
         // read as tampering, and it cannot happen from here.
-        if let Some((head, writes)) = anchor {
-            self.vault.anchor_manifest(&head, writes)?;
+        if anchor.is_some() {
+            self.anchor()?;
         }
         // **The UPDATEs are not enough, and this is the part that is easy to
         // get wrong.** An in-place UPDATE leaves the old row image in a
@@ -1808,8 +1807,8 @@ impl VaultStore {
             None
         };
         tx.commit()?;
-        if let Some((head, writes)) = anchor {
-            self.vault.anchor_manifest(&head, writes)?;
+        if anchor.is_some() {
+            self.anchor()?;
         }
 
         // The UPDATEs above leave the old row images — and therefore the
@@ -2311,9 +2310,9 @@ impl VaultStore {
                 terms.as_deref(),
             ],
         )?;
-        let (head, writes) = chain_append(&tx, &self.vault, Namespace::Kg, &id, &tag, &now)?;
+        chain_append(&tx, &self.vault, Namespace::Kg, &id, &tag, &now)?;
         tx.commit()?;
-        self.vault.anchor_manifest(&head, writes)?;
+        self.anchor()?;
         if entity.is_some() {
             undercroft_obs::kg_write(undercroft_obs::KgKind::Entity);
         }
@@ -2767,9 +2766,9 @@ impl VaultStore {
                 terms.as_deref(),
             ],
         )?;
-        let (head, writes) = chain_append(&tx, &self.vault, Namespace::Kg, &id, &tag, &now)?;
+        chain_append(&tx, &self.vault, Namespace::Kg, &id, &tag, &now)?;
         tx.commit()?;
-        self.vault.anchor_manifest(&head, writes)?;
+        self.anchor()?;
         if entity.is_some() {
             undercroft_obs::kg_write(undercroft_obs::KgKind::Entity);
         }
@@ -2869,8 +2868,8 @@ impl VaultStore {
             }
         }
         tx.commit()?;
-        if let Some((head, writes)) = anchor {
-            self.vault.anchor_manifest(&head, writes)?;
+        if anchor.is_some() {
+            self.anchor()?;
             for _ in 0..records {
                 undercroft_obs::kg_write(undercroft_obs::KgKind::Entity);
             }
@@ -2944,10 +2943,9 @@ impl VaultStore {
                 "UPDATE kg_triples SET valid_to = ?1, tag = ?2 WHERE id = ?3",
                 params![ended, tag.as_slice(), held.id],
             )?;
-            let (head, writes) =
-                chain_append(&tx, &self.vault, Namespace::Kg, &held.id, &tag, &ended)?;
+            chain_append(&tx, &self.vault, Namespace::Kg, &held.id, &tag, &ended)?;
             tx.commit()?;
-            self.vault.anchor_manifest(&head, writes)?;
+            self.anchor()?;
             undercroft_obs::kg_write(undercroft_obs::KgKind::Supersede);
             undercroft_obs::event_kg_triple(self.vault.id());
         }
@@ -3034,7 +3032,7 @@ impl VaultStore {
                 triple_id
             ],
         )?;
-        let (head, writes) = chain_append(
+        chain_append(
             &tx,
             &self.vault,
             Namespace::Kg,
@@ -3043,7 +3041,7 @@ impl VaultStore {
             &now,
         )?;
         tx.commit()?;
-        self.vault.anchor_manifest(&head, writes)?;
+        self.anchor()?;
         undercroft_obs::kg_write(undercroft_obs::KgKind::Triple);
         undercroft_obs::event_kg_triple(self.vault.id());
         Ok(())
@@ -3369,10 +3367,9 @@ impl VaultStore {
                     terms.as_deref()
                 ],
             )?;
-            let (head, writes) =
-                chain_append(&tx, &self.vault, Namespace::Kg, &t.id, &tag, &now_rfc3339())?;
+            chain_append(&tx, &self.vault, Namespace::Kg, &t.id, &tag, &now_rfc3339())?;
             tx.commit()?;
-            self.vault.anchor_manifest(&head, writes)?;
+            self.anchor()?;
             undercroft_obs::kg_write(undercroft_obs::KgKind::Supersede);
             undercroft_obs::event_kg_triple(self.vault.id());
             count += 1;

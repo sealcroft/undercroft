@@ -124,6 +124,17 @@ Exposed series (all `undercroft_*`):
   is `chain_replays` on every stats surface. No labels — a vault-shaped one
   has a value set created by use, and the per-vault figure is on
   `/v1/…/stats`),
+  `anchor_failures_total{class}` (ROADMAP O254 — post-commit manifest
+  anchors that did not complete. `class` is `io` or `integrity`, and the two
+  call for opposite responses: an `io` failure — the filesystem refused, or
+  the write lock stayed busy past its timeout — is covered by the next
+  anchor and the handle keeps writing; an `integrity` failure means the
+  `vault.json` on disk is not one the handle's keys may overwrite, because
+  another process rotated the vault or the file was edited, and that handle
+  now refuses every write. The write before it is stored either way. Two
+  alerts fire on this counter, `ManifestAnchorHandleRetired` (critical) and
+  `ManifestAnchorDeferred` (warning); none fires on the anchor's lag,
+  `anchor_lag` on every stats surface, which read-audit keeps above zero),
   `hmac_verify_failures_total{surface}`, `vault_opens_total`,
   `http_requests_total{route,status}`, `auth_rejections_total{kind}`.
 - **Histograms** — `search_duration_seconds`, `search_hits`,

@@ -73,6 +73,56 @@ or when they could never be presented.
 
 ---
 
+## 1.7.0 (unreleased)
+
+### every process that writes one vault must run the same build (O254)
+
+**Symptom:** none a check can show you, which is why it is listed. With a
+1.6.x process and a 1.7.x process writing one vault, the 1.6.x side still
+writes `vault.json` through one fixed `vault.json.tmp` and takes no lock for
+it, so the failures 1.7.0 closed come back: a write that committed but
+reported `vault error: io error: No such file or directory (os error 2)` —
+and a retry of an API save stores the memory twice — an open that fails the
+same way, and, after a `vault rotate` on either side, the rotated salt
+written back over the new manifest.
+
+**Cause:** from 1.7.0 every manifest write goes through one door that holds
+the database's write lock and checks the file on disk first (ROADMAP O254).
+Only processes running that door honour it.
+
+**Fix:** upgrade every process that opens the vault writably — `serve-http`,
+`serve-mcp`, `daemon --watch`, `mine`, scheduled CLI jobs, and the engines an
+orchestrator routes to — before any of them writes again: stop them all,
+upgrade, start them. `undercroft config check` cannot see this: it inspects
+the environment, not the other processes running beside it.
+
+### a server whose vault another process rotated stops writing, and says why (O254)
+
+**Symptom:** after `undercroft vault rotate` runs beside a live `serve-http`
+(or any long-lived writer), that server's next save answers 200 with a
+warning in its log, and every write after it is refused with `integrity
+verdict: this handle no longer writes: its manifest anchor found that the
+database's key-generation marker is not this handle's …` — a 409 with
+`class: "integrity"` on `/v1`, exit 2 on the CLI. `stats` shows the reason
+under `unhealed` and `anchor_failures` of at least 1, and the
+`ManifestAnchorHandleRetired` alert fires. The next open of the vault then
+refuses it: `integrity failure on record audit-chain head — HMAC mismatch`.
+
+**Cause:** that server's keys were retired by the rotation. Before 1.7.0 its
+next manifest write put the RETIRED salt back over the rotated one, and the
+vault could no longer decrypt anything the rotation had sealed — silently and
+permanently. 1.7.0 refuses that write, so the rotated salt and every row the
+rotation sealed survive. What it does not yet stop is the one save that
+committed before the server's anchor noticed: it was sealed and chained under
+the retired keys, and that record is what the next open refuses (ROADMAP
+O257, the next unit, closes it).
+
+**Fix:** restore the vault from a backup taken after the rotation and before
+that save, and replay the save from its source. **Never run `vault rotate`
+while another process has the vault open** — stop the server, rotate, start
+it — which has always been the documented procedure and is still the only
+safe one until O257 lands.
+
 ## 1.6.1 (released 2026-09-22)
 
 ### The manifest carries a version fence from this release on (O238)

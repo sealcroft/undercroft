@@ -105,6 +105,50 @@ groups:
             audit table. Check for a second process writing the served vault.
           runbook_url: "https://sealcroft.com/undercroft/docs/runbook.html"
 
+      - alert: ManifestAnchorHandleRetired
+        # ROADMAP O254. A post-commit anchor found the manifest on disk is not
+        # one the writing handle's keys may overwrite — another process
+        # rotated the vault's keys beside a live handle, or `vault.json` was
+        # edited, removed or written by a newer build — and that handle now
+        # refuses every write until the process re-opens the vault. Critical:
+        # writes through it are refused from this moment, and either cause
+        # needs a human. On the COUNTER and never on the anchor's lag, which
+        # read-audit keeps permanently above zero.
+        expr: sum by (instance) (increase(undercroft_anchor_failures_total{class="integrity"}[15m])) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "A handle stopped writing: its manifest anchor refused the vault.json on disk"
+          description: >-
+            A post-commit anchor on this instance found a vault.json its keys
+            may not overwrite, and that handle now refuses every write.
+            Another process rotated this vault's keys beside it, or the
+            manifest was edited or removed. The vault's stats name the vault
+            under unhealed; restart the process, then run undercroft verify.
+          runbook_url: "https://sealcroft.com/undercroft/docs/runbook.html"
+
+      - alert: ManifestAnchorDeferred
+        # ROADMAP O254. A post-commit anchor could not complete for a
+        # transient reason — the filesystem refused a read or a write, or the
+        # database write lock stayed busy past its timeout. The write it
+        # followed is committed and the next anchor covers it, so nothing is
+        # lost; a steady rate means the manifest keeps trailing the database,
+        # and that trail is what a rollback could strip before the next open.
+        expr: sum by (instance) (increase(undercroft_anchor_failures_total{class="io"}[15m])) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Manifest anchors are being deferred"
+          description: >-
+            A post-commit anchor on this instance could not write vault.json
+            (a filesystem refusal or a busy write lock). The write it followed
+            is stored and the next anchor covers it. Check the vault
+            directory's disk and permissions, and anything else holding
+            vault.json open.
+          runbook_url: "https://sealcroft.com/undercroft/docs/runbook.html"
+
       - alert: AuditChainStalled
         # Writes are landing but the tamper-evident chain isn't advancing.
         # Both sides of the `and` aggregate by the same label, or the vector

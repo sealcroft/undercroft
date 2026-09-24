@@ -14,6 +14,8 @@
 #![warn(missing_docs)]
 
 pub mod admission;
+#[cfg(test)]
+mod anchor_tests;
 mod chain;
 mod fdeidx;
 pub mod forget;
@@ -28,6 +30,7 @@ pub mod remote;
 mod replay;
 pub mod retention;
 mod rotate;
+mod rotate_pause;
 pub mod witness;
 
 pub use admission::{DestinationState, PendingAdmission, QUARANTINE_WING};
@@ -723,6 +726,14 @@ pub(crate) fn chain_append(
     tag: &[u8],
     at: &str,
 ) -> Result<(String, u64), StoreError> {
+    // A retired handle writes nothing more (ROADMAP O254): its anchor found
+    // the manifest on disk is not one its keys may overwrite, so a row it
+    // committed now would be sealed and tagged under keys the vault no longer
+    // answers to. Every audited mutation reaches this line inside its own
+    // transaction, so refusing here rolls the whole write back.
+    if let Some(why) = vault.retired() {
+        return Err(retired_handle(why));
+    }
     let record_id = ns.record(rest);
     // The regime and the live head come from `chain`, the one owner of the
     // chain's arithmetic (ROADMAP O233): a version-2 chain folds this row's
@@ -733,6 +744,78 @@ pub(crate) fn chain_append(
     chain::set_writes(conn, writes)?;
     Ok((next, writes))
 }
+
+/// The refusal a retired handle answers every write with (ROADMAP O254).
+pub(crate) fn retired_handle(why: &str) -> StoreError {
+    StoreError::IntegrityFinding(format!(
+        "this handle no longer writes: its manifest anchor found that {why}. Nothing was \
+         written. Reopen the vault, which reads the current manifest, and run `undercroft \
+         verify` (ROADMAP O254)"
+    ))
+}
+
+/// A `BEGIN IMMEDIATE` held by a guard that rolls back on every exit that
+/// did not commit — an early `?`, a refusal, a panic.
+///
+/// Two users, one shape: a key rotation, from its pre-rotation check to its
+/// commit (ROADMAP O232), and the post-commit anchor door, which takes the
+/// write lock only to serialise the manifest file against every other handle
+/// and process and always rolls back (ROADMAP O254). A long-lived `/v1` handle
+/// that kept a transaction open would fail or lose every later write, which
+/// is why neither may leave one behind.
+pub(crate) struct WriteLock<'a> {
+    conn: &'a rusqlite::Connection,
+    committed: bool,
+}
+
+impl<'a> WriteLock<'a> {
+    pub(crate) fn begin(conn: &'a rusqlite::Connection) -> Result<Self, StoreError> {
+        conn.execute_batch("BEGIN IMMEDIATE")?;
+        Ok(Self {
+            conn,
+            committed: false,
+        })
+    }
+
+    pub(crate) fn commit(mut self) -> Result<(), StoreError> {
+        self.conn.execute_batch("COMMIT")?;
+        self.committed = true;
+        Ok(())
+    }
+}
+
+impl Drop for WriteLock<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            // Nothing to report from here: the caller already has the error
+            // that made this rollback necessary, or — for the anchor — there
+            // was never anything to commit.
+            let _ = self.conn.execute_batch("ROLLBACK");
+        }
+    }
+}
+
+/// What the post-commit anchor did (ROADMAP O254). Never an error for a
+/// write whose commit succeeded: a failed anchor is counted and said, and the
+/// class decides whether the handle may go on writing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum AnchorOutcome {
+    /// The manifest on disk names the committed head — written now, or it
+    /// already did.
+    Anchored,
+    /// Nothing was written, for a transient reason (the filesystem refused,
+    /// or the write lock stayed busy); the next anchor covers every record
+    /// this one would have.
+    Deferred(String),
+    /// Nothing was written, and this handle refuses every later write: the
+    /// manifest on disk is not one its keys may overwrite.
+    Retired(String),
+}
+
+/// How old an orphaned manifest temp file must be before the anchor sweeps
+/// it. A second margin rather than the first: the sweep runs under the write
+/// lock every manifest write holds, so nothing matching is mid-write.
+const ORPHAN_TEMP_AGE: std::time::Duration = std::time::Duration::from_secs(3600);
 
 pub(crate) fn rerank_top_n() -> usize {
     // `min` 1: a top-N of zero would rerank nothing, which the old
@@ -2922,6 +3005,14 @@ pub struct VaultStore {
     /// which is the steady state. Consumed by
     /// [`VaultStore::adopt_open_verdict`] and never read twice.
     open_verdict: Option<OpenVerdict>,
+    /// Post-commit anchors this handle could not complete, in either class
+    /// (ROADMAP O254). The HANDLE's number, like `embed_failures`; the
+    /// durable half is `undercroft_anchor_failures_total{class}`.
+    anchor_failures: u64,
+    /// Whether this handle has swept orphaned manifest temp files yet. Once
+    /// per handle: an orphan only exists after a crash, which a re-open
+    /// follows.
+    orphans_swept: bool,
     /// The `semantic` score above which a drawer may be admitted on cosine
     /// alone; `None` refuses semantic-only admission entirely. Resolved once
     /// at open by [`resolve_semantic_gate`] — see there for why it is not
@@ -3696,20 +3787,45 @@ impl VaultStore {
     /// mismatch ⇒ before commit, discard the staging file and stay on the
     /// current keys. Runs before any read so a crashed rotation can never
     /// masquerade as tamper.
+    ///
+    /// **The promote-versus-discard comparison is made under the write lock
+    /// every anchor holds (ROADMAP O254)**, and the file operation happens
+    /// inside it: the keycheck is committed database state, and only the
+    /// database's own lock makes comparing it atomic with renaming or
+    /// deleting the file. Read outside the lock, an open that met a
+    /// rotation's staged file between its staging and its commit saw the OLD
+    /// keycheck and deleted it, and the rotation then committed with no
+    /// manifest to promote. A rotation holds that lock from before it stages
+    /// until it commits, so this now waits for it and then promotes.
     fn reconcile_rotation(conn: &Connection, mut vault: Vault) -> Result<Vault, StoreError> {
-        let db_kc: Option<String> = conn
-            .query_row("SELECT value FROM meta WHERE key = 'keycheck'", [], |r| {
-                r.get(0)
-            })
-            .optional()?;
+        let read_keycheck = || -> Result<Option<String>, StoreError> {
+            Ok(conn
+                .query_row("SELECT value FROM meta WHERE key = 'keycheck'", [], |r| {
+                    r.get(0)
+                })
+                .optional()?)
+        };
         if let Some(pending) = vault.take_pending() {
-            if db_kc.as_deref() == Some(pending.keycheck_hex().as_str()) {
-                pending.promote_manifest()?;
+            let _lock = WriteLock::begin(conn)?;
+            if read_keycheck()?.as_deref() == Some(pending.keycheck_hex().as_str()) {
+                match pending.promote_manifest() {
+                    Ok(()) => {}
+                    // The rotation itself, or another open, promoted it
+                    // first — under this same lock, so the manifest on disk
+                    // is already the staged one. Measured by O254's probe P1:
+                    // once both promotes wait on the lock, the second always
+                    // meets a staged file the first has already renamed.
+                    Err(VaultError::Io(e))
+                        if e.kind() == std::io::ErrorKind::NotFound
+                            && pending.manifest_on_disk_is_mine() => {}
+                    Err(e) => return Err(e.into()),
+                }
                 vault = *pending;
             } else {
                 vault.discard_pending_file()?;
             }
         }
+        let db_kc = read_keycheck()?;
         let want = vault.keycheck_hex();
         if db_kc.as_deref() != Some(want.as_str()) {
             conn.execute(
@@ -3800,7 +3916,19 @@ impl VaultStore {
 
     fn open_inner(vault: Vault, embedder: Box<dyn Embedder + Send>) -> Result<Self, StoreError> {
         Self::migrate_db_filename(&vault)?;
-        let conn = Connection::open(vault.db_path())?;
+        let mut conn = Connection::open(vault.db_path())?;
+        // Every `transaction()` and `unchecked_transaction()` on this
+        // connection begins IMMEDIATE (ROADMAP O254, probe P2). Each one in
+        // the tree is a write, and a DEFERRED transaction that has read and
+        // must then upgrade is refused SQLITE_BUSY at once — SQLite never runs
+        // the busy handler for that upgrade. Measured once the anchor door
+        // held the write lock across its fsyncs: with two writer processes on
+        // audited DEFERRED writes, one writer took every write and the other
+        // failed all 200 of its own; three of four failed every write. An
+        // IMMEDIATE transaction takes the lock at BEGIN, where the busy
+        // handler does run, which is how `write_drawer`, the rotation and the
+        // chain switch already began theirs.
+        conn.set_transaction_behavior(rusqlite::TransactionBehavior::Immediate);
         conn.pragma_update(None, "journal_mode", "WAL")?;
         // Pinned explicitly rather than left to the compile-time default: the
         // manifest anchor is written *after* the transaction that produced a
@@ -4231,7 +4359,7 @@ impl VaultStore {
             }
             _ => {}
         }
-        self.anchor_at_open = self.reconcile_chain(false)?;
+        self.anchor_at_open = self.reconcile_chain(false)?.0;
         match self.anchor_at_open {
             AnchorState::Current => Ok(()),
             AnchorState::Unseeded => {
@@ -4343,7 +4471,143 @@ impl VaultStore {
                     .into(),
             ));
         }
-        self.reconcile_chain(true)
+        // The operator ASKED for the anchor, so an anchor that did not happen
+        // is this call's failure — unlike a write's, whose commit stands.
+        let (state, healed) = self.reconcile_chain(true)?;
+        match healed {
+            Some(AnchorOutcome::Deferred(why)) => Err(StoreError::Vault(VaultError::Io(
+                std::io::Error::other(format!("the manifest anchor was deferred: {why}")),
+            ))),
+            Some(AnchorOutcome::Retired(why)) => Err(retired_handle(&why)),
+            Some(AnchorOutcome::Anchored) | None => Ok(state),
+        }
+    }
+
+    /// **The one post-commit door onto the manifest anchor (ROADMAP O254)**,
+    /// and the only caller of [`Vault::anchor_manifest`].
+    ///
+    /// It takes NO head. Every anchor before this wrote whatever head its
+    /// caller held, through one fixed `vault.json.tmp`, from the handle's
+    /// cached manifest — so two handles collided on the temp file (a
+    /// committed write reported failure: measured 27 times in eight seconds,
+    /// and 53 of 456 opens), a lagging handle could lower the anchor, and a
+    /// handle opened before another's key rotation wrote the RETIRED salt
+    /// back over the rotated one, measured, leaving the vault unable to
+    /// decrypt what the rotation sealed. So after the data transaction's
+    /// COMMIT this takes SQLite's write lock — `BEGIN IMMEDIATE` under a
+    /// guard — reads the committed head, height and keycheck under it, hands
+    /// them to the vault's checked read-modify-write of the file on disk, and
+    /// rolls back. The database's own lock rather than a sidecar file lock,
+    /// because every decision here compares the file with COMMITTED database
+    /// state, and only that lock makes the comparison atomic with the file
+    /// operation. A write lock in WAL requires the newest snapshot, so the
+    /// head it reads is committed and the anchor is never ahead.
+    ///
+    /// **A committed write whose anchor fails still returns Ok**, split by
+    /// class: an I/O failure — the filesystem, or a write lock still busy
+    /// after the busy timeout — is counted and warned and leaves the handle
+    /// writing, because the next anchor covers it exactly as a crash between
+    /// commit and anchor always has; an integrity failure is counted and
+    /// warned and RETIRES the handle, which then refuses every later write
+    /// (`chain_append` answers [`StoreError::IntegrityFinding`]). An error
+    /// for a stored write invites a retry, and the API saves are
+    /// unique-per-call, so a retry duplicates the memory.
+    ///
+    /// **Refused, as a typed error, inside a transaction**: the anchor is
+    /// out-of-database evidence and must never run ahead of a commit that
+    /// has not happened — a `debug_assert!` would not fire in the suites,
+    /// which run `--release`.
+    pub(crate) fn anchor(&mut self) -> Result<AnchorOutcome, StoreError> {
+        if !self.conn.is_autocommit() {
+            return Err(StoreError::Invalid(
+                "the manifest anchor runs after its transaction commits (ROADMAP O254), and \
+                 this connection is still inside one"
+                    .into(),
+            ));
+        }
+        if self.read_only {
+            return Err(StoreError::Invalid(
+                "anchoring the manifest is a write, and this store was opened read-only".into(),
+            ));
+        }
+        if let Some(why) = self.vault.retired() {
+            return Ok(AnchorOutcome::Retired(why.to_string()));
+        }
+        match self.anchor_under_lock() {
+            Ok(()) => Ok(AnchorOutcome::Anchored),
+            Err(undercroft_vault::AnchorFault::Io(why)) => {
+                self.anchor_failures += 1;
+                undercroft_obs::anchor_failed("io");
+                undercroft_obs::diag_warn!(
+                    "vault {:?}: the manifest anchor was deferred ({why}). The write it \
+                     follows is committed, and the next anchor covers it (ROADMAP O254)",
+                    self.vault.id()
+                );
+                Ok(AnchorOutcome::Deferred(why))
+            }
+            Err(undercroft_vault::AnchorFault::Integrity(why)) => {
+                self.anchor_failures += 1;
+                undercroft_obs::anchor_failed("integrity");
+                let note = format!(
+                    "this handle stopped writing: its manifest anchor found that {why}. The \
+                     write before it is committed and nothing was written to vault.json; every \
+                     later write through this handle is refused. Reopen the vault and run \
+                     `undercroft verify` (ROADMAP O254)"
+                );
+                undercroft_obs::diag_warn!("vault {:?}: {note}", self.vault.id());
+                self.unhealed.push(note);
+                self.vault.retire(why.clone());
+                Ok(AnchorOutcome::Retired(why))
+            }
+        }
+    }
+
+    /// Post-commit anchors this handle could not complete (ROADMAP O254).
+    pub fn anchor_failures(&self) -> u64 {
+        self.anchor_failures
+    }
+
+    /// The door's work under the write lock. Every failure is classed for
+    /// [`anchor`](Self::anchor): anything the DATABASE refuses — the lock
+    /// busy past its timeout, a read that fails — is I/O, because the write
+    /// it follows is committed and a later anchor covers it; only the
+    /// manifest's own checks can retire the handle.
+    fn anchor_under_lock(&mut self) -> Result<(), undercroft_vault::AnchorFault> {
+        use undercroft_vault::AnchorFault;
+        let lock = WriteLock::begin(&self.conn)
+            .map_err(|e| AnchorFault::Io(format!("taking the database write lock: {e}")))?;
+        let committed = (|| -> Result<_, StoreError> {
+            let head = chain::committed_head(&self.conn)?;
+            let writes = chain::writes(&self.conn)?;
+            let keycheck: Option<String> = self
+                .conn
+                .query_row("SELECT value FROM meta WHERE key = 'keycheck'", [], |r| {
+                    r.get(0)
+                })
+                .optional()?;
+            Ok((head, writes, keycheck))
+        })()
+        .map_err(|e| AnchorFault::Io(format!("reading the committed chain: {e}")))?;
+        let (Some(head), writes, keycheck) = committed else {
+            return Err(AnchorFault::Io(
+                "the chain has no committed head to anchor".into(),
+            ));
+        };
+        if !self.orphans_swept {
+            self.orphans_swept = true;
+            if let Err(e) = self.vault.sweep_orphan_temps(ORPHAN_TEMP_AGE) {
+                undercroft_obs::diag_warn!(
+                    "vault {:?}: orphaned manifest temp files could not be swept ({e}); they \
+                     are harmless and the next open retries",
+                    self.vault.id()
+                );
+            }
+        }
+        let anchored = self
+            .vault
+            .anchor_manifest(&head.head, writes, keycheck.as_deref());
+        drop(lock);
+        anchored.map(|_| ())
     }
 
     /// Compare the manifest's rollback anchor against the committed chain
@@ -4356,7 +4620,10 @@ impl VaultStore {
     /// second place for that alarm to be subtly wrong. The two verdicts
     /// fire whatever `heal` says — declining to write is not declining to
     /// look.
-    fn reconcile_chain(&mut self, heal: bool) -> Result<AnchorState, StoreError> {
+    fn reconcile_chain(
+        &mut self,
+        heal: bool,
+    ) -> Result<(AnchorState, Option<AnchorOutcome>), StoreError> {
         // **The cookie is read BEFORE the replay** (ROADMAP O251), the same
         // order and for the same reason `require_authenticated_labels`
         // states: a foreign commit landing between the two leaves the
@@ -4374,7 +4641,7 @@ impl VaultStore {
         // arithmetic below, the unjudged state feeds `chain::verdict`.
         let head_state = chain::head_state(&self.conn)?;
         let Some(db_head) = head_state.clone().into_committed()?.map(|h| h.head) else {
-            return Ok(AnchorState::Unseeded);
+            return Ok((AnchorState::Unseeded, None));
         };
         // **The anchor is read from DISK and MAC-verified**, never from this
         // handle's cached copy. That copy is written only by this handle's
@@ -4386,7 +4653,7 @@ impl VaultStore {
         // and the one that raises `ManifestTampered` reading stale.
         let anchor = self.vault.anchored_head()?;
         if anchor == db_head {
-            return Ok(AnchorState::Current);
+            return Ok((AnchorState::Current, None));
         }
         // Heads differ: replay the audit rows and decide crash vs rollback,
         // through the one replay (ROADMAP O233). A crash between a switch's
@@ -4408,12 +4675,8 @@ impl VaultStore {
             writes: chain::writes(&self.conn)?,
             verdict: chain::verdict(&replayed, &head_state),
         };
-        let (head, anchor_seen, behind_by, rows) = (
-            replayed.head,
-            replayed.anchor_seen,
-            replayed.behind_by,
-            replayed.rows,
-        );
+        let (head, anchor_seen, behind_by) =
+            (replayed.head, replayed.anchor_seen, replayed.behind_by);
         if head != db_head {
             // The committed head doesn't match its own audit rows — this is
             // in-database corruption, not an anchoring artifact.
@@ -4425,20 +4688,13 @@ impl VaultStore {
             ));
         }
         self.open_verdict = Some(offered);
-        if heal {
-            // Crash artifact: the anchor is a strict ancestor. Fast-forward.
-            let writes: u64 = self
-                .conn
-                .query_row(
-                    "SELECT value FROM chain_meta WHERE key = 'writes'",
-                    [],
-                    |r| r.get::<_, String>(0),
-                )?
-                .parse()
-                .unwrap_or(rows as u64);
-            self.vault.anchor_manifest(&db_head, writes)?;
-        }
-        Ok(AnchorState::Healed { behind_by })
+        // Crash artifact: the anchor is a strict ancestor. Fast-forward it —
+        // through the door, which reads the head AND the height under the
+        // write lock. This heal used to anchor `db_head`, read above, with a
+        // height read separately afterwards: a mismatched pair whenever a
+        // writer committed in between (ROADMAP O254).
+        let healed = if heal { Some(self.anchor()?) } else { None };
+        Ok((AnchorState::Healed { behind_by }, healed))
     }
 
     /// Resolve every open-time tunable and build the handle.
@@ -4586,6 +4842,8 @@ impl VaultStore {
             // Nothing has replayed yet; `reconcile_chain` fills this in only
             // when it does, and only the open consumes it (ROADMAP O251).
             open_verdict: None,
+            anchor_failures: 0,
+            orphans_swept: false,
         };
         Ok(store)
     }
@@ -4613,7 +4871,8 @@ impl VaultStore {
                  value TEXT NOT NULL
              );",
         )?;
-        self.anchor_at_open = self.reconcile_chain(true)?;
+        let (state, healed) = self.reconcile_chain(true)?;
+        self.anchor_at_open = state;
         match self.anchor_at_open {
             AnchorState::Unseeded => {
                 // Legacy adoption (pre-chain_meta database) or a fresh vault:
@@ -4635,13 +4894,29 @@ impl VaultStore {
             // a route claiming a CURRENT lag on every call, which a sentence
             // in the past tense does not.
             AnchorState::Healed { behind_by } => {
+                // What the open's heal actually did (ROADMAP O254): a
+                // DEFERRED fast-forward must not be reported as one that
+                // happened, and a retired handle has already said why.
+                let how = match &healed {
+                    Some(AnchorOutcome::Deferred(why)) => {
+                        format!("the open could NOT fast-forward it ({why}); the next anchor will")
+                    }
+                    Some(AnchorOutcome::Retired(_)) => {
+                        "the open could NOT fast-forward it, for the reason the note beside \
+                         this one gives"
+                            .to_string()
+                    }
+                    Some(AnchorOutcome::Anchored) | None => {
+                        "the open fast-forwarded it".to_string()
+                    }
+                };
                 let note = format!(
                     "the manifest rollback anchor was {behind_by} record(s) behind the \
-                     committed chain head when this handle opened, and the open \
-                     fast-forwarded it. A crash between a commit and its anchor is the \
-                     ordinary cause; a genuine OLDER `vault.json` restored beside a \
-                     current database lowers the anchor the same way, and this line is \
-                     the only evidence of either (ROADMAP O246)"
+                     committed chain head when this handle opened, and {how}. A crash \
+                     between a commit and its anchor is the ordinary cause, and so is a \
+                     second writer on this vault; a genuine OLDER `vault.json` restored \
+                     beside a current database lowers the anchor the same way, and this \
+                     line is the only evidence of either (ROADMAP O246)"
                 );
                 undercroft_obs::diag_warn!("{note}");
                 self.unhealed.push(note);
@@ -4681,7 +4956,10 @@ impl VaultStore {
         chain::set_head(&self.conn, chain::Regime::V1, &replayed.head).unwrap();
         let writes = chain::writes(&self.conn).unwrap() - had_v2 as u64;
         chain::set_writes(&self.conn, writes).unwrap();
-        self.vault.anchor_manifest(&replayed.head, writes).unwrap();
+        // Past the door's checks on purpose: this LOWERS the height, which
+        // the door refuses as a manifest ahead of the database (O254).
+        undercroft_vault::fixture::write_anchor_unchecked(&mut self.vault, &replayed.head, writes)
+            .unwrap();
     }
 
     /// Switch this vault's audit chain to the labelled version-2 step, once
@@ -4715,9 +4993,9 @@ impl VaultStore {
             .conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         match chain::switch(&tx, &self.vault, &anchor, &at)? {
-            chain::SwitchOutcome::Switched { head, writes } => {
+            chain::SwitchOutcome::Switched => {
                 tx.commit()?;
-                self.vault.anchor_manifest(&head, writes)?;
+                self.anchor()?;
             }
             chain::SwitchOutcome::Already => {}
             chain::SwitchOutcome::Withheld(reason) => self.unhealed.push(reason),
@@ -5352,7 +5630,7 @@ impl VaultStore {
             Screen::Bypass(BypassReason::OperatorRuling(expected)) => Some(expected),
             _ => None,
         };
-        let (is_new, head, writes) =
+        let (is_new, _, _) =
             match self.write_drawer_stmts(drawer, &embedding, diverted_by_screen, ruling) {
                 Ok(v) => v,
                 Err(e) => {
@@ -5364,7 +5642,7 @@ impl VaultStore {
             let _ = self.conn.execute_batch("ROLLBACK");
             return Err(e.into());
         }
-        self.vault.anchor_manifest(&head, writes)?;
+        self.anchor()?;
         self.post_write(drawer, embedding, is_new);
         // The live feed learns what this write MEANT, classified by where
         // the row landed rather than by which call site wrote it. Emitting
@@ -5991,8 +6269,8 @@ impl VaultStore {
             self.drop_derived_caches();
             return Err(e.into());
         }
-        if let Some((head, writes)) = anchor {
-            self.vault.anchor_manifest(&head, writes)?;
+        if anchor.is_some() {
+            self.anchor()?;
         }
         // Page-tier batch boundary: fold the tail rows this batch wrote
         // into their lists' pages — one reseal per touched list per batch,
@@ -7903,10 +8181,9 @@ impl VaultStore {
         );
         let tag = self.vault.tag(canonical.as_bytes());
         let tx = self.conn.transaction()?;
-        let (head, writes) =
-            chain_append(&tx, &self.vault, Namespace::Egress, "export", &tag, &now)?;
+        chain_append(&tx, &self.vault, Namespace::Egress, "export", &tag, &now)?;
         tx.commit()?;
-        self.vault.anchor_manifest(&head, writes)?;
+        self.anchor()?;
         Ok(())
     }
 
@@ -8001,10 +8278,9 @@ impl VaultStore {
         );
         let tag = self.vault.tag(canonical.as_bytes());
         let tx = self.conn.transaction()?;
-        let (head, writes) =
-            chain_append(&tx, &self.vault, Namespace::Egress, "refine", &tag, &now)?;
+        chain_append(&tx, &self.vault, Namespace::Egress, "refine", &tag, &now)?;
         tx.commit()?;
-        self.vault.anchor_manifest(&head, writes)?;
+        self.anchor()?;
         Ok(())
     }
 
@@ -8073,8 +8349,8 @@ impl VaultStore {
             "egress\u{1f}advise\u{1f}{op}\u{1f}{surface}\u{1f}{destination}\u{1f}{consulted}\u{1f}{apply}\u{1f}{now}"
         );
         let tag = self.vault.tag(canonical.as_bytes());
-        let (head, writes) = self.append_egress(&format!("advise/{op}"), &tag, &now)?;
-        self.vault.anchor_manifest(&head, writes)?;
+        self.append_egress(&format!("advise/{op}"), &tag, &now)?;
+        self.anchor()?;
         Ok(())
     }
 
@@ -13608,7 +13884,7 @@ mod tests {
         // the first (and the chain's `migrate/chain-v2` commitment before
         // it, ROADMAP O233 — hence 2 and 4 below, not 1 and 3). A power loss
         // must NOT read as tampering.
-        s.vault.anchor_manifest(&old_head, 2).unwrap();
+        undercroft_vault::fixture::write_anchor_unchecked(&mut s.vault, &old_head, 2).unwrap();
         assert!(
             s.verify().unwrap().chain_ok,
             "a behind-anchor (crash artifact) must not fail verification"

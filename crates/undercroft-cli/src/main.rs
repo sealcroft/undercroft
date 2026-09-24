@@ -4199,6 +4199,23 @@ fn run(cli: Cli) -> Result<()> {
                     st.chain_replays
                 );
             }
+            // ROADMAP O254: how far the manifest anchor trails the committed
+            // chain, always printed — "unknown" is a different claim from 0 —
+            // and this handle's failed anchors only when there were any, on
+            // the rule the lines around it follow.
+            match st.anchor_lag {
+                Some(lag) => println!("anchor lag: {lag} committed record(s) not yet anchored"),
+                None => println!(
+                    "anchor lag: unknown (vault.json does not verify under this handle's key)"
+                ),
+            }
+            if st.anchor_failures > 0 {
+                println!(
+                    "anchor failures: {} (post-commit manifest anchors this handle could not \
+                     complete; a handle that stopped writing says why under unhealed)",
+                    st.anchor_failures
+                );
+            }
             println!("db size: {} bytes", st.db_bytes);
             // The posture this handle was opened under. Silence here read as
             // "writable" on a replica.

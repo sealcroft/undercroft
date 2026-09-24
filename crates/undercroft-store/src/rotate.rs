@@ -72,40 +72,11 @@ pub struct RotationReport {
     pub retention_policies: usize,
 }
 
-/// The rotation's one `BEGIN IMMEDIATE`, from the pre-rotation check to the
-/// commit (ROADMAP O232). Rolls back on every exit that did not commit —
-/// an early `?`, the refusal, a panic — because a long-lived `/v1` handle
-/// that kept a transaction open would fail or lose every later write.
-struct RotationTx<'a> {
-    conn: &'a rusqlite::Connection,
-    committed: bool,
-}
-
-impl<'a> RotationTx<'a> {
-    fn begin(conn: &'a rusqlite::Connection) -> Result<Self, StoreError> {
-        conn.execute_batch("BEGIN IMMEDIATE")?;
-        Ok(Self {
-            conn,
-            committed: false,
-        })
-    }
-
-    fn commit(mut self) -> Result<(), StoreError> {
-        self.conn.execute_batch("COMMIT")?;
-        self.committed = true;
-        Ok(())
-    }
-}
-
-impl Drop for RotationTx<'_> {
-    fn drop(&mut self) {
-        if !self.committed {
-            // Nothing to report from here: the caller already has the error
-            // that made this rollback necessary.
-            let _ = self.conn.execute_batch("ROLLBACK");
-        }
-    }
-}
+// The rotation's one `BEGIN IMMEDIATE`, from the pre-rotation check to the
+// commit (ROADMAP O232) — the same guard the post-commit anchor door holds
+// (ROADMAP O254), one implementation of "a write lock that rolls back on
+// every exit that did not commit".
+use crate::WriteLock as RotationTx;
 
 /// What a refused rotation says (ROADMAP O232): the findings it would have
 /// laundered, up to ten, and what to do about each kind.
@@ -158,6 +129,11 @@ impl VaultStore {
         // the reads and writes below, so the bytes checked are the bytes
         // re-tagged; the guard rolls back on every exit that does not commit,
         // which a long-lived `/v1` handle needs as much as the check.
+        // A retired handle's keys are not the vault's (ROADMAP O254): its
+        // anchor found the manifest on disk is not one they may overwrite.
+        if let Some(why) = self.vault.retired() {
+            return Err(crate::retired_handle(why));
+        }
         let rotation = RotationTx::begin(&self.conn)?;
         let blockers = self.verify()?.rotation_blockers();
         if !blockers.is_empty() {
@@ -784,6 +760,7 @@ impl VaultStore {
         // the anchor commits a height the chain does not have.
         let writes = writes + 1;
         next.save_manifest_pending(&head, writes)?;
+        crate::rotate_pause::fire(self.vault.dir(), crate::rotate_pause::Phase::Staged);
 
         // ---- Phase 3: the one transaction applies everything ----
         // It was opened above, before the check (O232); these statements
@@ -886,11 +863,40 @@ impl VaultStore {
             )?;
         }
         rotation.commit()?;
+        crate::rotate_pause::fire(self.vault.dir(), crate::rotate_pause::Phase::Committed);
 
         // ---- Phase 4: promote and adopt ----
-        next.promote_manifest()?;
+        // Under the write lock every anchor holds (ROADMAP O254), so a promote
+        // and another handle's anchor cannot interleave: that handle's next
+        // anchor reads the new keycheck under the lock and stops writing
+        // rather than putting the retired salt back.
+        let promoted = {
+            let _lock = RotationTx::begin(&self.conn)?;
+            next.promote_manifest()
+        };
         self.vault = next;
         self.drop_derived_caches();
+        if let Err(e) = promoted {
+            // The rotation COMMITTED: the database answers only to the new
+            // keys, so this handle adopts them whatever the rename did. A
+            // staging file still on disk is promoted by the next writable
+            // open; one that is gone was promoted by an open that met it
+            // first, which the manifest verifying under the new key shows.
+            // Neither is a reason to report the rotation as failed.
+            if !self.vault.manifest_on_disk_is_mine() && !self.vault.has_staged_file() {
+                return Err(StoreError::IntegrityFinding(format!(
+                    "the key rotation committed, but its staged manifest could not be promoted \
+                     ({e}) and is gone, and vault.json does not verify under the new keys: the \
+                     vault's data is sealed under keys no manifest on disk can derive. Restore \
+                     the vault from a backup taken before this rotation (ROADMAP O257)"
+                )));
+            }
+            undercroft_obs::diag_warn!(
+                "vault {:?}: the key rotation committed and its manifest promote was deferred \
+                 ({e}); vault.json.next is promoted by the next writable open (ROADMAP O254)",
+                self.vault.id()
+            );
+        }
         Ok(report)
     }
 

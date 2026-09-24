@@ -251,6 +251,15 @@
             <div class="h">AUDIT TRAIL — DECLARED CEILING AND CHAIN REPLAYS</div>
             <div class="kv" id="sAudit">—</div>
           </div>
+          <!-- ROADMAP O254: the manifest anchor's lag behind the committed
+               chain, and this handle's failed anchors. The lag is shown
+               always and alarms on nothing: under read-audit it is never zero
+               between writes. A failed anchor is the line that needs a human,
+               and a handle that stopped writing says why under UNHEALED. -->
+          <div class="sect" id="sAnchorSect">
+            <div class="h">MANIFEST ANCHOR</div>
+            <div class="kv" id="sAnchor">—</div>
+          </div>
           <div class="sect">
             <div class="h">WINGS — DRAWER DISTRIBUTION</div>
             <table><thead><tr><th>WING</th><th>DRAWERS</th><th style="width:50%">SHARE</th></tr></thead><tbody id="wingRows"></tbody></table>
@@ -1122,6 +1131,17 @@ async function loadOverview() {
             : "ceiling " + ceil + " declared · within it"))
       + " · " + reps + " chain replay" + (reps === 1 ? "" : "s") + " by this handle's"
       + " label guard (a climbing count means another connection keeps committing)";
+    // O254: the anchor's lag is the engine's figure (null = the manifest on
+    // disk did not verify, which is unknown, not zero); the failure count is
+    // this handle's. textContent, so no escaping.
+    const lag = s.anchor_lag;
+    const af = Number(s.anchor_failures || 0);
+    $("sAnchor").textContent =
+      ((lag === null || lag === undefined)
+        ? "lag unknown — vault.json did not verify under this handle's key"
+        : lag + " committed record" + (lag === 1 ? "" : "s") + " not yet anchored")
+      + " · " + af + " failed anchor" + (af === 1 ? "" : "s") + " by this handle"
+      + (af > 0 ? " — see UNHEALED if it stopped writing" : "");
     // M5: R4's report. A non-empty list means either "this replica is
     // serving a vault its writer has not finished with" or "this vault still
     // holds some graph words in clear at rest" — each note says which.

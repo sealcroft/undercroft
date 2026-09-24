@@ -416,7 +416,15 @@ Consequences that are binding, not advisory:
   seal.rs: AEAD + HMAC; lib.rs: VaultManager/Vault + manifest-as-rollback-
   anchor + pure chain arithmetic + key rotation primitives
   (rotation_candidate, byte-exact reseal_at_rest, two-phase
-  vault.json.next staging, keycheck marker); bundle.rs:
+  vault.json.next staging, keycheck marker) + **the one manifest file
+  writer** (`write_manifest_file`: a random-nonce `create_new` temp, fsync,
+  rename, directory sync — `create`, the staging write and every anchor go
+  through it, and the bare legacy `vault.json.tmp` a 1.6.x process still
+  writes is never matched or swept) and the anchor's checked
+  read-modify-write, whose failures come back as `AnchorFault::{Io,
+  Integrity}` for the store's door to act on (ROADMAP O254); a
+  `test-fixture` feature carries the fault seam, since a nonce name cannot
+  be targeted from outside; bundle.rs:
   recipient-encrypted export bundles — **the vault-sized paths take the
   buffer rather than borrowing it** (`encrypt_for_into` seals IN PLACE and
   writes the header ahead of it; `decrypt_with_owned` opens in place;
@@ -2292,8 +2300,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (1048 run,
-                                      # 4 #[ignore]d = 1052 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (1062 run,
+                                      # 6 #[ignore]d = 1068 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2377,9 +2385,14 @@ docker compose run --rm test          # cargo unit + integration tests (1048 run
                                       # remembered — do not hand-edit one to
                                       # silence the gate; it is measuring the
                                       # suite, not this comment.
-                                      # The 4 ignored are 3 measurements needing
-                                      # testdata/*_50k.txt plus one in lib.rs. Run
-                                      # them with `cargo test --release -- --ignored`:
+                                      # The 6 ignored are 3 measurements needing
+                                      # testdata/*_50k.txt, one in lib.rs, and two
+                                      # in anchor_tests.rs (ROADMAP O254): the
+                                      # multi-process gate's child entry point,
+                                      # which returns at once unless a parent
+                                      # names a role, and the P2 latency
+                                      # measurement, run by name. Run the first
+                                      # four with `cargo test --release -- --ignored`:
                                       # 3 pass, and `measure_relation_promiscuity`
                                       # FAILS on missing data, not on logic — it
                                       # wants ar/el/he word lists and the tree
@@ -2415,7 +2428,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (631 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (640 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (169 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (157 checks; weaviate
@@ -2485,7 +2498,7 @@ docker compose run --rm arch-check    # TWO verifications, one service: the
                                       # a countable population, and inventing
                                       # a metric to satisfy a gate is how a
                                       # figure stops meaning anything
-docker compose run --rm obs-config    # the observability CONFIG suite (15 checks):
+docker compose run --rm obs-config    # the observability CONFIG suite (17 checks):
                                       # promtool check/test rules + amtool
                                       # check-config at the versions the stack
                                       # deploys, plus the join between them —
@@ -3053,6 +3066,21 @@ Heavy cargo work: use the `undercroft-target` volume + `CARGO_TARGET_DIR=/build`
   rename (+ dir sync), and key material is fsynced at creation. The
   anchor must never run **ahead** of the database — that combination is
   what makes a power loss reconcile as a crash instead of a tamper alarm.
+  **And ONE door writes it (ROADMAP O254)**: `VaultStore::anchor()`, the only
+  caller of `Vault::anchor_manifest`, takes no head; after the data COMMIT it
+  holds SQLite's write lock, reads the committed head, height and keycheck,
+  and hands them to a read-modify-write of the MAC-verified `vault.json`
+  through a random-nonce `create_new` temp. Every anchor used to write the
+  handle's CACHED manifest through one fixed `vault.json.tmp`, so two handles
+  collided (a committed write reported failed, measured 27 times in eight
+  seconds) and a handle opened before another's rotation wrote the retired
+  salt back. A failed anchor never fails the write it follows: I/O is counted
+  and covered by the next anchor; integrity (a manifest the handle's keys may
+  not overwrite) RETIRES the handle, which then refuses every write at
+  `chain_append`. Because the door holds the write lock across two fsyncs,
+  the writable connection begins every transaction IMMEDIATE — a DEFERRED one
+  that must upgrade is refused SQLITE_BUSY without waiting, and P2 measured
+  a second writer failing every write that way.
 - **A signal is read; a convention is declared; nothing is inferred.** The
   never-guess contract forbids INFERENCE, not EVIDENCE — a distinction that cost
   five attempts to get right. Reading an era marker the writer typed, or a

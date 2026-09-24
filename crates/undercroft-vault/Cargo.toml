@@ -7,6 +7,14 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+# Failure injection for the manifest anchor's file operations (ROADMAP O254):
+# the temp file is named with a random nonce, so nothing outside this crate can
+# target it, and the gate has to drive a rename or fsync failure through a
+# seam. Off in every production build; `undercroft-store` enables it through a
+# DEV-dependency only, on `undercroft-embed-onnx`'s precedent (ROADMAP O134a).
+test-fixture = []
+
 [dependencies]
 undercroft-core = { path = "../undercroft-core" }
 undercroft-obs = { path = "../undercroft-obs" }
