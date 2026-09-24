@@ -202,7 +202,15 @@ not in the replayed chain at all is a **rollback alarm**
 false-fire: WAL + `synchronous=FULL` guarantee data+chain reach disk
 before the anchor can, so power loss lands in the healed case by
 construction. Deletions write keyed tombstones — absence is also
-evidence.
+evidence. *Known defect, filed 2026-09-24 as ROADMAP O254*: that
+guarantee holds for ONE writer. Two writable handles on one vault anchor
+through one shared temporary file, so one can truncate the file the other
+is renaming into place — a committed write is then reported as failed, a
+concurrent reader can find `vault.json` empty or corrupt, and a manifest
+left corrupt (by overlapping writes, or by a power loss inside that window)
+makes the vault unopenable until it is restored from `backups/`. Separately,
+a concurrent writer can make the label guard and `verify` report a broken
+chain that is not broken (ROADMAP O253).
 
 **Residual (documented)**: an attacker with full disk control who
 restores a **consistent old database + manifest pair together** rewinds
@@ -960,7 +968,14 @@ straight, each carrying what it actually is.
   `POST /v1/vaults/{id}/verify-forgetting`, the fleet's
   `ops/verify-forgetting`, and the admin console — where until 1.1.0 the
   HTTP plane could MINT a receipt and only the CLI could check one
-  (ROADMAP O14).
+  (ROADMAP O14). **Known defect, filed 2026-09-24 as ROADMAP O255**: a
+  receipt minted while another handle commits to the same vault cannot
+  verify — each drawer is destroyed in its own transaction, so the other
+  writer's record lands inside the attested interval (measured, 20 of 20),
+  and the receipt carries that writer's labels to the data subject. The
+  sweep shares the shape: it decides on one state and destroys on a later
+  one. Until O255 lands, run `forget` and a sweep with no other writer on
+  the vault.
 - **Memory-poisoning defense (C3.3) — BUILT (2026-08-03/04)**:
   write-path admission control — provenance on every write, a
   deterministic (optionally classifier-assisted) detector at the write

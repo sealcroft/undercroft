@@ -8766,7 +8766,11 @@ impl VaultStore {
         bad.extend(self.tunnels_verify()?);
         // Two-part chain check. (1) The audit rows must reproduce exactly
         // the committed head in chain_meta — they advanced in the same
-        // transactions, so any mismatch is corruption, not timing. (2) The
+        // transactions, so any mismatch is corruption, not timing. [Corrected
+        // 2026-09-24, ROADMAP O253: it IS timing when the rows and the head
+        // are read in two snapshots and another handle commits between them —
+        // measured, 52 false `chain_ok = false` in 215 runs beside a writer.
+        // The fix reads both in one snapshot.] (2) The
         // manifest anchor must appear somewhere in that chain: equal in
         // steady state, strictly behind after a crash-before-anchor (legal),
         // and absent only when the database was rolled back or forked

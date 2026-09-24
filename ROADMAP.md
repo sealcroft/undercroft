@@ -3998,7 +3998,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**283** of the **298** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**286** of the **301** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -24587,6 +24587,341 @@ and looped, because a race gate that passes once is not a measurement.
 **Counterfactual**: today, 64 refusals and 41 false verdicts in six seconds.
 
 **Relations:** shares a diff surface with O252 — both edit the label guard's replay path in `chain.rs`, and a tail fold that reads rows and a head in two snapshots inherits this entry's false alarm.
+
+**Relations:** sequenced after O254 — the open-path gate here must demand zero errors of any kind, which a manifest that two anchoring handles can truncate or corrupt makes impossible.
+
+**Relations:** sequenced before O256 — a backup taken inside the snapshot it verified needs this entry's snapshot helper.
+
+#### RULED 2026-09-24 by a three-lens panel (agentic memory architecture, security, software engineering) plus an adversarial refuter
+
+**The question.** What shape makes every integrity judgement read what it
+compares from one state, where it lives, which sites it covers, and what gate
+proves it — the entry's filed shape was the question's starting point, not an
+answer. The brief, the lenses' answers and the refuter's pack are in the
+session scratchpad — material, never the record. **Nothing is built by this
+record**: the build is the next unit that takes this entry, after O254.
+
+**Measured before and during the panel** (release build, sealed vaults, a
+second handle on a second thread committing in a loop):
+
+- The guard and `verify`, 4,000 drawers, a writer alternating `trust set`,
+  `retention set` and a drawer correction: `wing_trusts` refused 49× "its
+  records do not replay to the committed head" and 12× "trust/wN: assigned in
+  the chain, row is gone"; `retention_policies` 1× "row is not the newest
+  declaration"; `verify` reported `chain_ok = false` on 52 of 215 runs.
+- The policy scan alone (a small audit table, a `retention set` writer): 59
+  false "row is not the newest declaration" in 248,408 reads, with ZERO
+  replay-race refusals — so a snapshot inside `chain_verdict` alone leaves
+  every one of them.
+- The witness check: 0 of 1,327. `get`: 0, but CACHE-MASKED — the loop's
+  `wing_trusts` replayed first each time, so it measured nothing (the
+  refuter's finding).
+- Opens under a read-audit writer: 0 integrity failures in 456 + 456, and 53
+  writable opens failed with an io error — that is **O254**, not this entry.
+- `PRAGMA data_version` inside a read transaction is CONSTANT and describes
+  that transaction's snapshot (P7), and as the first statement after `BEGIN`
+  it pins the snapshot (P7b). The design rests on P7, the observable, not on
+  P7b, which is SQLite internals.
+- rusqlite 0.32.1: `unchecked_transaction` issues `BEGIN DEFERRED` (no crate
+  sets another behaviour); `total_changes` and `is_autocommit` exist;
+  `transaction_state` is behind `modern_sqlite`, which this workspace does not
+  enable.
+- An erasure receipt minted while another handle commits: **20 of 20 fail**
+  `verify_forget_attestation` ("record trust/wN is not a tombstone") — that is
+  **O255**.
+
+**Prior rulings found, and their disposition.**
+
+- **O113** (a two-pass export is two snapshots and manufactures a 409 integrity
+  verdict) — FOLLOWED: this entry is that ruling applied to every judgement.
+- **O237 rulings 1, 2, 4 and 5** — FOLLOWED: one replay per foreign-commit
+  window, the cookie the accelerator and never the boundary, the guard's
+  placement, the destruction path never refuses.
+- **O237's "read the cookie BEFORE the replay", as built, and this entry's filed
+  "the cookie BEFORE the snapshot opens"** — REFUTED beside, by P7: read INSIDE
+  the snapshot the cookie equals the version of the rows the verdict reads,
+  which meets the ordering argument's goal — never newer than the verdict —
+  strictly.
+- **O251** — FOLLOWED, its cookie read inside the open's snapshot;
+  `adopt_open_verdict` stays OUT, every straddle there only declines the seed.
+- **O232** (rotation's `verify` inside its `BEGIN IMMEDIATE`) — FOLLOWED: the
+  inline path, where reading the anchor is sound because nothing else commits.
+- **O234** (the read budget) — FOLLOWED, measured at its own size.
+- **O245** — FOLLOWED; the witness emit and check join the shape.
+- **O246** — its note must name concurrent writers as a normal cause, because
+  reading the anchor first turns today's false "audit-chain head" into a
+  `Healed` note whose text calls itself the only evidence of a restored
+  manifest.
+- **O242** — untouched: replay counts do not change.
+
+**The ruled shape.**
+
+1. **One helper and one WITNESS TYPE.** A `Snapshot` value that only the helper
+   or a write-lock guard (`RotationTx`, the switch's transaction) can mint, and
+   `chain::replay` and `chain::prefix` REQUIRE one — the tree's own
+   required-witness pattern (`Screen`, `Read`, `LabelUse`), so a new unwrapped
+   walk does not compile. **A `debug_assert!(is_autocommit)` was proposed and
+   is REFUTED**: the suites run `cargo test --release` and the release profile
+   carries no debug assertions, so it would pass by being absent.
+2. **The helper**: in autocommit — set `PRAGMA query_only = ON` (restoring the
+   previous value after; a read-only handle stays ON), `BEGIN DEFERRED`, the
+   closure, then `COMMIT` on Ok and on Err alike (a read transaction; the two
+   are the same). Otherwise inline. **Not a `total_changes` tripwire with a
+   rollback, which is REFUTED as itself a silent-damage path**: `verify`
+   reaches `kg_secret`'s first-use `INSERT`, which caches the secret before the
+   write commits, so a rollback leaves graph rows blinded with a key that
+   exists nowhere. Under `query_only` the write fails BEFORE anything is
+   cached. `total_changes` stays a test measure.
+3. **Ownership is COUNTED, never inferred**: `is_autocommit()` cannot tell the
+   helper's own snapshot from a caller's read or write transaction, so the
+   store carries an ownership counter, and the guard's cache and its per-key
+   pins are written ONLY from a snapshot the helper opened — a pin recorded
+   inside a transaction that later rolls back would name a seq AUTOINCREMENT
+   reuses, and the next read would refuse "a different tag at seq".
+4. **`guarded_snapshot(body)` at the DOOR**, never inside `chain_verdict` alone:
+   attempt 1 reads the cookie first and, on a HIT, checks the cached verdict
+   and runs the body in the same snapshot; on a MISS it ends, reads the
+   manifest ANCHOR, reopens, and attempt 2 replays, judges, caches, counts,
+   refuses if bad and runs the body — attempt 2 never consults the cache, so
+   two attempts is a property of the construction. Inline inside another
+   transaction: a hit is fine; a miss only under a write lock, reading the
+   anchor in place and writing no cache and no pins; anything else is an error
+   naming the call site. Chosen over "read the anchor before every `BEGIN`":
+   free on a hit, no detection lost (without a replay the anchor is checked
+   against nothing), and no exposure of every guarded read to O254's torn
+   manifest.
+5. **The anchor is read BEFORE the snapshot, everywhere.** An anchor is written
+   only after its commit, so one read first is never newer than the rows; read
+   after the pin, a writer that commits and anchors makes `anchor_seen = false`
+   — a false `chain_ok = false` on the guard and a false `ManifestTampered` at
+   open — over the WHOLE replay window. All three lenses found this
+   independently; the brief had omitted it.
+6. **The doors**: both policy scans on `Decide`; `refuse_replayed` split into
+   the guard and a comparison that takes `&Snapshot`, every chunk in one
+   snapshot; `get`, `recent`, search and the graph doors FETCH AND COMPARE
+   inside the door's guarded snapshot, with `record_read` AFTER it ends
+   (`audit_read` must never run inline); `forget`'s top guard only. **The
+   hydration-to-check gap is FOLDED, not filed or left as a residual**: in
+   every door the row read and the check are adjacent with no write between
+   (the `one_rewrite`/`pq_build` writes happen during candidate generation,
+   before refinement), so the lenses' reason for leaving it out was false.
+7. **`verify`**: `kg_secret()` warmed first, the anchor, then ONE snapshot
+   around every leg — a report is evidence and must describe one state
+   (O113's argument), and `backup create` and rotation gate on its `ok()`.
+8. **`reconcile_chain`**: the anchor first, then a snapshot around the cookie,
+   `head_state` and — when they differ — the replay, `writes` and the verdict;
+   the errors, O251's offer and the heal after it. It reads the anchor AFTER
+   the head today, so a commit plus anchor between them is a false
+   `Integrity("audit-chain head")` at open NOW (reachable by reading; the
+   probe's rate did not catch it).
+9. **Witness emit and check**: the anchor, then one snapshot — emit today can
+   write a document whose `rows` and `head` describe different states.
+
+**Claims refuted, including the brief's.**
+
+- "`chain_verdict` is three statements": five and a disk read — `regime` is
+  read twice (once in the replay, once in `head_state`), so a concurrent
+  version-2 switch between them steps the commitment row under version 1 and
+  reports a broken chain; `head_state` alone is three statements, which makes
+  O251's "read `chain_meta` ONCE" three snapshots.
+- "`refuse_replayed` is one statement": the guard, `version_boundary`'s two
+  statements, then the comparison, re-entered per chunk.
+- `verify`'s comment "any mismatch is corruption, not timing": false under a
+  concurrent writer (measured).
+- `forget.rs`'s "contiguity holds by construction": false under an external
+  writer (O255, measured).
+- The candidate's `debug_assert!` gate, its `total_changes`-and-rollback
+  tripwire, its "`is_autocommit` decides ownership" and its hydration residual
+  — each refuted above.
+- The lenses' "hydration must stay outside the snapshot" — refuted (item 6).
+
+**Options that lost, with their cost.** A snapshot inside `chain_verdict` alone
+— leaves the scans' false refusals (measured 59, zero of them replay races) and
+a window where a verdict from one snapshot licenses rows read in a later one,
+so a SQLite-mediated forger gets one decision before the next replay. The
+cookie read before the snapshot — reopens that gap and wastes a replay per
+foreign commit. `verify` per leg — a report whose legs describe different
+states. Reading the anchor before every `BEGIN` — a file read and a MAC on
+every guarded read, exposed to O254's torn manifest, for no detection gain.
+Folding O254, O255 or O256 in — different mechanisms, each its own entry.
+Production-code interleave hooks — the tree has none, and rusqlite's `hooks`
+feature as a dev-dependency gives a `progress_handler` a test can drive.
+
+**The gate owed by the build.**
+
+- **Deterministic interleavings, no production hooks**: rusqlite's `hooks`
+  feature on the store crate's dev-dependency; a test installs a
+  `progress_handler` on the store's connection and commits from a second
+  connection on the Nth callback, sweeping N across every step of every door —
+  zero false refusals after, more than zero before, with the premise that some
+  N fired inside the replay's statement. A masking arm: a replayed row written
+  back, then at N a legitimate update of the same drawer — refused after,
+  served before. An anchor-after-pin counterfactual that MUST produce a false
+  `chain_ok = false` or `ManifestTampered`.
+- **Soaks**: each door ALONE (the probe's `get` zero was masked by door
+  order), read-audit ON, looped at least ten times at ~4k and at ~10⁵ audit
+  rows, with the premises that the writer committed and the replay count rose
+  during the window, and a pass meaning zero errors of ANY kind (the probe's
+  classifier filed an unknown wording under "other").
+- **`verify` on a fresh writable vault with no graph secret**, under a writer:
+  loud without the warm-up, `total_changes` unchanged across the snapshot with
+  it.
+- **Cost**: O234's instrument at its own size (~10⁵ sealed, PQ tier,
+  interleaved rounds, warm search, `get`, `wing_trusts`, the first guarded
+  read), plus the `-wal` growth while one snapshot holds `verify` under a
+  steady writer at 10⁵–10⁶ — that is not a per-read constant.
+- The survey O252 owes: guarded reads reached with `!is_autocommit()` across
+  the suite, expecting none outside rotation's `verify`.
+
+**Dissent.** The agentic-memory lens would fold the erasure receipt in; settled
+by evidence the other way (it needs a write lock held across the destruction,
+a restructure of a security-verdict path, O255). The lenses' "hydration
+outside" was settled against them by the refuter's reading. None on the core.
+
+**What would make this fail silently**: an assertion gate absent from the
+builds that run; a rollback that drops a write whose value was already cached;
+ownership read from `is_autocommit()`; the anchor read after the pin; any door
+reading its rows before its guard resolves inside the same snapshot;
+`refuse_replayed`'s chunks in separate snapshots; a soak whose door order masks
+the result or that counts only the wordings it already knows; the O246 note
+left teaching operators to ignore it; and a later optimisation seeding the
+guard's cache from inside rotation's uncommitted transaction.
+
+**Versioning**: PATCH-class — false integrity refusals removed, no documented
+contract moved — inside the unreleased `1.7.0`; no `UPGRADING.md` entry.
+
+### O254 — two handles anchoring one vault share `vault.json.tmp`: a committed write is reported failed, and the manifest can be left truncated or corrupt
+
+**Filed 2026-09-24 by O253's panel; measured by the integrator, the mechanism
+read in code.** `Vault::save_manifest`
+(`crates/undercroft-vault/src/lib.rs`) writes every anchor through ONE fixed
+path, `vault.json.tmp`, with `File::create` — which TRUNCATES — then `fsync`,
+then `rename` over `vault.json`. Nothing serialises anchors between handles or
+processes, and `serve-http` beside `undercroft mine`, a `trust set` against a
+running server, or two servers on one vault are the ordinary deployments that
+run two writable handles.
+
+**Measured**: a writable open looped against a second handle whose writes
+anchor — 53 of 456 opens failed "vault error: io error: No such file or
+directory (os error 2)", and the WRITER's own calls failed 27× the same way,
+each AFTER its database commit had succeeded. One handle's `rename` moved the
+shared temp file away; the other's `rename` then found nothing.
+
+**What it does, from reading the code** — each worse than the measured one:
+
+- **A committed write reported as failed.** The caller of a save sees an error
+  for a drawer that is stored; the API save paths are unique-per-call, so a
+  retry DUPLICATES the memory.
+- **An erasure with no receipt.** `delete_drawer_ruled` anchors once per id, so
+  `forget`, a retention sweep or an admission `deny` can destroy drawers and
+  then return an error, losing the attestation and the rest of the list.
+- **An empty or corrupt `vault.json`.** Handle B's `File::create` can truncate
+  the inode handle A is about to rename, so `vault.json` briefly exists EMPTY
+  and a concurrent `anchored_head()` fails to parse it — `CorruptManifest`,
+  which `/v1` classes as an integrity verdict. And when both have truncated and
+  both then write through separate descriptors, a longer JSON leaves trailing
+  bytes after a shorter one (a `writes` count gaining a digit is enough): the
+  file is corrupt with NO crash at all.
+- **An unopenable vault.** The manifest carries the vault's key salt, so a
+  corrupt `vault.json` — or a power loss inside the window — leaves the vault
+  unopenable until a restore from `backups/`.
+- **A lowered anchor.** Last rename wins, so a lagging handle can write an
+  older head over a newer one; the next writable open heals it and writes an
+  O246 note that reads as a restored manifest.
+- **A stale WHOLE manifest (reasoned, not probed).** `save_manifest` writes
+  this handle's entire CACHED manifest, not only the head — the salt and the
+  MAC ride with it — so after another handle's key rotation a stale handle's
+  next anchor writes the pre-rotation manifest back over the new one. The
+  panel must decide whether an anchor is a read-modify-write of the file on
+  disk under a lock, and what a handle whose keys another handle rotated may
+  write at all.
+
+**Shape, for this entry's own panel**: a temp name unique per write (process,
+thread and a nonce, created with `create_new`) and an atomic replace; and the
+two questions the fix must answer rather than assume — **may the on-disk anchor
+ever move DOWN** (a monotonic write under a cross-process lock, or lag accepted
+as today and healed), and **what does a write report whose commit succeeded
+and whose anchor failed** (an error, as today — which invites a duplicating
+retry — or success with the anchor left to the next write, which is how a
+crash between commit and anchor already behaves).
+
+**Gate**: two handles anchoring in a loop with a third parsing `vault.json` on
+every iteration — zero failed writes, zero unparseable reads — and the
+digit-length overlay forced deterministically; the O253 open-path probe clean
+of io errors.
+**Counterfactual**: today, 53 failed opens and 27 failed committed writes in
+eight seconds.
+
+**Relations:** sequenced before O253 — that entry's open-path gate demands zero errors of any kind, which this defect makes impossible while it stands.
+
+**Relations:** sequenced before O255 — the erasure path anchors once per destroyed id, so its receipt cannot be made whole while an anchor can fail after a commit.
+
+### O255 — the destruction paths decide and attest outside the write lock that acts, so an erasure receipt minted beside a concurrent writer can never verify
+
+**Filed 2026-09-24 by O253's panel; measured by the integrator.**
+`forget_with_proof_ruled` reads the head before, the highest seq, then deletes
+each drawer in its OWN transaction (`delete_drawer_ruled`), then reads the head
+after and every record above the starting seq — and attests that run. A
+concurrent writer's commit lands inside it, so the attested interval holds a
+record that is not a tombstone.
+
+**Measured**: 400 drawers forgotten twenty at a time while a second handle
+made `trust set` commits — **all 20 attestations fail
+`verify_forget_attestation`**: "attestation failed: record "trust/wN" is not a
+tombstone — something else happened inside the attested interval". The
+destruction happened; the receipt for it is permanently unverifiable, and the
+verdict it produces is the integrity family's (exit 2). `forget.rs`'s own
+comment says the contiguity "holds by construction", which is false under an
+external writer.
+
+**And it leaks.** The receipt goes to a third party carrying the other writer's
+records — bare drawer-id labels (unkeyed digests of wing, room, source and
+chunk: a confirmation oracle) and `trust/{wing}` names.
+
+**The retention sweep is the same primitive**: it decides which drawers expire
+on one state and destroys afterwards, so a `retention set 365` committed in
+between is ignored and drawers the new policy keeps are destroyed.
+
+**Shape, for this entry's own panel**: one write lock held from the starting
+head through the attested records — the destruction loop inside one `BEGIN
+IMMEDIATE`, which needs `delete_drawer_ruled`'s own transaction and per-id
+anchor restructured — and the sweep's decision re-validated inside the lock
+that destroys (the O220/O224 backstop shape). O237 ruling 5 binds it: the
+destruction path holds the lock, it never refuses. A restructure of a path
+that produces a security verdict, so it is not half-landed.
+
+**Gate**: receipts minted beside a writer all verify; the sweep under a
+concurrent re-declaration destroys only what the policy in force at the moment
+of destruction expires.
+**Counterfactual**: today, 20 of 20 receipts fail.
+
+**Relations:** sequenced after O254 — the destruction path anchors once per id, and while an anchor can fail after its commit a restructured destruction loop still cannot return its receipt.
+
+### O256 — `backup create` verifies one state of the vault and then raw-copies another
+
+**Filed 2026-09-24 by O253's panel (the agentic-memory lens and the refuter);
+read in code, not yet measured.** `/v1`'s `backup_create` runs `verify` on the
+cached handle, drops the handle, then `copy_dir`s the vault's directory — the
+database, its `-wal` and `-shm`, and the manifest — as plain files, with no lock
+(`crates/undercroft-cli/src/tenant.rs`); the CLI's `backup create` does the same
+(`main.rs`). Beside any other writer the archive therefore holds a state
+`verify` never examined — and a live WAL database copied as files can be torn:
+O245's own rollback fixture had to work around exactly that (`witness.rs`: "a
+copy taken under an open handle lacks whatever the WAL still holds, which is a
+torn snapshot"). "VERIFY OK" then certifies a different state
+from the one archived, and `restore` trusts the archive.
+
+**Shape**: the archive taken INSIDE the snapshot that was verified — SQLite's
+online backup API or `VACUUM INTO` within O253's read snapshot — with the
+manifest paired to the rows the copy holds, not to whatever is on disk at copy
+time.
+
+**Gate**: a backup taken while a writer runs reopens, verifies, and holds
+exactly the verified state; the probe that measures today's torn or
+out-of-state copies comes first.
+**Counterfactual**: to be measured — the filing is from reading.
+
+**Relations:** sequenced after O253 — a backup taken inside the snapshot it verified needs that entry's snapshot helper.
 
 
 ---
