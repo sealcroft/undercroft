@@ -51,7 +51,7 @@ use time::OffsetDateTime;
 
 use undercroft_core::embed::{cosine, Embedder};
 use undercroft_core::{Drawer, DrawerMeta, HashEmbedder, Reranker};
-use undercroft_vault::{SecurityLevel, Vault, VaultError};
+use undercroft_vault::{RotationVerdict, SecurityLevel, Vault, VaultError};
 
 /// Drawer count at which the BM25 prefilter engages for hmac-only vaults.
 /// Below this a full decrypt-free scan is cheap and keeps semantic-only
@@ -451,7 +451,17 @@ pub fn hold_vault_exclusively(dir: &std::path::Path) -> Result<VaultHold, StoreE
             db.display()
         )));
     }
-    conn.execute_batch("BEGIN EXCLUSIVE")?;
+    // Busy is the one refusal that means "in use" (ROADMAP O257): the CLI and
+    // `/v1` used to render EVERY error here as the vault being in use, a
+    // missing database and an I/O error included.
+    conn.execute_batch("BEGIN EXCLUSIVE").map_err(|e| {
+        held_if_busy(
+            e,
+            "the vault is open in another process, and replacing it beneath that process \
+             destroys it — the process keeps writing to the database file a restore unlinks. \
+             Nothing was changed. Stop it, then retry (ROADMAP O69)",
+        )
+    })?;
     Ok(VaultHold(conn))
 }
 
@@ -734,6 +744,22 @@ pub(crate) fn chain_append(
     if let Some(why) = vault.retired() {
         return Err(retired_handle(why));
     }
+    // **The write door (ROADMAP O257).** O254's anchor stopped a stale handle
+    // AFTER its first write had committed, and that one write — chained under
+    // the retired chain key — made the next open refuse the whole vault. The
+    // keycheck is read HERE, inside the caller's IMMEDIATE transaction, so it
+    // is the committed marker under the write lock, and a handle whose keys
+    // are not the vault's commits nothing. Absent is refused too, as the
+    // anchor refuses it: every open seeds the marker before any write, so an
+    // absent one was deleted. Every audited mutation reaches this line — the
+    // read-audit append included, which never anchors and so never retired.
+    let db_keycheck: Option<String> = conn
+        .prepare_cached("SELECT value FROM meta WHERE key = 'keycheck'")?
+        .query_row([], |r| r.get(0))
+        .optional()?;
+    if db_keycheck.as_deref() != Some(vault.keycheck()) {
+        return Err(stale_keys(db_keycheck.as_deref()));
+    }
     let record_id = ns.record(rest);
     // The regime and the live head come from `chain`, the one owner of the
     // chain's arithmetic (ROADMAP O233): a version-2 chain folds this row's
@@ -751,6 +777,21 @@ pub(crate) fn retired_handle(why: &str) -> StoreError {
         "this handle no longer writes: its manifest anchor found that {why}. Nothing was \
          written. Reopen the vault, which reads the current manifest, and run `undercroft \
          verify` (ROADMAP O254)"
+    ))
+}
+
+/// The refusal a write through a handle whose keys are no longer the vault's
+/// answers with (ROADMAP O257).
+pub(crate) fn stale_keys(db_keycheck: Option<&str>) -> StoreError {
+    let found = match db_keycheck {
+        None => "absent".to_string(),
+        Some(k) => format!("{}…", &k[..k.len().min(12)]),
+    };
+    StoreError::IntegrityFinding(format!(
+        "this handle's keys are not the vault's: the database's key-generation marker is \
+         {found}, not this handle's — another process rotated the vault's keys after this \
+         handle opened it, or the marker was edited. Nothing was written. Reopen the vault, \
+         which reads the current manifest, and run `undercroft verify` (ROADMAP O257)"
     ))
 }
 
@@ -792,6 +833,116 @@ impl Drop for WriteLock<'_> {
             // was never anything to commit.
             let _ = self.conn.execute_batch("ROLLBACK");
         }
+    }
+}
+
+/// Whether SQLite refused because another connection holds the database —
+/// the one condition every door below must SAY rather than swallow or
+/// misread (ROADMAP O257).
+pub(crate) fn is_busy(e: &rusqlite::Error) -> bool {
+    matches!(
+        e,
+        rusqlite::Error::SqliteFailure(f, _)
+            if matches!(
+                f.code,
+                rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+            )
+    )
+}
+
+/// What an open says when another process holds the vault exclusively.
+pub(crate) const OPEN_HELD: &str =
+    "another process holds this vault exclusively — a key rotation or a backup restore is \
+     running. Nothing was read or written; retry once it finishes (ROADMAP O257)";
+
+/// What a refused key rotation says (ROADMAP O257).
+pub(crate) const ROTATION_HELD: &str =
+    "a key rotation must be the only process with the vault open, and another process has it \
+     open — a `serve-http` or `serve-mcp` server (an MCP client such as Claude Desktop keeps \
+     one running), `daemon --watch`, a `mine`, a read-only replica, or another command still \
+     running. Nothing was changed. Stop it, then rotate (ROADMAP O257)";
+
+/// A busy database as [`StoreError::VaultHeld`] with `what`, any other SQLite
+/// error as itself.
+pub(crate) fn held_if_busy(e: rusqlite::Error, what: &str) -> StoreError {
+    if is_busy(&e) {
+        StoreError::VaultHeld(what.to_string())
+    } else {
+        e.into()
+    }
+}
+
+/// **The key rotation's fence (ROADMAP O257)**: an EXCLUSIVE hold on the
+/// store's own connection, from before the rotation's checks until after its
+/// promote.
+///
+/// `locking_mode=EXCLUSIVE` plus `BEGIN EXCLUSIVE` on an open WAL connection
+/// is REFUSED while any other connection has the database open — idle or
+/// reading, in another process or in this one, a `--read-only` one included —
+/// and, once taken, it SURVIVES the COMMIT: another process's open waits its
+/// busy timeout and then fails (measured, O257's probes PA, PB, P6). That is
+/// what lets the promote run inside the fence, so no other process can open
+/// the vault between a rotation's commit and its new manifest.
+///
+/// Dropping it rolls back an open transaction, sets `locking_mode=NORMAL` and
+/// reads a TABLE — the release happens only when the pager next touches the
+/// file, and `SELECT 1` touches nothing. That is a best effort and it is not
+/// proof: the pragma reports the pager's flag, not the lock. The caller proves
+/// the release from another connection ([`VaultStore::prove_released`]).
+pub(crate) struct ExclusiveHold<'a> {
+    conn: &'a rusqlite::Connection,
+    in_transaction: bool,
+}
+
+impl<'a> ExclusiveHold<'a> {
+    pub(crate) fn take(conn: &'a rusqlite::Connection) -> Result<Self, StoreError> {
+        // Read the mode back rather than trusting the call — O69's lesson: in
+        // WAL mode `BEGIN EXCLUSIVE` alone takes only the write lock, which an
+        // idle reader does not hold, so without the mode this fence cannot see
+        // the holder that matters.
+        let mode: String = conn.query_row("PRAGMA locking_mode = EXCLUSIVE", [], |r| r.get(0))?;
+        if !mode.eq_ignore_ascii_case("exclusive") {
+            Self::restore_normal(conn);
+            return Err(StoreError::Invalid(format!(
+                "could not put the vault database into exclusive locking mode (sqlite reports \
+                 {mode:?}). Refusing rather than rotating: without it this fence cannot see \
+                 another process holding the vault (ROADMAP O257)"
+            )));
+        }
+        match conn.execute_batch("BEGIN EXCLUSIVE") {
+            Ok(()) => Ok(Self {
+                conn,
+                in_transaction: true,
+            }),
+            Err(e) => {
+                Self::restore_normal(conn);
+                Err(held_if_busy(e, ROTATION_HELD))
+            }
+        }
+    }
+
+    /// Commit the transaction. The exclusive lock is KEPT until the hold is
+    /// dropped — the whole point of the locking mode.
+    pub(crate) fn commit(&mut self) -> Result<(), StoreError> {
+        self.conn.execute_batch("COMMIT")?;
+        self.in_transaction = false;
+        Ok(())
+    }
+
+    fn restore_normal(conn: &rusqlite::Connection) {
+        let _ = conn.query_row("PRAGMA locking_mode = NORMAL", [], |r| {
+            r.get::<_, String>(0)
+        });
+        let _ = conn.query_row("SELECT count(*) FROM meta", [], |r| r.get::<_, i64>(0));
+    }
+}
+
+impl Drop for ExclusiveHold<'_> {
+    fn drop(&mut self) {
+        if self.in_transaction {
+            let _ = self.conn.execute_batch("ROLLBACK");
+        }
+        Self::restore_normal(self.conn);
     }
 }
 
@@ -1619,6 +1770,21 @@ pub enum StoreError {
     /// HMAC (the older sites that share that problem are ROADMAP O235's).
     #[error("integrity verdict: {0}")]
     IntegrityFinding(String),
+    /// Another process holds the vault, and the operation needs to be the
+    /// only one that does (ROADMAP O257): a key rotation refused beside a live
+    /// server, a backup restore refused beside one (O69), an open refused
+    /// while a rotation or a restore holds the vault exclusively. Nothing is
+    /// wrong with the vault — 409 with NO integrity class on `/v1`, exit 1 on
+    /// the CLI — and the message names what to stop.
+    #[error("the vault is held by another process: {0}")]
+    VaultHeld(String),
+    /// This process unlocked the vault before another process rotated its
+    /// keys, so the keys it holds are no longer the vault's (ROADMAP O257).
+    /// A race, not tampering: nothing was written, and reopening reads the
+    /// current manifest — the CLI and `/v1` reopen once by themselves. 409
+    /// with no integrity class, exit 1.
+    #[error("the vault's keys were rotated while this process opened it: {0}")]
+    StaleUnlock(String),
     /// The vault's recorded vector space is not this process's embedder; searching across the swap would degrade recall silently.
     #[error(
         "vault was embedded with {stored:?} ({stored_dim}d) but the current embedder is \
@@ -3013,6 +3179,11 @@ pub struct VaultStore {
     /// per handle: an orphan only exists after a crash, which a re-open
     /// follows.
     orphans_swept: bool,
+    /// Times this handle had to REPLACE its own connection because releasing
+    /// an exclusive hold could not be proven by another connection (ROADMAP
+    /// O257). Zero on every healthy path; a gate asserts it, so a release that
+    /// only works by reconnecting cannot pass for one that works.
+    lock_reconnects: u64,
     /// The `semantic` score above which a drawer may be admitted on cosine
     /// alone; `None` refuses semantic-only admission entirely. Resolved once
     /// at open by [`resolve_semantic_gate`] — see there for why it is not
@@ -3783,21 +3954,38 @@ impl VaultStore {
     /// database's `keycheck` marker, and keep that marker seeded. The
     /// keycheck flips inside the rotation transaction, so it says exactly
     /// whether the re-seal committed: match ⇒ the crash happened after
-    /// commit, promote the staged manifest and adopt the new keys;
-    /// mismatch ⇒ before commit, discard the staging file and stay on the
-    /// current keys. Runs before any read so a crashed rotation can never
-    /// masquerade as tamper.
+    /// commit, promote the staged generation and adopt its keys; the marker
+    /// still this handle's ⇒ before commit, discard the staging file and stay
+    /// on the current keys. Runs before any read so a crashed rotation can
+    /// never masquerade as tamper. Returns a note for `unhealed` when it healed
+    /// something an operator should hear about.
     ///
-    /// **The promote-versus-discard comparison is made under the write lock
-    /// every anchor holds (ROADMAP O254)**, and the file operation happens
-    /// inside it: the keycheck is committed database state, and only the
-    /// database's own lock makes comparing it atomic with renaming or
-    /// deleting the file. Read outside the lock, an open that met a
-    /// rotation's staged file between its staging and its commit saw the OLD
-    /// keycheck and deleted it, and the rotation then committed with no
-    /// manifest to promote. A rotation holds that lock from before it stages
-    /// until it commits, so this now waits for it and then promotes.
-    fn reconcile_rotation(conn: &Connection, mut vault: Vault) -> Result<Vault, StoreError> {
+    /// **Every decision and every write under the write lock every anchor
+    /// holds (ROADMAP O254, O257)** — the keycheck read, the decision, the
+    /// file operation and the seeding of an ABSENT marker; only the no-op case
+    /// (nothing staged, the marker already this handle's) is recognised
+    /// without it. O254 put the promote-versus-discard under
+    /// it; the marker's seeding stayed outside, in autocommit, and it
+    /// OVERWROTE a present marker with this handle's: an open that unlocked
+    /// before a rotation staged, reconciling after its commit, wrote the OLD
+    /// keycheck back and only then failed — it wrote before it refused.
+    ///
+    /// **A present marker that is not this handle's is never overwritten
+    /// blind (ROADMAP O257).** What it means is decided from the rest of the
+    /// evidence ([`Self::settle_foreign_keycheck`]): a rotation that moved
+    /// `vault.json` or `.next` since this unlock read them is a race, refused
+    /// for a reopen; a database whose audit chain replays under this handle's
+    /// keys answers to them, and the marker is re-seeded WITH a note — the
+    /// state a pre-1.7 re-seed left, which 1.6.x heals and this build must not
+    /// refuse; anything else is an integrity verdict.
+    ///
+    /// A staged file is promoted or removed only while it is still exactly the
+    /// bytes this unlock read, so an open that attached one rotation's
+    /// abandoned file cannot delete a later rotation's.
+    fn reconcile_rotation(
+        conn: &Connection,
+        mut vault: Vault,
+    ) -> Result<(Vault, Option<String>), StoreError> {
         let read_keycheck = || -> Result<Option<String>, StoreError> {
             Ok(conn
                 .query_row("SELECT value FROM meta WHERE key = 'keycheck'", [], |r| {
@@ -3805,36 +3993,132 @@ impl VaultStore {
                 })
                 .optional()?)
         };
-        if let Some(pending) = vault.take_pending() {
-            let _lock = WriteLock::begin(conn)?;
-            if read_keycheck()?.as_deref() == Some(pending.keycheck_hex().as_str()) {
-                match pending.promote_manifest() {
-                    Ok(()) => {}
-                    // The rotation itself, or another open, promoted it
-                    // first — under this same lock, so the manifest on disk
-                    // is already the staged one. Measured by O254's probe P1:
-                    // once both promotes wait on the lock, the second always
-                    // meets a staged file the first has already renamed.
-                    Err(VaultError::Io(e))
-                        if e.kind() == std::io::ErrorKind::NotFound
-                            && pending.manifest_on_disk_is_mine() => {}
-                    Err(e) => return Err(e.into()),
-                }
+        // **The common case takes no lock.** Nothing staged and the marker
+        // already this generation's: there is nothing to decide and nothing
+        // to write. Taking the write lock anyway made EVERY writable open
+        // queue behind busy writers — O254's multi-process gate caught an
+        // open starved past its busy timeout beside two writers (O258's
+        // tail). The read is safe outside the lock because this connection
+        // is already open, and a rotation's fence cannot be taken while it is
+        // (ROADMAP O257): the marker cannot move under it.
+        if !vault.has_pending() && read_keycheck()?.as_deref() == Some(vault.keycheck()) {
+            return Ok((vault, None));
+        }
+        let lock = WriteLock::begin(conn)?;
+        let db_kc = read_keycheck()?;
+        let mut note = None;
+        match vault.rotation_verdict(db_kc.as_deref()) {
+            RotationVerdict::Committed => {
+                let pending = vault.take_pending().expect("verdict saw a pending twin");
+                pending.promote()?;
                 vault = *pending;
-            } else {
-                vault.discard_pending_file()?;
+            }
+            RotationVerdict::Abandoned => {
+                let pending = vault.take_pending().expect("verdict saw a pending twin");
+                pending.remove_staged_if_unchanged()?;
+            }
+            RotationVerdict::Settled => {
+                // A staged file naming this very generation is what a promote
+                // leaves when it stops between its write and its removal.
+                if let Some(leftover) = vault.take_pending() {
+                    leftover.remove_staged_if_unchanged()?;
+                }
+            }
+            RotationVerdict::Foreign => {
+                vault.take_pending();
+                note = Some(Self::settle_foreign_keycheck(conn, &vault, true)?);
             }
         }
-        let db_kc = read_keycheck()?;
-        let want = vault.keycheck_hex();
-        if db_kc.as_deref() != Some(want.as_str()) {
+        // Every arm that could leave the marker other than this handle's has
+        // either returned an error or settled it as this generation's; what
+        // reaches here unequal is an ABSENT marker or a healed one.
+        if db_kc.as_deref() != Some(vault.keycheck()) {
             conn.execute(
                 "INSERT INTO meta (key, value) VALUES ('keycheck', ?1) \
                  ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                params![want],
+                params![vault.keycheck()],
             )?;
         }
-        Ok(vault)
+        // The lock guard rolls back on every other exit, the refusals above
+        // included, so a refused open writes nothing.
+        lock.commit()?;
+        Ok((vault, note))
+    }
+
+    /// Decide what a present keycheck that is neither this handle's nor a
+    /// staged generation's means (ROADMAP O257), from the evidence around it.
+    /// `writable` only changes the wording of the heal note.
+    ///
+    /// - **A race** — `vault.json` no longer verifies under this handle's key,
+    ///   or `vault.json.next` is not the bytes this unlock read: another
+    ///   process rotated the vault after this process read it.
+    ///   [`StoreError::StaleUnlock`], which the CLI and `/v1` reopen once.
+    ///   Compared with what the unlock READ rather than with what it
+    ///   attached, or an unchanged torn file beside a foreign marker would
+    ///   read as a race on every retry.
+    /// - **Answers to these keys** — the audit chain replays to its committed
+    ///   head under them: the marker is stale, not the data. The note says so.
+    /// - **Otherwise** an integrity verdict: a manifest rolled back to an
+    ///   older generation, a lost promote, a database from another
+    ///   generation.
+    fn settle_foreign_keycheck(
+        conn: &Connection,
+        vault: &Vault,
+        writable: bool,
+    ) -> Result<String, StoreError> {
+        if vault.staged_on_disk()? != vault.staged_seen() || !vault.manifest_on_disk_is_mine() {
+            return Err(StoreError::StaleUnlock(
+                "vault.json or vault.json.next changed after this process read it, and the \
+                 database answers to another key generation. Nothing was written; reopen the \
+                 vault (ROADMAP O257)"
+                    .into(),
+            ));
+        }
+        if !Self::chain_answers_to(conn, vault)? {
+            return Err(StoreError::IntegrityFinding(
+                "the database's key-generation marker names another generation, vault.json \
+                 names this one, and the audit chain does not replay under this one's keys: \
+                 the database and the manifest are from different key generations — a \
+                 manifest restored from before a key rotation, or a rotation whose new \
+                 manifest was lost. Nothing was written. Restore the vault from a backup \
+                 that verifies (ROADMAP O257)"
+                    .into(),
+            ));
+        }
+        Ok(format!(
+            "the database's key-generation marker named another generation while vault.json \
+             and the audit chain both answer to this one — what a key rotation beside a racing \
+             open left before 1.7.0, or an edited marker — {} (ROADMAP O257)",
+            if writable {
+                "it was re-seeded to this generation"
+            } else {
+                "a writable open re-seeds it"
+            }
+        ))
+    }
+
+    /// Whether the audit chain replays to its committed head under `vault`'s
+    /// keys — the evidence that the database answers to them (ROADMAP O257).
+    /// A rotation re-steps every row under the next generation, so a database
+    /// from another generation cannot pass. A vault with no chain yet has
+    /// nothing keyed to contradict it, and every later read still verifies
+    /// its own tag.
+    fn chain_answers_to(conn: &Connection, vault: &Vault) -> Result<bool, StoreError> {
+        let has_chain: i64 = conn.query_row(
+            "SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name = 'chain_meta'",
+            [],
+            |r| r.get(0),
+        )?;
+        if has_chain == 0 {
+            return Ok(true);
+        }
+        match chain::head_state(conn)? {
+            chain::HeadState::Unseeded => Ok(true),
+            chain::HeadState::Seeded(head) => {
+                Ok(chain::replay(conn, vault, None)?.head == head.head)
+            }
+            chain::HeadState::Inconsistent { .. } => Ok(false),
+        }
     }
 
     /// ROADMAP O7: bring a pre-1.5.0 vault's database under its current
@@ -3914,8 +4198,10 @@ impl VaultStore {
         }
     }
 
-    fn open_inner(vault: Vault, embedder: Box<dyn Embedder + Send>) -> Result<Self, StoreError> {
-        Self::migrate_db_filename(&vault)?;
+    /// The writable connection, configured the one way every writable
+    /// handle's is: at open, and when a handle must REPLACE its own connection
+    /// because releasing an exclusive hold could not be proven (ROADMAP O257).
+    fn connect_writable(vault: &Vault) -> Result<Connection, StoreError> {
         let mut conn = Connection::open(vault.db_path())?;
         // Every `transaction()` and `unchecked_transaction()` on this
         // connection begins IMMEDIATE (ROADMAP O254, probe P2). Each one in
@@ -3929,7 +4215,12 @@ impl VaultStore {
         // handler does run, which is how `write_drawer`, the rotation and the
         // chain switch already began theirs.
         conn.set_transaction_behavior(rusqlite::TransactionBehavior::Immediate);
-        conn.pragma_update(None, "journal_mode", "WAL")?;
+        // The first statement that touches the file: busy here means another
+        // process holds the vault EXCLUSIVELY — a key rotation or a backup
+        // restore — and an open must say so rather than answer a bare
+        // "database is locked", which `/v1` classes as a 500 (ROADMAP O257).
+        conn.pragma_update(None, "journal_mode", "WAL")
+            .map_err(|e| held_if_busy(e, OPEN_HELD))?;
         // Pinned explicitly rather than left to the compile-time default: the
         // manifest anchor is written *after* the transaction that produced a
         // chain head, and open-time reconciliation treats an anchor the
@@ -3939,6 +4230,12 @@ impl VaultStore {
         // crash case) — never ahead (the alarm case).
         conn.pragma_update(None, "synchronous", "FULL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
+        Ok(conn)
+    }
+
+    fn open_inner(vault: Vault, embedder: Box<dyn Embedder + Send>) -> Result<Self, StoreError> {
+        Self::migrate_db_filename(&vault)?;
+        let conn = Self::connect_writable(&vault)?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS meta (
                  key TEXT PRIMARY KEY,
@@ -3985,8 +4282,23 @@ impl VaultStore {
              -- deletions unindexed.
              CREATE INDEX IF NOT EXISTS idx_audit_record_id ON audit(record_id);",
         )?;
-        let vault = Self::reconcile_rotation(&conn, vault)?;
+        let (vault, reseeded) = Self::reconcile_rotation(&conn, vault)?;
         let mut store = Self::assemble(conn, vault, embedder, false)?;
+        // What the unlock found and did not repair — a staging manifest it
+        // could not authenticate or that a newer build wrote — reaches the
+        // writable open's `unhealed` too since no unlock deletes it (ROADMAP
+        // O257), with any keycheck the reconcile re-seeded.
+        let notes: Vec<String> = store
+            .vault
+            .unhealed()
+            .iter()
+            .map(|u| u.to_string())
+            .chain(reseeded)
+            .collect();
+        for note in &notes {
+            undercroft_obs::diag_warn!("vault {:?}: {note}", store.vault.id());
+        }
+        store.unhealed.extend(notes);
         store.fts = store.init_fts_schema()?;
         store.init_kg_schema()?;
         store.init_manage_schema()?;
@@ -4177,18 +4489,33 @@ impl VaultStore {
             });
         }
         let conn = Self::connect_read_only(&vault)?;
-        let db_kc: Option<String> = conn
+        // A busy database is said (ROADMAP O257); any other failure reads as
+        // "no marker", which the schema check below then names properly — a
+        // legacy vault's missing `meta` is `ReadOnlyUnmigrated`, not a raw
+        // SQLite error.
+        let db_kc: Option<String> = match conn
             .query_row("SELECT value FROM meta WHERE key = 'keycheck'", [], |r| {
                 r.get(0)
             })
             .optional()
-            .unwrap_or(None);
+        {
+            Ok(kc) => kc,
+            Err(e) if is_busy(&e) => return Err(StoreError::VaultHeld(OPEN_HELD.into())),
+            Err(_) => None,
+        };
         let mut vault = vault;
         // Adopting a committed rotation's keys in memory is not a write and
         // is what keeps "detect and report" from meaning "serve garbage":
-        // the database is already sealed under the staged keys.
-        vault.reconcile_read_only(db_kc.as_deref());
+        // the database is already sealed under the staged keys. A FOREIGN
+        // marker is classified from the rest of the evidence, as the writable
+        // open does, and refused rather than served as a stream of false
+        // integrity failures (ROADMAP O257).
+        let mut foreign_note = None;
+        if vault.reconcile_read_only(db_kc.as_deref()) == RotationVerdict::Foreign {
+            foreign_note = Some(Self::settle_foreign_keycheck(&conn, &vault, false)?);
+        }
         let mut store = Self::assemble(conn, vault, embedder, true)?;
+        store.unhealed.extend(foreign_note);
         store.check_read_schema()?;
         store.fts = store.probe_fts_read_only();
         store.check_chain_read_only()?;
@@ -4241,9 +4568,22 @@ impl VaultStore {
             .map(|_| ())
         };
         let path = vault.db_path();
+        // **Busy is not a reason to go immutable (ROADMAP O257, D1).** Every
+        // failure used to fall through to the `immutable=1` escalation below,
+        // SQLITE_BUSY included — so a read-only open arriving while a key
+        // rotation or a backup restore held the vault waited its busy timeout
+        // and then read the MAIN FILE WITHOUT THE WAL: measured, a false
+        // "schema predates this build" refusal on a young vault, and on a
+        // checkpointed one a frozen snapshot served as the vault. A busy
+        // database is held by someone; that is said, not read around.
         match Connection::open_with_flags(&path, flags) {
-            Ok(conn) if probe(&conn).is_ok() => return Ok(conn),
-            Ok(_) | Err(_) => {}
+            Ok(conn) => match probe(&conn) {
+                Ok(()) => return Ok(conn),
+                Err(e) if is_busy(&e) => return Err(StoreError::VaultHeld(OPEN_HELD.into())),
+                Err(_) => {}
+            },
+            Err(e) if is_busy(&e) => return Err(StoreError::VaultHeld(OPEN_HELD.into())),
+            Err(_) => {}
         }
         let uri = format!(
             "file:{}?immutable=1",
@@ -4567,6 +4907,59 @@ impl VaultStore {
         self.anchor_failures
     }
 
+    /// How many times this handle replaced its own connection because an
+    /// exclusive hold's release could not be proven (ROADMAP O257).
+    pub fn lock_reconnects(&self) -> u64 {
+        self.lock_reconnects
+    }
+
+    /// **Prove an exclusive hold is released, from ANOTHER connection
+    /// (ROADMAP O257)** — and when it cannot be, replace this handle's own.
+    ///
+    /// Reading `locking_mode` back proves nothing: the pragma reports the
+    /// pager's flag, while the release is SQLite's `sqlite3WalExclusiveMode`,
+    /// which can fail to re-take the WAL read lock and stay exclusive with the
+    /// pragma reading `normal`. And on Windows a refused `BEGIN EXCLUSIVE`
+    /// leaves SQLite's PENDING byte held, which no statement on this
+    /// connection releases (read from the bundled source; nothing here runs
+    /// on Windows). So a zero-timeout connection reads one row; if it cannot,
+    /// this handle's connection is closed — the one release that works on
+    /// every platform — and replaced, counted on
+    /// [`lock_reconnects`](Self::lock_reconnects). A long-lived handle left
+    /// exclusive would lock every other process out of the vault in silence.
+    pub(crate) fn prove_released(&mut self) {
+        if self.lock_released() {
+            return;
+        }
+        self.lock_reconnects += 1;
+        undercroft_obs::diag_warn!(
+            "vault {:?}: another connection could not read the vault after this handle released \
+             its exclusive hold; replacing this handle's connection (ROADMAP O257)",
+            self.vault.id()
+        );
+        match Self::connect_writable(&self.vault) {
+            Ok(fresh) => self.conn = fresh,
+            Err(e) => undercroft_obs::diag_warn!(
+                "vault {:?}: reconnecting failed ({e}); the hold is released when this handle \
+                 is dropped",
+                self.vault.id()
+            ),
+        }
+    }
+
+    fn lock_released(&self) -> bool {
+        let Ok(probe) = Connection::open_with_flags(
+            self.vault.db_path(),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        ) else {
+            return false;
+        };
+        let _ = probe.busy_timeout(std::time::Duration::ZERO);
+        probe
+            .query_row("SELECT count(*) FROM meta", [], |r| r.get::<_, i64>(0))
+            .is_ok()
+    }
+
     /// The door's work under the write lock. Every failure is classed for
     /// [`anchor`](Self::anchor): anything the DATABASE refuses — the lock
     /// busy past its timeout, a read that fails — is I/O, because the write
@@ -4844,6 +5237,7 @@ impl VaultStore {
             open_verdict: None,
             anchor_failures: 0,
             orphans_swept: false,
+            lock_reconnects: 0,
         };
         Ok(store)
     }
@@ -5376,22 +5770,25 @@ impl VaultStore {
             vault.db_path(),
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
-        let name: Option<String> = conn
-            .query_row(
-                "SELECT value FROM meta WHERE key = 'embedder_name'",
-                [],
-                |r| r.get(0),
-            )
-            .optional()
-            .unwrap_or(None);
-        let dim: Option<String> = conn
-            .query_row(
-                "SELECT value FROM meta WHERE key = 'embedder_dim'",
-                [],
-                |r| r.get(0),
-            )
-            .optional()
-            .unwrap_or(None);
+        // A database with no `meta` table records nothing, and reads as
+        // `None` as it always has; a BUSY one is held by a rotation or a
+        // restore and is said (ROADMAP O257) — read as "nothing recorded", an
+        // external vault opened with the wrong embedder and failed later as a
+        // misleading `EmbedderMismatch`.
+        let recorded = |key: &str| -> Result<Option<String>, StoreError> {
+            match conn
+                .query_row("SELECT value FROM meta WHERE key = ?1", params![key], |r| {
+                    r.get(0)
+                })
+                .optional()
+            {
+                Ok(v) => Ok(v),
+                Err(e) if is_busy(&e) => Err(StoreError::VaultHeld(OPEN_HELD.into())),
+                Err(_) => Ok(None),
+            }
+        };
+        let name = recorded("embedder_name")?;
+        let dim = recorded("embedder_dim")?;
         Ok(match (name, dim) {
             (Some(n), Some(d)) => Some((n, d.parse().unwrap_or(0))),
             _ => None,
@@ -21974,8 +22371,9 @@ mod tests {
     /// of the writer it is freezing.
     ///
     /// The file planted here is a torn one (unreadable to us), which is the
-    /// case `unlock` deletes. It is *not* necessarily garbage: it is what a
-    /// rotation that is being written right now looks like from outside.
+    /// case a writable `unlock` used to delete. It is *not* necessarily
+    /// garbage: it is what a rotation being written right now by a pre-1.7
+    /// build looks like from outside.
     #[test]
     fn a_read_only_open_leaves_a_writers_staging_manifest_alone() {
         let dir = TempDir::new().unwrap();
@@ -22005,11 +22403,17 @@ mod tests {
             "the open must say it left it, got {notes:?}"
         );
 
-        // Premise: the writable open is the one that removes it.
-        drop(VaultStore::open(mgr.unlock("test").unwrap()).unwrap());
+        // This arm was the premise "a writable open is the one that removes
+        // it", and ROADMAP O257 inverted it: no open deletes a staging
+        // manifest it cannot authenticate, on either posture — it is evidence
+        // or a torn pre-1.7 write, and the next rotation stages over it. The
+        // writable open now REPORTS it, which is the plumbing this arm pins.
+        let s = VaultStore::open(mgr.unlock("test").unwrap()).unwrap();
+        assert!(staging.exists(), "a writable open deleted it (O257)");
+        let notes = s.stats().unwrap().unhealed;
         assert!(
-            !staging.exists(),
-            "premise: a writable open discards a torn staging manifest"
+            notes.iter().any(|n| n.contains("vault.json.next")),
+            "a writable open must say it left it, got {notes:?}"
         );
     }
 

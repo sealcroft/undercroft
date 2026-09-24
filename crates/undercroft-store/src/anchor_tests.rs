@@ -1,7 +1,10 @@
 //! ROADMAP O254: the post-commit anchor door, its two failure classes, the
 //! stale handle it stops, and the concurrency it exists for — driven across
 //! real PROCESSES, because the defect was two processes sharing one temp file
-//! and a lock taken inside one process proves nothing about another.
+//! and a lock taken inside one process proves nothing about another. And
+//! ROADMAP O257: the key rotation's exclusive fence, the write door, and how
+//! an open reads a keycheck another generation left — across processes for
+//! the same reason.
 //!
 //! Child processes are this same test binary re-invoked on
 //! [`o254_child_entry`], an `#[ignore]`d test that does nothing unless the
@@ -128,26 +131,217 @@ fn a_busy_write_lock_defers_the_anchor() {
     assert_eq!(s.anchor().unwrap(), AnchorOutcome::Anchored);
 }
 
-/// **PROBE-254R in one process (ROADMAP O254 P1's in-process arm).** A
-/// handle opened before another handle's key rotation used to write the
-/// RETIRED salt back on its next anchor, and the vault could no longer
-/// decrypt what the rotation sealed. Now its anchor reads the rotation's
-/// keycheck under the lock and the handle RETIRES: the write before it is
-/// committed, nothing reaches `vault.json`, and every later write refuses.
-///
-/// The stale handle's committed row is sealed under keys the vault no longer
-/// answers to — O257's third route, not this entry's, and it is left to
-/// that entry.
+/// The database's committed keycheck, read through a connection of its own
+/// that is closed before this returns — a connection held open would itself
+/// be a holder the rotation's fence refuses beside.
+fn keycheck_of(root: &Path) -> Option<String> {
+    use rusqlite::OptionalExtension;
+    let conn = rusqlite::Connection::open(vdir(root).join("vault.db")).unwrap();
+    conn.query_row("SELECT value FROM meta WHERE key = 'keycheck'", [], |r| {
+        r.get(0)
+    })
+    .optional()
+    .unwrap()
+}
+
+/// What another key generation's commit, or an offline edit, leaves in the
+/// marker. `None` deletes it.
+fn set_keycheck(root: &Path, keycheck: Option<&str>) {
+    let conn = rusqlite::Connection::open(vdir(root).join("vault.db")).unwrap();
+    match keycheck {
+        Some(k) => conn
+            .execute(
+                "INSERT INTO meta (key, value) VALUES ('keycheck', ?1) \
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [k],
+            )
+            .unwrap(),
+        None => conn
+            .execute("DELETE FROM meta WHERE key = 'keycheck'", [])
+            .unwrap(),
+    };
+}
+
+fn rotate_rows(s: &VaultStore) -> i64 {
+    s.conn
+        .query_row(
+            "SELECT count(*) FROM audit WHERE record_id LIKE 'rotate/%'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+}
+
+fn staging(root: &Path) -> PathBuf {
+    vdir(root).join("vault.json.next")
+}
+
+/// Copy an installation — its key and every vault — with every store on it
+/// dropped, so the database's WAL has been checkpointed into the file (a copy
+/// taken under an open handle is a torn snapshot).
+fn copy_installation(from: &Path, to: &Path) {
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            std::fs::create_dir_all(&target).unwrap();
+            copy_installation(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), &target).unwrap();
+        }
+    }
+}
+
+/// Another PROCESS holding the vault open in `role` (`idle`, `ro-idle`,
+/// `reader-txn`), returned once it says it holds it.
+fn hold_from_another_process(
+    root: &Path,
+    role: &str,
+    tag: &str,
+) -> (Child, BufReader<std::process::ChildStdout>) {
+    let mut child = spawn_child(role, &child_env(root, 0, tag));
+    let mut out = BufReader::new(child.stdout.take().unwrap());
+    let mut ready = false;
+    for _ in 0..16 {
+        let mut line = String::new();
+        if out.read_line(&mut line).unwrap() == 0 {
+            break;
+        }
+        if line.contains("O254_READY") {
+            ready = true;
+            break;
+        }
+    }
+    assert!(ready, "premise: the {role} process holds the vault open");
+    (child, out)
+}
+
+fn let_go(
+    root: &Path,
+    tag: &str,
+    (mut child, mut out): (Child, BufReader<std::process::ChildStdout>),
+) {
+    std::fs::write(root.join(format!("release-{tag}")), b"").unwrap();
+    let mut rest = String::new();
+    std::io::Read::read_to_string(&mut out, &mut rest).unwrap();
+    assert!(child.wait().unwrap().success(), "{tag}: {rest}");
+}
+
+/// **The release, proven the only way it can be (ROADMAP O257)**: another
+/// PROCESS opens the vault and writes, within a bound, and this handle did not
+/// have to replace its own connection to let it. Reading `locking_mode` back
+/// would prove nothing, and a reconnect would hide a restore that failed.
+fn assert_released(root: &Path, s: &VaultStore, tag: &str) {
+    let started = Instant::now();
+    let mut env = child_env(root, 1, tag);
+    env.push(("O254_BUSY_MS", "1000".into()));
+    let report = child_report(spawn_child("writer", &env));
+    assert_eq!(report["err"], "0", "{tag}: another process could not write");
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "{tag}: the other process waited {:?} to open",
+        started.elapsed()
+    );
+    assert_eq!(
+        s.lock_reconnects(),
+        0,
+        "{tag}: the hold was released only by replacing the connection"
+    );
+}
+
+/// **ROADMAP O257, the fence, in one process.** O254's version of this test
+/// rotated through one handle while a second, opened before it, stayed live,
+/// and pinned that the stale handle RETIRED at its next anchor — after its
+/// first write had already committed under the retired keys. The rotation now
+/// refuses outright: a second handle in the same process holds the vault, so
+/// the rotation answers `VaultHeld` and changes nothing, both handles keep
+/// writing, and the same rotation succeeds once the other handle is dropped.
+/// O254's retire arm survives, through the one route left to it, in
+/// [`a_manifest_another_key_generation_wrote_retires_the_handle`].
 #[test]
-fn a_handle_opened_before_a_rotation_retires_and_the_rotated_salt_survives() {
-    let (dir, mut stale) = fresh(SecurityLevel::Sealed);
-    stale.upsert(&drawer("before the rotation", 0)).unwrap();
-    let mgr = VaultManager::open(dir.path(), None).unwrap();
+fn a_second_handle_in_the_process_refuses_the_rotation_until_it_is_dropped() {
+    let (dir, mut other) = fresh(SecurityLevel::Sealed);
+    other.upsert(&drawer("before the rotation", 0)).unwrap();
+    let root = dir.path();
+    let mgr = VaultManager::open(root, None).unwrap();
     let mut rotator = VaultStore::open(mgr.unlock(VAULT).unwrap()).unwrap();
+    // The fence's wait is the connection's own busy timeout; shortened here
+    // only so the refusal does not cost the suite five seconds.
+    rotator
+        .conn
+        .busy_timeout(Duration::from_millis(300))
+        .unwrap();
+    let (salt, kc) = (manifest(root), keycheck_of(root));
+    let (height, rows) = (
+        crate::chain::writes(&rotator.conn).unwrap(),
+        rotate_rows(&rotator),
+    );
+    match rotator.rotate_keys(mgr.rotation_candidate(VAULT).unwrap()) {
+        Err(StoreError::VaultHeld(m)) => assert!(m.contains("O257"), "{m}"),
+        other => panic!("the fence must refuse beside a live handle, got {other:?}"),
+    }
+    assert_eq!(
+        manifest(root),
+        salt,
+        "a refused rotation moved the manifest"
+    );
+    assert_eq!(keycheck_of(root), kc);
+    assert_eq!(crate::chain::writes(&rotator.conn).unwrap(), height);
+    assert_eq!(
+        rotate_rows(&rotator),
+        rows,
+        "a refused rotation left a record"
+    );
+    assert!(
+        !staging(root).exists(),
+        "a refused rotation staged a manifest"
+    );
+    assert_eq!(rotator.lock_reconnects(), 0);
+    other.upsert(&drawer("the other handle writes", 1)).unwrap();
+    rotator.upsert(&drawer("the rotator writes", 2)).unwrap();
+    assert_eq!(other.anchor_failures() + rotator.anchor_failures(), 0);
+    assert!(other.vault.retired().is_none() && rotator.vault.retired().is_none());
+
+    drop(other);
     rotator
         .rotate_keys(mgr.rotation_candidate(VAULT).unwrap())
+        .expect("once nothing else holds the vault, the rotation runs");
+    assert_ne!(manifest(root), salt, "premise: the rotation ran");
+    assert_eq!(rotator.lock_reconnects(), 0);
+    rotator.upsert(&drawer("after the rotation", 3)).unwrap();
+    assert_eq!(rotator.anchor_failures(), 0);
+    drop(rotator);
+    let s = reopen(root);
+    assert!(s.verify().unwrap().ok());
+    assert_eq!(s.count().unwrap(), 4);
+}
+
+/// **O254's retire arm, kept (ROADMAP O254, O257).** A handle whose anchor
+/// meets a `vault.json` its keys do not verify stops writing: the write before
+/// it is committed, nothing reaches the manifest, and every later write — a
+/// save, an audited write, a rotation — refuses. No rotation of this build can
+/// run beside a live handle any more, so the manifest is PLANTED: the vault is
+/// copied to a second installation holding the same master key, rotated there,
+/// and that manifest written over this one — what a rotation by a build
+/// without the fence, or on a filesystem whose locks do not work, leaves
+/// beside a live handle.
+#[test]
+fn a_manifest_another_key_generation_wrote_retires_the_handle() {
+    let (dir, s) = fresh(SecurityLevel::Sealed);
+    drop(s);
+    let root = dir.path();
+    let elsewhere = TempDir::new().unwrap();
+    copy_installation(root, elsewhere.path());
+    let mut stale = reopen(root);
+    stale.upsert(&drawer("before the rotation", 0)).unwrap();
+    let there = VaultManager::open(elsewhere.path(), None).unwrap();
+    let mut rotated = VaultStore::open(there.unlock(VAULT).unwrap()).unwrap();
+    rotated
+        .rotate_keys(there.rotation_candidate(VAULT).unwrap())
         .unwrap();
-    let rotated = manifest(dir.path());
+    drop(rotated);
+    let foreign = manifest(elsewhere.path());
+    std::fs::write(vdir(root).join("vault.json"), &foreign).unwrap();
 
     stale
         .audit_migration_standalone("o254-probe", "1", 0, 0)
@@ -157,19 +351,14 @@ fn a_handle_opened_before_a_rotation_retires_and_the_rotated_salt_survives() {
         "the stale handle must retire"
     );
     assert_eq!(stale.anchor_failures(), 1);
-    assert_eq!(
-        manifest(dir.path()),
-        rotated,
-        "the rotated salt must survive the stale handle's anchor"
-    );
+    assert_eq!(manifest(root), foreign, "the planted manifest must survive");
     assert!(stale
         .stats()
         .unwrap()
         .unhealed
         .iter()
         .any(|n| n.contains("stopped writing")));
-
-    // Every later write refuses, as an integrity verdict, and writes nothing.
+    let mgr = VaultManager::open(root, None).unwrap();
     let height = crate::chain::writes(&stale.conn).unwrap();
     for (what, refused) in [
         (
@@ -195,22 +384,17 @@ fn a_handle_opened_before_a_rotation_retires_and_the_rotated_salt_survives() {
         }
     }
     assert_eq!(crate::chain::writes(&stale.conn).unwrap(), height);
-    assert_eq!(manifest(dir.path()), rotated);
-
-    // The rotated handle is untouched and still anchors.
-    rotator.upsert(&drawer("after the rotation", 2)).unwrap();
-    assert_eq!(rotator.anchor_failures(), 0);
-    assert!(rotator.vault.retired().is_none());
-    drop((stale, rotator));
-    reopen(dir.path());
+    assert_eq!(manifest(root), foreign);
 }
 
-/// **P1's discard window (ROADMAP O254, O257).** An open that met a
-/// rotation's staged file between its staging and its commit used to read
-/// the OLD keycheck and delete the file, and the rotation then committed with
-/// no manifest to promote — the new salt gone. The comparison now runs under
-/// the write lock the rotation holds from before it stages until it commits,
-/// so the open waits for the commit and then promotes.
+/// **P1's discard window (ROADMAP O254), re-shaped by O257.** An open that met
+/// a rotation's staged file between its staging and its commit used to read the
+/// OLD keycheck and delete it. O254 moved that decision under the write lock;
+/// O257's fence now stops such an open before it reaches the decision at all —
+/// it waits at its FIRST statement until the rotation has committed AND
+/// promoted, then adopts the promoted generation. The `is_finished` arm is
+/// what separates "held by the fence" from "reached reconcile and waited
+/// there", which this test's O254 form could not tell apart.
 #[test]
 fn p1_an_open_inside_the_staging_window_waits_and_promotes_rather_than_discards() {
     let (dir, mut s) = fresh(SecurityLevel::Sealed);
@@ -246,42 +430,48 @@ fn p1_an_open_inside_the_staging_window_waits_and_promotes_rather_than_discards(
         .recv_timeout(Duration::from_secs(20))
         .expect("the rotation reaches its staged window");
     assert!(
-        vdir(&root).join("vault.json.next").exists(),
+        staging(&root).exists(),
         "premise: the staged manifest is on disk"
     );
     let opening = {
         let root = root.clone();
         std::thread::spawn(move || reopen(&root))
     };
-    // Long enough for the open to reach its reconcile and block on the lock.
     std::thread::sleep(Duration::from_millis(400));
     assert!(
-        vdir(&root).join("vault.json.next").exists(),
+        !opening.is_finished(),
+        "the open must be held by the fence, not finished beside the rotation"
+    );
+    assert!(
+        staging(&root).exists(),
         "the open must not have discarded the staged manifest"
     );
     go_tx.send(()).unwrap();
     let mut rotated = rotating.join().unwrap().expect("the rotation succeeds");
     let mut opened = opening.join().unwrap();
-    // Both handles answer to the new keys, and both still write.
     rotated.upsert(&drawer("the rotator writes", 1)).unwrap();
     opened.upsert(&drawer("the opener writes", 2)).unwrap();
     assert_eq!(rotated.anchor_failures() + opened.anchor_failures(), 0);
+    assert!(
+        !staging(&root).exists(),
+        "the promote removed its staged file"
+    );
     drop((rotated, opened));
     let s = reopen(&root);
     assert!(s.verify().unwrap().chain_ok);
     assert_eq!(s.count().unwrap(), 3);
 }
 
-/// **P1's re-seed window (ROADMAP O254 probe; O257 owns the fix).** An open
-/// that unlocked BEFORE a rotation staged, and reconciles between the
-/// rotation's commit and its promote, still writes the OLD keycheck back —
-/// `reconcile_rotation`'s re-seed, which O257 is filed to refuse. What O254
-/// changes is that the salt SURVIVES it: the promote runs under the lock, and
-/// the rotating handle's next anchor, reading a keycheck that is not its own,
-/// retires that handle instead of writing. A pinned COST: when O257 lands,
-/// the re-seed is refused and this test's retire arm inverts.
+/// **P1's re-seed window, INVERTED (ROADMAP O254 pinned it as a cost, O257
+/// closes it).** An open that unlocked BEFORE a rotation staged and reconciled
+/// after its commit used to write the OLD keycheck back — in autocommit, after
+/// its lock had gone — and only then fail; the rotating handle's next anchor
+/// read that keycheck and retired. Now the open is held by the fence until the
+/// rotation has promoted, then finds `vault.json` no longer verifying under
+/// the keys it unlocked: a race, refused for a reopen, writing nothing. The
+/// keycheck is untouched and the rotating handle does NOT retire.
 #[test]
-fn p1_a_reseed_inside_the_promote_window_costs_a_retired_handle_never_the_salt() {
+fn p1_an_open_that_read_the_vault_before_a_rotation_is_told_to_reopen_and_writes_nothing() {
     let (dir, mut s) = fresh(SecurityLevel::Sealed);
     s.upsert(&drawer("a memory the rotation seals", 0)).unwrap();
     drop(s);
@@ -317,43 +507,35 @@ fn p1_a_reseed_inside_the_promote_window_costs_a_retired_handle_never_the_salt()
     committed_rx
         .recv_timeout(Duration::from_secs(20))
         .expect("the rotation commits");
-    let conn = rusqlite::Connection::open(vdir(&root).join("vault.db")).unwrap();
-    let keycheck = |c: &rusqlite::Connection| -> String {
-        c.query_row("SELECT value FROM meta WHERE key = 'keycheck'", [], |r| {
-            r.get(0)
-        })
-        .unwrap()
-    };
-    let rotated_kc = keycheck(&conn);
-    assert_ne!(
-        rotated_kc,
-        early.keycheck_hex(),
-        "premise: the rotation committed"
-    );
-    // The early handle's open re-seeds the OLD keycheck and then fails on
-    // the re-keyed chain, which its keys cannot replay.
-    assert!(VaultStore::open(early).is_err());
-    assert_ne!(
-        keycheck(&conn),
-        rotated_kc,
-        "premise: the re-seed happened (O257)"
+    let opening = std::thread::spawn(move || VaultStore::open(early));
+    std::thread::sleep(Duration::from_millis(400));
+    assert!(
+        !opening.is_finished(),
+        "the early open must be held by the fence"
     );
     go_tx.send(()).unwrap();
     let mut rotated = rotating.join().unwrap().expect("the rotation succeeds");
-    let promoted = manifest(&root);
-    // The rotating handle's next write commits, and its anchor reads a
-    // keycheck that is not its own: it retires rather than writes.
+    let rotated_kc = keycheck_of(&root);
+    match opening.join().unwrap() {
+        Err(StoreError::StaleUnlock(m)) => assert!(m.contains("reopen"), "{m}"),
+        other => panic!(
+            "the early open must be told to reopen, got {:?}",
+            other.err()
+        ),
+    }
+    assert_eq!(
+        keycheck_of(&root),
+        rotated_kc,
+        "the early open re-seeded (O257)"
+    );
     rotated.upsert(&drawer("after the promote", 1)).unwrap();
     assert!(
-        rotated.vault.retired().is_some(),
-        "COST pinned (O257 inverts it): the re-seed retires the rotating handle"
+        rotated.vault.retired().is_none(),
+        "INVERTED from O254's pinned cost: the rotating handle keeps writing"
     );
-    assert_eq!(manifest(&root), promoted, "the rotated salt survives");
+    assert_eq!(rotated.anchor_failures(), 0);
     drop(rotated);
-    // A fresh open re-seeds the keycheck from the promoted manifest and the
-    // vault answers to the rotated keys.
     let s = reopen(&root);
-    assert_eq!(keycheck(&conn), rotated_kc);
     assert!(s.verify().unwrap().chain_ok);
 }
 
@@ -506,8 +688,8 @@ fn o254_child_entry() {
         // clean of I/O errors; an integrity refusal here is O253's (the open
         // reads the head and replays in two snapshots), reported, not judged.
         "opener" => {
-            let (mut ok, mut io, mut busy, mut other, mut deferred) =
-                (0u64, 0u64, 0u64, 0u64, 0u64);
+            let (mut ok, mut io, mut busy, mut other, mut deferred, mut held) =
+                (0u64, 0u64, 0u64, 0u64, 0u64, 0u64);
             for i in 0..n {
                 let mgr = VaultManager::open(&root, None).unwrap();
                 match mgr
@@ -539,7 +721,11 @@ fn o254_child_entry() {
                         // upgrade, which the busy handler never waits for;
                         // anything else is reported whole.
                         let text = e.to_string();
-                        if text.contains("database is locked") {
+                        if matches!(e, StoreError::VaultHeld(_)) {
+                            // ROADMAP O257: an open while a rotation holds the
+                            // vault says so, typed.
+                            held += 1;
+                        } else if text.contains("database is locked") {
                             busy += 1;
                         } else if text.contains("io error") {
                             io += 1;
@@ -552,15 +738,61 @@ fn o254_child_entry() {
             }
             println!(
                 "O254_CHILD opened={ok} io_err={io} busy_err={busy} other_err={other} \
-                 anchor_failures={deferred}"
+                 anchor_failures={deferred} held_err={held}"
+            );
+        }
+        // One read-only open (the `--read-only` server's path), reporting
+        // whether it opened and how long it took.
+        "ro-opener" => {
+            let t = Instant::now();
+            let mgr = VaultManager::open(&root, None).unwrap();
+            let outcome = mgr
+                .unlock_as(VAULT, Access::ReadOnly)
+                .map_err(StoreError::from)
+                .and_then(|v| {
+                    VaultStore::open_read_only(v, Box::new(undercroft_core::HashEmbedder))
+                });
+            let (opened, drawers, held) = match &outcome {
+                Ok(s) => (1, s.count().unwrap_or(0), 0),
+                Err(e) => {
+                    eprintln!("O257 ro-opener {tag}: {e}");
+                    (0, 0, u8::from(matches!(e, StoreError::VaultHeld(_))))
+                }
+            };
+            println!(
+                "O254_CHILD ro_opened={opened} drawers={drawers} held_err={held} ms={}",
+                t.elapsed().as_millis()
             );
         }
         // Holds a connection (and, for `reader-txn`, an open read transaction)
         // until the parent drops a release file — P3's other process.
-        "idle" | "reader-txn" => {
-            let conn = rusqlite::Connection::open(vdir(&root).join("vault.db")).unwrap();
-            conn.query_row("SELECT count(*) FROM meta", [], |r| r.get::<_, i64>(0))
-                .unwrap();
+        "idle" | "reader-txn" | "ro-idle" | "immutable-idle" => {
+            let db = vdir(&root).join("vault.db");
+            let conn = match role.as_str() {
+                // A `--read-only` server's connection shape (`connect_read_only`).
+                "ro-idle" => rusqlite::Connection::open_with_flags(
+                    &db,
+                    rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                        | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+                )
+                .unwrap(),
+                // The escalation a read-only open takes on a write-protected
+                // mount: `immutable=1`, which takes no locks at all.
+                "immutable-idle" => rusqlite::Connection::open_with_flags(
+                    format!("file:{}?immutable=1", db.display()),
+                    rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                        | rusqlite::OpenFlags::SQLITE_OPEN_URI
+                        | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+                )
+                .unwrap(),
+                _ => rusqlite::Connection::open(&db).unwrap(),
+            };
+            // `sqlite_master`, not `meta`: an immutable reader ignores the
+            // WAL, where a schema not yet checkpointed may still live.
+            conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| {
+                r.get::<_, i64>(0)
+            })
+            .unwrap();
             if role == "reader-txn" {
                 conn.execute_batch("BEGIN").unwrap();
                 conn.query_row("SELECT count(*) FROM meta", [], |r| r.get::<_, i64>(0))
@@ -848,6 +1080,617 @@ fn p2_measure_save_latency_and_busy_with_1_2_and_4_writers() {
     }
 }
 
+/// **O257 probes (a measurement, not a gate)**: what the exclusive rotation
+/// posture O254's P3 pointed at does once it is HELD rather than merely
+/// taken. Run by name with `--ignored` and read the lines it prints.
+#[test]
+#[ignore = "O257 probe; run by name with --ignored and read what it prints"]
+fn o257_probe_exclusive_posture_held_across_a_commit() {
+    let (dir, mut s) = fresh(SecurityLevel::HmacOnly);
+    s.upsert(&drawer("seed", 0)).unwrap();
+    let root = dir.path().to_path_buf();
+    let db = vdir(&root).join("vault.db");
+    let exclusive = |c: &rusqlite::Connection| -> String {
+        c.query_row("PRAGMA locking_mode=EXCLUSIVE", [], |r| r.get(0))
+            .unwrap()
+    };
+    let normal = |c: &rusqlite::Connection| {
+        let m: String = c
+            .query_row("PRAGMA locking_mode=NORMAL", [], |r| r.get(0))
+            .unwrap();
+        c.query_row("SELECT count(*) FROM meta", [], |r| r.get::<_, i64>(0))
+            .unwrap();
+        m
+    };
+    let opener = |tag: &str| {
+        let t = Instant::now();
+        let r = child_report(spawn_child("opener", &child_env(&root, 1, tag)));
+        (r, t.elapsed())
+    };
+
+    // PA: taken, a write, COMMIT — is the lock still held after the commit?
+    eprintln!("O257 PA mode set: {}", exclusive(&s.conn));
+    s.conn.execute_batch("BEGIN EXCLUSIVE").unwrap();
+    s.conn
+        .execute_batch("INSERT INTO meta (key, value) VALUES ('o257-pa', '1') ON CONFLICT(key) DO UPDATE SET value = '2'")
+        .unwrap();
+    s.conn.execute_batch("COMMIT").unwrap();
+    let (r, took) = opener("pa-held");
+    eprintln!("O257 PA other-process open AFTER COMMIT, still EXCLUSIVE: {r:?} in {took:?}");
+    eprintln!("O257 PA restore: {}", normal(&s.conn));
+    let (r, took) = opener("pa-released");
+    eprintln!("O257 PA other-process open after NORMAL + one read: {r:?} in {took:?}");
+
+    // PB: an idle second connection in the SAME process.
+    let other = rusqlite::Connection::open(&db).unwrap();
+    other
+        .query_row("SELECT count(*) FROM meta", [], |r| r.get::<_, i64>(0))
+        .unwrap();
+    s.conn.busy_timeout(Duration::from_millis(300)).unwrap();
+    exclusive(&s.conn);
+    let took = s.conn.execute_batch("BEGIN EXCLUSIVE");
+    eprintln!("O257 PB same-process idle connection: BEGIN EXCLUSIVE -> {took:?}");
+    if took.is_ok() {
+        s.conn.execute_batch("ROLLBACK").unwrap();
+    }
+    normal(&s.conn);
+    drop(other);
+    // PB2: a second VaultStore in the same process.
+    let s2 = reopen(&root);
+    exclusive(&s.conn);
+    let took = s.conn.execute_batch("BEGIN EXCLUSIVE");
+    eprintln!("O257 PB2 same-process second VaultStore: BEGIN EXCLUSIVE -> {took:?}");
+    if took.is_ok() {
+        s.conn.execute_batch("ROLLBACK").unwrap();
+    }
+    normal(&s.conn);
+    drop(s2);
+    s.conn.busy_timeout(Duration::from_secs(5)).unwrap();
+
+    // PC: an opener in another process while the lock is held for 1.5 s,
+    // under the production 5 s busy timeout — does it wait and then open?
+    for hold in [1500u64, 7000] {
+        exclusive(&s.conn);
+        s.conn.execute_batch("BEGIN EXCLUSIVE").unwrap();
+        s.conn.execute_batch("COMMIT").unwrap();
+        let t = Instant::now();
+        let child = spawn_child("opener", &child_env(&root, 1, &format!("pc-{hold}")));
+        std::thread::sleep(Duration::from_millis(hold));
+        normal(&s.conn);
+        let r = child_report(child);
+        eprintln!(
+            "O257 PC opener while the lock was held {hold} ms: {r:?} in {:?}",
+            t.elapsed()
+        );
+    }
+    // PD: a store left open after all of it still writes, and so does
+    // another process.
+    s.upsert(&drawer("after the probes", 1)).unwrap();
+    let (r, took) = opener("pd");
+    eprintln!("O257 PD after the probes: {r:?} in {took:?}");
+
+    // P6: a read-only holder and an `immutable=1` holder in another process.
+    s.conn.busy_timeout(Duration::from_millis(300)).unwrap();
+    for role in ["ro-idle", "immutable-idle"] {
+        let mut child = spawn_child(role, &child_env(&root, 0, role));
+        let mut out = BufReader::new(child.stdout.take().unwrap());
+        let mut ready = false;
+        for _ in 0..16 {
+            let mut line = String::new();
+            if out.read_line(&mut line).unwrap() == 0 {
+                break;
+            }
+            if line.contains("O254_READY") {
+                ready = true;
+                break;
+            }
+        }
+        assert!(ready, "premise: {role} holds the database open");
+        exclusive(&s.conn);
+        let took = s.conn.execute_batch("BEGIN EXCLUSIVE");
+        eprintln!("O257 P6 {role}: BEGIN EXCLUSIVE -> {took:?}");
+        if took.is_ok() {
+            s.conn.execute_batch("ROLLBACK").unwrap();
+        }
+        normal(&s.conn);
+        std::fs::write(root.join(format!("release-{role}")), b"").unwrap();
+        let mut rest = String::new();
+        std::io::Read::read_to_string(&mut out, &mut rest).unwrap();
+        assert!(child.wait().unwrap().success(), "{role}: {rest}");
+    }
+    // P6b: a refused fence leaves the handle writable and another process
+    // writing (the mode restored).
+    let holder = rusqlite::Connection::open(&db).unwrap();
+    holder
+        .query_row("SELECT count(*) FROM meta", [], |r| r.get::<_, i64>(0))
+        .unwrap();
+    exclusive(&s.conn);
+    let refused = s.conn.execute_batch("BEGIN EXCLUSIVE");
+    eprintln!("O257 P6b fence beside a holder: {refused:?}");
+    let restored = normal(&s.conn);
+    drop(holder);
+    s.upsert(&drawer("after a refused fence", 2)).unwrap();
+    let (r, took) = opener("p6b");
+    eprintln!("O257 P6b after a refused fence (mode {restored}): {r:?} in {took:?}");
+
+    // P-RO: a read-only open in another process while the hold lasts 7 s,
+    // after a write the WAL still holds — does it refuse, or read a frozen
+    // main file through `immutable=1` (D1)?
+    s.conn.busy_timeout(Duration::from_secs(5)).unwrap();
+    s.upsert(&drawer("only in the WAL", 3)).unwrap();
+    let live = s.count().unwrap();
+    exclusive(&s.conn);
+    s.conn.execute_batch("BEGIN EXCLUSIVE").unwrap();
+    s.conn.execute_batch("COMMIT").unwrap();
+    let child = spawn_child("ro-opener", &child_env(&root, 0, "p-ro"));
+    std::thread::sleep(Duration::from_millis(7000));
+    normal(&s.conn);
+    let out = child.wait_with_output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    let line = text
+        .lines()
+        .find_map(|l| l.find("O254_CHILD ").map(|at| &l[at..]))
+        .unwrap_or("(no report)");
+    eprintln!("O257 P-RO read-only open during a 7 s hold (live drawers {live}): {line}");
+}
+
+/// **O257 P8 (a measurement)**: how long a rotation holds the vault — the
+/// window in which every other open waits its busy timeout. Sealed drawers,
+/// `O257_P8_N` of them (default 5,000). Run by name with `--ignored`.
+#[test]
+#[ignore = "O257 P8 measurement; run by name with --ignored"]
+fn o257_probe_rotation_hold_time() {
+    let n: u32 = std::env::var("O257_P8_N")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(5_000);
+    let (dir, mut s) = fresh(SecurityLevel::Sealed);
+    for chunk in (0..n).collect::<Vec<_>>().chunks(500) {
+        let batch: Vec<Drawer> = chunk
+            .iter()
+            .map(|i| {
+                drawer(
+                    &format!("memory {i}: the tide table for the north quay, read at dawn"),
+                    *i,
+                )
+            })
+            .collect();
+        s.upsert_many(&batch).unwrap();
+    }
+    let mgr = VaultManager::open(dir.path(), None).unwrap();
+    let started = Instant::now();
+    let report = s
+        .rotate_keys(mgr.rotation_candidate(VAULT).unwrap())
+        .unwrap();
+    eprintln!(
+        "O257 P8 drawers={} rotation_ms={}",
+        report.drawers,
+        started.elapsed().as_millis()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// ROADMAP O257: the rotation's fence, and what it leaves behind
+// ---------------------------------------------------------------------------
+
+/// **The O257 gate, across processes.** A rotation beside another PROCESS
+/// holding the vault — idle, or a `--read-only` connection — is refused as
+/// `VaultHeld` and changes nothing; and after EVERY exit — each refusal, a
+/// verify blocker, an injected staging fault, a panicking pause hook, a
+/// deferred promote, a success — another process opens and writes, and this
+/// handle did not have to reconnect to let it. The counterfactuals that must
+/// fail here: no fence; no NORMAL restore; `SELECT 1` as the release.
+#[test]
+fn a_rotation_beside_another_process_is_refused_and_every_exit_releases_the_vault() {
+    let (dir, mut s) = fresh(SecurityLevel::Sealed);
+    for i in 0..3 {
+        s.upsert(&drawer(&format!("memory {i}"), i)).unwrap();
+    }
+    let root = dir.path();
+    let mgr = VaultManager::open(root, None).unwrap();
+    s.conn.busy_timeout(Duration::from_millis(300)).unwrap();
+
+    for role in ["idle", "ro-idle"] {
+        let holder = hold_from_another_process(root, role, role);
+        let (salt, kc) = (manifest(root), keycheck_of(root));
+        let (height, rows) = (crate::chain::writes(&s.conn).unwrap(), rotate_rows(&s));
+        match s.rotate_keys(mgr.rotation_candidate(VAULT).unwrap()) {
+            Err(StoreError::VaultHeld(m)) => assert!(m.contains("O257"), "{role}: {m}"),
+            other => panic!("{role}: the fence must refuse beside a holder, got {other:?}"),
+        }
+        assert_eq!(manifest(root), salt, "{role}: the salt moved");
+        assert_eq!(keycheck_of(root), kc, "{role}");
+        assert_eq!(crate::chain::writes(&s.conn).unwrap(), height, "{role}");
+        assert_eq!(rotate_rows(&s), rows, "{role}");
+        assert!(
+            !staging(root).exists(),
+            "{role}: a staged manifest was left"
+        );
+        // Released even while the holder is still there.
+        assert_released(root, &s, &format!("refused-{role}"));
+        let_go(root, role, holder);
+    }
+
+    // A verify blocker: an integrity finding, refused inside the fence.
+    let tag: Vec<u8> = s
+        .conn
+        .query_row("SELECT tag FROM drawers ORDER BY seq LIMIT 1", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    s.conn
+        .execute(
+            "UPDATE drawers SET tag = zeroblob(32) WHERE seq = (SELECT min(seq) FROM drawers)",
+            [],
+        )
+        .unwrap();
+    match s.rotate_keys(mgr.rotation_candidate(VAULT).unwrap()) {
+        Err(StoreError::IntegrityFinding(m)) => assert!(m.contains("refused"), "{m}"),
+        other => panic!("a tampered row must block the rotation, got {other:?}"),
+    }
+    assert_released(root, &s, "blocker");
+    s.conn
+        .execute(
+            "UPDATE drawers SET tag = ?1 WHERE seq = (SELECT min(seq) FROM drawers)",
+            rusqlite::params![tag],
+        )
+        .unwrap();
+
+    // An injected fault at the staging write — the rotation's first manifest
+    // write — fails the rotation before its commit.
+    fixture::fail_next(fixture::Fault::Rename);
+    assert!(s
+        .rotate_keys(mgr.rotation_candidate(VAULT).unwrap())
+        .is_err());
+    assert_eq!(fixture::armed(), None, "premise: the injected fault fired");
+    assert_released(root, &s, "staging-fault");
+
+    // A pause hook that panics inside the fence.
+    pause::set(
+        &vdir(root),
+        std::sync::Arc::new(|phase| {
+            if phase == pause::Phase::Staged {
+                panic!("an injected panic inside the fence (ROADMAP O257)");
+            }
+        }),
+    );
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        s.rotate_keys(mgr.rotation_candidate(VAULT).unwrap())
+    }));
+    assert!(panicked.is_err(), "premise: the hook panicked");
+    assert_released(root, &s, "panic");
+
+    // A promote that fails every attempt: the rotation COMMITTED, answers Ok,
+    // and says the deferral on the report and on `unhealed`.
+    pause::set(
+        &vdir(root),
+        std::sync::Arc::new(|phase| {
+            if phase == pause::Phase::Committed {
+                fixture::fail_times(fixture::Fault::Rename, crate::rotate::PROMOTE_ATTEMPTS);
+            }
+        }),
+    );
+    let before = manifest(root);
+    let report = s
+        .rotate_keys(mgr.rotation_candidate(VAULT).unwrap())
+        .expect("a committed rotation answers Ok (O254 ruling item 3)");
+    assert!(
+        report.promote_deferred.is_some(),
+        "the deferral is reported"
+    );
+    assert_eq!(manifest(root), before, "premise: nothing was promoted");
+    assert!(staging(root).exists(), "the staged manifest is intact");
+    assert!(s
+        .stats()
+        .unwrap()
+        .unhealed
+        .iter()
+        .any(|n| n.contains("do NOT delete it")));
+    // The other process's open promotes it, and writes.
+    assert_released(root, &s, "deferred-promote");
+    assert!(
+        !staging(root).exists(),
+        "the next writable open promoted it"
+    );
+
+    pause::set(&vdir(root), std::sync::Arc::new(|_| {}));
+    let before = manifest(root);
+    s.rotate_keys(mgr.rotation_candidate(VAULT).unwrap())
+        .expect("with nothing holding the vault, the rotation runs");
+    assert_ne!(manifest(root), before);
+    assert_released(root, &s, "success");
+    s.upsert(&drawer("the rotated handle writes", 9)).unwrap();
+    assert_eq!(s.anchor_failures(), 0);
+    drop(s);
+    assert!(reopen(root).verify().unwrap().ok());
+}
+
+/// **The fence is HELD from staging through the promote (ROADMAP O257)**:
+/// paused at Staged and at Committed, a writable open AND a read-only open in
+/// another process are both refused as `VaultHeld` — never served, and the
+/// read-only one never through `immutable=1`, which read the main file without
+/// the WAL and refused with a false "schema predates this build" (probe P-RO,
+/// D1).
+#[test]
+fn the_fence_holds_at_both_pauses_against_writable_and_read_only_opens() {
+    for phase in [pause::Phase::Staged, pause::Phase::Committed] {
+        let (dir, mut s) = fresh(SecurityLevel::Sealed);
+        s.upsert(&drawer("a memory the rotation seals", 0)).unwrap();
+        drop(s);
+        let root = dir.path().to_path_buf();
+        let (at_tx, at_rx) = std::sync::mpsc::channel::<()>();
+        let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+        let go_rx = std::sync::Mutex::new(go_rx);
+        pause::set(
+            &vdir(&root),
+            std::sync::Arc::new(move |p| {
+                if p == phase {
+                    at_tx.send(()).unwrap();
+                    go_rx
+                        .lock()
+                        .unwrap()
+                        .recv_timeout(Duration::from_secs(30))
+                        .expect("bounded: the test signals go");
+                }
+            }),
+        );
+        let rotating = {
+            let root = root.clone();
+            std::thread::spawn(move || {
+                let mgr = VaultManager::open(&root, None).unwrap();
+                let mut s = VaultStore::open(mgr.unlock(VAULT).unwrap()).unwrap();
+                s.rotate_keys(mgr.rotation_candidate(VAULT).unwrap())
+                    .map(|_| s)
+            })
+        };
+        at_rx
+            .recv_timeout(Duration::from_secs(20))
+            .expect("the rotation reaches its pause");
+        let tag = format!("{phase:?}");
+        let writable = spawn_child("opener", &child_env(&root, 1, &format!("w-{tag}")));
+        let read_only = spawn_child("ro-opener", &child_env(&root, 0, &format!("r-{tag}")));
+        let (w, r) = (child_report(writable), child_report(read_only));
+        assert_eq!(
+            w["held_err"], "1",
+            "{tag}: a writable open was not held: {w:?}"
+        );
+        assert_eq!(w["opened"], "0", "{tag}: {w:?}");
+        assert_eq!(
+            r["held_err"], "1",
+            "{tag}: a read-only open was not held: {r:?}"
+        );
+        assert_eq!(r["ro_opened"], "0", "{tag}: {r:?}");
+        go_tx.send(()).unwrap();
+        let s = rotating.join().unwrap().expect("the rotation succeeds");
+        assert_released(&root, &s, &format!("after-{tag}"));
+    }
+}
+
+/// **The write door (ROADMAP O257).** O254 stopped a stale handle at its
+/// ANCHOR, after its first write had committed under the retired keys — the
+/// write that made the next open refuse the vault (pinned in e2e as O254's
+/// cost). The keycheck is now read inside every audited write's own
+/// transaction: a handle whose marker the database no longer holds — another
+/// build's rotation beside it, or an edited marker — commits nothing, the
+/// read-audit append included, and an absent marker is refused as the anchor
+/// refuses it. Nothing latches: once the marker is this handle's again, it
+/// writes.
+#[test]
+fn a_handle_whose_keys_the_database_no_longer_holds_writes_nothing() {
+    let (dir, mut s) = fresh(SecurityLevel::Sealed);
+    s.upsert(&drawer("the memory before", 0)).unwrap();
+    let root = dir.path();
+    let own = keycheck_of(root).expect("premise: the open seeded the marker");
+    s.set_read_audit(true);
+    for (arm, marker) in [("foreign", Some("00".repeat(32))), ("absent", None)] {
+        set_keycheck(root, marker.as_deref());
+        let (count, height) = (s.count().unwrap(), crate::chain::writes(&s.conn).unwrap());
+        for (what, refused) in [
+            ("a save", s.upsert(&drawer("after", 1)).err()),
+            (
+                "an audited write",
+                s.audit_migration_standalone("o257-door", arm, 0, 0).err(),
+            ),
+            (
+                "a read under read-audit",
+                s.search("memory", &crate::SearchOptions::default()).err(),
+            ),
+        ] {
+            match refused {
+                Some(StoreError::IntegrityFinding(m)) => {
+                    assert!(m.contains("O257"), "{arm} marker, {what}: {m}")
+                }
+                other => panic!("{arm} marker, {what}: must refuse, got {other:?}"),
+            }
+        }
+        assert_eq!(s.count().unwrap(), count, "{arm}: a row was committed");
+        assert_eq!(crate::chain::writes(&s.conn).unwrap(), height, "{arm}");
+    }
+    set_keycheck(root, Some(&own));
+    s.upsert(&drawer("the marker is this handle's again", 2))
+        .expect("no latch: the door is re-evaluated per write");
+    assert!(s.vault.retired().is_none());
+    drop(s);
+    assert!(reopen(root).verify().unwrap().ok());
+}
+
+/// **A present foreign keycheck, decided by the evidence around it (ROADMAP
+/// O257).** Three states, and the refuter's point is the middle one: the
+/// state a pre-1.7 re-seed LEFT — rotated manifest, rotated data, the OLD
+/// marker — is an intact vault that 1.6.x heals, and a build that refused it
+/// as tampering would be a MAJOR change. So: the chain replays under the
+/// manifest's keys ⇒ re-seeded with a note (read-only: served, noted,
+/// untouched); a manifest restored from BEFORE a rotation ⇒ an integrity
+/// verdict that rewrites nothing, on both postures; and an unchanged torn
+/// staging file beside that restored manifest is STILL an integrity verdict,
+/// never a race — comparing with what the unlock attached would have made it a
+/// reopen on every retry.
+#[test]
+fn a_foreign_keycheck_heals_refuses_as_integrity_or_reads_as_a_race_by_the_evidence() {
+    let (dir, mut s) = fresh(SecurityLevel::Sealed);
+    s.upsert(&drawer("a memory that outlives two rotations", 0))
+        .unwrap();
+    let root = dir.path();
+    let mgr = VaultManager::open(root, None).unwrap();
+    let old_manifest = manifest(root);
+    let old_kc = keycheck_of(root).unwrap();
+    s.rotate_keys(mgr.rotation_candidate(VAULT).unwrap())
+        .unwrap();
+    drop(s);
+    let new_kc = keycheck_of(root).unwrap();
+    assert_ne!(old_kc, new_kc, "premise: the rotation moved the marker");
+
+    // The pre-1.7 re-seed's leftover: rotated manifest and data, OLD marker.
+    set_keycheck(root, Some(&old_kc));
+    let ro = VaultStore::open_read_only(
+        mgr.unlock_as(VAULT, Access::ReadOnly).unwrap(),
+        Box::new(undercroft_core::HashEmbedder),
+    )
+    .expect("a read-only open serves the intact vault");
+    assert!(ro
+        .unhealed()
+        .iter()
+        .any(|n| n.contains("a writable open re-seeds it")));
+    assert_eq!(ro.count().unwrap(), 1);
+    drop(ro);
+    assert_eq!(keycheck_of(root).unwrap(), old_kc, "a read-only open wrote");
+    let s = reopen(root);
+    assert_eq!(
+        keycheck_of(root).unwrap(),
+        new_kc,
+        "re-seeded to this generation"
+    );
+    assert!(s
+        .unhealed()
+        .iter()
+        .any(|n| n.contains("re-seeded to this generation")));
+    assert!(s.verify().unwrap().ok());
+    drop(s);
+
+    // A manifest restored from before the rotation: integrity, both postures.
+    std::fs::write(vdir(root).join("vault.json"), &old_manifest).unwrap();
+    for torn in [false, true] {
+        if torn {
+            std::fs::write(staging(root), b"{\"half-written\":").unwrap();
+        }
+        match VaultStore::open(mgr.unlock(VAULT).unwrap()) {
+            Err(StoreError::IntegrityFinding(m)) => {
+                assert!(m.contains("different key generations"), "torn={torn}: {m}")
+            }
+            other => panic!(
+                "torn={torn}: must be an integrity verdict, got {:?}",
+                other.err()
+            ),
+        }
+        match VaultStore::open_read_only(
+            mgr.unlock_as(VAULT, Access::ReadOnly).unwrap(),
+            Box::new(undercroft_core::HashEmbedder),
+        ) {
+            Err(StoreError::IntegrityFinding(_)) => {}
+            other => panic!(
+                "torn={torn}: read-only must refuse too, got {:?}",
+                other.err()
+            ),
+        }
+        assert_eq!(keycheck_of(root).unwrap(), new_kc, "torn={torn}: rewritten");
+    }
+}
+
+/// **The discard's identity (ROADMAP O257, the R1/R2 sequence).** An open
+/// attached one rotation's ABANDONED staging file (R1) and connected only after
+/// a LATER rotation (R2) committed and failed to promote. Its discard used to
+/// remove whatever `.next` was on disk — R2's, the only copy of the new salt —
+/// and its re-seed wrote the old keycheck: the vault's data sealed under keys
+/// no file could derive. Now the staged file changed since that open read it,
+/// so the open is told to reopen and removes nothing, and the reopen promotes
+/// R2's generation.
+#[test]
+fn an_open_that_attached_an_older_staging_file_never_deletes_a_newer_one() {
+    let (dir, mut s) = fresh(SecurityLevel::Sealed);
+    s.upsert(&drawer("a memory R2 seals", 0)).unwrap();
+    drop(s);
+    let root = dir.path();
+    let mgr = VaultManager::open(root, None).unwrap();
+    // R1: a rotation that staged and never committed.
+    let mut r1 = mgr.rotation_candidate(VAULT).unwrap();
+    r1.save_manifest_pending(&undercroft_vault::Vault::chain_genesis_hex(), 1)
+        .unwrap();
+    let p1 = std::fs::read(staging(root)).unwrap();
+    // U reads the vault now, attaching R1's file, and connects later.
+    let early = mgr.unlock(VAULT).unwrap();
+    assert!(early.has_pending(), "premise: R1's file attached");
+    // R2: its own open discards R1's file (unchanged since it read it), then
+    // it rotates, and its promote fails every attempt.
+    let mut s = reopen(root);
+    assert!(
+        !staging(root).exists(),
+        "the open discarded R1's abandoned file"
+    );
+    pause::set(
+        &vdir(root),
+        std::sync::Arc::new(|phase| {
+            if phase == pause::Phase::Committed {
+                fixture::fail_times(fixture::Fault::Rename, crate::rotate::PROMOTE_ATTEMPTS);
+            }
+        }),
+    );
+    let report = s
+        .rotate_keys(mgr.rotation_candidate(VAULT).unwrap())
+        .unwrap();
+    assert!(
+        report.promote_deferred.is_some(),
+        "premise: R2's promote failed"
+    );
+    let p2 = std::fs::read(staging(root)).unwrap();
+    assert_ne!(p1, p2);
+    let r2_kc = keycheck_of(root);
+    drop(s);
+
+    match VaultStore::open(early) {
+        Err(StoreError::StaleUnlock(_)) => {}
+        other => panic!("U must be told to reopen, got {:?}", other.err()),
+    }
+    assert_eq!(
+        std::fs::read(staging(root)).unwrap(),
+        p2,
+        "R2's staged manifest — the only copy of its salt — must survive"
+    );
+    assert_eq!(keycheck_of(root), r2_kc, "U re-seeded the marker");
+    let s = reopen(root);
+    assert!(
+        !staging(root).exists(),
+        "the reopen promoted R2's generation"
+    );
+    assert!(s.verify().unwrap().ok());
+    assert_eq!(s.count().unwrap(), 1);
+}
+
+/// **A staged file naming the CURRENT generation never lowers the anchor
+/// (ROADMAP O257).** It is what a promote leaves when it stops between writing
+/// the manifest and removing the staged file — or an older copy of this
+/// generation's manifest planted as one. Before O257 it read as a committed
+/// rotation and was RENAMED over `vault.json`, moving the anchor down (and the
+/// next heal wrote a note that read as a restored manifest). Now it is settled:
+/// removed when it is still the bytes the unlock read, `vault.json` untouched.
+#[test]
+fn a_staged_file_of_the_current_generation_is_removed_and_never_lowers_the_anchor() {
+    let (dir, mut s) = fresh(SecurityLevel::Sealed);
+    s.upsert(&drawer("first", 0)).unwrap();
+    let root = dir.path();
+    let earlier = manifest(root);
+    s.upsert(&drawer("second", 1)).unwrap();
+    s.upsert(&drawer("third", 2)).unwrap();
+    let later = manifest(root);
+    assert_ne!(earlier, later, "premise: the anchor moved");
+    drop(s);
+    std::fs::write(staging(root), &earlier).unwrap();
+    let s = reopen(root);
+    assert_eq!(manifest(root), later, "the anchor was moved down");
+    assert!(!staging(root).exists(), "the leftover is removed");
+    assert!(s.unhealed().is_empty(), "{:?}", s.unhealed());
+    assert_eq!(s.stats().unwrap().anchor_lag, Some(0));
+}
+
 // ---------------------------------------------------------------------------
 // The source gate
 // ---------------------------------------------------------------------------
@@ -894,9 +1737,11 @@ fn body_of<'a>(text: &'a str, name: &str) -> &'a str {
 /// names the silent failures: a `vault.json` writer that survives outside the
 /// door, and an anchor "optimised" back into a caller's own hands. So:
 /// `anchor_manifest` has ONE production caller, the door's; the vault crate
-/// renames in exactly two places — the one writer and the promote — and
-/// creates a file only through `create_new`; each promote and discard in the
-/// store runs within a few lines of taking the write lock; the one writer
+/// renames in exactly one place — the one writer, which the promote now goes
+/// through (ROADMAP O257) — deletes only files it can name as its own and
+/// never in an unlock, and creates a file only through `create_new`; each
+/// promote and staged-file removal in the store runs under the write lock or
+/// inside the rotation's fence; the one writer
 /// keeps the anchor's durability at one file fsync and one directory sync;
 /// and no other crate writes the manifest. The CLI's `copy_dir` — backup
 /// create into `backups/`, restore back into `vaults/` under O69's exclusive
@@ -933,10 +1778,13 @@ fn every_manifest_writer_and_anchor_caller_is_the_one_the_ruling_names() {
     assert!(body_of(lib, "anchor_under_lock").contains(".anchor_manifest("));
     assert!(body_of(lib, "anchor_under_lock").contains("WriteLock::begin("));
 
-    // The vault crate: two renames, one `create_new`, no truncating create.
-    assert_eq!(vault.matches("fs::rename(").count(), 2, "vault renames");
+    // The vault crate: ONE rename — the one writer's — since the promote
+    // writes the new manifest from memory through it rather than renaming the
+    // staged file (ROADMAP O257, a refinement of O254 ruling item 4); one
+    // `create_new`; no truncating create.
+    assert_eq!(vault.matches("fs::rename(").count(), 1, "vault renames");
     assert!(body_of(&vault, "write_manifest_file").contains("fs::rename("));
-    assert!(body_of(&vault, "promote_manifest").contains("fs::rename("));
+    assert!(body_of(&vault, "promote").contains("write_manifest_file("));
     assert_eq!(vault.matches(".create_new(true)").count(), 1);
     assert_eq!(
         vault.matches("File::create(").count(),
@@ -945,8 +1793,24 @@ fn every_manifest_writer_and_anchor_caller_is_the_one_the_ruling_names() {
     );
     assert_eq!(
         vault.matches("write_manifest_file(").count(),
-        4,
-        "one def + three writers"
+        5,
+        "one def + four writers: create, staging, anchor, promote"
+    );
+    // Three deletions, each of a file the vault crate can name as its own: a
+    // failed write's own temp, an orphan temp under the lock, and a staged
+    // manifest still exactly the bytes this handle staged or read. None in an
+    // unlock, on either posture (ROADMAP O257).
+    assert_eq!(
+        vault.matches("fs::remove_file(").count(),
+        3,
+        "vault deletions"
+    );
+    assert!(body_of(&vault, "write_manifest_file").contains("fs::remove_file("));
+    assert!(body_of(&vault, "sweep_orphan_temps").contains("fs::remove_file("));
+    assert!(body_of(&vault, "remove_staged_if_unchanged").contains("fs::remove_file("));
+    assert!(
+        !body_of(&vault, "unlock_as").contains("remove_file"),
+        "an unlock deletes nothing (ROADMAP O257)"
     );
     let writer = body_of(&vault, "write_manifest_file");
     assert_eq!(writer.matches(".sync_all()").count(), 1, "one file fsync");
@@ -956,21 +1820,47 @@ fn every_manifest_writer_and_anchor_caller_is_the_one_the_ruling_names() {
         "the legacy fixed temp name"
     );
 
-    // Each promote and discard in the store runs under the write lock.
-    for call in [".promote_manifest()", ".discard_pending_file()"] {
-        let mut sites = 0;
-        for (path, text) in &store {
-            for (at, _) in text.match_indices(call) {
-                sites += 1;
-                let window: String = text[..at].lines().rev().take(20).collect();
-                assert!(
-                    window.contains("WriteLock::begin(") || window.contains("RotationTx::begin("),
-                    "{path}: {call} outside the write lock"
-                );
-            }
-        }
-        assert!(sites >= 1, "premise: {call} has call sites");
+    // Each promote and staged-file removal in the store runs where no other
+    // writer can interleave: inside `reconcile_rotation`, whose whole body is
+    // under the write lock, or inside the rotation's fence BEFORE the hold is
+    // dropped (ROADMAP O254, O257). Counted per call site, so a new caller
+    // anywhere else fails here.
+    let rotate = &store
+        .iter()
+        .find(|(p, _)| p.ends_with("rotate.rs"))
+        .unwrap()
+        .1;
+    let reconcile = body_of(lib, "reconcile_rotation");
+    let fenced = body_of(rotate, "rotate_keys_fenced");
+    assert!(
+        reconcile.contains("WriteLock::begin("),
+        "premise: reconcile locks"
+    );
+    let (take, drop_at) = (
+        fenced
+            .find("ExclusiveHold::take(")
+            .expect("the fence is taken"),
+        fenced.find("drop(hold)").expect("the fence is dropped"),
+    );
+    for call in [".promote()", ".remove_staged_if_unchanged()"] {
+        let total: usize = store.iter().map(|(_, t)| t.matches(call).count()).sum();
+        let locked = reconcile.matches(call).count();
+        let in_fence = fenced
+            .match_indices(call)
+            .filter(|(at, _)| *at > take && *at < drop_at)
+            .count();
+        assert_eq!(
+            total,
+            locked + in_fence,
+            "{call}: a call site outside the write lock and the fence"
+        );
+        assert!(locked >= 1, "premise: {call} is reached from reconcile");
     }
+    assert_eq!(
+        fenced.matches(".promote()").count(),
+        2,
+        "premise: the retried promote"
+    );
 
     // No other crate writes a manifest, and the directory writer is pinned.
     for (path, text) in cli.iter().chain(&orch) {

@@ -96,32 +96,58 @@ orchestrator routes to — before any of them writes again: stop them all,
 upgrade, start them. `undercroft config check` cannot see this: it inspects
 the environment, not the other processes running beside it.
 
-### a server whose vault another process rotated stops writing, and says why (O254)
+### `vault rotate` refuses while any other process has the vault open (O257)
 
-**Symptom:** after `undercroft vault rotate` runs beside a live `serve-http`
-(or any long-lived writer), that server's next save answers 200 with a
-warning in its log, and every write after it is refused with `integrity
-verdict: this handle no longer writes: its manifest anchor found that the
-database's key-generation marker is not this handle's …` — a 409 with
-`class: "integrity"` on `/v1`, exit 2 on the CLI. `stats` shows the reason
-under `unhealed` and `anchor_failures` of at least 1, and the
-`ManifestAnchorHandleRetired` alert fires. The next open of the vault then
-refuses it: `integrity failure on record audit-chain head — HMAC mismatch`.
+**Symptom:** `undercroft vault rotate <name>` exits 1 with `the vault is held
+by another process: a key rotation must be the only process with the vault
+open, and another process has it open …`, and `POST /v1/vaults/{id}/rotate`
+answers 409 with the same text and NO `class` field. Before 1.7.0 the same
+command exited 0.
 
-**Cause:** that server's keys were retired by the rotation. Before 1.7.0 its
-next manifest write put the RETIRED salt back over the rotated one, and the
-vault could no longer decrypt anything the rotation had sealed — silently and
-permanently. 1.7.0 refuses that write, so the rotated salt and every row the
-rotation sealed survive. What it does not yet stop is the one save that
-committed before the server's anchor noticed: it was sealed and chained under
-the retired keys, and that record is what the next open refuses (ROADMAP
-O257, the next unit, closes it).
+**Cause:** a key rotation now holds the vault exclusively from before its
+checks until its new manifest is written (ROADMAP O257), and refuses — changing
+nothing — while any other connection has the vault open: a `serve-http` or
+`serve-mcp` server (an MCP client such as Claude Desktop keeps one running),
+`daemon --watch`, a `mine`, a read-only replica, or another command still
+running. The documented procedure always said to stop them first; nothing
+enforced it, and a rotation beside a live writer could leave the vault unable
+to decrypt what the rotation had sealed. A script that rotated beside a
+running server used to get exit 0 and, from its next write, a damaged vault.
 
-**Fix:** restore the vault from a backup taken after the rotation and before
-that save, and replay the save from its source. **Never run `vault rotate`
-while another process has the vault open** — stop the server, rotate, start
-it — which has always been the documented procedure and is still the only
-safe one until O257 lands.
+**Fix:** stop every process that has the vault open, rotate, start them
+again. There is no override, for the reason O69's `backup restore` has none:
+SQLite's locks belong to a process, so a crashed server leaves files that hold
+nothing and the rotation runs. `undercroft config check` cannot see this: it
+is a command's behaviour, not a declaration. An open that arrives WHILE a
+rotation runs waits up to its 5 s busy timeout — longer than a rotation of
+about 10⁵ sealed drawers takes (2.56 s measured at 102,000) — and past it
+answers `another process holds this vault exclusively … retry once it
+finishes`. **The fence is only as good as the filesystem's locks**: on NFS,
+SMB, or a Windows host and a Docker Desktop container sharing one bind mount
+(the two do not see each other's locks), it can grant beside a live process —
+run every process on a vault from one side of such a mount.
+
+### a server whose vault another key generation took over stops writing, and says why (O254)
+
+**Symptom:** a long-lived writer (`serve-http`, `daemon --watch`, …) answers
+its writes with `integrity verdict: this handle's keys are not the vault's …`
+or `this handle no longer writes: its manifest anchor found …` — a 409 with
+`class: "integrity"` on `/v1`, exit 2 on the CLI — and `stats` says why under
+`unhealed`; the `ManifestAnchorHandleRetired` alert may fire.
+
+**Cause:** the vault's keys were rotated while that process had it open, which
+a 1.7.0 rotation refuses (above) — so this arises only from a rotation by an
+OLDER build, or on a filesystem whose locks do not work. Before 1.7.0 the
+server's next manifest write put the retired salt back over the rotated one,
+and the vault could no longer decrypt what the rotation had sealed. 1.7.0
+refuses that write, and since O257 also refuses every audited write whose
+key-generation marker is not the handle's, so nothing is committed under the
+retired keys (O254 alone let the first one through, and the next open then
+refused the whole vault).
+
+**Fix:** restart the process — the reopen reads the current manifest — and run
+`undercroft verify`. Then fix the cause: upgrade every process on the vault to
+one build (previous entry), and stop them all before a rotation.
 
 ## 1.6.1 (released 2026-09-22)
 

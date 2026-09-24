@@ -418,8 +418,11 @@ Consequences that are binding, not advisory:
   (rotation_candidate, byte-exact reseal_at_rest, two-phase
   vault.json.next staging, keycheck marker) + **the one manifest file
   writer** (`write_manifest_file`: a random-nonce `create_new` temp, fsync,
-  rename, directory sync — `create`, the staging write and every anchor go
-  through it, and the bare legacy `vault.json.tmp` a 1.6.x process still
+  rename, directory sync — `create`, the staging write, every anchor and,
+  since O257, the promote go through it, so the crate renames in ONE
+  place and deletes only files it can name as its own; no unlock deletes a
+  `vault.json.next` on either posture, a too-new one included — and the
+  bare legacy `vault.json.tmp` a 1.6.x process still
   writes is never matched or swept) and the anchor's checked
   read-modify-write, whose failures come back as `AnchorFault::{Io,
   Integrity}` for the store's door to act on (ROADMAP O254); a
@@ -1325,9 +1328,8 @@ Consequences that are binding, not advisory:
   row's CURRENT columns, so it turned every tampering `verify` reported —
   a flipped trust class, an edited drawer, a deleted audit row, an
   hmac-only vault's content — into authentic data with `verify` green.
-  One `verify()` now runs inside the rotation's own `BEGIN IMMEDIATE`
-  (`RotationTx`, which rolls back on every exit that does not commit)
-  and it refuses on `VerifyReport::rotation_blockers()`, destructured
+  One `verify()` now runs inside the rotation's own transaction and it
+  refuses on `VerifyReport::rotation_blockers()`, destructured
   with no `..` so a new leg does not compile unruled, as
   `StoreError::IntegrityFinding` — the integrity family's variant for a
   verdict that compared no HMAC. **And a policy row must be its key's
@@ -1335,7 +1337,31 @@ Consequences that are binding, not advisory:
   decision `verify`, `wing_trusts()` and `retention_policies()` share,
   comparing a row's tag with its newest chain record's above the last
   `rotate/` record, on indexed `record_id` probes; relabelling an audit
-  row defeats it, because `record_id` is outside the chain hash — O233),
+  row defeats it, because `record_id` is outside the chain hash — O233.
+  **And it holds the vault ALONE (O257)**: that transaction is taken on an
+  `ExclusiveHold` — `locking_mode=EXCLUSIVE` read back, `BEGIN EXCLUSIVE`,
+  on the store's own connection — from before the checks until after the
+  promote, because in that mode the lock SURVIVES the commit (measured). It
+  is refused, changing nothing, while any other connection has the vault
+  open — another process's, a `--read-only` one, or this process's own —
+  as `StoreError::VaultHeld` (exit 1; 409 with no class). The release is
+  PROVEN from a zero-timeout second connection (`prove_released`), never
+  by reading the pragma back, and a handle whose release cannot be proven
+  replaces its connection, counted on `lock_reconnects`; `/v1` also closes
+  its cached handle after every rotate. The promote writes the new
+  manifest FROM MEMORY through `write_manifest_file` — idempotent, never
+  lowering an anchor, removing `vault.json.next` only while it is still
+  the bytes it staged — and a promote that fails every attempt answers Ok
+  with `RotationReport.promote_deferred`, never an error that invites a
+  second rotation. Its partners: `chain_append` refuses a write whose
+  handle's keycheck the database does not hold, absent included; the
+  open's `reconcile_rotation` never overwrites a present foreign keycheck
+  — a race (`StaleUnlock`, reopened once by the CLI and `/v1`), a heal
+  when the chain replays under the manifest's keys, or an integrity
+  verdict — and takes the write lock only when there is something to
+  decide; no unlock deletes a staged manifest. Test pause points live in
+  `rotate_pause.rs`, never inline here — an inline `#[cfg(test)]` blinds
+  `rotation_names_every_key_derived_artifact`),
   bulk ingest
   (`upsert_many`: one transaction + one manifest anchor per batch —
   advisory encode paths must never BEGIN or batching breaks),
@@ -2300,8 +2326,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (1062 run,
-                                      # 6 #[ignore]d = 1068 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (1070 run,
+                                      # 8 #[ignore]d = 1078 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2385,13 +2411,15 @@ docker compose run --rm test          # cargo unit + integration tests (1062 run
                                       # remembered — do not hand-edit one to
                                       # silence the gate; it is measuring the
                                       # suite, not this comment.
-                                      # The 6 ignored are 3 measurements needing
-                                      # testdata/*_50k.txt, one in lib.rs, and two
-                                      # in anchor_tests.rs (ROADMAP O254): the
+                                      # The 8 ignored are 3 measurements needing
+                                      # testdata/*_50k.txt, one in lib.rs, and four
+                                      # in anchor_tests.rs (ROADMAP O254, O257): the
                                       # multi-process gate's child entry point,
                                       # which returns at once unless a parent
-                                      # names a role, and the P2 latency
-                                      # measurement, run by name. Run the first
+                                      # names a role, the P2 latency
+                                      # measurement, and O257's two probes (the
+                                      # exclusive hold across a commit, and the
+                                      # rotation's hold time), each run by name. Run the first
                                       # four with `cargo test --release -- --ignored`:
                                       # 3 pass, and `measure_relation_promiscuity`
                                       # FAILS on missing data, not on logic — it
@@ -2428,7 +2456,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (640 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (646 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (169 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (157 checks; weaviate

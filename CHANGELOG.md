@@ -2,13 +2,14 @@
 
 ## 1.7.0 — unreleased
 
-MINOR: one new capability, backward compatible, and four fixes. The witness
+MINOR: one new capability, backward compatible, and five fixes. The witness
 commands and routes are new; no default moves and no declaration can stop a
-start-up. One fix changes what a deployment must do: every process writing a
+start-up. Two fixes change what a deployment must do: every process writing a
 vault must run the same build, and a server whose vault another process
-rotated now stops writing rather than destroy the rotated salt (O254 —
-`UPGRADING.md`). (This line said "one fix" while O243 and O246 were both
-below it; corrected with O247.)
+rotated now stops writing rather than destroy the rotated salt (O254); and a
+key rotation now refuses while any other process has the vault open (O257) —
+both in `UPGRADING.md`. (This line said "one fix" while O243 and O246 were
+both below it; corrected with O247.)
 
 ### The external witness: `undercroft witness emit` / `check`, `GET`/`POST /v1/…/witness` (O245)
 
@@ -170,6 +171,48 @@ IMMEDIATE, and the same load fails none. What remains is a busy-handler tail
 stale write is still committed under the retired keys, which the next open
 refuses: O257, next in the ruled sequence. **Every process writing one vault
 must run the same build** — `UPGRADING.md`.
+
+### A key rotation holds the vault alone, and refuses while anything else has it open (O257)
+
+"Do not rotate a vault another process is serving" was documented and enforced
+by nothing. A rotation mints a fresh salt that lives only in the new manifest,
+and before O254 one ordinary write through a handle opened before the rotation
+wrote the old salt back — measured `f35f6159 → dd8d9114 → f35f6159` — leaving
+the vault unable to decrypt what the rotation sealed, permanently and silently.
+O254 stopped that anchor; the handle's first write still COMMITTED under the
+retired keys, and the next open refused the whole vault. Three more routes to
+the same loss were in the open path: an open that unlocked before a rotation
+staged wrote the OLD keycheck back after its commit; an open could delete a
+later rotation's staged manifest while removing an earlier one's; and every
+writable unlock deleted any `vault.json.next` it could not authenticate,
+outside any lock — a TOO-NEW one included, contrary to O238's record.
+
+Now `vault rotate` and `POST /v1/…/rotate` hold the vault EXCLUSIVELY on the
+store's own connection from before their checks until after the new manifest
+is written — the lock survives the commit, measured — and answer
+`the vault is held by another process` (exit 1; 409 with no integrity class)
+while any other connection has it open: a server, `serve-mcp`, `daemon
+--watch`, a `mine`, a read-only replica, another handle in the same process.
+Nothing changes when it refuses, and the release is proven from another
+connection afterwards; `/v1` also closes its cached handle after every rotate.
+Every audited write now checks, inside its own transaction, that the
+database's key-generation marker is still the handle's, so a handle whose keys
+are not the vault's commits nothing. An open whose marker is someone else's
+decides from the evidence instead of overwriting it: a rotation that moved the
+manifest since this process read it is a race, answered "reopen" (the CLI and
+`/v1` reopen once by themselves); a database whose chain replays under the
+manifest's keys — what the old re-seed left, which 1.6.x heals — is re-seeded
+with a note; anything else is an integrity verdict. The new manifest is written
+from memory through the one writer, never lowers an anchor, and removes the
+staged file only while it is still the bytes that rotation staged; a promote
+that still fails is reported on the rotation's output (`manifest promoted:
+DEFERRED`), never answered as an error that would invite a second rotation. No
+unlock deletes anything: an unauthenticated or too-new staged manifest is
+reported on `unhealed`, on writable opens too. A read-only open arriving during
+a rotation is told the vault is held instead of falling back to `immutable=1`,
+which read the database without its WAL and refused with a false "schema
+predates this build". **A rotation now refuses where it used to run and
+destroy the vault** — `UPGRADING.md`.
 
 ## 1.6.1 — 2026-09-22
 

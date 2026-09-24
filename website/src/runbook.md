@@ -139,8 +139,10 @@ well, where only a tampered count fails.
    is, and a prefilter loads an index but never builds one. What the open
    declined to repair is printed as a warning and readable afterwards on
    `undercroft stats` (and `GET /v1/vaults/{id}/stats`) as `unhealed` — during
-   an incident, read it: "a torn `vault.json.next` was left in place" tells
-   you a rotation was in flight when the incident began; and since 1.7.0
+   an incident, read it: "vault.json.next does not authenticate … and was
+   left in place" names a staged manifest this build cannot read — a torn
+   write from a build before 1.7.0 or a file something else put there, which
+   since 1.7.0 no open deletes on either posture (ROADMAP O257) — and since 1.7.0
    (ROADMAP O246) a WRITABLE open reports on the same list the manifest
    anchor heal it performed and how far behind the anchor was — a crash is
    the ordinary cause, and a genuine older `vault.json` restored beside a

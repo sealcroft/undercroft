@@ -46,7 +46,7 @@
 
     <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="key-rotation-title key-rotation-desc">
       <title id="key-rotation-title">Undercroft key rotation sequence</title>
-      <desc id="key-rotation-desc">An operator rotates a vault's keys in two phases: the store asks the vault for a rotation candidate with a fresh salt and five new subkeys, then opens one database transaction and runs verify inside it first, refusing and re-tagging nothing when a record tag, the audit chain, a receipt or a policy row fails, because re-keying would make that tampering authentic; otherwise it stages the new manifest durably as vault.json.next and, in the same transaction, re-seals every artifact under the new keys, re-tags the policy rows, re-keys the audit chain over the preserved historical bytes, appends a rotate record and flips the keycheck marker; only after that commit is the staged manifest promoted over vault.json. A crash between the commit and the promotion is reconciled at the next open, where the database keycheck decides whether the staged manifest is adopted or discarded, and the read-only role reports rather than heals. Identifiers, blind columns, fingerprints and audit record ids never move; tags, receipts and sealed bytes must.</desc>
+      <desc id="key-rotation-desc">An operator rotates a vault's keys in two phases: the store asks the vault for a rotation candidate with a fresh salt and five new subkeys, then takes the vault EXCLUSIVELY on its own connection — refused, changing nothing, while any other connection in any process has the vault open — opens one database transaction and runs verify inside it first, refusing and re-tagging nothing when a record tag, the audit chain, a receipt or a policy row fails, because re-keying would make that tampering authentic; otherwise it stages the new manifest durably as vault.json.next and, in the same transaction, re-seals every artifact under the new keys, re-tags the policy rows, re-keys the audit chain over the preserved historical bytes, appends a rotate record and flips the keycheck marker; the exclusive lock survives that commit, and only then is the new manifest written from memory over vault.json and the staged file removed, still inside the hold. A crash between the commit and the promotion is reconciled at the next open, where the database keycheck decides whether the staged manifest is adopted or discarded; a keycheck of neither generation is a race refused for a reopen, a stale marker re-seeded when the chain replays under the manifest's keys, or an integrity verdict; no open deletes a staged file it cannot authenticate, and the read-only role reports rather than heals. Identifiers, blind columns, fingerprints and audit record ids never move; tags, receipts and sealed bytes must.</desc>
       <defs>
         <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7fa39c"/></marker>
         <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#35e0c2"/></marker>
@@ -104,10 +104,10 @@
       <text x="276" y="141" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.06em">rotate · operator only</text>
 
       <rect x="428" y="164" width="188" height="12" rx="2" fill="#04080a"/>
-      <text x="522" y="173" fill="#7fa39c" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.06em">rotation_candidate: fresh salt, 4 keys</text>
+      <text x="522" y="173" fill="#7fa39c" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.06em">rotation_candidate: fresh salt, 5 keys</text>
 
       <rect x="612" y="196" width="256" height="12" rx="2" fill="#04080a"/>
-      <text x="740" y="205" fill="#35e0c2" font-size="8" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.06em">BEGIN IMMEDIATE — from the check to COMMIT</text>
+      <text x="740" y="205" fill="#35e0c2" font-size="8" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.06em">EXCLUSIVE hold — from the check to promote</text>
 
       <rect x="448" y="243" width="340" height="12" rx="2" fill="#04080a"/>
       <text x="618" y="252" fill="#35e0c2" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.06em">verify first · refuse, re-tag nothing: tag · chain · receipt · policy</text>
@@ -128,7 +128,7 @@
       <text x="740" y="389" fill="#35e0c2" font-size="8" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.06em">COMMIT</text>
 
       <rect x="544" y="404" width="196" height="12" rx="2" fill="#04080a"/>
-      <text x="642" y="413" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.06em">promote .next over vault.json</text>
+      <text x="642" y="413" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.06em">write vault.json from memory</text>
 
       <rect x="196" y="428" width="164" height="12" rx="2" fill="#04080a"/>
       <text x="278" y="437" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.06em">RotationReport · chain record</text>
@@ -137,7 +137,7 @@
       <text x="860" y="517" fill="#7fa39c" font-size="8" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.06em">rotation_verdict(db keycheck) — no effect</text>
 
       <rect x="628" y="556" width="264" height="12" rx="2" fill="#04080a"/>
-      <text x="760" y="565" fill="#7fa39c" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.06em">matches ⇒ promote · else discard · read-only ⇒ REPORT</text>
+      <text x="760" y="565" fill="#7fa39c" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.06em">twin's ⇒ promote · own ⇒ discard · else ⇒ refuse/heal</text>
 
       <!-- ============ ACTORS ============ -->
       <rect x="80" y="64" width="160" height="64" rx="6" fill="#04080a"/>
