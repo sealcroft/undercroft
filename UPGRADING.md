@@ -149,6 +149,31 @@ refused the whole vault).
 `undercroft verify`. Then fix the cause: upgrade every process on the vault to
 one build (previous entry), and stop them all before a rotation.
 
+### `forget`, a retention sweep and `admission deny` destroy everything or nothing, and hold the write lock while they do (O255)
+
+**Symptom:** while a large `forget` or `retention sweep` runs, other writers on
+the vault wait for it, and one that waits past its 5 s busy timeout is refused
+`database is locked` (nothing it wrote is stored; a retry is safe). A `forget`
+naming a drawer another process destroyed meanwhile now refuses with
+`NotFound` and destroys none of the list, where it used to destroy the drawers
+before it. A `forget` that names one drawer twice returns a receipt naming it
+once. A `forget` on a `--read-only` handle refuses before it replays anything.
+
+**Cause:** ROADMAP O255. Each drawer used to be destroyed in its own
+transaction, so another writer's commit could land inside the receipt's
+interval — the receipt then never verified and carried that writer's labels —
+and a sweep destroyed what a policy re-declared meanwhile would keep. Now the
+whole destruction is one write lock, and the receipt is read from it. The lock
+is short where the old loop was long: 4,000 drawers held it 122 ms (the old
+loop took 53 s and starved a paced writer past its timeout 6 times); 40,000
+drawers held it about 2.5 s with the retrieval tiers built.
+
+**Fix:** none needed for ordinary use. Schedule a very large sweep — tens of
+thousands of drawers expiring at once — away from write-heavy hours, or split a
+very large `forget` into several; one destruction near 75,000 drawers holds
+the lock past another writer's busy timeout (ROADMAP O264). `undercroft config
+check` cannot see this: it depends on the data, not on a declaration.
+
 ## 1.6.1 (released 2026-09-22)
 
 ### The manifest carries a version fence from this release on (O238)

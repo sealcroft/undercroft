@@ -1143,7 +1143,21 @@ Consequences that are binding, not advisory:
   alarm on the routine path. The enum is `#[must_use]` so a third verdict
   could not silently weaken an existing `.unwrap();` that meant "verified",
   and the CLI's exhaustive `match` gates the projection better than an
-  inventory entry would),
+  inventory entry would. **A whole destruction is ONE write lock since
+  O255**: each drawer was destroyed in its own transaction, so another
+  writer's commit landed inside the receipt's interval and the receipt never
+  verified (7 of 65 in a sweep of every step), and a failure at drawer k
+  left k−1 destroyed with no receipt a re-run could mint. Now `attest_in`
+  (`forget`, the sweep and `admission deny` share it, deny appending its
+  ruling first) reads existence, the fence, the fingerprints — from the
+  bytes it destroys — the heads and the records inside the lock, asserts
+  the records are exactly its tombstones before the COMMIT, and anchors
+  once after it; `destroy_in` holds the crate's one `DELETE FROM drawers
+  WHERE id`, propagates every statement's error, and checks
+  `is_autocommit()` before each write, because a statement that fails can
+  make SQLite roll the whole transaction back and the next one would then
+  commit on its own (measured). The label guard stays OUTSIDE the lock,
+  where a miss replays in a read snapshot),
   retention policies (retention.rs — C3.2 phase 2: per wing/room on the
   wing-trust pattern, operator-only + HMAC-tagged + audited, flip fails
   list AND sweep; enforcement is an **explicit sweep** through
@@ -1161,7 +1175,14 @@ Consequences that are binding, not advisory:
   `withheld` for an undatable member or one the pending-evidence fence
   refuses), it reports drift on what it destroyed and a deleted policy row
   (the retention half of the policy leg, one function), and any of those
-  makes `ok` false: 200 on `/v1`, exit 2 on the CLI and the orchestrator),
+  makes `ok` false: 200 on `/v1`, exit 2 on the CLI and the orchestrator.
+  **And it destroys only what the policy IN FORCE at the destruction
+  expires (O255)**: the decision is one guarded snapshot (policies, drift,
+  the walk); the destroying lock compares the policy rows byte for byte
+  with the decision's and re-classifies each member through the walk's own
+  per-row decision (`covered_row`); a change makes it decide again outside
+  once, then inside the lock — measured, 58 of 64 sweeps destroyed after a
+  concurrent re-declaration before),
   management surface (manage.rs — incl. **deployment-assigned wing trust**:
   `undercroft_core::TRUST_VOCAB` closed vocabulary assigned by the operator
   only, never over MCP; HMAC-tagged + audited, flip = integrity failure;
@@ -2336,8 +2357,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (1080 run,
-                                      # 11 #[ignore]d = 1091 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (1095 run,
+                                      # 11 #[ignore]d = 1106 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2469,7 +2490,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (646 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (652 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (169 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (157 checks; weaviate

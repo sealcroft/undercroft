@@ -1670,6 +1670,109 @@ else
   echo "FAIL  O232: /v1 refuses the rotation"; echo "$O232_R" | sed 's/^/      /'; FAIL=$((FAIL+1))
 fi
 
+# ── ROADMAP O255: a destruction beside a writer in ANOTHER process ─────────
+# Each drawer used to be destroyed in its own transaction, so another
+# writer's commit landed inside a receipt's interval — the receipt then never
+# verified, and carried that writer's labels — and a sweep decided on one
+# state and destroyed on a later one. One write lock now spans the whole
+# destruction. Driven through both surfaces with the writer in another
+# PROCESS: the CLI forgets and sweeps beside a `/v1` save loop in the server,
+# and `/v1` forgets beside a CLI writer. The drawers are re-dated through
+# export and import (the O206 recipe) so a policy expires them.
+O255_SRC="$(mktemp -d)"; O255_HOME="$(mktemp -d)"; O255_DIR="$(mktemp -d)"
+o255() { env UNDERCROFT_HOME="$O255_HOME" "$BIN" "$@"; }
+UNDERCROFT_HOME="$O255_SRC" "$BIN" init >/dev/null 2>&1
+for i in $(seq 1 24); do
+  UNDERCROFT_HOME="$O255_SRC" "$BIN" remember "harbour ledger entry $i names the cargo" \
+    --wing harbour --room ledger >/dev/null 2>&1
+done
+UNDERCROFT_HOME="$O255_SRC" "$BIN" export | grep -F '"drawer"' \
+  | sed 's/"filed_at":"[^"]*"/"filed_at":"2020-01-01T00:00:00Z"/' > "$O255_DIR/export.jsonl"
+o255 init >/dev/null 2>&1
+o255 import "$O255_DIR/export.jsonl" >/dev/null 2>&1
+mapfile -t O255_IDS < <(o255 drawer list --wing harbour --limit 100 | awk '{print $1}')
+if [ "${#O255_IDS[@]}" -eq 24 ]; then
+  echo "ok    O255: premise — 24 re-dated drawers to destroy"; PASS=$((PASS+1))
+else
+  echo "FAIL  O255: premise — 24 re-dated drawers (got ${#O255_IDS[@]})"; FAIL=$((FAIL+1))
+fi
+UNDERCROFT_HOME="$O255_HOME" "$BIN" serve-http --host 127.0.0.1 --port 18877 >/dev/null 2>&1 &
+O255_PID=$!
+for _ in $(seq 1 40); do curl -sf http://127.0.0.1:18877/healthz >/dev/null 2>&1 && break; sleep 0.25; done
+# The /v1 writer: saves in the SERVER process, for as long as the CLI works.
+( for i in $(seq 1 600); do
+    curl -s -o /dev/null -X POST http://127.0.0.1:18877/v1/vaults/default/drawers \
+      -d "{\"text\":\"a concurrent save $i on the quay\",\"wing\":\"quay\",\"room\":\"r\"}"
+  done ) &
+O255_W=$!
+# A bounded barrier: the writer has saved at least four drawers — the ones
+# the /v1 forget below destroys — before the CLI starts. Without it a fast
+# CLI phase finished before four existed, and the array under `set -u`
+# emptied the /v1 request (seen once in a battery).
+for _ in $(seq 1 80); do
+  [ "$(o255 drawer list --wing quay --limit 100 | grep -c '^[0-9a-f]\{32\}')" -ge 4 ] && break
+  sleep 0.25
+done
+O255_CLI_OK=0
+for r in 0 1 2; do
+  if o255 forget "${O255_IDS[@]:$((r*4)):4}" --out "$O255_DIR/att-$r.json" >/dev/null 2>&1 \
+     && o255 verify-forgetting "$O255_DIR/att-$r.json" 2>&1 | grep -qF 'ATTESTATION VERIFIED'; then
+    O255_CLI_OK=$((O255_CLI_OK+1))
+  fi
+done
+o255 retention set harbour --days 30 >/dev/null 2>&1
+o255 retention sweep --out "$O255_DIR/sweep.json" >/dev/null 2>&1
+O255_SWEEP_CODE=$?
+O255_RUNNING=0; kill -0 "$O255_W" 2>/dev/null && O255_RUNNING=1
+if [ "$O255_CLI_OK" -eq 3 ] && [ "$O255_RUNNING" -eq 1 ]; then
+  echo "ok    O255: three CLI receipts minted beside a /v1 writer all verify"; PASS=$((PASS+1))
+else
+  echo "FAIL  O255: CLI receipts beside a /v1 writer — $O255_CLI_OK of 3 verified, writer still running: $O255_RUNNING"
+  FAIL=$((FAIL+1))
+fi
+perl -0777 -ne 'print $1 if /"attestation": (\{.*\})\s*\}\s*$/s' "$O255_DIR/sweep.json" \
+  > "$O255_DIR/sweep-att.json"
+if [ "$O255_SWEEP_CODE" -eq 0 ] && grep -qF '"ok": true' "$O255_DIR/sweep.json" \
+   && grep -qF '"destroyed": 12' "$O255_DIR/sweep.json" \
+   && o255 verify-forgetting "$O255_DIR/sweep-att.json" 2>&1 | grep -qF 'ATTESTATION VERIFIED'; then
+  echo "ok    O255: the CLI sweep beside the writer destroys the 12 left, ok, its receipt verifies"
+  PASS=$((PASS+1))
+else
+  echo "FAIL  O255: the CLI sweep beside the writer (exit $O255_SWEEP_CODE)"
+  sed 's/^/      /' "$O255_DIR/sweep.json" | head -20; FAIL=$((FAIL+1))
+fi
+kill "$O255_W" 2>/dev/null; wait "$O255_W" 2>/dev/null
+# The other direction: /v1 forgets beside a CLI writer in its own process,
+# four of the drawers the /v1 writer saved.
+mapfile -t O255_IDS2 < <(o255 drawer list --wing quay --limit 4 | grep -o '^[0-9a-f]\{32\}')
+if [ "${#O255_IDS2[@]}" -eq 4 ]; then
+  echo "ok    O255: premise — four drawers the /v1 writer saved, to forget"; PASS=$((PASS+1))
+else
+  echo "FAIL  O255: premise — four drawers the /v1 writer saved (got ${#O255_IDS2[@]})"
+  FAIL=$((FAIL+1)); O255_IDS2=(none none none none)
+fi
+( for i in $(seq 1 40); do o255 remember "a cli save $i on the quay" --wing quay --room s \
+    >/dev/null 2>&1; done ) &
+O255_W2=$!
+O255_V1="$(curl -s -w '\n%{http_code}' -X POST http://127.0.0.1:18877/v1/vaults/default/forget \
+  -d "{\"ids\":[\"${O255_IDS2[0]}\",\"${O255_IDS2[1]}\",\"${O255_IDS2[2]}\",\"${O255_IDS2[3]}\"]}")"
+O255_RUNNING2=0; kill -0 "$O255_W2" 2>/dev/null && O255_RUNNING2=1
+sed '$d' <<<"$O255_V1" > "$O255_DIR/v1-att.json"
+O255_V1V="$(curl -s -X POST http://127.0.0.1:18877/v1/vaults/default/verify-forgetting \
+  --data-binary "@$O255_DIR/v1-att.json")"
+if [ "$(tail -1 <<<"$O255_V1")" = 200 ] && [ "$O255_RUNNING2" -eq 1 ] \
+   && grep -qF '"verdict":"verified"' <<<"$O255_V1V"; then
+  echo "ok    O255: a /v1 receipt minted beside a CLI writer verifies"; PASS=$((PASS+1))
+else
+  echo "FAIL  O255: a /v1 receipt beside a CLI writer (writer running: $O255_RUNNING2)"
+  echo "$O255_V1" | head -3 | sed 's/^/      /'; echo "$O255_V1V" | sed 's/^/      /'
+  FAIL=$((FAIL+1))
+fi
+wait "$O255_W2" 2>/dev/null
+kill "$O255_PID" 2>/dev/null; wait "$O255_PID" 2>/dev/null
+check "O255: the vault verifies after both" 0 "VERIFY OK" -- \
+  env UNDERCROFT_HOME="$O255_HOME" "$BIN" verify
+
 # ── ROADMAP O233: a relabelled audit row breaks the labelled chain ─────────
 # The chain folded each record's TAG alone, so an audit row's label sat
 # outside it: relabelling a `trust/` record (and deleting its row) lifted a

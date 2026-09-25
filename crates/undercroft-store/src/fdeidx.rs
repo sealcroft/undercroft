@@ -434,15 +434,6 @@ impl VaultStore {
         self.fde_store_row(id, model, &fde);
     }
 
-    /// Purge a deleted drawer's FDE row (called beside the token purge; the
-    /// cache drops wholesale — deletes are rare, the next search reloads).
-    pub(crate) fn fde_purge_row(&self, id: &str) {
-        let _ = self
-            .conn
-            .execute("DELETE FROM drawer_fde WHERE id = ?1", params![id]);
-        self.fde_cache.borrow_mut().take();
-    }
-
     /// Backfill FDEs for every drawer that has a stored token matrix under
     /// `model` but no FDE row — pure arithmetic over the stored matrices
     /// (v1 rows dequantize; v2 rows decode through the token codebook), no

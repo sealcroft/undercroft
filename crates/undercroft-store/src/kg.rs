@@ -5002,9 +5002,10 @@ mod tests {
     /// alarming on it would retire the leg by making it noise.
     ///
     /// The premise that makes this safe was enumerated rather than assumed:
-    /// `delete_drawer_ruled` holds the crate's only `DELETE FROM drawers` and
-    /// appends `del/{id}` in the same transaction, so "no row and no
-    /// tombstone" is unreachable by any legitimate path.
+    /// `destroy_in` holds the crate's only `DELETE FROM drawers WHERE id`
+    /// (ROADMAP O255; `delete_drawer_ruled` before it) and appends `del/{id}`
+    /// in the same transaction, so "no row and no tombstone" is unreachable by
+    /// any legitimate path.
     #[test]
     fn a_relabelled_drawer_audit_row_is_an_orphan_and_a_deleted_one_is_not() {
         let (dir, mut s) = store(SecurityLevel::Sealed);
