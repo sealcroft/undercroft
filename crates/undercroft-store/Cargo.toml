@@ -44,3 +44,7 @@ tempfile = { workspace = true }
 # The anchor's failure-injection seam (ROADMAP O254): a DEV-dependency, so the
 # feature reaches this crate's tests and never a production build.
 undercroft-vault = { path = "../undercroft-vault", features = ["test-fixture"] }
+# ROADMAP O253's interleaving gate: a `progress_handler` on the store's own
+# connection commits from a second handle at the Nth VM step of a door. A
+# dev-dependency feature, so production code carries no interleave hook.
+rusqlite = { workspace = true, features = ["hooks"] }

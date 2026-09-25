@@ -82,8 +82,10 @@ modification: every read verifies, `verify` audits everything.
   and a replayed drawer is served — measured, pinned as a cost, ROADMAP O252.
   The guard defends against a writer who does not hold the key; a
   deployment that keeps `master.key` beside the database gives most such
-  writers the key. A legitimate concurrent writer can also make it refuse as
-  tampering (ROADMAP O253).
+  writers the key. A legitimate concurrent writer no longer makes it refuse
+  as tampering: since 1.7.0 every judgement reads what it compares — the
+  replay, the committed head, the rows it acts on — from ONE database state,
+  and reads the manifest anchor before that state is pinned (ROADMAP O253).
 - **Duplicate detection** uses keyed fingerprints (truncated HMAC), so
   stored fingerprints reveal nothing offline.
 

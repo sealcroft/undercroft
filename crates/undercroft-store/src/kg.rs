@@ -3080,23 +3080,46 @@ impl VaultStore {
         // `valid_to`), so a replayed row can walk INTO the filter and win on
         // `extracted_at DESC` — or push the current holder out of it. The
         // consulted set is therefore every row on this key, whatever the
-        // other clauses say, read through the `canonical_key` index.
-        let candidates: Vec<String> = self
-            .conn
-            .prepare("SELECT id FROM kg_triples WHERE canonical_key = ?1")?
-            .query_map(params![key], |r| r.get(0))?
-            .collect::<Result<_, _>>()?;
-        self.refuse_replayed(read, crate::replay::Consulted::Facts, Some(&candidates))?;
-        let row = self
-            .conn
-            .prepare(&sql)?
-            .query_row(params![key], TripleRow::from_row)
-            .optional()?;
-        let out = row.map(|r| self.decode_triple(r)).transpose()?;
+        // other clauses say, read through the `canonical_key` index. The
+        // consulted set, its comparison and the answer are one snapshot
+        // (ROADMAP O253).
+        let out = self.read_facts(read, |snap| {
+            if let Some(snap) = snap {
+                let candidates: Vec<String> = snap
+                    .conn()
+                    .prepare("SELECT id FROM kg_triples WHERE canonical_key = ?1")?
+                    .query_map(params![key], |r| r.get(0))?
+                    .collect::<Result<_, _>>()?;
+                self.refuse_replayed(snap, crate::replay::Consulted::Facts, Some(&candidates))?;
+            }
+            let row = self
+                .conn
+                .prepare(&sql)?
+                .query_row(params![key], TripleRow::from_row)
+                .optional()?;
+            row.map(|r| self.decode_triple(r)).transpose()
+        })?;
         if out.is_some() {
             self.record_read(read, key, crate::ReadScope::none(), 1)?;
         }
         Ok(out)
+    }
+
+    /// **A graph door's reads** (ROADMAP O253): a returning read runs `body`
+    /// inside ONE guarded snapshot, handed to it so the door compares what it
+    /// consulted with the chain in the state it read the facts from; the
+    /// engine's own lookups decide nothing from the chain and run outside any
+    /// guard, handed `None`. Each door's `record_read` runs after this
+    /// returns, because the record is a write.
+    fn read_facts<T>(
+        &self,
+        read: crate::Read,
+        body: impl FnOnce(Option<&crate::chain::Snapshot<'_>>) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        match read {
+            crate::Read::Returned(_) => self.guarded(|snap| body(Some(snap))),
+            crate::Read::Internal(_) => body(None),
+        }
     }
 
     fn decode_triple(&self, row: TripleRow) -> Result<Triple, StoreError> {
@@ -3194,9 +3217,14 @@ impl VaultStore {
         // it consulted IS the table — naming the ids it kept would
         // under-report exactly as recording a count on the shared helper
         // would over-report (ROADMAP O51). A replayed fact that merely
-        // displaced the answer never appears in the answer.
-        self.refuse_replayed(read, crate::replay::Consulted::Facts, None)?;
-        let all = self.all_triples()?;
+        // displaced the answer never appears in the answer. The comparison and
+        // the walk are one snapshot (ROADMAP O253).
+        let all = self.read_facts(read, |snap| {
+            if let Some(snap) = snap {
+                self.refuse_replayed(snap, crate::replay::Consulted::Facts, None)?;
+            }
+            self.all_triples()
+        })?;
         let key = as_of.map(temporal_key);
         let out: Vec<Triple> = all
             .into_iter()
@@ -3229,11 +3257,16 @@ impl VaultStore {
         // it consulted IS the table — naming the ids it kept would
         // under-report exactly as recording a count on the shared helper
         // would over-report (ROADMAP O51). A replayed fact that merely
-        // displaced the answer never appears in the answer.
-        self.refuse_replayed(read, crate::replay::Consulted::Facts, None)?;
+        // displaced the answer never appears in the answer. The comparison and
+        // the walk are one snapshot (ROADMAP O253).
+        let all = self.read_facts(read, |snap| {
+            if let Some(snap) = snap {
+                self.refuse_replayed(snap, crate::replay::Consulted::Facts, None)?;
+            }
+            self.all_triples()
+        })?;
         let key = as_of.map(temporal_key);
-        let out: Vec<Triple> = self
-            .all_triples()?
+        let out: Vec<Triple> = all
             .into_iter()
             .filter(|t| t.predicate == predicate)
             .filter(|t| valid_at(t, key.as_deref()))
@@ -3427,10 +3460,15 @@ impl VaultStore {
         // it consulted IS the table — naming the ids it kept would
         // under-report exactly as recording a count on the shared helper
         // would over-report (ROADMAP O51). A replayed fact that merely
-        // displaced the answer never appears in the answer.
-        self.refuse_replayed(read, crate::replay::Consulted::Facts, None)?;
-        let mut out: Vec<Triple> = self
-            .all_triples()?
+        // displaced the answer never appears in the answer. The comparison and
+        // the walk are one snapshot (ROADMAP O253).
+        let all = self.read_facts(read, |snap| {
+            if let Some(snap) = snap {
+                self.refuse_replayed(snap, crate::replay::Consulted::Facts, None)?;
+            }
+            self.all_triples()
+        })?;
+        let mut out: Vec<Triple> = all
             .into_iter()
             .filter(|t| {
                 entity

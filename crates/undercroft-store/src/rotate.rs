@@ -180,7 +180,14 @@ impl VaultStore {
         {
             return Err(crate::stale_keys(db_keycheck.as_deref()));
         }
-        let blockers = self.verify()?.rotation_blockers();
+        // Every leg in the hold's own transaction, the anchor read in place:
+        // nothing else can even open the vault while it is held, so the
+        // anchor and the rows are one state (ROADMAP O232, O253).
+        let blockers = {
+            let anchor = self.vault.anchored_head()?;
+            self.verify_in(&hold.snapshot()?, &anchor)?
+                .rotation_blockers()
+        };
         if !blockers.is_empty() {
             return Err(StoreError::IntegrityFinding(rotation_refusal(&blockers)));
         }
@@ -745,7 +752,7 @@ impl VaultStore {
         // bind, and so launder, whatever its labels are now). The `verify`
         // above refused a chain that does not replay; a pre-switch label
         // mismatch does not block, because it survives this untouched.
-        let replayed = crate::chain::replay(&self.conn, &next, None)?;
+        let replayed = crate::chain::replay(&hold.snapshot()?, &next, None)?;
         report.audit_entries = replayed.rows;
         let regime = replayed.regime;
         // **The rotation records ITSELF (ROADMAP A19).** This is the largest

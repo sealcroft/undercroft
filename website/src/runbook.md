@@ -144,8 +144,9 @@ well, where only a tampered count fails.
    write from a build before 1.7.0 or a file something else put there, which
    since 1.7.0 no open deletes on either posture (ROADMAP O257) — and since 1.7.0
    (ROADMAP O246) a WRITABLE open reports on the same list the manifest
-   anchor heal it performed and how far behind the anchor was — a crash is
-   the ordinary cause, and a genuine older `vault.json` restored beside a
+   anchor heal it performed and how far behind the anchor was — a crash, or
+   another writer committing while the handle opened (ROADMAP O253), is the
+   ordinary cause, and a genuine older `vault.json` restored beside a
    current database looks identical, so treat it as evidence to read during
    an incident rather than as an alarm. Since 1.2.0 the admin
    console at `GET /ui` shows it too, as an UNHEALED panel that appears only

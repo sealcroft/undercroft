@@ -760,9 +760,19 @@ Consequences that are binding, not advisory:
   (O252, measured and pinned as a cost). **The whole guard defends against
   a writer who does NOT hold the key** — on a deployment keeping
   `master.key` in a file beside the database, a writer who can edit the
-  database can usually read the key as well. And a legitimate CONCURRENT
-  writer makes it refuse as tampering, because the replay and the committed
-  head are read in two snapshots (O253, measured)),
+  database can usually read the key as well. **And every judgement reads
+  ONE state since O253**: a legitimate CONCURRENT writer made the guard
+  refuse as tampering, `verify` report a broken chain and `vault anchor`
+  fail, because what each compared was read in several WAL snapshots —
+  measured, 478 false refusals at every step of seven doors. `chain::replay`
+  and `chain::prefix` REQUIRE a `Snapshot`, which only the helper
+  (`query_only`, `BEGIN DEFERRED`, the cookie read first, ownership COUNTED
+  on the handle) and the two write-lock guards can mint; `guarded` is the
+  door — a hit runs the body in the snapshot that read the cookie, a miss
+  ends it, reads the manifest anchor, and replays in a second — and the
+  anchor is read BEFORE the snapshot everywhere, because read after the pin
+  it names heads the rows never produced (counterfactual: false refusals at
+  exactly the pinning statement)),
   verify (**`VerifyReport` is the whole verdict and it has NINE legs**: record
   HMACs, the chain replay, the label commitment (O233), drawer supersession
   receipts, **KG fact receipts**, orphan graph labels, mirror drift,
@@ -2326,8 +2336,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (1070 run,
-                                      # 8 #[ignore]d = 1078 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (1080 run,
+                                      # 11 #[ignore]d = 1091 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2411,7 +2421,7 @@ docker compose run --rm test          # cargo unit + integration tests (1070 run
                                       # remembered — do not hand-edit one to
                                       # silence the gate; it is measuring the
                                       # suite, not this comment.
-                                      # The 8 ignored are 3 measurements needing
+                                      # The 11 ignored are 3 measurements needing
                                       # testdata/*_50k.txt, one in lib.rs, and four
                                       # in anchor_tests.rs (ROADMAP O254, O257): the
                                       # multi-process gate's child entry point,
@@ -2419,7 +2429,10 @@ docker compose run --rm test          # cargo unit + integration tests (1070 run
                                       # names a role, the P2 latency
                                       # measurement, and O257's two probes (the
                                       # exclusive hold across a commit, and the
-                                      # rotation's hold time), each run by name. Run the first
+                                      # rotation's hold time), each run by name,
+                                      # and three in snapshot_tests.rs (ROADMAP
+                                      # O253's soak, cost and -wal measurements,
+                                      # also run by name). Run the first
                                       # four with `cargo test --release -- --ignored`:
                                       # 3 pass, and `measure_relation_promiscuity`
                                       # FAILS on missing data, not on logic — it
