@@ -993,6 +993,40 @@ else
   echo "      refusal arm would have passed against nothing"
   FAIL=$((FAIL+1))
 fi
+# ROADMAP O256. `backup create` archives EXACTLY the state its verify judged:
+# it used to verify, drop the store and copy the directory as files, so beside
+# a writer 11 of 40 copies failed, 2 of the rest restored as tampering and 16
+# held a state the verify never saw. An archive is now the database and the
+# manifest and nothing else, and it names the chain height it holds.
+o256_exact() { # <archive dir> <vault> <reported height> <home holding master.key>
+  local r h
+  [ "$(ls -A "$1" | tr '\n' ' ')" = "vault.db vault.json " ] \
+    || { echo "contents: $(ls -A "$1" | tr '\n' ' ')"; return; }
+  r="$(mktemp -d)"; mkdir -p "$r/vaults/$2"
+  cp "$4/master.key" "$r/"; cp "$1"/vault.db "$1"/vault.json "$r/vaults/$2/"
+  UNDERCROFT_HOME="$r" "$BIN" verify --vault "$2" 2>&1 | grep -q "VERIFY OK" \
+    || { echo "the restored archive did not verify"; return; }
+  h="$(UNDERCROFT_HOME="$r" "$BIN" stats --vault "$2" 2>/dev/null \
+    | sed -n 's/^writes:  \([0-9]*\) .*/\1/p')"
+  [ -n "$3" ] && [ "$h" = "$3" ] || { echo "restored height '$h', reported '$3'"; return; }
+  echo "exact"
+}
+O256_OUT="$("$BIN" backup create 2>&1)"
+O256_DIR="$(printf '%s\n' "$O256_OUT" | sed -n 's/^Backup created: //p')"
+O256_H="$(printf '%s\n' "$O256_OUT" | sed -n 's/^  chain height: //p')"
+check "backup create names the chain height it archived" 0 "exact" -- \
+  o256_exact "$O256_DIR" default "$O256_H" "$UNDERCROFT_HOME"
+# ROADMAP O256: a backup NAME is a name. Unvalidated, `restore ../vaults/X`
+# resolved the source to the vault itself and removed it before failing to
+# copy from what it had just deleted.
+check "restore refuses a backup name that is a path" 1 "invalid backup" -- \
+  "$BIN" backup restore ../vaults/default --force
+check "and the vault it named is untouched"          0 "VERIFY OK"      -- "$BIN" verify
+# The stage an archive is built in is never listed as one.
+mkdir -p "$UNDERCROFT_HOME/backups/.staging/0123456789abcdef0123456789abcdef"
+check "backup list never shows the stage" 0 "hidden" -- sh -c \
+  "\"$BIN\" backup list | grep -qx '.staging' && echo LISTED || echo hidden"
+rm -rf "$UNDERCROFT_HOME/backups/.staging"
 check "repair passes"             0 "integrity: ok"                  -- "$BIN" repair
 check "hooks prints settings"     0 "PreCompact"                     -- "$BIN" hooks claude-code
 
@@ -2806,6 +2840,72 @@ rest_body "/v1 backup create" '"backup"' -- -X POST "$API/vaults/acme/backups" \
   -H "X-Vault-Assertion: $(sign acme)"
 rest_body "/v1 backup list is scoped to this vault" '"vault":"acme"' -- \
   "$API/vaults/acme/backups" -H "X-Vault-Assertion: $(sign acme)"
+# ROADMAP O256: the report travels — the chain height and head the archive
+# holds, and how far its manifest's anchor lags them.
+rest_body "/v1 backup create reports the archived height" '"writes":' -- -X POST \
+  "$API/vaults/acme/backups" -H "X-Vault-Assertion: $(sign acme)"
+rest_body "/v1 backup create reports the anchor lag" '"anchor_behind_by":' -- -X POST \
+  "$API/vaults/acme/backups" -H "X-Vault-Assertion: $(sign acme)"
+# ...and each archive is EXACTLY what it reports while ANOTHER PROCESS writes
+# the vault, in both directions: the CLI backing up while this server saves,
+# and this server backing up while CLI processes save. (The server's request
+# loop is single-threaded, so a /v1 writer and a /v1 backup would never
+# interleave; the concurrency that matters is across processes.)
+( for i in $(seq 1 150); do
+    curl -s -o /dev/null -X POST "$API/vaults/acme/drawers" \
+      -H "X-Vault-Assertion: $(sign acme)" \
+      -d "{\"text\":\"o256 concurrent save $i\",\"wing\":\"o256\",\"room\":\"r\"}"
+  done ) &
+O256_W=$!
+O256_BAD=""; O256_HS=""
+for k in 1 2 3 4; do
+  OUT="$(UNDERCROFT_HOME="$REST_HOME" "$BIN" backup create --vault acme 2>&1)"
+  D="$(printf '%s\n' "$OUT" | sed -n 's/^Backup created: //p')"
+  H="$(printf '%s\n' "$OUT" | sed -n 's/^  chain height: //p')"
+  V="$(o256_exact "$D" acme "$H" "$REST_HOME")"
+  [ "$V" = "exact" ] || O256_BAD="$O256_BAD [$k: $V]"
+  O256_HS="$O256_HS $H"
+done
+wait "$O256_W"
+check "CLI backups beside a writing server are each exactly what they report" 0 "none" -- \
+  sh -c "echo \"${O256_BAD:-none}\""
+# The premise: the server's saves landed between the backups, or the arm above
+# proved nothing about a concurrent writer.
+check "premise: the vault moved between those backups" 0 "moved" -- sh -c \
+  "set -- $O256_HS; [ \"\$1\" != \"\$4\" ] && echo moved"
+( for i in $(seq 1 12); do
+    UNDERCROFT_HOME="$REST_HOME" "$BIN" remember "o256 cli save $i" --vault acme \
+      >/dev/null 2>&1
+  done ) &
+O256_W=$!
+O256_BAD=""; O256_HS=""
+for k in 1 2 3 4; do
+  J="$(curl -s -X POST "$API/vaults/acme/backups" -H "X-Vault-Assertion: $(sign acme)")"
+  N="$(printf '%s' "$J" | sed -n 's/.*"backup":"\([^"]*\)".*/\1/p')"
+  H="$(printf '%s' "$J" | sed -n 's/.*"writes":\([0-9]*\).*/\1/p')"
+  V="$(o256_exact "$REST_HOME/backups/$N" acme "$H" "$REST_HOME")"
+  [ "$V" = "exact" ] || O256_BAD="$O256_BAD [$k: $V]"
+  O256_HS="$O256_HS $H"
+  sleep 0.3
+done
+wait "$O256_W"
+check "/v1 backups beside CLI writers are each exactly what they report" 0 "none" -- \
+  sh -c "echo \"${O256_BAD:-none}\""
+check "premise: the vault moved between those /v1 backups" 0 "moved" -- sh -c \
+  "set -- $O256_HS; [ \"\$1\" != \"\$4\" ] && echo moved"
+# O265: a backup of one vault never prunes another's. Ten archives of a vault
+# whose name `acme` prefixes; the prefix prune deleted from them first.
+for d in 01 02 03 04 05 06 07 08 09 10; do
+  mkdir -p "$REST_HOME/backups/acme-x-2026-01-${d}T00-00-00Z"
+  printf '{"id":"acme-x"}' > "$REST_HOME/backups/acme-x-2026-01-${d}T00-00-00Z/vault.json"
+done
+for k in 1 2 3 4 5 6 7 8 9 10 11; do
+  curl -s -o /dev/null -X POST "$API/vaults/acme/backups" -H "X-Vault-Assertion: $(sign acme)"
+done
+check "pruning acme leaves acme-x's ten archives alone (O265)" 0 "10" -- sh -c \
+  "ls -d \"$REST_HOME\"/backups/acme-x-* | wc -l | tr -d ' '"
+check "and keeps acme's own newest ten" 0 "10" -- sh -c \
+  "ls -d \"$REST_HOME\"/backups/acme-2026-* | wc -l | tr -d ' '"
 BK="$(curl -s "$API/vaults/acme/backups" -H "X-Vault-Assertion: $(sign acme)" \
   | sed -n 's/.*\["\([^"]*\)".*/\1/p')"
 rest_code "/v1 restore needs a name" 400 -- -X POST "$API/vaults/acme/backups/restore" \

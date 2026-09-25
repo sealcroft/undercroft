@@ -2,14 +2,15 @@
 
 ## 1.7.0 — unreleased
 
-MINOR: one new capability, backward compatible, and seven fixes. The witness
+MINOR: one new capability, backward compatible, and nine fixes. The witness
 commands and routes are new; no default moves and no declaration can stop a
 start-up. Two fixes change what a deployment must do: every process writing a
 vault must run the same build, and a server whose vault another process
 rotated now stops writing rather than destroy the rotated salt (O254); and a
 key rotation now refuses while any other process has the vault open (O257) —
 both in `UPGRADING.md`, beside O255's note that a destruction now holds the
-write lock for as long as it runs. (This line said "one fix" while O243 and
+write lock for as long as it runs and O256's that an archive taken by an older
+release beside a writer may be torn. (This line said "one fix" while O243 and
 O246 were both below it; corrected with O247.)
 
 ### The external witness: `undercroft witness emit` / `check`, `GET`/`POST /v1/…/witness` (O245)
@@ -351,6 +352,59 @@ destruction), O263 (an unauthenticated schema: a planted trigger), O264.
 PATCH-class inside the unreleased 1.7.0: receipts that verify and a sweep that
 honours the declarations in force; the one behaviour a deployment can notice is
 in `UPGRADING.md`.
+
+### A backup is exactly the state its verify judged (O256), and pruning one vault's backups never touches another's (O265)
+
+**`backup create` verified one state of the vault and archived another.** Both
+surfaces verified through a store, DROPPED it, and copied the vault's directory
+as plain files — the database, its `-wal` and `-shm`, the manifest — with no
+connection and no lock. Measured beside a writer saving as fast as it could, 40
+backups by that sequence: **11 failed outright** (`No such file or directory`: a
+file listed in the directory was gone before it was copied), and of the 29
+written **2 restored as `ManifestTampered`** — a genuine backup reading as
+tampering, exit 2 — and **16 held a chain height the verify never saw**. Forced
+deterministically, a checkpoint between the main file and its `-wal` tore the
+database (it restored as an integrity finding), and a key rotation between the
+database and the manifest paired two key generations: nothing held the vault
+while it copied, so O257's rotation fence could not see the backup.
+
+**Now one door, both surfaces.** The manifest's exact bytes are read once,
+MAC-verified and with no fall-back, before the snapshot is pinned; inside that
+ONE snapshot the key generation is compared, the vault is verified, and
+SQLite's online backup API copies the pages of exactly that state; the copy is
+synced and its committed head and height must equal the snapshot's; the
+manifest is written beside it through the one manifest writer; and a stage
+under `backups/.staging/` is published by one rename, so nothing that reads
+`backups/` ever meets a half-written archive. An archive holds exactly
+`vault.db` and `vault.json`. The connection is held throughout, so a rotation
+attempted during a backup is refused. `/v1` no longer evicts its cached handle
+to take a backup, and the re-opener that existed only for that eviction is
+gone. `backup create` now prints — and `/v1` answers — the chain height and
+head the archive holds and how far its manifest's anchor lags them
+(`anchor_behind_by`, carried as found: a restore fast-forwards it and says so).
+Measured after: 200 archives beside the same writer, every one restoring to
+exactly its reported state, while the old sequence failed in every run beside
+it; at 102,000 drawers the snapshot is held for 0.72–0.76 s and a writer saving
+every 10 ms was never refused. Ruled by a three-lens panel and a refuter.
+
+**Pruning kept "the last ten" by name prefix** (O265), so backing up `p` beside
+`p-2024` deleted one of `p-2024`'s archives — another vault's, another tenant's
+on a shared engine — and beside `p-archive` it deleted `p`'s own new archive
+while printing "Backup created". Archives are now matched by their own
+manifest and their exact name shape, and sorted by the instant their stamp
+names. **And `backup restore` validates the backup name** as `/v1` always has:
+`backup restore ../vaults/X --force` resolved the source to the vault itself,
+removed it, and then failed copying from what it had just deleted.
+
+Filed beside it: O266 (a `--read-only` open over a rotation whose promote was
+deferred refuses as `ManifestTampered`), O267 (a destroyed drawer's bytes
+survive in freed pages and WAL frames, and archives taken before a destruction
+hold it as a live row — the second half escalated as a product question), O268
+(`backup restore` replaces the vault before it knows the archive opens).
+
+PATCH-class inside the unreleased 1.7.0: the documented "verified snapshots,
+keeps last 10" is now true; the report's fields are additive. What an operator
+should know about older archives is in `UPGRADING.md`.
 
 ## 1.6.1 — 2026-09-22
 

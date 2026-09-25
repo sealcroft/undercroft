@@ -794,6 +794,18 @@ pub const HAND_PROJECTED: &[(&str, &str, &str, &str)] = &[
         "undercroft-cli/src/ui.html",
         "async function loadOverview()",
     ),
+    // `BackupReport` (ROADMAP O256): the archive's identity — the chain height
+    // and head it holds, how far its manifest's anchor lags them, what prune
+    // removed. The CLI projects it by hand; `/v1` serializes it WHOLE (beside
+    // the `backup` key the route has always answered with), so it needs no
+    // row; and `ui.html` renders no backup at all — a decision, written here,
+    // not a missing row. MCP has no backup tool (`Absence::Boundary`).
+    (
+        "undercroft-store/src/backup.rs",
+        "BackupReport",
+        "undercroft-cli/src/main.rs",
+        "BackupAction::Create",
+    ),
     // MCP serializes `DedupReport` whole and the CLI hand-projects it, so
     // `dates_kept` — "the difference between collapsing text and losing
     // history", by its own doc comment — reached one surface only.
@@ -3038,6 +3050,45 @@ mod tests {
         assert!(
             arm.contains(".with_mcp_vault("),
             "the ServeHttp arm must ADOPT its store into the Tenancy (ROADMAP O242), so both surfaces run on one handle"
+        );
+    }
+
+    /// **Nothing evicts the co-resident vault** (ROADMAP O256). `backup
+    /// create` was the one route that dropped the `/mcp` vault's handle, and
+    /// the re-opener that existed to bring it back never guarded what it
+    /// claimed: a `/v1` request re-opened the vault first, with the
+    /// multi-tenant configuration, and `/mcp` then served that. Backup takes
+    /// its copy through the cached handle now, so every eviction left in
+    /// `tenant.rs` must sit behind `deny_co_resident` in its own function —
+    /// the refusal that keeps a live server's vault out of reach.
+    #[test]
+    fn every_eviction_is_behind_the_co_resident_refusal() {
+        let src = include_str!("tenant.rs");
+        let prod = &src[..src
+            .find("\n#[cfg(test)]\nmod tests")
+            .expect("premise: tenant.rs has its test module")];
+        let needle = "self.stores.remove(";
+        let sites: Vec<usize> = prod.match_indices(needle).map(|(i, _)| i).collect();
+        assert!(
+            sites.len() >= 3,
+            "premise: the scan found the evictions (delete, rotate, restore), got {}",
+            sites.len()
+        );
+        for at in sites {
+            let fn_start = prod[..at]
+                .rfind("\n    fn ")
+                .expect("an eviction sits inside a method");
+            let name = prod[fn_start + 8..].split('(').next().unwrap_or("?");
+            assert!(
+                prod[fn_start..at].contains("self.deny_co_resident("),
+                "`{name}` evicts a cached handle without refusing the co-resident vault \
+                 first — the /mcp surface would lose its handle (ROADMAP O256)"
+            );
+        }
+        assert!(
+            !prod.contains("mcp_opener") && !prod.contains("type StoreOpener"),
+            "a re-opener is back: the co-resident vault is never evicted, so there is \
+             nothing for one to re-open (ROADMAP O256)"
         );
     }
 }

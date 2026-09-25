@@ -237,7 +237,7 @@ GET    /v1/vaults/{id}/hallways         entity co-occurrence (wing, top?)
 ── operator plane (mostly never on MCP — verify-forgetting is the one
    exception since 1.2.0/O68, as undercroft_check_erasure_receipt; the
    witness routes are off MCP by the maintainer's ruling, O245) ─────────
-POST   /v1/vaults/{id}/backups          snapshot this vault (409 if it fails verify)
+POST   /v1/vaults/{id}/backups          snapshot exactly the state it verified (409 if it fails verify)
 GET    /v1/vaults/{id}/backups          this vault's snapshots
 POST   /v1/vaults/{id}/backups/restore  {name}; 400 if the backup holds another
                                         vault, 409 while the vault is in use

@@ -241,10 +241,11 @@ a genuine older `vault.json` beside a CURRENT database is healed silently —
 and lowering the anchor first *admits* a later database rollback to any
 point at or above it. So the detector degrades in two cheap steps rather
 than one coordinated one, and the pair need never be consistent. The
-attacker need capture nothing to do it: `backup create` copies the whole
-vault directory and keeps up to ten genuine, validly-MAC'd
-`(vault.db, vault.json)` pairs on the same disk, and a manifest is rejected
-only for a foreign vault id. Two consequences follow and are filed rather
+attacker need capture nothing to do it: `backup create` keeps up to ten
+genuine, validly-MAC'd `(vault.db, vault.json)` pairs on the same disk —
+since 1.7.0 each one exactly the state its verify judged, beside the very
+manifest those rows were verified against (ROADMAP O256) — and a manifest is
+rejected only for a foreign vault id. Two consequences follow and are filed rather
 than absorbed: the writable open used to consume the one observable of this
 in silence while a read-only open reported it — since 1.7.0 (O246) it
 reports the heal it performed, and how far behind the anchor was, on
@@ -941,8 +942,12 @@ straight, each carrying what it actually is.
   hold, without the vault key — and it names content the vault no longer
   has, rather than sitting at rest beside content it does;
   `verify-forgetting` replays it with the key in hand — **while that key
-  exists**: a key rotation destroys it by design, so from then on the
-  same command reports the reduced verdict (the preserved audit trail
+  exists**: a key rotation destroys it by design — **though not wholly
+  (ROADMAP O267)**: a rotation changes the vault's salt and not the master
+  key, and every older `vault.json` still names the old salt, every archive
+  `backup create` took before the rotation included, so a holder of the
+  master key and such a manifest can re-derive the retired keys — so from
+  then on the same command reports the reduced verdict (the preserved audit trail
   holds those tombstones contiguously and the drawers are gone) rather
   than a replay, at exit 0. Reporting that case as forged, with the
   tamper exit code, was ROADMAP O13. Retention

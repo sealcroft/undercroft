@@ -218,7 +218,13 @@ Only return the server to read-write once `verify` is clean.
 - **Back up on a schedule.** `undercroft backup create --vault <vault>` is the
   recovery path above; without a good backup, a verbatim restore isn't possible.
   Only the ten most recent snapshots per vault are kept — older ones are pruned
-  on each create, so a schedule needs its own off-box retention.
+  on each create, so a schedule needs its own off-box retention. Since 1.7.0
+  an archive is exactly the state its verify judged, even beside a running
+  server, and `backup create` prints the chain height it holds: record it
+  beside the name. **An archive taken by 1.6.1 or earlier while anything held
+  the vault may be torn** — restore it into a scratch data directory and run
+  `undercroft verify` there before restoring it over a vault, because a
+  restore replaces the vault before it knows the archive opens (ROADMAP O268).
 - **Lock down the store.** `master.key` should be `0600` and the vault
   directory `0700` (owner-only). Anything that can write the vault DB
   out-of-band can tamper; anything that can read `master.key` can forge.

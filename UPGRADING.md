@@ -174,6 +174,28 @@ very large `forget` into several; one destruction near 75,000 drawers holds
 the lock past another writer's busy timeout (ROADMAP O264). `undercroft config
 check` cannot see this: it depends on the data, not on a declaration.
 
+### an archive taken by 1.6.1 or earlier while anything held the vault may be torn, and a restore does not check it first (O256)
+
+**Symptom:** restoring an older backup leaves a vault that refuses to open —
+`possible tampering` (`ManifestTampered`), an integrity finding about the audit
+chain, or one about key generations — where the vault it replaced opened fine.
+Nothing about the archive shows it beforehand.
+
+**Cause:** until 1.7.0 `backup create` verified the vault and then copied its
+directory as files with no lock, so an archive taken while a server or another
+command was writing could hold a torn database, a manifest ahead of its rows,
+or a manifest from a different key generation (ROADMAP O256 measured all three).
+From 1.7.0 an archive is exactly the state its verify judged. `backup restore`
+still removes the vault before it copies an archive in (ROADMAP O268).
+
+**Fix:** take a fresh backup after upgrading. Before restoring an archive made
+by an older release over a vault you still have, restore it into a scratch data
+directory holding a copy of the same `master.key` (or with the same
+passphrase) and run `undercroft verify` there first. Expect the `-wal` to grow
+while a backup runs — it holds one read snapshot for its verify and copy, 0.7 s
+at 10⁵ drawers — and shrink at the next checkpoint. `undercroft config check`
+cannot see any of this: it concerns the archives on disk, not a declaration.
+
 ## 1.6.1 (released 2026-09-22)
 
 ### The manifest carries a version fence from this release on (O238)

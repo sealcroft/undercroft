@@ -16,6 +16,10 @@
 pub mod admission;
 #[cfg(test)]
 mod anchor_tests;
+mod backup;
+mod backup_pause;
+#[cfg(test)]
+mod backup_tests;
 mod chain;
 #[cfg(test)]
 mod destruction_tests;
@@ -39,6 +43,7 @@ mod sweep_pause;
 pub mod witness;
 
 pub use admission::{DestinationState, PendingAdmission, QUARANTINE_WING};
+pub use backup::{BackupOutcome, BackupReport};
 pub use forget::{AttestationVerdict, ForgetAttestation, MirrorDelete};
 pub use kg::{KgStats, ReceiptStatus, ReceiptVerdict, SupersessionStatus, Triple, TripleExport};
 pub use manage::{
@@ -4630,12 +4635,7 @@ impl VaultStore {
             Err(e) if is_busy(&e) => return Err(StoreError::VaultHeld(OPEN_HELD.into())),
             Err(_) => {}
         }
-        let uri = format!(
-            "file:{}?immutable=1",
-            path.to_string_lossy()
-                .replace('?', "%3f")
-                .replace('#', "%23")
-        );
+        let uri = backup::immutable_uri(&path);
         let conn = Connection::open_with_flags(&uri, flags | OpenFlags::SQLITE_OPEN_URI)?;
         probe(&conn)?;
         undercroft_obs::diag_warn!(
@@ -5378,12 +5378,14 @@ impl VaultStore {
                 };
                 let note = format!(
                     "the manifest rollback anchor was {behind_by} record(s) behind the \
-                     committed chain head when this handle opened, and {how}. Two causes \
-                     are ordinary: a crash between a commit and its anchor, and another \
-                     writer on this vault committing while this handle opened (ROADMAP \
-                     O253). A genuine OLDER `vault.json` restored beside a current database \
-                     lowers the anchor the same way, and this line is the only evidence of \
-                     that (ROADMAP O246)"
+                     committed chain head when this handle opened, and {how}. Three causes \
+                     are ordinary: a crash between a commit and its anchor, another writer \
+                     on this vault committing while this handle opened (ROADMAP O253), and \
+                     a restored backup whose manifest lagged the rows it was taken with — \
+                     `backup create` reports that lag as `anchor_behind_by` (ROADMAP O256). \
+                     A genuine OLDER `vault.json` restored beside a current database lowers \
+                     the anchor the same way, and this line is the only evidence of that \
+                     (ROADMAP O246)"
                 );
                 undercroft_obs::diag_warn!("{note}");
                 self.unhealed.push(note);

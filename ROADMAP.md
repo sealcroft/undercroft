@@ -3998,7 +3998,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**294** of the **309** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**298** of the **313** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4176,10 +4176,15 @@ identities.
 ## 1.7.0 — unreleased
 
 MINOR: O245 adds capability the product never had — a witness the engine
-emits and checks — and three fixes ride with it: O246 (a surface added to
+emits and checks — and nine fixes ride with it: O246 (a surface added to
 REPORT an existing silence, the 2026-09-08 ruling), O243 (a latent panic
-removed) and O247 (a gate that names which mechanism refuses a copied
-`rotate/` label, and records corrected beside — no behaviour moves).
+removed), O247 (a gate that names which mechanism refuses a copied
+`rotate/` label, and records corrected beside — no behaviour moves), O254
+(one manifest door), O257 (a rotation holds the vault alone), O253 (one
+snapshot per judgement), O255 (a destruction is one write lock), O256 (a
+backup is exactly the state it verified) and O265 (prune by manifest). This
+paragraph said "three fixes" until O256's unit, while O254, O257, O253 and
+O255 sat below it.
 
 ### O245 — CLOSED 2026-09-23: the external witness the threat model called "the planned mitigation" is ruled, escalated, decided (emit + check, no MCP) and built
 
@@ -6680,6 +6685,444 @@ decision is the drift the tree forbids.
 **Versioning**: PATCH-class inside the unreleased `1.7.0`, with an `UPGRADING.md`
 entry (writers wait out the destruction; a vanished target now refuses; a
 repeated id is named once).
+
+### O256 — CLOSED 2026-09-25: `backup create` archives exactly the state its verify judged — the pages copied inside the verified snapshot, beside the manifest those rows were verified against, published by one rename
+
+**Filed 2026-09-24 by O253's panel (the agentic-memory lens and the refuter);
+read in code, not yet measured.** `/v1`'s `backup_create` runs `verify` on the
+cached handle, drops the handle, then `copy_dir`s the vault's directory — the
+database, its `-wal` and `-shm`, and the manifest — as plain files, with no lock
+(`crates/undercroft-cli/src/tenant.rs`); the CLI's `backup create` does the same
+(`main.rs`). Beside any other writer the archive therefore holds a state
+`verify` never examined — and a live WAL database copied as files can be torn:
+O245's own rollback fixture had to work around exactly that (`witness.rs`: "a
+copy taken under an open handle lacks whatever the WAL still holds, which is a
+torn snapshot"). "VERIFY OK" then certifies a different state
+from the one archived, and `restore` trusts the archive.
+
+**Shape**: the archive taken INSIDE the snapshot that was verified — SQLite's
+online backup API or `VACUUM INTO` within O253's read snapshot — with the
+manifest paired to the rows the copy holds, not to whatever is on disk at copy
+time.
+
+**Gate**: a backup taken while a writer runs reopens, verifies, and holds
+exactly the verified state; the probe that measures today's torn or
+out-of-state copies comes first.
+**Counterfactual**: to be measured — the filing is from reading.
+
+**Added 2026-09-24 by O257's refuter**: O257's rotation fence does not cover
+this path. `backup create` drops its store before the raw copy, so it holds no
+connection while it copies, and a key rotation can take the vault and run in
+the middle of the copy — which then pairs one generation's manifest with the
+other's rows. The shape above (the copy taken inside the verified snapshot,
+under a connection) closes that too, since a connection is what the fence sees.
+
+Sequenced after O253, which closed on 2026-09-24 and built the snapshot helper a backup taken inside the state it verified needs (`VaultStore::snapshot`, `verify_in`).
+
+#### RULED 2026-09-25 by a three-lens panel (agentic memory architecture, security, software and storage engineering) plus an adversarial refuter
+
+**The question.** How `backup create` archives exactly the state its `verify`
+judged, paired with a manifest that state answers to, so that an archive taken
+beside a writer — or beside a rotation — restores, verifies and is the verified
+state; what the archive holds; how it appears before it is complete; and where
+the one implementation lives. The brief, the three lens answers, the refuter's
+report and every probe record are in the session scratchpad (`o256-panel/`) —
+material, never the record.
+
+**Measured before ruling**, by the integrator (release build,
+`rust:1.90-slim-bookworm`, sealed; the copy is the CLI's own `copy_dir`, the
+restore its own restore into a fresh root holding the same master key, opened
+writable):
+
+- **T, today's sequence beside a writer** (5,000 drawers, a thread saving as fast
+  as it can, 4,425 commits, 0 errors; 40 backups): **11 of 40 `copy_dir` failed**
+  `No such file or directory` — a file `read_dir` listed was gone before it was
+  copied, the anchor's nonce temp manifest; of the 29 written, **2 restored as
+  `ManifestTampered`**, **16 held a chain height above the highest the verify
+  could have seen**, 11 sat inside the verified window (which proves nothing),
+  0 lost writes, 0 failed verify.
+- **Scripted interleavings `copy_dir` permits**: a commit and its anchor between
+  the database files and `vault.json` → the restore refuses `ManifestTampered`
+  (exit 2 on a genuine backup); a checkpoint and a WAL restart between the main
+  file and the `-wal` → `IntegrityFinding("audit chain: a version-2 head with no
+  migrate/chain-v2 commitment record")`, a torn database read as tampering; a key
+  rotation between the database and the manifest, either order →
+  `IntegrityFinding(… different key generations …)`. Nothing holds the vault
+  while `copy_dir` runs, so O257's fence never sees the backup.
+- **Mechanisms, on raw connections**: the online backup API `step(-1)` run on a
+  connection holding an open read transaction under `query_only`, while another
+  committed 3,000 rows past it and ran a PASSIVE checkpoint, copied EXACTLY the
+  snapshot (2,000), `integrity_check` ok, the copy's `journal_mode` reading `wal`;
+  from a `SQLITE_OPEN_READ_ONLY` connection too. `VACUUM INTO` inside the read
+  transaction: `cannot VACUUM from within a transaction`; in autocommit under
+  `query_only`: `attempt to write a readonly database`. A deleted marker blob:
+  1,118 occurrences in the source file, 1,118 in a backup-API copy, 0 in a
+  `VACUUM INTO` copy.
+- **Cost at 10⁵** (102,000 drawers, 132.5 MB, a writer saving every 10 ms):
+  `verify` 633 / 782 / 801 ms; the backup API `step(-1)` 341 / 242 / 346 ms, copy
+  = snapshot every round; `-wal` growth across the copy at most 1.8 MB; today's
+  `copy_dir` 91–170 ms. **The refuter: verify and copy were measured in two
+  snapshots on two connections, so the ruled hold — both in one — is owed by the
+  build (P-C).**
+- **O256-PRUNE** (`prune_backups`, the artifact): backing up `p` beside ten `p-2024`
+  archives deleted one of `p-2024`'s; beside ten `p-archive` archives it deleted
+  `p`'s OWN new archive while the command reports "Backup created".
+- **O256-RO**, by hand and then through the vault crate's fault seam (a rotation
+  whose promote failed every attempt, `promote_deferred` set, `vault.json.next`
+  present): a `--read-only` open **refuses `ManifestTampered` at OPEN**; a writable
+  open then promotes and verifies. Filed as O266.
+
+**Prior rulings found, and their disposition.**
+
+- **O68** (the manifest decides which vault an archive belongs to, never a name
+  prefix) — FOLLOWED, and **`prune_backups` never obeyed it**: O265.
+- **O69** (restore's exclusive hold) — FOLLOWED, untouched.
+- **O113 / O253** (one report, one snapshot; the anchor read BEFORE the pin; the
+  helper counted) — FOLLOWED: the copy is taken in the snapshot the verify read.
+- **O254** (one manifest writer; a helper that trusts a caller's head re-admits
+  lowering) — FOLLOWED: the archive's manifest goes through `write_manifest_file`
+  as a sixth named caller, and no manifest is minted.
+- **O257** (rotation refused while any connection holds the vault) — FOLLOWED:
+  the backup holds its connection for the whole copy, which is what the fence
+  sees; its stated residual (locks that do not work) is covered by a keycheck
+  comparison inside the snapshot.
+- **O246 / A32 / O241** (a heal is the one observable of A2's manifest-only
+  rollback; read-only detects and never heals; backups keep genuine MAC'd pairs)
+  — FOLLOWED: the archive carries the anchor as found; nothing heals into it.
+- **O204** (the key survey counts every `backups/` entry) — FOLLOWED: an archive
+  in progress is a reference to the key and is counted.
+- **O175 / O176** (an effect outside the database decides its own posture) and
+  **O212** (open: `--read-only` and `backup create`) — O212 is LEFT OPEN, by all
+  four answers; see item 7.
+- **O147** (data resurrected while its receipt says erased) — its class one door
+  over is escalated (item 11).
+
+**The ruled shape.**
+
+1. **Mechanism: SQLite's online backup API, `Backup::new(snapshot.conn(),
+   dst).step(-1)`, inside the snapshot `verify_in` ran in, on the verifying
+   connection.** SQLite reuses a read transaction the source already holds and
+   refuses one holding a write transaction, so the copy is the verified state
+   page for page. The step's result must be `Done`; anything else refuses.
+   `Connection::backup` is NOT used: it opens the destination itself and, outside
+   a snapshot, each step takes a fresh read transaction.
+2. **The door opens its own snapshot.** Called inside a snapshot this handle
+   already opened, or inside a caller's transaction, it refuses as `Invalid` —
+   nested, the manifest would be read after the pin; inline, the backup API
+   answers BUSY.
+3. **The manifest: the exact MAC-verified `vault.json` bytes, read ONCE before the
+   pin, with NO fallback.** One vault-crate read returns the bytes, their head and
+   their `writes` together as one value only the archive writer accepts; its head
+   is the anchor `verify_in` compares against; a missing file is an integrity
+   error, any other I/O error an I/O refusal. `anchored_head`'s fall-back to the
+   cached head is never used here — it would archive a manifest the vault never
+   had. Inside the snapshot the database's `meta.keycheck` is compared with the
+   handle's before the verify and a difference refuses as a race (exit 1).
+   **No `anchor()` call**: on a cached handle it fast-forwards a lowered on-disk
+   manifest silently, erasing the one observable O246 gives A2 — the archive
+   carries the lag as found, and the report says how far behind it is.
+4. **A post-condition, not a second verify.** Before the archive is published,
+   its `vault.db` is reopened `immutable=1` (read-only, nothing written beside it)
+   and its committed head and height must EQUAL the snapshot's. A mismatch refuses
+   with exit 1 / 500, never 2 — the live vault verified.
+5. **Atomicity: a nested staging directory, then a rename.** The archive is built
+   in `backups/.staging/<nonce>/` — inside `backups/`, because a rename across
+   mounts fails and operators mount `backups/` separately. In order:
+   `create_dir` (never `_all`) of the stage; the destination connection with
+   `journal_mode=OFF` and `synchronous=OFF` (never WAL — a WAL destination leaves
+   the copy's pages in a `-wal` the archive does not carry); inside the snapshot
+   the step; the snapshot ends; the destination closes; `sync_all(vault.db)`; the
+   post-condition; `write_manifest_file(stage, vault.json, bytes)`; the rename to
+   `{vault}-{stamp}`, refused if the target exists; `sync_dir(backups/)`; then
+   prune. The archive keeps the source's WAL-mode header bytes, so a restored
+   vault is in WAL mode and O69's `-shm` detection still sees its holders. A stage
+   older than an hour is swept at the next create — its location and nonce prove
+   it is a backup's own, which O257 item 6's unauthenticated staged manifest could
+   not; a fresh one never is. An emptied `.staging` is removed, best effort.
+6. **Contents: exactly `vault.db` and `vault.json`.** A pre-1.5.0 `palace.db` read
+   through a read-only handle is archived as `vault.db`. Never `-wal`, `-shm`,
+   `vault.json.next` (a genuine MAC'd manifest of another generation — A2
+   material that would hand a restore a promote the archived database never
+   made), or a temp.
+7. **Where it lives, and posture.** The snapshot, copy, pairing and post-condition
+   in ONE store door both surfaces call; the staging, rename, sweep, listing and
+   prune in the vault crate, which owns `BACKUPS_DIR` and the manifest.
+   **The integrator resolved one contradiction inside the refuter's
+   recommendation, and says so**: it put the filesystem half behind the manager's
+   writable posture AND left O212 open, but that gate would make `--read-only
+   backup create` refuse where it writes today — deciding O212's backup half by
+   side effect. The new code therefore decides no posture: `/v1` still refuses on a
+   read-only server in front of dispatch (`mutates`), the CLI behaves under
+   `--read-only` exactly as before, and O212 remains the decision point.
+8. **The report.** The door returns `BackupReport { name, vault, writes,
+   chain_head, anchor_behind_by }` — the archive's identity, which is what a gate
+   compares and a runbook records. The CLI prints it and exits 2 on a failed verify
+   as today; `/v1` answers the fields beside `backup` and `vault`, additively; the
+   orchestrator's OPS proxy passes them through. `HAND_PROJECTED` gains the CLI row
+   (and `/v1`'s if its JSON stays hand-built); `ui.html` renders no backups, which
+   is written down rather than left as a missing row. O246's heal note names a
+   restored archive whose manifest lagged its rows as an ordinary cause.
+9. **`/v1` stops evicting the handle, and `StoreOpener` is deleted.** The eviction
+   at `backup_create` was the only one of the co-resident vault; every other
+   `stores.remove(` is behind `deny_co_resident`. The re-opener already failed to
+   guard what its doc claimed — after an eviction a `/v1` request re-opened
+   through `store_for`, which `mcp_store` then served. A source gate requires every
+   `stores.remove(` in `tenant.rs` to follow a `deny_co_resident` in its function.
+10. **Prune and list by manifest id** — O265, built in this unit under its own
+    heading. **And the CLI restore validates the backup NAME** as `/v1` does: today
+    `backup restore ../vaults/X --force` resolves the source to the vault itself,
+    takes the hold, removes it, and then fails copying from what it just deleted —
+    folded here as a drift closure.
+11. **Not O256's, filed or escalated.** Freed-page and WAL residue of destroyed
+    drawers in the live file and in archives — O267 (an archive taken this way
+    carries no stale WAL frames, so it holds strictly less than today's).
+    Restore verifying an archive before it destroys the vault it replaces — O268,
+    sequenced next: its read-only verify of an older archive meets
+    `ReadOnlyUnmigrated`, a posture and migration question of its own. The
+    read-only open over a deferred promote — O266. **Escalated to the maintainer**:
+    whether erasure must reach archives taken before a destruction (they hold the
+    drawers as live rows, and a restore resurrects them — O147's class); any
+    override on a restore refusal; O212's backup posture.
+
+**Options that lost, with their cost.** `VACUUM INTO` — cannot share the verified
+snapshot (measured), refuses under `query_only`, rebuilds every table, and would
+certify only a re-verified archive; its freed-page hygiene belongs at the source
+(O267). A second full verify of the archive at create — roughly doubles the hold
+(~0.8 s at 10⁵) and catches nothing the head-and-height post-condition does not
+except storage corruption, which belongs to restore (O268). A raw copy under the
+write lock — stalls every writer for verify plus copy (O258). `ExclusiveHold` — a
+served vault could never be backed up. A synthesized manifest at the snapshot head
+— the primitive O254 confined to one door, and it heals into the archive. Calling
+`anchor()` first — erases A2's one observable on a cached handle and makes
+archives differ by posture. The manifest written last with no rename — leaves
+partial `{vault}-{stamp}` directories visible to every consumer that reads names,
+with nothing ever allowed to remove them. Keeping `StoreOpener` as a guard — it did
+not guard. Folding restore — it carries its own posture and migration question.
+
+**Claims refuted, including the brief's.** The brief: "`Connection::backup` sleeps
+250 ms between steps" — it loops `step(100)` with no sleep (rusqlite
+`backup.rs:61-84`; the sleeps are `restore`'s and `run_to_completion`'s caller-
+chosen pause), and the memory lens repeated it; "SQLite does not fsync a
+`VACUUM INTO` output" — 3.46 gives it the source's safety level; "`step(-1)`
+copies all" — `Busy`, `Locked` and `More` all come back `Ok`; the cost probe
+measured verify and copy in two snapshots; "the gates that pin today's shape" were
+red on the branch while the probe file existed. The engineering lens: `VACUUM
+INTO` impossible from a read-only connection (SQLite lifts `READONLY` for the
+output attach; `query_only` is the separate block); a raw copy under the write lock
+"still torn by a PASSIVE checkpoint" (W needed a WAL restart, which needs the write
+lock — unproven); "a crashed stage would be listed by `/v1` anyway" (`/v1` reads
+top-level manifests only). The memory lens: the `anchor()` refinement contradicts
+its own case against a synthesized manifest. The security lens: THREAT_MODEL's
+rotation claim fails for passphrase deployments too, not only key files.
+
+**Dissent.** The memory lens: the `anchor()` refinement; folding restore. The
+security lens: a full second verify at create; folding restore. The engineering
+lens: manifest-last without a rename; keeping `StoreOpener`. Each settled by the
+evidence above.
+
+**Versioning**: PATCH inside the unreleased `1.7.0`. The documented contract is
+"verified snapshots, keeps last 10" (`README.md`, `docs/AGENTS.md`,
+`docs/PARITY.md`), and the fix makes it true; the report's fields are additive and
+report what was silent; the archive's layout was never a contract. **`UPGRADING.md`
+owes**: archives taken by ≤ 1.6.1 while anything held the vault may be torn, and
+nothing checks one without restoring it — restore into a scratch root and verify
+first, and take a fresh backup after upgrading; the `-wal` grows while a backup
+holds its snapshot; `config check` sees none of it. THREAT_MODEL A2's "copies the
+whole vault directory" changes.
+
+**The gate owed by the build.** Pause points in their own file (`progress_handler`
+never fires inside `sqlite3_backup_step`, which runs no VM): after the manifest
+read, after the pin, between the verify and the step, and before the manifest
+write, a second handle commits and anchors at each; every archive reopens through
+the restore path into a fresh root, writable and read-only, verifies, holds a
+committed head AND height EQUAL to the report's, holds a manifest byte-identical
+to the bytes read, and contains exactly two files; a rotation attempted at each
+point is refused `VaultHeld`; a fault before the rename leaves nothing listed,
+pruned or restorable; the T soak through the door (≥ 40 backups, premise: the
+writer committed during every backup; zero copy failures, zero tampered restores,
+zero heights off the report), looped; today's sequence fails in the same run as
+the counterfactual, with a manifest read after the pin, the copy outside the
+snapshot and the fallback as the others. The source gates move: `copy_dir(` 6 → 4;
+`write_manifest_file(` 5 → 6 with the archive named; exactly one `Backup::new(` in
+the store, after `verify_in(` in the door; a store-crate scan for manifest writes.
+P-C (verify and copy in one snapshot at 10⁵: hold, `-wal` high-water, the writer's
+save p99 — a hold above ~2 s or any writer refused refutes "harmless") and P-dest
+(the OFF/OFF destination plus `sync_all`: `integrity_check` ok, `journal_mode`
+reads `wal` on reopen, the stage holds only `vault.db`).
+
+**Fails silently if**: the step's result is not checked for `Done`; the door runs
+nested or inline; `vault.json` is read twice or through the fallback; the copy is
+taken on a separate connection; the destination runs in WAL mode; the manifest is
+written before `vault.db` is synced; the sweep removes a live stage; prune counts
+stages or another vault's archives; the CLI's list shows `.staging`; the report's
+head is read after the snapshot ends. **The gate lies if** it accepts "in window"
+or equal counts as equality, its writer lands nothing inside the pinned window, it
+runs once, the restore is verified through the backup's own handle, or it
+compares archive bytes (page 1 differs by construction).
+
+#### BUILT 2026-09-25, to the ruling — with two stated deviations, and three defects of my own, one of them caught by a gate
+
+**The door, as ruled.** `VaultStore::backup` (`crates/undercroft-store/src/backup.rs`)
+is the one implementation both surfaces call. It refuses `Invalid` inside a
+snapshot this handle opened or inside a caller's transaction; warms the graph
+secret as `verify` does; reads the manifest ONCE through the new
+`Vault::verified_manifest` — the exact bytes, MAC-verified, a missing file
+`CorruptManifest` (exit 2 / 409) and never `anchored_head`'s cached-head
+fall-back (the two share `parse_verified`, one check) — before it pins; opens
+the destination `journal_mode=OFF`, `synchronous=OFF`; and inside ONE snapshot
+compares the key generation, runs `verify_in` against the manifest's head, and
+copies with `Backup::new(snap.conn(), &mut dst).step(-1)`, anything but `Done`
+refusing. After the snapshot: close, `sync_all`, an `immutable=1` reopen whose
+committed head and height must EQUAL the snapshot's (a mismatch is I/O-class,
+exit 1 / 500), the manifest through `Stage::write_manifest`, and the publish.
+The vault crate's `backups.rs` owns the rest: a stage at
+`backups/.staging/<nonce>` (`create_dir`, never `_all`), removed on any drop
+before publish; a publish that refuses unless the stage holds exactly
+`vault.db` and `vault.json` and unless the target is absent (checked first,
+because `rename(2)` replaces an empty directory silently), then syncs
+`backups/`; a sweep of stages older than an hour; and `archive_name`,
+`archive_vault_id`, `archives_of`, `prune`, `list_entries`. `BackupReport
+{ name, vault, writes, chain_head, anchor_behind_by, pruned }`: the CLI prints
+it (a `HAND_PROJECTED` row); `/v1` serializes it whole beside the `backup` key
+it has always answered with; `ui.html` renders no backup, written into
+`parity.rs` beside the row. `/v1` no longer evicts its handle; `StoreOpener`,
+`mcp_opener` and the re-open in `mcp_store` are gone, and
+`every_eviction_is_behind_the_co_resident_refusal` requires each remaining
+`self.stores.remove(` in `tenant.rs` to follow a `deny_co_resident(` in its
+own method. The CLI's restore validates the backup NAME (O256 item 10), its
+list goes through `list_entries`, and `read_backup_vault_id` delegates to
+`archive_vault_id`. O246's heal note names a restored archive whose manifest
+lagged its rows as an ordinary cause. The store's rusqlite gains `backup`, a
+module over functions the bundled SQLite always compiles.
+
+**Deviations, stated.** (1) **The keycheck refusal is `stale_keys`, an
+integrity finding (exit 2), not the "race (exit 1)" the ruling named**: the
+write door and the rotation answer the identical condition — a database
+marker naming another generation than the handle's — with that refusal (O257),
+so one condition keeps one answer; and with the fence working it is
+unreachable except by an edited marker, which IS an integrity verdict. (2)
+**`immutable_uri` is ONE builder**, shared with the read-only open's
+escalation, and it now escapes `%` first: that builder decoded a path holding
+a literal `%3f` into a `?`.
+
+**Measured after**, release build, sealed:
+
+- **The gate** (`backup_tests.rs`, eight tests): at each of six pause points
+  (`backup_pause.rs` — manifest read, pinned, verified, copied, synced,
+  staged) a second handle's commit and anchor is wholly in the archive when it
+  lands before the pin, with `anchor_behind_by` equal to it, and wholly out of
+  it after; the archived manifest is byte-identical to the bytes read; a
+  rotation at each point is refused `VaultHeld`; an injected failure at each
+  point leaves nothing listed and no stage, and the handle backs up cleanly
+  after; a vault failing verify, a missing manifest and a foreign key
+  generation marker each archive nothing; nested inside a snapshot the door
+  refuses; a read-only handle archives, carrying a lagging anchor as found.
+  Every archive is checked through the restore's copy into a FRESH root holding
+  only the master key, opened writable AND read-only: `verify` ok, committed
+  head and height EQUAL to the report, exactly two files, the WAL-mode header,
+  `integrity_check` ok. `backups.rs` carries five more: the O265 prune beside
+  `p-2024` and `p-archive`, manifest-and-shape matching, stamps sorted as
+  instants, the publish's exact-two-files and existing-target refusals, and the
+  sweep sparing a fresh stage.
+- **Counterfactuals, each RUN** (the door edited, rebuilt — `Compiling
+  undercroft-store` confirmed in every log — the store gate run, the file
+  restored byte-identical from a saved copy): the manifest read after the pin →
+  the pause-point test fails, a false `chain_ok: false` refusal; the copy taken
+  after the snapshot with no post-condition → it fails, "the restored vault
+  holds EXACTLY the reported state", 208 against 207; the same with the
+  post-condition kept → the post-condition refuses, "the copied database holds
+  chain height 208, not the verified 207"; no keycheck comparison → the
+  foreign-marker test fails, the archive published. Each failed its own test
+  and no other.
+- **The soak** (`o256_soak_…`, 5,000 drawers, a writer saving as fast as it
+  can): 40 backups, every one exactly its reported state, the writer committing
+  during every one, median 76 ms — and in the SAME run the old sequence (verify,
+  then the directory copied as files) failed 5 copies and left 23 archives off
+  the verified window, the positive control. Looped ten times at 20 rounds: 200
+  archives, all exact, zero quiet; the old sequence failed in every run (2–7
+  copies, 0–11 off the window).
+- **P-C at 10⁵** (102,000 sealed drawers, a writer saving every 10 ms): a
+  backup 782 / 836 / 790 ms, the snapshot pinned 723 / 757 / 735 ms for verify
+  and copy together, `-wal` growth at most 1.5 MB across the pin, the writer's
+  114 saves p50 14.8 ms, p99 30.2 ms, max 65.7 ms, none refused — under the
+  refuter's ~2 s line.
+- **P-dest** is inside every archive check: `integrity_check` ok, header bytes
+  18–19 = 2 (WAL), nothing but the two files, before and after the reopen.
+- **A real corpus, through the release binary**: the LoCoMo feed mined into
+  twelve wings (1,020 drawers). Twelve CLI backups while `serve-http` saved
+  over `/v1` — the chain moving 1,021 → 1,060 across them — and eight `/v1`
+  backups while CLI processes saved — 1,064 → 1,265: all twenty restored into a
+  scratch home to exactly their reported height and verified; 39–64 ms a CLI
+  backup; prune kept ten.
+- **The suite**: 1,109 run / 13 ignored (was 1,095 / 11): fourteen tests and
+  two named measurements; e2e 652 → 664 checks. The e2e suite gains the binary-level arms — the CLI's
+  archive exactly what it reports, CLI backups beside a WRITING server and `/v1`
+  backups beside CLI writers each restored into a scratch home and compared by
+  height (the server's request loop is single-threaded, so the concurrency that
+  matters is across processes), both premised on the vault having moved, the
+  path-shaped restore name refused with the vault intact, the stage never
+  listed, and O265's prune through `/v1`.
+
+**The gates that moved.** `every_manifest_writer_and_anchor_caller_is_the_one_the_ruling_names`:
+`copy_dir(` 6 → 4 (the two restores); the archive module's one
+`write_manifest_file(` (inside `write_manifest`), one rename (inside
+`publish`) and three `remove_dir_all` (drop, sweep, prune), no other writer;
+and the STORE's production sources are scanned for manifest writes too, test
+files aside — the refuter's finding that a store-crate writer passed unseen.
+
+**My own defects.** The CLI's
+report lines were aligned with a ten-space run, which
+`no_message_literal_carries_a_collapsed_space_run` refused. The first read-only
+test set `UNDERCROFT_READ_AUDIT` process-wide to make the anchor lag — a
+variable every parallel test's open reads — replaced before it ran by a lagging
+anchor built from the manifest bytes alone. And a heredoc collapsed an e2e line
+continuation into a literal `\n`, which `bash -n` accepts; found by reading the
+line back.
+
+**Residuals, stated.** Windows: `sync_dir` is a no-op there and nothing here
+runs on Windows; a directory rename a scanner holds fails loudly. The archive
+carries freed pages as the live file does (O267). A restore still replaces the
+vault before it knows the archive opens (O268). O266 makes a `--read-only`
+backup impossible over a deferred promote, as it makes every read-only open.
+
+### O265 — CLOSED 2026-09-25: backups are pruned and matched by their own manifest and exact name, so backing up one vault never deletes another's archives or its own new one
+
+**Filed 2026-09-25 by O256's ruling (all four answers); measured by the
+integrator.** `prune_backups` (`crates/undercroft-cli/src/main.rs`) keeps a
+vault's ten newest archives by listing `backups/`, keeping every name that starts
+with `{vault}-`, sorting by name and deleting from the front. A prefix cannot tell
+vault `p` from vault `p-2024` or `p-archive`, which O68's ruling already said of
+the listing ("never a name prefix"). **Measured through the function itself**:
+backing up `p` beside ten `p-2024` archives deleted one of `p-2024`'s — another
+vault's, another tenant's on a shared `/v1` engine — because `-` sorts before
+`0`; beside ten `p-archive` archives it deleted `p`'s OWN new archive, because
+`a` sorts after `2`, while the command printed "Backup created". The documented
+"keeps last 10" (`README.md`, `docs/AGENTS.md`) holds for neither.
+
+**Shape**: prune and list by the archive's own manifest id AND the exact
+`{vault}-{stamp}` shape, published archives only, never a stage; sorted by the
+stamp parsed, not by the name; one implementation in the vault crate that both
+surfaces call. Built in O256's unit.
+
+**Gate**: backing up `p` beside `p-2024` and `p-archive` removes none of theirs and
+keeps `p`'s newest ten, through the CLI and `/v1`.
+**Counterfactual**: today's function, above.
+
+#### BUILT 2026-09-25, in O256's unit
+
+`undercroft_vault::backups::{archives_of, prune}`: a vault's archives are the
+entries named `{vault}-{stamp}` in exactly `archive_name`'s shape whose OWN
+manifest names the vault, sorted by the instant the stamp names (a string sort
+put `…03Z` after `…03-5Z`), never the stage; prune keeps the newest ten and
+takes an archive another process removed first as done. Both surfaces prune
+through it. **Gate**: `prune_keeps_each_vaults_own_newest_and_never_a_neighbours`
+(beside ten `p-2024` and ten `p-archive` archives: none of theirs removed, `p`'s
+newest ten kept), `only_published_archives_whose_manifest_names_the_vault_count`,
+`archives_sort_by_the_instant_their_stamp_names`, and an e2e arm through `/v1`
+(ten `acme-x` archives survive eleven `acme` backups). **Counterfactual**: the
+function it replaced, measured above — one of `p-2024`'s removed, and `p`'s own
+new archive beside `p-archive`'s. The `/v1` listing stays a manifest match
+alone, as documented; the shape filter is prune's, because prune deletes.
 
 ## 1.6.1 — released 2026-09-22
 
@@ -25644,6 +26087,14 @@ incident, which argues for O176's warn-and-serve shape rather than a refusal.
 `--read-only` and finds it unchanged (or, for `backup create`, changed only as
 the ruling allows, with its warning). Counterfactual: today's commands.
 
+**Noted 2026-09-25 by O256's ruling (item 7).** `backup create` is now one store
+door that decides NO posture: the page copy only reads, so a read-only handle
+can take one, and the CLI under `--read-only` still writes the archive into
+`backups/` exactly as before — this entry's backup half stays the decision point,
+deliberately unforeclosed. A forensic read-only backup is impossible over a
+vault whose rotation promote was deferred until O266 is fixed, because that
+open refuses. The CLI's restore now validates the backup NAME (O256).
+
 ### O213 — a vault `init` just created, opened read-only, is reported as tampering
 
 **Filed 2026-09-17 by O204's ruling; measured by its probe P13.** `init`
@@ -26236,39 +26687,6 @@ expecting zero.
 
 O253 closed on 2026-09-24 and shared this entry's diff surface. What it leaves here: `chain::replay` REQUIRES a `Snapshot`, so a tail fold reads its rows and its head in one state by construction, and a fold that advances the guard's cache must do so only from a snapshot the helper opened (`Origin::Opened`). **The `is_autocommit()` survey this entry owed was run by O253** across the whole workspace suite: a guarded read reached inside a caller's transaction happens NOWHERE in production code — the only two were O253's own test arms, deliberately — so a tail fold may assume it advances outside any transaction.
 
-### O256 — `backup create` verifies one state of the vault and then raw-copies another
-
-**Filed 2026-09-24 by O253's panel (the agentic-memory lens and the refuter);
-read in code, not yet measured.** `/v1`'s `backup_create` runs `verify` on the
-cached handle, drops the handle, then `copy_dir`s the vault's directory — the
-database, its `-wal` and `-shm`, and the manifest — as plain files, with no lock
-(`crates/undercroft-cli/src/tenant.rs`); the CLI's `backup create` does the same
-(`main.rs`). Beside any other writer the archive therefore holds a state
-`verify` never examined — and a live WAL database copied as files can be torn:
-O245's own rollback fixture had to work around exactly that (`witness.rs`: "a
-copy taken under an open handle lacks whatever the WAL still holds, which is a
-torn snapshot"). "VERIFY OK" then certifies a different state
-from the one archived, and `restore` trusts the archive.
-
-**Shape**: the archive taken INSIDE the snapshot that was verified — SQLite's
-online backup API or `VACUUM INTO` within O253's read snapshot — with the
-manifest paired to the rows the copy holds, not to whatever is on disk at copy
-time.
-
-**Gate**: a backup taken while a writer runs reopens, verifies, and holds
-exactly the verified state; the probe that measures today's torn or
-out-of-state copies comes first.
-**Counterfactual**: to be measured — the filing is from reading.
-
-**Added 2026-09-24 by O257's refuter**: O257's rotation fence does not cover
-this path. `backup create` drops its store before the raw copy, so it holds no
-connection while it copies, and a key rotation can take the vault and run in
-the middle of the copy — which then pairs one generation's manifest with the
-other's rows. The shape above (the copy taken inside the verified snapshot,
-under a connection) closes that too, since a connection is what the fence sees.
-
-Sequenced after O253, which closed on 2026-09-24 and built the snapshot helper a backup taken inside the state it verified needs (`VaultStore::snapshot`, `verify_in`).
-
 ### O258 — a writer waiting on the database lock can be starved past the 5 s busy timeout, and O254's anchor lock makes that likelier
 
 **Filed 2026-09-24 by O254's probe P2; measured by the integrator.** SQLite's
@@ -26439,6 +26857,86 @@ purges (`pq_page` is already read once per destruction since O255's build,
 which changed nothing measurable at 40,000).
 
 **Gate**: a paced writer beside a destruction of 10⁵ drawers, never refused.
+
+### O266 — a `--read-only` open over a rotation whose promote was deferred refuses as `ManifestTampered`
+
+**Filed 2026-09-25 by O256's ruling; measured by the integrator through the vault
+crate's fault seam.** A rotation that COMMITS and whose promote fails every
+attempt answers Ok with `RotationReport.promote_deferred` and leaves
+`vault.json` on the old generation beside `vault.json.next` (O254, O257). A
+writable open promotes it. A **read-only** open refuses: `reconcile_read_only`
+adopts the committed generation's keys in memory (`vault` `lib.rs`), then the
+store's read-only chain check calls `reconcile_chain(false)` →
+`Vault::anchored_head`, which MAC-checks the OLD `vault.json` under the ADOPTED
+manifest key → `ManifestTampered`, exit 2, at OPEN, before any read. Measured
+both by hand and with `fixture::fail_times(Rename, PROMOTE_ATTEMPTS)` at the
+rotation's `Committed` pause: refused; a writable open afterwards promotes and
+verifies. **It contradicts** CLAUDE.md's "a vault whose writer crashed
+mid-rotation still opens" and the incident runbook's read-only restart — the one
+posture A32/R4 exist for. The A32 test opens the VAULT read-only and never a store
+(O91's lesson: a posture is a property of the path). Every `anchored_head` caller
+on such a handle (the guard's miss path, `verify`, the witness, `forget`'s
+recorded verdict) has the same shape.
+
+**Shape, for a ruling panel**: the adopted generation's anchor comes from the
+staged bytes the unlock read and verified under the adopted key, never from the
+live file under the wrong one; every `anchored_head` caller audited; the
+refusal on a genuinely foreign manifest kept. It blocks O212's backup half: a
+forensic `--read-only` backup is impossible over such a vault today.
+
+**Gate**: the fault-seam deferred promote opens `--read-only`, verifies, serves a
+read and reports `RotationPromotionDeferred` on `unhealed`; a `vault.json` MAC'd
+under neither generation still refuses.
+
+### O267 — a destroyed drawer's bytes survive in freed pages and WAL frames, in the live file and in later archives
+
+**Filed 2026-09-25 by O256's ruling (all four answers); measured by the
+integrator.** Nothing in the tree sets `secure_delete` or VACUUMs after a
+destruction, so `forget`, the retention sweep and `admission deny` delete rows
+whose bytes stay in freed pages — and in WAL frames until a checkpoint — of the
+live file, and in any page-exact copy of it: a deleted marker blob measured 1,118
+occurrences in the source file and 1,118 in a backup-API copy. On a SEALED vault
+that is the forgotten drawer's ciphertext — which the master key still opens,
+since a rotation changes only the salt and every archive keeps the old one, so
+THREAT_MODEL's "a key rotation destroys it by design" does not hold for key-file
+or passphrase deployments — and its UNSEALED `meta_json` (wing, room, source
+file, dates, agent claims), readable by a keyless reader. On hmac-only it is the
+plaintext. The A10 migration VACUUMs for exactly this reason about its own rows.
+An archive taken the O256 way carries no stale WAL frames, so it holds strictly
+less than a raw copy did; this is not O256's regression.
+
+**Shape, for a ruling panel**: `secure_delete` on the store's own connection (a
+legitimate deletion zeroed, an offline deletion still leaving its forensic
+residue), a TRUNCATE checkpoint after a destruction, and the THREAT_MODEL
+correction. **The product half is escalated to the maintainer**: archives taken
+BEFORE a destruction hold the drawers as live rows and a restore resurrects them
+(O147's class) — whether erasure reaches `backups/` is what the product offers.
+
+**Gate**: a byte scan of the database, its `-wal` and a later archive after
+`forget` finds no marker from the destroyed drawer.
+
+### O268 — `backup restore` destroys the vault it replaces before it knows the archive opens
+
+**Filed 2026-09-25 by O256's ruling; read in code, and measured for the archives it
+would meet.** Both restores take O69's hold, `remove_dir_all` the vault and then
+`copy_dir` the archive in, checking only that the archive has a `vault.json`.
+Archives made by ≤ 1.6.1 beside a writer can be torn or mismatched (O256 measured
+a restore refusing `ManifestTampered`, a torn database refusing
+`IntegrityFinding`, and a rotation mid-copy), and restoring one leaves a vault
+that does not open where a working one stood — O69's "exit 0, then destroyed"
+shape. It also races a concurrent `backup create`'s prune, which can delete the
+archive while it is being copied, after the vault is already gone.
+
+**Shape, for a ruling panel**: copy the archive into a stage beside the vault,
+open and verify the COPY, then swap it in under O69's hold (rename the live
+vault aside, the stage into place, remove the aside). **Its own questions**: a
+read-only verify of an archive whose schema predates the build refuses
+`ReadOnlyUnmigrated`, so the stage needs a migrate-then-verify with its own
+posture (O212's filed shape has restore refuse under `--read-only`); any override on a
+refusal is escalated to the maintainer. Sequenced right after O256.
+
+**Gate**: a torn archive handed to restore leaves the live vault byte-identical
+and exits with the integrity class; a good archive restores and verifies.
 
 
 ---

@@ -25,7 +25,10 @@ undercroft-index = { path = "../undercroft-index" }
 undercroft-net = { path = "../undercroft-net" }
 undercroft-obs = { path = "../undercroft-obs" }
 base64 = "0.22"
-rusqlite = { workspace = true }
+# `backup`: SQLite's online backup API, which `backup create` copies the verified
+# snapshot with (ROADMAP O256). A module over functions the bundled SQLite always
+# compiles; it adds no crate.
+rusqlite = { workspace = true, features = ["backup"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 time = { workspace = true }

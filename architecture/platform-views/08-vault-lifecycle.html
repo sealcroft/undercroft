@@ -46,7 +46,7 @@
 
     <svg viewBox="0 0 1200 720" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="vault-lifecycle-title vault-lifecycle-desc">
       <title id="vault-lifecycle-title">Undercroft vault lifecycle</title>
-      <desc id="vault-lifecycle-desc">A vault starts uninitialised, becomes sealed at rest once initialised, and from there opens either writable or read-only; every open reconciles the manifest anchor, where a crash fast-forwards it and a rollback is reported as tamper. A writable vault can rotate its keys, holding the vault exclusively and refused while any other process or handle has it open, or repair itself — re-embedding every drawer and rebuilding its indexes without rewriting content, each a single transaction that returns it to writable — and can be archived as a verify-gated directory copy (the signed, recipient-sealed bundle is an export, not a backup), while the read-only role creates nothing, migrates nothing and promotes no staging manifest.</desc>
+      <desc id="vault-lifecycle-desc">A vault starts uninitialised, becomes sealed at rest once initialised, and from there opens either writable or read-only; every open reconciles the manifest anchor, where a crash fast-forwards it and a rollback is reported as tamper. A writable vault can rotate its keys, holding the vault exclusively and refused while any other process or handle has it open, or repair itself — re-embedding every drawer and rebuilding its indexes without rewriting content, each a single transaction that returns it to writable — and can be archived as a copy of exactly the state it verified (the signed, recipient-sealed bundle is an export, not a backup), while the read-only role creates nothing, migrates nothing and promotes no staging manifest.</desc>
       <defs>
         <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7fa39c"/></marker>
         <marker id="arrow-accent" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#35e0c2"/></marker>
@@ -185,7 +185,7 @@
       <rect x="912" y="534" width="44" height="12" rx="2" fill="transparent" stroke="rgba(127,163,156,0.40)" stroke-width="0.8"/>
       <text x="934" y="543" fill="rgba(127,163,156,0.90)" font-size="7" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle" letter-spacing="0.08em">COPY</text>
       <text x="1004" y="572" fill="#d9f0ea" font-size="12" font-weight="600" font-family="'DejaVu Sans', 'Noto Sans', sans-serif" text-anchor="middle">Archived</text>
-      <text x="1004" y="590" fill="#7fa39c" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">verify-gated directory copy</text>
+      <text x="1004" y="590" fill="#7fa39c" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">the verified snapshot, copied</text>
       <text x="1004" y="604" fill="#5c7f79" font-size="9" font-family="'DejaVu Sans Mono', monospace" text-anchor="middle">keeps 10 · export = sealed bundle</text>
 
       <!-- ============ LEGEND ============ -->

@@ -3398,28 +3398,13 @@ fn run(cli: Cli) -> Result<()> {
             if let Ok(n) = store.warm_embedding_cache() {
                 undercroft_obs::diag_info!("warmed embedding cache: {n} vector(s)");
             }
-            // How that store comes BACK if `backup create` evicts it. It must
-            // be this opener and not `Tenancy`'s, or the vault would silently
-            // return with a different embedder, no warmed cache and no
-            // `UNDERCROFT_RETRIEVAL=hnsw` (`tenant::StoreOpener`).
-            let opener: tenant::StoreOpener = {
-                let dir = dir.clone();
-                let vault = vault.clone();
-                Box::new(move || {
-                    let store = open_store_as(&dir, &vault, posture)?;
-                    if let Ok(n) = store.warm_embedding_cache() {
-                        undercroft_obs::diag_info!("warmed embedding cache: {n} vector(s)");
-                    }
-                    Ok(store)
-                })
-            };
             let mut tenancy =
                 tenant::Tenancy::new(manager(&cli, posture)?, embedder_factory(), *read_only)?
                     // ONE handle on this vault, held by `Tenancy` and borrowed
                     // by both surfaces (ROADMAP O242). Two handles made every
                     // `/v1` commit look foreign to the `/mcp` label guard, so
                     // the next search replayed the whole chain.
-                    .with_mcp_vault(vault.clone(), store, opener);
+                    .with_mcp_vault(vault.clone(), store);
             if let Some(reranker) = reranker_factory()? {
                 tenancy = tenancy.with_reranker(reranker);
             }
@@ -4405,41 +4390,48 @@ fn run(cli: Cli) -> Result<()> {
             let root = data_dir(&cli);
             match action {
                 BackupAction::Create { vault } => {
-                    // Verify before snapshotting — never archive a bad vault.
-                    // The refusal is an integrity verdict, so it exits 2
-                    // like `verify` and `repair` rather than 1: a script
-                    // that treats 1 as "retry the run" must not retry a
-                    // vault that failed its HMACs.
+                    // **The archive IS the verified state (ROADMAP O256).** This
+                    // used to verify, DROP the store and copy the directory as
+                    // files — beside a writer 11 of 40 copies failed, 2 of the
+                    // rest restored as tampering and 16 held a state the verify
+                    // never saw. `backup` verifies and copies inside one
+                    // snapshot, through the connection O257's fence sees.
+                    //
+                    // A failed verify is an integrity verdict, so it exits 2
+                    // like `verify` and `repair` rather than 1: a script that
+                    // treats 1 as "retry the run" must not retry a vault that
+                    // failed its HMACs. Anything failing after the verify
+                    // passed exits 1 — the vault verified.
                     let store = open_store(&cli, vault)?;
-                    if !store.verify()?.ok() {
-                        println!(
-                            "refusing to back up vault '{vault}': integrity verification \
-                             failed (run `undercroft verify --vault {vault}` for the detail)"
-                        );
-                        std::process::exit(EXIT_INTEGRITY.into());
-                    }
-                    drop(store);
-                    let stamp = time::OffsetDateTime::now_utc()
-                        .format(&time::format_description::well_known::Rfc3339)?
-                        .replace([':', '.'], "-");
-                    let src = root.join(undercroft_vault::VAULTS_DIR).join(vault);
-                    let dst = root
-                        .join(undercroft_vault::BACKUPS_DIR)
-                        .join(format!("{vault}-{stamp}"));
-                    copy_dir(&src, &dst)?;
-                    prune_backups(&root.join(undercroft_vault::BACKUPS_DIR), vault, 10)?;
-                    println!("Backup created: {}", dst.display());
+                    let backups = root.join(undercroft_vault::BACKUPS_DIR);
+                    let report = match store.backup(&backups)? {
+                        undercroft_store::BackupOutcome::Created(report) => report,
+                        undercroft_store::BackupOutcome::Refused(_) => {
+                            println!(
+                                "refusing to back up vault '{vault}': integrity verification \
+                                 failed (run `undercroft verify --vault {vault}` for the detail)"
+                            );
+                            std::process::exit(EXIT_INTEGRITY.into());
+                        }
+                    };
+                    println!("Backup created: {}", backups.join(&report.name).display());
+                    println!("  vault:        {}", report.vault);
+                    println!("  chain height: {}", report.writes);
+                    println!("  chain head:   {}", report.chain_head);
+                    // The anchor travels as found (O246/A2): a lag here is
+                    // what a restore heals, and says it healed.
+                    println!(
+                        "  anchor lag:   {} record(s) — a restore fast-forwards it",
+                        report.anchor_behind_by
+                    );
+                    println!("  older pruned: {}", report.pruned);
                 }
                 BackupAction::List => {
-                    let dir = root.join(undercroft_vault::BACKUPS_DIR);
-                    let mut names: Vec<String> = match std::fs::read_dir(&dir) {
-                        Ok(rd) => rd
-                            .filter_map(|e| e.ok())
-                            .map(|e| e.file_name().to_string_lossy().to_string())
-                            .collect(),
-                        Err(_) => Vec::new(),
-                    };
-                    names.sort();
+                    // Every entry but the stage an archive is built in
+                    // (ROADMAP O256), which is never an archive.
+                    let names = undercroft_vault::backups::list_entries(
+                        &root.join(undercroft_vault::BACKUPS_DIR),
+                    )?;
                     if names.is_empty() {
                         println!("No backups.");
                     }
@@ -4448,6 +4440,12 @@ fn run(cli: Cli) -> Result<()> {
                     }
                 }
                 BackupAction::Restore { name, force } => {
+                    // **The backup NAME is a name, not a path** (ROADMAP O256),
+                    // as `/v1` has always required. Unvalidated,
+                    // `backup restore ../vaults/X --force` resolved the source
+                    // to the vault ITSELF, took the hold, removed it, and then
+                    // failed copying from what it had just deleted.
+                    undercroft_core::validate_name(name, "backup")?;
                     let src = root.join(undercroft_vault::BACKUPS_DIR).join(name);
                     if !src.join("vault.json").exists() {
                         bail!("no backup named {name}");
@@ -4873,22 +4871,8 @@ fn collect_transcripts(path: &Path) -> Result<Vec<PathBuf>> {
 /// outright, so it is read rather than reconstructed — the manifest is the
 /// authority on which vault this is, exactly as it is for everything else.
 pub(crate) fn read_backup_vault_id(src: &Path) -> Result<String> {
-    let raw = std::fs::read_to_string(src.join("vault.json"))
-        .with_context(|| format!("reading {}", src.join("vault.json").display()))?;
-    let v: serde_json::Value = serde_json::from_str(&raw)
-        .with_context(|| format!("parsing {}", src.join("vault.json").display()))?;
-    let id = v
-        .get("id")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("");
-    if id.is_empty() {
-        bail!(
-            "backup at {} has no vault id in its manifest",
-            src.display()
-        );
-    }
-    undercroft_core::validate_name(id, "vault")?;
-    Ok(id.to_string())
+    undercroft_vault::backups::archive_vault_id(src)
+        .with_context(|| format!("reading the backup manifest at {}", src.display()))
 }
 
 pub(crate) fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
@@ -4902,23 +4886,6 @@ pub(crate) fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
         } else {
             std::fs::copy(&from, &to)?;
         }
-    }
-    Ok(())
-}
-
-pub(crate) fn prune_backups(dir: &Path, vault: &str, keep: usize) -> Result<()> {
-    let Ok(rd) = std::fs::read_dir(dir) else {
-        return Ok(());
-    };
-    let mut names: Vec<String> = rd
-        .filter_map(|e| e.ok())
-        .map(|e| e.file_name().to_string_lossy().to_string())
-        .filter(|n| n.starts_with(&format!("{vault}-")))
-        .collect();
-    names.sort();
-    while names.len() > keep {
-        let victim = names.remove(0);
-        std::fs::remove_dir_all(dir.join(victim))?;
     }
     Ok(())
 }

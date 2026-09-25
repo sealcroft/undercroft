@@ -24,6 +24,7 @@
 //! unlocked.
 #![warn(missing_docs)]
 
+pub mod backups;
 pub mod bundle;
 pub mod keys;
 pub mod seal;
@@ -191,6 +192,40 @@ struct Manifest {
 /// fence has to be in the field before the format moves, or it reports
 /// tampering instead of age.
 pub const MANIFEST_VERSION: u32 = 1;
+
+/// A vault's `vault.json` as read from disk: its exact bytes, verified under
+/// the reading handle's manifest key, and the anchor they name (ROADMAP O256).
+///
+/// Minted only by [`Vault::verified_manifest`]; its bytes are written only by
+/// [`backups::Stage::write_manifest`]. That is the pairing a backup needs —
+/// the manifest archived beside the copied rows is the manifest those rows
+/// were verified against, byte for byte, and never one this build composed.
+pub struct VerifiedManifest {
+    bytes: Vec<u8>,
+    head: String,
+    writes: u64,
+}
+
+impl VerifiedManifest {
+    /// The chain head this manifest anchors.
+    pub fn chain_head(&self) -> &str {
+        &self.head
+    }
+
+    /// The chain height this manifest anchors.
+    pub fn writes(&self) -> u64 {
+        self.writes
+    }
+}
+
+impl std::fmt::Debug for VerifiedManifest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VerifiedManifest")
+            .field("writes", &self.writes)
+            .field("head", &self.head)
+            .finish_non_exhaustive()
+    }
+}
 
 impl Manifest {
     /// **The one door every manifest on disk is parsed through** (ROADMAP
@@ -1361,7 +1396,44 @@ impl Vault {
         let Ok(raw) = fs::read(self.dir.join("vault.json")) else {
             return Ok(self.manifest.chain_head_hex.clone());
         };
-        let m = Manifest::parse(&raw)?;
+        Ok(self.parse_verified(&raw)?.chain_head_hex)
+    }
+
+    /// **The manifest ON DISK, its exact bytes, MAC-verified — with NO
+    /// fall-back** (ROADMAP O256).
+    ///
+    /// `backup create` reads it ONCE, before it pins the snapshot it verifies
+    /// and copies: its head is the anchor that `verify` compares the rows
+    /// with, and its bytes are what the archive carries, so the two cannot be
+    /// different reads. [`anchored_head`](Self::anchored_head) falls back to
+    /// the cached head when the file cannot be read, which is right for a
+    /// tamper decision and wrong here — it would archive a manifest the vault
+    /// never had. So a missing file is an integrity verdict and any other read
+    /// error is an I/O refusal. The bytes leave this crate only through
+    /// [`backups::Stage::write_manifest`].
+    pub fn verified_manifest(&self) -> Result<VerifiedManifest, VaultError> {
+        let raw = match fs::read(self.dir.join(MANIFEST_FILE)) {
+            Ok(raw) => raw,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(VaultError::CorruptManifest(format!(
+                    "{MANIFEST_FILE} is missing from vault {:?}'s directory",
+                    self.id
+                )));
+            }
+            Err(e) => return Err(e.into()),
+        };
+        let m = self.parse_verified(&raw)?;
+        Ok(VerifiedManifest {
+            head: m.chain_head_hex,
+            writes: m.writes,
+            bytes: raw,
+        })
+    }
+
+    /// Parse a manifest read from disk and verify it is this vault's and
+    /// carries this handle's MAC — the one check both readers above share.
+    fn parse_verified(&self, raw: &[u8]) -> Result<Manifest, VaultError> {
+        let m = Manifest::parse(raw)?;
         if m.id != self.id {
             return Err(VaultError::CorruptManifest("manifest id mismatch".into()));
         }
@@ -1376,7 +1448,7 @@ impl Vault {
             );
             return Err(VaultError::ManifestTampered);
         }
-        Ok(m.chain_head_hex)
+        Ok(m)
     }
 
     /// Write this handle's manifest as it stands, through the one writer.
