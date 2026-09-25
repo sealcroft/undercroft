@@ -402,15 +402,6 @@ impl VaultStore {
         }
     }
 
-    /// Purge a deleted drawer's token row (mirrors the PQ purge), and its
-    /// FDE beside it.
-    pub(crate) fn late_purge_row(&self, id: &str) {
-        let _ = self
-            .conn
-            .execute("DELETE FROM drawer_tok WHERE id = ?1", params![id]);
-        self.fde_purge_row(id);
-    }
-
     /// Export one drawer's stored token matrix as a **portable artifact**:
     /// `(model_name, packed_plaintext)`. Token matrices are the expensive
     /// derived data (one transformer forward per drawer at ingest), and they

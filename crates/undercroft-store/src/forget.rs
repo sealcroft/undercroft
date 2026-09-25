@@ -34,12 +34,19 @@
 //!   in. The heads still bind the operator — a later history shown for
 //!   the same interval that disagrees is two conflicting signed claims.
 //!
-//! What "destroyed" means here is what `delete_drawer` ships: row +
-//! derived artifacts gone, keyed tombstone chained atomically. A crash
-//! mid-batch leaves already-deleted drawers tombstoned and chained (the
-//! append-only posture) and NO attestation — re-run to completion, then
-//! attest. Retention policies and admission-deny-with-receipt build on
-//! this in their own units.
+//! What "destroyed" means here is what the one destruction body ships
+//! (`manage.rs`, `destroy_in`): the row and its derived artifacts gone and a
+//! keyed tombstone chained. **A whole destruction is ONE write lock**
+//! (ROADMAP O255): every drawer of a `forget`, a retention sweep or an
+//! `admission deny` is destroyed in one transaction, and the receipt is read
+//! from that same transaction, so nobody else's record can land inside its
+//! interval and a failure or a crash anywhere before the COMMIT destroys
+//! nothing. This said "a crash mid-batch leaves already-deleted drawers
+//! tombstoned … re-run to completion, then attest" until O255, and that
+//! recovery could not work: the re-run refused `NotFound` on the ids already
+//! destroyed, so those destructions could never be receipted. What remains is
+//! a crash after the COMMIT and before the receipt reaches its caller — the
+//! unkeyed fingerprints it carries are persisted nowhere, by design.
 
 use rusqlite::params;
 use time::format_description::well_known::Rfc3339;
@@ -266,6 +273,15 @@ impl ForgetAttestation {
     }
 }
 
+/// `ids` with each id kept once, in first-seen order (ROADMAP O255).
+pub(crate) fn distinct(ids: &[String]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::with_capacity(ids.len());
+    ids.iter()
+        .filter(|id| seen.insert(id.as_str()))
+        .cloned()
+        .collect()
+}
+
 impl VaultStore {
     /// Destroy the named drawers and attest it. Every id must exist —
     /// attesting the destruction of what was never there is a claim this
@@ -369,8 +385,7 @@ impl VaultStore {
         )
     }
 
-    /// `forget_with_proof` with the pending-evidence decision stated —
-    /// `admission deny` is the one caller allowed to pass `Ruled`.
+    /// `forget_with_proof` with the pending-evidence decision stated.
     pub(crate) fn forget_with_proof_ruled(
         &mut self,
         ids: &[String],
@@ -380,6 +395,15 @@ impl VaultStore {
         if ids.is_empty() {
             return Err(StoreError::Invalid("nothing to forget".into()));
         }
+        // Each drawer named ONCE (ROADMAP O255). A repeated id used to
+        // destroy once, append one tombstone and hand back a receipt naming
+        // the drawer twice; one lock and a check of the records it wrote
+        // would turn that into a refusal, or a tamper verdict.
+        let ids = distinct(ids);
+        // The posture FIRST (ROADMAP O255, on O184's door): a read-only
+        // handle cannot destroy, and the lock below would refuse with
+        // SQLite's own "readonly database" after the guard had replayed.
+        self.refuse_when_read_only("forget destroys the named drawers")?;
         // **At the TOP, beside the other pre-flights, and NOT inside
         // `mirror_note`** (ROADMAP O237). This path decides from audit
         // labels — the mirror disclosure reads `egress/index-push`, and the
@@ -394,14 +418,38 @@ impl VaultStore {
         // (O171 item (c) / O206) — and is closed instead by tagging the
         // `meta` row it reads.
         //
-        // The guard ONLY (ROADMAP O253's ruling): a door with nothing inside
-        // its snapshot. The decision and the destruction below are separate
-        // steps outside the write lock, which is ROADMAP O255's.
+        //
+        // OUTSIDE the lock, which O255's ruling kept: inside it the guard
+        // would see an `Inline` snapshot, and beside a writer — whose commit
+        // is exactly what `BEGIN IMMEDIATE` waits for — a miss is near-certain
+        // and would replay the chain under the write lock for no decision.
         self.guarded(|_| Ok(()))?;
-        // Existence + fingerprints first, so a bad id aborts before any
-        // deletion. The pending-evidence fence is checked here too, for the
-        // same reason: the choke point would catch it, but only after the
-        // ids before it in the list were already gone.
+        self.under_destruction_lock(|s, snap| s.attest_in(snap, &ids, evidence, &mirror))
+    }
+
+    /// **The attested destruction, inside ONE write lock** (ROADMAP O255) —
+    /// the body every destruction path runs: `forget`, the retention sweep
+    /// and `admission deny`.
+    ///
+    /// Everything the receipt says is read in the lock that acts: each
+    /// drawer's existence, the pending-evidence fence, and its content
+    /// fingerprint FROM THE BYTES READ HERE (a correction landing between an
+    /// outside read and the delete made the receipt name content that was not
+    /// the content destroyed — measured, 5 of 65); the regime and the head
+    /// before; every destruction; the head after and the records. Nobody else
+    /// can commit into the interval, so it holds exactly this destruction's
+    /// tombstones — and that is ASSERTED before the commit, because a receipt
+    /// that cannot verify must never be minted. A refusal here rolls every
+    /// drawer back: none of this is a label refusal after destruction began
+    /// (O237 ruling 5), because nothing is destroyed until the COMMIT.
+    pub(crate) fn attest_in(
+        &self,
+        snap: &crate::chain::Snapshot<'_>,
+        ids: &[String],
+        evidence: crate::manage::PendingEvidence,
+        mirror: &MirrorDelete,
+    ) -> Result<(ForgetAttestation, Vec<crate::manage::Destroyed>), StoreError> {
+        let conn = snap.conn();
         let mut drawers = Vec::with_capacity(ids.len());
         for id in ids {
             let d = self
@@ -423,35 +471,60 @@ impl VaultStore {
                 content_fp: hex::encode(crate::kg::content_fp(&d.content)),
             });
         }
-        let head_before: String = self.chain_head()?;
+        let tables = crate::manage::DerivedTables::read(self)?;
         // The attestation names the step its heads were computed with
         // (ROADMAP O233): version 2 on a switched chain, whose tombstones fold
-        // their labels and times. The regime cannot change mid-call — a chain
-        // switches only at an open.
-        let version = match crate::chain::regime(&self.conn)? {
+        // their labels and times. Read inside the lock: another process's
+        // writable open switches a chain under its own write lock, which this
+        // one now excludes.
+        let version = match crate::chain::regime(conn)? {
             crate::chain::Regime::V1 => 1,
             crate::chain::Regime::V2 { .. } => 2,
         };
+        let head_before = crate::chain::require_head(conn)?.head;
         let seq_before: i64 =
-            self.conn
-                .query_row("SELECT COALESCE(MAX(seq), 0) FROM audit", [], |r| r.get(0))?;
+            conn.query_row("SELECT COALESCE(MAX(seq), 0) FROM audit", [], |r| r.get(0))?;
+        let mut destroyed = Vec::with_capacity(ids.len());
         for id in ids {
-            self.delete_drawer_ruled(id, evidence)?;
+            destroyed.push(self.destroy_in(snap, &tables, id)?);
         }
-        let head_after: String = self.chain_head()?;
-        let mut stmt = self
-            .conn
-            .prepare("SELECT record_id, tag, at FROM audit WHERE seq > ?1 ORDER BY seq")?;
-        let records: Vec<AttestedRecord> = stmt
-            .query_map(params![seq_before], |r| {
-                Ok(AttestedRecord {
-                    record_id: r.get(0)?,
-                    tag: hex::encode(r.get::<_, Vec<u8>>(1)?),
-                    at: r.get(2)?,
-                })
-            })?
-            .collect::<Result<_, _>>()?;
-        Ok(ForgetAttestation {
+        self.settle_derived(snap, &tables, &destroyed)?;
+        let head_after = crate::chain::require_head(conn)?.head;
+        let records: Vec<AttestedRecord> = {
+            let mut stmt =
+                conn.prepare("SELECT record_id, tag, at FROM audit WHERE seq > ?1 ORDER BY seq")?;
+            let rows = stmt
+                .query_map(params![seq_before], |r| {
+                    Ok(AttestedRecord {
+                        record_id: r.get(0)?,
+                        tag: hex::encode(r.get::<_, Vec<u8>>(1)?),
+                        at: r.get(2)?,
+                    })
+                })?
+                .collect::<Result<_, _>>()?;
+            rows
+        };
+        // The records are exactly this destruction's tombstones, in order,
+        // with the tags it computed. It compares this transaction's own
+        // output before the commit, so a mismatch is a defect or something
+        // planted beneath SQLite (a trigger, ROADMAP O263) — and refusing
+        // beats handing out a receipt that can never verify.
+        let exact = records.len() == destroyed.len()
+            && records.iter().zip(&destroyed).all(|(r, d)| {
+                r.record_id == crate::manage::Namespace::Del.record(&d.id)
+                    && r.tag == hex::encode(&d.tag)
+            });
+        if !exact {
+            return Err(StoreError::IntegrityFinding(format!(
+                "the audit records this destruction wrote are not exactly its {} tombstone(s) \
+                 ({} record(s) above the starting head) — something inside the database \
+                 wrote into the interval. Nothing was destroyed; run `undercroft verify` \
+                 (ROADMAP O255)",
+                destroyed.len(),
+                records.len()
+            )));
+        }
+        let att = ForgetAttestation {
             version,
             vault: self.vault.id().to_string(),
             created_at: OffsetDateTime::now_utc()
@@ -465,11 +538,13 @@ impl VaultStore {
             // through — `forget`, `retention sweep` and `admission deny` all
             // land on it — rather than at a surface. A boundary that has to
             // be remembered per call site is the class of defect this tree
-            // spends its time closing.
-            mirror: self.mirror_note(&mirror),
+            // spends its time closing. Read inside the lock, so a push that
+            // lands beside the destruction cannot fall between the two.
+            mirror: self.mirror_note(mirror),
             sender: None,
             sig: None,
-        })
+        };
+        Ok((att, destroyed))
     }
 
     /// What to say about a remote mirror in an attestation, if anything.
@@ -522,7 +597,10 @@ impl VaultStore {
                 [],
                 |r| r.get(0),
             )
-            .unwrap_or(false)
+            // A lookup that FAILS discloses rather than suppresses (ROADMAP
+            // O255's refuter): this note can only ever add a warning, so its
+            // safe direction is to say it.
+            .unwrap_or(true)
             || marker != crate::remote::PushedMarker::Absent;
         if !pushed {
             return None;
@@ -647,10 +725,11 @@ impl VaultStore {
         // Which posture can this vault take? The keyed replay needs the MAC
         // key that MADE these tombstones, and `rotate_keys` destroys it by
         // design. An attestation that spans a rotation cannot exist — the
-        // per-id deletes run on the exclusive handle a rotation also needs,
-        // so one `forget` is made under one key — so this is all-or-
-        // nothing: any tag that will not verify takes the WHOLE document to
-        // the recorded-evidence path.
+        // whole destruction is one write-locked transaction on this handle,
+        // and a rotation needs the vault alone (ROADMAP O257, O255), so one
+        // `forget` is made under one key — so this is all-or-nothing: any
+        // tag that will not verify takes the WHOLE document to the
+        // recorded-evidence path.
         //
         // Not because that path is stricter — it is not, and neither posture
         // dominates the other: the keyed one proves the tags are genuine and
@@ -747,19 +826,23 @@ impl VaultStore {
     /// path gets that from the head replay; here the heads are unverifiable
     /// strings, so the equivalent structural claim is that the attested
     /// records sit at consecutive `seq` values with nothing interleaved.
-    /// That holds by construction — `forget_with_proof_ruled` takes
-    /// `MAX(seq)` before destroying anything and selects `seq > that`
-    /// afterwards, and `audit` is append-only (`AUTOINCREMENT`, and no
-    /// production statement deletes from it). Without this the check would
-    /// admit a document that quietly omitted a record from the middle of its
-    /// own interval, which is precisely the claim it exists to support.
+    /// That holds by construction — `attest_in` takes `MAX(seq)` before
+    /// destroying anything and selects `seq > that` afterwards, INSIDE the
+    /// one write lock the whole destruction holds, and `audit` is append-only
+    /// (`AUTOINCREMENT`, and no production statement deletes from it).
+    /// Without this the check would admit a document that quietly omitted a
+    /// record from the middle of its own interval, which is precisely the
+    /// claim it exists to support.
     ///
-    /// **"By construction" is false beside a concurrent writer** (ROADMAP
-    /// O255, corrected 2026-09-24): each drawer is destroyed in its own
-    /// transaction, so another handle's commit lands inside the interval and
-    /// the receipt fails this very check — measured, 20 of 20 receipts minted
-    /// beside a `trust set` writer are unverifiable, and each carries that
-    /// writer's labels. The fix holds one write lock across the destruction.
+    /// **"By construction" was false beside a concurrent writer until ROADMAP
+    /// O255** (corrected 2026-09-24, fixed 2026-09-25): each drawer was
+    /// destroyed in its own transaction, so another handle's commit landed
+    /// inside the interval and the receipt failed this very check — measured,
+    /// 7 of 65 receipts in a sweep of every step, 1–3 of 20 in a soak, each
+    /// carrying that writer's labels. One write lock across the destruction,
+    /// and an assertion before its COMMIT that the records are exactly its
+    /// tombstones, are what make the sentence above true. Receipts minted
+    /// before the fix beside a writer still fail it: ROADMAP O261.
     ///
     /// Several rows can legitimately match one attested record: a drawer id
     /// is deterministic, so a drawer may be mined, destroyed, re-mined and
@@ -859,11 +942,6 @@ impl VaultStore {
                     rid == &r.record_id && tag == want && at == &r.at
                 });
         Ok(matches.then(|| rows.last().map(|(seq, ..)| *seq)).flatten())
-    }
-
-    /// The live head (ROADMAP O233: `head_v2` once the chain has switched).
-    fn chain_head(&self) -> Result<String, StoreError> {
-        Ok(crate::chain::require_head(&self.conn)?.head)
     }
 }
 

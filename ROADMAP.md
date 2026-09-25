@@ -3998,7 +3998,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**288** of the **303** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**294** of the **309** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -5922,7 +5922,11 @@ second handle on a second thread committing in a loop):
   verdict) — FOLLOWED: this entry is that ruling applied to every judgement.
 - **O237 rulings 1, 2, 4 and 5** — FOLLOWED: one replay per foreign-commit
   window, the cookie the accelerator and never the boundary, the guard's
-  placement, the destruction path never refuses.
+  placement, the destruction path never refuses. **Corrected beside
+  2026-09-25 by O255's ruling:** ruling 5 forbids a refusal on an audit LABEL
+  once destruction has begun (`mirror_note`); ruling 4 itself refuses at
+  `forget`'s top, and a refusal before anything is destroyed is not what
+  ruling 5 governs.
 - **O237's "read the cookie BEFORE the replay", as built, and this entry's filed
   "the cookie BEFORE the snapshot opens"** — REFUTED beside, by P7: read INSIDE
   the snapshot the cookie equals the version of the rows the verdict reads,
@@ -6269,6 +6273,413 @@ defect, reproduced at 10⁵ by the instrument meant to price its fix.
 **Versioning**: PATCH-class inside the unreleased `1.7.0` — false integrity
 refusals and false open failures removed, no documented contract moved; no
 `UPGRADING.md` entry.
+
+### O255 — CLOSED 2026-09-25: a whole destruction is one write lock, so a receipt minted beside a writer verifies and a sweep destroys only what the policy in force expires
+
+**Filed 2026-09-24 by O253's panel; measured by the integrator.**
+`forget_with_proof_ruled` reads the head before, the highest seq, then deletes
+each drawer in its OWN transaction (`delete_drawer_ruled`), then reads the head
+after and every record above the starting seq — and attests that run. A
+concurrent writer's commit lands inside it, so the attested interval holds a
+record that is not a tombstone.
+
+**Measured**: 400 drawers forgotten twenty at a time while a second handle
+made `trust set` commits — **all 20 attestations fail
+`verify_forget_attestation`**: "attestation failed: record "trust/wN" is not a
+tombstone — something else happened inside the attested interval". The
+destruction happened; the receipt for it is permanently unverifiable, and the
+verdict it produces is the integrity family's (exit 2). `forget.rs`'s own
+comment says the contiguity "holds by construction", which is false under an
+external writer.
+
+**And it leaks.** The receipt goes to a third party carrying the other writer's
+records — bare drawer-id labels (unkeyed digests of wing, room, source and
+chunk: a confirmation oracle) and `trust/{wing}` names.
+
+**The retention sweep is the same primitive**: it decides which drawers expire
+on one state and destroys afterwards, so a `retention set 365` committed in
+between is ignored and drawers the new policy keeps are destroyed.
+
+**Shape, for this entry's own panel**: one write lock held from the starting
+head through the attested records — the destruction loop inside one `BEGIN
+IMMEDIATE`, which needs `delete_drawer_ruled`'s own transaction and per-id
+anchor restructured — and the sweep's decision re-validated inside the lock
+that destroys (the O220/O224 backstop shape). O237 ruling 5 binds it: the
+destruction path holds the lock, it never refuses. A restructure of a path
+that produces a security verdict, so it is not half-landed.
+
+**Gate**: receipts minted beside a writer all verify; the sweep under a
+concurrent re-declaration destroys only what the policy in force at the moment
+of destruction expires.
+**Counterfactual**: today, 20 of 20 receipts fail.
+
+Sequenced after O254, which closed on 2026-09-24: the destruction path anchors once per id, and since O254 an anchor never fails the write it follows, so a restructured destruction loop can return its receipt.
+
+**Corrected beside 2026-09-25 by this entry's own ruling:** "O237 ruling 5
+binds it: … it never refuses" overreads that ruling. Ruling 4 of the same panel
+puts a refusal at `forget`'s top and ruling 7 writes "refuses a `forget`" into
+`UPGRADING.md`; ruling 5 settles the `mirror_note` split — no refusal on an
+audit LABEL once destruction has begun. A refusal made before anything is
+destroyed, which inside one transaction is anything before its COMMIT, is not
+what ruling 5 forbids.
+
+#### RULED 2026-09-25 by a three-lens panel (agentic memory architecture, security, software engineering) plus an adversarial refuter
+
+**The question.** What lock, and what inside it, makes an erasure receipt
+describe one state nobody else committed into, name exactly the content it
+destroyed, and always be mintable once the destruction has happened; and what
+the retention sweep re-validates inside that lock, so that it destroys only what
+the policy in force at the moment of destruction expires. The brief, the three
+lens answers, the refuter's report and every probe record are in the session
+scratchpad (`o255-panel/`) — material, never the record.
+
+**Measured before ruling**, by the integrator (release build,
+`rust:1.90-slim-bookworm`, sealed unless named):
+
+- **The gate, on today's tree** (`destruction_tests.rs`, public APIs only, a
+  second handle committing once at a strided VM step of the door, O253's
+  harness): forget ×3 from its first step, 65 runs — 7 receipts unverifiable,
+  **5 naming a content fingerprint that is not the content destroyed** (a
+  correction between the pre-flight and the delete); forget from its first
+  delete, 63 — 7 unverifiable; the sweep with its policy re-declared to 36,500
+  days at step N, 64 — **58 destroyed after the re-declaration took effect**;
+  cleared, 64 — **37 destroyed after the clear**; the sweep from its first
+  delete, 63 — 8 unverifiable. A paced writer-thread soak: 3, 2 and 1 of 20
+  receipts unverifiable in three runs, each carrying the writer's `trust/w9`.
+  **The probe's first version passed on this tree**: a nudged cookie made
+  every run replay the chain, the replay is ~95% of the steps, and the strided
+  commit never reached the destruction — so the forget arms warm the guard
+  first and a second pair counts from the first `drawers` DELETE (an
+  `update_hook`).
+- **P-hold** (a worktree of `a9c915c` carrying only a prototype): today's
+  `forget` against one `WriteLock` across the whole destruction, a writer beside
+  it saving every 5 ms with the production 5 s timeout. Today 276 ms / 5.05 s /
+  53.2 s / 533 s at 20 / 400 / 4k / 40k drawers, and the writer was REFUSED past
+  its busy timeout **6 times at 4k and 55 at 40k**; one lock held 5.2 ms /
+  15.6 ms / 122 ms / 1.59 s, the writer waited once and was refused never.
+  Today's per-drawer commit plus anchor is what holds writers off.
+- **P-tiers** (the refuter's: P-hold ran with no retrieval tier built, so every
+  purge hit an absent table): 40k with the PQ and wing-PQ tiers built — hold
+  **2.46 s sealed, 2.68 s hmac-only** (FTS too), `-wal` 8 → 38 MB, the writer
+  waited ~2.5 s once and was refused never.
+- **P4, SQLite's own behaviour**: `RAISE(ROLLBACK)` from a trigger inside
+  `BEGIN IMMEDIATE` ROLLS THE TRANSACTION BACK, and a later `DELETE` issued as
+  if still inside it runs in AUTOCOMMIT and commits (9 of 10 rows left, not
+  10) — the software-engineering lens's silent-failure mode, real;
+  `RAISE(ABORT)` fails the statement and leaves the transaction live (a clean
+  fault injection); an interrupt left the transaction live on this build
+  (the lens predicted otherwise; the mode stands on the rollback and on
+  SQLite's documented FULL/IOERR/NOMEM rollbacks); `BEGIN IMMEDIATE` on a
+  read-only open and under `query_only` answers `attempt to write a readonly
+  database`.
+- **P-dup**: today `forget [a, a]` succeeds — one tombstone, a receipt naming
+  the drawer TWICE, and `Verified`.
+- P5, today's receipt-less partial destruction beside an unpaced writer: 0 of
+  10 in a run; reachable by reading (a busy `BEGIN` at drawer k, or an O254
+  retire after drawer k making k+1's `chain_append` refuse) and observed once
+  this session (`database is locked` from `forget_with_proof`).
+
+**Prior rulings found, and their disposition.**
+
+- **O237 ruling 4** (guard at `forget`'s top, never inside `mirror_note`) —
+  FOLLOWED: the guard stays OUTSIDE the lock.
+- **O237 ruling 5** — FOLLOWED at its scope; **the paraphrase "the destruction
+  path never refuses", in this entry's filing and in O253's disposition list,
+  is REFUTED** and corrected beside each (above, and in O253). The lenses also
+  credited ruling 5 with O91's "refuses after the fact" argument, which is
+  ruling 4's.
+- **O253 item 6 and its dissent** — FOLLOWED: the lock the dissent waited for
+  now exists, but an in-lock replay decides nothing for `forget` or `deny`: the
+  only label read inside is `mirror_note`'s, whose half O237 left a residual.
+- **O254** (one post-commit anchor door; Ok on a failed anchor), **O257**, **O206**
+  (withhold and unverifiable semantics, the invariant, the dry run on the one
+  path), **O220/O224** (door outside, authority inside), **O113/O253** (one
+  state), **O13** (contiguity, now true), **O129** (drop derived caches on a
+  rollback), **O175** (the remote delete first), **O184/O167** (the read-only
+  refusal first) — FOLLOWED.
+
+**The ruled shape.**
+
+1. **One destruction body.** A single function holds the crate's only
+   `DELETE FROM drawers WHERE id`; it runs under the caller's `WriteLock`, on
+   that lock's snapshot, and never commits and never anchors. Its callers are
+   the locked attested body below and `delete_drawer_ruled`, which keeps its
+   own lock and stays unattested. The four prose sites that name the single
+   delete (`kg.rs`, `lib.rs` ×2, `manage.rs`) follow it.
+2. **`forget`, in order.** Outside: refuse an empty list; deduplicate the ids,
+   keeping their order, so a receipt names each drawer once; refuse a
+   read-only handle through `refuse_when_read_only`, the door `admission allow`
+   already uses; the top guard. Inside ONE `WriteLock`: per id, the row read
+   through `fetch_verified` (absent → `NotFound`, a failing tag → `Integrity`,
+   pending under `Protect` → `Invalid`) and the content fingerprint FROM THOSE
+   BYTES; the regime, `head_before`, `seq_before`; the destruction body per id
+   (a row count other than one refuses); `head_after` and the records; **an
+   assertion that the records are exactly `del/{id}` for the deduplicated ids,
+   in order, with the tags just computed** (a mismatch rolls back as
+   `IntegrityFinding` — it compares this transaction's own output, before
+   COMMIT, so it is not a label refusal); `mirror_note`'s reads; COMMIT. After:
+   on any error, `drop_derived_caches`; on success, one `anchor()`, then the
+   surgical RAM updates from the collected (id, seq, wing), then the telemetry.
+   The existence pre-flight stays outside only where something leaves the
+   database before the lock — the mirrored path (O175); on the ruled path the
+   in-lock check is both door and authority and carries the same message.
+3. **The purges.** `pq_purge_row` splits into a database half that returns
+   `(seq, wing)` and propagates every error, and a RAM half that runs only after
+   COMMIT. Wholesale cache drops (`pq_cache`, `fde_cache`) are safe anywhere.
+   Whether a derived table exists is read once inside the lock
+   (`table_exists`), never decided by matching an error string.
+4. **Nothing is swallowed inside the lock, and a tripwire backs it.** Every
+   statement's error propagates — the FTS delete and `fts_seq_of` included —
+   because under P4 a statement RETURNING an error is what triggers SQLite's
+   own rollback, so with nothing swallowed no write can run after one.
+   `is_autocommit()` is checked before every write statement (each purge, the
+   drawer delete, the FTS delete, `chain_append`, `deny`'s ruling): checking
+   only before COMMIT is too late, the piecemeal commits having landed.
+5. **`admission_deny`.** Outside: `quarantined`, the read-only refusal, the
+   guard. Inside the same lock: `quarantined` re-checked, the ruling appended
+   (a `&self` body that does not anchor), then item 2 from `seq_before` onward
+   — so the ruling is the record just before the attested interval by
+   construction, and a deny racing an `allow` rolls back whole.
+6. **The sweep.** Outside: ONE guarded `Decide` scan yielding the tagged policy
+   rows and the drift together, then the walk; a dry run takes no lock. Inside
+   the lock: read the policy rows and compare them byte for byte (wing, room,
+   days, tag, `assigned_at`) with the rows the decision used — every
+   legitimate `set` and `clear` rewrites `tag` and `assigned_at`, and a keyless
+   writer cannot forge a validly tagged different row past the next `Decide`
+   scan (O230). **Identical** → per candidate, one classifier factored out of
+   `walk_covered` (never a copy), an `expires` predicate, and the fence:
+   vanished → dropped; tag failing or meta unparseable → `unverifiable`; the
+   clear wing now naming the review queue → `withheld`; no longer expired →
+   dropped; otherwise destroyed, with its fingerprint and drift read in the
+   lock. **Different** → roll back and re-decide outside, ONCE (β); different
+   again → decide inside the lock: the `Decide` scan on the `WriteLocked`
+   snapshot (O253's in-place replay, counted), the walk and the fence inside.
+   The report describes ONE state: `policies` are the rows in force at the
+   destruction, O206's invariant holds (`destroyed` = the distinct union of
+   `expired` = the receipt's drawers) and `expired ∩ withheld = ∅`; a
+   legitimate concurrent re-declaration never makes `ok` false; an empty
+   destroy set mints no receipt and commits nothing. Stated residual:
+   membership is as of the walk — a drawer that crosses a policy's age, or
+   arrives with an old `filed_at`, after the walk waits for the next sweep.
+7. **One lock per call; no chunking and no cap here.** P-hold and P-tiers are
+   published. P-tiers put the hmac-only hold at 40k over the 2.5 s line the
+   lenses and the refuter set, so a chunking-or-cap entry is FILED (O264), not
+   built: it changes `RetentionSweep.attestation`, a hand-projected report on
+   four renderers.
+8. **A busy `BEGIN`** keeps SQLite's own error (a 500 with no integrity class
+   on `/v1`, exit 1 on the CLI). What changes is that it now arrives before
+   anything is destroyed. Typing busy errors across every write door is O258's,
+   which gains a note; three doors typed alone would be the per-door drift the
+   tree forbids. The refuter settled this against two lenses: `VaultHeld`'s
+   documented meaning is "the operation needs to be the ONLY one", which an
+   ordinary lock wait is not.
+9. **`WriteLock::snapshot` and `ExclusiveHold::snapshot` return a snapshot
+   tied to the guard**, not to the connection, so none can outlive the commit.
+10. **PATCH inside the unreleased `1.7.0`**: receipts that verify, a sweep that
+    honours the policy in force, and all-or-nothing where a broken failure mode
+    stood. The `forget.rs` module doc's "re-run to completion, then attest" was
+    a recovery that could not work (the re-run refuses `NotFound` on the ids
+    already destroyed), in a code doc no user-facing document repeats.
+    `UPGRADING.md` owes an entry: writers wait out the whole destruction and are
+    refused past 5 s with nothing stored; a `forget` whose target vanished
+    meanwhile now refuses with nothing destroyed; duplicate ids are named once;
+    `config check` sees none of it.
+
+**Options that lost, with their cost.** A guard INSIDE the lock — a miss is
+near-certain beside a writer (`BEGIN IMMEDIATE` waits for exactly the commit
+that moves the cookie), an in-place replay under the write lock (~88 ms at 10⁵
+audit rows, ~836 ms at 10⁶) for no decision. **Fingerprints computed outside
+and reused on an equal tag** (two lenses) — sound only if the lock also
+re-verifies the tag over the current bytes, and unreachable where it would
+matter, since the sweep's walk decrypts nothing; P-hold's prototype decrypted
+every row inside and stayed inside the budget, so the fact is read once, in the
+lock. **(α) authenticate in the lock on every sweep** — a replay under the
+write lock whenever anything foreign committed. **(γ) intersect on a
+difference** (software engineering) and **a report-mode intersection** (the
+security lens's fallback) — both report a policy SHORTENED mid-sweep over an
+`expired` list its own doc (`retention.rs`, "past the policy's age at sweep
+time") says is complete, and the second presents rows no replay authenticated as
+in force. **β up to three times** — no evidence for more than one. **Chunked
+receipts or a cap** — a documented-JSON change on four renderers, O264.
+**Typing the busy error here** — O258's. **The records read after COMMIT** —
+exactly the few steps a writer lands in and a strided probe can skip.
+
+**Claims refuted, including the brief's.** "The sweep decides on one state" —
+four snapshots (policies, drift, the walk, one fence query per member).
+"Closed by O254" — half: a retire after drawer k, or a busy `BEGIN` at k,
+still destroys k drawers with no receipt. "The purges mutate RAM caches
+immediately" — only `wing_pq`'s surgical edit is unsafe on a rollback. The
+refusal list omitted the failing-tag `Integrity` and `chain_append`'s
+retired/stale-keys refusal. P-hold and the gate ran with no retrieval tier
+built. The software-engineering lens's rejection of β confused a moving cookie
+with changed policy rows; the security lens's fallback carried the report
+defect it charged γ with, and its record assertion, without deduplication,
+would turn a working `forget a a` into a tamper verdict — as would the
+agentic-memory lens's "exactly one row" rule. In the tree: `forget.rs`'s "the
+regime cannot change mid-call" (false beside another process's writable open,
+which switches under a `WriteLock`); `admission.rs`'s "the ruling record sits
+just before the attested interval" and `manage.rs`'s `delete_by_source`
+promise, both false beside a writer; `mirror_note`'s `.unwrap_or(false)`,
+which fails toward suppressing the disclosure (flip it); and the probe's own
+`CorrectTarget`, which counted a `NotFound` update as a commit.
+
+**Dissent.** Two lenses would reuse an outside fingerprint on an equal tag;
+two would type the busy error as `VaultHeld` now; each lens proposed a
+different sweep fallback. Each is settled by the evidence above, not by
+count. None on the core.
+
+**The gate owed by the build.** The probe's six arms at zero, looped at least
+ten times, with premises: the first-delete arms see the writer HELD OFF and no
+writer record between `seq_before` and `head_after`; at least one sweep run
+lands its commit between the decision and the lock, destroys nothing and
+answers `ok: true`; `ok` and `destroyed` asserted on every sweep arm; a
+`NotFound` update not counted as a commit. New arms: duplicate ids; a vanished
+target (`forget`: `NotFound`, nothing destroyed; sweep: dropped, `ok`); `deny`
+beside a writer (its ruling is the record at `seq_before`); a busy `forget`
+leaving every id present; `RAISE(ROLLBACK)` and `RAISE(ABORT)` injected on
+`drawers` and on a derived table (nothing destroyed, `MAX(seq)` and the head
+unchanged, `verify` OK); the PQ and wing-PQ tiers built, a rollback injected,
+then a scoped search finding every drawer; hmac-only (FTS); the β and in-lock
+branches each forced and counted; a rotation after a receipt minted beside a
+writer (`Recorded`); CLI and `/v1` beside a writer in another process; a real
+corpus. Source gates: no guarded door, snapshot helper, returning read, anchor
+or `let _ =` inside the locked bodies, and exactly one production
+`DELETE FROM drawers WHERE id`. **Counterfactuals**: today's tree fails the
+arms; a pre-flight fingerprint fails the correction arm; a surgical edit before
+COMMIT fails the cache arm; a swallowed purge fails the `RAISE(ROLLBACK)` arm;
+a policy read outside the lock fails the re-declaration arms.
+
+**What would make it fail silently.** An error swallowed inside the lock
+(piecemeal commits, then a FALSE orphan-label alarm from `verify`); a surgical
+`wing_pq` edit before COMMIT (recall lost after a rollback); an outside
+fingerprint trusted; the report assembled from the outside state after β; no
+deduplication; a guarded door inside the lock (a miss becomes a refused
+erasure); the records read after COMMIT; gate vaults with no tier built; a sweep
+that destroys nothing whenever anything commits (passes the policy arms unless
+`destroyed` is asserted); `deny`'s ruling appended after `seq_before`.
+
+**Filed from this ruling**: O259 (`delete_by_source` can delete part of a
+source), O260 (`admission_allow`'s three transactions race a `deny`), O261
+(receipts minted beside a writer before this fix report as forged forever —
+O13's class), O262 (the CLI loses a receipt after the destruction commits),
+O263 (the database schema is not authenticated — a planted trigger runs inside
+every legitimate transaction), O264 (one lock across a very large destruction
+passes the busy timeout). O258 gains a note.
+
+#### BUILT 2026-09-25, to the ruling — with two defects of my own in the gate, found by its own premises
+
+**The body and the lock** (`manage.rs`). `destroy_in` holds the crate's one
+`DELETE FROM drawers WHERE id` — a source gate counts it — and runs on a
+`WriteLocked` snapshot only: the PQ tail and wing rows, the token and FDE rows,
+the full-text row (by the drawer's `seq`, whether or not the handle kept its
+prefilter), the drawer, the tombstone; every statement's error propagates, a row
+count other than one refuses, and `live()` checks `is_autocommit()` before each
+write. `DerivedTables::read` decides which lazy tables exist once per
+destruction, and `settle_derived` counts paged codes out of the page commitment
+once rather than per drawer. `under_destruction_lock` begins the `WriteLock`,
+runs the body, re-checks the tripwire and commits; on any error the lock's drop
+rolls back and `drop_derived_caches` runs; on success ONE `anchor()`, then
+`after_destroy` — the wing PQ cache's surgical edit (`pq_forget_cached`, the
+RAM half of the old `pq_purge_row`, which is gone with `late_purge_row`,
+`fde_purge_row` and `fts_seq_of`), the embedding cache, telemetry.
+`delete_drawer_ruled` is that lock around one `destroy_in`.
+
+**The attested body** (`forget.rs`, `attest_in`): existence, the fence and the
+fingerprints from the bytes it will destroy, the regime, the heads, the
+destruction, the records, the assertion that the records are exactly its
+tombstones with the tags it computed, `mirror_note` (whose failed lookup now
+discloses) — all inside the lock. `forget_with_proof_ruled` deduplicates,
+refuses a read-only handle through `refuse_when_read_only`, runs the guard
+outside, then the lock. `admission_deny` re-checks `quarantined` and appends its
+ruling (`admission_ruling_in`, no anchor) inside the same lock before
+`seq_before`. `WriteLock::snapshot` and `ExclusiveHold::snapshot` are tied to
+the guard.
+
+**The sweep** (`retention.rs`): the decision (`sweep_decide_in`) is ONE guarded
+snapshot — a `Decide` scan yielding policies and drift, the raw policy rows, and
+the walk; `classify` is the per-row membership decision the walk and the
+in-lock re-check share, and `covered_row` (factored out of `walk_covered`, which
+`replay.rs`'s verify-site inventory now names) the covered read behind both. In
+the lock the rows are compared byte for byte; equal → each member re-read with
+`covered_one`, re-classified, fenced and destroyed through `attest_in`;
+different → the lock commits nothing and the sweep decides again outside, once,
+then inside the lock (`sweep_pause.rs` carries the test seam, on
+`rotate_pause.rs`'s precedent). A dry run takes no lock.
+
+**The gate** (`destruction_tests.rs`, fifteen tests, looped 10 of 10 green):
+the probe's six arms — forget and sweep from their first step and from their
+first DELETE, the sweep under a re-declaration and a clear, a paced soak — each
+with its premise asserted (from the first delete the writer is HELD OFF: 61,
+63; the policy change reached the lock in 17 and 14 runs and destroyed
+nothing; every sweep `ok`, and `destroyed` = the distinct union of `expired` =
+the receipt's drawers); and the new arms — a repeated id named once, a vanished
+target refused with nothing destroyed, a sweep settling a vanished and a
+corrected member in the lock, the two re-decide branches forced and counted,
+`deny` beside a writer (its ruling the record before the interval, 64 runs), a
+forget held off at every step all-or-nothing, `RAISE(ABORT)` and
+`RAISE(ROLLBACK)` injected on `drawers` and `drawer_pq` on both levels with the
+tiers built (nothing destroyed, head unchanged, the wing tier still offering all
+60), a receipt minted beside a writer answering `Recorded` after a rotation, and
+the source gate. **Through the surfaces** (`tests/e2e.sh`): CLI forgets and a CLI
+sweep beside a `/v1` save loop in the server, and a `/v1` forget beside a CLI
+writer, every receipt verified by `verify-forgetting` on its own surface.
+
+**The counterfactuals**, each on a copy of the tree with the store recompiled
+(checked in its log): the fingerprint read outside the lock — 3 of 423 receipts
+name content not destroyed; a surgical cache edit before the commit, with no
+drop — the wing tier offers 56 of 60 after a rolled-back forget; a swallowed
+purge — under `RAISE(ABORT)` the forget SUCCEEDS and leaves a plaintext-derived
+PQ row behind its receipt, and under `RAISE(ROLLBACK)` alone the tripwire
+catches it (green) while without the tripwire the destruction commits
+piecemeal ("nothing destroyed" fails); no in-lock policy comparison — 17
+re-declared and 14 cleared sweeps destroy under a policy no longer in force; no
+deduplication — `NotFound`; the deny ruling outside the lock — the writer's
+record lands between the ruling and the interval.
+
+**Two defects of mine, both in the gate.** Its first version passed on today's
+tree: every run replayed the chain, the replay was ~95% of the steps, and a
+strided commit never reached the destruction — so the forget arms warm the guard
+and a second pair counts from the first DELETE. And its first counterfactual
+runner shared one target directory across copies made before any compile, so
+cargo judged every copy fresh and reran the first binary: all seven
+counterfactuals "passed". Each now touches its sources and must log a
+recompile. The same pass found the commit kind chosen by `step % kinds`, whose
+stride could pin one kind; kinds now rotate by run. **A third, in the e2e
+arm**: it listed four drawers the `/v1` writer had saved without asserting that
+four existed, and a battery whose CLI phase ran fast found fewer — under
+`set -u` the missing array element emptied the request and the check failed
+(1 of 651, passing in the battery before it). It now waits, bounded, for the
+writer's first four saves and asserts the premise as its own check.
+
+**A real corpus**: the LoCoMo feed mined into six wings (510 drawers, re-dated
+through export and import), beside a `serve-http` taking `/v1` saves: four CLI
+forgets of 25 all verify, one forget of a whole 85-drawer wing in 40 ms
+verifies, a sweep of two wings destroys 170 with `ok: true` and a verifying
+receipt, the writer's saves all succeed, `VERIFY OK`. Small, and stated as such.
+
+**Cost on the built code** (40,000 drawers, PQ and wing-PQ tiers built, a writer
+saving every 5 ms beside it): `forget` 2.91 s sealed / 2.98 s hmac-only, the
+sweep 2.90 s / 2.89 s; the writer waited at most 2.46–2.66 s and was refused
+never; `-wal` 8 → 32–38 MB. Today's per-drawer path at the same size took 533 s
+and refused that writer 55 times (P-hold). Reading `pq_page` once per
+destruction rather than per drawer changed nothing measurable at this size.
+
+**Residuals, stated.** The guard-to-lock window (a tamper committed between them
+is not seen by that destruction); a receipt lost between the COMMIT and its
+delivery, and by the CLI after it (O262); the mirrored forget's remote delete
+ahead of the lock (O175); the sweep's membership as of its walk; the hold,
+linear in the destruction (O264); receipts minted earlier beside a writer (O261);
+`delete_by_source` (O259) and `admission_allow` (O260) still several
+transactions; a planted trigger inside the database (O263 — the record
+assertion catches it writing into a receipt's interval, and nothing names one
+that copies destroyed content). The read-only refusal reuses O184's door, whose
+wording ("what it sent first could not be recorded") describes an egress and
+reads loosely for a destruction; kept, because a second door for one posture
+decision is the drift the tree forbids.
+
+**Versioning**: PATCH-class inside the unreleased `1.7.0`, with an `UPGRADING.md`
+entry (writers wait out the destruction; a vanished target now refuses; a
+repeated id is named once).
 
 ## 1.6.1 — released 2026-09-22
 
@@ -25825,47 +26236,6 @@ expecting zero.
 
 O253 closed on 2026-09-24 and shared this entry's diff surface. What it leaves here: `chain::replay` REQUIRES a `Snapshot`, so a tail fold reads its rows and its head in one state by construction, and a fold that advances the guard's cache must do so only from a snapshot the helper opened (`Origin::Opened`). **The `is_autocommit()` survey this entry owed was run by O253** across the whole workspace suite: a guarded read reached inside a caller's transaction happens NOWHERE in production code — the only two were O253's own test arms, deliberately — so a tail fold may assume it advances outside any transaction.
 
-### O255 — the destruction paths decide and attest outside the write lock that acts, so an erasure receipt minted beside a concurrent writer can never verify
-
-**Filed 2026-09-24 by O253's panel; measured by the integrator.**
-`forget_with_proof_ruled` reads the head before, the highest seq, then deletes
-each drawer in its OWN transaction (`delete_drawer_ruled`), then reads the head
-after and every record above the starting seq — and attests that run. A
-concurrent writer's commit lands inside it, so the attested interval holds a
-record that is not a tombstone.
-
-**Measured**: 400 drawers forgotten twenty at a time while a second handle
-made `trust set` commits — **all 20 attestations fail
-`verify_forget_attestation`**: "attestation failed: record "trust/wN" is not a
-tombstone — something else happened inside the attested interval". The
-destruction happened; the receipt for it is permanently unverifiable, and the
-verdict it produces is the integrity family's (exit 2). `forget.rs`'s own
-comment says the contiguity "holds by construction", which is false under an
-external writer.
-
-**And it leaks.** The receipt goes to a third party carrying the other writer's
-records — bare drawer-id labels (unkeyed digests of wing, room, source and
-chunk: a confirmation oracle) and `trust/{wing}` names.
-
-**The retention sweep is the same primitive**: it decides which drawers expire
-on one state and destroys afterwards, so a `retention set 365` committed in
-between is ignored and drawers the new policy keeps are destroyed.
-
-**Shape, for this entry's own panel**: one write lock held from the starting
-head through the attested records — the destruction loop inside one `BEGIN
-IMMEDIATE`, which needs `delete_drawer_ruled`'s own transaction and per-id
-anchor restructured — and the sweep's decision re-validated inside the lock
-that destroys (the O220/O224 backstop shape). O237 ruling 5 binds it: the
-destruction path holds the lock, it never refuses. A restructure of a path
-that produces a security verdict, so it is not half-landed.
-
-**Gate**: receipts minted beside a writer all verify; the sweep under a
-concurrent re-declaration destroys only what the policy in force at the moment
-of destruction expires.
-**Counterfactual**: today, 20 of 20 receipts fail.
-
-Sequenced after O254, which closed on 2026-09-24: the destruction path anchors once per id, and since O254 an anchor never fails the write it follows, so a restructured destruction loop can return its receipt.
-
 ### O256 — `backup create` verifies one state of the vault and then raw-copies another
 
 **Filed 2026-09-24 by O253's panel (the agentic-memory lens and the refuter);
@@ -25947,6 +26317,128 @@ content and the trail records no read — an availability failure of the read
 itself on every read-audited deployment beside a busy writer. The soak counts
 these as `o258_busy` and fails on anything else; this entry's gate should add
 an audited-read arm beside P2's saves.
+
+**Noted 2026-09-25 by O255's ruling (item 8):** the three destruction doors —
+`forget`, the retention sweep, `admission deny` — now take ONE write lock for
+the whole destruction, so a busy wait fails them at `BEGIN`, with nothing
+destroyed, where today it could fail them part-way through. The error keeps
+SQLite's own type; typing busy errors across every write door stays this
+entry's. O255's P-hold also measured the other direction: today's per-drawer
+destruction refused a paced concurrent writer past its busy timeout 6 times at
+4,000 drawers and 55 times at 40,000, and one lock refused it never.
+
+### O259 — `delete_by_source` can delete part of a source and report an error, against its own promise
+
+**Filed 2026-09-25 by O255's ruling (the security and agentic-memory lenses and
+the refuter); read in code, not measured.** Its doc promises the call "is
+refused BEFORE anything is deleted rather than half-way through"
+(`crates/undercroft-store/src/manage.rs`), and it keeps that promise only for
+pending review evidence. Each drawer is deleted by `delete_drawer` in its own
+write lock, so a busy lock or a failing statement at drawer k leaves k−1 drawers
+of the source deleted and returns an error; and its pending-evidence pre-flight
+reads the fence through `.unwrap_or(false)`, so a fence query that FAILS counts
+as "not pending" and lets the loop reach a pending drawer, which the choke point
+then refuses mid-loop.
+
+**Shape**: the same one-lock destruction body O255 built, the whole source in one
+transaction, the pre-flight's errors propagated. Unattested either way — this
+path mints no receipt.
+
+**Gate**: a `RAISE(ABORT)` injected on the k-th drawer leaves every drawer of the
+source present; a fence query made to fail refuses the call with nothing deleted.
+**Counterfactual**: today, k−1 drawers deleted and an error.
+
+### O260 — `admission_allow` is three transactions, and a concurrent `deny` of the same queue row leaves both verdicts in the trail
+
+**Filed 2026-09-25 by O255's ruling (the security and agentic-memory lenses and
+the refuter); read in code, not measured.** `admission_allow`
+(`crates/undercroft-store/src/admission.rs`) re-files the drawer, appends its
+ruling, and deletes the queue row, each its own transaction. A `deny` of the same
+row from another handle can land between them: the trail then records both
+`allowed` and `denied`, and the deny's receipt attests the destruction of content
+that survives, re-filed under its ordinary id. O255 moved `deny`'s ruling into
+its destruction's lock; the allow is the other half of the race.
+
+**Shape**: the allow's three writes in one write lock, the queue row re-checked
+inside it (the O224 `destination_state` door already runs inside
+`write_drawer_stmts`).
+
+**Gate**: an allow and a deny of one queue row interleaved at every step
+(O253's harness): exactly one verdict in the trail, and a deny that loses
+refuses with nothing destroyed.
+**Counterfactual**: to be measured.
+
+### O261 — a receipt minted beside another writer before O255 is genuine and reports as forged forever
+
+**Filed 2026-09-25 by O255's ruling (the security lens and the refuter).**
+O255 made new receipts contiguous; it cannot rewrite the ones already handed
+out. A receipt minted by `1.6.x` while another handle committed carries that
+handle's records inside its interval, and `verify_forget_attestation` answers it
+"not a tombstone — something else happened inside the attested interval": the
+integrity verdict, exit 2, for as long as the document exists — O13's class, a
+genuine document reported forged. The labels those receipts already disclosed
+to their recipients cannot be recalled.
+
+**Shape, for a ruling panel**: a reduced verdict whose claim is still sound —
+the heads chain through every record, every tombstone for a named drawer is this
+vault's, the drawers are gone, and the foreign records are NAMED rather than
+waved through. It changes what a security verdict says, so it is not
+half-landed anywhere.
+
+**Gate**: a receipt minted on `a9c915c` beside a writer, checked by the fixed
+build — today exit 2, after the ruling whatever it rules, with a forged document
+still refused.
+
+### O262 — the CLI loses a destruction's receipt when `--sign` or `--out` fails after the drawers are gone
+
+**Filed 2026-09-25 by O255's ruling (the agentic-memory lens; confirmed by the
+refuter).** `forget`, `admission deny` and `retention sweep`
+(`crates/undercroft-cli/src/main.rs`) read the `--sign` identity and write
+`--out` only AFTER the store has destroyed the drawers and committed. A mistyped
+signing path or an unwritable output file exits non-zero and drops a receipt
+that can never be minted again: the unkeyed fingerprints it carries are stored
+nowhere, by design.
+
+**Shape**: read and check the signing identity (`signer_of`) before the store
+call; if writing `--out` fails, print the receipt's JSON before exiting non-zero.
+
+**Gate**: `forget --sign <missing file>` refuses with nothing destroyed; an
+unwritable `--out` still delivers the JSON.
+**Counterfactual**: today, the drawers destroyed and no receipt.
+
+### O263 — the database schema is not authenticated, so a trigger planted by a writer without the key runs inside every legitimate transaction
+
+**Filed 2026-09-25 by O255's refuter; read in code, not measured.** `verify`
+compares rows with their tags and the chain; it never lists `sqlite_schema`. A
+writer who can edit `vault.db` but does not hold the key can add a trigger that
+fires inside every legitimate transaction: one that copies a drawer's content
+into another table on delete keeps destroyed content, one that inserts into
+`audit` puts rows inside a receipt's interval, and one that raises `ROLLBACK`
+makes chosen writes fail. O255's in-lock record assertion catches the second on
+the destruction path; nothing names the first.
+
+**Shape, for a ruling panel**: an inventory of the schema this build creates,
+compared by `verify` and at open, in both directions — an unknown trigger,
+view or table is a finding.
+
+**Gate**: each planted trigger is named by `verify`; a vault with none verifies.
+
+### O264 — one write lock across a very large destruction passes the 5 s busy timeout
+
+**Filed 2026-09-25 by O255's ruling (item 7).** O255 destroys a whole `forget`
+or sweep inside one write lock. Measured with the PQ and wing-PQ tiers built,
+40,000 drawers held it 2.46 s sealed and 2.68 s hmac-only — over the 2.5 s line
+the panel set, and linear, so a single destruction near 75,000 drawers holds
+another writer past its 5 s busy timeout. Today's per-drawer path is worse at
+every size measured, and the entry records that rather than a regression.
+
+**Shape, for a ruling panel**: chunked destruction with one receipt per chunk —
+`RetentionSweep.attestation` becomes a list, a documented JSON change on four
+renderers — or a declared per-call cap with a `remaining` count, or cheaper
+purges (`pq_page` is already read once per destruction since O255's build,
+which changed nothing measurable at 40,000).
+
+**Gate**: a paced writer beside a destruction of 10⁵ drawers, never refused.
 
 
 ---

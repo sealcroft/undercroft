@@ -17,6 +17,8 @@ pub mod admission;
 #[cfg(test)]
 mod anchor_tests;
 mod chain;
+#[cfg(test)]
+mod destruction_tests;
 mod fdeidx;
 pub mod forget;
 #[cfg(feature = "hnsw")]
@@ -33,6 +35,7 @@ mod rotate;
 mod rotate_pause;
 #[cfg(test)]
 mod snapshot_tests;
+mod sweep_pause;
 pub mod witness;
 
 pub use admission::{DestinationState, PendingAdmission, QUARANTINE_WING};
@@ -828,7 +831,11 @@ impl<'a> WriteLock<'a> {
 
     /// The lock's transaction as a [`chain::Snapshot`] (ROADMAP O253): one
     /// state nobody else can commit into while the guard lives.
-    pub(crate) fn snapshot(&self) -> Result<chain::Snapshot<'a>, StoreError> {
+    ///
+    /// Tied to the GUARD's borrow, not to the connection's (ROADMAP O255): a
+    /// snapshot that could outlive `commit()` would go on asserting a lock
+    /// its transaction no longer holds.
+    pub(crate) fn snapshot(&self) -> Result<chain::Snapshot<'_>, StoreError> {
         chain::Snapshot::write_locked(self.conn)
     }
 }
@@ -931,8 +938,8 @@ impl<'a> ExclusiveHold<'a> {
 
     /// The held transaction as a [`chain::Snapshot`] (ROADMAP O253), for the
     /// rotation's own checks and its re-fold: nothing else can even open the
-    /// vault while it is held.
-    pub(crate) fn snapshot(&self) -> Result<chain::Snapshot<'a>, StoreError> {
+    /// vault while it is held. Tied to the hold's borrow (ROADMAP O255).
+    pub(crate) fn snapshot(&self) -> Result<chain::Snapshot<'_>, StoreError> {
         chain::Snapshot::write_locked(self.conn)
     }
 
@@ -2907,10 +2914,11 @@ pub struct VerifyReport {
     ///
     /// **A bare drawer id is the case that reason did not describe**, and it
     /// discriminates because destruction is a choke point: the crate has one
-    /// `DELETE FROM drawers` (`delete_drawer_ruled`) and it appends
-    /// `del/{id}` in the same transaction, inherited by all three callers —
-    /// the public delete, which `delete_by_source` loops, admission deny, and
-    /// `forget_with_proof`, which the retention sweep rides. So no live row
+    /// `DELETE FROM drawers WHERE id` (`destroy_in`, ROADMAP O255) and it
+    /// appends `del/{id}` in the same transaction, inherited by both of its
+    /// callers — the public delete (`delete_drawer_ruled`, which
+    /// `delete_by_source` loops) and the attested destruction `forget`, the
+    /// retention sweep and admission deny share. So no live row
     /// AND no tombstone is unreachable legitimately; it is a relabel onto a drawer
     /// nothing destroyed. Enumerated from every `chain_append` call site,
     /// which is also what establishes that a label with no `/` can only be a
@@ -5633,23 +5641,6 @@ impl VaultStore {
             "INSERT INTO drawers_fts(rowid, text) VALUES (?1, ?2)",
             params![seq, &*undercroft_core::normalize::search_key(content)],
         );
-    }
-
-    /// The `seq` a drawer occupies, for removing its index entry inside the
-    /// same transaction that removes the row — dropping it beforehand would
-    /// leave the index short of the table if that transaction rolled back,
-    /// and under-returning is the one direction the prefilter must never do.
-    pub(crate) fn fts_seq_of(&self, id: &str) -> Option<i64> {
-        if !self.fts {
-            return None;
-        }
-        self.conn
-            .query_row("SELECT seq FROM drawers WHERE id = ?1", params![id], |r| {
-                r.get(0)
-            })
-            .optional()
-            .ok()
-            .flatten()
     }
 
     /// Tune when the BM25 prefilter engages on hmac-only vaults: it runs
@@ -9464,10 +9455,41 @@ impl VaultStore {
         &self,
         mut visit: impl FnMut(CoveredRow) -> Result<(), StoreError>,
     ) -> Result<(), StoreError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, meta_json, content, tag, wing, room, kind, supersedes \
-             FROM drawers ORDER BY seq",
-        )?;
+        let mut stmt = self.conn.prepare(concat!(
+            "SELECT id, meta_json, content, tag, wing, room, kind, supersedes ",
+            "FROM drawers ORDER BY seq",
+        ))?;
+        let mut rows = stmt.query([])?;
+        while let Some(r) = rows.next()? {
+            visit(self.covered_row(r)?)?;
+        }
+        Ok(())
+    }
+
+    /// One drawer as the COVERED copy sees it — [`VaultStore::walk_covered`]'s
+    /// per-row decision for a single id, read on `conn` (ROADMAP O255: the
+    /// retention sweep re-classifies each member inside the lock that
+    /// destroys it, through this, never a copy). `None` when the row is gone.
+    pub(crate) fn covered_one(
+        &self,
+        conn: &rusqlite::Connection,
+        id: &str,
+    ) -> Result<Option<CoveredRow>, StoreError> {
+        let mut stmt = conn.prepare(concat!(
+            "SELECT id, meta_json, content, tag, wing, room, kind, supersedes ",
+            "FROM drawers WHERE id = ?1",
+        ))?;
+        let mut rows = stmt.query(params![id])?;
+        match rows.next()? {
+            Some(r) => Ok(Some(self.covered_row(r)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// The covered decision for one row of `id, meta_json, content, tag,
+    /// wing, room, kind, supersedes` — the ONE implementation the walk and
+    /// the single-row read share.
+    fn covered_row(&self, r: &rusqlite::Row<'_>) -> Result<CoveredRow, StoreError> {
         // A borrowed column of the wrong type fails exactly as `r.get` would.
         fn typed(
             i: usize,
@@ -9477,76 +9499,70 @@ impl VaultStore {
             rusqlite::Error::FromSqlConversionFailure(i, t, Box::new(e)).into()
         }
         use rusqlite::types::Type;
-        let mut rows = stmt.query([])?;
-        while let Some(r) = rows.next()? {
-            let id: String = r.get(0)?;
-            let meta_json = r
-                .get_ref(1)?
-                .as_str()
-                .map_err(|e| typed(1, Type::Text, e))?;
-            let content_rest = r
-                .get_ref(2)?
-                .as_blob()
-                .map_err(|e| typed(2, Type::Blob, e))?;
-            let tag = r
-                .get_ref(3)?
-                .as_blob()
-                .map_err(|e| typed(3, Type::Blob, e))?;
-            if self
-                .vault
-                .verify_tag(&canonical(&id, meta_json.as_bytes(), content_rest), tag)
-                .is_err()
-            {
-                visit(CoveredRow::TagFailed { id })?;
-                continue;
-            }
-            // The tag verified, so `meta_json` is authentic — which makes any
-            // disagreement with a mirror column an offline edit of the
-            // mirror. Reported separately from a tag failure: the record
-            // itself is intact, and calling it a corrupt record would
-            // misname what happened.
-            let Ok(meta) = serde_json::from_str::<undercroft_core::DrawerMeta>(meta_json) else {
-                visit(CoveredRow::MetaUnparseable { id })?;
-                continue;
-            };
-            let wing: String = r.get(4)?;
-            let room: String = r.get(5)?;
-            let kind: Option<String> = r.get(6)?;
-            let supersedes: Option<String> = r.get(7)?;
-            let mut drift = Vec::new();
-            let mut compare = |field: &str, column: &str, covered: &str| {
-                if column != covered {
-                    drift.push(format!(
-                        "{id}: column {field}={column:?} but the covered meta says {covered:?}"
-                    ));
-                }
-            };
-            // **`filed_at` is NOT in this list, and that is a correction to
-            // this leg's first version rather than an omission.** The other
-            // four columns are bound straight from `drawer.meta.*` at write
-            // time, so a difference can only be an offline edit. `filed_at`
-            // is not: the column takes the write path's own `now` while
-            // `meta.filed_at` was stamped when the `Drawer` was constructed,
-            // so the two differ by a clock read in NORMAL operation — and an
-            // import may legitimately carry an older declared value. Checking
-            // it made eight healthy tests report a tampered vault. The column
-            // is storage metadata; the covered field is the declared value,
-            // which is exactly why retention reads the covered one.
-            compare("wing", &wing, &meta.wing);
-            compare("room", &room, &meta.room);
-            compare(
-                "kind",
-                kind.as_deref().unwrap_or_default(),
-                meta.kind.as_deref().unwrap_or_default(),
-            );
-            compare(
-                "supersedes",
-                supersedes.as_deref().unwrap_or_default(),
-                meta.supersedes.as_deref().unwrap_or_default(),
-            );
-            visit(CoveredRow::Verified { id, meta, drift })?;
+        let id: String = r.get(0)?;
+        let meta_json = r
+            .get_ref(1)?
+            .as_str()
+            .map_err(|e| typed(1, Type::Text, e))?;
+        let content_rest = r
+            .get_ref(2)?
+            .as_blob()
+            .map_err(|e| typed(2, Type::Blob, e))?;
+        let tag = r
+            .get_ref(3)?
+            .as_blob()
+            .map_err(|e| typed(3, Type::Blob, e))?;
+        if self
+            .vault
+            .verify_tag(&canonical(&id, meta_json.as_bytes(), content_rest), tag)
+            .is_err()
+        {
+            return Ok(CoveredRow::TagFailed { id });
         }
-        Ok(())
+        // The tag verified, so `meta_json` is authentic — which makes any
+        // disagreement with a mirror column an offline edit of the
+        // mirror. Reported separately from a tag failure: the record
+        // itself is intact, and calling it a corrupt record would
+        // misname what happened.
+        let Ok(meta) = serde_json::from_str::<undercroft_core::DrawerMeta>(meta_json) else {
+            return Ok(CoveredRow::MetaUnparseable { id });
+        };
+        let wing: String = r.get(4)?;
+        let room: String = r.get(5)?;
+        let kind: Option<String> = r.get(6)?;
+        let supersedes: Option<String> = r.get(7)?;
+        let mut drift = Vec::new();
+        let mut compare = |field: &str, column: &str, covered: &str| {
+            if column != covered {
+                drift.push(format!(
+                    "{id}: column {field}={column:?} but the covered meta says {covered:?}"
+                ));
+            }
+        };
+        // **`filed_at` is NOT in this list, and that is a correction to
+        // this leg's first version rather than an omission.** The other
+        // four columns are bound straight from `drawer.meta.*` at write
+        // time, so a difference can only be an offline edit. `filed_at`
+        // is not: the column takes the write path's own `now` while
+        // `meta.filed_at` was stamped when the `Drawer` was constructed,
+        // so the two differ by a clock read in NORMAL operation — and an
+        // import may legitimately carry an older declared value. Checking
+        // it made eight healthy tests report a tampered vault. The column
+        // is storage metadata; the covered field is the declared value,
+        // which is exactly why retention reads the covered one.
+        compare("wing", &wing, &meta.wing);
+        compare("room", &room, &meta.room);
+        compare(
+            "kind",
+            kind.as_deref().unwrap_or_default(),
+            meta.kind.as_deref().unwrap_or_default(),
+        );
+        compare(
+            "supersedes",
+            supersedes.as_deref().unwrap_or_default(),
+            meta.supersedes.as_deref().unwrap_or_default(),
+        );
+        Ok(CoveredRow::Verified { id, meta, drift })
     }
 
     /// Walk every record verifying its HMAC, replay the audit chain
@@ -9705,12 +9721,12 @@ impl VaultStore {
                 // absent subject". True of the prefixed ones, and NOT true of
                 // this one — which nobody separated out. A drawer label is
                 // discriminating because deletion is a choke point:
-                // `delete_drawer_ruled` holds the only `DELETE FROM drawers`
-                // in the crate and appends `del/{id}` in the SAME transaction,
-                // and its three callers (the public delete, which
-                // `delete_by_source` loops, admission deny, and
-                // `forget_with_proof`, which the retention sweep rides) all
-                // inherit it.
+                // `destroy_in` holds the only `DELETE FROM drawers WHERE id`
+                // in the crate (ROADMAP O255) and appends `del/{id}` in the
+                // SAME transaction, and both of its callers (the public
+                // delete, which `delete_by_source` loops, and the attested
+                // destruction `forget`, the retention sweep and admission
+                // deny share) inherit it.
                 //
                 // So: no live row AND no tombstone is not ordinary operation.
                 // It is a relabel onto a drawer that was never destroyed —

@@ -970,14 +970,30 @@ straight, each carrying what it actually is.
   `POST /v1/vaults/{id}/verify-forgetting`, the fleet's
   `ops/verify-forgetting`, and the admin console — where until 1.1.0 the
   HTTP plane could MINT a receipt and only the CLI could check one
-  (ROADMAP O14). **Known defect, filed 2026-09-24 as ROADMAP O255**: a
-  receipt minted while another handle commits to the same vault cannot
-  verify — each drawer is destroyed in its own transaction, so the other
-  writer's record lands inside the attested interval (measured, 20 of 20),
-  and the receipt carries that writer's labels to the data subject. The
-  sweep shares the shape: it decides on one state and destroys on a later
-  one. Until O255 lands, run `forget` and a sweep with no other writer on
-  the vault.
+  (ROADMAP O14). **A whole destruction is one write lock (ROADMAP O255,
+  2026-09-25).** Until then each drawer was destroyed in its own
+  transaction, so a receipt minted while another handle committed carried
+  that writer's records — and labels — inside its interval and could never
+  verify, and the retention sweep decided on one state and destroyed on a
+  later one, destroying drawers a `retention set` made meanwhile would keep
+  (measured: 58 of 64 sweeps with a re-declaration landing mid-sweep). Now
+  every drawer of a `forget`, a sweep or an `admission deny` is destroyed in
+  one transaction; the receipt is read from it, its fingerprints from the
+  bytes that transaction destroyed, and its records are asserted to be
+  exactly its tombstones before the COMMIT; the sweep re-checks each member,
+  and the declarations in force, inside that lock; and any failure before
+  the COMMIT destroys nothing. Residuals, stated: a tamper committed between
+  the label guard and the lock is not seen by that destruction (the guard
+  stays outside, where it replays in a read snapshot); a crash after the
+  COMMIT and before the receipt reaches its caller loses the receipt (its
+  fingerprints are persisted nowhere, by design), and the CLI can still lose
+  it to a bad `--sign` or `--out` (O262); `forget --backend` deletes from
+  the mirror before the lock (O175's order); a sweep's membership is as of
+  its walk; the lock is held for the whole destruction — 2.5 s at 40,000
+  drawers with the retrieval tiers built — so other writers wait, and past
+  their 5 s busy timeout are refused with nothing stored (O264, O258); and
+  receipts minted by earlier builds beside a writer still fail as forged
+  (O261).
 - **Memory-poisoning defense (C3.3) — BUILT (2026-08-03/04)**:
   write-path admission control — provenance on every write, a
   deterministic (optionally classifier-assisted) detector at the write

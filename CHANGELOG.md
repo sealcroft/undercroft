@@ -2,14 +2,15 @@
 
 ## 1.7.0 — unreleased
 
-MINOR: one new capability, backward compatible, and six fixes. The witness
+MINOR: one new capability, backward compatible, and seven fixes. The witness
 commands and routes are new; no default moves and no declaration can stop a
 start-up. Two fixes change what a deployment must do: every process writing a
 vault must run the same build, and a server whose vault another process
 rotated now stops writing rather than destroy the rotated salt (O254); and a
 key rotation now refuses while any other process has the vault open (O257) —
-both in `UPGRADING.md`. (This line said "one fix" while O243 and O246 were
-both below it; corrected with O247.)
+both in `UPGRADING.md`, beside O255's note that a destruction now holds the
+write lock for as long as it runs. (This line said "one fix" while O243 and
+O246 were both below it; corrected with O247.)
 
 ### The external witness: `undercroft witness emit` / `check`, `GET`/`POST /v1/…/witness` (O245)
 
@@ -286,6 +287,70 @@ reported there with these figures.
 
 PATCH-class inside the unreleased 1.7.0: false integrity refusals removed,
 no documented contract moved, no `UPGRADING.md` entry.
+
+### An erasure receipt minted beside another writer verifies, and a sweep destroys only what the policy in force expires (O255)
+
+`forget`, the retention sweep and `admission deny` destroyed each drawer in its
+own transaction and read the receipt around them. Another writer's commit —
+a save, a `trust set`, a fact, from any handle or process — landed inside the
+receipt's interval, so the receipt could never verify (`verify-forgetting`:
+"not a tombstone — something else happened inside the attested interval",
+exit 2) and it carried that writer's labels to the data subject. A correction
+landing between the check and the delete made the receipt name content that
+was not the content destroyed. And the sweep decided which drawers expire on
+one state and destroyed on a later one, so a `retention set 36500` or a
+`retention clear` committed meanwhile was ignored and the drawers it kept were
+destroyed. A failure part-way through — a busy lock at drawer k — left k−1
+destroyed with no receipt, and the documented recovery ("re-run to completion,
+then attest") could not work: the re-run refused the ids already gone.
+
+Measured on `a9c915c` by a gate that commits from a second handle at a strided
+step of each door: 7 of 65 forget receipts unverifiable and 5 naming the wrong
+content; **58 of 64 sweeps destroying after a concurrent re-declaration** and 37
+of 64 after a clear; 8 of 63 sweep receipts unverifiable; a paced soak failing
+1–3 receipts in 20. After: zero on every arm, looped ten times.
+
+**The shape, as ruled** (three lenses and a refuter): a whole destruction is ONE
+write lock. Inside it: each drawer's existence, the pending-evidence fence and
+its content fingerprint from the bytes it destroys; the heads; the destruction;
+the records — asserted to be exactly its tombstones before the COMMIT, since a
+receipt that cannot verify must never be minted. One manifest anchor after it.
+`admission deny` appends its ruling inside the same lock, so the ruling is the
+record just before the interval. The sweep decides on one snapshot, then in
+the lock compares the declarations byte for byte and re-reads every member; a
+change makes it decide again — outside once, then inside the lock. The label
+guard stays outside, where a miss replays in a read snapshot rather than under
+the write lock.
+
+**Nothing inside the lock is swallowed, and a tripwire backs it.** A statement
+that fails can make SQLite roll the whole transaction back on its own — measured
+with a trigger's `RAISE(ROLLBACK)`, after which the next `DELETE` ran in
+autocommit and committed — so a swallowed error would let the rest of the
+destruction commit piece by piece. The derived-row purges used to be swallowed
+autocommit statements; under a trigger's `RAISE(ABORT)` a swallowed purge let the
+forget succeed with a plaintext-derived PQ row left behind its receipt.
+`is_autocommit()` is checked before every write. RAM caches change only after the
+COMMIT and are dropped on any rollback.
+
+Duplicate ids are named once (a repeated id used to produce a receipt naming the
+drawer twice). A `forget` whose target vanished meanwhile refuses with nothing
+destroyed. A read-only handle refuses before the guard replays.
+
+**The lock is short where the old loop was long.** 4,000 drawers held it 122 ms
+where the per-drawer loop took 53 s and refused a paced writer past its busy
+timeout 6 times; 40,000 with the retrieval tiers built took 2.9 s (the old loop:
+533 s, 55 refusals), the writer waiting once and refused never. A single
+destruction near 75,000 drawers would hold the lock past another writer's 5 s
+busy timeout — filed as O264, in `UPGRADING.md`.
+
+Filed beside it: O259 (`delete_by_source`), O260 (`admission_allow` racing a
+deny), O261 (receipts minted before this fix beside a writer still fail as
+forged), O262 (the CLI loses a receipt when `--sign` or `--out` fails after the
+destruction), O263 (an unauthenticated schema: a planted trigger), O264.
+
+PATCH-class inside the unreleased 1.7.0: receipts that verify and a sweep that
+honours the declarations in force; the one behaviour a deployment can notice is
+in `UPGRADING.md`.
 
 ## 1.6.1 — 2026-09-22
 

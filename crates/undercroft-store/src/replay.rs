@@ -1376,6 +1376,14 @@ mod tests {
         assert_eq!(
             silent,
             [
+                // The verify and sweep walk's per-row decision, which the
+                // sweep's in-lock re-check of each member shares (ROADMAP
+                // O255 moved the site out of `walk_covered` so the two cannot
+                // differ). It IS the leg — refusing here would leave the check
+                // unable to report what it found — and the sweep destroys only
+                // through the attested body, which names a replayed row's
+                // content fingerprint rather than serving it.
+                "covered_row",
                 // The export paths carry no caller-supplied witness because
                 // they are `InternalRead::ExportAudited`: an unconditional
                 // `egress/` record covers them, and `backup create` gates on
@@ -1386,9 +1394,6 @@ mod tests {
                 // returning read, in the same guarded snapshot; the engine's
                 // own lookups reach it with no caller to return content to.
                 "fetch_verified",
-                // The verify and sweep walk. It IS the leg — refusing here
-                // would leave the check unable to report what it found.
-                "walk_covered",
             ]
             .iter()
             .map(|s| s.to_string())

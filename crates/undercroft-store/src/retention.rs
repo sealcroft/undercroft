@@ -284,10 +284,10 @@ impl VaultStore {
     }
 
     /// Run (or preview) a sweep: every declared policy contributes the
-    /// drawers older than its age, the distinct set is destroyed through
-    /// [`VaultStore::forget_with_proof`], and the attestation is the
-    /// receipt. Dry runs and empty sweeps destroy nothing and attest
-    /// nothing.
+    /// drawers older than its age, the distinct set is destroyed through the
+    /// one attested destruction every forgetting path shares, and the
+    /// attestation is the receipt. Dry runs and empty sweeps destroy nothing
+    /// and attest nothing.
     ///
     /// **Membership is read from the HMAC-covered copy alone, over one walk
     /// of every drawer** (ROADMAP O206). The candidates used to come from the
@@ -313,124 +313,203 @@ impl VaultStore {
     ///   legacy row stopping every policy; naming it keeps both halves;
     /// * a covered member the pending-evidence fence refuses, which is a
     ///   drawer whose clear `wing` was flipped INTO the review queue: the
-    ///   fence reads that column on purpose, and handing the row to
-    ///   [`VaultStore::forget_with_proof`] would refuse the whole call.
+    ///   fence reads that column on purpose, and handing the row to the
+    ///   destruction would refuse the whole call.
     ///
     /// A policy row that fails its own tag still refuses the whole sweep: a
     /// tampered lifespan must never drive a destruction.
+    ///
+    /// **It decides on ONE state and destroys only what the policy IN FORCE
+    /// at the destruction expires** (ROADMAP O255). The decision — the
+    /// policies, their drift and the walk — is one guarded snapshot, outside
+    /// any lock, because the walk is O(corpus). The destruction takes ONE
+    /// write lock, and inside it first compares the policy rows byte for byte
+    /// (wing, room, age, tag, time) with the rows the decision used: every
+    /// legitimate `set` and `clear` rewrites the tag and the time, so equal
+    /// rows are the same declarations. Then each member is re-classified
+    /// through the walk's own per-row decision and the fence, inside the lock:
+    /// one that vanished, or that the policy no longer expires, is dropped;
+    /// one whose tag now fails is unverifiable; one flipped into the review
+    /// queue is withheld; the rest are destroyed, fingerprinted from what the
+    /// lock read. It used to decide on four states and destroy on a fifth, so
+    /// a `retention set 36500` committed meanwhile was ignored and the drawers
+    /// it kept were destroyed (measured: 58 of 64 sweeps). When the rows
+    /// differ, the lock commits nothing and the sweep decides again outside,
+    /// ONCE; when they differ again, it decides inside the lock — the walk and
+    /// an in-place replay under the write lock, a cost reached only by a
+    /// policy re-declared inside two decision windows in a row. The report
+    /// describes the state the destruction saw: `policies` are the
+    /// declarations in force, and `destroyed` is the distinct union of the
+    /// `expired` lists, which are the receipt's drawers. Stated residual:
+    /// membership is as of the walk, so a drawer that crosses its age, or
+    /// arrives with an old `filed_at`, after the walk waits for the next sweep.
     pub fn retention_sweep(&mut self, dry_run: bool) -> Result<RetentionSweep, StoreError> {
         let now = OffsetDateTime::now_utc();
-        let policies = self.retention_policies()?;
-        let policy_drift = self.snapshot(|snap| self.retention_policy_drift(snap))?;
-        let cutoffs: Vec<OffsetDateTime> = policies
-            .iter()
-            .map(|p| now - Duration::days(i64::from(p.max_age_days)))
-            .collect();
-        let mut expired: Vec<Vec<String>> = vec![Vec::new(); policies.len()];
+        if dry_run {
+            return self.guarded(|snap| {
+                let decided = self.sweep_decide_in(snap, now)?;
+                Ok(self.sweep_settle_in(snap, &decided, Settle::Preview)?.0)
+            });
+        }
+        self.refuse_when_read_only("a retention sweep destroys drawers")?;
+        for attempt in 0..2 {
+            let decided = self.guarded(|snap| self.sweep_decide_in(snap, now))?;
+            crate::sweep_pause::fire(
+                self.vault.dir(),
+                crate::sweep_pause::Phase::Decided { attempt },
+            );
+            let settled = self.under_destruction_lock(|s, snap| {
+                if policy_rows(snap.conn())? != decided.rows {
+                    // Declarations changed since the decision: nothing is
+                    // destroyed under this lock, and the sweep decides again.
+                    return Ok((None, Vec::new()));
+                }
+                let (sweep, destroyed) = s.sweep_settle_in(snap, &decided, Settle::Recheck)?;
+                Ok((Some(sweep), destroyed))
+            })?;
+            if let Some(sweep) = settled {
+                return Ok(sweep);
+            }
+        }
+        crate::sweep_pause::fire(self.vault.dir(), crate::sweep_pause::Phase::DecidingInLock);
+        self.under_destruction_lock(|s, snap| {
+            let decided = s.sweep_decide_in(snap, now)?;
+            s.sweep_settle_in(snap, &decided, Settle::AsDecided)
+        })
+    }
+
+    /// A sweep's decision, on ONE state (ROADMAP O255): the policies and
+    /// their drift through one `Decide` scan — which refuses a tampered
+    /// lifespan — the rows as stored, and the walk. On a helper snapshot it
+    /// is read outside any lock; on a write-locked one, inside it.
+    fn sweep_decide_in(
+        &self,
+        snap: &crate::chain::Snapshot<'_>,
+        now: OffsetDateTime,
+    ) -> Result<SweepDecision, StoreError> {
+        let (policies, findings) = self.retention_policy_scan(snap, LabelUse::Decide)?;
+        refuse_on_findings(&findings, |f| !f.gone)?;
+        let mut policy_drift: Vec<String> = findings.into_iter().map(|f| f.text).collect();
+        policy_drift.sort();
+        let rows = policy_rows(snap.conn())?;
+        let cutoffs = cutoffs_of(&policies, now);
+        let mut members = Vec::new();
         let mut unverifiable = Vec::new();
-        let mut withheld = Vec::new();
-        let mut mirror_drift = Vec::new();
-        // Past-age members, in walk order, with their covered scope and
-        // their drift, for the fence split after the walk.
-        let mut members: Vec<(String, String, String, Vec<String>)> = Vec::new();
+        let mut undatable = Vec::new();
         // No policy, no scope: nothing any row could be a member of, so the
         // walk would decide nothing.
         if !policies.is_empty() {
+            // The walk reads through the handle's connection, which is inside
+            // `snap`'s transaction: the same state as the policies.
             self.walk_covered(|row| {
-                let (id, meta, drift) = match row {
-                    crate::CoveredRow::TagFailed { id } => {
-                        unverifiable.push(RetentionUnverifiable {
-                            id,
-                            reason: "its record HMAC does not verify, so neither copy of its \
-                                     scope or its clock is authentic; `verify` names it"
-                                .into(),
-                        });
-                        return Ok(());
-                    }
-                    crate::CoveredRow::MetaUnparseable { id } => {
-                        unverifiable.push(RetentionUnverifiable {
-                            id,
-                            reason: "its HMAC-covered meta does not parse".into(),
-                        });
-                        return Ok(());
-                    }
-                    crate::CoveredRow::Verified { id, meta, drift } => (id, meta, drift),
-                };
-                let covers: Vec<usize> = policies
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, p)| {
-                        meta.wing == p.wing && (p.room.is_empty() || meta.room == p.room)
-                    })
-                    .map(|(i, _)| i)
-                    .collect();
-                if covers.is_empty() {
-                    return Ok(());
-                }
-                let filed = match OffsetDateTime::parse(&meta.filed_at, &Rfc3339) {
-                    Ok(t) => t,
-                    Err(e) => {
-                        withheld.push(RetentionWithheld {
-                            id,
-                            wing: meta.wing,
-                            room: meta.room,
-                            reason: format!(
-                                "its HMAC-covered filed_at {:?} is not RFC 3339 ({e}), so it \
-                                 cannot be dated; destroy it with `forget` if its policy \
-                                 applies",
-                                meta.filed_at
-                            ),
-                        });
-                        mirror_drift.extend(drift);
-                        return Ok(());
-                    }
-                };
-                let mut past = false;
-                for i in covers {
-                    if filed < cutoffs[i] {
-                        expired[i].push(id.clone());
-                        past = true;
-                    }
-                }
-                if past {
-                    members.push((id, meta.wing, meta.room, drift));
+                match classify(row, &policies, &cutoffs) {
+                    Member::Outside => {}
+                    Member::Unverifiable(u) => unverifiable.push(u),
+                    Member::Undatable(w, drift) => undatable.push((w, drift)),
+                    Member::Expired(m) => members.push(m),
                 }
                 Ok(())
             })?;
         }
-        // The pending-evidence fence decides here, through the function the
-        // destruction path itself calls — never a copy of it — so this split
-        // cannot disagree with the refusal it exists to avoid.
-        let mut held = std::collections::HashSet::new();
-        for (id, wing, room, drift) in members {
-            if self.is_quarantine_pending(&id)? {
+        Ok(SweepDecision {
+            rows,
+            policies,
+            policy_drift,
+            cutoffs,
+            members,
+            unverifiable,
+            undatable,
+        })
+    }
+
+    /// Settle a decision: the fence, and — unless previewing — the attested
+    /// destruction, inside the caller's lock. `Recheck` re-classifies every
+    /// member from the row as the lock reads it; `AsDecided` trusts a
+    /// decision made in this same state.
+    fn sweep_settle_in(
+        &self,
+        snap: &crate::chain::Snapshot<'_>,
+        decided: &SweepDecision,
+        how: Settle,
+    ) -> Result<(RetentionSweep, Vec<crate::manage::Destroyed>), StoreError> {
+        let mut expired: Vec<Vec<String>> = vec![Vec::new(); decided.policies.len()];
+        let mut unverifiable = decided.unverifiable.clone();
+        let mut withheld = Vec::new();
+        let mut mirror_drift = Vec::new();
+        for (w, drift) in &decided.undatable {
+            withheld.push(w.clone());
+            mirror_drift.extend(drift.iter().cloned());
+        }
+        for m in &decided.members {
+            let m = match how {
+                Settle::Preview | Settle::AsDecided => m.clone(),
+                Settle::Recheck => match self.covered_one(snap.conn(), &m.id)? {
+                    // Destroyed by another handle since the walk.
+                    None => continue,
+                    Some(row) => match classify(row, &decided.policies, &decided.cutoffs) {
+                        // Corrected out of scope, or kept by the policy.
+                        Member::Outside => continue,
+                        Member::Unverifiable(u) => {
+                            if !unverifiable.iter().any(|v| v.id == u.id) {
+                                unverifiable.push(u);
+                            }
+                            continue;
+                        }
+                        Member::Undatable(w, drift) => {
+                            withheld.push(w);
+                            mirror_drift.extend(drift);
+                            continue;
+                        }
+                        Member::Expired(m) => m,
+                    },
+                },
+            };
+            // The pending-evidence fence decides here, through the function
+            // the destruction itself calls — never a copy of it — so this
+            // split cannot disagree with the refusal it exists to avoid.
+            if self.is_quarantine_pending(&m.id)? {
                 withheld.push(RetentionWithheld {
                     reason: format!(
                         "its clear `wing` column names the review queue ({QUARANTINE_WING}) \
-                         while its HMAC-covered meta files it under {wing}; the \
+                         while its HMAC-covered meta files it under {}; the \
                          pending-evidence fence reads that column, so no sweep can destroy \
-                         it. Re-save its own content with `drawer update` and sweep again"
+                         it. Re-save its own content with `drawer update` and sweep again",
+                        m.wing
                     ),
-                    id: id.clone(),
-                    wing,
-                    room,
+                    id: m.id.clone(),
+                    wing: m.wing.clone(),
+                    room: m.room.clone(),
                 });
-                held.insert(id);
+                mirror_drift.extend(m.drift.iter().cloned());
+                continue;
             }
-            mirror_drift.extend(drift);
-        }
-        for list in &mut expired {
-            list.retain(|id| !held.contains(id));
-        }
-        let mut distinct: Vec<String> = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        for id in expired.iter().flatten() {
-            if seen.insert(id.clone()) {
-                distinct.push(id.clone());
+            for &i in &m.covers {
+                expired[i].push(m.id.clone());
             }
+            mirror_drift.extend(m.drift.iter().cloned());
         }
-        let entries = policies
-            .into_iter()
+        let distinct =
+            crate::forget::distinct(&expired.iter().flatten().cloned().collect::<Vec<String>>());
+        let (attestation, destroyed) = if how == Settle::Preview || distinct.is_empty() {
+            (None, Vec::new())
+        } else {
+            let (att, gone) = self.attest_in(
+                snap,
+                &distinct,
+                crate::manage::PendingEvidence::Protect,
+                &crate::forget::MirrorDelete::NotIssued,
+            )?;
+            (Some(att), gone)
+        };
+        let dry_run = how == Settle::Preview;
+        let ok = unverifiable.is_empty()
+            && withheld.is_empty()
+            && mirror_drift.is_empty()
+            && decided.policy_drift.is_empty();
+        let policies = decided
+            .policies
+            .iter()
+            .cloned()
             .zip(expired)
             .map(|(p, expired)| RetentionSweepEntry {
                 wing: p.wing,
@@ -439,26 +518,20 @@ impl VaultStore {
                 expired,
             })
             .collect();
-        let attestation = if dry_run || distinct.is_empty() {
-            None
-        } else {
-            Some(self.forget_with_proof(&distinct)?)
-        };
-        let ok = unverifiable.is_empty()
-            && withheld.is_empty()
-            && mirror_drift.is_empty()
-            && policy_drift.is_empty();
-        Ok(RetentionSweep {
-            dry_run,
-            ok,
-            policies: entries,
-            destroyed: if dry_run { 0 } else { distinct.len() },
-            unverifiable,
-            withheld,
-            mirror_drift,
-            policy_drift,
-            attestation,
-        })
+        Ok((
+            RetentionSweep {
+                dry_run,
+                ok,
+                policies,
+                destroyed: if dry_run { 0 } else { distinct.len() },
+                unverifiable,
+                withheld,
+                mirror_drift,
+                policy_drift: decided.policy_drift.clone(),
+                attestation,
+            },
+            destroyed,
+        ))
     }
 
     /// The retention half of `verify`'s policy-drift leg (ROADMAP O94),
@@ -651,6 +724,141 @@ impl VaultStore {
         }
         Ok((kept, findings))
     }
+}
+
+/// A policy row as stored — the tag and the time included, because every
+/// legitimate `set` and `clear` rewrites them (ROADMAP O255).
+type PolicyRow = (String, String, u32, Vec<u8>, String);
+
+/// The policy table as stored, in one order, on `conn`.
+fn policy_rows(conn: &rusqlite::Connection) -> Result<Vec<PolicyRow>, StoreError> {
+    let mut stmt = conn.prepare(concat!(
+        "SELECT wing, room, max_age_days, tag, assigned_at ",
+        "FROM retention_policy ORDER BY wing, room",
+    ))?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })?
+        .collect::<Result<_, _>>()?;
+    Ok(rows)
+}
+
+fn cutoffs_of(policies: &[RetentionPolicy], now: OffsetDateTime) -> Vec<OffsetDateTime> {
+    policies
+        .iter()
+        .map(|p| now - Duration::days(i64::from(p.max_age_days)))
+        .collect()
+}
+
+/// What a sweep decided, on one state (ROADMAP O255).
+struct SweepDecision {
+    /// The policy rows as stored, compared inside the destroying lock.
+    rows: Vec<PolicyRow>,
+    policies: Vec<RetentionPolicy>,
+    policy_drift: Vec<String>,
+    cutoffs: Vec<OffsetDateTime>,
+    /// Covered members past a policy's age, in walk order.
+    members: Vec<ExpiredMember>,
+    /// Rows the walk could not decide, anywhere in the vault.
+    unverifiable: Vec<RetentionUnverifiable>,
+    /// Covered members that cannot be dated, with their drift.
+    undatable: Vec<(RetentionWithheld, Vec<String>)>,
+}
+
+/// A covered member past at least one policy's age.
+#[derive(Clone)]
+struct ExpiredMember {
+    id: String,
+    wing: String,
+    room: String,
+    drift: Vec<String>,
+    /// The policies it is past, by index.
+    covers: Vec<usize>,
+}
+
+/// One row's standing under a set of policies.
+enum Member {
+    Outside,
+    Unverifiable(RetentionUnverifiable),
+    Undatable(RetentionWithheld, Vec<String>),
+    Expired(ExpiredMember),
+}
+
+/// How a decision is settled.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Settle {
+    /// A dry run: nothing is destroyed and no lock is taken.
+    Preview,
+    /// Inside the destroying lock, every member re-read and re-classified.
+    Recheck,
+    /// Inside the lock the decision itself was made in.
+    AsDecided,
+}
+
+/// The ONE per-row membership decision the walk and the in-lock re-check
+/// share (ROADMAP O206, O255): the covered scope, the covered clock.
+fn classify(
+    row: crate::CoveredRow,
+    policies: &[RetentionPolicy],
+    cutoffs: &[OffsetDateTime],
+) -> Member {
+    let (id, meta, drift) = match row {
+        crate::CoveredRow::TagFailed { id } => {
+            return Member::Unverifiable(RetentionUnverifiable {
+                id,
+                reason: "its record HMAC does not verify, so neither copy of its scope or its \
+                         clock is authentic; `verify` names it"
+                    .into(),
+            });
+        }
+        crate::CoveredRow::MetaUnparseable { id } => {
+            return Member::Unverifiable(RetentionUnverifiable {
+                id,
+                reason: "its HMAC-covered meta does not parse".into(),
+            });
+        }
+        crate::CoveredRow::Verified { id, meta, drift } => (id, meta, drift),
+    };
+    let covers: Vec<usize> = policies
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| meta.wing == p.wing && (p.room.is_empty() || meta.room == p.room))
+        .map(|(i, _)| i)
+        .collect();
+    if covers.is_empty() {
+        return Member::Outside;
+    }
+    let filed = match OffsetDateTime::parse(&meta.filed_at, &Rfc3339) {
+        Ok(t) => t,
+        Err(e) => {
+            let reason = format!(
+                "its HMAC-covered filed_at {:?} is not RFC 3339 ({e}), so it cannot be dated; \
+                 destroy it with `forget` if its policy applies",
+                meta.filed_at
+            );
+            return Member::Undatable(
+                RetentionWithheld {
+                    id,
+                    wing: meta.wing,
+                    room: meta.room,
+                    reason,
+                },
+                drift,
+            );
+        }
+    };
+    let past: Vec<usize> = covers.into_iter().filter(|&i| filed < cutoffs[i]).collect();
+    if past.is_empty() {
+        return Member::Outside;
+    }
+    Member::Expired(ExpiredMember {
+        id,
+        wing: meta.wing,
+        room: meta.room,
+        drift,
+        covers: past,
+    })
 }
 
 /// How a READER of a policy table refuses (ROADMAP O230): a failed tag keeps

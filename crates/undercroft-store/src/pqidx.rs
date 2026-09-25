@@ -521,7 +521,7 @@ impl VaultStore {
             .unwrap_or(0))
     }
 
-    fn pq_count_put(&self, key: &str, v: u64) -> Result<(), StoreError> {
+    pub(crate) fn pq_count_put(&self, key: &str, v: u64) -> Result<(), StoreError> {
         self.pq_meta_put(key, &v.to_le_bytes())
     }
 
@@ -1782,46 +1782,18 @@ impl VaultStore {
         }
     }
 
-    /// Purge one drawer's code on delete (called by `delete_drawer` with
-    /// the drawer row still live). Tail rows delete directly; a code inside
-    /// a sealed page is instead counted out of the commitment (`deleted`) —
-    /// the page itself is rewritten only by fold/rebuild, never per delete.
-    /// Advisory: any failure arms the next search's verification.
-    pub(crate) fn pq_purge_row(&self, id: &str) {
-        let outcome: Result<(), StoreError> = (|| {
-            let row: Option<(i64, String)> = self
-                .conn
-                .query_row(
-                    "SELECT seq, wing FROM drawers WHERE id = ?1",
-                    params![id],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )
-                .optional()?;
-            let Some((seq, wing)) = row else {
-                return Ok(());
-            };
-            let tail = self
-                .conn
-                .execute("DELETE FROM drawer_pq WHERE seq = ?1", params![seq])?;
-            if tail == 0 && self.pq_pages_present()? {
-                let d = self.pq_count_get("deleted")?;
-                self.pq_count_put("deleted", d + 1)?;
-            }
-            // The wing tier mirrors the tail: per-row deletes, no page
-            // tier, and the wing's RAM cache is updated surgically (both
-            // sides of its matched-count equation lose one row).
-            let _ = self
-                .conn
-                .execute("DELETE FROM drawer_pq_wing WHERE seq = ?1", params![seq]);
-            if let Some(Some(st)) = self.wing_pq.borrow_mut().get_mut(&wing) {
-                st.cache.remove_seq(seq);
-                st.live -= 1;
-            }
-            Ok(())
-        })();
-        if outcome.is_err() {
-            self.pq_verified.set(false);
-            self.wing_pq.borrow_mut().clear();
+    /// The RAM half of a destroyed drawer's PQ purge, run only AFTER the
+    /// destruction committed (ROADMAP O255). The database half — the tail
+    /// row, the wing row, and a paged code counted out of the commitment —
+    /// runs inside the destruction's lock (`manage.rs`, `destroy_in` and
+    /// `settle_derived`); this surgical edit used to run before that
+    /// transaction, so a rollback left the wing's cache missing a live row.
+    /// The wing tier mirrors the tail, so both sides of its matched-count
+    /// equation lose one row.
+    pub(crate) fn pq_forget_cached(&self, seq: i64, wing: &str) {
+        if let Some(Some(st)) = self.wing_pq.borrow_mut().get_mut(wing) {
+            st.cache.remove_seq(seq);
+            st.live -= 1;
         }
     }
 

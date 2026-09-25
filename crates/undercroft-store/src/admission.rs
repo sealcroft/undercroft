@@ -1270,6 +1270,10 @@ impl VaultStore {
     /// signals and intended-destination metadata come off — the ruling is
     /// in the chain, not on the record), then remove the quarantined
     /// copy. Returns the re-filed drawer's id.
+    ///
+    /// Three transactions, where `admission_deny` is one lock since ROADMAP
+    /// O255 — so a deny of the same row from another handle can land between
+    /// them and the trail then states both verdicts: ROADMAP O260.
     pub fn admission_allow(&mut self, id: &str) -> Result<String, StoreError> {
         // The posture first (ROADMAP O167): re-filing is a write that cannot
         // land read-only. The allow sends nothing any more — it reuses the
@@ -1394,20 +1398,37 @@ impl VaultStore {
     /// interval holds exactly this drawer's tombstone. What remains
     /// afterwards is the audit trail — signals, ruling, tombstone, and a
     /// verifiable attestation — and no content.
+    ///
+    /// **The ruling and the destruction are ONE write lock** (ROADMAP O255).
+    /// The ruling used to commit on its own before the destruction ran, so
+    /// another writer's commit could land between it and the attested
+    /// interval — "just before" was false beside a writer — and a refusal
+    /// after it left a committed `denied` with no effect. Now the ruling is
+    /// appended inside the lock, immediately before the interval, and
+    /// anything that refuses rolls both back.
     pub fn admission_deny(
         &mut self,
         id: &str,
     ) -> Result<crate::forget::ForgetAttestation, StoreError> {
-        // Verifies it exists and is actually quarantined before ruling.
+        // Verifies it exists and is actually quarantined before ruling — the
+        // message door; the check that decides is repeated in the lock.
         self.quarantined(id)?;
-        self.admission_ruling(id, "denied", None)?;
-        // `Ruled`: the deny verdict is committed; the attested destruction
-        // is the effect of a ruling, not an ordinary forget.
-        self.forget_with_proof_ruled(
-            &[id.to_string()],
-            crate::manage::PendingEvidence::Ruled,
-            crate::forget::MirrorDelete::NotIssued,
-        )
+        self.refuse_when_read_only("admission deny destroys the quarantined drawer")?;
+        // The label guard, outside the lock, as `forget`'s is (O237 ruling 4).
+        self.guarded(|_| Ok(()))?;
+        let ids = [id.to_string()];
+        self.under_destruction_lock(|s, snap| {
+            s.quarantined(id)?;
+            s.admission_ruling_in(snap.conn(), id, "denied", None)?;
+            // `Ruled`: the deny verdict is appended; the attested destruction
+            // is the effect of a ruling, not an ordinary forget.
+            s.attest_in(
+                snap,
+                &ids,
+                crate::manage::PendingEvidence::Ruled,
+                &crate::forget::MirrorDelete::NotIssued,
+            )
+        })
     }
 
     /// Append a ruling record without acting on it — the crash-window
@@ -1444,23 +1465,43 @@ impl VaultStore {
         verdict: &str,
         restored_id: Option<&str>,
     ) -> Result<(), StoreError> {
+        {
+            let lock = crate::WriteLock::begin(&self.conn)?;
+            self.admission_ruling_in(&self.conn, id, verdict, restored_id)?;
+            lock.commit()?;
+        }
+        self.anchor()?;
+        Ok(())
+    }
+
+    /// The ruling record's statement, on a connection already inside the
+    /// caller's transaction — `admission_deny` appends it inside its
+    /// destruction's write lock (ROADMAP O255). It neither commits nor
+    /// anchors.
+    pub(crate) fn admission_ruling_in(
+        &self,
+        conn: &rusqlite::Connection,
+        id: &str,
+        verdict: &str,
+        restored_id: Option<&str>,
+    ) -> Result<(), StoreError> {
+        if conn.is_autocommit() {
+            return Err(crate::manage::rolled_back());
+        }
         let now = now_rfc3339();
         let canonical = format!(
             "admission\x1f{id}\x1f{verdict}\x1f{}\x1f{now}",
             restored_id.unwrap_or("")
         );
         let tag = self.vault.tag(canonical.as_bytes());
-        let tx = self.conn.transaction()?;
         chain_append(
-            &tx,
+            conn,
             &self.vault,
             Namespace::Admission,
             &format!("{id}/{verdict}"),
             &tag,
             &now,
         )?;
-        tx.commit()?;
-        self.anchor()?;
         Ok(())
     }
 }

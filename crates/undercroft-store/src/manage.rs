@@ -33,6 +33,72 @@ pub(crate) fn fingerprint_with(vault: &undercroft_vault::Vault, content: &str) -
     vault.tag(&buf)[..16].to_vec()
 }
 
+/// One drawer a destruction removed inside its write lock, and what the RAM
+/// caches, the telemetry and the receipt need after it (ROADMAP O255).
+#[derive(Debug, Clone)]
+pub(crate) struct Destroyed {
+    pub(crate) id: String,
+    /// The drawer's `seq` and clear wing, for the per-wing PQ cache.
+    pub(crate) seq: i64,
+    pub(crate) wing: String,
+    /// The tombstone's tag, which the attested records must carry.
+    pub(crate) tag: Vec<u8>,
+    /// Whether its PQ code lived inside a sealed page rather than the tail.
+    pub(crate) paged: bool,
+}
+
+/// Which derived tables exist, read ONCE inside a destruction's lock (ROADMAP
+/// O255): they are created lazily, and a purge must never learn that a table
+/// is absent by matching an error string it would otherwise swallow.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DerivedTables {
+    pq: bool,
+    pq_wing: bool,
+    pq_pages: bool,
+    tok: bool,
+    fde: bool,
+    fts: bool,
+}
+
+impl DerivedTables {
+    pub(crate) fn read(s: &VaultStore) -> Result<Self, StoreError> {
+        let pq_page = s.table_exists("pq_page")?;
+        Ok(Self {
+            pq: s.table_exists("drawer_pq")?,
+            pq_wing: s.table_exists("drawer_pq_wing")?,
+            pq_pages: pq_page && s.pq_pages_present()?,
+            tok: s.table_exists("drawer_tok")?,
+            fde: s.table_exists("drawer_fde")?,
+            fts: s.table_exists("drawers_fts")?,
+        })
+    }
+}
+
+/// **The tripwire before every write of a destruction** (ROADMAP O255): the
+/// transaction is still open. SQLite rolls a whole transaction back by itself
+/// on some failures — a trigger's `RAISE(ROLLBACK)`, and by its documentation
+/// FULL, IOERR and NOMEM — and a statement issued after that runs in
+/// AUTOCOMMIT and commits on its own (measured, O255's P4). Checking only
+/// before COMMIT would be too late: the piecemeal commits would have landed.
+pub(crate) fn live(snap: &crate::chain::Snapshot<'_>) -> Result<(), StoreError> {
+    if snap.conn().is_autocommit() {
+        return Err(rolled_back());
+    }
+    Ok(())
+}
+
+/// What a destruction says when SQLite rolled its transaction back under it.
+pub(crate) fn rolled_back() -> StoreError {
+    StoreError::Sqlite(rusqlite::Error::SqliteFailure(
+        rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_ABORT),
+        Some(
+            "the destruction's transaction was rolled back by SQLite before it finished; \
+             nothing was destroyed and nothing more was written. Retry it (ROADMAP O255)"
+                .into(),
+        ),
+    ))
+}
+
 /// Whether a delete may destroy a drawer that is still awaiting an
 /// admission ruling. Stated by every caller of the delete choke point —
 /// a required argument cannot be forgotten the way a call-site check can,
@@ -921,74 +987,223 @@ impl VaultStore {
         self.delete_drawer_ruled(id, PendingEvidence::Protect)
     }
 
-    /// The delete choke point. Every caller states whether it may destroy
-    /// pending review evidence, so a new delete path does not compile until
-    /// its author decides — the same shape the write choke point uses for
-    /// the admission screen. `delete_drawer` states `Protect` and inherits
-    /// the fence; the bulk callers — `delete_by_source`, `forget_with_proof`
-    /// and the retention sweep through it — PRE-FLIGHT it with
-    /// `is_quarantine_pending` before the loop, so a refused id stops the
-    /// batch before anything is destroyed rather than midway.
+    /// The single, unattested delete. Every caller states whether it may
+    /// destroy pending review evidence, so a new delete path does not compile
+    /// until its author decides — the same shape the write choke point uses
+    /// for the admission screen. `delete_drawer` states `Protect` and inherits
+    /// the fence; `admission allow` states `Ruled` for the queue row it has
+    /// just re-filed.
+    ///
+    /// **One write lock, one body** (ROADMAP O255): the fence, the existence
+    /// check and the destruction run inside the lock, through
+    /// [`VaultStore::destroy_in`], which holds the crate's only
+    /// `DELETE FROM drawers WHERE id`. The attested paths — `forget`, the
+    /// retention sweep, `admission deny` — run the same body for every drawer
+    /// of a destruction inside ONE lock (`forget.rs`).
     pub(crate) fn delete_drawer_ruled(
         &mut self,
         id: &str,
         evidence: PendingEvidence,
     ) -> Result<bool, StoreError> {
-        if let PendingEvidence::Protect = evidence {
-            if self.is_quarantine_pending(id)? {
+        self.under_destruction_lock(|s, snap| {
+            if evidence == PendingEvidence::Protect && s.is_quarantine_pending(id)? {
                 return Err(StoreError::Invalid(format!(
                     "{id} is quarantine-pending — rule on it with `admission \
                      allow`/`deny`; pending review evidence is not deletable"
                 )));
             }
-        }
-        // Purge the PQ code first (needs the live seq): the ADC scan reads
-        // codes without joining drawers, so orphans would linger as wasted
-        // candidate slots until the next rebuild. Tail rows delete; a code
-        // inside a sealed page is counted out of the page commitment
-        // instead (pqidx::pq_purge_row). Advisory either way.
-        self.pq_purge_row(id);
-        // Both levels also hold the codes in a RAM cache — drop it wholesale
-        // (deletes are rare; the next search reloads once).
-        self.pq_cache.borrow_mut().take();
-        self.late_purge_row(id);
-        // Delete + tombstone + chain advance are one transaction: a crash
-        // can't leave a deletion the audit chain never heard about.
-        let tag = self.vault.tag(format!("del\x1f{id}").as_bytes());
-        // Resolved before the transaction, removed inside it: the FTS index
-        // must never end up shorter than the table, because under-returning
-        // is what cuts a drawer out of the scan entirely.
-        let fts_seq = self.fts_seq_of(id);
-        let tx = self.conn.transaction()?;
-        let n = tx.execute("DELETE FROM drawers WHERE id = ?1", params![id])?;
-        if let Some(seq) = fts_seq {
-            let _ = tx.execute("DELETE FROM drawers_fts WHERE rowid = ?1", params![seq]);
-        }
-        let anchor = if n > 0 {
-            Some(chain_append(
-                &tx,
-                &self.vault,
-                Namespace::Del,
-                id,
-                &tag,
-                &now_rfc3339(),
-            )?)
-        } else {
-            None
-        };
-        tx.commit()?;
-        if anchor.is_some() {
-            self.anchor()?;
-            if let Some(cache) = self.emb_cache.borrow_mut().as_mut() {
-                cache.remove(id);
+            let present: bool = snap.conn().query_row(
+                "SELECT EXISTS(SELECT 1 FROM drawers WHERE id = ?1)",
+                params![id],
+                |r| r.get(0),
+            )?;
+            if !present {
+                return Ok((false, Vec::new()));
             }
-            // Drop the stale ANN index; rebuilt on the next search.
-            #[cfg(feature = "hnsw")]
-            self.hnsw.borrow_mut().take();
+            let tables = DerivedTables::read(s)?;
+            let gone = s.destroy_in(snap, &tables, id)?;
+            s.settle_derived(snap, &tables, std::slice::from_ref(&gone))?;
+            Ok((true, vec![gone]))
+        })
+    }
+
+    /// **The crate's only `DELETE FROM drawers WHERE id`** (ROADMAP O255),
+    /// run inside a write lock the caller holds, on that lock's snapshot. It
+    /// removes the drawer's derived rows (the PQ codes, the token matrix, the
+    /// FDE row, the full-text row), the drawer, and appends its keyed
+    /// tombstone — and never commits and never anchors: the caller's lock
+    /// decides whether ALL of a destruction lands or none of it.
+    ///
+    /// **Nothing here is swallowed.** Every statement's error propagates,
+    /// because a statement that FAILS is what makes SQLite roll the whole
+    /// transaction back on its own (measured, O255's P4: after a trigger's
+    /// `RAISE(ROLLBACK)` a later `DELETE` ran in autocommit and committed), so
+    /// a swallowed error would let the rest of the destruction commit piece by
+    /// piece. The purges used to be advisory autocommit statements run BEFORE
+    /// the tombstone's transaction, so a busy purge could leave a
+    /// plaintext-derived row for a drawer the receipt called destroyed. And
+    /// [`live`] is checked before every write — the tripwire for a rollback
+    /// that arrives some other way.
+    ///
+    /// A row count other than one refuses: a drawer another handle destroyed
+    /// after the caller's check is not this destruction's to attest.
+    pub(crate) fn destroy_in(
+        &self,
+        snap: &crate::chain::Snapshot<'_>,
+        tables: &DerivedTables,
+        id: &str,
+    ) -> Result<Destroyed, StoreError> {
+        if snap.origin() != crate::chain::Origin::WriteLocked {
+            return Err(StoreError::Invalid(
+                "a drawer is destroyed only inside a write lock (ROADMAP O255); this is a \
+                 defect in the caller, not in the vault"
+                    .into(),
+            ));
+        }
+        let conn = snap.conn();
+        let row: Option<(i64, String)> = conn
+            .query_row(
+                "SELECT seq, wing FROM drawers WHERE id = ?1",
+                params![id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let Some((seq, wing)) = row else {
+            return Err(StoreError::NotFound(id.to_string()));
+        };
+        // The derived rows first, while the drawer's `seq` still names them.
+        // The ADC scan reads codes without joining `drawers`, so an orphan
+        // would linger as a wasted candidate slot until the next rebuild; a
+        // code inside a sealed page is counted out of the page commitment in
+        // `settle_derived`, once per destruction.
+        let mut paged = false;
+        if tables.pq {
+            live(snap)?;
+            paged = conn.execute("DELETE FROM drawer_pq WHERE seq = ?1", params![seq])? == 0;
+        }
+        if tables.pq_wing {
+            live(snap)?;
+            conn.execute("DELETE FROM drawer_pq_wing WHERE seq = ?1", params![seq])?;
+        }
+        if tables.tok {
+            live(snap)?;
+            conn.execute("DELETE FROM drawer_tok WHERE id = ?1", params![id])?;
+        }
+        if tables.fde {
+            live(snap)?;
+            conn.execute("DELETE FROM drawer_fde WHERE id = ?1", params![id])?;
+        }
+        // The full-text row too, keyed by the drawer's `seq`. Its absence is
+        // read once per destruction rather than taken from the handle's
+        // prefilter flag: a handle that declined the prefilter still holds
+        // the table, and folded plaintext tokens left in it would outlive a
+        // receipt that says the drawer is destroyed.
+        if tables.fts {
+            live(snap)?;
+            conn.execute("DELETE FROM drawers_fts WHERE rowid = ?1", params![seq])?;
+        }
+        let tag = self.vault.tag(format!("del\x1f{id}").as_bytes());
+        live(snap)?;
+        let n = conn.execute("DELETE FROM drawers WHERE id = ?1", params![id])?;
+        if n != 1 {
+            return Err(StoreError::NotFound(id.to_string()));
+        }
+        live(snap)?;
+        chain_append(conn, &self.vault, Namespace::Del, id, &tag, &now_rfc3339())?;
+        Ok(Destroyed {
+            id: id.to_string(),
+            seq,
+            wing,
+            tag: tag.to_vec(),
+            paged: paged && tables.pq_pages,
+        })
+    }
+
+    /// The per-destruction half of the derived-row purge, inside the same
+    /// lock: codes that lived inside sealed pages are counted out of the page
+    /// commitment ONCE for the whole destruction, where the per-drawer purge
+    /// read and rewrote the counter — and counted `pq_page` — per drawer.
+    pub(crate) fn settle_derived(
+        &self,
+        snap: &crate::chain::Snapshot<'_>,
+        tables: &DerivedTables,
+        destroyed: &[Destroyed],
+    ) -> Result<(), StoreError> {
+        let paged = destroyed.iter().filter(|d| d.paged).count() as u64;
+        if paged > 0 && tables.pq_pages {
+            live(snap)?;
+            let d = self.pq_count_get("deleted")?;
+            self.pq_count_put("deleted", d + paged)?;
+        }
+        Ok(())
+    }
+
+    /// Run a destruction inside ONE write lock (ROADMAP O255).
+    ///
+    /// `body` runs on the lock's snapshot and returns its value and what it
+    /// destroyed. On Ok the lock commits, and THEN — after the commit, never
+    /// before — the one manifest anchor (O254's door) and the RAM caches and
+    /// telemetry for what was destroyed. On any error the lock's drop rolls
+    /// the whole destruction back and every derived RAM cache is dropped
+    /// (O129's rule), so a cache can never describe a delete that did not
+    /// land. Nothing a caller may reach from `body` opens a guarded door or a
+    /// snapshot of its own: inside a caller's transaction the guard sees an
+    /// `Inline` snapshot, and a miss there is an error.
+    pub(crate) fn under_destruction_lock<T>(
+        &mut self,
+        body: impl FnOnce(&Self, &crate::chain::Snapshot<'_>) -> Result<(T, Vec<Destroyed>), StoreError>,
+    ) -> Result<T, StoreError> {
+        let outcome = {
+            let lock = crate::WriteLock::begin(&self.conn)?;
+            let ran = {
+                let snap = lock.snapshot()?;
+                body(self, &snap)
+            };
+            match ran {
+                Ok(v) => {
+                    // The tripwire once more: a transaction SQLite already
+                    // rolled back must not be reported as committed.
+                    if self.conn.is_autocommit() {
+                        Err(rolled_back())
+                    } else {
+                        lock.commit().map(|()| v)
+                    }
+                }
+                Err(e) => Err(e),
+            }
+        };
+        match outcome {
+            Err(e) => {
+                self.drop_derived_caches();
+                Err(e)
+            }
+            Ok((v, destroyed)) => {
+                if !destroyed.is_empty() {
+                    self.anchor()?;
+                    self.after_destroy(&destroyed);
+                }
+                Ok(v)
+            }
+        }
+    }
+
+    /// The RAM caches and the telemetry for a destruction that COMMITTED.
+    fn after_destroy(&self, destroyed: &[Destroyed]) {
+        // Both levels hold the codes in a RAM cache — dropped wholesale
+        // (destructions are rare; the next search reloads once).
+        self.pq_cache.borrow_mut().take();
+        self.fde_cache.borrow_mut().take();
+        // Drop the stale ANN index; rebuilt on the next search.
+        #[cfg(feature = "hnsw")]
+        self.hnsw.borrow_mut().take();
+        for d in destroyed {
+            self.pq_forget_cached(d.seq, &d.wing);
+            if let Some(cache) = self.emb_cache.borrow_mut().as_mut() {
+                cache.remove(&d.id);
+            }
             undercroft_obs::drawer_delete();
             undercroft_obs::event_drawer_deleted(self.vault.id());
         }
-        Ok(n > 0)
     }
 
     /// Delete every drawer mined from one source file. Returns the count.
@@ -997,7 +1212,10 @@ impl VaultStore {
     /// review evidence. The whole call is refused BEFORE anything is
     /// deleted rather than half-way through: failing mid-loop would destroy
     /// part of a source and then report an error, leaving the operator
-    /// unsure what survived.
+    /// unsure what survived. That holds for pending evidence only: each drawer
+    /// is still its own write lock, so a busy lock or a failing statement at
+    /// drawer k leaves k−1 deleted, and the fence query below reads a failure
+    /// as "not pending" — ROADMAP O259.
     pub fn delete_by_source(&mut self, source_file: &str) -> Result<u64, StoreError> {
         let ids: Vec<String> = self
             .conn
@@ -2552,9 +2770,10 @@ impl Namespace {
     /// rather than assuming the id follows the prefix directly.
     pub const fn is_destruction(self) -> bool {
         match self {
-            // `delete_drawer_ruled` (the crate's one `DELETE FROM drawers`,
-            // inherited by the public delete, admission deny and
-            // `forget_with_proof`) and `delete_tunnel`.
+            // `destroy_in` (the crate's one `DELETE FROM drawers WHERE id`,
+            // ROADMAP O255, inherited by the public delete and by the attested
+            // destruction `forget`, the retention sweep and admission deny
+            // share) and `delete_tunnel`.
             Namespace::Del => true,
             // Nothing else removes a row. A `retention-clear/` record removes
             // a POLICY, which is the policy leg's business (O230) and not a
