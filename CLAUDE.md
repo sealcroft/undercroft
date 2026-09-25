@@ -418,16 +418,24 @@ Consequences that are binding, not advisory:
   (rotation_candidate, byte-exact reseal_at_rest, two-phase
   vault.json.next staging, keycheck marker) + **the one manifest file
   writer** (`write_manifest_file`: a random-nonce `create_new` temp, fsync,
-  rename, directory sync — `create`, the staging write, every anchor and,
-  since O257, the promote go through it, so the crate renames in ONE
-  place and deletes only files it can name as its own; no unlock deletes a
+  rename, directory sync — `create`, the staging write, every anchor,
+  since O257 the promote, and since O256 the manifest an archive is
+  published with go through it, so the crate renames a manifest in ONE
+  place — its one other rename publishes an archive's stage — and deletes
+  only files it can name as its own; no unlock deletes a
   `vault.json.next` on either posture, a too-new one included — and the
   bare legacy `vault.json.tmp` a 1.6.x process still
   writes is never matched or swept) and the anchor's checked
   read-modify-write, whose failures come back as `AnchorFault::{Io,
   Integrity}` for the store's door to act on (ROADMAP O254); a
   `test-fixture` feature carries the fault seam, since a nonce name cannot
-  be targeted from outside; bundle.rs:
+  be targeted from outside; backups.rs: the archive side of `backup
+  create` (ROADMAP O256, O265) — a stage under `backups/.staging/<nonce>`
+  published by one rename only when it holds exactly `vault.db` and
+  `vault.json`, a stage older than an hour swept, and a vault's archives
+  found by their OWN manifest and exact name shape, never a prefix (backing
+  up `p` pruned `p-2024`'s archives, and its own beside `p-archive`'s);
+  bundle.rs:
   recipient-encrypted export bundles — **the vault-sized paths take the
   buffer rather than borrowing it** (`encrypt_for_into` seals IN PLACE and
   writes the header ahead of it; `decrypt_with_owned` opens in place;
@@ -948,6 +956,25 @@ Consequences that are binding, not advisory:
   summary — the shape this file records for headings, one bullet over;
   the manifest carries embedder identity and chain head as
   provenance, never as state),
+  **`backup create`, one door (backup.rs, ROADMAP O256)** — both surfaces
+  verified, DROPPED the store and copied the directory as files, so beside
+  a writer 11 of 40 copies failed, 2 of the rest restored as tampering and
+  16 held a state no verify saw, and a rotation between two files paired
+  two key generations. Now the manifest's exact bytes are read ONCE before
+  the pin with no fall-back (`Vault::verified_manifest`, never
+  `anchored_head`'s cached-head fall-back); inside ONE snapshot the door
+  compares the key generation, verifies, and copies the pages with SQLite's
+  online backup API (`Backup::new(snap.conn(), …).step(-1)`, `Done`
+  checked — never `Connection::backup`, whose steps each take a fresh read
+  transaction); the copy is synced and its head and height must EQUAL the
+  snapshot's (an `immutable=1` reopen, never a second verify); and the
+  vault crate's stage is published by one rename. It refuses nested or
+  inline (`Invalid`), decides no posture (O212 stays open), holds its
+  connection so a rotation is refused throughout, and reports `writes`,
+  `chain_head` and `anchor_behind_by` — the anchor carried AS FOUND, never
+  healed into the archive (A2/O246). `backup_pause.rs` holds its test pause
+  points (the page copy runs no VM, so a progress handler never fires in
+  it), and `/v1` no longer evicts its handle to take one,
   write-path admission control (admission.rs + core admission.rs — C3.3
   phase 2: deterministic tier-1 detector, closed signal vocabulary,
   offsets never content; **the screen lives at the write CHOKE POINT**
@@ -2357,8 +2384,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (1095 run,
-                                      # 11 #[ignore]d = 1106 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (1109 run,
+                                      # 13 #[ignore]d = 1122 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2442,7 +2469,7 @@ docker compose run --rm test          # cargo unit + integration tests (1095 run
                                       # remembered — do not hand-edit one to
                                       # silence the gate; it is measuring the
                                       # suite, not this comment.
-                                      # The 11 ignored are 3 measurements needing
+                                      # The 13 ignored are 3 measurements needing
                                       # testdata/*_50k.txt, one in lib.rs, and four
                                       # in anchor_tests.rs (ROADMAP O254, O257): the
                                       # multi-process gate's child entry point,
@@ -2453,7 +2480,9 @@ docker compose run --rm test          # cargo unit + integration tests (1095 run
                                       # rotation's hold time), each run by name,
                                       # and three in snapshot_tests.rs (ROADMAP
                                       # O253's soak, cost and -wal measurements,
-                                      # also run by name). Run the first
+                                      # also run by name), and two in
+                                      # backup_tests.rs (ROADMAP O256's soak and
+                                      # its cost at ~10^5, run by name). Run the first
                                       # four with `cargo test --release -- --ignored`:
                                       # 3 pass, and `measure_relation_promiscuity`
                                       # FAILS on missing data, not on logic — it
@@ -2490,7 +2519,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (652 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (664 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (169 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (157 checks; weaviate

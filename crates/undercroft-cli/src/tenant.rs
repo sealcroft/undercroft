@@ -150,19 +150,6 @@ pub type EmbedderFactory =
 pub type RerankerFactory =
     Box<dyn Fn() -> Box<dyn undercroft_core::rerank::Reranker + Send + Sync>>;
 
-/// Re-opens the co-resident `--vault` store, with the SAME configuration
-/// `serve-http` opened it with (ROADMAP O242).
-///
-/// It is required rather than optional because the alternative is silent
-/// drift: `backup create` evicts the store (`stores.remove`), and without
-/// this the next `/mcp` request would re-open through [`Tenancy::store_for`],
-/// which resolves a different embedder, a different reranker, never re-warms
-/// the embedding cache, and — the sharp one — REFUSES
-/// `UNDERCROFT_RETRIEVAL=hnsw` with a 500 where the CLI's opener accepts it.
-/// On an `hnsw` build, one `/v1` backup would have made every later `/mcp`
-/// call 500 forever.
-pub type StoreOpener = Box<dyn Fn() -> Result<VaultStore>>;
-
 /// The multi-tenant engine state behind the `/v1` routes. Single-threaded
 /// (the `tiny_http` request loop is sequential), so the store cache needs
 /// no locking.
@@ -188,14 +175,20 @@ pub struct Tenancy {
     /// guard, its cookie policy and its refusals are untouched.
     ///
     /// The field still names the vault, because two things still turn on
-    /// co-residency: [`Self::mcp_store`] serves it through the opener rather
-    /// than through [`Self::store_for`], and [`Self::deny_co_resident`] still
-    /// refuses the operations that would pull the ground out from under a
-    /// live server.
+    /// co-residency: [`Self::mcp_store`] serves it straight from the cache
+    /// rather than through [`Self::store_for`], and
+    /// [`Self::deny_co_resident`] still refuses the operations that would pull
+    /// the ground out from under a live server.
+    ///
+    /// **Nothing evicts it** (ROADMAP O256). `backup create` was the one
+    /// eviction of the co-resident vault, and a re-opener (`StoreOpener`)
+    /// existed to bring it back with `serve-http`'s configuration. It never
+    /// guarded what it claimed: after the eviction a `/v1` request re-opened
+    /// the vault through `store_for`, with the multi-tenant configuration,
+    /// and `/mcp` then served THAT handle. Backup no longer evicts, every
+    /// other `stores.remove(` is behind [`Self::deny_co_resident`] — counted by
+    /// a source gate — and a missing handle is an error, never a re-open.
     mcp_vault: Option<String>,
-    /// How to re-open [`Self::mcp_vault`] after an eviction. See
-    /// [`StoreOpener`] for why it is not optional in effect.
-    mcp_opener: Option<StoreOpener>,
     /// Per-request vault-assertion secret; when present every vault-
     /// addressing request must carry a valid `X-Vault-Assertion`.
     secret: Option<Vec<u8>>,
@@ -275,7 +268,6 @@ impl Tenancy {
             stores: HashMap::new(),
             read_only,
             mcp_vault: None,
-            mcp_opener: None,
             secret,
             window: assertion::DEFAULT_WINDOW_SECS,
         })
@@ -289,19 +281,12 @@ impl Tenancy {
     ///
     /// The store is put straight into the cache [`Self::store_for`] reads, so
     /// `/v1` finds it by its `contains_key` short-circuit and never opens a
-    /// second one. `opener` is how it comes back after an eviction, with the
-    /// configuration it was opened with — see [`StoreOpener`].
-    pub fn with_mcp_vault(
-        mut self,
-        vault: impl Into<String>,
-        store: VaultStore,
-        opener: StoreOpener,
-    ) -> Self {
+    /// second one — and it stays there for the life of the process.
+    pub fn with_mcp_vault(mut self, vault: impl Into<String>, store: VaultStore) -> Self {
         let vault = vault.into();
         self.stores.insert(vault.clone(), store);
         undercroft_obs::vault_opened();
         self.mcp_vault = Some(vault);
-        self.mcp_opener = Some(opener);
         self
     }
 
@@ -312,31 +297,21 @@ impl Tenancy {
 
     /// The ONE handle on the co-resident vault, for the `/mcp` surface.
     ///
-    /// It goes through the opener rather than [`Self::store_for`] because the
-    /// two are not interchangeable: `store_for` resolves the multi-tenant
-    /// configuration, which refuses `UNDERCROFT_RETRIEVAL=hnsw` outright. A
-    /// re-open happens only after `backup create` evicts the entry.
+    /// Served from the cache and never through [`Self::store_for`], which
+    /// resolves the multi-tenant configuration — a different embedder and
+    /// reranker, no warmed cache, and a refusal of `UNDERCROFT_RETRIEVAL=hnsw`.
+    /// Nothing evicts it (ROADMAP O256), so its absence is a defect to report,
+    /// never a reason to open a second, differently configured handle.
     pub(crate) fn mcp_store(&mut self) -> Result<&mut VaultStore, RestError> {
         let Some(id) = self.mcp_vault.clone() else {
             return Err(RestError::new(500, "this process serves no /mcp vault"));
         };
-        if !self.stores.contains_key(&id) {
-            // The opener's borrow ends with this block, before the insert
-            // below needs `&mut self`.
-            let opened = {
-                let opener = self
-                    .mcp_opener
-                    .as_ref()
-                    .ok_or_else(|| RestError::new(500, "the /mcp vault has no re-opener"))?;
-                opener().map_err(|e| RestError::new(500, e.to_string()))?
-            };
-            self.stores.insert(id.clone(), opened);
-            undercroft_obs::vault_opened();
-        }
-        Ok(self
-            .stores
-            .get_mut(&id)
-            .expect("just inserted or already present"))
+        self.stores.get_mut(&id).ok_or_else(|| {
+            RestError::new(
+                500,
+                "the /mcp vault's handle is gone, and nothing may evict it (ROADMAP O256)",
+            )
+        })
     }
 
     /// Attach a shared second-stage reranker, applied to every per-vault
@@ -2292,34 +2267,36 @@ impl Tenancy {
     /// THAT vault's verify verdict, which is preserved here — never archive a
     /// vault that fails its own HMACs, and say so as an integrity verdict
     /// (409 + `class: "integrity"`, the wire form of the CLI's exit 2).
+    ///
+    /// **Through the cached handle, which is no longer evicted** (ROADMAP
+    /// O256). The handle used to be dropped "so the snapshot is not taken
+    /// through a store this process is still writing" and the directory
+    /// copied as files — which is exactly what made the archive a state the
+    /// verify never saw. The copy is now taken INSIDE the verified snapshot,
+    /// and the open connection is what O257's fence needs to see. It was also
+    /// the only eviction of the co-resident `/mcp` vault, so the re-opener
+    /// that existed for it went with it.
+    ///
+    /// The whole report is serialized, beside the `backup` key this route has
+    /// always answered with.
     fn backup_create(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
         self.assert_or_401(id, req, now)?;
-        let root = self.manager.root().to_path_buf();
-        {
-            let store = self.store_for(id)?;
-            let report = store.verify().map_err(store_err)?;
-            if !report.ok() {
+        let backups = self.manager.root().join(undercroft_vault::BACKUPS_DIR);
+        let store = self.store_for(id)?;
+        let report = match store.backup(&backups).map_err(store_err)? {
+            undercroft_store::BackupOutcome::Created(report) => report,
+            undercroft_store::BackupOutcome::Refused(_) => {
                 return Err(RestError::new(
                     409,
                     "refusing to back up: integrity verification failed",
                 )
                 .integrity());
             }
-        }
-        // The handle is dropped before copying so the snapshot is not taken
-        // through a store this process is still writing.
-        self.stores.remove(id);
-        let stamp = time::OffsetDateTime::now_utc()
-            .format(&time::format_description::well_known::Rfc3339)
-            .map_err(|e| RestError::new(500, e.to_string()))?
-            .replace([':', '.'], "-");
-        let src = root.join(undercroft_vault::VAULTS_DIR).join(id);
-        let name = format!("{id}-{stamp}");
-        let dst = root.join(undercroft_vault::BACKUPS_DIR).join(&name);
-        crate::copy_dir(&src, &dst).map_err(|e| RestError::new(500, e.to_string()))?;
-        crate::prune_backups(&root.join(undercroft_vault::BACKUPS_DIR), id, 10)
-            .map_err(|e| RestError::new(500, e.to_string()))?;
-        Ok((201, Body::Json(json!({ "backup": name, "vault": id }))))
+        };
+        let mut body =
+            serde_json::to_value(&report).map_err(|e| RestError::new(500, e.to_string()))?;
+        body["backup"] = json!(report.name);
+        Ok((201, Body::Json(body)))
     }
 
     /// `GET /v1/vaults/{id}/backups` — this vault's snapshots.

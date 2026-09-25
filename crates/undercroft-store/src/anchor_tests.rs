@@ -1750,10 +1750,12 @@ fn body_of<'a>(text: &'a str, name: &str) -> &'a str {
 /// promote and staged-file removal in the store runs under the write lock or
 /// inside the rotation's fence; the one writer
 /// keeps the anchor's durability at one file fsync and one directory sync;
-/// and no other crate writes the manifest. The CLI's `copy_dir` — backup
-/// create into `backups/`, restore back into `vaults/` under O69's exclusive
-/// hold, which refuses while any handle has the vault open — is the one
-/// whole-directory writer, pinned by its call sites so a new one is ruled.
+/// and no other crate writes the manifest. The CLI's `copy_dir` — restore
+/// into `vaults/` under O69's exclusive hold, which refuses while any handle
+/// has the vault open — is the one whole-directory writer, pinned by its call
+/// sites so a new one is ruled; backup create copies the verified snapshot
+/// through the store since ROADMAP O256, and its archive's manifest goes
+/// through the one writer.
 #[test]
 fn every_manifest_writer_and_anchor_caller_is_the_one_the_ruling_names() {
     let crates = concat!(env!("CARGO_MANIFEST_DIR"), "/..");
@@ -1827,6 +1829,42 @@ fn every_manifest_writer_and_anchor_caller_is_the_one_the_ruling_names() {
         "the legacy fixed temp name"
     );
 
+    // The ARCHIVE (ROADMAP O256): the sixth manifest writer, and the one
+    // other place the crate renames or removes. Its manifest goes through the
+    // one writer — the exact bytes the backup verified against — and its
+    // rename is the publish of a stage; it removes only a stage of its own
+    // (a failed backup's, or one a crash abandoned) and archives `prune`
+    // keeps no longer.
+    let archive = production(&format!("{crates}/undercroft-vault/src/backups.rs"));
+    assert_eq!(
+        archive.matches("write_manifest_file(").count(),
+        1,
+        "the archive writes its manifest once, through the one writer"
+    );
+    assert!(body_of(&archive, "write_manifest").contains("write_manifest_file("));
+    assert_eq!(archive.matches("fs::rename(").count(), 1, "archive renames");
+    assert!(body_of(&archive, "publish").contains("fs::rename("));
+    assert_eq!(
+        archive.matches("fs::remove_dir_all(").count(),
+        3,
+        "archive removals: an unpublished stage, an abandoned stage, a pruned archive"
+    );
+    assert!(body_of(&archive, "drop").contains("fs::remove_dir_all("));
+    assert!(body_of(&archive, "sweep_stale").contains("fs::remove_dir_all("));
+    assert!(body_of(&archive, "prune").contains("fs::remove_dir_all("));
+    for w in [
+        "fs::remove_file(",
+        "File::create(",
+        "fs::write(",
+        "fs::copy(",
+    ] {
+        assert_eq!(
+            archive.matches(w).count(),
+            0,
+            "the archive module calls {w}"
+        );
+    }
+
     // Each promote and staged-file removal in the store runs where no other
     // writer can interleave: inside `reconcile_rotation`, whose whole body is
     // under the write lock, or inside the rotation's fence BEFORE the hold is
@@ -1870,7 +1908,14 @@ fn every_manifest_writer_and_anchor_caller_is_the_one_the_ruling_names() {
     );
 
     // No other crate writes a manifest, and the directory writer is pinned.
-    for (path, text) in cli.iter().chain(&orch) {
+    // The STORE is scanned too (ROADMAP O256's refuter: a store-crate writer
+    // passed unseen), its test files aside — a test may plant a manifest.
+    for (path, text) in store
+        .iter()
+        .filter(|(p, _)| !p.ends_with("_tests.rs"))
+        .chain(&cli)
+        .chain(&orch)
+    {
         for line in text.lines().filter(|l| l.contains("vault.json")) {
             let code = line.split("//").next().unwrap();
             assert!(
@@ -1886,8 +1931,9 @@ fn every_manifest_writer_and_anchor_caller_is_the_one_the_ruling_names() {
         .map(|(_, t)| t.matches("copy_dir(").count())
         .sum();
     assert_eq!(
-        copy_dir_calls, 6,
-        "`copy_dir` call sites moved (one definition, one recursion, backup create and \
-         restore on the CLI and on /v1): rule the new one against O69's hold"
+        copy_dir_calls, 4,
+        "`copy_dir` call sites moved (one definition, one recursion, restore on the CLI and \
+         on /v1 — backup create copies through the store since ROADMAP O256): rule the new \
+         one against O69's hold"
     );
 }
