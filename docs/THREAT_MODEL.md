@@ -202,15 +202,16 @@ not in the replayed chain at all is a **rollback alarm**
 false-fire: WAL + `synchronous=FULL` guarantee data+chain reach disk
 before the anchor can, so power loss lands in the healed case by
 construction. Deletions write keyed tombstones — absence is also
-evidence. *Known defect, filed 2026-09-24 as ROADMAP O254*: that
-guarantee holds for ONE writer. Two writable handles on one vault anchor
-through one shared temporary file, so one can truncate the file the other
-is renaming into place — a committed write is then reported as failed, a
-concurrent reader can find `vault.json` empty or corrupt, and a manifest
-left corrupt (by overlapping writes, or by a power loss inside that window)
-makes the vault unopenable until it is restored from `backups/`. Separately,
-a concurrent writer can make the label guard and `verify` report a broken
-chain that is not broken (ROADMAP O253).
+evidence. That guarantee held for ONE writer until 1.7.0: two writable
+handles on one vault anchored through one shared temporary file, so one
+could truncate the file the other was renaming into place. Since 1.7.0 one
+door writes the manifest, after its commit and under the database's write
+lock, through a random-nonce temporary file (ROADMAP O254). *(This paragraph
+still called that a known defect after O254 closed; corrected with O253.)*
+And a concurrent writer no longer makes the label guard, `verify` or an
+open report a broken chain that is not broken: every judgement reads what it
+compares from one database state, the manifest anchor before that state is
+pinned (ROADMAP O253).
 
 **Residual (documented)**: an attacker with full disk control who
 restores a **consistent old database + manifest pair together** rewinds
@@ -595,10 +596,11 @@ rows, so anything appended above it is writes since the witness (O245's
 ruling). The honest statement of the defence is narrower: this guard
 protects against a writer who does NOT hold the vault key (see A2's
 capability line), and against such a writer in-band answers exist — the live
-handle holds what that writer lacks — which is O252's to rule. Separately, a
-legitimate CONCURRENT writer makes the guard refuse and `verify` report a
-broken chain, because the replay and the committed head are read in two
-snapshots; that false alarm is ROADMAP O253.
+handle holds what that writer lacks — which is O252's to rule. A legitimate
+CONCURRENT writer made the guard refuse and `verify` report a broken chain
+until 1.7.0, because the replay and the committed head were read in two
+snapshots; every judgement now reads them in one, the anchor before it
+(ROADMAP O253).
 
 The chain also carries what left and what was read. Every export
 appends an `egress/export` record binding the surface, the recipient

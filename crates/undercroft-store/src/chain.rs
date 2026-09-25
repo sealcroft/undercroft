@@ -207,7 +207,7 @@ impl HeadState {
 /// [`HeadState`] it should agree with.
 ///
 /// It exists because two callers now make the same judgement —
-/// [`crate::VaultStore::chain_verdict`], which replays for the label guard,
+/// [`crate::VaultStore::chain_verdict_in`], which replays for the label guard,
 /// and `reconcile_chain`, which replays at the open and (when the open
 /// appended nothing afterwards) hands its verdict forward so the guard need
 /// not walk the same rows again. A second copy of this arithmetic would be a
@@ -371,11 +371,17 @@ fn bytes_of(v: ValueRef<'_>) -> (Vec<u8>, bool, bool) {
 /// the rows — a malformed row and a broken commitment are findings in the
 /// returned [`Replay`], because a `verify` that returns an error instead of a
 /// verdict is the failure `verify` exists to prevent.
+///
+/// **It REQUIRES a [`Snapshot`]** (ROADMAP O253): the regime it reads, the
+/// rows it steps, and whatever head its caller compares the result with must
+/// come from one state, or a legitimate commit between them reads as a broken
+/// chain.
 pub(crate) fn replay(
-    conn: &Connection,
+    snap: &Snapshot<'_>,
     stepper: &Vault,
     anchor: Option<&str>,
 ) -> Result<Replay, StoreError> {
+    let conn = snap.conn();
     let regime = regime(conn)?;
     let genesis = Vault::chain_genesis_hex();
     let mut head = genesis.clone();
@@ -464,7 +470,11 @@ pub(crate) struct Prefix {
 /// sealed vault whose blinding walk has not completed — the emit refuses
 /// while that is pending), and any rewrite of a witnessed row, which is the
 /// point.
-pub(crate) fn prefix(conn: &Connection, at: Option<u64>) -> Result<Prefix, StoreError> {
+///
+/// It REQUIRES a [`Snapshot`] for [`replay`]'s reason: a witness's `rows` and
+/// `head` describe one state only if they were read in one (ROADMAP O253).
+pub(crate) fn prefix(snap: &Snapshot<'_>, at: Option<u64>) -> Result<Prefix, StoreError> {
+    let conn = snap.conn();
     let mut digest = CommitmentDigest::new();
     let mut rows = 0u64;
     let mut at_digest = None;
@@ -514,11 +524,19 @@ pub(crate) enum SwitchOutcome {
 /// and says so. The regime is re-read inside the transaction, so two
 /// handles opening at once write one commitment.
 pub(crate) fn switch(
-    tx: &Connection,
+    locked: &Snapshot<'_>,
     vault: &Vault,
     anchor: &str,
     at: &str,
 ) -> Result<SwitchOutcome, StoreError> {
+    // It writes, and it compares the anchor with the rows: both need the
+    // write lock, under which nothing else commits (ROADMAP O253).
+    if locked.origin() != Origin::WriteLocked {
+        return Err(StoreError::Invalid(
+            "the chain switch runs under the write lock (ROADMAP O233, O253)".into(),
+        ));
+    }
+    let tx = locked.conn();
     let head = match head_state(tx)? {
         HeadState::Seeded(h) if h.regime == Regime::V1 => h,
         HeadState::Seeded(_) => return Ok(SwitchOutcome::Already),
@@ -531,7 +549,7 @@ pub(crate) fn switch(
             return Err(StoreError::IntegrityFinding(finding))
         }
     };
-    let replayed = replay(tx, vault, Some(anchor))?;
+    let replayed = replay(locked, vault, Some(anchor))?;
     if replayed.head != head.head || !replayed.anchor_seen || !replayed.malformed.is_empty() {
         return Ok(SwitchOutcome::Withheld(
             "the audit chain's labels are NOT chain-authenticated: the switch to the \
@@ -856,7 +874,7 @@ pub(crate) fn chain_keys(conn: &Connection, ns: Namespace) -> Result<Vec<String>
 // is stated rather than absorbed** (ROADMAP O242). That process used to
 // hold two handles on one vault, so every `/v1` commit handed the `/mcp`
 // handle a free re-replay — and a free re-read and MAC check of the
-// manifest with it, since `chain_verdict` begins at `anchored_head`. It now
+// manifest with it, since the guard's replay begins at `anchored_head`. It now
 // holds one, which is what every other deployment has always had, so
 // neither happens until a genuinely FOREIGN commit arrives. The coverage
 // that goes was an accident of that aliasing and never a mechanism: it
@@ -939,11 +957,274 @@ struct Replayed {
 /// this one commits, and not when this one does. Measured with a real second
 /// process, behind a premise assertion — its first run reported "a process
 /// does not move it" from a child that had run zero tests.
+///
+/// **Inside a read transaction it is CONSTANT and describes that
+/// transaction's snapshot** (ROADMAP O253, P7), which is why a [`Snapshot`]
+/// reads it once, as its first statement, and the guard compares that value.
 pub(crate) fn data_version(conn: &Connection) -> Result<i64, StoreError> {
     Ok(conn.query_row("PRAGMA data_version", [], |r| r.get(0))?)
 }
 
+// ── ONE state per judgement (ROADMAP O253) ────────────────────────────────
+//
+// A judgement that compares two things it read — a replay against the
+// committed head, a policy row against its newest record, a fetched drawer
+// against the chain — is only a judgement when both were read from ONE
+// database state. In autocommit every statement is its own WAL read
+// snapshot, so a legitimate commit landing between two of them made the
+// comparison disagree with itself: measured, 64 false tampering refusals and
+// 41 `verify` runs reporting a broken chain in six seconds beside an ordinary
+// `trust set` loop, with nothing tampered. The remedy the refusal names is to
+// restore a backup, i.e. to throw away every write since it.
+//
+// So every judgement reads inside a [`Snapshot`], and the two readers the
+// judgements rest on — [`replay`] and [`prefix`] — REQUIRE one: the tree's
+// required-witness shape (`Screen`, `Read`, `LabelUse`), so a new walk that
+// opened no snapshot does not compile. Only three things can mint one: the
+// helper [`snapshot`], and the two write-lock guards (`WriteLock`, the
+// rotation's `ExclusiveHold`), whose transactions are already one state.
+
+/// Where a [`Snapshot`] came from — which decides whether the label guard may
+/// REMEMBER what it read through it, and whether it may replay inside it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Origin {
+    /// Opened by [`snapshot`] in autocommit, or nested inside one this handle
+    /// opened: a read transaction the handle owns and ends before any write.
+    /// The only origin whose observations the guard keeps — a pin taken
+    /// inside a transaction that later rolls back would name a `seq` that
+    /// `AUTOINCREMENT` reuses, and the next read would refuse "a different
+    /// tag at seq".
+    Opened,
+    /// A caller's transaction the helper found open and ran inside. Its reads
+    /// are one state; whether anything else can commit meanwhile is unknown,
+    /// so the manifest anchor cannot be compared inside it.
+    Inline,
+    /// A write-lock guard's transaction: nothing else commits while it is
+    /// held, so the anchor read inside it is the anchor the rows answer to.
+    WriteLocked,
+}
+
+/// **Proof that the reads made through it come from ONE database state**
+/// (ROADMAP O253). Every statement run on [`conn`](Self::conn) while it lives
+/// sees the same committed state, because the connection is inside one
+/// transaction for the whole of its life.
+pub(crate) struct Snapshot<'c> {
+    conn: &'c Connection,
+    origin: Origin,
+    data_version: i64,
+}
+
+impl<'c> Snapshot<'c> {
+    /// The connection, for the reads a judgement makes beside the replay —
+    /// every one of them inside this snapshot.
+    pub(crate) fn conn(&self) -> &'c Connection {
+        self.conn
+    }
+
+    /// Where it came from.
+    pub(crate) fn origin(&self) -> Origin {
+        self.origin
+    }
+
+    /// The `data_version` of the state it reads (P7).
+    pub(crate) fn data_version(&self) -> i64 {
+        self.data_version
+    }
+
+    /// A snapshot over a transaction a WRITE-LOCK GUARD holds. Called by
+    /// `WriteLock::snapshot` and `ExclusiveHold::snapshot` and nowhere else,
+    /// which a source gate counts: a caller that passed a connection in
+    /// autocommit here would be asserting a lock it does not hold.
+    pub(crate) fn write_locked(conn: &'c Connection) -> Result<Self, StoreError> {
+        if conn.is_autocommit() {
+            return Err(StoreError::Invalid(
+                "a write-locked snapshot was asked for on a connection holding no \
+                 transaction (ROADMAP O253)"
+                    .into(),
+            ));
+        }
+        Ok(Self {
+            conn,
+            origin: Origin::WriteLocked,
+            data_version: data_version(conn)?,
+        })
+    }
+}
+
+/// **Run `body` inside ONE read snapshot of `conn`** (ROADMAP O253).
+///
+/// In autocommit it sets `PRAGMA query_only = ON` (restoring the previous
+/// value after, so a read-only handle stays on), begins a DEFERRED
+/// transaction, reads `data_version` as its first statement — which pins the
+/// snapshot and is the cookie the guard compares — runs `body`, and COMMITS
+/// on Ok and on Err alike: a read transaction has nothing to keep or undo, so
+/// the two are the same. `query_only` rather than a changed-rows tripwire with
+/// a rollback, which was REFUTED as a silent-damage path of its own:
+/// `kg_secret`'s first-use `INSERT` caches the secret before its write
+/// commits, so a rollback would leave graph rows blinded with a key that
+/// exists nowhere. Under `query_only` that write FAILS, before anything is
+/// cached.
+///
+/// Inside a snapshot this handle already opened (`owned > 0`) it runs `body`
+/// in that one. Inside any other transaction — a caller's write, a rotation —
+/// it runs `body` INLINE, and the snapshot says so: those reads are one state
+/// too, and the guard decides what it may do there.
+///
+/// `owned` is the handle's count of snapshots it opened, COUNTED rather than
+/// inferred: `is_autocommit()` cannot tell this helper's transaction from a
+/// caller's.
+pub(crate) fn snapshot<T>(
+    conn: &Connection,
+    owned: &std::cell::Cell<u32>,
+    body: impl FnOnce(&Snapshot<'_>) -> Result<T, StoreError>,
+) -> Result<T, StoreError> {
+    if owned.get() > 0 || !conn.is_autocommit() {
+        let origin = if owned.get() > 0 {
+            Origin::Opened
+        } else {
+            Origin::Inline
+        };
+        return body(&Snapshot {
+            conn,
+            origin,
+            data_version: data_version(conn)?,
+        });
+    }
+    let open = OpenSnapshot::begin(conn, owned)?;
+    let out = data_version(conn).and_then(|data_version| {
+        body(&Snapshot {
+            conn,
+            origin: Origin::Opened,
+            data_version,
+        })
+    });
+    let ended = open.end();
+    // The body's own error outranks one from ending a read transaction.
+    let value = out?;
+    ended?;
+    Ok(value)
+}
+
+/// The helper's read transaction, ended on every exit — a panic in `body`
+/// included, or a long-lived handle would be left inside a transaction under
+/// `query_only`, refusing every later write.
+struct OpenSnapshot<'c> {
+    conn: &'c Connection,
+    owned: &'c std::cell::Cell<u32>,
+    restore_query_only: bool,
+    live: bool,
+}
+
+impl<'c> OpenSnapshot<'c> {
+    fn begin(conn: &'c Connection, owned: &'c std::cell::Cell<u32>) -> Result<Self, StoreError> {
+        let was_on: i64 = conn.query_row("PRAGMA query_only", [], |r| r.get(0))?;
+        if was_on == 0 {
+            conn.pragma_update(None, "query_only", "ON")?;
+        }
+        if let Err(e) = conn.execute_batch("BEGIN DEFERRED") {
+            if was_on == 0 {
+                let _ = conn.pragma_update(None, "query_only", "OFF");
+            }
+            return Err(e.into());
+        }
+        owned.set(owned.get() + 1);
+        Ok(Self {
+            conn,
+            owned,
+            restore_query_only: was_on == 0,
+            live: true,
+        })
+    }
+
+    fn end(mut self) -> Result<(), StoreError> {
+        self.live = false;
+        self.finish()
+    }
+
+    fn finish(&self) -> Result<(), StoreError> {
+        self.owned.set(self.owned.get() - 1);
+        let ended = self.conn.execute_batch("COMMIT").map_err(|e| {
+            let _ = self.conn.execute_batch("ROLLBACK");
+            StoreError::from(e)
+        });
+        let restored = if self.restore_query_only {
+            self.conn
+                .pragma_update(None, "query_only", "OFF")
+                .map_err(StoreError::from)
+        } else {
+            Ok(())
+        };
+        ended.and(restored)
+    }
+}
+
+impl Drop for OpenSnapshot<'_> {
+    fn drop(&mut self) {
+        if self.live {
+            self.live = false;
+            let _ = self.finish();
+        }
+    }
+}
+
+/// A cached or fresh verdict, refused unless it authenticates the labels.
+fn refuse_unless_authentic(
+    (chain_ok, labels): (bool, crate::LabelCommitment),
+) -> Result<(), StoreError> {
+    if chain_ok && labels != crate::LabelCommitment::Mismatch {
+        return Ok(());
+    }
+    let why = if !chain_ok {
+        "its records do not replay to the committed head"
+    } else {
+        "the labels it held when it switched no longer match their commitment"
+    };
+    Err(StoreError::IntegrityFinding(format!(
+        "the audit chain does not authenticate its own labels ({why}), so what it \
+         says about a record decides nothing — run `undercroft verify`, then \
+         restore a backup that verifies"
+    )))
+}
+
 impl crate::VaultStore {
+    /// [`snapshot`] on this handle's connection, counted on this handle — the
+    /// one way the store opens a read snapshot (ROADMAP O253).
+    pub(crate) fn snapshot<T>(
+        &self,
+        body: impl FnOnce(&Snapshot<'_>) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        snapshot(&self.conn, &self.owned_snapshots, body)
+    }
+
+    /// The chain's two verdicts — `(chain_ok, label_commitment)` — from ONE
+    /// replay inside `snap`, against the committed head read in the SAME
+    /// snapshot (ROADMAP O233, O253). `anchor` is read by the caller BEFORE
+    /// `snap` was opened, or under a write lock.
+    ///
+    /// `verify` reports them; the guard and the forget path's
+    /// recorded-evidence verdict refuse without them. Besides a wrong head the
+    /// replay can find a regime and a head key that disagree, and a row whose
+    /// label, time or tag is not stored as the type every writer binds; each
+    /// is sorted by which side of the switch it sits on (at or after it, the
+    /// CHAIN's finding, which a rotation would re-step and so must refuse;
+    /// before it, the label commitment's, which a rotation preserves
+    /// verbatim — O232 ruling 1). The arithmetic is [`verdict`]'s, shared with
+    /// the open's `reconcile_chain` (ROADMAP O251).
+    ///
+    /// It was five statements and a disk read in five snapshots — the regime
+    /// read twice, once inside the replay and once inside `head_state`, so
+    /// another handle's version-2 switch between them stepped the commitment
+    /// row under version 1 and reported a broken chain.
+    pub(crate) fn chain_verdict_in(
+        &self,
+        snap: &Snapshot<'_>,
+        anchor: &str,
+    ) -> Result<(bool, crate::LabelCommitment), StoreError> {
+        let replayed = replay(snap, &self.vault, Some(anchor))?;
+        let head = head_state(snap.conn())?;
+        Ok(verdict(&replayed, &head))
+    }
+
     /// **The door every reader that DECIDES from an audit label goes
     /// through** (ROADMAP O237): the chain must replay to its committed head
     /// under this handle's own keys, and its labels must still match the
@@ -957,68 +1238,152 @@ impl crate::VaultStore {
     /// documented contract change, i.e. MAJOR. Such a vault gets the
     /// append-only invariant and nothing more, which is stated rather than
     /// implied.
-    pub(crate) fn require_authenticated_labels(&self) -> Result<(), StoreError> {
-        // The cookie is read BEFORE the replay, and that order is the safe
-        // one. A commit landing between the two makes the cached pair
-        // (older cookie, newer verdict), so the next call sees a moved
-        // cookie and replays again — a wasted replay, never a skipped one.
-        // Reading it after would cache (newer cookie, older verdict) and
-        // skip the replay that the commit called for.
-        let version = data_version(&self.conn)?;
-        let cached = {
-            let guard = self.labels.borrow();
-            match &guard.replayed {
-                Some(r) if r.data_version == version => Some((r.chain_ok, r.labels)),
-                _ => None,
-            }
-        };
-        let (chain_ok, labels) = match cached {
-            Some(v) => v,
-            None => {
-                // Outside the borrow: the replay is the expensive call and
-                // holding a `RefCell` across it would be a re-entrancy trap
-                // for the next reader added here.
-                let (chain_ok, labels) = self.chain_verdict()?;
-                let mut guard = self.labels.borrow_mut();
-                guard.replayed = Some(Replayed {
-                    data_version: version,
-                    chain_ok,
-                    labels,
-                });
-                guard.replays += 1;
-                // The durable half (ROADMAP O250), OUTSIDE the borrow for
-                // the reason stated above it: nothing in `undercroft-obs`
-                // reaches back into this store today, and the next person to
-                // add a counter here should not have to prove that again.
-                drop(guard);
-                undercroft_obs::chain_replayed();
-                (chain_ok, labels)
-            }
-        };
-        if chain_ok && labels != crate::LabelCommitment::Mismatch {
-            return Ok(());
+    ///
+    /// **The DOOR (ROADMAP O253): run `body` inside one snapshot the guard
+    /// has authenticated.** Every reader that decides from a label and every
+    /// read that returns content goes through here, and `body` makes ALL of
+    /// its reads — the rows it acts on and the chain evidence it compares them
+    /// with — inside that snapshot. It used to be a check made BEFORE the
+    /// reader's own statements, each its own snapshot, so a legitimate commit
+    /// between two of them read as tampering, and a verdict taken in one state
+    /// licensed rows read in another.
+    ///
+    /// Two attempts, by construction. The first opens a snapshot and reads
+    /// its cookie inside it (P7: constant within the transaction, and so the
+    /// version of exactly the rows the body reads — the ordering argument's
+    /// goal met strictly, where reading it before the snapshot opened only
+    /// met it probably). On a HIT it checks the cached verdict and runs the
+    /// body in that same snapshot, which costs nothing but the cookie. On a
+    /// MISS it ENDS the snapshot, reads the manifest anchor from disk, opens a
+    /// second one and replays there; the second attempt never consults the
+    /// cache. **The anchor is read BEFORE the snapshot, never inside it**: an
+    /// anchor is written only after its commit, so one read first is never
+    /// newer than the rows, while one read after the snapshot pinned can name
+    /// a head a writer committed and anchored since — a false `chain_ok =
+    /// false` over the whole replay window. All three lenses of the ruling
+    /// found that independently; the brief had omitted it.
+    ///
+    /// Nested inside a snapshot this handle opened, or inside a caller's
+    /// transaction, the snapshot is already pinned and the guard can only
+    /// CHECK it: a hit runs the body; a miss replays only under a write lock
+    /// ([`Origin::WriteLocked`]) and is otherwise an error naming the call
+    /// site — the survey the ruling asked for found no such caller.
+    #[track_caller]
+    pub(crate) fn guarded<T>(
+        &self,
+        body: impl FnOnce(&Snapshot<'_>) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        let site = std::panic::Location::caller();
+        let mut body = Some(body);
+        let mut run = |snap: &Snapshot<'_>| (body.take().expect("the body runs once"))(snap);
+        if self.owned_snapshots.get() > 0 || !self.conn.is_autocommit() {
+            return self.snapshot(|snap| {
+                self.labels_authenticated_at(snap, site)?;
+                run(snap)
+            });
         }
-        let why = if !chain_ok {
-            "its records do not replay to the committed head"
-        } else {
-            "the labels it held when it switched no longer match their commitment"
-        };
-        Err(StoreError::IntegrityFinding(format!(
-            "the audit chain does not authenticate its own labels ({why}), so what it \
-             says about a record decides nothing — run `undercroft verify`, then \
-             restore a backup that verifies"
-        )))
+        let first = self.snapshot(|snap| match self.cached_verdict(snap.data_version()) {
+            Some(verdict) => {
+                refuse_unless_authentic(verdict)?;
+                run(snap).map(Some)
+            }
+            None => Ok(None),
+        })?;
+        if let Some(done) = first {
+            return Ok(done);
+        }
+        let anchor = self.vault.anchored_head()?;
+        self.snapshot(|snap| {
+            let verdict = self.chain_verdict_in(snap, &anchor)?;
+            self.remember_replay(snap, verdict);
+            refuse_unless_authentic(verdict)?;
+            run(snap)
+        })
     }
 
-    /// [`newest_record`] through the handle's append-only memory.
+    /// **The check a deciding reader makes inside the snapshot it was
+    /// handed** (ROADMAP O253): the verdict the door established for exactly
+    /// this state, or — under a write lock only — a replay made in place.
+    /// Every `LabelUse::Decide` reader and every returning read's comparison
+    /// calls it, so a reader handed a snapshot no guarded door authenticated
+    /// fails loudly instead of deciding.
+    #[track_caller]
+    pub(crate) fn labels_authenticated(&self, snap: &Snapshot<'_>) -> Result<(), StoreError> {
+        self.labels_authenticated_at(snap, std::panic::Location::caller())
+    }
+
+    fn labels_authenticated_at(
+        &self,
+        snap: &Snapshot<'_>,
+        site: &std::panic::Location<'_>,
+    ) -> Result<(), StoreError> {
+        if let Some(verdict) = self.cached_verdict(snap.data_version()) {
+            return refuse_unless_authentic(verdict);
+        }
+        match snap.origin() {
+            // Nothing else commits under the lock, so the anchor read here is
+            // the anchor these rows answer to. Counted — it walks the whole
+            // table — and never cached: the lock's transaction may still roll
+            // back.
+            Origin::WriteLocked => {
+                let anchor = self.vault.anchored_head()?;
+                let verdict = self.chain_verdict_in(snap, &anchor)?;
+                self.count_replay();
+                refuse_unless_authentic(verdict)
+            }
+            Origin::Opened | Origin::Inline => Err(StoreError::Invalid(format!(
+                "a label decision at {site} was reached inside a snapshot no guarded door \
+                 authenticated (ROADMAP O253): it would compare the anchor with rows it did \
+                 not read first. This is a defect in the caller, not in the vault"
+            ))),
+        }
+    }
+
+    /// The verdict cached for exactly this cookie, if any.
+    fn cached_verdict(&self, data_version: i64) -> Option<(bool, crate::LabelCommitment)> {
+        match &self.labels.borrow().replayed {
+            Some(r) if r.data_version == data_version => Some((r.chain_ok, r.labels)),
+            _ => None,
+        }
+    }
+
+    /// Keep a replay's verdict for the state it describes — only from a
+    /// snapshot this handle opened, whose cookie IS that state (P7).
+    fn remember_replay(
+        &self,
+        snap: &Snapshot<'_>,
+        (chain_ok, labels): (bool, crate::LabelCommitment),
+    ) {
+        if snap.origin() == Origin::Opened {
+            self.labels.borrow_mut().replayed = Some(Replayed {
+                data_version: snap.data_version(),
+                chain_ok,
+                labels,
+            });
+        }
+        self.count_replay();
+    }
+
+    fn count_replay(&self) {
+        self.labels.borrow_mut().replays += 1;
+        // The durable half (ROADMAP O250), OUTSIDE the borrow: nothing in
+        // `undercroft-obs` reaches back into this store today, and the next
+        // person to add a counter here should not have to prove that again.
+        undercroft_obs::chain_replayed();
+    }
+
+    /// [`newest_record`] through the handle's append-only memory, read in
+    /// `snap`. A `Decide` read is checked against every label this handle
+    /// pinned, and pins what it found only from a snapshot the helper opened.
     pub(crate) fn newest_record(
         &self,
+        snap: &Snapshot<'_>,
         record_id: &str,
         on: LabelUse,
     ) -> Result<Option<ChainRecord>, StoreError> {
-        let found = newest_record(&self.conn, record_id)?;
+        let found = newest_record(snap.conn(), record_id)?;
         if on == LabelUse::Decide {
-            self.hold_append_only(record_id, found.as_ref())?;
+            self.hold_append_only(snap, record_id, found.as_ref())?;
         }
         Ok(found)
     }
@@ -1027,12 +1392,13 @@ impl crate::VaultStore {
     /// namespace and no longer sees was taken out of it.
     pub(crate) fn chain_keys(
         &self,
+        snap: &Snapshot<'_>,
         ns: Namespace,
         on: LabelUse,
     ) -> Result<Vec<String>, StoreError> {
-        let found = chain_keys(&self.conn, ns)?;
+        let found = chain_keys(snap.conn(), ns)?;
         if on == LabelUse::Decide {
-            self.hold_keys_append_only(ns, &found)?;
+            self.hold_keys_append_only(snap, ns, &found)?;
         }
         Ok(found)
     }
@@ -1071,9 +1437,13 @@ impl crate::VaultStore {
     /// here, because every outcome it would prevent is reachable at equal
     /// cost by the edits ROADMAP O252 files; it is one component of that
     /// entry's fix.
-    pub(crate) fn rotation_boundary(&self, on: LabelUse) -> Result<Option<i64>, StoreError> {
+    pub(crate) fn rotation_boundary(
+        &self,
+        snap: &Snapshot<'_>,
+        on: LabelUse,
+    ) -> Result<Option<i64>, StoreError> {
         let label = rotation_label(&self.vault);
-        Ok(self.newest_record(&label, on)?.map(|r| r.seq))
+        Ok(self.newest_record(snap, &label, on)?.map(|r| r.seq))
     }
 
     /// Install a verdict the OPEN's replay produced, so the first guarded
@@ -1115,8 +1485,13 @@ impl crate::VaultStore {
     }
 
     /// The invariant for one label.
+    ///
+    /// Checked against every pin on any snapshot; a pin is RECORDED only from
+    /// one the helper opened (ROADMAP O253): inside a caller's transaction the
+    /// row read may yet roll back, and `AUTOINCREMENT` reuses its `seq`.
     fn hold_append_only(
         &self,
+        snap: &Snapshot<'_>,
         record_id: &str,
         found: Option<&ChainRecord>,
     ) -> Result<(), StoreError> {
@@ -1139,6 +1514,9 @@ impl crate::VaultStore {
         if let Some(what) = complaint {
             return Err(append_only_finding(record_id, &what));
         }
+        if snap.origin() != Origin::Opened {
+            return Ok(());
+        }
         if let Some(now) = found {
             guard.newest.insert(
                 record_id.to_string(),
@@ -1152,7 +1530,12 @@ impl crate::VaultStore {
     }
 
     /// The invariant for one namespace's label set.
-    fn hold_keys_append_only(&self, ns: Namespace, found: &[String]) -> Result<(), StoreError> {
+    fn hold_keys_append_only(
+        &self,
+        snap: &Snapshot<'_>,
+        ns: Namespace,
+        found: &[String],
+    ) -> Result<(), StoreError> {
         let mut guard = self.labels.borrow_mut();
         let seen = guard.keys.entry(ns.prefix()).or_default();
         if let Some(gone) = seen.iter().find(|k| !found.contains(k)) {
@@ -1162,7 +1545,9 @@ impl crate::VaultStore {
                 "this handle read it in the chain and the chain no longer carries it",
             ));
         }
-        seen.extend(found.iter().cloned());
+        if snap.origin() == Origin::Opened {
+            seen.extend(found.iter().cloned());
+        }
         Ok(())
     }
 }
@@ -1311,8 +1696,9 @@ mod tests {
 
     /// The production prefix digest over the first `n` rows (ROADMAP O245),
     /// as the witness binds it.
-    fn prefix_digest(conn: &Connection, n: usize) -> [u8; 32] {
-        prefix(conn, Some(n as u64))
+    fn prefix_digest(store: &VaultStore, n: usize) -> [u8; 32] {
+        store
+            .snapshot(|s| prefix(s, Some(n as u64)))
             .unwrap()
             .at_digest
             .expect("the fixture holds at least n rows")
@@ -1334,31 +1720,35 @@ mod tests {
         for i in 0..3 {
             store.upsert(&drawer(&format!("fact {i}"), i)).unwrap();
         }
-        let before = replay(&store.conn, &store.vault, None).unwrap();
+        let before = store.snapshot(|s| replay(s, &store.vault, None)).unwrap();
         let head_n = before.head.clone();
         let n = before.rows;
-        let digest_n = prefix_digest(&store.conn, n);
+        let digest_n = prefix_digest(&store, n);
         // PREMISE: the head is a prefix point of its own chain before the
         // rotation, so a `!anchor_seen` afterwards is the rotation's doing.
-        let seen = replay(&store.conn, &store.vault, Some(&head_n)).unwrap();
+        let seen = store
+            .snapshot(|s| replay(s, &store.vault, Some(&head_n)))
+            .unwrap();
         assert!(seen.anchor_seen, "premise: the head is on its own chain");
         assert_eq!(seen.behind_by, 0, "premise: it is the newest head");
 
         rotate(&dir, &mut store).unwrap();
 
-        let after = replay(&store.conn, &store.vault, Some(&head_n)).unwrap();
+        let after = store
+            .snapshot(|s| replay(s, &store.vault, Some(&head_n)))
+            .unwrap();
         assert_eq!(after.rows, n + 1, "the rotation appended its own record");
         assert!(
             !after.anchor_seen,
             "P1: a pre-rotation head is unreachable after a rotation (O13's shape)"
         );
         assert_eq!(
-            prefix_digest(&store.conn, n),
+            prefix_digest(&store, n),
             digest_n,
             "P1: the unkeyed prefix digest is rotation-stable"
         );
         assert_ne!(
-            prefix_digest(&store.conn, n + 1),
+            prefix_digest(&store, n + 1),
             digest_n,
             "P1: the digest is count-bound — one more row is a different digest"
         );
@@ -1374,7 +1764,7 @@ mod tests {
                 [],
             )
             .unwrap();
-        let planted = replay(&store.conn, &store.vault, None).unwrap();
+        let planted = store.snapshot(|s| replay(s, &store.vault, None)).unwrap();
         assert_eq!(planted.rows, n + 2, "P4: the replay counts the planted row");
         assert_eq!(
             writes(&store.conn).unwrap(),
@@ -1783,14 +2173,49 @@ mod tests {
         );
     }
 
+    /// The files `lib.rs` declares as `#[cfg(test)] mod name;` — a WHOLE
+    /// file of test code, which a split at `mod tests` cannot see. Derived
+    /// from `lib.rs` rather than listed, so a new one is skipped the day it
+    /// is declared (ROADMAP O253 added the second: its interleaving gate
+    /// steps the chain itself, independently of the code it checks).
+    fn test_only_files() -> std::collections::BTreeSet<String> {
+        let lib = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"),
+        )
+        .unwrap();
+        let mut out = std::collections::BTreeSet::new();
+        let mut previous = "";
+        for line in lib.lines() {
+            let t = line.trim();
+            if previous == "#[cfg(test)]" {
+                if let Some(name) = t.strip_prefix("mod ").and_then(|r| r.strip_suffix(';')) {
+                    out.insert(format!("{name}.rs"));
+                }
+            }
+            if !t.is_empty() {
+                previous = t;
+            }
+        }
+        out
+    }
+
     /// Every `.rs` file of this crate, cut at its test module, with comment
-    /// lines dropped: prose naming a statement is not the statement.
+    /// lines dropped: prose naming a statement is not the statement. A file
+    /// that IS a test module is skipped whole.
     fn production_lines() -> Vec<(String, usize, String)> {
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let skip = test_only_files();
+        // PREMISE: the reader finds the modules it exists to skip.
+        assert!(
+            skip.contains("anchor_tests.rs") && skip.contains("snapshot_tests.rs"),
+            "premise: lib.rs declares its whole-file test modules: {skip:?}"
+        );
         let mut out = Vec::new();
         for entry in std::fs::read_dir(&src).expect("the crate's own sources are readable") {
             let path = entry.unwrap().path();
-            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            if path.extension().and_then(|e| e.to_str()) != Some("rs")
+                || skip.contains(&path.file_name().unwrap().to_string_lossy().to_string())
+            {
                 continue;
             }
             let text = std::fs::read_to_string(&path).unwrap();
@@ -2046,8 +2471,8 @@ mod tests {
     /// **ROADMAP O251: an open that already replayed hands its verdict
     /// forward, so the first guarded read runs no SECOND replay.**
     ///
-    /// `reconcile_chain` and `chain_verdict` make the same `chain::replay`
-    /// call over the same rows, and until O251 the second one was computed
+    /// `reconcile_chain` and the guard's `chain_verdict_in` make the same
+    /// `chain::replay` call over the same rows, and until O251 the second one was computed
     /// from scratch. It costs nothing in the steady state, because
     /// `reconcile_chain` short-circuits when the anchor equals the committed
     /// head and never replays at all — and one whole replay (88 ms at
@@ -2319,7 +2744,9 @@ mod tests {
             .unwrap();
         drop(other);
         assert_eq!(
-            store.rotation_boundary(LabelUse::Report).unwrap(),
+            store
+                .snapshot(|snap| store.rotation_boundary(snap, LabelUse::Report))
+                .unwrap(),
             None,
             "ROADMAP O239: a foreign keycheck is not this handle's rotation"
         );
@@ -2461,7 +2888,9 @@ mod tests {
             // just the same.
             assert_eq!(records_under(&store.conn, "retention/scratch"), 2);
             assert_eq!(
-                store.rotation_boundary(LabelUse::Report).unwrap(),
+                store
+                    .snapshot(|snap| store.rotation_boundary(snap, LabelUse::Report))
+                    .unwrap(),
                 Some(planted),
                 "rotated={rotated}: the equality accepts a copy"
             );
@@ -2509,7 +2938,9 @@ mod tests {
             let old = a_replayable_policy(&mut store);
             store.retention_policies().unwrap();
             let (replays, cookie) = (store.replays(), data_version(&store.conn).unwrap());
-            let boundary = store.rotation_boundary(LabelUse::Report).unwrap();
+            let boundary = store
+                .snapshot(|snap| store.rotation_boundary(snap, LabelUse::Report))
+                .unwrap();
             store
                 .conn
                 .execute(
@@ -2525,7 +2956,9 @@ mod tests {
                 "premise: the cookie did not move"
             );
             assert_eq!(
-                store.rotation_boundary(LabelUse::Report).unwrap(),
+                store
+                    .snapshot(|snap| store.rotation_boundary(snap, LabelUse::Report))
+                    .unwrap(),
                 boundary,
                 "rotated={rotated}: a foreign label moves nothing"
             );

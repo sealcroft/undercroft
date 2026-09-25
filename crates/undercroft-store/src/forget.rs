@@ -393,7 +393,11 @@ impl VaultStore {
         // trade the erasure promise for availability, the wrong way round
         // (O171 item (c) / O206) — and is closed instead by tagging the
         // `meta` row it reads.
-        self.require_authenticated_labels()?;
+        //
+        // The guard ONLY (ROADMAP O253's ruling): a door with nothing inside
+        // its snapshot. The decision and the destruction below are separate
+        // steps outside the write lock, which is ROADMAP O255's.
+        self.guarded(|_| Ok(()))?;
         // Existence + fingerprints first, so a bad id aborts before any
         // deletion. The pending-evidence fence is checked here too, for the
         // same reason: the choke point would catch it, but only after the
@@ -691,19 +695,25 @@ impl VaultStore {
             // or whose pre-switch labels no longer match their commitment,
             // cannot vouch for anything — refused as an integrity verdict,
             // naming `verify`, rather than reported as `Recorded`.
-            let (chain_ok, labels) = self.chain_verdict()?;
-            if !chain_ok || labels == crate::LabelCommitment::Mismatch {
-                return Err(StoreError::IntegrityFinding(
-                    "the audit trail this attestation would be matched against does not \
-                     verify (its chain does not replay, or its labels no longer match their \
-                     commitment), so it cannot vouch for the recorded tombstones — run \
-                     `undercroft verify`"
-                        .into(),
-                ));
-            }
-            AttestationVerdict::Recorded {
-                rotations_since: self.attested_run_in_audit(att, &tags)?,
-            }
+            //
+            // The verdict and the run it licenses are read in ONE snapshot,
+            // the anchor before it (ROADMAP O253): a verdict from one state
+            // must not vouch for rows read in another.
+            let anchor = self.vault.anchored_head()?;
+            let rotations_since = self.snapshot(|snap| {
+                let (chain_ok, labels) = self.chain_verdict_in(snap, &anchor)?;
+                if !chain_ok || labels == crate::LabelCommitment::Mismatch {
+                    return Err(StoreError::IntegrityFinding(
+                        "the audit trail this attestation would be matched against does not \
+                         verify (its chain does not replay, or its labels no longer match \
+                         their commitment), so it cannot vouch for the recorded tombstones \
+                         — run `undercroft verify`"
+                            .into(),
+                    ));
+                }
+                self.attested_run_in_audit(att, &tags)
+            })?;
+            AttestationVerdict::Recorded { rotations_since }
         };
 
         // Required by BOTH verdicts: this vault named a tombstone for every

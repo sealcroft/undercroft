@@ -2,7 +2,7 @@
 
 ## 1.7.0 — unreleased
 
-MINOR: one new capability, backward compatible, and five fixes. The witness
+MINOR: one new capability, backward compatible, and six fixes. The witness
 commands and routes are new; no default moves and no declaration can stop a
 start-up. Two fixes change what a deployment must do: every process writing a
 vault must run the same build, and a server whose vault another process
@@ -213,6 +213,79 @@ a rotation is told the vault is held instead of falling back to `immutable=1`,
 which read the database without its WAL and refused with a false "schema
 predates this build". **A rotation now refuses where it used to run and
 destroy the vault** — `UPGRADING.md`.
+
+### A concurrent writer no longer makes the vault look tampered (O253)
+
+Every integrity judgement compares two things it read — a chain replay with
+the committed head, a policy row with its newest record, a fetched drawer
+with the chain — and each was read as its own SQLite statement, which in WAL
+mode is its own snapshot. A legitimate commit from another handle or process
+landing between two of them made the comparison disagree with itself: the
+label guard refused ordinary reads as TAMPERING, `verify` reported a broken
+chain, `vault anchor` failed on the audit-chain head, and the refusals all
+named the same remedy — restore a backup, i.e. throw away every write since
+it. The deployment is ordinary: `mine` or a daemon beside a server, a
+`trust set` against one, two servers on one vault. Nothing was tampered with.
+
+Measured on `1b9746e` by a new interleaving gate that commits from a second
+handle at every step of a door (SQLite's progress handler, a test-only
+feature): **478 false refusals across seven deciding doors**, 11 `verify`
+runs reporting `chain_ok = false`, 4 false audit-chain-head failures from the
+anchor reconcile, 87 of 123 witness documents whose `rows` and `head`
+described different states, and — the one that is not a false alarm but a
+missed one — a replayed drawer SERVED by `get` 10 times, because a
+correction landing between the read and its check made the check look at the
+corrected row. After: zero on every arm.
+
+**The shape, as ruled.** `chain::replay` and `chain::prefix` now REQUIRE a
+`Snapshot` value that only one helper and the two write-lock guards can mint,
+so a new walk that opened no snapshot does not compile. The helper sets
+`query_only`, begins a read transaction, reads the change cookie as its first
+statement and ends on every exit. Every deciding read goes through one door
+that reads the cookie INSIDE the snapshot, runs its body there on a cached
+verdict, and on a miss ends the snapshot, reads the manifest anchor, and
+replays in a second one. **The anchor is read before the snapshot
+everywhere**, because read after it pins, a writer that commits and anchors
+in between names a head the rows never produced — a counterfactual that moves
+it produces false refusals at exactly the pinning statement. `verify`,
+`reconcile_chain`, the witness, the forget attestation's recorded verdict,
+the policy scans, and the drawer and graph reads each read in one snapshot;
+the read-audit record is written after it ends.
+
+**The open's two unexplained failures were the same class** (O254's gate
+reported them and judged neither): an hmac-only vault's FTS check compared
+two row counts read in two snapshots, so an open beside a writer found a
+drawer committed and not yet indexed and rebuilt the index in autocommit
+while that writer inserted the same row — `constraint failed`, and
+`database is locked` for an open whose rebuild waited out the busy timeout.
+The judgement is now one snapshot, the rebuild runs under the write lock and
+re-judges there (its doc said "in one transaction" and took none), and a lock
+still busy after the timeout leaves this handle without the prefilter rather
+than failing the open or serving a short index. O254's gate now asserts that
+no open fails at all.
+
+Two corrections, found here: the ruling's premise that `verify` reaches the
+graph secret's first-use write on a fresh writable vault does not hold —
+every writable open stores the secret — so the warm-up stays as the defensive
+shape and its test builds the one state that reaches it; and the threat
+model still called the shared anchor temp file a known defect after O254
+closed it.
+
+Cost at ~10⁵ sealed drawers, two binaries alternating: warm reads did not get
+slower (`get` 36 → 33 µs, a cached `wing_trusts` 15 → 12 µs, a full-scan search
+within noise), and a handle's first guarded read is about 9 ms slower, the
+second snapshot its miss path opens. `verify` holds one snapshot for its whole
+run, so a writer beside it grows the `-wal` for that long: 60 MB after 24
+back-to-back runs at 10⁵ beside 1,146 commits.
+
+Its soak found one more thing, which is not this fix's: with read-audit on, a
+returning read writes its record, and beside a writer committing in a tight
+loop between a third and nearly half of those records (34–43%) waited out the
+5 s busy timeout and were refused `database is locked` — the busy-handler starvation filed as O258,
+reported there with these figures.
+
+PATCH-class inside the unreleased 1.7.0: false integrity refusals removed,
+no documented contract moved, no `UPGRADING.md` entry.
 
 ## 1.6.1 — 2026-09-22
 

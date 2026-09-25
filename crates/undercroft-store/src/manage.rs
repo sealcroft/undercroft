@@ -650,10 +650,18 @@ impl VaultStore {
     /// wing's newest assignment, and an assignment whose row is gone, refuse
     /// here as well, and the trust floor, `recent`, `list_drawers` and
     /// `trust list` refuse with them, exactly as a flip already made them.
+    ///
+    /// A guarded door (ROADMAP O253): the rows and the records they are
+    /// judged against are read in ONE snapshot, which the door authenticated.
+    /// Read in several, a legitimate `trust set` from another handle made
+    /// this refuse as tampering — measured, 49 "does not replay" and 12
+    /// "assigned in the chain, row is gone" beside a writer.
     pub fn wing_trusts(&self) -> Result<Vec<(String, String)>, StoreError> {
-        let (rows, findings) = self.trust_policy_scan(crate::chain::LabelUse::Decide)?;
-        crate::retention::refuse_on_findings(&findings, |_| true)?;
-        Ok(rows)
+        self.guarded(|snap| {
+            let (rows, findings) = self.trust_policy_scan(snap, crate::chain::LabelUse::Decide)?;
+            crate::retention::refuse_on_findings(&findings, |_| true)?;
+            Ok(rows)
+        })
     }
 
     /// Resolve a trust floor into the clause the candidate machinery

@@ -221,7 +221,8 @@ undercroft serve-http --host 0.0.0.0 --port 8800
   `undercroft stats`, `undercroft_status` and `GET /v1/vaults/{id}/stats`.
   Since 1.7.0 (ROADMAP O246) a WRITABLE open reports one repair it made on
   the same list: a manifest anchor it found behind and fast-forwarded, with
-  how far behind — a crash is the ordinary cause, and a genuine older
+  how far behind — a crash and another writer committing while the handle
+  opened (ROADMAP O253) are the ordinary causes, and a genuine older
   `vault.json` restored beside a current database looks identical, so the
   line is evidence rather than an alarm.
   Two conditions **refuse** instead, both 409: a manifest whose `vault.db`

@@ -257,15 +257,18 @@ fn destruction_label_sql(spec: &Tagged, first_param: usize) -> (String, Vec<Stri
 impl VaultStore {
     /// Every row that is not the version the chain last recorded — the ninth
     /// verify leg (ROADMAP O234), sorted.
-    pub(crate) fn version_replay_drift(&self) -> Result<Vec<String>, StoreError> {
-        let boundary = self.version_boundary(LabelUse::Report)?;
+    pub(crate) fn version_replay_drift(
+        &self,
+        snap: &chain::Snapshot<'_>,
+    ) -> Result<Vec<String>, StoreError> {
+        let boundary = self.version_boundary(snap, LabelUse::Report)?;
         let mut out = Vec::new();
         for spec in TAGGED {
             if spec.versioned {
-                out.extend(self.superseded_rows(spec, boundary)?);
+                out.extend(self.superseded_rows(snap, spec, boundary)?);
             }
             if spec.destruction_infix.is_some() {
-                out.extend(self.resurrected_rows(spec)?);
+                out.extend(self.resurrected_rows(snap, spec)?);
             }
         }
         out.sort();
@@ -275,12 +278,16 @@ impl VaultStore {
     /// `max(the last rotation, the chain switch)`, or `None` on a chain that
     /// has not switched — see arm 1 in this module's own documentation for
     /// why the switch is half of it.
-    fn version_boundary(&self, on: LabelUse) -> Result<Option<i64>, StoreError> {
-        let switch = match chain::regime(&self.conn)? {
+    fn version_boundary(
+        &self,
+        snap: &chain::Snapshot<'_>,
+        on: LabelUse,
+    ) -> Result<Option<i64>, StoreError> {
+        let switch = match chain::regime(snap.conn())? {
             chain::Regime::V1 => return Ok(None),
             chain::Regime::V2 { switch_seq } => switch_seq,
         };
-        let rotate = self.rotation_boundary(on)?.unwrap_or(switch);
+        let rotate = self.rotation_boundary(snap, on)?.unwrap_or(switch);
         Ok(Some(switch.max(rotate)))
     }
 
@@ -304,6 +311,7 @@ impl VaultStore {
     /// naming it twice, once wrongly, is the thing to avoid.
     fn superseded_rows(
         &self,
+        snap: &chain::Snapshot<'_>,
         spec: &Tagged,
         boundary: Option<i64>,
     ) -> Result<Vec<String>, StoreError> {
@@ -326,7 +334,7 @@ impl VaultStore {
               ORDER BY t.id",
             table = spec.table,
         );
-        let mut stmt = self.conn.prepare(&sql)?;
+        let mut stmt = snap.conn().prepare(&sql)?;
         let ids: Vec<String> = stmt
             .query_map(rusqlite::params_from_iter(label_params.iter()), |r| {
                 r.get(0)
@@ -350,7 +358,11 @@ impl VaultStore {
     /// of one per row of the corpus. The labels come from every namespace
     /// [`Namespace::is_destruction`] admits, so a second destruction
     /// namespace is covered the day it is classified.
-    fn resurrected_rows(&self, spec: &Tagged) -> Result<Vec<String>, StoreError> {
+    fn resurrected_rows(
+        &self,
+        snap: &chain::Snapshot<'_>,
+        spec: &Tagged,
+    ) -> Result<Vec<String>, StoreError> {
         let infix = spec
             .destruction_infix
             .expect("only a table with a destruction path reaches here");
@@ -367,7 +379,7 @@ impl VaultStore {
             let (clause, ps) = chain::prefix_range(ns).clause(1);
             let sql =
                 format!("SELECT record_id, MAX(seq) FROM audit WHERE {clause} GROUP BY record_id");
-            let mut stmt = self.conn.prepare(&sql)?;
+            let mut stmt = snap.conn().prepare(&sql)?;
             let dead: Vec<(String, i64)> = stmt
                 .query_map(rusqlite::params_from_iter(ps.iter()), |r| {
                     Ok((r.get(0)?, r.get(1)?))
@@ -382,10 +394,10 @@ impl VaultStore {
                 let Some(id) = label.strip_prefix(&head) else {
                     continue;
                 };
-                if id.is_empty() || !self.row_exists(spec.table, id)? {
+                if id.is_empty() || !Self::row_exists(snap, spec.table, id)? {
                     continue;
                 }
-                let newest = self.newest_write_record(spec, id)?;
+                let newest = Self::newest_write_record(snap, spec, id)?;
                 let evidence = RowEvidence {
                     // Arm 3 does not read the tag; the row's presence is the
                     // whole claim.
@@ -437,13 +449,22 @@ impl VaultStore {
     /// of a walk that decoded every row would under-report the same way
     /// recording a door's count on a shared helper over-reports (ROADMAP
     /// O51).
+    ///
+    /// **The comparison only; the guard is the DOOR's** (ROADMAP O253). It
+    /// takes the door's snapshot, and the door fetches the rows it returns in
+    /// that same snapshot, so the rows and the records they are compared with
+    /// are one state — every chunk of a large consulted set included. It was
+    /// its own statements after the door's fetch, and a legitimate correction
+    /// landing between them made it compare the corrected row while the read
+    /// returned the replayed one. A door that returns nothing to a caller
+    /// never calls it: the engine's own lookups decide nothing from it.
     pub(crate) fn refuse_replayed(
         &self,
-        read: crate::Read,
+        snap: &chain::Snapshot<'_>,
         from: Consulted,
         ids: Option<&[String]>,
     ) -> Result<(), StoreError> {
-        if matches!(read, crate::Read::Internal(_)) || ids.is_some_and(<[String]>::is_empty) {
+        if ids.is_some_and(<[String]>::is_empty) {
             return Ok(());
         }
         // **This comparison is only as good as the labels it rests on**
@@ -462,7 +483,11 @@ impl VaultStore {
         // record — which the invariant refuses on a pinned policy label — is
         // unseen here, and the replayed drawer is served. Measured, and
         // pinned as a cost in `chain.rs`.
-        self.require_authenticated_labels()?;
+        //
+        // The DOOR authenticated this snapshot; this confirms the comparison
+        // was handed one that was, so it can never decide under an unguarded
+        // state (ROADMAP O253).
+        self.labels_authenticated(snap)?;
         // **A consulted set is not bounded by anything the caller controls,
         // and one `IN` list is.** An unscoped search on a vault with no
         // prefilter tier hydrates the WHOLE corpus, so this arrived as a 500
@@ -473,14 +498,14 @@ impl VaultStore {
         match ids {
             Some(ids) if ids.len() > REFUSAL_BATCH => {
                 for chunk in ids.chunks(REFUSAL_BATCH) {
-                    self.refuse_replayed(read, from, Some(chunk))?;
+                    self.refuse_replayed(snap, from, Some(chunk))?;
                 }
                 return Ok(());
             }
             _ => {}
         }
         let spec = from.spec();
-        let boundary = self.version_boundary(LabelUse::Decide)?;
+        let boundary = self.version_boundary(snap, LabelUse::Decide)?;
         let (labels, mut binds) = write_label_sql(spec, 1);
         let dead = destruction_label_sql(spec, 1 + binds.len());
         binds.extend(dead.1);
@@ -514,7 +539,7 @@ impl VaultStore {
             table = spec.table,
             dead_labels = dead.0,
         );
-        let mut stmt = self.conn.prepare(&sql)?;
+        let mut stmt = snap.conn().prepare(&sql)?;
         let found: Option<String> = stmt
             .query_map(rusqlite::params_from_iter(binds.iter()), |r| r.get(0))?
             .next()
@@ -531,8 +556,8 @@ impl VaultStore {
     }
 
     /// Whether the table still holds this id.
-    fn row_exists(&self, table: &str, id: &str) -> Result<bool, StoreError> {
-        let n: i64 = self.conn.query_row(
+    fn row_exists(snap: &chain::Snapshot<'_>, table: &str, id: &str) -> Result<bool, StoreError> {
+        let n: i64 = snap.conn().query_row(
             &format!("SELECT COUNT(*) FROM {table} WHERE id = ?1"),
             rusqlite::params![id],
             |r| r.get(0),
@@ -544,14 +569,14 @@ impl VaultStore {
     /// [`chain::newest_record`] per label, which is the one reader of what
     /// the trail says about a label.
     fn newest_write_record(
-        &self,
+        snap: &chain::Snapshot<'_>,
         spec: &Tagged,
         id: &str,
     ) -> Result<Option<ChainRecord>, StoreError> {
         let mut best: Option<ChainRecord> = None;
         for (ns, suffix) in spec.writes {
             let label = ns.record(&format!("{id}{suffix}"));
-            if let Some(rec) = chain::newest_record(&self.conn, &label)? {
+            if let Some(rec) = chain::newest_record(snap.conn(), &label)? {
                 if best.as_ref().is_none_or(|b| rec.seq > b.seq) {
                     best = Some(rec);
                 }
@@ -944,7 +969,11 @@ mod tests {
         restore_drawer(&s, &first.id, &before);
 
         // PREMISE: arm 1 is off, because there is no switch to bound it.
-        assert_eq!(s.version_boundary(LabelUse::Report).unwrap(), None);
+        assert_eq!(
+            s.snapshot(|snap| s.version_boundary(snap, LabelUse::Report))
+                .unwrap(),
+            None
+        );
         let r = s.verify().unwrap();
         assert_eq!(r.version_replay.len(), 1, "{:?}", r.version_replay);
         assert!(!r.ok());
@@ -1318,7 +1347,8 @@ mod tests {
             // — wider than the one row it can return, because its filter
             // rides clear columns.
             "lookup_canonical",
-            "recent",
+            // `recent`'s reads, inside its guarded snapshot (ROADMAP O253).
+            "recent_in",
             "search_inner",
         ]
         .iter()
@@ -1352,6 +1382,10 @@ mod tests {
                 // the verdict this unit adds a leg to.
                 "export_each",
                 "export_each_with_vectors",
+                // `get`'s row read (ROADMAP O253). `get` itself compares on a
+                // returning read, in the same guarded snapshot; the engine's
+                // own lookups reach it with no caller to return content to.
+                "fetch_verified",
                 // The verify and sweep walk. It IS the leg — refusing here
                 // would leave the check unable to report what it found.
                 "walk_covered",

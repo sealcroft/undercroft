@@ -31,6 +31,8 @@ mod replay;
 pub mod retention;
 mod rotate;
 mod rotate_pause;
+#[cfg(test)]
+mod snapshot_tests;
 pub mod witness;
 
 pub use admission::{DestinationState, PendingAdmission, QUARANTINE_WING};
@@ -823,6 +825,12 @@ impl<'a> WriteLock<'a> {
         self.committed = true;
         Ok(())
     }
+
+    /// The lock's transaction as a [`chain::Snapshot`] (ROADMAP O253): one
+    /// state nobody else can commit into while the guard lives.
+    pub(crate) fn snapshot(&self) -> Result<chain::Snapshot<'a>, StoreError> {
+        chain::Snapshot::write_locked(self.conn)
+    }
 }
 
 impl Drop for WriteLock<'_> {
@@ -919,6 +927,13 @@ impl<'a> ExclusiveHold<'a> {
                 Err(held_if_busy(e, ROTATION_HELD))
             }
         }
+    }
+
+    /// The held transaction as a [`chain::Snapshot`] (ROADMAP O253), for the
+    /// rotation's own checks and its re-fold: nothing else can even open the
+    /// vault while it is held.
+    pub(crate) fn snapshot(&self) -> Result<chain::Snapshot<'a>, StoreError> {
+        chain::Snapshot::write_locked(self.conn)
     }
 
     /// Commit the transaction. The exclusive lock is KEPT until the hold is
@@ -3165,6 +3180,12 @@ pub struct VaultStore {
     /// cached verdict that outlived the process would be a claim about a file
     /// somebody else has had since. See `chain::LabelGuard`.
     labels: std::cell::RefCell<crate::chain::LabelGuard>,
+    /// Read snapshots this handle has OPEN (ROADMAP O253) — 0, or 1 with any
+    /// nested judgement riding it. Counted rather than inferred, because
+    /// `is_autocommit()` cannot tell the snapshot helper's own transaction
+    /// from a caller's read or write, and the label guard may remember only
+    /// what it read inside one the helper opened.
+    owned_snapshots: std::cell::Cell<u32>,
     /// The verdict the OPEN's replay produced, offered to the label guard
     /// once the open has finished appending (ROADMAP O251). `None` whenever
     /// the open took `reconcile_chain`'s short-circuit and never replayed,
@@ -4026,7 +4047,13 @@ impl VaultStore {
             }
             RotationVerdict::Foreign => {
                 vault.take_pending();
-                note = Some(Self::settle_foreign_keycheck(conn, &vault, true)?);
+                // Judged in the lock's own transaction: the marker, the head
+                // and the rows it replays are one state (ROADMAP O253).
+                note = Some(Self::settle_foreign_keycheck(
+                    &lock.snapshot()?,
+                    &vault,
+                    true,
+                )?);
             }
         }
         // Every arm that could leave the marker other than this handle's has
@@ -4062,7 +4089,7 @@ impl VaultStore {
     ///   older generation, a lost promote, a database from another
     ///   generation.
     fn settle_foreign_keycheck(
-        conn: &Connection,
+        snap: &chain::Snapshot<'_>,
         vault: &Vault,
         writable: bool,
     ) -> Result<String, StoreError> {
@@ -4074,7 +4101,7 @@ impl VaultStore {
                     .into(),
             ));
         }
-        if !Self::chain_answers_to(conn, vault)? {
+        if !Self::chain_answers_to(snap, vault)? {
             return Err(StoreError::IntegrityFinding(
                 "the database's key-generation marker names another generation, vault.json \
                  names this one, and the audit chain does not replay under this one's keys: \
@@ -4103,7 +4130,13 @@ impl VaultStore {
     /// from another generation cannot pass. A vault with no chain yet has
     /// nothing keyed to contradict it, and every later read still verifies
     /// its own tag.
-    fn chain_answers_to(conn: &Connection, vault: &Vault) -> Result<bool, StoreError> {
+    ///
+    /// The head and the rows are read in `snap`, one state (ROADMAP O253): read
+    /// in two, a legitimate commit between them made a database that DOES
+    /// answer to these keys read as one that does not — an integrity verdict
+    /// on an open beside a writer.
+    fn chain_answers_to(snap: &chain::Snapshot<'_>, vault: &Vault) -> Result<bool, StoreError> {
+        let conn = snap.conn();
         let has_chain: i64 = conn.query_row(
             "SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name = 'chain_meta'",
             [],
@@ -4115,7 +4148,7 @@ impl VaultStore {
         match chain::head_state(conn)? {
             chain::HeadState::Unseeded => Ok(true),
             chain::HeadState::Seeded(head) => {
-                Ok(chain::replay(conn, vault, None)?.head == head.head)
+                Ok(chain::replay(snap, vault, None)?.head == head.head)
             }
             chain::HeadState::Inconsistent { .. } => Ok(false),
         }
@@ -4512,7 +4545,11 @@ impl VaultStore {
         // integrity failures (ROADMAP O257).
         let mut foreign_note = None;
         if vault.reconcile_read_only(db_kc.as_deref()) == RotationVerdict::Foreign {
-            foreign_note = Some(Self::settle_foreign_keycheck(&conn, &vault, false)?);
+            // No store exists yet, so no handle counts this snapshot; nothing
+            // it reads is remembered (ROADMAP O253).
+            foreign_note = Some(chain::snapshot(&conn, &std::cell::Cell::new(0), |snap| {
+                Self::settle_foreign_keycheck(snap, &vault, false)
+            })?);
         }
         let mut store = Self::assemble(conn, vault, embedder, true)?;
         store.unhealed.extend(foreign_note);
@@ -4719,8 +4756,9 @@ impl VaultStore {
                 self.unhealed.push(format!(
                     "the manifest rollback anchor is {behind_by} record(s) behind the \
                      committed chain head and was NOT fast-forwarded (anchoring is a \
-                     write); a crash between a commit and its anchor is the ordinary \
-                     cause, and `undercroft vault anchor` or any write heals it"
+                     write); a crash between a commit and its anchor is an ordinary \
+                     cause, and so is a writer committing while this handle opened \
+                     (ROADMAP O253), and `undercroft vault anchor` or any write heals it"
                 ));
                 Ok(())
             }
@@ -4730,8 +4768,8 @@ impl VaultStore {
     /// **Hand the open's replay verdict to the label guard, if the open did
     /// not go on to append** (ROADMAP O251).
     ///
-    /// `reconcile_chain` and `chain_verdict` make the same `chain::replay`
-    /// call over the same rows against the same anchor, and the second one
+    /// `reconcile_chain` and the guard's `chain_verdict_in` make the same
+    /// `chain::replay` call over the same rows against the same anchor, and the second one
     /// was computed from scratch. It is worth nothing in the steady state —
     /// `reconcile_chain` short-circuits when the anchor equals the committed
     /// head and never replays — and one whole replay (88 ms at 102,001 rows,
@@ -5017,77 +5055,102 @@ impl VaultStore {
         &mut self,
         heal: bool,
     ) -> Result<(AnchorState, Option<AnchorOutcome>), StoreError> {
-        // **The cookie is read BEFORE the replay** (ROADMAP O251), the same
-        // order and for the same reason `require_authenticated_labels`
-        // states: a foreign commit landing between the two leaves the
-        // verdict paired with the OLDER cookie, so the next guarded read
-        // sees a moved cookie and replays — a wasted replay, never a
-        // skipped one. Reading it afterwards would pair a newer cookie with
-        // an older verdict and skip the replay the commit called for, which
-        // is O242 option (C)'s defect exactly.
-        let version = chain::data_version(&self.conn)?;
-        // The LIVE head: `head_v2` on a switched chain, `head` before it
-        // (ROADMAP O233). A regime and a head key that disagree refuse here
-        // as an integrity finding — the read-only open reports it instead.
+        // **The anchor FIRST, then ONE snapshot** (ROADMAP O253). This read
+        // the cookie, the head, the anchor, the replay and the height as five
+        // separate snapshots, the anchor AFTER the head — so a writer that
+        // committed and anchored between the head read and the replay made
+        // `head != db_head` and failed the OPEN with an integrity verdict
+        // naming the audit-chain head, with nothing tampered (reachable by
+        // reading; ROADMAP O253's interleaving gate reaches it). An anchor is
+        // written only after its commit, so the one read here is never newer
+        // than the rows the snapshot sees; a writer landing in between leaves
+        // it an ancestor, which is a lag the heal below fast-forwards — and
+        // which the note on `unhealed` now names as ordinary.
         //
-        // Read ONCE and used twice: the judged head decides the anchor
-        // arithmetic below, the unjudged state feeds `chain::verdict`.
-        let head_state = chain::head_state(&self.conn)?;
-        let Some(db_head) = head_state.clone().into_committed()?.map(|h| h.head) else {
-            return Ok((AnchorState::Unseeded, None));
-        };
         // **The anchor is read from DISK and MAC-verified**, never from this
         // handle's cached copy. That copy is written only by this handle's
         // own `anchor_manifest`, so with two handles on one vault — what
-        // `serve-http` runs — this compared the database against an anchor a
-        // different handle had already moved. `chain_state` was moved off the
-        // cached manifest for exactly this reason and the tamper decision was
-        // not, which left the least security-relevant consumer reading fresh
-        // and the one that raises `ManifestTampered` reading stale.
+        // `serve-http` ran until O242 — this compared the database against an
+        // anchor a different handle had already moved. `chain_state` was
+        // moved off the cached manifest for exactly this reason and the tamper
+        // decision was not, which left the least security-relevant consumer
+        // reading fresh and the one that raises `ManifestTampered` reading
+        // stale.
         let anchor = self.vault.anchored_head()?;
-        if anchor == db_head {
-            return Ok((AnchorState::Current, None));
+        enum Judged {
+            Unseeded,
+            Current,
+            Behind {
+                behind_by: usize,
+                offered: OpenVerdict,
+            },
         }
-        // Heads differ: replay the audit rows and decide crash vs rollback,
-        // through the one replay (ROADMAP O233). A crash between a switch's
-        // commit and its anchor leaves the anchor on a version-1 head, and
-        // the version-1 prefix is unchanged, so it is found here and healed.
-        let replayed = chain::replay(&self.conn, &self.vault, Some(&anchor))?;
-        // **ROADMAP O251: this replay is the guard's replay**, and its
-        // verdict is taken here while `replayed` is still whole — the
-        // destructuring below moves its `head` out. Offered rather than
-        // installed: the open goes on to run two at-rest migrations and the
-        // version-2 switch, each of which APPENDS, and this connection's own
-        // commits do not move `data_version` — so a verdict installed here
-        // would go stale behind an unmoved cookie, which is O242 option
-        // (C)'s shape. `adopt_open_verdict` takes it only if the chain has
-        // not moved since.
-        let offered = OpenVerdict {
-            data_version: version,
-            head: db_head.clone(),
-            writes: chain::writes(&self.conn)?,
-            verdict: chain::verdict(&replayed, &head_state),
-        };
-        let (head, anchor_seen, behind_by) =
-            (replayed.head, replayed.anchor_seen, replayed.behind_by);
-        if head != db_head {
-            // The committed head doesn't match its own audit rows — this is
-            // in-database corruption, not an anchoring artifact.
-            return Err(StoreError::Integrity("audit-chain head".into()));
+        let judged = self.snapshot(|snap| {
+            // The LIVE head: `head_v2` on a switched chain, `head` before it
+            // (ROADMAP O233). A regime and a head key that disagree refuse
+            // here as an integrity finding — the read-only open reports it
+            // instead. Read once and used twice: the judged head decides the
+            // anchor arithmetic below, the unjudged state feeds
+            // `chain::verdict`.
+            let head_state = chain::head_state(snap.conn())?;
+            let Some(db_head) = head_state.clone().into_committed()?.map(|h| h.head) else {
+                return Ok(Judged::Unseeded);
+            };
+            if anchor == db_head {
+                return Ok(Judged::Current);
+            }
+            // Heads differ: replay the audit rows and decide crash vs
+            // rollback, through the one replay (ROADMAP O233). A crash
+            // between a switch's commit and its anchor leaves the anchor on a
+            // version-1 head, and the version-1 prefix is unchanged, so it is
+            // found here and healed.
+            let replayed = chain::replay(snap, &self.vault, Some(&anchor))?;
+            // **ROADMAP O251: this replay is the guard's replay**, offered
+            // rather than installed: the open goes on to run two at-rest
+            // migrations and the version-2 switch, each of which APPENDS, and
+            // this connection's own commits do not move `data_version` — so a
+            // verdict installed here would go stale behind an unmoved cookie,
+            // which is O242 option (C)'s shape. `adopt_open_verdict` takes it
+            // only if the chain has not moved since. The cookie is the
+            // SNAPSHOT's (P7), so it is exactly the version of the rows this
+            // verdict describes — O251's "cookie before the replay", met
+            // strictly rather than probably (ROADMAP O253).
+            let offered = OpenVerdict {
+                data_version: snap.data_version(),
+                head: db_head.clone(),
+                writes: chain::writes(snap.conn())?,
+                verdict: chain::verdict(&replayed, &head_state),
+            };
+            if replayed.head != db_head {
+                // The committed head doesn't match its own audit rows, read
+                // in the same snapshot — in-database corruption, not timing
+                // and not an anchoring artifact.
+                return Err(StoreError::Integrity("audit-chain head".into()));
+            }
+            if !replayed.anchor_seen {
+                return Err(StoreError::Vault(
+                    undercroft_vault::VaultError::ManifestTampered,
+                ));
+            }
+            Ok(Judged::Behind {
+                behind_by: replayed.behind_by,
+                offered,
+            })
+        })?;
+        match judged {
+            Judged::Unseeded => Ok((AnchorState::Unseeded, None)),
+            Judged::Current => Ok((AnchorState::Current, None)),
+            Judged::Behind { behind_by, offered } => {
+                self.open_verdict = Some(offered);
+                // Crash artifact, or a writer that committed after the anchor
+                // was read: the anchor is a strict ancestor. Fast-forward it —
+                // through the door, which reads the head AND the height under
+                // the write lock, after this snapshot has ended (ROADMAP
+                // O254).
+                let healed = if heal { Some(self.anchor()?) } else { None };
+                Ok((AnchorState::Healed { behind_by }, healed))
+            }
         }
-        if !anchor_seen {
-            return Err(StoreError::Vault(
-                undercroft_vault::VaultError::ManifestTampered,
-            ));
-        }
-        self.open_verdict = Some(offered);
-        // Crash artifact: the anchor is a strict ancestor. Fast-forward it —
-        // through the door, which reads the head AND the height under the
-        // write lock. This heal used to anchor `db_head`, read above, with a
-        // height read separately afterwards: a mismatched pair whenever a
-        // writer committed in between (ROADMAP O254).
-        let healed = if heal { Some(self.anchor()?) } else { None };
-        Ok((AnchorState::Healed { behind_by }, healed))
     }
 
     /// Resolve every open-time tunable and build the handle.
@@ -5134,6 +5197,7 @@ impl VaultStore {
             late: None,
             emb_cache: std::cell::RefCell::new(None),
             labels: Default::default(),
+            owned_snapshots: std::cell::Cell::new(0),
             semantic_gate,
             sem_gate_source,
             fts: false,
@@ -5306,11 +5370,12 @@ impl VaultStore {
                 };
                 let note = format!(
                     "the manifest rollback anchor was {behind_by} record(s) behind the \
-                     committed chain head when this handle opened, and {how}. A crash \
-                     between a commit and its anchor is the ordinary cause, and so is a \
-                     second writer on this vault; a genuine OLDER `vault.json` restored \
-                     beside a current database lowers the anchor the same way, and this \
-                     line is the only evidence of either (ROADMAP O246)"
+                     committed chain head when this handle opened, and {how}. Two causes \
+                     are ordinary: a crash between a commit and its anchor, and another \
+                     writer on this vault committing while this handle opened (ROADMAP \
+                     O253). A genuine OLDER `vault.json` restored beside a current database \
+                     lowers the anchor the same way, and this line is the only evidence of \
+                     that (ROADMAP O246)"
                 );
                 undercroft_obs::diag_warn!("{note}");
                 self.unhealed.push(note);
@@ -5341,7 +5406,9 @@ impl VaultStore {
                 params![chain::LIVE_HEAD],
             )
             .unwrap();
-        let replayed = chain::replay(&self.conn, &self.vault, None).unwrap();
+        let replayed = self
+            .snapshot(|s| chain::replay(s, &self.vault, None))
+            .unwrap();
         assert_eq!(
             replayed.regime,
             chain::Regime::V1,
@@ -5381,14 +5448,18 @@ impl VaultStore {
             );
             return Ok(());
         }
-        let anchor = self.vault.anchored_head()?;
         let at = crate::manage::now_rfc3339();
-        let tx = self
-            .conn
-            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        match chain::switch(&tx, &self.vault, &anchor, &at)? {
+        // Under the write lock, which is what lets the anchor be read here
+        // and compared with the rows (ROADMAP O253): nothing else commits
+        // while it is held. `WriteLock` rather than a rusqlite transaction,
+        // because a write-lock guard is one of the three things that may mint
+        // the snapshot `chain::switch` requires.
+        let lock = WriteLock::begin(&self.conn)?;
+        let anchor = self.vault.anchored_head()?;
+        let outcome = chain::switch(&lock.snapshot()?, &self.vault, &anchor, &at)?;
+        match outcome {
             chain::SwitchOutcome::Switched => {
-                tx.commit()?;
+                lock.commit()?;
                 self.anchor()?;
             }
             chain::SwitchOutcome::Already => {}
@@ -5435,30 +5506,70 @@ impl VaultStore {
         // Storing folded text in clear leaks nothing new: this table only ever
         // exists for HmacOnly vaults, whose content is already readable.
         // Sealed vaults never reach here.
-        let stored: Option<String> = self
-            .conn
-            .query_row(
-                "SELECT value FROM meta WHERE key = 'fts_key_version'",
-                [],
-                |r| r.get(0),
-            )
-            .optional()?;
-        let n_drawers: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM drawers", [], |r| r.get(0))?;
-        let n_fts: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM drawers_fts", [], |r| r.get(0))?;
+        //
         // Rebuild when the fold changed (a vault indexed by an older build,
         // including the external-content shape) or when the counts disagree.
-        if stored.as_deref() != Some(FTS_KEY_VERSION) || n_fts != n_drawers {
+        //
+        // **Judged in ONE snapshot, rebuilt under the write lock, and judged
+        // again there** (ROADMAP O253's FOUND note). The two counts were two
+        // autocommit statements, so an open beside a writer could count a
+        // drawer another handle committed and not yet its index row — a
+        // single save indexes AFTER its commit — and then rebuilt in
+        // autocommit, statement by statement, while that writer inserted the
+        // very row the rebuild was about to insert: `constraint failed` on
+        // the open, measured by O254's multi-process gate at about one open
+        // in forty, and `database is locked` for an open whose DROP waited out
+        // the busy timeout. The lock is taken only when the snapshot says
+        // there is something to do — O257's lesson, that an open taking the
+        // write lock every time starves beside busy writers — and the
+        // judgement is repeated under it, where the writer's index statements
+        // queue behind the rebuild instead of racing it.
+        let stale = |conn: &Connection| -> Result<bool, StoreError> {
+            let stored: Option<String> = conn
+                .query_row(
+                    "SELECT value FROM meta WHERE key = 'fts_key_version'",
+                    [],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let n_drawers: i64 =
+                conn.query_row("SELECT COUNT(*) FROM drawers", [], |r| r.get(0))?;
+            let n_fts: i64 =
+                conn.query_row("SELECT COUNT(*) FROM drawers_fts", [], |r| r.get(0))?;
+            Ok(stored.as_deref() != Some(FTS_KEY_VERSION) || n_fts != n_drawers)
+        };
+        if !self.snapshot(|snap| stale(snap.conn()))? {
+            return Ok(true);
+        }
+        // A lock still busy after the timeout is not a reason to fail the
+        // open over an accelerator, and serving an index that may be short is
+        // worse — the prefilter is safe only when it never under-returns. So
+        // this handle goes without it, and says so.
+        let lock = match WriteLock::begin(&self.conn) {
+            Ok(lock) => lock,
+            Err(StoreError::Sqlite(e)) if is_busy(&e) => {
+                undercroft_obs::diag_warn!(
+                    "vault {:?}: the FTS prefilter needs rebuilding and the write lock stayed \
+                     busy, so this handle searches without it (a full scan, never a short \
+                     answer); the next open retries (ROADMAP O253)",
+                    self.vault.id()
+                );
+                return Ok(false);
+            }
+            Err(e) => return Err(e),
+        };
+        if stale(&self.conn)? {
             self.rebuild_fts()?;
         }
+        lock.commit()?;
         Ok(true)
     }
 
-    /// Drop and repopulate `drawers_fts` from folded content, in one
-    /// transaction. Also removes the external-content triggers an older build
+    /// Drop and repopulate `drawers_fts` from folded content, inside the
+    /// caller's write transaction — `init_fts_schema`'s `WriteLock`, the one
+    /// caller. This said "in one transaction" and took none, which is how a
+    /// rebuild at open raced a concurrent writer's index insert (ROADMAP
+    /// O253). Also removes the external-content triggers an older build
     /// installed, which would otherwise keep writing raw text into it.
     fn rebuild_fts(&self) -> Result<(), StoreError> {
         let rows: Vec<(i64, Vec<u8>, String)> = self
@@ -7286,7 +7397,43 @@ impl VaultStore {
     }
 
     /// Fetch one drawer by id, verifying its HMAC and decrypting content.
+    ///
+    /// **A returning read fetches the row and compares it with the chain in
+    /// ONE snapshot** (ROADMAP O253): read in two, a legitimate correction of
+    /// this very drawer landing between them made the comparison look at the
+    /// NEW row while the read returned the OLD one — so a replayed drawer was
+    /// served, measured by the interleaving gate's masking arm. The engine's
+    /// own lookups decide nothing from the chain and fetch outside any guard.
     pub fn get(&self, id: &str, read: Read) -> Result<Option<Drawer>, StoreError> {
+        let found = match read {
+            Read::Internal(_) => self.fetch_verified(id)?,
+            Read::Returned(_) => self.guarded(|snap| {
+                let found = self.fetch_verified(id)?;
+                if let Some(d) = &found {
+                    // ROADMAP O234: a row whose tag verifies can still be an
+                    // older version of itself, written back. A read that
+                    // RETURNS it refuses; the engine's own lookups do not,
+                    // because the remedy is the write that replaces it.
+                    self.refuse_replayed(
+                        snap,
+                        crate::replay::Consulted::Drawers,
+                        Some(std::slice::from_ref(&d.id)),
+                    )?;
+                }
+                Ok(found)
+            })?,
+        };
+        // ROADMAP O50, through the one recording door — AFTER the snapshot,
+        // because the record is a write (ROADMAP O253).
+        if let Some(d) = &found {
+            self.record_read(read, &d.id, ReadScope::none(), 1)?;
+        }
+        Ok(found)
+    }
+
+    /// One drawer's row, tag-verified and decrypted — `get`'s read, with no
+    /// chain judgement and no record.
+    fn fetch_verified(&self, id: &str) -> Result<Option<Drawer>, StoreError> {
         let row = self
             .conn
             .query_row(
@@ -7324,19 +7471,7 @@ impl VaultStore {
                         );
                         StoreError::Integrity(id.clone())
                     })?;
-                let drawer = self.decode(&id, &meta_json, &content_rest)?;
-                // ROADMAP O234: a row whose tag verifies can still be an
-                // older version of itself, written back. A read that RETURNS
-                // it refuses; the engine's own lookups do not, because the
-                // remedy is the write that replaces it.
-                self.refuse_replayed(
-                    read,
-                    crate::replay::Consulted::Drawers,
-                    Some(std::slice::from_ref(&id)),
-                )?;
-                // ROADMAP O50, through the one recording door.
-                self.record_read(read, &id, ReadScope::none(), 1)?;
-                Ok(Some(drawer))
+                Ok(Some(self.decode(&id, &meta_json, &content_rest)?))
             }
         }
     }
@@ -7407,6 +7542,28 @@ impl VaultStore {
         limit: usize,
         read: Read,
     ) -> Result<Vec<Drawer>, StoreError> {
+        // ONE guarded snapshot around the trust floor, the rows and their
+        // comparison with the chain (ROADMAP O253); the record after it.
+        let out = self.guarded(|snap| self.recent_in(snap, wing, limit, read))?;
+        // ROADMAP O50: ONE record for the bulk read, not one per row — the
+        // caller made a single request and the trail should say so.
+        self.record_read(
+            read,
+            wing.unwrap_or(""),
+            ReadScope::wing_only(wing),
+            out.len(),
+        )?;
+        Ok(out)
+    }
+
+    /// [`recent`](Self::recent)'s reads, inside the door's snapshot.
+    fn recent_in(
+        &self,
+        snap: &chain::Snapshot<'_>,
+        wing: Option<&str>,
+        limit: usize,
+        read: Read,
+    ) -> Result<Vec<Drawer>, StoreError> {
         let mut sql = String::from("SELECT id, meta_json, content, tag FROM drawers");
         let mut clauses: Vec<String> = Vec::new();
         let mut binds: Vec<String> = Vec::new();
@@ -7456,7 +7613,9 @@ impl VaultStore {
         // — a replayed row that merely displaced a real one has changed the
         // answer without appearing in it.
         let consulted: Vec<String> = rows.iter().map(|(id, ..)| id.clone()).collect();
-        self.refuse_replayed(read, crate::replay::Consulted::Drawers, Some(&consulted))?;
+        if let Read::Returned(_) = read {
+            self.refuse_replayed(snap, crate::replay::Consulted::Drawers, Some(&consulted))?;
+        }
         for (id, meta_json, content_rest, tag) in rows {
             self.vault
                 .verify_tag(&canonical(&id, meta_json.as_bytes(), &content_rest), &tag)
@@ -7491,14 +7650,6 @@ impl VaultStore {
             }
             out.push(drawer);
         }
-        // ROADMAP O50: ONE record for the bulk read, not one per row — the
-        // caller made a single request and the trail should say so.
-        self.record_read(
-            read,
-            wing.unwrap_or(""),
-            ReadScope::wing_only(wing),
-            out.len(),
-        )?;
         Ok(out)
     }
 
@@ -8104,27 +8255,31 @@ impl VaultStore {
             sql.push_str(" WHERE ");
             sql.push_str(&clauses.join(" AND "));
         }
-        let mut stmt = self.conn.prepare(&sql)?;
-        let rows: Vec<SearchRow> = stmt
-            .query_map(rusqlite::params_from_iter(binds.iter()), |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
-            })?
-            .collect::<Result<_, _>>()?;
-        phase_ms("sql-fetch", &mut t_phase);
-        // ROADMAP O234, before a byte is decrypted: the CONSULTED set is
-        // every candidate hydrated here, because a search's rank is a
-        // function of all of them — a replayed row that merely displaced a
-        // real one changed the answer without appearing in it. A search is
-        // always a returning read (`Read::Returned(ReadOp::Search)` at the
-        // record below), so the witness is stated rather than threaded.
-        {
+        // **The hydration and its comparison with the chain, in ONE guarded
+        // snapshot** (ROADMAP O253). Read in two, a legitimate correction of
+        // a candidate landing between them made the comparison look at the
+        // new row while the ranking scored the old one. Everything before
+        // this — the trust floor (its own guarded door), candidate
+        // generation, which may BUILD an index and so write — stays outside,
+        // and everything after it is CPU over the rows in hand.
+        let rows: Vec<SearchRow> = self.guarded(|snap| {
+            let mut stmt = self.conn.prepare(&sql)?;
+            let rows: Vec<SearchRow> = stmt
+                .query_map(rusqlite::params_from_iter(binds.iter()), |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+                })?
+                .collect::<Result<_, _>>()?;
+            // ROADMAP O234, before a byte is decrypted: the CONSULTED set is
+            // every candidate hydrated here, because a search's rank is a
+            // function of all of them — a replayed row that merely displaced
+            // a real one changed the answer without appearing in it. A search
+            // is always a returning read (`Read::Returned(ReadOp::Search)` at
+            // the record below), so it always compares.
             let consulted: Vec<String> = rows.iter().map(|(id, ..)| id.clone()).collect();
-            self.refuse_replayed(
-                Read::Returned(ReadOp::Search),
-                crate::replay::Consulted::Drawers,
-                Some(&consulted),
-            )?;
-        }
+            self.refuse_replayed(snap, crate::replay::Consulted::Drawers, Some(&consulted))?;
+            Ok(rows)
+        })?;
+        phase_ms("sql-fetch", &mut t_phase);
 
         // Pass 1: verify + decrypt every candidate, and gather the signals
         // that don't need corpus statistics (cosine, recency). Content
@@ -9412,7 +9567,37 @@ impl VaultStore {
     /// supersession receipt columns sit outside the drawer HMAC, so a caller
     /// that verified only what the first two legs returned answered green
     /// on a tampered link.
+    ///
+    /// **ONE snapshot around every leg** (ROADMAP O253). A report is evidence,
+    /// and `backup create` and a rotation both gate on its `ok()`, so its legs
+    /// must describe one state: read leg by leg, a legitimate commit between
+    /// the replay and the head read reported a BROKEN chain — measured, 52 of
+    /// 215 runs beside a writer — and the policy legs could compare a row
+    /// with a record written after it. Two things happen first, outside the
+    /// snapshot, and each for a reason:
+    ///
+    /// * **the graph secret is warmed**: two legs read it, and on a writable
+    ///   vault that has none its first use WRITES one, which the snapshot's
+    ///   `query_only` refuses — loudly, and before anything is cached, which
+    ///   is the reason `query_only` was chosen over a rollback;
+    /// * **the manifest anchor is read**, from disk and MAC-verified, BEFORE
+    ///   the snapshot: an anchor is written only after its commit, so one
+    ///   read first is never newer than the rows, while one read inside could
+    ///   name a head a writer committed and anchored since.
     pub fn verify(&self) -> Result<VerifyReport, StoreError> {
+        self.kg_secret()?;
+        let anchor = self.vault.anchored_head()?;
+        self.snapshot(|snap| self.verify_in(snap, &anchor))
+    }
+
+    /// [`verify`](Self::verify)'s legs, read in `snap` against `anchor` — the
+    /// form a rotation calls inside its own exclusive transaction, where the
+    /// anchor read in place is sound because nothing else can commit.
+    pub(crate) fn verify_in(
+        &self,
+        snap: &chain::Snapshot<'_>,
+        anchor: &str,
+    ) -> Result<VerifyReport, StoreError> {
         // The first two legs ride the covered-copy walk, which the retention
         // sweep shares (ROADMAP O206): one implementation of "which rows
         // verify, and where does a mirror disagree with the covered meta".
@@ -9439,11 +9624,10 @@ impl VaultStore {
         bad.extend(self.tunnels_verify()?);
         // Two-part chain check. (1) The audit rows must reproduce exactly
         // the committed head in chain_meta — they advanced in the same
-        // transactions, so any mismatch is corruption, not timing. [Corrected
-        // 2026-09-24, ROADMAP O253: it IS timing when the rows and the head
-        // are read in two snapshots and another handle commits between them —
-        // measured, 52 false `chain_ok = false` in 215 runs beside a writer.
-        // The fix reads both in one snapshot.] (2) The
+        // transactions, so any mismatch is corruption, not timing — which
+        // holds only because both are read in `snap` (ROADMAP O253: read in
+        // two snapshots it WAS timing, and 52 of 215 runs beside a writer
+        // reported a broken chain). (2) The
         // manifest anchor must appear somewhere in that chain: equal in
         // steady state, strictly behind after a crash-before-anchor (legal),
         // and absent only when the database was rolled back or forked
@@ -9451,8 +9635,8 @@ impl VaultStore {
         // From disk and MAC-verified — see `reconcile_chain`. `verify` could
         // not see a `vault.json` swapped underneath a long-lived server
         // until a fresh open, which is the one deployment its own doctrine
-        // is written for.
-        let (chain_ok, label_commitment) = self.chain_verdict()?;
+        // is written for. Read by the caller, before `snap` (ROADMAP O253).
+        let (chain_ok, label_commitment) = self.chain_verdict_in(snap, anchor)?;
         // Not folded into `records_checked`: that count is HMAC-covered
         // *records*, and a supersession link is a relation between two of
         // them, reported with its own verdicts.
@@ -9602,8 +9786,8 @@ impl VaultStore {
         // `verify`, the trust floor and the retention sweep cannot disagree
         // about a policy row. Every lookup is an indexed equality or range
         // on `record_id`, and there is one per declared key.
-        let mut policy_drift = self.trust_policy_drift()?;
-        policy_drift.extend(self.retention_policy_drift()?);
+        let mut policy_drift = self.trust_policy_drift(snap)?;
+        policy_drift.extend(self.retention_policy_drift(snap)?);
         policy_drift.sort();
 
         // ── The ninth leg: the corpus's own rows against the chain that
@@ -9612,7 +9796,7 @@ impl VaultStore {
         // whose rows carry a tag the chain holds and whose tag is then
         // recomputed in place on the next write. One statement per table,
         // short-circuiting on a single indexed probe for a row that agrees.
-        let version_replay = self.version_replay_drift()?;
+        let version_replay = self.version_replay_drift(snap)?;
 
         Ok(VerifyReport {
             records_checked: checked,
@@ -9626,28 +9810,6 @@ impl VaultStore {
             policy_drift,
             version_replay,
         })
-    }
-
-    /// The chain's two verdicts — `(chain_ok, label_commitment)` — from ONE
-    /// streaming replay (ROADMAP O233). `verify` reports them; the forget
-    /// path's recorded-evidence verdict refuses without them.
-    ///
-    /// Besides a wrong head, the replay can find a regime and a head key
-    /// that disagree, and a row whose label, time or tag is not stored as the
-    /// type every writer binds. Each is sorted by which side of the switch it
-    /// sits on: at or after it, the CHAIN's finding (a rotation re-steps those
-    /// rows as found, so it must refuse); before it, the label commitment's,
-    /// which a rotation preserves verbatim and so cannot launder (O232
-    /// ruling 1).
-    /// **The arithmetic itself lives in [`chain::verdict`]** (ROADMAP O251),
-    /// because the open's `reconcile_chain` makes the same judgement over
-    /// the same replay and hands it forward. This function is the replay,
-    /// the reads it needs, and nothing else.
-    pub(crate) fn chain_verdict(&self) -> Result<(bool, LabelCommitment), StoreError> {
-        let anchor = self.vault.anchored_head()?;
-        let replayed = chain::replay(&self.conn, &self.vault, Some(&anchor))?;
-        let head = chain::head_state(&self.conn)?;
-        Ok(chain::verdict(&replayed, &head))
     }
 
     /// Decrypted export of every drawer (for backup / migration).

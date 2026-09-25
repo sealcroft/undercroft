@@ -685,11 +685,15 @@ fn o254_child_entry() {
         }
         // Opens the vault writably `n` times while writers commit — the open's
         // heal anchors through the door too. The ruling requires this probe
-        // clean of I/O errors; an integrity refusal here is O253's (the open
-        // reads the head and replays in two snapshots), reported, not judged.
+        // clean of I/O errors, and since ROADMAP O253 clean of errors of ANY
+        // kind: the two it used to report and not judge — `constraint failed`
+        // and `database is locked` — were the FTS judgement read in two
+        // snapshots and its rebuild racing a writer in autocommit. A heal the
+        // lock deferred is not an error and is counted apart (`busy_heal`).
         "opener" => {
             let (mut ok, mut io, mut busy, mut other, mut deferred, mut held) =
                 (0u64, 0u64, 0u64, 0u64, 0u64, 0u64);
+            let mut busy_heal = 0u64;
             for i in 0..n {
                 let mgr = VaultManager::open(&root, None).unwrap();
                 match mgr
@@ -704,11 +708,11 @@ fn o254_child_entry() {
                         // deferred or refused heal is a manifest failure,
                         // which is what the gate exists to see. The open's
                         // own note says which.
-                        let busy_heal = s.unhealed().iter().any(|n| {
+                        let heal_was_busy = s.unhealed().iter().any(|n| {
                             n.contains("could NOT fast-forward") && n.contains("write lock")
                         });
-                        if busy_heal {
-                            busy += 1;
+                        if heal_was_busy {
+                            busy_heal += 1;
                         } else {
                             deferred += s.anchor_failures();
                         }
@@ -738,7 +742,7 @@ fn o254_child_entry() {
             }
             println!(
                 "O254_CHILD opened={ok} io_err={io} busy_err={busy} other_err={other} \
-                 anchor_failures={deferred} held_err={held}"
+                 anchor_failures={deferred} held_err={held} busy_heal={busy_heal}"
             );
         }
         // One read-only open (the `--read-only` server's path), reporting
@@ -921,6 +925,9 @@ fn two_processes_anchoring_while_a_third_reads_never_fail_or_tear_the_manifest()
             if r.contains_key("opened") {
                 opened += 1;
                 assert_eq!(r["io_err"], "0", "an open failed on I/O: {r:?}");
+                // ROADMAP O253's FOUND note, closed: no open fails at all.
+                assert_eq!(r["other_err"], "0", "an open failed: {r:?}");
+                assert_eq!(r["busy_err"], "0", "an open failed busy: {r:?}");
                 assert_eq!(r["anchor_failures"], "0", "an open's heal failed: {r:?}");
                 eprintln!("O254 gate round {round}: opener {r:?}");
             } else {

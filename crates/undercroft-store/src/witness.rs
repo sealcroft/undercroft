@@ -186,25 +186,37 @@ impl VaultStore {
     /// relabels audit rows on the next writable open and the digest would
     /// not survive it. Runs on either posture; the CLI opens read-only so
     /// the anchored pair is read as found.
+    ///
+    /// **One state per document** (ROADMAP O253): the manifest anchor first,
+    /// then the rows, the digest, the head and the height in ONE snapshot. Read
+    /// statement by statement, a commit landing during the walk produced a
+    /// document whose `rows` named one state and whose `head` named the next
+    /// — measured, 87 of 123 documents emitted beside a writer — which an
+    /// external verifier replaying the witnessed prefix cannot reproduce.
     pub fn witness_emit(&self) -> Result<ChainWitness, StoreError> {
-        let prefix = chain::prefix(&self.conn, None)?;
-        if prefix.rows == 0 {
-            return Err(StoreError::Invalid(
-                "nothing to witness: the audit chain has no records yet, and a witness of \
-                 the genesis head is one every chain extends"
-                    .into(),
-            ));
-        }
-        if !self.kg_blind_complete()? {
-            return Err(StoreError::Invalid(
-                "refusing to witness: the knowledge-graph blinding migration (ROADMAP A10) \
-                 has not completed on this vault and RELABELS audit rows when it does, so a \
-                 digest taken now would not survive the next writable open — open the vault \
-                 writable once, then witness"
-                    .into(),
-            ));
-        }
-        let head = chain::require_head(&self.conn)?;
+        let anchored_head = self.vault.anchored_head()?;
+        let (prefix, head, writes) = self.snapshot(|snap| {
+            let prefix = chain::prefix(snap, None)?;
+            if prefix.rows == 0 {
+                return Err(StoreError::Invalid(
+                    "nothing to witness: the audit chain has no records yet, and a witness \
+                     of the genesis head is one every chain extends"
+                        .into(),
+                ));
+            }
+            if !self.kg_blind_complete()? {
+                return Err(StoreError::Invalid(
+                    "refusing to witness: the knowledge-graph blinding migration (ROADMAP \
+                     A10) has not completed on this vault and RELABELS audit rows when it \
+                     does, so a digest taken now would not survive the next writable open — \
+                     open the vault writable once, then witness"
+                        .into(),
+                ));
+            }
+            let head = chain::require_head(snap.conn())?;
+            let writes = chain::writes(snap.conn())?;
+            Ok((prefix, head, writes))
+        })?;
         let regime = match head.regime {
             chain::Regime::V1 => "v1",
             chain::Regime::V2 { .. } => "v2",
@@ -216,8 +228,8 @@ impl VaultStore {
             prefix_digest: hex::encode(prefix.digest),
             head: head.head,
             regime: regime.to_string(),
-            writes: chain::writes(&self.conn)?,
-            anchored_head: self.vault.anchored_head()?,
+            writes,
+            anchored_head,
             emitted_at: crate::manage::now_rfc3339(),
             unhealed: self.unhealed.clone(),
             sender: None,
@@ -228,7 +240,9 @@ impl VaultStore {
     /// Check a witness against this vault's audit chain.
     ///
     /// Two walks of `audit`: the unkeyed prefix scan that DECIDES, and the
-    /// keyed replay that corroborates the head. A document naming another
+    /// keyed replay that corroborates the head — both in ONE snapshot
+    /// (ROADMAP O253), so the corroboration describes the rows the decision
+    /// read. A document naming another
     /// vault, or carrying a signature that does not verify, is an error in
     /// the integrity family rather than a verdict — the caller's wrong file
     /// and a re-created vault are indistinguishable here, and the second is
@@ -268,30 +282,32 @@ impl VaultStore {
                 "the witness names zero rows; a genesis witness is vacuous".into(),
             ));
         }
-        let prefix = chain::prefix(&self.conn, Some(w.rows))?;
-        let Some(at_digest) = prefix.at_digest else {
-            return Ok(WitnessVerdict::RolledBack {
-                rows_witnessed: w.rows,
-                rows_now: prefix.rows,
-                rewritten: false,
-            });
-        };
-        if hex::encode(at_digest) != w.prefix_digest {
-            return Ok(WitnessVerdict::RolledBack {
-                rows_witnessed: w.rows,
-                rows_now: prefix.rows,
-                rewritten: true,
-            });
-        }
-        let replayed = chain::replay(&self.conn, &self.vault, Some(&w.head))?;
-        let rotations_since = match prefix.at_seq {
-            Some(seq) => chain::rotations_since(&self.conn, seq)?,
-            None => 0,
-        };
-        Ok(WitnessVerdict::Extends {
-            rows_since: prefix.rows - w.rows,
-            head_corroborated: replayed.anchor_seen,
-            rotations_since,
+        self.snapshot(|snap| {
+            let prefix = chain::prefix(snap, Some(w.rows))?;
+            let Some(at_digest) = prefix.at_digest else {
+                return Ok(WitnessVerdict::RolledBack {
+                    rows_witnessed: w.rows,
+                    rows_now: prefix.rows,
+                    rewritten: false,
+                });
+            };
+            if hex::encode(at_digest) != w.prefix_digest {
+                return Ok(WitnessVerdict::RolledBack {
+                    rows_witnessed: w.rows,
+                    rows_now: prefix.rows,
+                    rewritten: true,
+                });
+            }
+            let replayed = chain::replay(snap, &self.vault, Some(&w.head))?;
+            let rotations_since = match prefix.at_seq {
+                Some(seq) => chain::rotations_since(snap.conn(), seq)?,
+                None => 0,
+            };
+            Ok(WitnessVerdict::Extends {
+                rows_since: prefix.rows - w.rows,
+                head_corroborated: replayed.anchor_seen,
+                rotations_since,
+            })
         })
     }
 
@@ -457,7 +473,7 @@ mod tests {
         rotate(&dir, &mut s);
         // PREMISE: the head really did move.
         assert!(
-            !chain::replay(&s.conn, &s.vault, Some(&w.head))
+            !s.snapshot(|snap| chain::replay(snap, &s.vault, Some(&w.head)))
                 .unwrap()
                 .anchor_seen,
             "premise: the rotation re-stepped the witnessed head"
