@@ -611,7 +611,14 @@ connection: a handle that replaced its connection — the release fallback
 after a key rotation's fence, reached by a library caller and by no product
 surface — served the verdict it had cached on the old one, so a commit
 another connection made before the swap went unexamined. A replaced
-connection now forgets it (ROADMAP O276).
+connection now forgets it (ROADMAP O276) — and since O278 the fallback does
+not reattach at all: it closes the connection and the handle answers every
+door with the reopen class. A reopen by path could not tell its own file from
+one a `backup restore` swapped in — a connection opened before a directory
+swap reads the file set aside and writes into the restored vault's `-wal`,
+measured — and a manifest read under keys another process rotated since would
+have raised a false tamper verdict. The same swap race for an ORDINARY open is
+filed as ROADMAP O279.
 
 The chain also carries what left and what was read. Every export
 appends an `egress/export` record binding the surface, the recipient

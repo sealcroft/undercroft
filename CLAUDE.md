@@ -1469,14 +1469,26 @@ Consequences that are binding, not advisory:
   as `StoreError::VaultHeld` (exit 1; 409 with no class). The release is
   PROVEN from a zero-timeout second connection (`prove_released`), never
   by reading the pragma back, and a handle whose release cannot be proven
-  replaces its connection, counted on `lock_reconnects` — through
-  `replace_connection`, the ONE place a handle's connection is replaced,
-  which forgets the label guard's cached verdict because its cookie is
-  comparable only within the connection that read it (O276). The fallback
-  opens its replacement BEFORE closing the old connection, which the old
-  one's own lock refuses in the state the fallback exists for (O278,
-  measured, pinned as a cost); `/v1` also closes its cached handle after
-  every rotate, and the CLI exits. The promote writes the new
+  LETS GO of the vault (O278), counted on `lock_reconnects`: it closes its
+  connection with `Connection::close()` — never by drop, which discards a
+  failed close — through `replace_connection`, the ONE place a handle's
+  connection is replaced (O276), which swaps in a schema-less placeholder
+  under `query_only`, forgets the label guard's cached verdict and drops the
+  derived caches, and it reattaches NOTHING. A reopen by path cannot tell its
+  own file from one a restore swapped in: a connection that has not yet read
+  is invisible to a fence, and one opened before a directory swap reads the
+  aside file and writes into the restored `-wal` (measured — O279 files that
+  race for an ordinary open). The handle is `Retirement::Released`, which
+  OVERWRITES a deferral and which the vault crate's one manifest resolver
+  and the store's `snapshot` door refuse, so no manifest read by path can
+  raise a false tamper verdict; every door answers the reopen class
+  (`StaleUnlock`, whose prefix is now cause-neutral, or
+  `VaultError::HandleReleased`; 409 with no class, exit 1), and a door that
+  touches the placeholder first answers a loud "no such table", never Ok. A
+  read-only handle is refused a rotation before the fence, and the rotation's
+  report carries the head it committed, so neither surface reads the handle
+  afterwards; `/v1` also closes its cached handle after every rotate, and the
+  CLI exits. The promote writes the new
   manifest FROM MEMORY through `write_manifest_file` — idempotent, never
   lowering an anchor, removing `vault.json.next` only while it is still
   the bytes it staged — and a promote that fails every attempt answers Ok
@@ -2467,8 +2479,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (1137 run,
-                                      # 14 #[ignore]d = 1151 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (1143 run,
+                                      # 14 #[ignore]d = 1157 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote

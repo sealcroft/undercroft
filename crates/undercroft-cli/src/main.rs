@@ -2398,9 +2398,13 @@ fn run(cli: Cli) -> Result<()> {
                     report.audit_entries
                 );
                 // The DATABASE's head, not the handle's cached manifest
-                // field — the third and last A21 caller.
-                let (chain_head, _) = store.chain_state()?;
-                println!("  new chain head:      {chain_head}");
+                // field — the third and last A21 caller — and read INSIDE the
+                // rotation's hold, from its report, never through the handle
+                // afterwards (ROADMAP O278): a handle that let go of the vault
+                // on its way out answers the reopen class, and an error after
+                // a committed rotation invites a second one.
+                println!("  new chain head:      {}", report.chain_head);
+                println!("  chain height:        {}", report.writes);
                 // ROADMAP O257: a committed rotation whose new manifest could
                 // not be written is Ok — an error would invite a second
                 // rotation — and says so here rather than only in a log.

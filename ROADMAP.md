@@ -3998,7 +3998,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**308** of the **323** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**309** of the **324** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -5848,7 +5848,11 @@ open waits its busy timeout and fails, the handle keeping the connection that
 holds the vault (M1, measured, pinned as `Verdict::Cost`). Item 2's letter —
 "closing is the one release" — was not kept. Filed as O278. And a replacement
 that DID succeed kept the label guard's verdict, keyed by a cookie only the old
-connection could compare — O276, closed.
+connection could compare — O276, closed. **Item 2's "the store REPLACES its own
+connection" is REVISED beside it by O278's ruling (2026-09-26)**: refuted by M1,
+PE and PF — a reopen by path cannot tell its own file from a restore's — and by
+the absence of any consumer that keeps a handle past a rotation. The fallback
+closes the connection and does not reattach; the handle answers the reopen class.
 
 ### O253 — CLOSED 2026-09-24: a legitimate concurrent writer no longer makes the label guard refuse, `verify` report a broken chain or an open fail — every judgement reads what it compares from one snapshot, the manifest anchor before it
 
@@ -8165,7 +8169,10 @@ cached 2 (P5, again).
   because in the state the fallback exists for the reopen fails (O278). Fixing
   O278 makes every successful fallback reach this code, which is why this entry
   lands first and why its source gate refuses a second replacement site: O278's
-  close-first must go through the helper.
+  close-first must go through the helper. **Refuted beside, 2026-09-26, by
+  O278's ruling:** O278 closes and does not reattach, so no reconnected handle
+  serves at all; the helper and its forgotten verdict stand, and this entry's
+  behavioural gate is re-shaped by O278 rather than deleted.
 
 **Found by the build.**
 - **O278, filed** (the fallback cannot release the lock it exists for).
@@ -8240,6 +8247,328 @@ entry changed, which is what its cost line claims.
 **Versioning**: PATCH inside the unreleased `1.7.0` — a verdict the handle had no
 basis for is no longer served, on a path no product surface reaches. No
 `UPGRADING.md` entry: nothing accepted is refused.
+
+### O278 — CLOSED 2026-09-26: a key rotation that cannot prove its hold released lets go of the vault — it closes its connection, reattaches nothing, and reads no manifest after
+
+**Filed 2026-09-26 by O276's build; measured by the integrator.** O257 ruling item
+2: when a zero-timeout second connection cannot read the vault after an exclusive
+hold, "the store REPLACES its own connection — closing is the one release that
+works on every platform and every path". `VaultStore::prove_released` (store
+`lib.rs`) opens the replacement (`connect_writable`) while the old connection is
+still open, and closes the old one only by the assignment that follows. On this
+platform another connection cannot hold the vault exclusively while the handle has
+it open — O257's P3, re-measured: a second connection's `BEGIN EXCLUSIVE` beside
+an idle store handle is refused busy — so the proof fails only on the handle's OWN
+lock, and that lock refuses the replacement's first statement. **M1**: the
+handle's connection left exclusive (what a failed return to NORMAL leaves;
+Windows' PENDING byte after a refused fence, O257's D2, is the same shape by
+reading) — the proof fails, the replacement waits its busy timeout (5.01 s) and
+fails, the handle keeps the connection that holds the vault, another connection
+still cannot read, and `lock_reconnects` reads 1 for a replacement that never
+happened. **M2**: the old connection closed FIRST — the replacement opened in
+10 ms, another connection read the vault, and the fresh connection's cookie read
+2, as the old one's had, which is why O276's helper is the one door (its source
+gate refuses a second replacement site). O257's ruled arm "the fallback itself,
+forced, releases" was never built; built as ruled, it would have failed. M1 is
+pinned as `Verdict::Cost` in
+`o278_the_fallback_cannot_replace_a_connection_whose_own_lock_blocks_the_replacement`.
+No product surface is held by it — the CLI exits after `vault rotate` and `/v1`
+evicts its handle after every rotate (O257 item 2) — so a library caller keeps
+the lock until it drops the handle.
+
+**Shape, for a ruling**: close before reopening, through `replace_connection`;
+what the handle is if the reopen then fails — another process may take the vault
+the moment it is released (a rotation, a restore's hold) — a placeholder with a
+retirement of the reopen class, a bounded retry, or both, and which doors must
+consult it (reads do not consult a retirement today); and what `lock_reconnects`
+counts, an attempt or a replacement (O257's release gate asserts it zero). Two
+siblings the ruling should take: the replacement is always `connect_writable`,
+so a read-only handle reaching it would be upgraded to a writable connection —
+unreachable today, because a rotation asked of a read-only handle fails at
+`BEGIN EXCLUSIVE` with a raw `SQLITE_READONLY` before any lock (measured by O276:
+nothing staged, the manifest unchanged, no reconnect, `query_only` still on);
+and that raw error is the wrong class for a posture refusal, which
+`refuse_when_read_only` exists to give — a library-only path, `/v1` refusing
+rotate on a read-only server before dispatch and the CLI opening writable.
+
+**Gate**: the pinned cost INVERTED, never deleted — the handle's own connection
+left exclusive, `prove_released` releases it (another PROCESS writes within the
+bound), `lock_reconnects` counts what the ruling decides, and the next guarded
+read replays (O276); the reopen-failure arm driven by a holder that takes the
+vault in the window between the close and the reopen; the read-only arm.
+
+#### RULED 2026-09-26 by a three-lens panel (agentic memory architecture, security, software engineering) plus an adversarial refuter
+
+**The question.** How the fallback releases a vault whose release it cannot prove
+(O257 item 2 says "closing is the one release"); whether the handle then
+reattaches, and what it must prove if it does; what a handle that holds nothing
+answers, door by door; the durability pins; what `lock_reconnects` counts; the
+posture of the replacement; the gate. Working material (the brief, the lenses'
+digest, the probes) is in the session scratchpad `o278-panel/`; this record is
+the ruling.
+
+**Measured before and during the panel** (Docker, release build, this tree):
+M1 and M2 as filed above. **P3** re-measured: a second connection's fence beside
+an idle store handle is refused busy. **PA**: while the old connection holds, a
+new one can open and set its transaction behaviour and `foreign_keys`;
+`synchronous`, `journal_mode` and any read are refused busy. **PB**: close first
+through an in-memory placeholder, another connection takes the vault in the
+window, the reopen fails `VaultHeld` after 5.009 s, and every later door answers
+a false raw "no such table". **PC**: a replacement configured before the close
+answers raw `DatabaseBusy` while held, and serves after. **PD**: an unconfigured
+connection on this build reads `synchronous` 2 and `foreign_keys` 1 — the pins
+are explicit over compiled defaults. **PE**: another connection's fence SUCCEEDS
+beside a connection that is merely open (or has set only `foreign_keys`) and is
+refused once it has read — so every close-first design has a window between the
+close and the replacement's first read. **PF** (after the lenses, deciding the
+split): a connection opened on `v/db` before `v` is renamed aside and a stage
+renamed in, and first used after, reads the ASIDE file and its `INSERT`
+SUCCEEDS, its `-wal` and `-shm` created in the swapped-in directory; every later
+reader of the swapped-in database, a fresh open included, then sees the aside's
+pages plus that write — the swapped-in content silently gone, `PRAGMA
+integrity_check` `ok` (a one-page toy; a real vault mixes two databases' pages).
+The refuter read why: SQLite's moved-file check runs for a rollback journal and
+at close, never on a WAL write, and only in the unix VFS.
+
+**Prior rulings found and their disposition** (searched `rul(ed|ing)` in this
+entry, O257, O276, O266, O254, O253, O268, O69, O175/O184). **O257 item 2** —
+"proven from another connection", "closing is the one release", "counted", "`/v1`
+evicts": FOLLOWED. **"The store REPLACES its own connection": REFUTED** — by M1
+(the replacement cannot open beside the lock it is to release), PE (closing first
+opens a window a rotation fence or a restore hold fills: the waiters the release
+exists for), PF (a reopen by path cannot tell its own file from a restore's) and
+the absence of any consumer (below); revised beside O257's record, never in place.
+**O276** — the one helper and the forgotten verdict FOLLOWED; its BUILT premise
+"fixing O278 makes every successful fallback reach this code" REFUTED beside it:
+nothing reattaches. **O266 item 5** — the reopen class FOLLOWED; its "first reason
+stands" (`get_or_insert`) REFINED: a release outranks a deferral, because a
+deferred handle serves reads the released one cannot. **O266 item 1** — the one
+manifest resolver FOLLOWED and extended. **O254 item 3** — a committed write
+answers Ok: FOLLOWED, and it is why the rotation's report now carries the head.
+**O253** — the snapshot door FOLLOWED. **O69/O268** — FOLLOWED: a released handle
+neither blocks a restore nor re-enters its directory. **O175/O184** — a function
+decides its own posture: FOLLOWED, in rotation's own words (`refuse_when_read_only`
+speaks of egress).
+
+**Claims refuted, the brief's and the lenses' included.**
+- *"A library caller keeps the handle"* (brief): `rotate_keys` has exactly two
+  production callers — the CLI (`main.rs`), which exits, and `/v1` (`tenant.rs`),
+  which evicts — and the orchestrator does not link the store. Only tests keep one.
+  But *"no product surface keeps a handle past the fallback"* is false in the
+  letter: both surfaces call `chain_state()` through the handle AFTER
+  `rotate_keys` returns, so on a released handle a COMMITTED rotation would answer
+  an error, inviting a second rotation.
+- *Keycheck as continuity* (brief Q2), *keycheck + height/head* (engineering) and
+  *inode read before the close* (memory): each PASSES the unsafe case — a
+  connection that raced the swap reads the aside file, which IS the database it
+  closed. A sound same-file check must follow the new connection's first
+  locking statement and is unix-only; Windows, where the fallback is expected
+  (D2), has no moved-file check at all.
+- *"`Link` makes every door refuse by construction"* (memory): false for the one
+  route to a false verdict — `verify`, `witness_emit`, `backup create` and
+  `verify_forget_attestation` read `vault.json` by path through `self.vault`
+  before any statement; after a foreign rotation under stale keys that is
+  `manifest_in_force` → `Tampered` → the manifest tamper event.
+- *"Never a false verdict"* (engineering): false with the graph secret warm.
+- *An equal-head rule* (security's fall-back if a reopen were ruled): detaches on
+  every benign append.
+- *The read-only case needs no fallback* (brief): only on a writable mount —
+  `lock_released` opens `READ_WRITE`, which on a write-protected mount cannot reach
+  the WAL index, so a read-only handle's refused rotation enters the fallback.
+
+**The ruled shape.**
+1. **Close, and do not reattach.** `replace_connection` (still O276's one site)
+   swaps in a schema-less in-memory placeholder under `query_only`, forgets the
+   label guard's verdict, drops the derived caches and closes the old connection
+   with `Connection::close()` — never by drop, whose `sqlite3_close` result
+   rusqlite discards; a failed close keeps the old connection and says the vault
+   stays held until the handle drops. `prove_released` counts the entry (as now),
+   releases, and opens NOTHING. The caller's next open is the retry, and the one
+   implementation of "is this handle still this vault".
+2. **`Retirement::Released`** in the vault crate, set by a setter that OVERWRITES
+   any earlier kind. `manifest_in_force` refuses it FIRST, as a new non-tamper
+   `VaultError` the surfaces class with the reopen class (409, no class; exit 1) —
+   so no manifest read by path can raise a false tamper verdict. The store's
+   `snapshot` door refuses it (every guarded read, and the bodies of `verify`,
+   the witness, a backup and the forget verdict); the four existing consumers of
+   a retirement refuse it; `retired_handle` maps it to `StaleUnlock` with its own
+   cause. `StaleUnlock`'s display prefix becomes cause-neutral and the race wording
+   moves to its mint site. The snapshot door refuses `Released` ONLY: an
+   integrity-retired or deferred handle keeps serving reads.
+3. **Doors that touch the placeholder directly** — `count`, `chain_state`, `stats`,
+   the listings, the graph, a write's `transaction()` — answer a raw "no such
+   table": loud, never Ok with vault data, never a verdict. A stated residual, its
+   trigger the day a production consumer keeps a handle past a rotation (then a
+   link type behind one accessor is owed, ≈207 sites).
+4. **`rotate_keys` refuses a read-only handle** before the fence, in
+   `tighten_anchor`'s shape (`Invalid`), so a read-only handle never reaches the
+   fallback.
+5. **`RotationReport` carries `chain_head` and `writes`**, read inside the hold;
+   the CLI and `/v1` print them from the report and read nothing through the
+   handle after a rotation; a `HAND_PROJECTED` row.
+6. **`lock_reconnects` counts entries into the fallback** — each one a release —
+   and O257's release gate keeps asserting zero.
+7. **Durability pins**: moot, nothing is reopened.
+
+**Options that lost, with their cost.** Reopen with a proof: the proof needs a
+unix-only same-file check after a locking statement, a second implementation of
+the open's verdicts, a connector keeping posture without `SQLITE_OPEN_CREATE`,
+and up to 5 s of `/v1`'s one loop — and it is unsound until the sibling below
+lands. PB/PC: the window, false or raw errors, PF (PC pins a descriptor across the
+swap). A link type now: ≈207 sites for a uniform error class on a state no binary
+reaches.
+
+**Dissent.** The memory lens held for a link type and a reattach with proven
+continuity; the engineering lens for a reattach with keycheck and height. Both
+were settled by PF and by reading the manifest doors, not by count. None on the
+close itself, the class, the report or the posture.
+
+**Fails silently if**: the release is checked at store call sites or in
+`anchored_head` alone rather than in `manifest_in_force`; set with `get_or_insert`;
+the old connection dropped instead of closed; the snapshot door refuses every
+retirement kind; the inverted cost is driven by the proof-refusal seam (it passes
+on the old code) rather than the real own-lock; the foreign-rotation arm runs with
+a cold graph secret (it passes without the fix); the read-only refusal comes after
+the fence; the placeholder has a schema or lacks `query_only` (a lazy `CREATE
+TABLE IF NOT EXISTS` would make a read answer empty Ok); a surface still reads
+`chain_state()` after rotating; Windows, where nothing here runs.
+
+**The gate.** G1 — M1's real own-lock: released in under a second (today 5 s,
+FAILS), `lock_reconnects` 1, another PROCESS writes, and `get`, `upsert`, `verify`
+and `witness_emit` answer the reopen class. G2 — a foreign rotation after the
+release, the secret warmed: it succeeds, and `verify`, `witness_emit`, `backup
+create` and `verify_forget_attestation` answer the reopen class, never
+`ManifestTampered`; a fresh open verifies. Counterfactual: without the resolver
+arm, `ManifestTampered`. G3 — a restore after the release succeeds, the handle
+refuses, the restored directory gains no `-wal`/`-shm` from it. G4 — a deferral,
+then a release: `Released` wins. G5 — the report's head equals a fresh
+`chain_state`, and a source gate finds no `chain_state()` after `rotate_keys` on
+either surface. G6 — read-only: `Invalid`, nothing staged, `lock_reconnects` 0
+under a refused proof. G7 — O276's test re-shaped, never deleted, and its source
+gate re-pointed: one `mem::replace`, a `.close()`, no connector inside
+`prove_released` or `replace_connection`. Multi-process arms looped ≥10.
+
+**Versioning**: PATCH inside the unreleased `1.7.0` — the fallback, O276 and
+`StaleUnlock` are unreleased; a read-only rotation answered a raw error to tests
+alone. No `UPGRADING.md` entry: no product surface refuses anything it accepted.
+
+**Filed by this ruling**: O279 (an open that races a restore's swap reads the
+vault set aside and writes into the restored one).
+
+#### BUILT 2026-09-26, to the ruling — with one claim of the ruling's gate corrected by the gate, and one defect of mine in a splice
+
+**The release.** `prove_released` (store `lib.rs`) counts the entry, calls
+`replace_connection`, marks the handle `Vault::release(..)` and pushes a note on
+`unhealed`; it opens nothing. `replace_connection` — still the one site a
+connection is replaced — swaps in an in-memory placeholder under `query_only`
+(`std::mem::replace`), forgets the label guard's verdict, drops the derived
+caches and closes the old connection with `Connection::close()`; a failed close
+reinstalls it and says the vault stays held until the handle drops.
+
+**The vault crate.** `Retirement::Released`, set by `Vault::release`, which
+OVERWRITES any earlier kind (`retire` and `retire_until_reopened` keep their
+`get_or_insert`). `manifest_in_force` refuses it first, as
+`NotInForce::Released`, which `refusal` maps to the new
+`VaultError::HandleReleased` — never the tamper event. `/v1` classes it 409 with
+no class in both `vault_err` and `store_err`; the CLI's integrity set does not
+name it, so it exits 1.
+
+**The store.** `VaultStore::snapshot` refuses `Released` alone, through
+`retired_handle`, which maps it to `StaleUnlock` with its own cause; an
+integrity-retired or deferred handle still reads. `StaleUnlock`'s display
+prefix is now "this handle must be reopened: …", the race's wording moved into
+its one mint site, `settle_foreign_keycheck`. `rotate_keys` refuses a read-only
+handle as `Invalid` after the id and retirement checks, before the fence.
+`RotationReport` gained `chain_head` and `writes`, set where the rotation's
+transaction sets them; the CLI prints both (`new chain head`, and a new `chain
+height` line) and `/v1` answers `chain_head` from the report, neither reading
+the handle after `rotate_keys`.
+
+**Gates** (`anchor_tests.rs`): `o278_the_fallback_releases_a_connection_whose_own_lock_held_the_vault`
+— the pinned cost INVERTED and renamed, never deleted: the real own-lock,
+released in under a second, `lock_reconnects` 1, `Released`, the note said,
+another connection reads, another PROCESS writes, `get`, `verify` and
+`witness_emit` answer the reopen class by variant, `upsert` and `count` are
+refused with no verdict, and a fresh open verifies with only the other
+process's write added. `o278_a_released_handle_reads_no_manifest_after_another_process_rotates`
+— the graph secret warmed by a `verify`, the release, another handle's rotation
+SUCCEEDING (which is itself the proof the vault was let go), then `verify`,
+`witness_emit` and `backup` in the reopen class and a fresh open verifying.
+`o278_a_released_handle_lets_a_restore_run_and_does_not_re_enter_the_vault` —
+a real `restore_archive` over the vault succeeds, the handle refuses, and the
+restored directory's listing is unchanged by its calls.
+`o278_a_release_outranks_a_deferred_promote` — a fault-seam deferral whose
+release proof is refused: `Released`, the deferral's warning still on
+`unhealed`, reads in the reopen class, the next writable open promotes.
+`o278_the_rotation_report_carries_the_committed_head` — equal to a fresh
+`chain_state`. `o278_a_read_only_handle_is_refused_a_rotation_before_the_fence`
+— `Invalid` under a refused proof, `lock_reconnects` 0, nothing staged, the
+manifest unchanged, `query_only` still 1 on the connection itself. O276's
+behavioural test is RE-SHAPED, never deleted: after the forced fallback the
+handle serves nothing, and a fresh open refuses the rolled-back correction on
+its first guarded read; its forget counterfactual no longer bites there, which
+its doc says. Source gates: O276's re-pointed — every `.conn` replacement in
+the store sits in `replace_connection`, which swaps by `mem::replace`, calls
+`.close()` and forgets the verdict, and neither it nor `prove_released` names a
+connector — and `no_surface_reads_the_handle_after_a_rotation`, over the CLI's
+rotate arm and `/v1`'s `rotate`.
+
+**Counterfactuals, each run on this tree, restored from a saved copy and checked
+by sha256, every log carrying a `Compiling` line**: a reattach after the close —
+the lenses' losing option → six fail: every behavioural arm, O276's re-shaped
+test and the source gate; the resolver without its `Released` arm → the
+foreign-rotation arm fails; `release` keeping the first reason → the deferral
+arm fails; no read-only refusal → the read-only arm fails; the old connection
+dropped instead of closed → the source gate fails (the behaviour is identical
+when a close succeeds, which is why a gate reads the source); the CLI reading
+`chain_state()` after rotating → the surface gate fails; the snapshot check
+removed → the release arm fails, and only since the build added a direct
+assertion on the door (below). The tree's diff was identical before and after.
+
+**Found by the build.**
+- *A claim of the ruling's gate, corrected by the gate.* G2 listed
+  `verify_forget_attestation` among the doors that read the manifest before any
+  statement. For a receipt this handle's own keys minted, the tombstones replay
+  by computation and the manifest is read only on the recorded-evidence arm; the
+  check that the drawers are gone then meets the placeholder and answers "no
+  such table" — ruling item 3's stated residual, never a verdict. The arm
+  asserts exactly that.
+- *A defect of mine in a splice, caught by the compiler.* The script that
+  re-pointed O276's source gate ended its replacement at the next doc comment,
+  and in O276's unit I had inserted that gate directly ABOVE the source-gate
+  helpers, so the splice deleted `production`, `sources` and `body_of`. The
+  helpers were restored verbatim from `HEAD`.
+- *A counterfactual that stayed GREEN, and what it found.* With the snapshot
+  door's check removed every arm still passed: each door they drive reads the
+  manifest anchor before or inside its snapshot (O253's order), where the
+  resolver's arm refuses first, so no arm reached the door the ruling names.
+  The release arm now drives the door directly (`snapshot(|_| Ok(()))`, which
+  without the check opens on the placeholder and answers Ok), and the
+  counterfactual fails.
+- The ruling's recorded G1 listed `upsert` among the reopen-class answers while
+  its item 3 lists every write's `transaction()` among the doors that meet the
+  placeholder first; the build follows item 3, and G1 asserts the write is
+  refused with no verdict and commits nothing.
+
+**Real corpus.** through a release binary built from this tree (`Compiling` lines for
+the vault crate, the store and the CLI after the last source edit; the change
+adds no runtime string to probe for, and the fallback is reachable only through
+the test seam or the real own-lock, so no binary drives the release itself):
+the LoCoMo feed mined into 20 wings, 1,700 sealed drawers. `vault rotate` beside
+a live `serve-http` exited 1 after 5.0 s with no fallback and the salt
+unchanged, the server's save and search 200; alone it rotated in 91 ms with no
+fallback; `verify` OK in 16–17 ms; search served in 113–129 ms (the O276
+run on the same corpus read 123–148 ms, so no cost shows). A second CLI
+rotation printed `new chain head` and `chain height: 1704`, both equal to
+`stats` after it; `POST /v1/…/rotate` — with `/mcp` on a second vault, since
+`/v1` refuses to rotate the vault its own `/mcp` serves — answered 200 with
+`chain_head` and `report.writes` 1705, equal to `stats` after, and `verify`
+passed.
+
+**Loops.** The six O278 arms, O276's re-shaped test and O257's release test
+(which drives other processes) run ten times in a row: ten green.
+
+**Cost.** One enum comparison per snapshot; nothing else off the fallback.
 
 ## 1.6.1 — released 2026-09-22
 
@@ -28162,6 +28491,8 @@ stop-the-server-and-move procedure for that platform.
 **Gate**: on a Windows runner, restore over an existing vault succeeds and verifies,
 and a held vault refuses with nothing changed.
 
+**Relations:** shares the restore swap with O279 — what an open that raced the swap reads and writes is O279's on unix, and whether the swap can happen with the database open is this entry's on Windows.
+
 ### O277 — `anchored_head` falls back to the cached head over a deleted `vault.json`, so an ordinary handle answers `VERIFY OK` with its manifest gone
 
 **Filed 2026-09-26 by O266's ruling (its security lens, confirmed by the
@@ -28186,54 +28517,37 @@ anchor would be a false exit 2.
 a live handle refuse as integrity; a transient read error still falls back; the
 Windows probe first.
 
-### O278 — the release fallback opens its replacement while the lock it exists to release is still held, so it never releases it
+### O279 — an open that races a restore's swap reads the vault set aside and writes into the restored one
 
-**Filed 2026-09-26 by O276's build; measured by the integrator.** O257 ruling item
-2: when a zero-timeout second connection cannot read the vault after an exclusive
-hold, "the store REPLACES its own connection — closing is the one release that
-works on every platform and every path". `VaultStore::prove_released` (store
-`lib.rs`) opens the replacement (`connect_writable`) while the old connection is
-still open, and closes the old one only by the assignment that follows. On this
-platform another connection cannot hold the vault exclusively while the handle has
-it open — O257's P3, re-measured: a second connection's `BEGIN EXCLUSIVE` beside
-an idle store handle is refused busy — so the proof fails only on the handle's OWN
-lock, and that lock refuses the replacement's first statement. **M1**: the
-handle's connection left exclusive (what a failed return to NORMAL leaves;
-Windows' PENDING byte after a refused fence, O257's D2, is the same shape by
-reading) — the proof fails, the replacement waits its busy timeout (5.01 s) and
-fails, the handle keeps the connection that holds the vault, another connection
-still cannot read, and `lock_reconnects` reads 1 for a replacement that never
-happened. **M2**: the old connection closed FIRST — the replacement opened in
-10 ms, another connection read the vault, and the fresh connection's cookie read
-2, as the old one's had, which is why O276's helper is the one door (its source
-gate refuses a second replacement site). O257's ruled arm "the fallback itself,
-forced, releases" was never built; built as ruled, it would have failed. M1 is
-pinned as `Verdict::Cost` in
-`o278_the_fallback_cannot_replace_a_connection_whose_own_lock_blocks_the_replacement`.
-No product surface is held by it — the CLI exits after `vault rotate` and `/v1`
-evicts its handle after every rotate (O257 item 2) — so a library caller keeps
-the lock until it drops the handle.
+**Filed 2026-09-26 by O278's ruling (its refuter; the mechanism measured as PF by
+the integrator).** `VaultStore::open` takes its database descriptor at
+`Connection::open` and runs its first statement (`journal_mode`) after it; a
+read-only open does the same through `connect_read_only`. O69's exclusive hold —
+the hold a `backup restore` takes last, before its two renames — can be taken
+between those two calls, because a connection that has opened but not read is
+invisible to a fence (O278's PE). The first statement then waits out the swap
+(`restores.rs`: the vault renamed aside, the stage renamed in, the hold dropped)
+and proceeds on the ASIDE inode, with `-wal` and `-shm` opened by path in the
+restored directory. PF measured the shape: the aside file's pages are read, a
+write succeeds into the restored directory's `-wal`, and the restored content is
+silently replaced for every later reader, `integrity_check` `ok`. An open's own
+writes — the keycheck seed, the chain switch, the anchor — would land there; a
+read-only server would serve a vault that no longer exists.
 
-**Shape, for a ruling**: close before reopening, through `replace_connection`;
-what the handle is if the reopen then fails — another process may take the vault
-the moment it is released (a rotation, a restore's hold) — a placeholder with a
-retirement of the reopen class, a bounded retry, or both, and which doors must
-consult it (reads do not consult a retirement today); and what `lock_reconnects`
-counts, an attempt or a replacement (O257's release gate asserts it zero). Two
-siblings the ruling should take: the replacement is always `connect_writable`,
-so a read-only handle reaching it would be upgraded to a writable connection —
-unreachable today, because a rotation asked of a read-only handle fails at
-`BEGIN EXCLUSIVE` with a raw `SQLITE_READONLY` before any lock (measured by O276:
-nothing staged, the manifest unchanged, no reconnect, `query_only` still on);
-and that raw error is the wrong class for a posture refusal, which
-`refuse_when_read_only` exists to give — a library-only path, `/v1` refusing
-rotate on a read-only server before dispatch and the CLI opening writable.
+**Relations:** shares the restore swap with O275 — whether a rename can happen at all with the database open is O275's on Windows, and what an open does when one happens is this entry's on unix.
 
-**Gate**: the pinned cost INVERTED, never deleted — the handle's own connection
-left exclusive, `prove_released` releases it (another PROCESS writes within the
-bound), `lock_reconnects` counts what the ruling decides, and the next guarded
-read replays (O276); the reopen-failure arm driven by a holder that takes the
-vault in the window between the close and the reopen; the read-only arm.
+**Shape, for a ruling**: in each posture's connector, after the first statement
+that takes a lock and before any write, prove the descriptor's file is the path's
+(`SQLITE_FCNTL_HAS_MOVED`, or a stat of dev/inode before the open against one after
+that statement); a mismatch closes without a checkpoint and answers `StaleUnlock`,
+which `open_store_as` and `store_for` already retry once. Windows has no moved-file
+check; O275 owns whether a rename there can happen with a file open.
+
+**Gate**: a restore swap forced between an open's `Connection::open` and its first
+statement (a pause point) — the open refuses or retries onto the restored file,
+the restored directory is byte-identical, and a multi-page vault's
+`integrity_check` and `verify` pass after; PF on a real multi-page vault first, to
+size it.
 
 
 ---

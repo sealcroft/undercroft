@@ -1189,10 +1189,21 @@ fn refuse_unless_authentic(
 impl crate::VaultStore {
     /// [`snapshot`] on this handle's connection, counted on this handle — the
     /// one way the store opens a read snapshot (ROADMAP O253).
+    ///
+    /// **A handle that let go of the vault opens none** (ROADMAP O278): every
+    /// guarded read, and the bodies of `verify`, the witness, a backup and an
+    /// erasure receipt's check, answer the reopen class here rather than read
+    /// the placeholder its connection became. Only THAT retirement refuses: a
+    /// handle retired as an integrity finding, or whose promote was deferred,
+    /// still reads.
     pub(crate) fn snapshot<T>(
         &self,
         body: impl FnOnce(&Snapshot<'_>) -> Result<T, StoreError>,
     ) -> Result<T, StoreError> {
+        if let Some(released @ undercroft_vault::Retirement::Released(_)) = self.vault.retirement()
+        {
+            return Err(crate::retired_handle(released));
+        }
         snapshot(&self.conn, &self.owned_snapshots, body)
     }
 

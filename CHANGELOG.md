@@ -2,7 +2,7 @@
 
 ## 1.7.0 — unreleased
 
-MINOR: one new capability, backward compatible, and twelve fixes. The witness
+MINOR: one new capability, backward compatible, and thirteen fixes. The witness
 commands and routes are new; no default moves and no declaration can stop a
 start-up. Three fixes change what a deployment must do: every process writing a
 vault must run the same build, and a server whose vault another process
@@ -14,7 +14,7 @@ vault's embedder environment and refuses under `--read-only` (O268) — all in
 write lock for as long as it runs and O256's that an archive taken by an older
 release beside a writer may be torn. (This line said "one fix" while O243 and
 O246 were both below it; corrected with O247. It said "nine" until O268,
-"ten" until O266, and "eleven" until O276.)
+"ten" until O266, "eleven" until O276, and "twelve" until O278.)
 
 ### The external witness: `undercroft witness emit` / `check`, `GET`/`POST /v1/…/witness` (O245)
 
@@ -554,6 +554,51 @@ now skips them, as the reader beside it already did.
 
 PATCH-class inside the unreleased 1.7.0: a verdict the handle had no basis for is
 no longer served, on a path no product surface reaches. No `UPGRADING.md` entry
+is owed.
+
+### A key rotation that cannot prove its hold released lets go of the vault, and reads nothing after (O278)
+
+When a key rotation's exclusive hold cannot be proven released — a zero-timeout
+second connection cannot read the vault — the handle was meant to close its
+connection, the one release that works on every platform (O257). It opened a
+replacement FIRST, and in the state the fallback exists for that open was
+refused by the old connection's own lock: measured, a 5-second wait and the
+vault still held, while the counter said the connection had been replaced.
+
+Now the handle CLOSES its connection (explicitly — a close that fails by drop is
+discarded silently) and reattaches nothing. A reopen by path cannot tell its own
+file from one a `backup restore` swapped in: a connection that has opened but not
+yet read is invisible to another process's fence, and one opened before a
+directory swap reads the file set aside and writes into the restored vault's
+`-wal` — measured, the restored content silently replaced with
+`integrity_check` reading ok. The released handle answers every door with the
+reopen class (409 with no class; exit 1): its reads refuse at the snapshot door,
+and its manifest reads refuse in the vault crate's one resolver, so a manifest
+another process rotated since cannot read as tampering. A door that touches the
+closed connection first answers a loud error, never data. The release outranks a
+deferred promote, whose warning about `vault.json.next` stays said.
+
+- **The rotation's report carries the chain head and height it committed**,
+  read inside its hold; `vault rotate` and `POST /v1/…/rotate` print them from
+  the report instead of reading the chain through the handle afterwards, so a
+  committed rotation can never answer an error that invites a second one. The
+  CLI now prints `chain height` beside `new chain head`.
+- **A rotation asked of a read-only handle is refused** before the fence, as a
+  posture error, where it answered a raw `SQLITE_READONLY`.
+- **`StaleUnlock`'s message** now reads "this handle must be reopened: …"; the
+  race's own wording ("the vault's keys were rotated while this process opened
+  it") moved to where the race is detected, because it was false for the other
+  two causes.
+
+No product surface kept a handle past a rotation — the CLI exits and `/v1`
+evicts its handle — so this reached a library caller alone. Ruled by a
+three-lens panel plus a refuter (ROADMAP O278), which refuted O257's "the store
+REPLACES its own connection" beside it. Filed beside it: O279 (an ordinary open
+that races a restore's swap reads the vault set aside and writes into the
+restored one).
+
+PATCH-class inside the unreleased 1.7.0: the fallback, O276 and `StaleUnlock`
+are all unreleased, and the report fields are additive. No `UPGRADING.md` entry
 is owed.
 
 ## 1.6.1 — 2026-09-22

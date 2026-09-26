@@ -117,8 +117,7 @@ Exposed series (all `undercroft_*`):
   label guard, which authenticates every label a reader decides from. It is
   designed to run **once per handle**, re-running only when another
   connection commits — or once after the handle's own key rotation (ROADMAP
-  O266) or a replaced connection (O276) — so a sustained rate here is not
-  routine: it is a
+  O266) — so a sustained rate here is not routine: it is a
   second writer moving `PRAGMA data_version` under a long-lived server, and
   each move costs the next guarded read a walk of the entire `audit` table.
   That was a +213% regression for a whole release, found by a reviewer

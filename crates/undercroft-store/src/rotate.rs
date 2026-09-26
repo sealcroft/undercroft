@@ -75,6 +75,15 @@ pub struct RotationReport {
     /// new keys; `vault.json.next` is intact and the next writable open
     /// promotes it — it must not be deleted. `None` on every healthy rotation.
     pub promote_deferred: Option<String>,
+    /// The committed chain head the rotation wrote, read inside its hold,
+    /// where nothing else can move it (ROADMAP O278). Every surface reports
+    /// the new head from HERE and never through the handle afterwards: a
+    /// handle that let go of the vault on its way out answers the reopen
+    /// class, and an error after a committed rotation invites a second one
+    /// (O254 item 3).
+    pub chain_head: String,
+    /// The committed chain height beside [`chain_head`](Self::chain_head).
+    pub writes: u64,
 }
 
 // The rotation's fence (ROADMAP O257): an EXCLUSIVE hold on the store's own
@@ -118,7 +127,10 @@ impl VaultStore {
     /// Rotate this vault onto `next`'s keys (obtain `next` from
     /// [`undercroft_vault::VaultManager::rotation_candidate`]). On return the
     /// store itself operates under the new keys; RAM caches of decrypted
-    /// artifacts are dropped and rebuild lazily.
+    /// artifacts are dropped and rebuild lazily. **Unless its hold's release
+    /// could not be proven** (ROADMAP O278): then the handle closed its
+    /// connection on the way out and answers the reopen class from every door,
+    /// so the report carries the committed head a surface prints.
     ///
     /// **It must be the only handle on the vault, and it now makes sure it is
     /// (ROADMAP O257).** "Do not rotate a vault another process is serving"
@@ -144,6 +156,19 @@ impl VaultStore {
         // only file holding its keys (ROADMAP O266).
         if let Some(retirement) = self.vault.retirement() {
             return Err(crate::retired_handle(retirement));
+        }
+        // A rotation writes `vault.json.next` and `vault.json` — files, which
+        // `query_only` does not stop — so it decides its posture itself, before
+        // the fence (ROADMAP O278; O175/O184's rule). A read-only handle
+        // answered a raw SQLITE_READONLY at `BEGIN EXCLUSIVE`, and on a
+        // write-protected mount its release proof could fail and let go of the
+        // vault it was only reading.
+        if self.read_only {
+            return Err(StoreError::Invalid(
+                "a key rotation writes the vault's manifest and re-seals every record, and this \
+                 store was opened read-only"
+                    .into(),
+            ));
         }
         let rotated = self.rotate_keys_fenced(next);
         // On every exit that returns — a refusal, a failure, a success.
@@ -914,6 +939,10 @@ impl VaultStore {
             crate::chain::insert_record(tx, &rotate_label, &rotate_tag, &rotated_at)?;
             crate::chain::set_head(tx, regime, &head)?;
             crate::chain::set_writes(tx, writes)?;
+            // What every surface reports as the new head (ROADMAP O278): the
+            // values this transaction commits, under the hold.
+            report.chain_head = head.to_string();
+            report.writes = writes;
             // The committed marker: reconciliation reads this to decide
             // whether a crash left the staging manifest promotable.
             tx.execute(

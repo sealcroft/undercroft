@@ -1563,13 +1563,10 @@ impl Tenancy {
         // The DATABASE's head, never `Vault::chain_head_hex()` — the
         // handle's cached manifest field, loaded once at unlock and never
         // reloaded, which CLAUDE.md names as forbidden for a reporting
-        // surface. This route and `vault status` were the last two callers
-        // (ROADMAP A21). They agreed with the truth only because a rotation
-        // re-anchors on its way out.
-        let chain_head = match &rotated {
-            Ok(_) => Some(store.chain_state().map_err(store_err)),
-            Err(_) => None,
-        };
+        // surface (ROADMAP A21). Read INSIDE the rotation's hold and carried
+        // on its report, never through the handle afterwards (ROADMAP O278):
+        // a handle that let go of the vault on its way out answers the reopen
+        // class, and a 500 after a committed rotation invites a second one.
         // **The handle is closed after every rotate, whatever the outcome
         // (ROADMAP O257)**, `backup_restore`'s precedent: the rotation's
         // exclusive hold is released and proven inside the store, and closing
@@ -1579,14 +1576,13 @@ impl Tenancy {
         // request reopens it from the current manifest.
         self.stores.remove(id);
         let report = rotated?;
-        let (chain_head, _) = chain_head.expect("computed on success")?;
         Ok((
             200,
             Body::Json(json!({
                 "id": id,
                 "rotated": true,
                 "report": serde_json::to_value(&report).unwrap_or_else(|_| json!({})),
-                "chain_head": chain_head,
+                "chain_head": report.chain_head,
                 "note": "remote index copies are stale; re-run `undercroft index push` if used",
             })),
         ))
@@ -3824,6 +3820,10 @@ fn vault_err(e: undercroft_vault::VaultError) -> RestError {
         // operator puts it back. The state of the installation, not of any vault's bytes:
         // 409 with no class.
         V::RestoreInterrupted { .. } => 409,
+        // ROADMAP O278: a handle that let go of the vault reads no manifest.
+        // The vault is untouched and a reopen is the remedy — `StaleUnlock`'s
+        // class, 409 with no class.
+        V::HandleReleased(_) => 409,
         _ => 500,
     };
     let err = RestError::new(code, e.to_string());
@@ -3899,6 +3899,9 @@ fn store_err(e: StoreError) -> RestError {
         // A restore refused over a vault an interrupted restore set aside
         // (ROADMAP O268) — `vault_err`'s class for the same variant.
         StoreError::Vault(undercroft_vault::VaultError::RestoreInterrupted { .. }) => 409,
+        // A handle that let go of the vault (ROADMAP O278) — `vault_err`'s
+        // class for the same variant, and `StaleUnlock`'s.
+        StoreError::Vault(undercroft_vault::VaultError::HandleReleased(_)) => 409,
         // "That record is not here" has ONE status class across every
         // route: `forget` and `admission` used to answer 400 for it while
         // GET/PUT on the same id answered 404, so a client could not key
