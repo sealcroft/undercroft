@@ -831,6 +831,10 @@ pub(crate) fn retired_handle(retirement: &undercroft_vault::Retirement) -> Store
              next writable open promotes vault.json.next — and do not delete that file \
              (ROADMAP O266)"
         )),
+        undercroft_vault::Retirement::Released(why) => StoreError::StaleUnlock(format!(
+            "this handle no longer reads or writes: {why}. Nothing was read or written. \
+             Reopen the vault (ROADMAP O278)"
+        )),
     }
 }
 
@@ -1856,8 +1860,11 @@ pub enum StoreError {
     /// open. 409 with no integrity class, exit 1. **Also the refusal of a
     /// handle whose own key rotation committed and could not promote its
     /// manifest** (ROADMAP O266): the same remedy, a reopen, whose writable
-    /// open promotes `vault.json.next`.
-    #[error("the vault's keys were rotated while this process opened it: {0}")]
+    /// open promotes `vault.json.next`. **And the refusal of a handle that
+    /// let go of the vault** (ROADMAP O278). The prefix names the remedy, not
+    /// a cause: the race's own wording is at its mint site, because "the keys
+    /// were rotated" is false for the other two.
+    #[error("this handle must be reopened: {0}")]
     StaleUnlock(String),
     /// The vault's recorded vector space is not this process's embedder; searching across the swap would degrade recall silently.
     #[error(
@@ -4160,9 +4167,9 @@ impl VaultStore {
     ) -> Result<String, StoreError> {
         if vault.staged_on_disk()? != vault.staged_seen() || !vault.manifest_on_disk_is_mine() {
             return Err(StoreError::StaleUnlock(
-                "vault.json or vault.json.next changed after this process read it, and the \
-                 database answers to another key generation. Nothing was written; reopen the \
-                 vault (ROADMAP O257)"
+                "the vault's keys were rotated while this process opened it — vault.json or \
+                 vault.json.next changed after this process read it, and the database answers \
+                 to another key generation. Nothing was written; reopen the vault (ROADMAP O257)"
                     .into(),
             ));
         }
@@ -5025,7 +5032,7 @@ impl VaultStore {
     }
 
     /// **Prove an exclusive hold is released, from ANOTHER connection
-    /// (ROADMAP O257)** — and when it cannot be, replace this handle's own.
+    /// (ROADMAP O257)** — and when it cannot be, let go of the vault.
     ///
     /// Reading `locking_mode` back proves nothing: the pragma reports the
     /// pager's flag, while the release is SQLite's `sqlite3WalExclusiveMode`,
@@ -5034,55 +5041,87 @@ impl VaultStore {
     /// leaves SQLite's PENDING byte held, which no statement on this
     /// connection releases (read from the bundled source; nothing here runs
     /// on Windows). So a zero-timeout connection reads one row; if it cannot,
-    /// this handle opens a replacement and swaps it in, closing the old one —
-    /// the one release that works on every platform — counted on
-    /// [`lock_reconnects`](Self::lock_reconnects). A long-lived handle left
-    /// exclusive would lock every other process out of the vault in silence.
+    /// this handle CLOSES its connection — the one release that works on
+    /// every platform — counted on [`lock_reconnects`](Self::lock_reconnects),
+    /// and is released: every later door answers the reopen class. A
+    /// long-lived handle left exclusive would lock every other process out of
+    /// the vault in silence.
     ///
-    /// **The replacement is opened BEFORE the old connection closes, and in
-    /// the state this fallback exists for that open is refused by the old
-    /// connection's own lock** (ROADMAP O278, measured and pinned as a cost):
-    /// it waits its busy timeout, the handle keeps the connection that holds
-    /// the vault, and the counter still reads one. The release then comes
-    /// from dropping the handle, which the CLI does by exiting and `/v1` by
-    /// evicting it after every rotate.
+    /// **It opens nothing** (ROADMAP O278's ruling). It used to open a
+    /// replacement BEFORE closing the old connection, and in the state this
+    /// fallback exists for that open was refused by the old connection's own
+    /// lock — measured, 5.01 s and the vault still held. Closing first opens a
+    /// window no fence can see (a connection that has not yet read is
+    /// invisible to one), and a reopen by path in that window reads the file a
+    /// restore set aside and writes into the restored directory's `-wal` —
+    /// measured, the restored content silently replaced. So the caller's next
+    /// open is the retry, and the one implementation of "is this handle still
+    /// this vault". The CLI exits after a rotation and `/v1` evicts its handle,
+    /// so no surface keeps one.
     pub(crate) fn prove_released(&mut self) {
         if self.lock_released() {
             return;
         }
         self.lock_reconnects += 1;
-        undercroft_obs::diag_warn!(
-            "vault {:?}: another connection could not read the vault after this handle released \
-             its exclusive hold; replacing this handle's connection (ROADMAP O257)",
-            self.vault.id()
-        );
-        match Self::connect_writable(&self.vault) {
-            Ok(fresh) => self.replace_connection(fresh),
-            Err(e) => undercroft_obs::diag_warn!(
-                "vault {:?}: reconnecting failed ({e}); the hold is released when this handle \
-                 is dropped",
-                self.vault.id()
-            ),
-        }
+        let why = if self.replace_connection() {
+            "another connection could not read the vault after this handle's key rotation \
+             released its exclusive hold, so the handle closed its database connection rather \
+             than keep every other process locked out"
+        } else {
+            "another connection could not read the vault after this handle's key rotation \
+             released its exclusive hold, and closing the handle's database connection failed: \
+             the vault stays held until this handle is dropped"
+        };
+        undercroft_obs::diag_warn!("vault {:?}: {why} (ROADMAP O257, O278)", self.vault.id());
+        self.unhealed
+            .push(format!("{why}; reopen the vault (ROADMAP O278)"));
+        self.vault.release(why.to_string());
     }
 
-    /// **The one place a handle's connection is replaced (ROADMAP O276)** —
-    /// and replacing it forgets what this handle keyed to the OLD one.
+    /// **The one place a handle's connection is replaced (ROADMAP O276)** — by
+    /// a placeholder, closing the vault's (ROADMAP O278) — and replacing it
+    /// forgets what this handle keyed to the OLD one.
     ///
-    /// The label guard caches its replay verdict under `PRAGMA
-    /// data_version`, and that cookie is comparable only within ONE
-    /// connection: a fresh connection reads the value a quiet long-lived one
-    /// did before any foreign commit (O266's P5), whatever was committed in
-    /// between. A verdict carried across the swap was therefore served as if
-    /// nothing had moved — measured, a correction another connection rolled
-    /// back read as the old text on the first guarded read after the swap.
-    /// The cached REPLAY is dropped; the append-only memory is kept, because
-    /// it describes audit ROWS, which do not change with a connection. Every
-    /// other connection setting is `connect_writable`'s, so nothing else the
-    /// handle holds is keyed to the connection it had.
-    fn replace_connection(&mut self, fresh: Connection) {
-        self.conn = fresh;
+    /// The placeholder is an in-memory database with no schema, under
+    /// `query_only`: a door that reaches it before a retirement is checked
+    /// answers a loud "no such table", and a lazy `CREATE TABLE IF NOT EXISTS`
+    /// cannot make one answer an empty Ok. The old connection is closed with
+    /// `Connection::close()`, never by drop: rusqlite's drop discards
+    /// `sqlite3_close`'s result, and a close that fails there would leave an
+    /// unreachable connection holding the very lock this exists to release. A
+    /// close that fails keeps the old connection, and says so.
+    ///
+    /// The label guard's cached verdict is dropped (O276: its `data_version`
+    /// cookie belongs to the connection that read it), and so are the derived
+    /// caches. Returns whether the vault's connection was closed.
+    fn replace_connection(&mut self) -> bool {
+        let placeholder = match Connection::open_in_memory()
+            .and_then(|c| c.pragma_update(None, "query_only", "ON").map(|()| c))
+        {
+            Ok(c) => c,
+            Err(e) => {
+                undercroft_obs::diag_warn!(
+                    "vault {:?}: no placeholder connection could be made ({e}); the vault's \
+                     connection is kept (ROADMAP O278)",
+                    self.vault.id()
+                );
+                return false;
+            }
+        };
+        let old = std::mem::replace(&mut self.conn, placeholder);
         self.forget_label_verdict();
+        self.drop_derived_caches();
+        match old.close() {
+            Ok(()) => true,
+            Err((old, e)) => {
+                undercroft_obs::diag_warn!(
+                    "vault {:?}: closing the database connection failed ({e}) (ROADMAP O278)",
+                    self.vault.id()
+                );
+                self.conn = old;
+                false
+            }
+        }
     }
 
     fn lock_released(&self) -> bool {

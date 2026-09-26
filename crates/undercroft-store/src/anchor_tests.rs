@@ -227,11 +227,9 @@ fn let_go(
     assert!(child.wait().unwrap().success(), "{tag}: {rest}");
 }
 
-/// **The release, proven the only way it can be (ROADMAP O257)**: another
-/// PROCESS opens the vault and writes, within a bound, and this handle did not
-/// have to replace its own connection to let it. Reading `locking_mode` back
-/// would prove nothing, and a reconnect would hide a restore that failed.
-fn assert_released(root: &Path, s: &VaultStore, tag: &str) {
+/// Another PROCESS opens the vault and writes, within a bound — the only
+/// proof that this process holds nothing on it (ROADMAP O257, O278).
+fn another_process_writes(root: &Path, tag: &str) {
     let started = Instant::now();
     let mut env = child_env(root, 1, tag);
     env.push(("O254_BUSY_MS", "1000".into()));
@@ -242,6 +240,14 @@ fn assert_released(root: &Path, s: &VaultStore, tag: &str) {
         "{tag}: the other process waited {:?} to open",
         started.elapsed()
     );
+}
+
+/// **The release, proven the only way it can be (ROADMAP O257)**: another
+/// PROCESS opens the vault and writes, within a bound, and this handle did not
+/// have to replace its own connection to let it. Reading `locking_mode` back
+/// would prove nothing, and a reconnect would hide a restore that failed.
+fn assert_released(root: &Path, s: &VaultStore, tag: &str) {
+    another_process_writes(root, tag);
     assert_eq!(
         s.lock_reconnects(),
         0,
@@ -1717,7 +1723,7 @@ fn a_staged_file_of_the_current_generation_is_removed_and_never_lowers_the_ancho
 }
 
 // ---------------------------------------------------------------------------
-// ROADMAP O276: a connection the handle replaces
+// ROADMAP O276, O278: a handle that lets go of the vault
 // ---------------------------------------------------------------------------
 
 type DrawerRow = (String, Vec<u8>, Vec<u8>, Vec<u8>);
@@ -1756,22 +1762,95 @@ fn replay_the_correction(conn: &rusqlite::Connection, id: &str, older: &DrawerRo
     assert_eq!(n, 1, "premise: the older drawer row is written back");
 }
 
-/// **ROADMAP O276, the gate: a connection the handle REPLACES takes nothing
-/// the old one cached.** The label guard keys its replay verdict by `PRAGMA
-/// data_version`, which is comparable only within one connection, and a
-/// fresh connection reads the value a quiet long-lived one did before any
-/// foreign commit (O266's P5). So a verdict cached on the old connection was
-/// served by the new one as if nothing had moved — here, a correction another
-/// connection rolled back, served as the OLD account number after the handle
-/// was refused its rotation and replaced its connection.
+/// Whether another connection can read the vault right now.
+fn another_connection_reads(root: &Path) -> bool {
+    let probe = rusqlite::Connection::open(vdir(root).join("vault.db")).unwrap();
+    probe.busy_timeout(Duration::ZERO).unwrap();
+    probe
+        .query_row("SELECT count(*) FROM meta", [], |r| r.get::<_, i64>(0))
+        .is_ok()
+}
+
+/// The state the release fallback exists for (O278's M1): this handle's OWN
+/// connection left holding the vault exclusively — what a failed return to
+/// NORMAL leaves, and by reading what Windows' PENDING byte after a refused
+/// fence leaves (O257's D2). Real, never the proof-refusal seam: the seam
+/// fails a proof that nothing holds, which the old fallback passed too.
+fn hold_the_vault_with_its_own_connection(s: &VaultStore, root: &Path) {
+    let mode: String = s
+        .conn
+        .query_row("PRAGMA locking_mode = EXCLUSIVE", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        mode, "exclusive",
+        "premise: the handle's connection is exclusive"
+    );
+    s.conn.execute_batch("BEGIN EXCLUSIVE; COMMIT").unwrap();
+    assert!(
+        !another_connection_reads(root),
+        "premise: the handle's own connection holds the vault"
+    );
+}
+
+/// The reopen class (ROADMAP O278): what a handle that let go of the vault
+/// answers — `StaleUnlock` from the store's doors, `HandleReleased` from a
+/// manifest read. Asserted by VARIANT: an `is_err()` would pass the tamper
+/// verdict this exists to rule out.
+fn assert_reopen_class<T: std::fmt::Debug>(what: &str, r: Result<T, StoreError>) {
+    match r {
+        Err(StoreError::StaleUnlock(m)) => assert!(m.contains("O278"), "{what}: {m}"),
+        Err(StoreError::Vault(undercroft_vault::VaultError::HandleReleased(m))) => {
+            assert!(m.contains("closed its database connection"), "{what}: {m}")
+        }
+        other => panic!("{what}: a released handle must answer the reopen class, got {other:?}"),
+    }
+}
+
+/// A door the retirement does not reach first (O278 ruling item 3): it meets
+/// the placeholder and is refused — loudly, never Ok with vault data, and
+/// never a verdict about the vault.
+fn assert_refused_without_a_verdict<T: std::fmt::Debug>(what: &str, r: Result<T, StoreError>) {
+    use undercroft_vault::VaultError as V;
+    match r {
+        Ok(v) => panic!("{what}: a released handle answered Ok: {v:?}"),
+        Err(
+            e @ (StoreError::Integrity(_)
+            | StoreError::IntegrityFinding(_)
+            | StoreError::Vault(V::ManifestTampered)
+            | StoreError::Vault(V::CorruptManifest(_))),
+        ) => panic!("{what}: a released handle answered a verdict: {e:?}"),
+        Err(_) => {}
+    }
+}
+
+fn is_released(s: &VaultStore) -> bool {
+    matches!(
+        s.vault.retirement(),
+        Some(undercroft_vault::Retirement::Released(_))
+    )
+}
+
+fn hash_embedder(
+    _: &undercroft_vault::Vault,
+) -> Result<Box<dyn undercroft_core::embed::Embedder + Send>, StoreError> {
+    Ok(Box::new(undercroft_core::HashEmbedder))
+}
+
+/// **ROADMAP O276, re-shaped by O278 — never deleted.** It pinned that a
+/// connection the handle REPLACED took nothing the old one cached: the label
+/// guard keys its replay verdict by `PRAGMA data_version`, which a fresh
+/// connection restarts (O266's P5), so a correction another connection rolled
+/// back was served as the OLD account number after the swap. Since O278 the
+/// fallback replaces the connection with a placeholder and reattaches nothing,
+/// so the handle serves NOTHING — a stronger answer than a replay. The
+/// forgotten verdict is still the helper's, and its source gate below pins
+/// it; its behavioural counterfactual no longer bites here, because nothing
+/// reads through the placeholder. The rollback itself is refused by a fresh
+/// open's first guarded read.
 ///
-/// The fence is refused by an idle connection holding the vault open — the
-/// refusal that, on Windows, leaves the PENDING byte held (O257's D2) — and
-/// the release proof is refused through the test fault, which stands in for
-/// that byte: nothing on this platform fails the proof while leaving the
-/// replacement free to open. The foreign edit lands BEFORE the swap: made
-/// after it, it moves the fresh connection's own cookie and the unfixed tree
-/// replays anyway (measured, 2 → 3), so that order gates nothing.
+/// The fence is refused by an idle connection holding the vault open, and
+/// the release proof through the test fault, which stands in for the PENDING
+/// byte such a refusal leaves on Windows (O257's D2).
 #[test]
 fn a_replaced_connection_forgets_the_label_verdict_the_old_one_cached() {
     use crate::{Read, ReadOp};
@@ -1788,9 +1867,8 @@ fn a_replaced_connection_forgets_the_label_verdict_the_old_one_cached() {
             .unwrap()
             .expect("premise: the corrected drawer reads");
         assert!(read.content.contains("2222"), "{level:?}: premise");
-        let (replays, cookie) = (s.replays(), crate::chain::data_version(&s.conn).unwrap());
         assert!(
-            replays >= 1,
+            s.replays() >= 1,
             "{level:?}: premise: the guard replayed and cached its verdict"
         );
 
@@ -1812,170 +1890,292 @@ fn a_replaced_connection_forgets_the_label_verdict_the_old_one_cached() {
         assert_eq!(
             s.lock_reconnects(),
             1,
-            "{level:?}: premise: the handle replaced its connection"
+            "{level:?}: premise: the fallback was taken"
         );
-        assert_eq!(
-            crate::chain::data_version(&s.conn).unwrap(),
-            cookie,
-            "{level:?}: premise (P5): the fresh connection reads the cookie the verdict was \
-             cached at, so a verdict carried across the swap is a HIT"
-        );
-        match s.get(&first.id, Read::Returned(ReadOp::Get)) {
-            Err(StoreError::IntegrityFinding(m)) => assert!(m.contains("verify"), "{m}"),
-            Ok(served) => panic!(
-                "{level:?}: served {:?} from the old connection's verdict",
-                served.map(|d| d.content)
-            ),
-            Err(e) => panic!("{level:?}: refused with the wrong class: {e:?}"),
-        }
-        assert_eq!(
-            s.replays(),
-            replays + 1,
-            "{level:?}: the first guarded read on the new connection replays"
-        );
-        assert!(
-            !s.verify().unwrap().chain_ok,
-            "{level:?}: and a replay sees the edit"
+        assert!(is_released(&s), "{level:?}: the handle let go of the vault");
+        assert_reopen_class(
+            &format!("{level:?} get"),
+            s.get(&first.id, Read::Returned(ReadOp::Get)),
         );
         drop(other);
+        drop(s);
+        match reopen(root).get(&first.id, Read::Returned(ReadOp::Get)) {
+            Err(StoreError::IntegrityFinding(m)) => assert!(m.contains("verify"), "{m}"),
+            other => panic!("{level:?}: a fresh open must refuse the rollback, got {other:?}"),
+        }
     }
 }
 
-/// Whether another connection can read the vault right now.
-fn another_connection_reads(root: &Path) -> bool {
-    let probe = rusqlite::Connection::open(vdir(root).join("vault.db")).unwrap();
-    probe.busy_timeout(Duration::ZERO).unwrap();
-    probe
-        .query_row("SELECT count(*) FROM meta", [], |r| r.get::<_, i64>(0))
-        .is_ok()
-}
-
-/// **ROADMAP O278, pinned as a cost rather than absorbed: the release
-/// fallback cannot release the one lock it exists for.** The handle's OWN
-/// connection is left holding the vault exclusively — what a refused fence
-/// leaves on Windows (the PENDING byte, O257's D2) and what a failed return
-/// to NORMAL leaves anywhere — so the release proof fails, as it should. The
-/// fallback then opens its replacement while that connection is still open,
-/// the replacement's first statement waits its whole busy timeout on the
-/// very lock it was to release, and the handle keeps the connection that
-/// holds the vault, with `lock_reconnects` reading one. Measured when O276
-/// was built: 5.01 s, and closing the old connection FIRST reopened in
-/// 10 ms and released the vault.
-///
-/// `Verdict::Cost`: O278's fix fails this test, and must invert it and say
-/// so, never delete it.
+/// **ROADMAP O278, the pinned cost INVERTED** — it was
+/// `o278_the_fallback_cannot_replace_a_connection_whose_own_lock_blocks_the_replacement`,
+/// which measured the fallback opening its replacement beside the lock it was
+/// to release: 5.01 s of busy wait, the vault still held, the counter reading
+/// one. Now the fallback CLOSES the connection and reattaches nothing: the
+/// vault is released at once, another process writes, and every door the
+/// release reaches answers the reopen class. Driven by the real own-lock.
 #[test]
-fn o278_the_fallback_cannot_replace_a_connection_whose_own_lock_blocks_the_replacement() {
+fn o278_the_fallback_releases_a_connection_whose_own_lock_held_the_vault() {
+    use crate::{Read, ReadOp};
     let (dir, mut s) = fresh(SecurityLevel::Sealed);
-    s.upsert(&drawer("a memory", 0)).unwrap();
+    let kept = drawer("a memory the released handle must not serve", 0);
+    s.upsert(&kept).unwrap();
     let root = dir.path();
-    let mode: String = s
-        .conn
-        .query_row("PRAGMA locking_mode = EXCLUSIVE", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(
-        mode, "exclusive",
-        "premise: the handle's connection is exclusive"
-    );
-    s.conn.execute_batch("BEGIN EXCLUSIVE; COMMIT").unwrap();
-    assert!(
-        !another_connection_reads(root),
-        "premise: the handle's own connection holds the vault"
-    );
+    hold_the_vault_with_its_own_connection(&s, root);
     let started = Instant::now();
     s.prove_released();
-    assert_eq!(s.lock_reconnects(), 1, "premise: the fallback was taken");
     assert!(
-        started.elapsed() >= Duration::from_secs(4),
-        "premise: the replacement waited its busy timeout, {:?}",
+        started.elapsed() < Duration::from_secs(1),
+        "the release waited {:?} — it opened something beside the lock it was to release",
         started.elapsed()
     );
-    let after: String = s
-        .conn
-        .query_row("PRAGMA locking_mode", [], |r| r.get(0))
-        .unwrap();
     assert_eq!(
-        after, "exclusive",
-        "Verdict::Cost (ROADMAP O278): the handle kept the connection that holds the vault"
+        s.lock_reconnects(),
+        1,
+        "the fallback was taken, and counted"
     );
+    assert!(is_released(&s), "{:?}", s.vault.retirement());
     assert!(
-        !another_connection_reads(root),
-        "Verdict::Cost (ROADMAP O278): and the vault is still held"
+        s.unhealed().iter().any(|n| n.contains("O278")),
+        "the release is said: {:?}",
+        s.unhealed()
+    );
+    assert!(another_connection_reads(root), "the vault is released");
+    another_process_writes(root, "o278-released");
+    assert_reopen_class("get", s.get(&kept.id, Read::Returned(ReadOp::Get)));
+    assert_reopen_class("verify", s.verify());
+    assert_reopen_class("witness_emit", s.witness_emit());
+    // The snapshot door itself (the ruling's item 2). Every door above reads
+    // the manifest anchor before or inside its snapshot (O253's order), where
+    // the resolver refuses first — so none of them sees this door, and the
+    // counterfactual that removed its check stayed green until this line.
+    assert_reopen_class("snapshot", s.snapshot(|_| Ok(())));
+    assert_refused_without_a_verdict(
+        "upsert",
+        s.upsert(&drawer("a write through the released handle", 1)),
+    );
+    assert_refused_without_a_verdict("count", s.count());
+    drop(s);
+    let s = reopen(root);
+    assert!(s.verify().unwrap().ok());
+    assert_eq!(
+        s.count().unwrap(),
+        2,
+        "the other process's write landed, and nothing of the released handle's"
+    );
+}
+
+/// **ROADMAP O278: a released handle reads no manifest.** After another
+/// process rotated the vault, a manifest read under this handle's keys fails
+/// its MAC — the tamper verdict, false, and paging an operator. `verify`, the
+/// witness, a backup and an erasure receipt's check read the manifest by path
+/// BEFORE they touch the database, so the refusal lives in the vault crate's
+/// one resolver. The graph secret is warmed first: cold, `verify` would fail
+/// on the placeholder before it read the manifest and the arm would pass
+/// without the fix.
+#[test]
+fn o278_a_released_handle_reads_no_manifest_after_another_process_rotates() {
+    let (dir, mut s) = fresh(SecurityLevel::Sealed);
+    let root = dir.path().to_path_buf();
+    s.upsert(&drawer("a memory the rotation seals", 0)).unwrap();
+    let doomed = drawer("a note the subject asked us to erase", 1);
+    s.upsert(&doomed).unwrap();
+    let receipt = s
+        .forget_with_proof(std::slice::from_ref(&doomed.id))
+        .unwrap();
+    assert!(
+        s.verify().unwrap().ok(),
+        "premise: verify ran, which warms the graph secret"
+    );
+    hold_the_vault_with_its_own_connection(&s, &root);
+    s.prove_released();
+    assert!(is_released(&s));
+    // The release is what lets another handle take the fence at all.
+    let mgr = VaultManager::open(&root, None).unwrap();
+    let mut other = reopen(&root);
+    other
+        .rotate_keys(mgr.rotation_candidate(VAULT).unwrap())
+        .expect("with the vault released, another handle rotates it");
+    drop(other);
+    assert_reopen_class("verify", s.verify());
+    assert_reopen_class("witness_emit", s.witness_emit());
+    assert_reopen_class("backup", s.backup(&root.join("backups")));
+    // A receipt this handle's own keys minted replays by computation alone —
+    // the manifest is read only on the path for a receipt they cannot replay
+    // (`forget.rs`, the recorded-evidence arm) — and the check that the
+    // drawers are gone then meets the placeholder: refused, never a verdict.
+    assert_refused_without_a_verdict(
+        "verify_forget_attestation",
+        s.verify_forget_attestation(&receipt),
     );
     drop(s);
     assert!(
-        another_connection_reads(root),
-        "premise: dropping the handle releases the vault"
+        reopen(&root).verify().unwrap().ok(),
+        "a fresh open answers to the rotated keys"
     );
+}
+
+/// **ROADMAP O278: a released handle lets a restore run, and does not
+/// re-enter the vault after it.** A reopen by path here would have read the
+/// file the restore set aside and written into the restored directory's
+/// `-wal` (the ruling's PF); the released handle holds nothing, so O69's hold
+/// is taken, and nothing the handle is asked afterwards touches the restored
+/// directory.
+#[test]
+fn o278_a_released_handle_lets_a_restore_run_and_does_not_re_enter_the_vault() {
+    use crate::{Read, ReadOp};
+    let (dir, mut s) = fresh(SecurityLevel::Sealed);
+    let root = dir.path().to_path_buf();
+    let kept = drawer("a memory the archive keeps", 0);
+    s.upsert(&kept).unwrap();
+    let backups = root.join("backups");
+    let archive = match s.backup(&backups).unwrap() {
+        crate::BackupOutcome::Created(report) => backups.join(&report.name),
+        crate::BackupOutcome::Refused(v) => panic!("premise: the backup is taken: {v:?}"),
+    };
+    s.upsert(&drawer("written after the backup", 1)).unwrap();
+    hold_the_vault_with_its_own_connection(&s, &root);
+    s.prove_released();
+    assert!(is_released(&s));
+    let mgr = VaultManager::open(&root, None).unwrap();
+    match crate::restore_archive(&mgr, &archive, None, true, &hash_embedder).unwrap() {
+        crate::RestoreOutcome::Restored(_) => {}
+        crate::RestoreOutcome::Refused(v) => {
+            panic!("with the vault released, the restore runs: {v:?}")
+        }
+    }
+    let files = || {
+        let mut v: Vec<String> = std::fs::read_dir(vdir(&root))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        v.sort();
+        v
+    };
+    let before = files();
+    assert_reopen_class("get", s.get(&kept.id, Read::Returned(ReadOp::Get)));
+    assert_reopen_class("verify", s.verify());
+    assert_refused_without_a_verdict("count", s.count());
+    assert_eq!(
+        files(),
+        before,
+        "the released handle made nothing in the restored directory"
+    );
+    drop(s);
+    let r = reopen(&root);
+    assert!(r.verify().unwrap().ok());
+    assert_eq!(r.count().unwrap(), 1, "the restored vault is the archive's");
+}
+
+/// **ROADMAP O278: a release OUTRANKS a deferred promote.** A handle whose
+/// promote was deferred serves reads against the staged manifest (O266); a
+/// released one has nothing behind it, so the release must replace the
+/// deferral — "the first reason stands" would keep the handle serving reads
+/// that fall through to the placeholder. The deferral's own warning stays
+/// said.
+#[test]
+fn o278_a_release_outranks_a_deferred_promote() {
+    use crate::{Read, ReadOp};
+    let (dir, mut s) = fresh(SecurityLevel::Sealed);
+    let root = dir.path();
+    let kept = drawer("a memory the rotation seals", 0);
+    s.upsert(&kept).unwrap();
+    pause::set(
+        &vdir(root),
+        std::sync::Arc::new(|phase| {
+            if phase == pause::Phase::Committed {
+                fixture::fail_times(fixture::Fault::Rename, crate::rotate::PROMOTE_ATTEMPTS);
+            }
+        }),
+    );
+    pause::refuse_proof(&vdir(root), true);
+    let mgr = VaultManager::open(root, None).unwrap();
+    let report = s.rotate_keys(mgr.rotation_candidate(VAULT).unwrap());
+    pause::refuse_proof(&vdir(root), false);
+    pause::set(&vdir(root), std::sync::Arc::new(|_| {}));
+    let report = report.expect("a committed rotation answers Ok (O254 ruling item 3)");
+    assert!(
+        report.promote_deferred.is_some(),
+        "premise: the promote was deferred"
+    );
+    assert!(
+        is_released(&s),
+        "the release outranks the deferral: {:?}",
+        s.vault.retirement()
+    );
+    assert!(
+        s.unhealed().iter().any(|n| n.contains("do NOT delete")),
+        "the deferral's warning is still said: {:?}",
+        s.unhealed()
+    );
+    assert_reopen_class("get", s.get(&kept.id, Read::Returned(ReadOp::Get)));
+    drop(s);
+    let r = reopen(root);
+    assert!(
+        !staging(root).exists(),
+        "the next writable open promoted it"
+    );
+    assert!(r.verify().unwrap().ok());
+}
+
+/// **ROADMAP O278: the rotation's report carries the head it committed**,
+/// read inside its hold — what both surfaces print, so neither reads through
+/// a handle that may have let go of the vault on its way out.
+#[test]
+fn o278_the_rotation_report_carries_the_committed_head() {
+    let (dir, mut s) = fresh(SecurityLevel::Sealed);
+    let root = dir.path();
+    s.upsert(&drawer("a memory the rotation seals", 0)).unwrap();
+    let mgr = VaultManager::open(root, None).unwrap();
+    let report = s
+        .rotate_keys(mgr.rotation_candidate(VAULT).unwrap())
+        .unwrap();
+    assert_eq!(s.lock_reconnects(), 0, "premise: an ordinary release");
+    drop(s);
+    let (head, writes) = reopen(root).chain_state().unwrap();
+    assert_eq!(report.chain_head, head);
+    assert_eq!(report.writes, writes);
+}
+
+/// **ROADMAP O278: a read-only handle is refused a rotation BEFORE the
+/// fence.** It answered a raw `SQLITE_READONLY` at `BEGIN EXCLUSIVE`, and a
+/// refused release proof — a write-protected mount can fail one — would then
+/// have let go of a vault it was only reading. The proof is refused here to
+/// show the refusal comes first.
+#[test]
+fn o278_a_read_only_handle_is_refused_a_rotation_before_the_fence() {
+    let (dir, mut s) = fresh(SecurityLevel::Sealed);
+    let root = dir.path();
+    s.upsert(&drawer("a memory", 0)).unwrap();
+    drop(s);
+    let m = VaultManager::open_as(root, None, Access::ReadOnly).unwrap();
+    let mut ro = VaultStore::open_read_only(
+        m.unlock_as(VAULT, Access::ReadOnly).unwrap(),
+        Box::new(undercroft_core::HashEmbedder),
+    )
+    .unwrap();
+    let before = manifest(root);
+    pause::refuse_proof(&vdir(root), true);
+    let mgr = VaultManager::open(root, None).unwrap();
+    let got = ro.rotate_keys(mgr.rotation_candidate(VAULT).unwrap());
+    pause::refuse_proof(&vdir(root), false);
+    match got {
+        Err(StoreError::Invalid(m)) => assert!(m.contains("read-only"), "{m}"),
+        other => panic!("a read-only handle must be refused a rotation, got {other:?}"),
+    }
+    assert_eq!(ro.lock_reconnects(), 0, "the fallback was never reached");
+    assert!(ro.vault.retirement().is_none());
+    assert!(!staging(root).exists(), "nothing was staged");
+    assert_eq!(manifest(root), before);
+    let q: i64 = ro
+        .conn
+        .query_row("PRAGMA query_only", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(q, 1, "the connection is still the read-only one");
 }
 
 // ---------------------------------------------------------------------------
 // The source gate
 // ---------------------------------------------------------------------------
-
-/// **ROADMAP O276: a handle's connection is replaced in ONE place, and that
-/// place forgets the label guard's cached verdict.** The verdict is keyed by
-/// `PRAGMA data_version`, which a fresh connection restarts, so a replacement
-/// that keeps it serves a replay taken on another connection as if nothing
-/// had moved. Counted over every store source, in each form a connection can
-/// be replaced: an assignment to a `.conn` field, or a `mem::replace`,
-/// `mem::swap` or `mem::take` of one. The counter is proved on a planted text
-/// first, which must find an assignment and a replace and neither a
-/// comparison nor a comment.
-#[test]
-fn a_connection_is_replaced_in_one_place_and_that_place_forgets_the_verdict() {
-    fn replacements(text: &str) -> usize {
-        text.lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .filter(|l| {
-                let assigned = l
-                    .match_indices(".conn =")
-                    .any(|(at, m)| !l[at + m.len()..].starts_with('='));
-                let moved = ["mem::replace(&mut ", "mem::swap(&mut ", "mem::take(&mut "]
-                    .iter()
-                    .any(|m| l.contains(m) && l.contains(".conn"));
-                assigned || moved
-            })
-            .count()
-    }
-    let planted = "fn a(&mut self) { self.conn = c; }\n\
-                   fn b(&mut self) { let _ = std::mem::replace(&mut self.conn, c); }\n\
-                   fn c(&self) -> bool { self.conn == d }\n\
-                   // self.conn = e;\n";
-    assert_eq!(
-        replacements(planted),
-        2,
-        "premise: the counter sees an assignment and a replace, and neither a comparison \
-         nor a comment"
-    );
-    let store = sources(concat!(env!("CARGO_MANIFEST_DIR"), "/src"));
-    assert!(store.len() > 10, "premise: sources read");
-    let found: Vec<(&String, usize)> = store
-        .iter()
-        .map(|(p, t)| (p, replacements(t)))
-        .filter(|(_, n)| *n > 0)
-        .collect();
-    assert_eq!(
-        found.iter().map(|(_, n)| n).sum::<usize>(),
-        1,
-        "a connection is replaced outside the one helper: {found:?}"
-    );
-    let lib = &store.iter().find(|(p, _)| p.ends_with("lib.rs")).unwrap().1;
-    let helper = body_of(lib, "replace_connection");
-    assert_eq!(
-        replacements(helper),
-        1,
-        "the one replacement is the helper's"
-    );
-    assert!(
-        helper.contains("self.forget_label_verdict()"),
-        "and the helper forgets the cached verdict"
-    );
-    assert!(
-        body_of(lib, "prove_released").contains("self.replace_connection("),
-        "the release fallback replaces through the helper"
-    );
-}
 
 /// A file's production text: everything before its `mod tests`.
 fn production(path: &str) -> String {
@@ -2012,6 +2212,126 @@ fn body_of<'a>(text: &'a str, name: &str) -> &'a str {
         .or_else(|| rest[1..].find("\nfn "))
         .map_or(rest.len(), |e| e + 1);
     &rest[..end]
+}
+
+/// **ROADMAP O276, re-pointed by O278: a handle's connection is replaced in
+/// ONE place — by a placeholder, the vault's connection CLOSED — and that
+/// place forgets the label guard's cached verdict, and nothing it or the
+/// fallback runs opens the vault again.** Counted over every store source,
+/// in each form a connection can be replaced: an assignment to a `.conn`
+/// field, or a `mem::replace`, `mem::swap` or `mem::take` of one. Every one
+/// must sit in `replace_connection`; the helper must close the old connection
+/// explicitly (rusqlite's drop discards a failed close); and neither the
+/// helper nor `prove_released` may name a connector — a count alone would
+/// pass an open written back into either. The counter is proved on a planted
+/// text first, which must find an assignment and a replace and neither a
+/// comparison nor a comment.
+#[test]
+fn a_connection_is_replaced_in_one_place_and_that_place_forgets_the_verdict() {
+    fn replacements(text: &str) -> usize {
+        text.lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .filter(|l| {
+                let assigned = l
+                    .match_indices(".conn =")
+                    .any(|(at, m)| !l[at + m.len()..].starts_with('='));
+                let moved = ["mem::replace(&mut ", "mem::swap(&mut ", "mem::take(&mut "]
+                    .iter()
+                    .any(|m| l.contains(m) && l.contains(".conn"));
+                assigned || moved
+            })
+            .count()
+    }
+    let planted = "fn a(&mut self) { self.conn = c; }\n\
+                   fn b(&mut self) { let _ = std::mem::replace(&mut self.conn, c); }\n\
+                   fn c(&self) -> bool { self.conn == d }\n\
+                   // self.conn = e;\n";
+    assert_eq!(
+        replacements(planted),
+        2,
+        "premise: the counter sees an assignment and a replace, and neither a comparison \
+         nor a comment"
+    );
+    let store = sources(concat!(env!("CARGO_MANIFEST_DIR"), "/src"));
+    assert!(store.len() > 10, "premise: sources read");
+    let lib = &store.iter().find(|(p, _)| p.ends_with("lib.rs")).unwrap().1;
+    let helper = body_of(lib, "replace_connection");
+    let fallback = body_of(lib, "prove_released");
+    let total: usize = store.iter().map(|(_, t)| replacements(t)).sum();
+    assert!(
+        replacements(helper) > 0,
+        "premise: the helper replaces the connection"
+    );
+    assert_eq!(
+        total,
+        replacements(helper),
+        "a connection is replaced outside the one helper"
+    );
+    assert!(
+        helper.contains("std::mem::replace(&mut self.conn"),
+        "the helper swaps a placeholder in"
+    );
+    assert!(
+        helper.contains(".close()"),
+        "and closes the vault's connection explicitly"
+    );
+    assert!(
+        helper.contains("self.forget_label_verdict()"),
+        "and forgets the cached verdict"
+    );
+    for (name, body) in [("replace_connection", helper), ("prove_released", fallback)] {
+        for connector in [
+            "connect_writable(",
+            "connect_read_only(",
+            "Connection::open(",
+            "open_with_flags(",
+        ] {
+            assert!(
+                !body.contains(connector),
+                "{name} opens the vault again through {connector} (ROADMAP O278: nothing \
+                 reattaches)"
+            );
+        }
+    }
+    assert!(
+        fallback.contains("self.replace_connection()") && fallback.contains("self.vault.release("),
+        "the fallback releases through the helper and marks the handle released"
+    );
+}
+
+/// **ROADMAP O278: no surface reads through the handle after a rotation.**
+/// A handle whose release could not be proven let go of the vault on its way
+/// out and answers the reopen class, so a `chain_state()` after
+/// `rotate_keys` turned a COMMITTED rotation into an error — which invites a
+/// second rotation. Both surfaces print the head from the rotation's report.
+#[test]
+fn no_surface_reads_the_handle_after_a_rotation() {
+    let crates = concat!(env!("CARGO_MANIFEST_DIR"), "/..");
+    let main = production(&format!("{crates}/undercroft-cli/src/main.rs"));
+    let tenant = production(&format!("{crates}/undercroft-cli/src/tenant.rs"));
+    let arm = {
+        let at = main
+            .find("VaultAction::Rotate { name } =>")
+            .expect("premise: the CLI's rotate arm");
+        let rest = &main[at..];
+        let end = rest[1..]
+            .find("VaultAction::")
+            .map_or(rest.len(), |e| e + 1);
+        &rest[..end]
+    };
+    for (surface, body) in [("the CLI", arm), ("/v1", body_of(&tenant, "rotate"))] {
+        let (_, after) = body
+            .split_once(".rotate_keys(")
+            .unwrap_or_else(|| panic!("premise: {surface} rotates"));
+        assert!(
+            !after.contains("chain_state("),
+            "{surface} reads the chain through the handle after a rotation"
+        );
+        assert!(
+            after.contains("report.chain_head"),
+            "premise: {surface} prints the head from the report"
+        );
+    }
 }
 
 /// **Every writer of `vault.json` and `vault.json.next`, and every caller of

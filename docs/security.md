@@ -64,8 +64,11 @@ modification: every read verifies, `verify` audits everything.
   `undercroft verify`. `PRAGMA data_version` decides when the replay is
   re-run and never whether the invariant applies — and because that cookie
   is comparable only within one connection, a handle that replaces its
-  connection re-runs the replay too (ROADMAP O276), as it does after its own
-  key rotation (O266). Two carve-outs, both
+  connection forgets the verdict (ROADMAP O276), as it does after its own key
+  rotation (O266). Since O278 the one replacement lets go of the vault: the
+  handle closes its connection, reattaches nothing and answers every door
+  with the reopen class, because a reopen by path cannot tell its own file
+  from one a restore swapped in. Two carve-outs, both
   stated rather than discovered: a version-1 chain does not refuse on unbound
   labels, because that would stop every pre-1.6.0 vault, including one served
   `--read-only` which cannot switch; and a forget attestation's mirror
