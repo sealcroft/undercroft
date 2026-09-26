@@ -2,7 +2,7 @@
 
 ## 1.7.0 — unreleased
 
-MINOR: one new capability, backward compatible, and ten fixes. The witness
+MINOR: one new capability, backward compatible, and eleven fixes. The witness
 commands and routes are new; no default moves and no declaration can stop a
 start-up. Three fixes change what a deployment must do: every process writing a
 vault must run the same build, and a server whose vault another process
@@ -13,7 +13,8 @@ vault's embedder environment and refuses under `--read-only` (O268) — all in
 `UPGRADING.md`, beside O255's note that a destruction now holds the
 write lock for as long as it runs and O256's that an archive taken by an older
 release beside a writer may be torn. (This line said "one fix" while O243 and
-O246 were both below it; corrected with O247. It said "nine" until O268.)
+O246 were both below it; corrected with O247. It said "nine" until O268, and
+"ten" until O266.)
 
 ### The external witness: `undercroft witness emit` / `check`, `GET`/`POST /v1/…/witness` (O245)
 
@@ -468,6 +469,63 @@ PATCH-class inside the unreleased 1.7.0: a restore that exited 0 and left an
 unopenable vault was the defect; needing the key removes nothing that worked;
 the report is additive; `--read-only` refusing is the flag keeping its promise.
 What a script that restores should expect is in `UPGRADING.md`.
+
+### A rotation whose promote was deferred opens read-only, verified against its staged manifest (O266)
+
+A key rotation that COMMITS and then cannot write its new manifest leaves the
+previous generation's `vault.json` beside the staged `vault.json.next`, with the
+database already sealed under the staged keys — the rotation answers Ok and says
+so (O257), and a crash between the rotation's commit and its promote leaves the
+same files. The next writable open promotes. **A `--read-only` open refused it
+as tampering, exit 2, before any read**, and has since 1.1.0: it adopted the
+staged keys in memory (A32) and then MAC-checked the retired `vault.json` under
+them. That is the posture the incident runbook starts a server in, and the one
+`CLAUDE.md` said still opens such a vault. **If a `--read-only` process on
+1.1.0–1.6.1 answered `ManifestTampered` right after a key rotation, this may
+have been it** — a writable open would have promoted and verified.
+
+Now a handle whose keys came from `vault.json.next` compares its rows with the
+STAGED manifest — while the disk still shows that state. One rule in the vault
+crate serves `anchored_head`, `anchored_writes` and `verified_manifest`: it reads
+`.next` first, then `vault.json`; a `vault.json` verifying under the adopted key
+means a promote happened since and is followed (no latch); the retired
+`vault.json`, byte for byte as the unlock verified it, beside a `.next` byte for
+byte as the unlock read it, means still deferred; `.next` gone or changed while
+`vault.json` is not this generation's is the integrity verdict a fresh open
+answers too, with no tamper event; anything else is `ManifestTampered`, the one
+arm that raises the tamper signal — so a healthy deferred vault never pages an
+operator. The strict readers — the rotation's stale-keys check, the anchor's
+write authority, `promote`'s own check — stay strict, because a lenient one
+lets a second rotation stage over the only file holding the keys.
+
+- **`backup create` over a deferral** archives the manifest its rows answer to:
+  `vault.json.next`'s bytes as the archive's `vault.json`, re-read from disk,
+  two files, restorable; `BackupReport.promote_deferred` says so. With `.next`
+  lost it refuses and publishes nothing.
+- **The rotating handle** after its own deferral reads and verifies against the
+  staged manifest, and stops writing BEFORE anything commits, with the reopen
+  class (409 with no class, exit 1) — its first write used to commit past the
+  staged anchor and then retire it as an integrity finding blaming "another
+  process". `tighten_anchor` and a second rotation refuse the same way; the
+  next writable open promotes.
+- **A promote that wrote the manifest and failed only to remove `.next`** is no
+  longer reported DEFERRED with a note that the manifest "could not be written".
+- **The label guard's cached verdict is reset when a rotation adopts the new
+  keys**, which re-steps every head under a cookie the handle's own commit
+  never moves.
+- **The CLI's rotate output** said "the next command on this vault promotes it",
+  false for every read-only command — `witness` included.
+
+Ruled by a three-lens panel plus a refuter (ROADMAP O266), which refined O256
+item 3 (an archive carries "the exact bytes of the manifest the rows answer
+to") and revised O257's recorded residual on the rotating handle. Filed beside
+it: O276 (a handle that replaces its connection keeps the label guard's cached
+verdict) and O277 (`anchored_head`'s fall-back answers `VERIFY OK` over a
+deleted `vault.json` on an ordinary handle).
+
+PATCH-class inside the unreleased 1.7.0: every change removes a false tamper or
+integrity verdict or a false report; the report field is additive; nothing an
+ordinary handle accepts today is refused. No `UPGRADING.md` entry is owed.
 
 ## 1.6.1 — 2026-09-22
 

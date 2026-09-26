@@ -1401,7 +1401,25 @@ fn a_rotation_beside_another_process_is_refused_and_every_exit_releases_the_vaul
     );
 
     pause::set(&vdir(root), std::sync::Arc::new(|_| {}));
+    // ROADMAP O266: the handle whose promote was deferred retired AT the
+    // deferral, with the reopen class, so it rotates nothing more — even once
+    // another process has promoted — and the refusal changes nothing. This
+    // arm used to rotate that same handle again; re-shaped, not deleted.
     let before = manifest(root);
+    match s.rotate_keys(mgr.rotation_candidate(VAULT).unwrap()) {
+        Err(StoreError::StaleUnlock(m)) => assert!(m.contains("O266"), "{m}"),
+        other => panic!("a handle whose promote was deferred rotated again: {other:?}"),
+    }
+    assert_eq!(
+        manifest(root),
+        before,
+        "the refused rotation changed nothing"
+    );
+    assert!(!staging(root).exists());
+    assert_released(root, &s, "retired-after-deferral");
+    // Reopened, it rotates.
+    drop(s);
+    let mut s = reopen(root);
     s.rotate_keys(mgr.rotation_candidate(VAULT).unwrap())
         .expect("with nothing holding the vault, the rotation runs");
     assert_ne!(manifest(root), before);

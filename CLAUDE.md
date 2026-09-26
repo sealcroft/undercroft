@@ -428,7 +428,21 @@ Consequences that are binding, not advisory:
   bare legacy `vault.json.tmp` a 1.6.x process still
   writes is never matched or swept) and the anchor's checked
   read-modify-write, whose failures come back as `AnchorFault::{Io,
-  Integrity}` for the store's door to act on (ROADMAP O254); a
+  Integrity}` for the store's door to act on (ROADMAP O254) — **and ONE
+  rule for which manifest a handle's rows answer to (O266)**:
+  `manifest_in_force`, read by `anchored_head`, `anchored_writes` and
+  `verified_manifest` alone. Ordinarily `vault.json`; on a handle whose
+  keys came from `vault.json.next` (a read-only open that adopted a
+  committed rotation, or the rotating handle after a deferred promote),
+  the STAGED manifest — `.next` read first, then `vault.json`, and only
+  while `vault.json` is byte for byte the retired file the adoption was
+  licensed by (a digest of the very buffer whose MAC was verified) and
+  `.next` byte for byte what the handle read. A `vault.json` verifying
+  under the adopted key is a promote since, followed, never latched; a lost
+  `.next` is integrity with no tamper event; only the refusal arm raises the
+  manifest tamper signal. The strict readers — `manifest_on_disk_is_mine`,
+  the anchor's own read, `promote` — never take it, and a source gate
+  counts the three readers and every manifest-file read in the crate; a
   `test-fixture` feature carries the fault seam, since a nonce name cannot
   be targeted from outside; backups.rs: the archive side of `backup
   create` (ROADMAP O256, O265) — a stage under `backups/.staging/<nonce>`
@@ -977,7 +991,10 @@ Consequences that are binding, not advisory:
   16 held a state no verify saw, and a rotation between two files paired
   two key generations. Now the manifest's exact bytes are read ONCE before
   the pin with no fall-back (`Vault::verified_manifest`, never
-  `anchored_head`'s cached-head fall-back); inside ONE snapshot the door
+  `anchored_head`'s cached-head fall-back) — the manifest the rows answer
+  to, which during a deferred rotation promote is `vault.json.next`'s bytes,
+  archived as the archive's `vault.json` and reported on
+  `BackupReport.promote_deferred` (O266, refining O256 item 3); inside ONE snapshot the door
   compares the key generation, verifies, and copies the pages with SQLite's
   online backup API (`Backup::new(snap.conn(), …).step(-1)`, `Done`
   checked — never `Connection::backup`, whose steps each take a fresh read
@@ -1455,7 +1472,15 @@ Consequences that are binding, not advisory:
   lowering an anchor, removing `vault.json.next` only while it is still
   the bytes it staged — and a promote that fails every attempt answers Ok
   with `RotationReport.promote_deferred`, never an error that invites a
-  second rotation. Its partners: `chain_append` refuses a write whose
+  second rotation. **A deferral is decided by whether `vault.json` verifies
+  under the new keys after the attempts, never by `promote`'s error (O266)**
+  — a promote that wrote the manifest and failed only to remove `.next` is
+  done — and at a real one the handle reads against the staged manifest and
+  RETIRES with the reopen class (`Retirement::PromotionDeferred` →
+  `StaleUnlock`: 409, no class, exit 1) before anything commits, so
+  `chain_append`, `tighten_anchor` and a second rotation all refuse; the
+  label guard's cached verdict is reset when the new keys are adopted. Its
+  partners: `chain_append` refuses a write whose
   handle's keycheck the database does not hold, absent included; the
   open's `reconcile_rotation` never overwrites a present foreign keycheck
   — a race (`StaleUnlock`, reopened once by the CLI and `/v1`), a heal
@@ -1897,7 +1922,12 @@ Consequences that are binding, not advisory:
   had to migrate (`ReadOnlyUnmigrated`, exit 1 — the vault is intact, the
   posture is simply wrong for it). A vault whose writer crashed
   mid-rotation still opens, which is the case that made reporting the
-  right rule. The prefilter half (R1) was already closed: a tier loads an
+  right rule — **and since O266 it verifies too**: the open adopts the
+  staged keys in memory and compares the rows with the STAGED manifest.
+  From 1.1.0 (`30c560f`) until O266 it refused as tampering, because
+  `anchored_head` MAC-checked the retired `vault.json` under the adopted
+  key, and nothing saw it: the A32 test drove the vault and never a store
+  open, O91's lesson exactly. The prefilter half (R1) was already closed: a tier loads an
   existing index and never builds one. Residue, stated: a read-only
   connection materialises SQLite's WAL scaffolding (`-shm`, and a
   zero-length `-wal`) when the directory is writable — no database
@@ -2428,8 +2458,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (1125 run,
-                                      # 14 #[ignore]d = 1139 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (1134 run,
+                                      # 14 #[ignore]d = 1148 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2565,9 +2595,9 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (692 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (714 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (171 checks)
-docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 checks)
+docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (60 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (157 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
                                       # answers HTTP before its Raft leader exists)

@@ -1347,6 +1347,16 @@ impl crate::VaultStore {
         }
     }
 
+    /// Drop the cached replay verdict, so the next guarded read replays
+    /// (ROADMAP O266). For a change of the chain this connection made itself —
+    /// which moves no cookie — that the verdict does not describe: a key
+    /// rotation re-steps every head. The append-only memory (`newest`,
+    /// `keys`) is kept, because a rotation preserves every record's label and
+    /// tag.
+    pub(crate) fn forget_label_verdict(&self) {
+        self.labels.borrow_mut().replayed = None;
+    }
+
     /// Keep a replay's verdict for the state it describes — only from a
     /// snapshot this handle opened, whose cookie IS that state (P7).
     fn remember_replay(

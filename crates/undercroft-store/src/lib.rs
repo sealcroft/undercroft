@@ -22,6 +22,8 @@ mod backup_pause;
 mod backup_tests;
 mod chain;
 #[cfg(test)]
+mod deferral_tests;
+#[cfg(test)]
 mod destruction_tests;
 mod fdeidx;
 pub mod forget;
@@ -777,8 +779,8 @@ pub(crate) fn chain_append(
     // committed now would be sealed and tagged under keys the vault no longer
     // answers to. Every audited mutation reaches this line inside its own
     // transaction, so refusing here rolls the whole write back.
-    if let Some(why) = vault.retired() {
-        return Err(retired_handle(why));
+    if let Some(retirement) = vault.retirement() {
+        return Err(retired_handle(retirement));
     }
     // **The write door (ROADMAP O257).** O254's anchor stopped a stale handle
     // AFTER its first write had committed, and that one write — chained under
@@ -807,13 +809,29 @@ pub(crate) fn chain_append(
     Ok((next, writes))
 }
 
-/// The refusal a retired handle answers every write with (ROADMAP O254).
-pub(crate) fn retired_handle(why: &str) -> StoreError {
-    StoreError::IntegrityFinding(format!(
-        "this handle no longer writes: its manifest anchor found that {why}. Nothing was \
-         written. Reopen the vault, which reads the current manifest, and run `undercroft \
-         verify` (ROADMAP O254)"
-    ))
+/// The refusal a retired handle answers every write with (ROADMAP O254) —
+/// its class decided by WHY it retired (ROADMAP O266).
+///
+/// An anchor that met a manifest its keys may not overwrite is an integrity
+/// finding. A handle whose own rotation committed and could not promote its
+/// manifest is not: its keys ARE the vault's and `vault.json.next` holds
+/// them, so the refusal is the reopen class — the one `StaleUnlock` already
+/// names, 409 with no class and exit 1 — and says a writable open promotes.
+/// It was an integrity finding reporting "another process rotated … or the
+/// file was edited", after the handle's first write had already committed.
+pub(crate) fn retired_handle(retirement: &undercroft_vault::Retirement) -> StoreError {
+    match retirement {
+        undercroft_vault::Retirement::Integrity(why) => StoreError::IntegrityFinding(format!(
+            "this handle no longer writes: its manifest anchor found that {why}. Nothing was \
+             written. Reopen the vault, which reads the current manifest, and run `undercroft \
+             verify` (ROADMAP O254)"
+        )),
+        undercroft_vault::Retirement::PromotionDeferred(why) => StoreError::StaleUnlock(format!(
+            "this handle no longer writes: {why}. Nothing was written. Reopen the vault — its \
+             next writable open promotes vault.json.next — and do not delete that file \
+             (ROADMAP O266)"
+        )),
+    }
 }
 
 /// The refusal a write through a handle whose keys are no longer the vault's
@@ -1834,8 +1852,11 @@ pub enum StoreError {
     /// This process unlocked the vault before another process rotated its
     /// keys, so the keys it holds are no longer the vault's (ROADMAP O257).
     /// A race, not tampering: nothing was written, and reopening reads the
-    /// current manifest — the CLI and `/v1` reopen once by themselves. 409
-    /// with no integrity class, exit 1.
+    /// current manifest — the CLI and `/v1` reopen once by themselves at an
+    /// open. 409 with no integrity class, exit 1. **Also the refusal of a
+    /// handle whose own key rotation committed and could not promote its
+    /// manifest** (ROADMAP O266): the same remedy, a reopen, whose writable
+    /// open promotes `vault.json.next`.
     #[error("the vault's keys were rotated while this process opened it: {0}")]
     StaleUnlock(String),
     /// The vault's recorded vector space is not this process's embedder; searching across the swap would degrade recall silently.
@@ -4888,6 +4909,15 @@ impl VaultStore {
                     .into(),
             ));
         }
+        // A retired handle writes nothing, and this is the one verb that
+        // exists to move the evidence (ROADMAP O266). Asked first: when the
+        // anchor is already current `reconcile_chain` never reaches the door
+        // that would say so, and a handle whose promote was deferred answered
+        // "anchored" having written nothing — `vault.json` still the retired
+        // generation's.
+        if let Some(retirement) = self.vault.retirement() {
+            return Err(retired_handle(retirement));
+        }
         // The operator ASKED for the anchor, so an anchor that did not happen
         // is this call's failure — unlike a write's, whose commit stands.
         let (state, healed) = self.reconcile_chain(true)?;
@@ -4895,7 +4925,11 @@ impl VaultStore {
             Some(AnchorOutcome::Deferred(why)) => Err(StoreError::Vault(VaultError::Io(
                 std::io::Error::other(format!("the manifest anchor was deferred: {why}")),
             ))),
-            Some(AnchorOutcome::Retired(why)) => Err(retired_handle(&why)),
+            Some(AnchorOutcome::Retired(why)) => Err(retired_handle(
+                self.vault
+                    .retirement()
+                    .unwrap_or(&undercroft_vault::Retirement::Integrity(why)),
+            )),
             Some(AnchorOutcome::Anchored) | None => Ok(state),
         }
     }
