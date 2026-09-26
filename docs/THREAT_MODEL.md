@@ -606,7 +606,12 @@ handle holds what that writer lacks — which is O252's to rule. A legitimate
 CONCURRENT writer made the guard refuse and `verify` report a broken chain
 until 1.7.0, because the replay and the committed head were read in two
 snapshots; every judgement now reads them in one, the anchor before it
-(ROADMAP O253).
+(ROADMAP O253). And the change cookie is comparable only within ONE
+connection: a handle that replaced its connection — the release fallback
+after a key rotation's fence, reached by a library caller and by no product
+surface — served the verdict it had cached on the old one, so a commit
+another connection made before the swap went unexamined. A replaced
+connection now forgets it (ROADMAP O276).
 
 The chain also carries what left and what was read. Every export
 appends an `egress/export` record binding the surface, the recipient

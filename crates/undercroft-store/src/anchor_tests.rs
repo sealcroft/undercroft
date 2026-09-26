@@ -1717,8 +1717,265 @@ fn a_staged_file_of_the_current_generation_is_removed_and_never_lowers_the_ancho
 }
 
 // ---------------------------------------------------------------------------
+// ROADMAP O276: a connection the handle replaces
+// ---------------------------------------------------------------------------
+
+type DrawerRow = (String, Vec<u8>, Vec<u8>, Vec<u8>);
+
+fn drawer_row(conn: &rusqlite::Connection, id: &str) -> DrawerRow {
+    conn.query_row(
+        "SELECT meta_json, content, embedding, tag FROM drawers WHERE id = ?1",
+        [id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+    )
+    .unwrap()
+}
+
+/// O252's replay attack, made by whatever connection runs it: the record of
+/// the drawer's correction relabelled out of its namespace, and the row the
+/// correction replaced written back.
+fn replay_the_correction(conn: &rusqlite::Connection, id: &str, older: &DrawerRow) {
+    let relabelled = conn
+        .execute(
+            "UPDATE audit SET record_id = 'read/x' WHERE seq = \
+             (SELECT MAX(seq) FROM audit WHERE record_id = ?1)",
+            [id],
+        )
+        .unwrap();
+    assert_eq!(
+        relabelled, 1,
+        "premise: the correction's record is relabelled"
+    );
+    let n = conn
+        .execute(
+            "UPDATE drawers SET meta_json = ?1, content = ?2, embedding = ?3, tag = ?4 \
+             WHERE id = ?5",
+            rusqlite::params![older.0, older.1, older.2, older.3, id],
+        )
+        .unwrap();
+    assert_eq!(n, 1, "premise: the older drawer row is written back");
+}
+
+/// **ROADMAP O276, the gate: a connection the handle REPLACES takes nothing
+/// the old one cached.** The label guard keys its replay verdict by `PRAGMA
+/// data_version`, which is comparable only within one connection, and a
+/// fresh connection reads the value a quiet long-lived one did before any
+/// foreign commit (O266's P5). So a verdict cached on the old connection was
+/// served by the new one as if nothing had moved — here, a correction another
+/// connection rolled back, served as the OLD account number after the handle
+/// was refused its rotation and replaced its connection.
+///
+/// The fence is refused by an idle connection holding the vault open — the
+/// refusal that, on Windows, leaves the PENDING byte held (O257's D2) — and
+/// the release proof is refused through the test fault, which stands in for
+/// that byte: nothing on this platform fails the proof while leaving the
+/// replacement free to open. The foreign edit lands BEFORE the swap: made
+/// after it, it moves the fresh connection's own cookie and the unfixed tree
+/// replays anyway (measured, 2 → 3), so that order gates nothing.
+#[test]
+fn a_replaced_connection_forgets_the_label_verdict_the_old_one_cached() {
+    use crate::{Read, ReadOp};
+    for level in [SecurityLevel::HmacOnly, SecurityLevel::Sealed] {
+        let (dir, mut s) = fresh(level);
+        let root = dir.path();
+        let first = drawer("the account number is 1111", 0);
+        s.upsert(&first).unwrap();
+        let older = drawer_row(&s.conn, &first.id);
+        s.upsert(&drawer("the account number is 2222 (corrected)", 0))
+            .unwrap();
+        let read = s
+            .get(&first.id, Read::Returned(ReadOp::Get))
+            .unwrap()
+            .expect("premise: the corrected drawer reads");
+        assert!(read.content.contains("2222"), "{level:?}: premise");
+        let (replays, cookie) = (s.replays(), crate::chain::data_version(&s.conn).unwrap());
+        assert!(
+            replays >= 1,
+            "{level:?}: premise: the guard replayed and cached its verdict"
+        );
+
+        // Another connection rolls the correction back, and stays OPEN.
+        let other = rusqlite::Connection::open(vdir(root).join("vault.db")).unwrap();
+        replay_the_correction(&other, &first.id, &older);
+
+        // The fence's wait is the connection's own busy timeout; shortened
+        // only so the refusal does not cost the suite five seconds.
+        s.conn.busy_timeout(Duration::from_millis(300)).unwrap();
+        pause::refuse_proof(&vdir(root), true);
+        let mgr = VaultManager::open(root, None).unwrap();
+        let refused = s.rotate_keys(mgr.rotation_candidate(VAULT).unwrap());
+        pause::refuse_proof(&vdir(root), false);
+        match refused {
+            Err(StoreError::VaultHeld(m)) => assert!(m.contains("O257"), "{m}"),
+            other => panic!("{level:?}: the fence must refuse beside the other, got {other:?}"),
+        }
+        assert_eq!(
+            s.lock_reconnects(),
+            1,
+            "{level:?}: premise: the handle replaced its connection"
+        );
+        assert_eq!(
+            crate::chain::data_version(&s.conn).unwrap(),
+            cookie,
+            "{level:?}: premise (P5): the fresh connection reads the cookie the verdict was \
+             cached at, so a verdict carried across the swap is a HIT"
+        );
+        match s.get(&first.id, Read::Returned(ReadOp::Get)) {
+            Err(StoreError::IntegrityFinding(m)) => assert!(m.contains("verify"), "{m}"),
+            Ok(served) => panic!(
+                "{level:?}: served {:?} from the old connection's verdict",
+                served.map(|d| d.content)
+            ),
+            Err(e) => panic!("{level:?}: refused with the wrong class: {e:?}"),
+        }
+        assert_eq!(
+            s.replays(),
+            replays + 1,
+            "{level:?}: the first guarded read on the new connection replays"
+        );
+        assert!(
+            !s.verify().unwrap().chain_ok,
+            "{level:?}: and a replay sees the edit"
+        );
+        drop(other);
+    }
+}
+
+/// Whether another connection can read the vault right now.
+fn another_connection_reads(root: &Path) -> bool {
+    let probe = rusqlite::Connection::open(vdir(root).join("vault.db")).unwrap();
+    probe.busy_timeout(Duration::ZERO).unwrap();
+    probe
+        .query_row("SELECT count(*) FROM meta", [], |r| r.get::<_, i64>(0))
+        .is_ok()
+}
+
+/// **ROADMAP O278, pinned as a cost rather than absorbed: the release
+/// fallback cannot release the one lock it exists for.** The handle's OWN
+/// connection is left holding the vault exclusively — what a refused fence
+/// leaves on Windows (the PENDING byte, O257's D2) and what a failed return
+/// to NORMAL leaves anywhere — so the release proof fails, as it should. The
+/// fallback then opens its replacement while that connection is still open,
+/// the replacement's first statement waits its whole busy timeout on the
+/// very lock it was to release, and the handle keeps the connection that
+/// holds the vault, with `lock_reconnects` reading one. Measured when O276
+/// was built: 5.01 s, and closing the old connection FIRST reopened in
+/// 10 ms and released the vault.
+///
+/// `Verdict::Cost`: O278's fix fails this test, and must invert it and say
+/// so, never delete it.
+#[test]
+fn o278_the_fallback_cannot_replace_a_connection_whose_own_lock_blocks_the_replacement() {
+    let (dir, mut s) = fresh(SecurityLevel::Sealed);
+    s.upsert(&drawer("a memory", 0)).unwrap();
+    let root = dir.path();
+    let mode: String = s
+        .conn
+        .query_row("PRAGMA locking_mode = EXCLUSIVE", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        mode, "exclusive",
+        "premise: the handle's connection is exclusive"
+    );
+    s.conn.execute_batch("BEGIN EXCLUSIVE; COMMIT").unwrap();
+    assert!(
+        !another_connection_reads(root),
+        "premise: the handle's own connection holds the vault"
+    );
+    let started = Instant::now();
+    s.prove_released();
+    assert_eq!(s.lock_reconnects(), 1, "premise: the fallback was taken");
+    assert!(
+        started.elapsed() >= Duration::from_secs(4),
+        "premise: the replacement waited its busy timeout, {:?}",
+        started.elapsed()
+    );
+    let after: String = s
+        .conn
+        .query_row("PRAGMA locking_mode", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        after, "exclusive",
+        "Verdict::Cost (ROADMAP O278): the handle kept the connection that holds the vault"
+    );
+    assert!(
+        !another_connection_reads(root),
+        "Verdict::Cost (ROADMAP O278): and the vault is still held"
+    );
+    drop(s);
+    assert!(
+        another_connection_reads(root),
+        "premise: dropping the handle releases the vault"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // The source gate
 // ---------------------------------------------------------------------------
+
+/// **ROADMAP O276: a handle's connection is replaced in ONE place, and that
+/// place forgets the label guard's cached verdict.** The verdict is keyed by
+/// `PRAGMA data_version`, which a fresh connection restarts, so a replacement
+/// that keeps it serves a replay taken on another connection as if nothing
+/// had moved. Counted over every store source, in each form a connection can
+/// be replaced: an assignment to a `.conn` field, or a `mem::replace`,
+/// `mem::swap` or `mem::take` of one. The counter is proved on a planted text
+/// first, which must find an assignment and a replace and neither a
+/// comparison nor a comment.
+#[test]
+fn a_connection_is_replaced_in_one_place_and_that_place_forgets_the_verdict() {
+    fn replacements(text: &str) -> usize {
+        text.lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .filter(|l| {
+                let assigned = l
+                    .match_indices(".conn =")
+                    .any(|(at, m)| !l[at + m.len()..].starts_with('='));
+                let moved = ["mem::replace(&mut ", "mem::swap(&mut ", "mem::take(&mut "]
+                    .iter()
+                    .any(|m| l.contains(m) && l.contains(".conn"));
+                assigned || moved
+            })
+            .count()
+    }
+    let planted = "fn a(&mut self) { self.conn = c; }\n\
+                   fn b(&mut self) { let _ = std::mem::replace(&mut self.conn, c); }\n\
+                   fn c(&self) -> bool { self.conn == d }\n\
+                   // self.conn = e;\n";
+    assert_eq!(
+        replacements(planted),
+        2,
+        "premise: the counter sees an assignment and a replace, and neither a comparison \
+         nor a comment"
+    );
+    let store = sources(concat!(env!("CARGO_MANIFEST_DIR"), "/src"));
+    assert!(store.len() > 10, "premise: sources read");
+    let found: Vec<(&String, usize)> = store
+        .iter()
+        .map(|(p, t)| (p, replacements(t)))
+        .filter(|(_, n)| *n > 0)
+        .collect();
+    assert_eq!(
+        found.iter().map(|(_, n)| n).sum::<usize>(),
+        1,
+        "a connection is replaced outside the one helper: {found:?}"
+    );
+    let lib = &store.iter().find(|(p, _)| p.ends_with("lib.rs")).unwrap().1;
+    let helper = body_of(lib, "replace_connection");
+    assert_eq!(
+        replacements(helper),
+        1,
+        "the one replacement is the helper's"
+    );
+    assert!(
+        helper.contains("self.forget_label_verdict()"),
+        "and the helper forgets the cached verdict"
+    );
+    assert!(
+        body_of(lib, "prove_released").contains("self.replace_connection("),
+        "the release fallback replaces through the helper"
+    );
+}
 
 /// A file's production text: everything before its `mod tests`.
 fn production(path: &str) -> String {

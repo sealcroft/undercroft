@@ -1350,9 +1350,12 @@ impl crate::VaultStore {
     /// Drop the cached replay verdict, so the next guarded read replays
     /// (ROADMAP O266). For a change of the chain this connection made itself —
     /// which moves no cookie — that the verdict does not describe: a key
-    /// rotation re-steps every head. The append-only memory (`newest`,
-    /// `keys`) is kept, because a rotation preserves every record's label and
-    /// tag.
+    /// rotation re-steps every head. And for a change of CONNECTION (ROADMAP
+    /// O276): the cookie the verdict is keyed by belongs to the connection
+    /// that read it, and a fresh one restarts it. The append-only memory
+    /// (`newest`, `keys`) is kept, because a rotation preserves every record's
+    /// label and tag, and the rows it describes do not change with a
+    /// connection.
     pub(crate) fn forget_label_verdict(&self) {
         self.labels.borrow_mut().replayed = None;
     }
@@ -3320,6 +3323,19 @@ mod tests {
             v.sort();
             v.dedup();
         }
+        // PREMISE, both ways: the files skipped as test code are the ones
+        // `lib.rs` compiles only under test, and never a production file.
+        let skipped = test_only_files();
+        assert!(
+            skipped.contains("anchor_tests.rs"),
+            "premise: a test-only file is recognised: {skipped:?}"
+        );
+        for f in ["chain.rs", "kg.rs", "lib.rs", "rotate.rs", "manage.rs"] {
+            assert!(
+                !skipped.contains(f),
+                "premise: {f} is production and is scanned: {skipped:?}"
+            );
+        }
         assert!(
             deletes.is_empty(),
             "a production `DELETE FROM audit` breaks the append-only premise the \
@@ -3346,8 +3362,18 @@ mod tests {
     /// not need: an item annotated `#[cfg(test)]` OUTSIDE `mod tests` is
     /// test code too, and `unswitch_chain_for_test` is exactly that — a
     /// `DELETE FROM audit` that a split on `mod tests` alone would have
-    /// reported as production.
+    /// reported as production. **And a whole FILE declared `#[cfg(test)]`
+    /// is test code** (ROADMAP O276), through the same `test_only_files`
+    /// `production_lines` has skipped since O253: this reader did not ask
+    /// it, and counted `anchor_tests.rs` — whose functions carry no
+    /// annotation of their own — as production the first time one of them
+    /// held an `UPDATE audit`, a test simulating an offline edit, which is
+    /// what such a file is for. Two readers in one module disagreed about
+    /// what production is.
     fn production_sites(file: &str, needle: &str) -> Vec<String> {
+        if test_only_files().contains(file) {
+            return Vec::new();
+        }
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("src")
             .join(file);

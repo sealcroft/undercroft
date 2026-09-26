@@ -62,7 +62,10 @@ modification: every read verifies, `verify` audits everything.
   read and then holds a per-key append-only invariant on every one of them,
   refusing a chain that does not replay as an integrity verdict that names
   `undercroft verify`. `PRAGMA data_version` decides when the replay is
-  re-run and never whether the invariant applies. Two carve-outs, both
+  re-run and never whether the invariant applies — and because that cookie
+  is comparable only within one connection, a handle that replaces its
+  connection re-runs the replay too (ROADMAP O276), as it does after its own
+  key rotation (O266). Two carve-outs, both
   stated rather than discovered: a version-1 chain does not refuse on unbound
   labels, because that would stop every pre-1.6.0 vault, including one served
   `--read-only` which cannot switch; and a forget attestation's mirror

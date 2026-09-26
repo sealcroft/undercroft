@@ -2,7 +2,7 @@
 
 ## 1.7.0 — unreleased
 
-MINOR: one new capability, backward compatible, and eleven fixes. The witness
+MINOR: one new capability, backward compatible, and twelve fixes. The witness
 commands and routes are new; no default moves and no declaration can stop a
 start-up. Three fixes change what a deployment must do: every process writing a
 vault must run the same build, and a server whose vault another process
@@ -13,8 +13,8 @@ vault's embedder environment and refuses under `--read-only` (O268) — all in
 `UPGRADING.md`, beside O255's note that a destruction now holds the
 write lock for as long as it runs and O256's that an archive taken by an older
 release beside a writer may be torn. (This line said "one fix" while O243 and
-O246 were both below it; corrected with O247. It said "nine" until O268, and
-"ten" until O266.)
+O246 were both below it; corrected with O247. It said "nine" until O268,
+"ten" until O266, and "eleven" until O276.)
 
 ### The external witness: `undercroft witness emit` / `check`, `GET`/`POST /v1/…/witness` (O245)
 
@@ -526,6 +526,35 @@ deleted `vault.json` on an ordinary handle).
 PATCH-class inside the unreleased 1.7.0: every change removes a false tamper or
 integrity verdict or a false report; the report field is additive; nothing an
 ordinary handle accepts today is refused. No `UPGRADING.md` entry is owed.
+
+### A handle that replaces its connection no longer serves the label guard's verdict from the old one (O276)
+
+The label guard replays the audit chain once per handle and caches the verdict
+under `PRAGMA data_version`, re-running the replay when another connection
+commits. That cookie is comparable only within ONE connection — a fresh one
+reads what a quiet long-lived one did before any foreign commit — and a key
+rotation's release fallback (O257) replaces the handle's connection when it
+cannot prove the exclusive hold released. The new connection kept the old
+one's verdict, so a commit another connection made before the swap was served
+as if nothing had moved: measured, a correction another connection rolled back
+read as the old text on the first guarded read after the swap. A replaced
+connection now forgets the cached verdict, through `replace_connection`, the one
+place a connection is replaced — a source gate refuses a second — and keeps the
+per-record memory, which describes audit rows rather than a connection.
+
+No product surface reached it: the CLI exits after `vault rotate` and `/v1`
+closes its handle after every rotate. A library caller holding its handle did.
+
+Found beside it, filed as O278 and pinned as a known cost: the fallback opens
+its replacement while the old connection still holds the lock it exists to
+release, so in that state the replacement waits out its busy timeout and the
+handle keeps the vault until it is dropped — which the CLI's exit and `/v1`'s
+eviction do. And a source gate that read whole-file test modules as production
+now skips them, as the reader beside it already did.
+
+PATCH-class inside the unreleased 1.7.0: a verdict the handle had no basis for is
+no longer served, on a path no product surface reaches. No `UPGRADING.md` entry
+is owed.
 
 ## 1.6.1 — 2026-09-22
 
