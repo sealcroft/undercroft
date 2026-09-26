@@ -2406,10 +2406,16 @@ fn run(cli: Cli) -> Result<()> {
                 // rotation — and says so here rather than only in a log.
                 match &report.promote_deferred {
                     None => println!("  manifest promoted:   yes"),
+                    // ROADMAP O266: "the next command promotes it" was false
+                    // for every read-only command — `witness` included, which
+                    // always opens read-only. They serve the vault against
+                    // the staged manifest and promote nothing.
                     Some(why) => println!(
                         "  manifest promoted:   DEFERRED ({why}) — the rotation committed; \
-                         vault.json.next is intact and the next command on this vault promotes \
-                         it. Do NOT delete it."
+                         vault.json.next is intact and the next WRITABLE command on this \
+                         vault promotes it, while read-only commands serve the vault against \
+                         it without promoting. Until then it is the only file holding the \
+                         vault's keys: do NOT delete it."
                     ),
                 }
                 println!(
@@ -4424,6 +4430,18 @@ fn run(cli: Cli) -> Result<()> {
                         "  anchor lag:   {} record(s) — a restore fast-forwards it",
                         report.anchor_behind_by
                     );
+                    // ROADMAP O266: an archive of a vault whose rotation
+                    // promote was deferred carries the STAGED manifest, the
+                    // one its rows answer to.
+                    if report.promote_deferred {
+                        println!(
+                            "  manifest:     the staged vault.json.next of a committed key \
+                             rotation (its promote was deferred) — the manifest these rows \
+                             answer to"
+                        );
+                    } else {
+                        println!("  manifest:     vault.json");
+                    }
                     println!("  older pruned: {}", report.pruned);
                 }
                 BackupAction::List => {

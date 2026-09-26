@@ -630,6 +630,62 @@ else
   fail "empty OTLP endpoint diagnosed as cleartext" "exit=$ecc_code out=$ecc_out"
 fi
 
+echo "== a deferred rotation promote raises no tamper signal (ROADMAP O266) =="
+# A read-only server over a committed rotation whose promote was deferred reads
+# the retired vault.json, which fails the adopted key's MAC by design. Serving
+# it correctly is not enough: a check that tried the adopted key and fell back
+# would answer every read AND raise `undercroft_hmac_verify_failures_total
+# {surface="manifest"}` — `PalaceTamperDetected`, a page — on every guard miss,
+# `verify` and backup of a healthy vault. The same hand recipe as the e2e suite.
+DEF_HOME="$(mktemp -d)"
+def_cli() { env UNDERCROFT_HOME="$DEF_HOME" "$BIN" "$@"; }
+def_cli init >/dev/null 2>&1
+def_cli remember "O266: a note the deferred vault still serves" --wing notes >/dev/null 2>&1
+DEF_V="$DEF_HOME/vaults/default"
+cp "$DEF_V/vault.json" "$DEF_HOME/retired.json"
+def_cli vault rotate default >/dev/null 2>&1
+mv "$DEF_V/vault.json" "$DEF_V/vault.json.next"
+cp "$DEF_HOME/retired.json" "$DEF_V/vault.json"
+if cmp -s "$DEF_V/vault.json" "$DEF_HOME/retired.json" && [ -f "$DEF_V/vault.json.next" ] \
+   && ! cmp -s "$DEF_V/vault.json" "$DEF_V/vault.json.next"; then
+  pass "premise: the deferred state was made by hand"
+else
+  fail "premise: the hand recipe did not land, so the arms below prove nothing"
+fi
+env UNDERCROFT_HOME="$DEF_HOME" UNDERCROFT_MCP_HTTP_TOKEN="$TOKEN" UNDERCROFT_METRICS=1 \
+  "$BIN" serve-http --host 127.0.0.1 --port 8789 --read-only >"$DEF_HOME/serve.log" 2>&1 &
+DEF_S=$!
+wait_up 8789 || fail "the deferred read-only server did not start" "$(cat "$DEF_HOME/serve.log")"
+for q in note deferred serves; do
+  curl -s -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+    -d "{\"query\":\"$q\"}" http://127.0.0.1:8789/v1/vaults/default/search >/dev/null
+done
+dv=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" \
+  -X POST http://127.0.0.1:8789/v1/vaults/default/verify)
+dm=$(curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8789/metrics)
+if [ "$dv" = 200 ] && ! grep -q 'undercroft_hmac_verify_failures_total{[^}]*surface="manifest"' <<<"$dm"; then
+  pass "reads and verify of a deferred vault raise no manifest tamper signal"
+else
+  fail "a deferred vault raised the manifest tamper signal (verify $dv)" \
+    "$(grep hmac_verify_failures <<<"$dm")"
+fi
+# PREMISE: the signal is live on this very server — a manifest no generation's
+# MAC verifies, flipped beneath it, raises it.
+dc="$(sed -n 's/.*"manifest_mac_hex": *"\(.\).*/\1/p' "$DEF_V/vault.json")"
+dn=0; [ "$dc" = 0 ] && dn=1
+sed -i "s/\"manifest_mac_hex\": *\"$dc/\"manifest_mac_hex\": \"$dn/" "$DEF_V/vault.json"
+dt=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" \
+  -X POST http://127.0.0.1:8789/v1/vaults/default/verify)
+dm=$(curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8789/metrics)
+if [ "$dt" = 409 ] && grep -q 'undercroft_hmac_verify_failures_total{[^}]*surface="manifest"' <<<"$dm"; then
+  pass "premise: a flipped manifest beneath the same server raises it"
+else
+  fail "premise: the flipped manifest did not raise the tamper signal (verify $dt)" \
+    "$(grep hmac_verify_failures <<<"$dm")"
+fi
+kill "$DEF_S" 2>/dev/null; wait "$DEF_S" 2>/dev/null
+rm -rf "$DEF_HOME"
+
 echo
 echo "telemetry e2e results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

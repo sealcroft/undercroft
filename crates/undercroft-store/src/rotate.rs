@@ -138,10 +138,12 @@ impl VaultStore {
                 self.vault.id()
             )));
         }
-        // A retired handle's keys are not the vault's (ROADMAP O254): its
-        // anchor found the manifest on disk is not one they may overwrite.
-        if let Some(why) = self.vault.retired() {
-            return Err(crate::retired_handle(why));
+        // A retired handle writes nothing (ROADMAP O254): its anchor found the
+        // manifest on disk is not one its keys may overwrite — or its own last
+        // rotation could not promote, and a second one would stage over the
+        // only file holding its keys (ROADMAP O266).
+        if let Some(retirement) = self.vault.retirement() {
+            return Err(crate::retired_handle(retirement));
         }
         let rotated = self.rotate_keys_fenced(next);
         // On every exit that returns — a refusal, a failure, a success.
@@ -175,11 +177,17 @@ impl VaultStore {
                 r.get(0)
             })
             .optional()?;
-        if db_keycheck.as_deref() != Some(self.vault.keycheck())
-            || !self.vault.manifest_on_disk_is_mine()
-        {
+        // The manifest's check keeps the digest of the bytes it verified
+        // (ROADMAP O266): nothing can write that file while the vault is held,
+        // so they are what licenses adopting the next keys if the promote is
+        // deferred — this handle's unlock-time copy is stale after its own
+        // anchors.
+        let retired_manifest = self.vault.manifest_on_disk_digest();
+        let Some(retired_manifest) =
+            retired_manifest.filter(|_| db_keycheck.as_deref() == Some(self.vault.keycheck()))
+        else {
             return Err(crate::stale_keys(db_keycheck.as_deref()));
-        }
+        };
         // Every leg in the hold's own transaction, the anchor read in place:
         // nothing else can even open the vault while it is held, so the
         // anchor and the rows are one state (ROADMAP O232, O253).
@@ -931,41 +939,76 @@ impl VaultStore {
             promoted = next.promote();
             attempts += 1;
         }
+        // **Decided by the FILE, never by `promote`'s error** (ROADMAP O266).
+        // A promote writes `vault.json` and then removes `.next`, so an error
+        // AFTER the write — the removal, or its directory sync — is a promote
+        // that happened, and reporting it deferred told the operator a
+        // manifest "could not be written" that was on disk. Read inside the
+        // hold, where nothing else can move either file.
+        let written = promoted.is_ok() || next.manifest_on_disk_is_mine();
+        let staged_intact = next
+            .staged_on_disk()
+            .ok()
+            .flatten()
+            .is_some_and(|d| Some(d) == next.staged_seen());
         drop(hold);
         self.vault = next;
         self.drop_derived_caches();
-        if let Err(e) = promoted {
-            // The rotation COMMITTED: the database answers only to the new
-            // keys, so this handle adopts them whatever the write did, and the
-            // rotation answers Ok (O254 ruling item 3) — an error would invite
-            // a retry that rotates AGAIN. A staged file still exactly as this
-            // rotation staged it is promoted by the next writable open, and
-            // the deferral is reported rather than logged. Only a staged file
-            // that is gone or changed, beside a manifest that does not verify
-            // under the new keys, leaves the new salt in no file at all.
-            let staged_intact = self
-                .vault
-                .staged_on_disk()
-                .ok()
-                .flatten()
-                .is_some_and(|d| Some(d) == self.vault.staged_seen());
-            if !self.vault.manifest_on_disk_is_mine() && !staged_intact {
-                return Err(StoreError::IntegrityFinding(format!(
-                    "the key rotation committed, but its new manifest could not be written \
-                     ({e}), vault.json.next is gone or changed, and vault.json does not verify \
-                     under the new keys: the vault's data is sealed under keys no manifest on \
-                     disk can derive. Restore the vault from a backup taken before this \
-                     rotation (ROADMAP O257)"
-                )));
+        // The label guard's verdict described the chain BEFORE this rotation
+        // re-stepped it, and this connection's own commit moved no cookie, so
+        // it would have been served for the life of the handle (ROADMAP O266;
+        // O253's one-state rule). Reset — one replay per rotation.
+        self.forget_label_verdict();
+        match promoted {
+            Ok(()) => {}
+            Err(e) if written => {
+                let note = format!(
+                    "the key rotation committed and its new manifest was written, but \
+                     vault.json.next could not be removed ({e}); it now names the same key \
+                     generation as vault.json, and the next writable open removes it \
+                     (ROADMAP O266)"
+                );
+                undercroft_obs::diag_warn!("vault {:?}: {note}", self.vault.id());
+                self.unhealed.push(note);
             }
-            let note = format!(
-                "the key rotation committed, but its new manifest could not be written after \
-                 {attempts} attempt(s) ({e}); vault.json.next is intact and the next writable \
-                 open promotes it — do NOT delete it (ROADMAP O257)"
-            );
-            undercroft_obs::diag_warn!("vault {:?}: {note}", self.vault.id());
-            self.unhealed.push(note);
-            report.promote_deferred = Some(e.to_string());
+            Err(e) => {
+                // The rotation COMMITTED: the database answers only to the new
+                // keys, so this handle adopts them whatever the write did, and
+                // the rotation answers Ok (O254 ruling item 3) — an error would
+                // invite a retry that rotates AGAIN. Only a staged file that is
+                // gone or changed, beside a manifest that does not verify under
+                // the new keys, leaves the new salt in no file at all.
+                if !staged_intact {
+                    return Err(StoreError::IntegrityFinding(format!(
+                        "the key rotation committed, but its new manifest could not be \
+                         written ({e}), vault.json.next is gone or changed, and vault.json \
+                         does not verify under the new keys: the vault's data is sealed under \
+                         keys no manifest on disk can derive. Restore the vault from a backup \
+                         taken before this rotation (ROADMAP O257)"
+                    )));
+                }
+                // A real deferral (ROADMAP O266). Reads verify against the
+                // staged manifest, licensed by the retired bytes this rotation
+                // verified under its hold; writes stop, with the reopen class,
+                // BEFORE any commits — the first write used to commit past the
+                // staged anchor and then retire the handle as an integrity
+                // finding whose text blamed another process.
+                self.vault.adopt_deferred_promotion(retired_manifest);
+                self.vault.retire_until_reopened(format!(
+                    "its key rotation committed, but the new manifest could not be written \
+                     after {attempts} attempt(s) ({e})"
+                ));
+                let note = format!(
+                    "the key rotation committed, but its new manifest could not be written \
+                     after {attempts} attempt(s) ({e}); vault.json.next is intact and holds the \
+                     vault's current keys — the next WRITABLE open promotes it, a read-only open \
+                     serves the vault against it without promoting, and this handle writes \
+                     nothing more — do NOT delete it (ROADMAP O257, O266)"
+                );
+                undercroft_obs::diag_warn!("vault {:?}: {note}", self.vault.id());
+                self.unhealed.push(note);
+                report.promote_deferred = Some(e.to_string());
+            }
         }
         Ok(report)
     }

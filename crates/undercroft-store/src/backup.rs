@@ -49,6 +49,12 @@ pub struct BackupReport {
     /// is carried as found, because on a vault whose anchor was lowered it is
     /// the one observable left (A2).
     pub anchor_behind_by: u64,
+    /// Whether the archive's `vault.json` is the STAGED manifest of a
+    /// committed key rotation whose promote was deferred (ROADMAP O266): the
+    /// manifest the archived rows answer to, byte for byte `vault.json.next`,
+    /// while the live `vault.json` still names the previous key generation. A
+    /// restore opens the archive as an ordinary vault; this is its provenance.
+    pub promote_deferred: bool,
     /// This vault's older archives removed to keep the newest ten.
     pub pruned: usize,
 }
@@ -116,6 +122,8 @@ impl VaultStore {
         self.kg_secret()?;
         // ONCE, before the pin, with no fall-back: its head is the anchor the
         // rows are compared with, and its bytes are what the archive carries.
+        // During a deferred promote that is `vault.json.next`'s manifest —
+        // the one the rows answer to (ROADMAP O266, refining O256 item 3).
         let manifest = self.vault.verified_manifest()?;
         let vault_dir = self.vault.dir().to_path_buf();
         pause::fire(&vault_dir, Phase::ManifestRead);
@@ -201,6 +209,7 @@ impl VaultStore {
             name,
             vault: self.vault.id().to_string(),
             anchor_behind_by: writes.saturating_sub(manifest.writes()),
+            promote_deferred: manifest.is_staged(),
             writes,
             chain_head,
             pruned,

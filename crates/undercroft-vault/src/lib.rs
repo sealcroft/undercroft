@@ -228,6 +228,7 @@ pub struct VerifiedManifest {
     bytes: Vec<u8>,
     head: String,
     writes: u64,
+    staged: bool,
 }
 
 impl VerifiedManifest {
@@ -240,6 +241,40 @@ impl VerifiedManifest {
     pub fn writes(&self) -> u64 {
         self.writes
     }
+
+    /// Whether these are `vault.json.next`'s bytes: a committed key
+    /// rotation's promote is deferred, and the staged manifest is the one the
+    /// rows answer to (ROADMAP O266).
+    pub fn is_staged(&self) -> bool {
+        self.staged
+    }
+}
+
+/// The manifest a handle's rows answer to, as read from disk (ROADMAP O266).
+struct InForce {
+    manifest: Manifest,
+    /// Its exact bytes on disk.
+    bytes: Vec<u8>,
+    /// Whether it is `vault.json.next`'s — a deferred promote.
+    staged: bool,
+}
+
+/// Why [`Vault::manifest_in_force`] found no manifest in force (ROADMAP
+/// O266). Nothing is raised here; each reader decides what a miss means.
+enum NotInForce {
+    /// A manifest file could not be read — on a deferred handle, with
+    /// `vault.json.next` still intact.
+    Unreadable(std::io::Error),
+    /// A manifest that does not parse, names another vault or is too new:
+    /// today's verdict for each, as is.
+    Refused(VaultError),
+    /// A manifest failing this handle's MAC that is not the retired one the
+    /// handle's adoption was licensed by: the one tamper verdict.
+    Tampered,
+    /// A deferred promote whose staged manifest is gone or changed, while
+    /// `vault.json` does not verify under the handle's keys: the keys the
+    /// database is sealed under are in no file.
+    StagedLost(String),
 }
 
 impl std::fmt::Debug for VerifiedManifest {
@@ -247,6 +282,7 @@ impl std::fmt::Debug for VerifiedManifest {
         f.debug_struct("VerifiedManifest")
             .field("writes", &self.writes)
             .field("head", &self.head)
+            .field("staged", &self.staged)
             .finish_non_exhaustive()
     }
 }
@@ -400,13 +436,40 @@ impl std::fmt::Display for Unhealed {
             ),
             Unhealed::RotationPromotionDeferred => f.write_str(
                 "a committed key rotation was adopted in memory only — vault.json.next \
-                 was NOT promoted (the rename is a write); the manifest on disk still \
-                 names the previous key generation until a writable open promotes it",
+                 was NOT promoted over vault.json (that is a write), so vault.json still \
+                 names the previous key generation. This open verified the vault against \
+                 the staged manifest it read, which a writable open promotes. Do NOT \
+                 delete vault.json.next: until then it is the only file holding the \
+                 vault's current keys (ROADMAP O266)",
             ),
             Unhealed::RotationDiscardDeferred => f.write_str(
                 "an uncommitted key rotation left vault.json.next on disk and it was \
                  kept (removing it is a write); a writable open will discard it",
             ),
+        }
+    }
+}
+
+/// Why a handle stopped writing (ROADMAP O254, O266). The kind decides the
+/// class of the refusal every later write through the handle answers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Retirement {
+    /// Its anchor found a manifest on disk its keys may not overwrite —
+    /// another process rotated the vault, or the file was edited. An
+    /// integrity finding.
+    Integrity(String),
+    /// Its own key rotation committed and the new manifest could not be
+    /// written (ROADMAP O266): its keys ARE the vault's and
+    /// `vault.json.next` holds them, so a reopen — whose writable open
+    /// promotes it — is the whole remedy. Not an integrity finding.
+    PromotionDeferred(String),
+}
+
+impl Retirement {
+    /// The reason, whichever the kind.
+    pub fn why(&self) -> &str {
+        match self {
+            Retirement::Integrity(why) | Retirement::PromotionDeferred(why) => why,
         }
     }
 }
@@ -612,12 +675,32 @@ pub mod fixture {
         /// A restore's rename of the live vault BACK after a failed `SwapIn`
         /// fails, leaving both directories where the error says.
         SwapBack,
+        /// Removing a promoted rotation's `vault.json.next` fails, AFTER the
+        /// new `vault.json` was written (ROADMAP O266): a promote that is
+        /// done, whose leftover the next writable open removes.
+        RemoveStaged,
     }
 
     thread_local! {
         static ARMED: Cell<Option<Fault>> = const { Cell::new(None) };
         static REMAINING: Cell<u32> = const { Cell::new(0) };
         static THEN: Cell<Option<Fault>> = const { Cell::new(None) };
+        static BETWEEN: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    /// Run `hook` once, on this thread, between the two reads the manifest
+    /// rule makes on a handle whose promote is deferred — `vault.json.next`,
+    /// then `vault.json` (ROADMAP O266). How a test races a promote against
+    /// them without an inline seam in the code under test.
+    pub fn between_manifest_reads(hook: impl FnOnce() + 'static) {
+        BETWEEN.with(|between| *between.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    pub(crate) fn run_between_manifest_reads() {
+        if let Some(hook) = BETWEEN.with(|between| between.borrow_mut().take()) {
+            hook();
+        }
     }
 
     /// Arm `first` once, and `second` once after it fires — a restore's
@@ -715,9 +798,19 @@ pub struct Vault {
     /// filesystem repair it declined, and on EITHER posture a staging manifest
     /// it could not authenticate (ROADMAP O257).
     unhealed: Vec<Unhealed>,
-    /// Why this handle may no longer write (ROADMAP O254), set when its
-    /// anchor met an [`AnchorFault::Integrity`]. `None` on every unlock.
-    retired: Option<String>,
+    /// Why this handle may no longer write (ROADMAP O254, O266): set when its
+    /// anchor met an [`AnchorFault::Integrity`], or when its own rotation
+    /// committed and could not promote its manifest. `None` on every unlock.
+    retired: Option<Retirement>,
+    /// A SHA-256 of the `vault.json` bytes this unlock MAC-verified — the
+    /// buffer the check read, never a second read (ROADMAP O266). `None` on a
+    /// handle no unlock minted.
+    manifest_seen: Option<[u8; 32]>,
+    /// **Set only while this handle's keys came from `vault.json.next`**
+    /// (ROADMAP O266): the SHA-256 of the RETIRED generation's `vault.json`
+    /// whose MAC was verified before those keys were adopted. See
+    /// [`adopt_deferred_promotion`](Self::adopt_deferred_promotion).
+    deferred_over: Option<[u8; 32]>,
     /// This generation's keycheck marker, computed once — the write door
     /// compares it on every audited write (ROADMAP O257).
     keycheck: String,
@@ -1090,6 +1183,12 @@ impl Vault {
     /// The manifest on disk, parsed and MAC-verified under this handle's key,
     /// or the anchor's verdict on why it cannot be overwritten.
     fn verified_disk_manifest(&self) -> Result<Manifest, AnchorFault> {
+        self.verified_disk_read().map(|(manifest, _)| manifest)
+    }
+
+    /// [`verified_disk_manifest`](Self::verified_disk_manifest) with the
+    /// SHA-256 of the very bytes whose MAC it verified (ROADMAP O266).
+    fn verified_disk_read(&self) -> Result<(Manifest, [u8; 32]), AnchorFault> {
         #[cfg(any(test, feature = "test-fixture"))]
         fixture::fire(fixture::Fault::Read)
             .map_err(|e| AnchorFault::Io(format!("reading vault.json: {e}")))?;
@@ -1127,31 +1226,45 @@ impl Vault {
                     .into(),
             ));
         }
-        Ok(manifest)
+        Ok((manifest, digest_of(&raw)))
     }
 
-    /// Stop this handle writing (ROADMAP O254). The first reason stands.
+    /// Stop this handle writing, as an integrity finding (ROADMAP O254): its
+    /// anchor found a manifest on disk its keys may not overwrite. The first
+    /// reason stands.
     pub fn retire(&mut self, why: String) {
-        self.retired.get_or_insert(why);
+        self.retired.get_or_insert(Retirement::Integrity(why));
     }
 
-    /// Why this handle may no longer write, once an anchor has found the
-    /// manifest on disk is not one its keys may overwrite. `None` otherwise.
+    /// Stop this handle writing because its OWN rotation committed and the
+    /// new manifest could not be written (ROADMAP O266). Not an integrity
+    /// finding: its keys are the vault's, `vault.json.next` holds them, and a
+    /// reopen promotes it. The first reason stands.
+    pub fn retire_until_reopened(&mut self, why: String) {
+        self.retired
+            .get_or_insert(Retirement::PromotionDeferred(why));
+    }
+
+    /// Why this handle may no longer write, whichever kind of retirement it
+    /// is. `None` otherwise.
     pub fn retired(&self) -> Option<&str> {
-        self.retired.as_deref()
+        self.retired.as_ref().map(Retirement::why)
     }
 
-    /// The chain height of the manifest currently ON DISK, MAC-verified under
-    /// this handle's key — the last anchor ANY handle committed. `None` when it
-    /// cannot be read or does not verify; the lag it feeds is then unknown,
-    /// and saying so is not the same as saying zero.
+    /// This handle's retirement, with its kind — what decides the class of
+    /// the refusal every later write answers (ROADMAP O266).
+    pub fn retirement(&self) -> Option<&Retirement> {
+        self.retired.as_ref()
+    }
+
+    /// The chain height of the manifest this handle's rows answer to, read
+    /// from disk — the last anchor ANY handle committed, or during a deferred
+    /// promote the staged manifest's (ROADMAP O266). `None` when it cannot be
+    /// read or does not verify; the lag it feeds is then unknown, and saying
+    /// so is not the same as saying zero. Never raises the tamper event: a
+    /// reported lag is not a verdict.
     pub fn anchored_writes(&self) -> Option<u64> {
-        let raw = fs::read(self.dir.join(MANIFEST_FILE)).ok()?;
-        let manifest = Manifest::parse(&raw).ok()?;
-        let mac = hex::decode(&manifest.manifest_mac_hex).ok()?;
-        (manifest.id == self.id
-            && verify_hmac(&self.manifest_key, &manifest.canonical(), &mac).is_ok())
-        .then_some(manifest.writes)
+        self.manifest_in_force().ok().map(|m| m.manifest.writes)
     }
 
     /// Remove temp files a crashed manifest write left behind (ROADMAP O254),
@@ -1295,8 +1408,14 @@ impl Vault {
             RotationVerdict::Committed => {
                 let pending = self.pending.take().expect("verdict saw a pending twin");
                 let notes = std::mem::take(&mut self.unhealed);
+                // Captured BEFORE the swap, which replaces every field: the
+                // twin was assembled with defaults (ROADMAP O266).
+                let retired = self.manifest_seen;
                 *self = *pending;
                 self.unhealed = notes;
+                if let Some(retired) = retired {
+                    self.adopt_deferred_promotion(retired);
+                }
                 self.unhealed.push(Unhealed::RotationPromotionDeferred);
             }
             RotationVerdict::Abandoned => {
@@ -1305,6 +1424,31 @@ impl Vault {
             }
         }
         verdict
+    }
+
+    /// Record that this handle's keys came from `vault.json.next` while
+    /// `vault.json` is still the retired generation's file, whose MAC was
+    /// verified in the buffer `retired_manifest` digests (ROADMAP O266).
+    ///
+    /// Set in exactly two places: a read-only open that adopted a committed
+    /// rotation in memory, and the rotating handle whose own promote failed
+    /// every attempt. From then on the manifest the rows answer to is the
+    /// STAGED one — the retired file's anchor is not a head a replay under
+    /// these keys produces — but only while the disk still shows that state:
+    /// see [`anchored_head`](Self::anchored_head). The strict readers
+    /// ([`manifest_on_disk_is_mine`](Self::manifest_on_disk_is_mine), the
+    /// anchor's own read, [`promote`](Self::promote)) are deliberately
+    /// untouched: each asks about `vault.json` alone, and a lenient one would
+    /// let a second rotation stage over the only file holding these keys, or
+    /// a promote remove `.next` with nothing written.
+    pub fn adopt_deferred_promotion(&mut self, retired_manifest: [u8; 32]) {
+        self.deferred_over = Some(retired_manifest);
+    }
+
+    /// Whether this handle's keys came from a committed rotation whose
+    /// manifest has not been promoted (ROADMAP O266).
+    pub fn promotion_deferred(&self) -> bool {
+        self.deferred_over.is_some()
     }
 
     fn pending_path(&self) -> PathBuf {
@@ -1389,6 +1533,8 @@ impl Vault {
         if self.staged_on_disk()? != Some(seen) {
             return Ok(false);
         }
+        #[cfg(any(test, feature = "test-fixture"))]
+        fixture::fire(fixture::Fault::RemoveStaged)?;
         match fs::remove_file(self.pending_path()) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
@@ -1418,8 +1564,21 @@ impl Vault {
     /// question a rotation asks when its promote failed, and the store asks
     /// of a foreign keycheck, to learn whether another process moved the
     /// manifest since this handle read it (ROADMAP O254, O257).
+    ///
+    /// **Strict, and deliberately NOT through the anchor rule** (ROADMAP
+    /// O266): it asks about `vault.json` alone, so on a handle whose promote
+    /// is deferred it answers `false` — which is what stops that handle
+    /// rotating again over the only file holding its keys.
     pub fn manifest_on_disk_is_mine(&self) -> bool {
         self.verified_disk_manifest().is_ok()
+    }
+
+    /// [`manifest_on_disk_is_mine`](Self::manifest_on_disk_is_mine), with the
+    /// SHA-256 of the bytes it verified when it is (ROADMAP O266) — how a
+    /// rotation, under its exclusive hold, records the retired manifest its
+    /// adoption of the next keys is licensed by if the promote is deferred.
+    pub fn manifest_on_disk_digest(&self) -> Option<[u8; 32]> {
+        self.verified_disk_read().ok().map(|(_, digest)| digest)
     }
 
     fn mac_verifies(&self, m: &Manifest) -> bool {
@@ -1448,11 +1607,136 @@ impl Vault {
     /// A missing or unreadable file falls back to the cached head rather
     /// than inventing one — the anchor is allowed to lag, and a read failure
     /// is not evidence of tampering.
+    ///
+    /// **While a committed rotation's promote is deferred it is the STAGED
+    /// manifest's head** (ROADMAP O266): this handle's keys came from
+    /// `vault.json.next`, the retired `vault.json` fails their MAC, and its
+    /// anchor is not a head a replay under them produces — reading it here
+    /// made every read-only open of such a vault refuse as tampering. The
+    /// rule, and when it stops applying, is
+    /// [`manifest_in_force`](Self::manifest_in_force)'s.
     pub fn anchored_head(&self) -> Result<String, VaultError> {
-        let Ok(raw) = fs::read(self.dir.join("vault.json")) else {
-            return Ok(self.manifest.chain_head_hex.clone());
+        match self.manifest_in_force() {
+            Ok(m) => Ok(m.manifest.chain_head_hex),
+            Err(NotInForce::Unreadable(_)) => Ok(self.manifest.chain_head_hex.clone()),
+            Err(miss) => Err(self.refusal(miss)),
+        }
+    }
+
+    /// **Which manifest this handle's rows answer to, read from disk**
+    /// (ROADMAP O266) — the one rule [`anchored_head`](Self::anchored_head),
+    /// [`anchored_writes`](Self::anchored_writes) and
+    /// [`verified_manifest`](Self::verified_manifest) share. It emits
+    /// nothing: each reader decides what a miss means for it.
+    ///
+    /// Ordinarily `vault.json`, verified under this handle's key. On a handle
+    /// whose promote is deferred ([`adopt_deferred_promotion`]):
+    ///
+    /// 1. `vault.json.next` is read FIRST. A promote writes `vault.json` by
+    ///    rename and only then removes `.next`, and nothing writes INTO
+    ///    `.next`, so when the second read still finds the retired bytes,
+    ///    `.next` was there when the first one read it — two reads, consistent
+    ///    at the second, with no retry.
+    /// 2. `vault.json` verifying under this handle's key means a promote has
+    ///    happened since: it is read as always, and a later anchor is
+    ///    followed. No latch — a rollback beneath a live handle is followed
+    ///    down (O254 item 2).
+    /// 3. `vault.json` byte-identical to the retired manifest the adoption
+    ///    was licensed by AND `.next` byte-identical to what this handle read
+    ///    or staged: still deferred, and the staged manifest is the one in
+    ///    force — its bytes from disk, never re-serialised.
+    /// 4. `.next` gone or changed while `vault.json` is not this generation's:
+    ///    the keys the database is sealed under are in no file, which is what
+    ///    a fresh open answers too (`settle_foreign_keycheck`, O257 item 5).
+    ///    An integrity verdict, and NOT the tamper event — no MAC was forged.
+    /// 5. Anything else failing this handle's MAC is the one tamper verdict.
+    ///
+    /// [`adopt_deferred_promotion`]: Self::adopt_deferred_promotion
+    fn manifest_in_force(&self) -> Result<InForce, NotInForce> {
+        // `None`: not deferred. `Some(None)`: deferred, and `.next` is gone
+        // or no longer the bytes this handle read or staged.
+        let staged: Option<Option<Vec<u8>>> = match self.deferred_over {
+            None => None,
+            Some(_) => {
+                let read = match fs::read(self.pending_path()) {
+                    Ok(raw) => Some(raw).filter(|raw| Some(digest_of(raw)) == self.staged_seen),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                    // A read failure is not evidence (the fall-back's rule).
+                    Err(e) => return Err(NotInForce::Unreadable(e)),
+                };
+                #[cfg(any(test, feature = "test-fixture"))]
+                fixture::run_between_manifest_reads();
+                Some(read)
+            }
         };
-        Ok(self.parse_verified(&raw)?.chain_head_hex)
+        let lost = || {
+            NotInForce::StagedLost(format!(
+                "vault.json.next, which holds vault {:?}'s current key generation while its \
+                 promote is deferred, is gone or has changed since this process read it, and \
+                 vault.json does not verify under that generation's keys: the database is \
+                 sealed under keys no manifest on disk now derives (ROADMAP O266, O257). \
+                 Nothing was written. Restore the vault from a backup taken before this",
+                self.id
+            ))
+        };
+        let raw = match fs::read(self.dir.join(MANIFEST_FILE)) {
+            Ok(raw) => raw,
+            Err(_) if matches!(staged, Some(None)) => return Err(lost()),
+            Err(e) => return Err(NotInForce::Unreadable(e)),
+        };
+        if let (Some(retired), Some(staged)) = (self.deferred_over, &staged) {
+            if digest_of(&raw) == retired {
+                return match staged {
+                    Some(bytes) => Ok(InForce {
+                        manifest: self.manifest.clone(),
+                        bytes: bytes.clone(),
+                        staged: true,
+                    }),
+                    None => Err(lost()),
+                };
+            }
+        }
+        let m = Manifest::parse(&raw).map_err(NotInForce::Refused)?;
+        if m.id != self.id {
+            return Err(NotInForce::Refused(VaultError::CorruptManifest(
+                "manifest id mismatch".into(),
+            )));
+        }
+        let stored = hex::decode(&m.manifest_mac_hex)
+            .map_err(|e| NotInForce::Refused(VaultError::CorruptManifest(e.to_string())))?;
+        if verify_hmac(&self.manifest_key, &m.canonical(), &stored).is_err() {
+            return Err(if matches!(staged, Some(None)) {
+                lost()
+            } else {
+                NotInForce::Tampered
+            });
+        }
+        Ok(InForce {
+            manifest: m,
+            bytes: raw,
+            staged: false,
+        })
+    }
+
+    /// What a reader answers for a manifest [`manifest_in_force`] did not
+    /// find — and the ONE place the manifest tamper event is raised.
+    ///
+    /// [`manifest_in_force`]: Self::manifest_in_force
+    fn refusal(&self, miss: NotInForce) -> VaultError {
+        match miss {
+            NotInForce::Unreadable(e) => e.into(),
+            NotInForce::Refused(e) => e,
+            NotInForce::StagedLost(why) => VaultError::CorruptManifest(why),
+            NotInForce::Tampered => {
+                undercroft_obs::hmac_verify_failed("manifest");
+                undercroft_obs::event_hmac_fail(
+                    self.id(),
+                    "manifest",
+                    undercroft_obs::TamperSite::default(),
+                );
+                VaultError::ManifestTampered
+            }
+        }
     }
 
     /// **The manifest ON DISK, its exact bytes, MAC-verified — with NO
@@ -1467,44 +1751,29 @@ impl Vault {
     /// never had. So a missing file is an integrity verdict and any other read
     /// error is an I/O refusal. The bytes leave this crate only through
     /// [`backups::Stage::write_manifest`].
+    ///
+    /// **During a deferred promote these are `vault.json.next`'s bytes**
+    /// (ROADMAP O266, refining O256 item 3): the manifest the rows answer to,
+    /// re-read from disk and required to be the bytes this handle read or
+    /// staged — never re-serialised from memory. An archive carrying the
+    /// retired `vault.json` instead is one a restore refuses as another key
+    /// generation. [`VerifiedManifest::is_staged`] says which.
     pub fn verified_manifest(&self) -> Result<VerifiedManifest, VaultError> {
-        let raw = match fs::read(self.dir.join(MANIFEST_FILE)) {
-            Ok(raw) => raw,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Err(VaultError::CorruptManifest(format!(
+        match self.manifest_in_force() {
+            Ok(m) => Ok(VerifiedManifest {
+                head: m.manifest.chain_head_hex,
+                writes: m.manifest.writes,
+                bytes: m.bytes,
+                staged: m.staged,
+            }),
+            Err(NotInForce::Unreadable(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+                Err(VaultError::CorruptManifest(format!(
                     "{MANIFEST_FILE} is missing from vault {:?}'s directory",
                     self.id
-                )));
+                )))
             }
-            Err(e) => return Err(e.into()),
-        };
-        let m = self.parse_verified(&raw)?;
-        Ok(VerifiedManifest {
-            head: m.chain_head_hex,
-            writes: m.writes,
-            bytes: raw,
-        })
-    }
-
-    /// Parse a manifest read from disk and verify it is this vault's and
-    /// carries this handle's MAC — the one check both readers above share.
-    fn parse_verified(&self, raw: &[u8]) -> Result<Manifest, VaultError> {
-        let m = Manifest::parse(raw)?;
-        if m.id != self.id {
-            return Err(VaultError::CorruptManifest("manifest id mismatch".into()));
+            Err(miss) => Err(self.refusal(miss)),
         }
-        let stored = hex::decode(&m.manifest_mac_hex)
-            .map_err(|e| VaultError::CorruptManifest(e.to_string()))?;
-        if verify_hmac(&self.manifest_key, &m.canonical(), &stored).is_err() {
-            undercroft_obs::hmac_verify_failed("manifest");
-            undercroft_obs::event_hmac_fail(
-                self.id(),
-                "manifest",
-                undercroft_obs::TamperSite::default(),
-            );
-            return Err(VaultError::ManifestTampered);
-        }
-        Ok(m)
     }
 
     /// Write this handle's manifest as it stands, through the one writer.
@@ -1798,7 +2067,11 @@ impl VaultManager {
         if !manifest_path.exists() {
             return Err(VaultError::NotFound(id.to_string()));
         }
-        let manifest = Manifest::parse(&fs::read(&manifest_path)?)?;
+        // Bound, digested, then parsed (ROADMAP O266): the digest must be of
+        // the very buffer whose MAC is verified below, never of a second read.
+        let raw = fs::read(&manifest_path)?;
+        let raw_digest = digest_of(&raw);
+        let manifest = Manifest::parse(&raw)?;
         if manifest.id != id {
             return Err(VaultError::CorruptManifest("manifest id mismatch".into()));
         }
@@ -1819,6 +2092,7 @@ impl VaultManager {
             }
             return Err(VaultError::ManifestTampered);
         }
+        vault.manifest_seen = Some(raw_digest);
         // Attach a pending rotation manifest (vault.json.next) for the
         // store's open-time reconciliation, and remember exactly which bytes
         // were read, authenticated or not: the store promotes or removes a
@@ -1894,6 +2168,8 @@ impl VaultManager {
             unhealed: Vec::new(),
             retired: None,
             staged_seen: None,
+            manifest_seen: None,
+            deferred_over: None,
         })
     }
 
@@ -3387,5 +3663,144 @@ mod tests {
             .unwrap()
             .unlock("default")
             .is_ok());
+    }
+
+    /// **ROADMAP O266's source gate: one manifest rule, three readers, and
+    /// every read of a manifest file named.**
+    ///
+    /// The defect was a reader reaching `vault.json` under the wrong rule, and
+    /// the fix is ONE rule (`manifest_in_force`) three readers share while the
+    /// strict readers stay strict: a lenient `manifest_on_disk_is_mine` lets a
+    /// second rotation stage over the only file holding the keys, and a lenient
+    /// `promote` removes `.next` with nothing written. The tamper event is
+    /// raised in exactly three places — the unlock, the rule's refusal and
+    /// O204's key-opens-no-vault refusal — never by the rule itself, so a
+    /// healthy deferred vault never pages an operator. And every `fs::read` of a
+    /// manifest file in this file is counted against a named list, so a new
+    /// reader cannot skip the rule unseen. Scoped to this file: `backups.rs` and
+    /// `restores.rs` read an ARCHIVE's or a STAGE's manifest, never a handle's
+    /// anchor. Needles are split with `concat!` so this test's own text is not
+    /// counted.
+    #[test]
+    fn the_manifest_rule_has_three_readers_and_every_manifest_read_is_named() {
+        let src = include_str!("lib.rs");
+        let cut = src
+            .find(concat!("#[cfg(test)]\nmod ", "tests {"))
+            .expect("premise: the tests module is where this gate expects it");
+        let prod = &src[..cut];
+        let fn_name = |line: &str| -> Option<String> {
+            let t = line.trim_start();
+            let t = t
+                .strip_prefix("pub(crate) ")
+                .or_else(|| t.strip_prefix("pub "))
+                .unwrap_or(t);
+            let t = t.strip_prefix("fn ")?;
+            let end = t.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))?;
+            Some(t[..end].to_string())
+        };
+        let body = |name: &str| -> &str {
+            let start = prod
+                .find(&format!("fn {name}("))
+                .unwrap_or_else(|| panic!("premise: no fn {name} in production code"));
+            let rest = &prod[start + 3..];
+            let end = [
+                "\n    pub fn ",
+                "\n    fn ",
+                "\n    pub(crate) fn ",
+                "\npub fn ",
+                "\nfn ",
+                "\npub(crate) fn ",
+                "\nimpl ",
+            ]
+            .iter()
+            .filter_map(|m| rest.find(m))
+            .min()
+            .unwrap_or(rest.len());
+            &rest[..end]
+        };
+
+        let call = concat!("self.manifest_in", "_force()");
+        assert_eq!(
+            prod.matches(call).count(),
+            3,
+            "the manifest rule has exactly three readers"
+        );
+        for reader in ["anchored_head", "anchored_writes", "verified_manifest"] {
+            assert!(
+                body(reader).contains(call),
+                "{reader} reads through the rule"
+            );
+        }
+        for strict in [
+            "manifest_on_disk_is_mine",
+            "manifest_on_disk_digest",
+            "verified_disk_manifest",
+            "verified_disk_read",
+            "anchor_manifest",
+            "promote",
+            "remove_staged_if_unchanged",
+            "staged_on_disk",
+        ] {
+            assert!(
+                !body(strict).contains(call),
+                "{strict} asks about vault.json alone and must never take the rule"
+            );
+        }
+
+        let emit = concat!("hmac_verify_failed(\"mani", "fest\")");
+        assert_eq!(
+            prod.matches(emit).count(),
+            3,
+            "the manifest tamper event is raised at the unlock, in the rule's refusal and in \
+             O204's key-opens-no-vault refusal, and nowhere else"
+        );
+        for site in ["unlock_dir", "refusal", "key_opens_an_existing_vault"] {
+            assert!(body(site).contains(emit), "{site} raises the tamper event");
+        }
+        for silent in ["manifest_in_force", "anchored_writes"] {
+            assert!(
+                !body(silent).contains(emit)
+                    && !body(silent).contains(concat!("event_hmac", "_fail")),
+                "{silent} must not raise the tamper event"
+            );
+        }
+
+        let mut reads: Vec<String> = Vec::new();
+        let mut current = String::new();
+        for line in prod.lines() {
+            if let Some(name) = fn_name(line) {
+                current = name;
+            }
+            if line.contains(concat!("fs::re", "ad("))
+                && [
+                    "MANIFEST_FILE",
+                    "\"vault.json\"",
+                    "pending_path",
+                    "STAGING_FILE",
+                    "manifest_path",
+                ]
+                .iter()
+                .any(|n| line.contains(n))
+            {
+                reads.push(current.clone());
+            }
+        }
+        reads.sort();
+        let mut expected = vec![
+            "key_opens_an_existing_vault",
+            "manifest_in_force",
+            "manifest_in_force",
+            "promote",
+            "staged_on_disk",
+            "unlock_dir",
+            "unlock_dir",
+            "verified_disk_read",
+        ];
+        expected.sort();
+        assert_eq!(
+            reads, expected,
+            "every read of a manifest file is one of these; a new one must be ruled on \
+             (ROADMAP O266)"
+        );
     }
 }

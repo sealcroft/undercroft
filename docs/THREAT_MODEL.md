@@ -343,7 +343,12 @@ connection is `SQLITE_OPEN_READ_ONLY` under `PRAGMA query_only=ON` — so a
 write that was *missed* fails loudly instead of happening quietly — and the
 schema is checked rather than created, a lagging manifest anchor is reported
 rather than fast-forwarded, an interrupted rotation is honoured in memory
-with its `vault.json.next` left in place, and a prefilter loads an index but
+with its `vault.json.next` left in place — and, since 1.7.0 (ROADMAP O266),
+verified against that staged manifest while the disk still shows the
+interrupted state: from 1.1.0 the open had MAC-checked the retired
+`vault.json` under the staged keys and refused as tampering, and a lost or
+edited `.next` beside the retired file is now the integrity verdict a fresh
+open gives, with no tamper signal — and a prefilter loads an index but
 never builds one. That last operation is the one the incident runbook's own
 "freeze writes" step used to perform: a read-only open could **delete** a
 writer's staging manifest (A32). What the open declined to repair is warned

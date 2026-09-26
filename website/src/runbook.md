@@ -136,7 +136,15 @@ well, where only a tampered count fails.
    `SQLITE_OPEN_READ_ONLY` under `PRAGMA query_only=ON`, the schema is checked
    rather than created, the anchor is reported rather than healed, a staged
    rotation is honoured **in memory only** and its file left exactly where it
-   is, and a prefilter loads an index but never builds one. What the open
+   is — and, since 1.7.0, verified against: a rotation whose promote was
+   deferred (or a writer that crashed between its rotation's commit and its
+   promote) opens read-only, verifies against the STAGED manifest, and says
+   so on `unhealed`. From 1.1.0 until then that open answered
+   `ManifestTampered`, exit 2 — if you met it right after a rotation, a
+   writable open would have promoted and verified. **Do not delete
+   `vault.json.next` in that state**: it is the only file holding the vault's
+   current keys, and a read-only open refuses as an integrity verdict once it
+   is gone. A prefilter loads an index but never builds one. What the open
    declined to repair is printed as a warning and readable afterwards on
    `undercroft stats` (and `GET /v1/vaults/{id}/stats`) as `unhealed` — during
    an incident, read it: "vault.json.next does not authenticate … and was

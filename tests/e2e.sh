@@ -4369,6 +4369,133 @@ fi
 kill "$O257_A" 2>/dev/null; wait "$O257_A" 2>/dev/null
 rm -rf "$O254_HOME"
 
+echo "== A deferred rotation promote opens read-only against its staged manifest (ROADMAP O266) =="
+# A committed rotation whose promote was deferred leaves the RETIRED
+# generation's vault.json beside the staged vault.json.next, and the database
+# sealed under the staged keys. Since 1.1.0 every read-only open of that state
+# refused as tampering (exit 2) — the incident runbook's own posture. The
+# release binary has no fault seam, so the state is made by hand from an
+# ordinary rotation: its promoted vault.json is byte-identical to the staged
+# manifest it replaced (the store's probe P-B), and the CLI anchors nothing
+# after the promote. Every arm below exits 2 on a binary without the fix
+# (measured on the pre-O266 release binary before this block was written).
+O266_HOME="$(mktemp -d)"
+o266() { UNDERCROFT_HOME="$O266_HOME" "$BIN" "$@"; }
+o266 init >/dev/null 2>&1
+for i in 1 2 3; do
+  o266 remember "O266: the lighthouse keeper's log, entry $i" --wing notes >/dev/null 2>&1
+done
+O266_V="$O266_HOME/vaults/default"
+check "O266 premise: the anchor is current before the rotation" 0 \
+  "anchor lag: 0 committed record(s) not yet anchored" -- o266 stats
+cp "$O266_V/vault.json" "$O266_HOME/retired.json"
+check "O266 premise: an ordinary rotation promotes" 0 "manifest promoted:   yes" -- o266 vault rotate default
+cp "$O266_V/vault.json" "$O266_HOME/staged.json"
+mv "$O266_V/vault.json" "$O266_V/vault.json.next"
+cp "$O266_HOME/retired.json" "$O266_V/vault.json"
+if cmp -s "$O266_V/vault.json.next" "$O266_HOME/staged.json" \
+   && cmp -s "$O266_V/vault.json" "$O266_HOME/retired.json" \
+   && ! cmp -s "$O266_HOME/staged.json" "$O266_HOME/retired.json"; then
+  echo "ok    O266 premise: vault.json is the retired generation's, vault.json.next the staged one"; PASS=$((PASS+1))
+else
+  echo "FAIL  O266 premise: the hand recipe did not land, so every arm below proves nothing"; FAIL=$((FAIL+1))
+fi
+O266_BEFORE="$(cd "$O266_V" && md5sum vault.db vault.json vault.json.next | sort)"
+check "O266: --read-only stats serves a deferred promote and names it" 0 \
+  "was NOT promoted over vault.json" -- o266 --read-only stats
+check "O266: --read-only stats reports no anchor lag against the staged manifest" 0 \
+  "anchor lag: 0 committed record(s) not yet anchored" -- o266 --read-only stats
+check "O266: --read-only verify passes against the staged manifest" 0 "VERIFY OK" -- o266 --read-only verify
+check "O266: --read-only search returns the drawer verbatim" 0 \
+  "the lighthouse keeper's log, entry 2" -- o266 --read-only search "lighthouse keeper log"
+check "O266: --read-only vault list serves" 0 "default" -- o266 --read-only vault list
+check "O266: witness emit (always read-only) serves" 0 "" -- o266 witness emit --out "$O266_HOME/w.json"
+if grep -q "\"anchored_head\": *\"$(sed -n 's/.*"chain_head_hex": *"\([0-9a-f]*\)".*/\1/p' "$O266_HOME/staged.json")\"" "$O266_HOME/w.json"; then
+  echo "ok    O266: the witness's anchor is the staged manifest's"; PASS=$((PASS+1))
+else
+  echo "FAIL  O266: the witness's anchor is the staged manifest's"; cat "$O266_HOME/w.json" 2>&1 | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+# The server a responder starts during an incident, on both of its surfaces.
+UNDERCROFT_HOME="$O266_HOME" "$BIN" serve-http --host 127.0.0.1 --port 18893 --read-only >/dev/null 2>&1 &
+O266_PID=$!
+for _ in $(seq 1 40); do curl -sf http://127.0.0.1:18893/healthz >/dev/null 2>&1 && break; sleep 0.25; done
+O266_ST="$(curl -s http://127.0.0.1:18893/v1/vaults/default/stats)"
+if grep -q '"anchor_lag":0' <<<"$O266_ST" && grep -q 'NOT promoted over vault.json' <<<"$O266_ST"; then
+  echo "ok    O266: a --read-only server serves /v1 stats with the deferral named and no lag"; PASS=$((PASS+1))
+else
+  echo "FAIL  O266: a --read-only server serves /v1 stats with the deferral named"; echo "$O266_ST" | head -5 | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+O266_SR="$(curl -s -X POST http://127.0.0.1:18893/v1/vaults/default/search -H 'content-type: application/json' -d '{"query":"lighthouse keeper log"}')"
+O266_VR="$(curl -s -w '\n%{http_code}' -X POST http://127.0.0.1:18893/v1/vaults/default/verify)"
+if grep -q "entry 1" <<<"$O266_SR" && [ "$(tail -1 <<<"$O266_VR")" = 200 ] && grep -q '"chain_ok":true' <<<"$O266_VR"; then
+  echo "ok    O266: /v1 search and verify serve the deferred vault"; PASS=$((PASS+1))
+else
+  echo "FAIL  O266: /v1 search and verify serve the deferred vault"; echo "$O266_SR" "$O266_VR" | head -5 | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+O266_MCP="$(curl -s -X POST http://127.0.0.1:18893/mcp -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"undercroft_search","arguments":{"query":"lighthouse keeper log"}}}')"
+if grep -q "entry 3" <<<"$O266_MCP"; then
+  echo "ok    O266: /mcp search serves the deferred vault"; PASS=$((PASS+1))
+else
+  echo "FAIL  O266: /mcp search serves the deferred vault"; echo "$O266_MCP" | head -3 | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+# `.next` removed beneath the live server: the keys the database is sealed under
+# are in no file now, which is what a fresh open answers too — integrity, 409.
+mv "$O266_V/vault.json.next" "$O266_HOME/next.aside"
+O266_LOST="$(curl -s -w '\n%{http_code}' -X POST http://127.0.0.1:18893/v1/vaults/default/verify)"
+mv "$O266_HOME/next.aside" "$O266_V/vault.json.next"
+if [ "$(tail -1 <<<"$O266_LOST")" = 409 ] && grep -qF '"class":"integrity"' <<<"$O266_LOST" \
+   && grep -q 'O266' <<<"$O266_LOST"; then
+  echo "ok    O266: vault.json.next lost beneath a live read-only server is 409 integrity"; PASS=$((PASS+1))
+else
+  echo "FAIL  O266: vault.json.next lost beneath a live read-only server is 409 integrity"; echo "$O266_LOST" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+kill "$O266_PID" 2>/dev/null; wait "$O266_PID" 2>/dev/null
+O266_AFTER="$(cd "$O266_V" && md5sum vault.db vault.json vault.json.next | sort)"
+if [ "$O266_BEFORE" = "$O266_AFTER" ]; then
+  echo "ok    O266: every read-only command left the three files byte-identical"; PASS=$((PASS+1))
+else
+  echo "FAIL  O266: the read-only commands changed the vault"; diff <(echo "$O266_BEFORE") <(echo "$O266_AFTER") | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+# A forensic read-only backup carries the manifest the rows answer to, and
+# restores into a fresh installation that verifies.
+O266_BK="$(o266 --read-only backup create 2>&1)"
+O266_BD="$(printf '%s\n' "$O266_BK" | sed -n 's/^Backup created: //p')"
+if grep -q "the staged vault.json.next of a committed key rotation" <<<"$O266_BK" \
+   && [ -n "$O266_BD" ] && cmp -s "$O266_BD/vault.json" "$O266_HOME/staged.json" \
+   && [ "$(ls "$O266_BD" | sort | tr '\n' ' ')" = "vault.db vault.json " ]; then
+  echo "ok    O266: a --read-only backup archives the staged manifest, two files"; PASS=$((PASS+1))
+else
+  echo "FAIL  O266: a --read-only backup archives the staged manifest, two files"; echo "$O266_BK" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+O266_FRESH="$(mktemp -d)"
+cp "$O266_HOME/master.key" "$O266_FRESH/master.key"
+mkdir -p "$O266_FRESH/backups" && cp -r "$O266_BD" "$O266_FRESH/backups/"
+check "O266: the archive of a deferral restores into a fresh installation" 0 "" -- \
+  env UNDERCROFT_HOME="$O266_FRESH" "$BIN" backup restore "$(basename "$O266_BD")"
+check "O266: the restored vault verifies" 0 "VERIFY OK" -- env UNDERCROFT_HOME="$O266_FRESH" "$BIN" verify
+rm -rf "$O266_FRESH"
+# A vault.json no generation's MAC verifies is still the tamper verdict.
+cp "$O266_V/vault.json" "$O266_HOME/intact.json"
+O266_C="$(sed -n 's/.*"manifest_mac_hex": *"\(.\).*/\1/p' "$O266_V/vault.json")"
+O266_N=0; [ "$O266_C" = 0 ] && O266_N=1
+sed -i "s/\"manifest_mac_hex\": *\"$O266_C/\"manifest_mac_hex\": \"$O266_N/" "$O266_V/vault.json"
+if [ -n "$O266_C" ] && ! cmp -s "$O266_V/vault.json" "$O266_HOME/intact.json"; then
+  check "O266: a vault.json whose MAC no generation verifies still exits 2" 2 "tampering" -- o266 --read-only stats
+else
+  echo "FAIL  O266 premise: the MAC flip did not land"; FAIL=$((FAIL+1))
+fi
+cp "$O266_HOME/intact.json" "$O266_V/vault.json"
+# A writable command promotes, to exactly the staged bytes.
+check "O266: a writable command promotes the deferral" 0 "" -- o266 stats
+if [ ! -e "$O266_V/vault.json.next" ] && cmp -s "$O266_V/vault.json" "$O266_HOME/staged.json"; then
+  echo "ok    O266: the promoted vault.json is byte-identical to the staged manifest"; PASS=$((PASS+1))
+else
+  echo "FAIL  O266: the promoted vault.json is byte-identical to the staged manifest"; FAIL=$((FAIL+1))
+fi
+check "O266: --read-only verify after the promote" 0 "VERIFY OK" -- o266 --read-only verify
+rm -rf "$O266_HOME"
+
 echo
 echo "e2e results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

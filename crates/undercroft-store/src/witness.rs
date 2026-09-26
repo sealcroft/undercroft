@@ -78,9 +78,11 @@ pub struct ChainWitness {
     pub regime: String,
     /// `chain_meta.writes` at emit — advisory.
     pub writes: u64,
-    /// The manifest anchor ON DISK at emit, MAC-verified. An anchor never
-    /// legitimately moves backwards, so a later check reading a lower one
-    /// has O246's observable off-machine as well.
+    /// The manifest anchor in force at emit, read from disk and MAC-verified:
+    /// `vault.json`'s, or `vault.json.next`'s while a committed rotation's
+    /// promote is deferred (ROADMAP O266), whose `unhealed` then says so. An
+    /// anchor never legitimately moves backwards, so a later check reading a
+    /// lower one has O246's observable off-machine as well.
     pub anchored_head: String,
     /// When the emitter said it emitted this — the emitter's claim.
     pub emitted_at: String,
