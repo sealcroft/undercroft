@@ -41,10 +41,12 @@ undercroft serve-http --read-only …
 cp -a "$UNDERCROFT_HOME/vaults/<vault>" "/tmp/<vault>.evidence.$(date +%s)"
 ```
 
-**4. Fix** — verbatim restore from a known-good backup, then re-verify:
+**4. Fix** — verbatim restore from a known-good backup, then re-verify. The
+restore verifies the archive in a stage before it touches the live vault, and
+one that does not verify exits 2 with the live vault unchanged (ROADMAP O268):
 ```bash
 undercroft backup list
-undercroft backup restore <backup-name>   # one positional; --force to overwrite
+undercroft backup restore <backup-name>   # one positional; --force to overwrite; stop the server first
 undercroft verify --vault <vault>      # must be 0 failures, chain ok
 undercroft repair --vault <vault>      # backfill fingerprints, re-embed every drawer + drop PQ/IVF (a served embedder receives the corpus), vacuum, re-verify
 ```

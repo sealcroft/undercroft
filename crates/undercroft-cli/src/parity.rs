@@ -806,6 +806,21 @@ pub const HAND_PROJECTED: &[(&str, &str, &str, &str)] = &[
         "undercroft-cli/src/main.rs",
         "BackupAction::Create",
     ),
+    // `RestoreReport` (ROADMAP O268): what a restore swapped in — the chain the
+    // archive held before the stage's open appended anything (for an O256
+    // archive, EQUAL to its create report), the chain swapped in, the open's
+    // `unhealed` notes carrying O246's heal (the restored vault's next open can
+    // no longer see it), a re-recorded embedder, a key generation brought back
+    // across a rotation, and what was not copied. The CLI projects it by hand;
+    // `/v1` serializes it WHOLE beside `restored`/`from` (no row); `ui.html`
+    // renders no restore — a decision, written here, not a missing row. MCP has
+    // no restore tool (`Absence::Boundary`).
+    (
+        "undercroft-store/src/restore.rs",
+        "RestoreReport",
+        "undercroft-cli/src/main.rs",
+        "BackupAction::Restore",
+    ),
     // MCP serializes `DedupReport` whole and the CLI hand-projects it, so
     // `dates_kept` — "the difference between collapsing text and losing
     // history", by its own doc comment — reached one surface only.

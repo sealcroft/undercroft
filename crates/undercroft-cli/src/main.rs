@@ -4469,65 +4469,79 @@ fn run(cli: Cli) -> Result<()> {
                     // e2e arm added for the exclusive hold, which happened to
                     // run at such a timestamp — luck, not coverage, which is
                     // why the arm below now pins the shape instead.
-                    let vault_name = read_backup_vault_id(&src)?;
-                    let dst = root.join(undercroft_vault::VAULTS_DIR).join(&vault_name);
-                    if dst.exists() && !force {
-                        bail!(
-                            "vault '{vault_name}' exists; pass --force to overwrite it with the backup"
+                    //
+                    // **The archive is proven before the vault it replaces is
+                    // touched (ROADMAP O268).** This used to take O69's hold,
+                    // REMOVE the vault and copy the archive in, knowing only that
+                    // it had a `vault.json` whose id it never verified — so a
+                    // torn, truncated or foreign archive restored at exit 0 over a
+                    // working vault that then refused to open. The one door both
+                    // surfaces call stages a copy, unlocks it (the manifest's MAC
+                    // is keyed by the id it names), opens it with this process's
+                    // embedder, verifies it and checks its storage, and only then
+                    // takes O69's hold and swaps. `--read-only` refuses there,
+                    // before any effect.
+                    let mgr = manager(&cli, cli.posture())?;
+                    let factory = embedder_factory();
+                    let embed = |v: &Vault| {
+                        factory(v).map_err(|e| {
+                            undercroft_store::StoreError::Invalid(format!(
+                                "building the embedder this backup's vault records: {e:#}; \
+                                 nothing was restored and the live vault was not changed"
+                            ))
+                        })
+                    };
+                    let outcome =
+                        undercroft_store::restore_archive(&mgr, &src, None, *force, &embed)
+                            .map_err(|e| restore_refusal(&src, e))?;
+                    let report = match outcome {
+                        undercroft_store::RestoreOutcome::Restored(report) => report,
+                        undercroft_store::RestoreOutcome::Refused(_) => {
+                            println!(
+                                "refusing to restore backup '{name}': it fails integrity \
+                                 verification, so nothing was restored and the live vault was \
+                                 not changed"
+                            );
+                            std::process::exit(EXIT_INTEGRITY.into());
+                        }
+                    };
+                    println!("Restored {} -> vault '{}'", report.archive, report.vault);
+                    println!(
+                        "  chain height: {} (the archive held {})",
+                        report.writes,
+                        report.archived_writes.map_or_else(
+                            || "no chain table — a schema the open migrated".to_string(),
+                            |w| w.to_string()
+                        )
+                    );
+                    println!("  chain head:   {}", report.chain_head);
+                    if let Some(head) = &report.archived_chain_head {
+                        println!("  archive head: {head}");
+                    }
+                    println!(
+                        "  replaced:     {}",
+                        if report.replaced {
+                            "the vault that stood there"
+                        } else {
+                            "nothing (no vault stood there)"
+                        }
+                    );
+                    if report.key_generation_differs == Some(true) {
+                        println!(
+                            "  key generation: the replaced vault was rotated after this backup \
+                             was taken, and the restore brings the older keys back — rotate \
+                             again if that rotation answered a compromise"
                         );
                     }
-                    // **ROADMAP O69.** Hold the vault EXCLUSIVELY across the
-                    // destroy-and-copy, or refuse. Without this, a restore
-                    // beneath a running `serve-http` succeeded at exit 0 and
-                    // destroyed the vault: `remove_dir_all` unlinks the
-                    // database while the server keeps its handles on the
-                    // unlinked inodes, so it serves and WRITES a file that no
-                    // longer has a name, and the manifest it later anchors
-                    // describes a database that is not there. The rollback
-                    // detector then fires — correctly — on evidence the
-                    // restore manufactured, and the vault is unopenable for
-                    // good: `possible tampering`, exit 2, on every later open.
-                    //
-                    // The lock is HELD ACROSS the whole operation rather than
-                    // probed and released, because a probe-then-act leaves a
-                    // window in which a server opens the vault between the
-                    // two. While this connection holds it, another opener
-                    // gets SQLITE_BUSY; once the directory is unlinked the
-                    // lock refers to a dead inode, which is harmless because
-                    // by then there is nothing left to protect.
-                    let _hold = if dst.exists() {
-                        Some(undercroft_store::hold_vault_exclusively(&dst).map_err(|e| {
-                            // Only a HELD vault is "in use" (ROADMAP O257): a
-                            // missing or doubled database, or an I/O error,
-                            // used to read as one too.
-                            if !matches!(e, undercroft_store::StoreError::VaultHeld(_)) {
-                                return anyhow::Error::from(e);
-                            }
-                            anyhow::anyhow!(
-                                concat!(
-                                    "vault '{}' is in use by another process — refusing to ",
-                                    "restore over it.
-
-Restoring beneath a running server DESTROYS ",
-                                    "the vault: the server keeps writing to the database file this ",
-                                    "would unlink, and the vault becomes unopenable. Stop the server, ",
-                                    "then retry.
-
-The store reported: {}"
-                                ),
-                                vault_name,
-                                e
-                            )
-                        })?)
-                    } else {
-                        None
-                    };
-                    if dst.exists() {
-                        std::fs::remove_dir_all(&dst)?;
+                    if let Some(moved) = &report.embedder_rerecorded {
+                        println!("  embedder re-recorded: {moved}");
                     }
-                    copy_dir(&src, &dst)?;
-                    drop(_hold);
-                    println!("Restored {} -> vault '{}'", name, vault_name);
+                    for note in &report.unhealed {
+                        println!("  note: {note}");
+                    }
+                    for entry in &report.skipped {
+                        println!("  not copied: {entry}");
+                    }
                 }
             }
         }
@@ -4862,6 +4876,26 @@ fn collect_transcripts(path: &Path) -> Result<Vec<PathBuf>> {
     Ok(out)
 }
 
+/// How `backup restore` words a refusal: only a HELD vault is "in use"
+/// (ROADMAP O257, O69), and saying so names what replacing it beneath a
+/// server would do. Every other refusal is the store's own words.
+fn restore_refusal(src: &Path, e: undercroft_store::StoreError) -> anyhow::Error {
+    if !matches!(e, undercroft_store::StoreError::VaultHeld(_)) {
+        return anyhow::Error::from(e);
+    }
+    anyhow::anyhow!(
+        concat!(
+            "vault '{}' is in use by another process — refusing to restore over it. ",
+            "The backup verified and nothing was changed.\n\n",
+            "Restoring beneath a running server DESTROYS the vault: the server keeps ",
+            "writing to the database file this would replace, and the vault becomes ",
+            "unopenable. Stop the server, then retry.\n\nThe store reported: {}"
+        ),
+        read_backup_vault_id(src).unwrap_or_default(),
+        e
+    )
+}
+
 /// The vault id a backup belongs to, read from the manifest INSIDE it.
 ///
 /// ROADMAP O69. A backup directory is named `<vault>-<timestamp>`, and
@@ -4873,21 +4907,6 @@ fn collect_transcripts(path: &Path) -> Result<Vec<PathBuf>> {
 pub(crate) fn read_backup_vault_id(src: &Path) -> Result<String> {
     undercroft_vault::backups::archive_vault_id(src)
         .with_context(|| format!("reading the backup manifest at {}", src.display()))
-}
-
-pub(crate) fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let from = entry.path();
-        let to = dst.join(entry.file_name());
-        if from.is_dir() {
-            copy_dir(&from, &to)?;
-        } else {
-            std::fs::copy(&from, &to)?;
-        }
-    }
-    Ok(())
 }
 
 fn claude_code_hooks_json() -> String {

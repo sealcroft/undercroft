@@ -419,9 +419,10 @@ Consequences that are binding, not advisory:
   vault.json.next staging, keycheck marker) + **the one manifest file
   writer** (`write_manifest_file`: a random-nonce `create_new` temp, fsync,
   rename, directory sync — `create`, the staging write, every anchor,
-  since O257 the promote, and since O256 the manifest an archive is
-  published with go through it, so the crate renames a manifest in ONE
-  place — its one other rename publishes an archive's stage — and deletes
+  since O257 the promote, since O256 the manifest an archive is
+  published with, and since O268 the manifest a restore stages go through
+  it, so the crate renames a manifest in ONE place — its other renames
+  publish an archive's stage and swap a restore's stage in — and deletes
   only files it can name as its own; no unlock deletes a
   `vault.json.next` on either posture, a too-new one included — and the
   bare legacy `vault.json.tmp` a 1.6.x process still
@@ -435,6 +436,20 @@ Consequences that are binding, not advisory:
   `vault.json`, a stage older than an hour swept, and a vault's archives
   found by their OWN manifest and exact name shape, never a prefix (backing
   up `p` pruned `p-2024`'s archives, and its own beside `p-archive`'s);
+  restores.rs: the filesystem side of `backup restore` (ROADMAP O268) — a
+  restore area directly under `vaults/` named by a 129-byte constant no vault
+  id can equal (`validate_name` trims, then refuses over 128 bytes; a test
+  pins it), refused if it is a link; an archive read by `symlink_metadata`
+  and copied through an ALLOWLIST of regular files (either database name,
+  its `-wal`, the manifest's exact bytes through the one writer, a staged
+  rotation manifest — never a `-shm`, a temp or a directory); a stage
+  unlocked only through `VaultManager::unlock_stage`, whose shared body
+  `unlock_dir` is `unlock_as`'s (keys derive from the manifest's id and salt,
+  never the directory, so taking only a stage this crate minted is what keeps
+  `backups/<name>` from ever being opened writable); and the swap — two
+  renames under the store's hold, an `aside-<sha256 of the id>` that is
+  NEVER swept or removed on a failure path, and `create` refusing
+  `RestoreInterrupted` while one exists;
   bundle.rs:
   recipient-encrypted export bundles — **the vault-sized paths take the
   buffer rather than borrowing it** (`encrypt_for_into` seals IN PLACE and
@@ -975,6 +990,35 @@ Consequences that are binding, not advisory:
   healed into the archive (A2/O246). `backup_pause.rs` holds its test pause
   points (the page copy runs no VM, so a progress handler never fires in
   it), and `/v1` no longer evicts its handle to take one,
+  **`backup restore`, one door (restore.rs, `restore_archive`, ROADMAP
+  O268)** — both surfaces took O69's hold, REMOVED the vault and copied the
+  archive in, knowing only that it held a `vault.json` whose id they never
+  verified: a manifest ahead of its rows, a truncated database, a foreign
+  archive and one flipped byte each restored at exit 0 over a working vault
+  that then refused to open. Now, STAGE FIRST, HOLD LAST: the archive is
+  staged (the vault crate's `restores.rs`), unlocked through the stage (the
+  manifest's MAC is keyed by the id it names, so a planted id fails before
+  anything is removed), opened WRITABLE with the surface's one embedder
+  factory (`EmbedderFor` — what is swapped in is the verified post-migration
+  state; a read-only open refuses every older schema), verified over all
+  nine legs, checked with `PRAGMA integrity_check` (`verify` reads no index:
+  a flipped index byte passed it on four of seven pages, and `quick_check`
+  on all seven), closed, and held to a post-condition (exactly two files, an
+  `immutable=1` head and height EQUAL to the verified ones) — and only then
+  is O69's hold taken, with `SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE` read back so
+  its drop never folds a dead writer's `-wal` into the live vault (measured:
+  it did; SQLite skips that only once the file has moved, and only on unix),
+  and the stage swapped in. A refusal the archive causes therefore changes no
+  byte of the live vault. Errors raised by the STAGE's handle alone map
+  SQLite's corruption codes onto `IntegrityFinding` — sound there and only
+  there, the stage being a private copy of the archive (the live `verify`'s
+  class is O269's). `--read-only` refuses before any effect, in the door
+  (O212's restore half). `RestoreReport` carries the archive's chain as
+  found, the chain swapped in, the open's `unhealed` notes (O246's heal, which
+  the restored vault's next open can no longer see), a re-recorded embedder,
+  `key_generation_differs`, `replaced` and `skipped`. `restore_pause.rs` holds
+  its pause points; the swap's renames take the vault crate's fixture faults
+  (`SwapAside`, `SwapIn`, `SwapBack`, and `fail_in_turn` for the crash state),
   write-path admission control (admission.rs + core admission.rs — C3.3
   phase 2: deterministic tier-1 detector, closed signal vocabulary,
   offsets never content; **the screen lives at the write CHOKE POINT**
@@ -2384,8 +2428,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (1109 run,
-                                      # 13 #[ignore]d = 1122 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (1125 run,
+                                      # 14 #[ignore]d = 1139 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2469,7 +2513,7 @@ docker compose run --rm test          # cargo unit + integration tests (1109 run
                                       # remembered — do not hand-edit one to
                                       # silence the gate; it is measuring the
                                       # suite, not this comment.
-                                      # The 13 ignored are 3 measurements needing
+                                      # The 14 ignored are 3 measurements needing
                                       # testdata/*_50k.txt, one in lib.rs, and four
                                       # in anchor_tests.rs (ROADMAP O254, O257): the
                                       # multi-process gate's child entry point,
@@ -2482,7 +2526,9 @@ docker compose run --rm test          # cargo unit + integration tests (1109 run
                                       # O253's soak, cost and -wal measurements,
                                       # also run by name), and two in
                                       # backup_tests.rs (ROADMAP O256's soak and
-                                      # its cost at ~10^5, run by name). Run the first
+                                      # its cost at ~10^5, run by name), and one in
+                                      # restore_tests.rs (ROADMAP O268's cost at
+                                      # ~10^5, run by name). Run the first
                                       # four with `cargo test --release -- --ignored`:
                                       # 3 pass, and `measure_relation_promiscuity`
                                       # FAILS on missing data, not on logic — it
@@ -2519,8 +2565,8 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (664 checks)
-docker compose run --rm orchestrator-e2e  # two engines + orchestrator (169 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (692 checks)
+docker compose run --rm orchestrator-e2e  # two engines + orchestrator (171 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (57 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (157 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it

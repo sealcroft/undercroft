@@ -3998,7 +3998,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**298** of the **313** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**305** of the **320** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -6844,6 +6844,13 @@ writable):
    `vault.json.next` (a genuine MAC'd manifest of another generation — A2
    material that would hand a restore a promote the archived database never
    made), or a temp.
+   **Refuted as applied to RESTORE by O268's ruling (2026-09-26), recorded beside;
+   the item stands for `backup create`.** A restore does not promote on the staged
+   file's say-so: `rotation_verdict` answers `Committed` only when the database's
+   own keycheck names the staged generation, and `reconcile_rotation` promotes only
+   then — so a legacy archive's `vault.json.next` is a promote the database DID
+   make, and leaving it out would turn a committed-but-unpromoted archive into a
+   false integrity refusal. O268's stage therefore copies it.
 7. **Where it lives, and posture.** The snapshot, copy, pairing and post-condition
    in ONE store door both surfaces call; the staging, rename, sweep, listing and
    prune in the vault crate, which owns `BACKUPS_DIR` and the manifest.
@@ -7123,6 +7130,476 @@ newest ten kept), `only_published_archives_whose_manifest_names_the_vault_count`
 function it replaced, measured above — one of `p-2024`'s removed, and `p`'s own
 new archive beside `p-archive`'s. The `/v1` listing stays a manifest match
 alone, as documented; the shape filter is prune's, because prune deletes.
+
+### O268 — CLOSED 2026-09-26: `backup restore` proves an archive before it touches the vault it replaces — staged, unlocked through the stage, opened, verified and checked, then swapped in under O69's hold
+
+**Filed 2026-09-25 by O256's ruling; read in code, and measured for the archives it
+would meet.** Both restores take O69's hold, `remove_dir_all` the vault and then
+`copy_dir` the archive in, checking only that the archive has a `vault.json`.
+Archives made by ≤ 1.6.1 beside a writer can be torn or mismatched (O256 measured
+a restore refusing `ManifestTampered`, a torn database refusing
+`IntegrityFinding`, and a rotation mid-copy), and restoring one leaves a vault
+that does not open where a working one stood — O69's "exit 0, then destroyed"
+shape. It also races a concurrent `backup create`'s prune, which can delete the
+archive while it is being copied, after the vault is already gone.
+
+**Shape, for a ruling panel**: copy the archive into a stage beside the vault,
+open and verify the COPY, then swap it in under O69's hold (rename the live
+vault aside, the stage into place, remove the aside). **Its own questions**: a
+read-only verify of an archive whose schema predates the build refuses
+`ReadOnlyUnmigrated`, so the stage needs a migrate-then-verify with its own
+posture (O212's filed shape has restore refuse under `--read-only`); any override on a
+refusal is escalated to the maintainer. Sequenced right after O256.
+
+**Gate**: a torn archive handed to restore leaves the live vault byte-identical
+and exits with the integrity class; a good archive restores and verifies.
+
+#### RULED 2026-09-26 by a three-lens panel (agentic memory architecture, security, software and storage engineering) plus an adversarial refuter
+
+**The question.** How `backup restore` — the CLI command, `POST
+/v1/vaults/{id}/backups/restore`, and the orchestrator's ops alias — proves an
+archive opens and verifies before it removes the vault it replaces: where the
+copy is staged, how it is opened and under what posture, how it is swapped in,
+what passes and what refuses with which class, what it reports, and where the
+one implementation lives. The brief, the three lens answers, the refuter's report
+and every probe script and log are in the session scratchpad (`o268-panel/`) —
+material, never the record.
+
+**Measured before ruling**, by the integrator (release build of `main`
+`4d0a658`, `rust:1.90-slim-bookworm`, sealed default vault):
+
+- **The counterfactual.** Today's `backup restore --force` of four damaged copies
+  of a good archive — a newer `vault.json` beside the older `vault.db`, a
+  half-truncated `vault.db`, an archive from another installation, one flipped
+  byte near the end of `vault.db` — **exits 0 "Restored" every time** and replaces
+  a working vault. Afterwards `verify` exits 2 (`ManifestTampered`) for the first
+  and third, and **exits 1** with a raw SQLite error for the second (`database
+  disk image is malformed`) and fourth (`Conversion error … invalid utf-8`), so a
+  corrupt database is not even classed as a verdict. A good archive restores and
+  verifies (the positive control).
+- **P-RO**: `--read-only backup restore --force` replaced the vault, exit 0 (O212).
+  **P-NOKEY**: with `master.key` moved away the restore still exits 0 — it opens no
+  manager. **P-DBM**: over a vault holding `vault.json` and no database the restore
+  refuses (exit 1, `has no database`), while the read-only open's own message for
+  that state says to restore; a writable `verify` there CREATES `vault.db` and
+  reports `audit chain: BROKEN`.
+- **P1**: taking and dropping the hold exactly as `hold_vault_exclusively` does
+  changes no byte of a quiescent vault; over a vault whose last writer was
+  SIGKILLed with committed frames in its `-wal`, it checkpoints them into
+  `vault.db` (126,976 → 167,936 bytes) and deletes the `-wal`.
+- **P1b** (the memory lens's central claim): a 1.6.1-shaped archive — the directory
+  copied while another connection held the vault, 284,312 bytes of committed
+  frames in its `-wal`, the main file alone holding 1 of 7 drawers — restored with
+  today's binary into a fresh root AND over the live vault: **both kept the `-wal`
+  and verified at 7 records.** The claim that the hold's close deletes the
+  restored `-wal` by path is refuted: `sqlite3PagerClose` hands `sqlite3WalClose`
+  a checkpoint buffer only when `databaseIsUnmoved` (`SQLITE_FCNTL_HAS_MOVED`,
+  the unix `fileHasMoved`: the path's `stat` fails or its inode differs), and
+  without it the close neither checkpoints nor deletes (`sqlite3.c` 3.46,
+  61225-61277, 39862-39871, 67410-67446; the refuter read them).
+- **R1** (refuter): the same hold with `SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE` leaves
+  the hot-`-wal` vault byte-identical; on a quiescent vault it leaves one empty
+  `-wal`.
+- **R3** (refuter): one flipped byte in an INDEX page, seven pages tried: `verify`
+  passed (exit 0) on four where `PRAGMA integrity_check` reported `row N missing
+  from index`; `PRAGMA quick_check` said `ok` on all seven; two flips landed where
+  neither check sees anything. `verify` walks tags and the chain and never an
+  index, so it is not a storage check, and O256 assigned storage corruption to
+  restore ("except storage corruption, which belongs to restore (O268)").
+
+**Prior rulings found, and their disposition.**
+
+- **O69** (refuse while held; the hold held across the destructive step, never
+  probed and released; no override) — FOLLOWED: the destructive step is now the
+  swap and the hold spans it. Its "once the directory is unlinked the lock refers
+  to a dead inode, which is harmless" is TRUE on unix — but because of SQLite's
+  moved-file check, not because nothing is left to protect; the mechanism is
+  recorded beside O69.
+- **O68** (the manifest decides which vault an archive belongs to) — FOLLOWED and
+  strengthened: today the deciding manifest is never verified; it is now the
+  MAC-verified stage manifest, keyed by that very id.
+- **O256** (the stage pattern; one door both surfaces call; the crate split;
+  "storage corruption belongs to restore") — FOLLOWED. **Its item 6 reason is
+  REFUTED as applied to restore**, recorded beside it: `vault.json.next` does not
+  "hand a restore a promote the archived database never made", because
+  `rotation_verdict` answers `Committed` only when the database's own keycheck
+  names the staged generation (`crates/undercroft-vault/src/lib.rs:1202-1217`) and
+  `reconcile_rotation` promotes only then (store `lib.rs:4044-4049`). Item 6 stands
+  for `backup create`.
+- **O246** (a heal is A2's one observable; report it, never refuse on it) —
+  FOLLOWED, and it decides a report field: the heal happens in the stage's handle,
+  which is then dropped, so unless the restore's report carries it the next open
+  reads current and the observable is consumed silently.
+- **O212** (open, unruled) — its filed shape for the RESTORE half is followed and
+  ruled here; `backup create` and `bundle keygen` stay open under it.
+- **O213** (open, unruled) — its filed distinction (a manifest recording writes
+  with no database is integrity; one recording none is not) is followed for a
+  stage with no database.
+- **O254, O257, O238, O7, O175, O204, O242** — FOLLOWED where they apply: no new
+  manifest writer (the stage's manifest goes through `write_manifest_file`); too
+  new is age (exit 1); either database name, both is ambiguity; an effect outside
+  the database decides its own posture; the container counts as a reference to
+  the key; `/v1` refuses the co-resident vault.
+- **O147 / O267** (resurrection while receipted; archives taken before a
+  destruction) — the product half stays ESCALATED to the maintainer; a restore
+  still brings back what the archive held, and says nothing new about it.
+
+**The ruled shape.**
+
+1. **Stage first, hold last.** Copy the archive into a stage, unlock it, open it,
+   verify it, check its storage, close it and check the post-condition — all
+   before the live vault is touched. Only then take O69's hold on the live vault,
+   and keep it across the swap. A refusal caused by the archive therefore never
+   reaches the live vault, which is what the gate's "byte-identical" needs (P1);
+   the cost, stated: a held vault is refused only after the copy and verify, and a
+   write landing during staging is acknowledged and then replaced — ordinary
+   restore semantics, as a write one second before any restore is.
+2. **Where the stage lives: one container directly under `vaults/`, named by a
+   129-byte ASCII constant with a leading dot** (`.undercroft-restore-area--…`),
+   holding `stage-<32 hex>` directories and `aside-<sha256 hex of the id>`
+   directories. `validate_name` trims and then refuses anything over 128 bytes, so
+   no vault id can equal it; it holds no top-level `vault.json`, so `list()`, `vault
+   list`, `GET /v1/vaults` and the key-opens probe never see it; it is always on the
+   live vault's filesystem. The container is refused if it is a symlink or not a
+   directory, and every leaf is made with `create_dir`, never `_all`. A test pins
+   `validate_name(ROOT)` failing, so raising the 128-byte bound fails the build.
+3. **What the stage copies: an allowlist of regular files, read with
+   `symlink_metadata`, never followed, never recursed**: `vault.db` and/or
+   `palace.db`, each one's `-wal`, `vault.json` (the bytes read once, written
+   through `write_manifest_file`), and `vault.json.next`. Never `-shm`, a temp
+   manifest or a directory; any other entry is skipped and named on the report; an
+   allowlisted name that is not a regular file refuses as integrity. Every copied
+   file is `sync_all`ed and the stage directory synced. `copy_dir` is retired (it
+   follows symlinks and recursed after the vault was already gone).
+4. **The stage is unlocked only through the stage.** A crate-private
+   `unlock_dir(dir, id, access)` holds `unlock_as`'s whole body (the MAC, the
+   pending manifest, too-new, the legacy name); `unlock_as` calls it for
+   `vaults/<id>` and `VaultManager::unlock_stage` for a stage the vault crate
+   minted — never for an arbitrary directory, so `backups/<name>` can never be
+   opened writable. A stage's MAC failure does not fire the live vault's tamper
+   event: the refusal names the archive instead.
+5. **Opened WRITABLE, with the surface's one embedder factory, then
+   `verify().ok()` and `PRAGMA integrity_check` = `ok`.** Writable because what is
+   swapped in must be the verified post-migration state: a read-only open refuses
+   `ReadOnlyUnmigrated` on every older archive and cannot promote a committed
+   `.next`, and verifying read-only then swapping would run the A10 relabel, the
+   chain-v2 switch and the embedder walk AFTER the verify. The migrations launder
+   nothing `verify` would catch, by reading: A10/U12 skip rows failing their own
+   tags, `chain::switch` withholds on any replay mismatch, and the anchor heal
+   requires a strict ancestor after a replay. Needing the key and the recorded
+   embedder's environment is the honest answer — the restored vault could open
+   with neither — and it moves the discovery before the vault is destroyed
+   instead of after. The CLI passes `embedder_factory()`, never a third copy of
+   `open_store_once`'s inline selection. `integrity_check`, not `quick_check`
+   (R3). A stage with no database is refused BEFORE the open, which would create
+   one: integrity if its manifest records writes, exit 1 otherwise. A recorded
+   embedder the open re-recorded — a known hash migration or a declared
+   `UNDERCROFT_FORCE_EMBEDDER=1` — is REPORTED, never refused: it is the
+   operator's declaration.
+6. **The post-condition, after the stage's store is dropped**: the stage holds
+   exactly `vault.db` and `vault.json`, and an `immutable=1` reopen holds a
+   committed head and height EQUAL to the verified ones.
+7. **The swap: two renames, portable, no `RENAME_EXCHANGE`.** Under the hold:
+   refuse if an aside for the id exists; rename `vaults/<id>` to its aside; refuse
+   if `vaults/<id>` is present again (`rename(2)` replaces an empty directory
+   silently); rename the stage in; sync `vaults/` and the container; drop the hold;
+   re-read `vaults/<id>/vault.json` and require it byte-identical to the stage's;
+   remove the aside. If the rename-in fails the aside is renamed back, and if that
+   fails too the error names its path. **An aside is never swept and never removed
+   on a failure path**; stale `stage-` directories older than an hour are swept
+   at the next restore, asides never. **`restore`, `create` and so `init` refuse
+   while an aside exists for the id**, printing the `mv` that puts it back — a crash
+   between the renames, followed by the team-server recipe's `undercroft init`,
+   would otherwise serve an empty `default` while the real vault sits aside.
+8. **The hold sets `SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE`**, read back like
+   `locking_mode`: its drop then never checkpoints or deletes by path, on any VFS
+   — the moved-file check that makes the drop harmless today is unix-only and
+   inode-based (R1). A restore into an ABSENT id takes no hold; a server still
+   serving a moved or unlinked vault anchors by path, which stays the pre-existing
+   residual stopping the server is the guard against.
+9. **Classes.** Integrity (exit 2 / 409 + `class: "integrity"`): the stage's
+   manifest failing its MAC (a torn ≤ 1.6.1 archive or another installation's — the
+   MAC cannot tell them apart and the message names both), `CorruptManifest`, an
+   integrity finding at the open, `DatabaseAmbiguous`, a missing database under a
+   manifest recording writes, `verify` not ok, `integrity_check` not ok, and — **for
+   errors raised by the stage's handle only** — SQLite's `DatabaseCorrupt`,
+   `NotADatabase` and a column conversion failure, mapped onto the existing
+   `IntegrityFinding` variant (the stage is a private copy this process just wrote,
+   so its corruption is the archive's). Exit 1: I/O, ENOSPC, `CANTOPEN`, a failed
+   rename, `ManifestTooNew`, `EmbedderMismatch` or an unbuildable embedder, the
+   posture refusal, the prune race, an existing target without `--force`; `VaultHeld`
+   409 with no class; a backup of another vault 400. **Every refusal says the live
+   vault was not changed.**
+10. **Posture: refused under `--read-only` before any effect, decided in the door
+    from the manager's posture** — O212's filed shape for the restore half;
+    `--read-only`'s own help promises it. `/v1` already refuses in front of dispatch.
+11. **The report**: `RestoreReport { vault, archive, archived_writes,
+    archived_chain_head, writes, chain_head, unhealed, embedder_rerecorded,
+    key_generation_differs, replaced, skipped }` — the archive's committed chain as
+    found (for an O256 archive, EQUAL to the `backup create` report, which is the
+    only defence against an older archive renamed as a newer one), the chain
+    swapped in, the stage open's `unhealed` notes carrying O246's heal, whether the
+    replaced vault was of another key generation (restoring an archive older than a
+    rotation brings the retired keys back — rotate again if that rotation answered a
+    compromise), and the skipped entries. On the CLI (a `HAND_PROJECTED` row), `/v1`
+    beside `restored`/`from`, and the orchestrator's pass-through; `ui.html` renders
+    no restore, written down beside the row.
+12. **Where it lives.** The vault crate's `restores.rs`: the container, the stage,
+    the allowlist copy, the unlock-at-stage, the swap and the aside check. The
+    store's `restore.rs`: the one door both surfaces call (manager, archive path,
+    expected id — `Some` on `/v1` — force, and the embedder factory), which opens,
+    verifies, checks storage and the post-condition, holds and swaps. `/v1` keeps
+    `deny_co_resident` and evicts its cached handle before the hold.
+13. **Versioning: PATCH inside the unreleased `1.7.0`.** The defect was a restore
+    that exited 0 and left an unopenable vault; needing the key removes nothing
+    that worked, since a restore without it produced an unopenable vault; the
+    report is additive; `--read-only` refusing is the flag keeping its promise.
+    `UPGRADING.md` owes: exit 2 with the vault kept where it was exit 0 and
+    destroyed; exit 1 without the key, passphrase or recorded embedder environment;
+    exit 1 under `--read-only`; free space for a whole copy on `vaults/`'s
+    filesystem; how to put an interrupted restore's aside back; and O256's entry
+    rewritten, its "still removes the vault" and its scratch-root fix both false.
+
+**Options that lost, with their cost.** Hold first (memory lens): satisfies O69's
+letter but a refused restore then checkpoints a hot `-wal` into the live vault
+(P1) — the evidence on the incident path — and even with `NO_CKPT_ON_CLOSE` leaves
+an empty `-wal` beside a quiescent one (R1). `vaults/.staging/` or
+`vaults/.restore/`: legal vault ids — `vault create .staging` writes a manifest
+into the container and `vault delete .staging` removes a crashed restore's aside;
+its 32-hex children also match `sweep_stale`'s shape, so reusing O256's stage would
+sweep the pre-restore vault after an hour; reserving the name is a documented value
+that stops being accepted, MAJOR. A top-level `vaults/.restore-<nonce>`: listed by
+`list()` and `GET /v1/vaults`, and `vault list` exits 2 on a directory whose manifest
+id is not its name (`lib.rs:1710-1712`, `main.rs:2065-2075`). The palace root:
+EXDEV wherever `vaults/` is its own mount — safe, but restore would never work
+there. A read-only verify, or read-only then writable: refuses every older archive,
+swaps in an unmigrated vault, or is two paths with different results. An
+identity-only stand-in embedder: a second selection path whose zero vectors would
+reach any write the open makes, and it moves the refusal past the swap.
+`RENAME_EXCHANGE`: Linux-only, not in `std`, a second path CI never runs. Excluding
+`.next`: turns a committed-but-unpromoted legacy archive into a false integrity
+refusal. Excluding `-wal`: a ≤ 1.6.1 archive with committed frames restores short or
+refuses (P1b's main file held 1 of 7). `verify` alone as the pass: blind to index
+corruption (R3). A global remap of SQLite corruption to integrity: moves the class
+of every command, which is its own question (O269). Refusing
+`UNDERCROFT_FORCE_EMBEDDER`: overrides the operator's own declaration.
+
+**Claims refuted, including the brief's.** The brief: "> 128 bytes can never be an
+id" (trimming admits one with surrounding whitespace); "`open_read_only` warns on an
+embedder mismatch" (only on a KNOWN upgrade or under `FORCE_EMBEDDER`; an unknown
+one refuses on both postures, `lib.rs:3694-3710` — its doc comment over-claims and
+is corrected in this unit); item 8 inherited O256 item 6's `.next` reason; item 7's
+"nothing can hold a database that does not exist" (a holder of the unlinked inode
+writes and anchors by path); item 1(b) omitted `vault list` exiting 2; item 5
+treated `verify().ok()` as sufficient; "`copy_dir` copies every file" (it follows
+symlinks and recurses). **The memory lens**: the hold's close deleting the restored
+`-wal` (P1b, and source). **Missed by the brief, found by the lenses and confirmed
+by the refuter**: the CLI removes `vaults/<id>` where `<id>` comes from an
+UNVERIFIED archive manifest, so a keyless writer planting `backups/x/vault.json`
+naming a victim destroys that vault on the next `--force` restore of it, and
+`/v1`'s id check reads the same unverified bytes; today's restore of another
+installation's archive mints a split installation (every later `create` refuses
+`KeyOpensNoVault`); a stage MAC failure would fire the live vault's tamper event;
+`std::fs::copy` syncs nothing.
+
+**Dissent.** The memory lens: hold first; the `.staging` container with a guard; its
+lost-`-wal` finding — each settled by P1, R1, P1b and the refuter's reading.
+Security: an allowlisted non-regular file as exit 1 (ruled integrity: it is a
+property of the archive's bytes, which no retry changes). Storage: sweeping only
+stale stages is agreed; its per-restore aside scan lost to a deterministic name
+`create` can check in O(1).
+
+**What remains — filed, each under `## Open`:** O269 (`verify` is blind to storage
+corruption and exits 1 on it), O270 (a restore over a vault whose database is
+missing refuses, including a fresh host `init` has populated), O271 (`vault
+create`'s own check-then-write race), O272 (`validate_name` measures the trimmed
+value while callers keep the raw one), O273 (O256's `Stage::begin` follows a
+symlinked `.staging`), O274 (a restore records nothing in the chain), O275 (restore
+over an existing vault on Windows). **Escalated to the maintainer, unchanged**: any
+override on a restore refusal; O147/O267's product half.
+
+**The gate owed by the build.** The four damaged archives, a foreign one, a planted
+id and a symlink loop, each through the door: today's sequence exits 0 and leaves an
+unopenable vault (premise: each fails to open in a scratch root), the door refuses
+each with its class, and the live directory is byte-identical — every file's name
+and bytes hashed WITHOUT opening it, on a hot-`-wal` (SIGKILLed writer) fixture and a
+quiescent one. A good archive restores and a fresh open verifies at exactly the
+reported head and height; an O256 archive's `archived_*` equal its create report.
+The ≤ 1.6.1 shapes restore: P1b's seven-drawer `-wal` archive, a committed `.next`
+with and without the file, `palace.db`, an older schema. A flipped index byte refuses
+(R3). A crash at each swap step leaves the aside legible, and `restore`, `create`,
+`init`, `vault list` and the `/v1` listing behave as ruled. `--read-only` changes no
+palace byte. `UNDERCROFT_FORCE_EMBEDDER` and a known hash migration are reported. The
+stage holds exactly two files after its store closes (the factory's read-only
+`recorded_embedder` open included). Timing split and peak disk at ~10⁵. Race tests
+looped: a prune mid-copy, a server opening during staging. Through the CLI, `/v1` and
+the orchestrator alias. The source gates move: `copy_dir(` 4 → 0, the new module
+counted for renames, removals and manifest writes, the "an unlock deletes nothing"
+assertion moved to the shared body.
+
+**Fails silently if**: the stage is unlocked through `unlock_as(id)`, so the verify
+judges the LIVE vault; the pass is `verify` alone; the hold relies on the inode check;
+an aside is 32-hex named, swept, or removed on a failure path; copied files are not
+synced; the report's height comes from the stage manifest (which can lag), is read
+after the swap from another store, or drops the heal note; `-wal` or `.next` is left
+out; `create`/`init` ignore a leftover aside; the new module escapes the anchor-test
+inventories; the corruption mapping reaches beyond the stage's handle; the posture
+check runs after the stage exists; the gate opens the live vault (an open heals), uses
+only a quiescent fixture, or runs once.
+
+#### BUILT 2026-09-26, to the ruling — with three stated refinements, and six defects of my own, each caught by a gate or by reading
+
+**The door, as ruled.** `undercroft_store::restore_archive`
+(`crates/undercroft-store/src/restore.rs`) is the one implementation both
+surfaces call, taking the manager, the archive's path, the vault the caller
+addressed (`Some` on `/v1`), `force`, and the surface's one embedder factory
+(`EmbedderFor`; the CLI passes `embedder_factory()`, never a third copy of
+`open_store_once`'s selection). In order: the posture (`VaultError::ReadOnly`
+before any effect); `restores::Archive::read` — the manifest's bytes once, every
+entry by `symlink_metadata`; the addressed id, a leftover aside and `--force`;
+an allowlisted entry that is not a regular file (integrity); `Stage::copy`;
+`VaultManager::unlock_stage`; a stage with no database refused BEFORE the open
+(integrity when its manifest records writes); the archive's committed chain read
+as found through a plain read-only connection (which reads a 1.6.1 `-wal`);
+`open_with_embedder`, `verify()` over every leg, `storage_check()` (`PRAGMA
+integrity_check`); the store dropped; the post-condition (exactly `vault.db` and
+`vault.json`, an `immutable=1` head and height EQUAL to the verified ones); and
+only then `hold_vault_exclusively`, which now sets
+`SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE` and reads it back, and `Stage::swap`.
+Errors raised proving the stage go through `archive_verdict`, which maps
+SQLite's `DatabaseCorrupt`/`NotADatabase` and a column conversion failure onto
+`IntegrityFinding` for the stage's handle alone, and names which of
+`ManifestTampered`'s two sources fired (the unlock's MAC, or the open's
+manifest-ahead-of-rows). The vault crate's `restores.rs` owns the rest: the
+129-byte `RESTORE_ROOT` (a test pins `validate_name` refusing it), the
+container refused if it is a link, the allowlist copy (`create_new`, `sync_all`,
+the manifest through `write_manifest_file`), the stale-stage sweep (`stage-<32
+hex>` only), `refuse_if_interrupted`, and the swap — which `VaultManager::create`
+consults, so `create` and `init` refuse `RestoreInterrupted` while an aside
+exists. `unlock_as` is one line over the shared `unlock_dir`, and a stage's MAC
+failure raises no tamper event under the live vault's id. `RestoreReport` is
+printed by the CLI (a `HAND_PROJECTED` row), serialized whole by `/v1` beside
+`restored`/`from` (an unparseable archive manifest is now a 409 integrity verdict
+there, as the CLI's exit 2 always was), and passed through by the orchestrator's
+`backup-restore`. `copy_dir` is gone. The `open_read_only` doc comment's
+embedder over-claim is corrected.
+
+**Refinements, stated.** (1) **A staged rotation manifest the open neither
+promoted nor discarded** — one that did not authenticate, or a newer build's — is
+removed from the stage (`Stage::discard_unpromoted_staging`) and named in
+`skipped`, rather than failing the two-file post-condition: a torn pre-1.7
+`.next` is an honest artifact of a crash during staging, and refusing an archive
+that otherwise verifies for carrying one would refuse a good archive. It stays
+in the archive. (2) **The archive directory itself must be a directory**, not a
+link (exit 1), beside the container rule. (3) **The fixture seam gained
+`SwapAside`, `SwapIn`, `SwapBack` and `fail_in_turn(first, second)`**, so the
+crash state — the move-in and the move back both failing — is produced by the
+code itself rather than assembled by the test.
+
+**Measured after**, release build, sealed:
+
+- **The gate** (`restore_tests.rs`, fourteen tests and one named measurement):
+  a good archive restores and IS the archive (`archived_*` equal to O256's create
+  report, a fresh open verifying at the reported head and height, the later
+  saves gone); five damaged archives — a newer manifest, a truncated database,
+  another installation's, a flipped byte, a database that is a link — each
+  refused as an integrity verdict naming its own cause, with the live vault
+  byte-identical, quiescent and with a dead writer's committed frames in its
+  `-wal`; an archive planted to name another vault refused with that vault
+  byte-identical, and `/v1`'s addressed-vault check refusing it before any copy;
+  a flipped index byte found by measurement to pass `verify` in a scratch root
+  and fail `integrity_check`, refused; a 1.6.1 archive with its frames only in
+  its `-wal` restoring whole and naming the `-shm` it did not copy, and refused
+  without its `-wal`; a committed-but-unpromoted rotation restoring by promoting,
+  and refused without its `.next`; `palace.db` restoring as `vault.db`; a hash-v2
+  archive reported re-recorded; a restore across a rotation reporting the key
+  generation; `--read-only` reaching no step and moving no byte; a held vault
+  refused after the archive verified; a commit during staging replaced; a prune
+  mid-restore refused as an ordinary failure; a failed move aside and a failed
+  move-in each leaving the live vault byte-identical, quiescent and hot; and the
+  crash state — both directories named, `create` and another restore refusing,
+  nothing listing the restore area, and the aside moved back being the original.
+  Plus the vault crate's two: the root's name, and an aside surviving the sweep.
+- **Counterfactuals, each RUN** on a private copy of the tree (the variants
+  written on the host, each anchor asserted; `Compiling undercroft-store` in every
+  log; the pristine tree green after): the LIVE vault unlocked instead of the
+  stage → the damaged-archive test fails — caught by the post-condition, height 47
+  against the verified 48, before any swap; the hold taken first → it fails, the
+  live vault not byte-identical; no `integrity_check` → the index test fails, the
+  corrupt index restored; no `-wal` → the legacy test fails; no `.next` → the
+  deferred-promote test fails; checkpoint-on-close left on → the failed-move test
+  fails on the hot vault; no archive verdict → the damaged test fails, a raw
+  `ManifestTampered`; the posture decided after the copy → the read-only test
+  PASSED, because the stage's `Drop` removed what it made and an end-state
+  comparison cannot see a transient effect — the test now records which pause
+  points fired, must see none, and fails on that variant.
+- **The binary**, through the e2e suite: twenty-eight new checks in `tests/e2e.sh` (664 → 692) — a good
+  restore whose report names the archive's height equal to its create report,
+  on a vault whose server was SIGKILLed with committed frames in its `-wal` (the
+  premise asserted): three damaged archives each refused at exit 2 with the live
+  vault byte-identical by file hash and each shown first not to open in a scratch
+  root, an archive planted to name another vault refused with that vault
+  byte-identical, `--read-only` exit 1 with not a byte of the palace moved, the
+  1.6.1 archive of the killed server's state restoring whole and naming its
+  `-shm`, and the crash state (`vault create` and another restore refusing,
+  nothing listing the restore area, the aside moved back verifying); four of them
+  on `/v1` (a truncated archive 409 with `class: "integrity"`, the vault verifying
+  after, a good archive 200 with `archived_writes`); and two in the orchestrator
+  suite (169 → 171), the ops route and the `backup-restore` alias.
+- **A real corpus**: the LoCoMo feed mined into twelve wings (chain height 1,021, a
+  2.2 MB archive), through the release binary: a good restore over a vault that
+  had moved on in 35 ms, its archived height EQUAL to the create report and
+  `VERIFY OK`; a torn archive refused at exit 2 in 22 ms naming the manifest
+  ahead of its rows, the live vault byte-identical — also over a SIGKILLed
+  server's 494 KB hot `-wal`; and the 1.6.1-shaped archive of that server's state
+  restoring whole in 52 ms to exactly the killed server's height (1,036).
+- **Cost at ~10⁵** (`o268_cost_of_a_restore_at_scale`, run by name): 102,000 sealed drawers, a 132.5 MB archive,
+  three rounds: a restore **1.19–1.22 s** — the copy 90–146 ms, the stage's
+  unlock + open + verify + `integrity_check` 1.04–1.09 s (verify alone 674 ms,
+  `integrity_check` alone 445 ms), the close and post-condition 1 ms, the hold
+  under 1 ms, the swap 17–23 ms; the stage peaks at the archive's size plus
+  33 KB, so a restore needs one archive's worth of free space beside the live
+  vault.
+- **The suites**: 1,125 run / 14 ignored (was 1,109 / 13): the store's fourteen
+  and the vault crate's two, and one named measurement; e2e 664 → 692,
+  orchestrator 169 → 171; every other suite unchanged (telemetry 57, backends
+  157, obs-config 17, site 7, tls-pins 31, lint, arch-check).
+
+**The gates that moved.** `every_manifest_writer_and_anchor_caller_is_the_one_the_ruling_names`:
+`copy_dir(` 4 → 0 across the CLI and the store; the "an unlock deletes nothing"
+check reads `unlock_dir`'s body, with premises that `unlock_as` delegates to it and
+that it is the unlock; and `restores.rs` counted — one `write_manifest_file(`,
+three renames all in the swap, three `remove_dir_all` (a stale stage, a dropped
+stage, an aside only after the swap completed and its manifest was re-read), one
+`remove_file` (an unpromoted staged manifest in its own stage), no truncating or
+copying writer; one `.swap(hold)` in the tree, after `hold_vault_exclusively(`,
+after `storage_check()`; no surface taking the hold itself; one `.unlock_stage(`.
+
+**My own defects.** The injected `SwapAside` fault returned through a bare `?`
+before the rename's error mapping, so the injection exercised a path production
+never takes — caught by the test's message check. The first mapping described
+`ManifestTampered` as a MAC failure from both of its sources — caught reading a
+counterfactual's output. The planted-id fixture edited nothing, the manifest
+being pretty-printed — caught by its premise assertion. The read-only test was
+blind to a transient stage — caught by its counterfactual. A heredoc collapsed
+a Rust line continuation in `RestoreInterrupted`'s message — caught reading the
+file back. And the CLI's `restore_archive(…).map_err(match … concat!(…))` chain
+was a construct `rustfmt` does not lay out idempotently: formatted locally, it
+failed the battery's `lint` — caught there, and restructured into
+`restore_refusal`, which formats stably.
+
+**Residuals, stated.** A swap that fails after the hold leaves, on a quiescent
+vault, the empty `-wal` the hold's open made (inert; the byte-identity gate is
+the archive-caused refusals, which never reach the hold). An archive file swapped
+for a link between the `symlink_metadata` check and the open is read through the
+link; the stage's verify then judges what arrived, and nothing from it is kept. A
+restore into an ABSENT vault takes no hold, and a `vault create` racing its final
+rename is O271's; a server still serving a moved or unlinked vault anchors by
+path, which stopping the server guards against. `/v1`'s request loop is
+single-threaded, so a restore blocks it for the whole copy, open, verify and
+check. Windows is O275; a restore's chain record O274; a restore over a vault with
+no database O270; the resurrection of drawers destroyed after an archive was taken
+stays escalated with O267 and O147.
 
 ## 1.6.1 — released 2026-09-22
 
@@ -23243,6 +23720,15 @@ now gets exit 1 where it used to get exit 0 — and used to get a destroyed
 vault. Stated there is that `config check` cannot detect this, because it is a
 command's behaviour rather than a declaration.
 
+**Noted 2026-09-26 by O268's ruling, beside the sentence it qualifies.** "Once the
+directory is unlinked the lock refers to a dead inode, which is harmless" is TRUE on
+unix, and the reason is SQLite's, not "nothing left to protect": `sqlite3PagerClose`
+checkpoints and deletes the `-wal` by path only while the database file has not moved
+(`SQLITE_FCNTL_HAS_MOVED`, the unix `fileHasMoved`), so a hold dropped after the
+directory is unlinked touches nothing. Measured (O268 P1b): a 1.6.1-shaped archive
+whose `-wal` held committed frames restored over the live vault kept them. The check
+is unix-only, which is why O268's hold sets `SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE`.
+
 ### O70 — CLOSED 2026-08-23: the assembly recipe is written, with the price of skipping it
 
 **CLOSED.** `docs/AGENTS.md` gained **§7.2 "Assembling the block — which
@@ -26095,6 +26581,11 @@ deliberately unforeclosed. A forensic read-only backup is impossible over a
 vault whose rotation promote was deferred until O266 is fixed, because that
 open refuses. The CLI's restore now validates the backup NAME (O256).
 
+**Noted 2026-09-26 by O268's ruling.** This entry's RESTORE half is ruled and built
+there: `backup restore` refuses under `--read-only` before any effect, decided in the
+restore door from the manager's posture (measured: today it replaced the vault at exit
+0). `backup create` and `bundle keygen` stay this entry's open questions.
+
 ### O213 — a vault `init` just created, opened read-only, is reported as tampering
 
 **Filed 2026-09-17 by O204's ruling; measured by its probe P13.** `init`
@@ -26915,28 +27406,145 @@ BEFORE a destruction hold the drawers as live rows and a restore resurrects them
 **Gate**: a byte scan of the database, its `-wal` and a later archive after
 `forget` finds no marker from the destroyed drawer.
 
-### O268 — `backup restore` destroys the vault it replaces before it knows the archive opens
+### O269 — `verify` is blind to storage corruption, and exits 1 on the corruption it trips over
 
-**Filed 2026-09-25 by O256's ruling; read in code, and measured for the archives it
-would meet.** Both restores take O69's hold, `remove_dir_all` the vault and then
-`copy_dir` the archive in, checking only that the archive has a `vault.json`.
-Archives made by ≤ 1.6.1 beside a writer can be torn or mismatched (O256 measured
-a restore refusing `ManifestTampered`, a torn database refusing
-`IntegrityFinding`, and a rotation mid-copy), and restoring one leaves a vault
-that does not open where a working one stood — O69's "exit 0, then destroyed"
-shape. It also races a concurrent `backup create`'s prune, which can delete the
-archive while it is being copied, after the vault is already gone.
+**Filed 2026-09-26 by O268's ruling; measured by the integrator.** `verify` walks
+record tags and replays the chain; it never checks the database's page structure.
+One flipped byte in an index page (R3, seven pages tried on a 40-drawer vault):
+`verify` exited 0 on four where `PRAGMA integrity_check` reported `row N missing
+from index` — `idx_drawers_fp`, `idx_drawers_room`, `idx_drawers_wing_room` — so a
+scoped search or the dedup probe can miss a drawer on a vault `verify` calls
+clean. `PRAGMA quick_check` said `ok` on all seven: it does not compare indexes
+with their tables. And where `verify` does trip over corruption it does not return
+a verdict: a truncated `vault.db` answered `database disk image is malformed`, a
+flipped byte in a row `Conversion error … invalid utf-8`, both as
+`StoreError::Sqlite` — exit 1, the class `integrity_verdict`
+(`crates/undercroft-cli/src/main.rs`) tells a script means "retry", on a vault
+whose answer will never change. O268 checks a restore's stage with
+`integrity_check` and classes corruption in the stage's handle as integrity; the
+live vault's `verify` is this entry.
 
-**Shape, for a ruling panel**: copy the archive into a stage beside the vault,
-open and verify the COPY, then swap it in under O69's hold (rename the live
-vault aside, the stage into place, remove the aside). **Its own questions**: a
-read-only verify of an archive whose schema predates the build refuses
-`ReadOnlyUnmigrated`, so the stage needs a migrate-then-verify with its own
-posture (O212's filed shape has restore refuse under `--read-only`); any override on a
-refusal is escalated to the maintainer. Sequenced right after O256.
+**Shape, for a ruling panel**: a storage leg on `VerifyReport` (a tenth, so every
+renderer and `rotation_blockers()` must rule it), `integrity_check` or a cheaper
+equivalent measured at 10⁵ and 10⁶, and whether SQLite's `DatabaseCorrupt` and
+`NotADatabase` join the integrity set on every command — which moves the class of
+every surface at once and is why O268 did not take it.
 
-**Gate**: a torn archive handed to restore leaves the live vault byte-identical
-and exits with the integrity class; a good archive restores and verifies.
+**Gate**: the R3 flips and the two row-level corruptions each fail `verify` as a
+verdict (exit 2 / 409 integrity) on every renderer. **Counterfactual**: today, exit
+0 on the index flips and exit 1 on the others.
+
+### O270 — a restore over a vault whose database is missing refuses, including a fresh host `init` has populated
+
+**Filed 2026-09-26 by O268's ruling (all four answers); measured by the
+integrator.** `hold_vault_exclusively` refuses a vault directory holding a manifest
+and no database (`crates/undercroft-store/src/lib.rs`, "has no database"), so
+`backup restore --force` over such a vault exits 1 (P-DBM) — while the read-only
+open's own message for exactly that state says "restore the database beside the
+manifest". The ordinary way to meet it is disaster recovery onto a fresh host: `init`
+writes a manifest-only `default` (O213), and the team-server recipe runs `undercroft
+init` before anything else, so restoring `default` there refuses until the operator
+removes the directory by hand. The refusal is kept deliberately by O268: "nothing
+can hold a database that does not exist" is false, since a server holding the
+unlinked inode keeps writing and anchors by PATH, and its checked read-modify-write
+would accept the restored manifest under the same salt.
+
+**Shape, for a ruling panel**: O213's distinction applies — a manifest that records
+no writes and has no database is a vault nothing has written, and replacing it takes
+no hold; one recording writes needs its own race analysis (rename aside first, then
+look for a database that appeared, undo and refuse if one did). Until then the
+runbook states the manual step.
+
+**Gate**: `init`, then `backup restore default-… --force` of that installation's own
+archive, restores and verifies; a manifest recording writes with its database removed
+still refuses as ruled.
+
+### O271 — `vault create` checks for the vault, then writes, with nothing in between
+
+**Filed 2026-09-26 by O268's ruling (security, memory and storage lenses).**
+`VaultManager::create` (`crates/undercroft-vault/src/lib.rs`) asks `exists(id)`, then
+`create_dir_all`s the directory and writes a fresh manifest by path. Two creates of
+one id can both pass the check; a create landing inside a restore's window writes a
+new salt over the manifest the restore just renamed in (O268 re-reads the manifest
+after its swap and says so, and cannot prevent it); and `create_dir_all` writes a
+fresh manifest beside an orphan database a crashed or half-deleted vault left.
+
+**Shape**: `create_dir` for the vault's own directory, refusing an existing one, and
+the manifest written through `write_manifest_file` with `create_new` semantics —
+weighed against deployments that pre-make a mount point at `vaults/<id>`, which
+`create_dir` would refuse.
+
+**Gate**: two concurrent creates of one id leave one vault and one clean refusal; a
+create over a directory holding an orphan database refuses.
+
+### O272 — `validate_name` measures the trimmed value while its callers keep the raw one
+
+**Filed 2026-09-26 by O268's ruling (security lens, confirmed by the refuter).**
+`undercroft_core::validate_name` trims, then checks length, separators and `.`/`..`
+(`crates/undercroft-core/src/lib.rs:63-90`), but every caller stores and joins the
+UNTRIMMED value: `"x"` and `"x "` are two distinct legal vault ids, a name over 128
+bytes is legal when whitespace surrounds it, and on Windows, which strips trailing
+dots and spaces from path components, two such ids name one directory.
+
+**Shape**: refuse surrounding whitespace outright (a documented-value question: a
+vault already named with it must keep opening), or trim at every caller — ruled
+against the existing vaults, wings and rooms such a name may already hold.
+
+**Gate**: `"x "` beside `"x"` is refused or resolves to one id, as ruled, on every
+surface that validates a name.
+
+### O273 — `backup create`'s stage follows a symlinked `.staging`, and its sweep deletes wherever it points
+
+**Filed 2026-09-26 by O268's ruling (security lens, confirmed by the refuter).**
+`backups::Stage::begin` (`crates/undercroft-vault/src/backups.rs`) runs
+`create_dir_all(backups/.staging)`, which follows a symlink planted at that name, and
+`sweep_stale` then removes every 32-hex directory older than an hour inside wherever
+the link points. A writer who can create one entry under `backups/` can aim a backup's
+stage — the copied database — at another directory, and aim the sweep's removals at
+it. O268's restore container refuses a symlinked container; the backup stage predates
+that rule.
+
+**Shape**: refuse a `.staging` that is a symlink or not a directory
+(`symlink_metadata`), as O268's container does, before the stage or the sweep touches
+it.
+
+**Gate**: a symlinked `.staging` refuses `backup create` with nothing written or
+removed through it.
+
+### O274 — a restore records nothing in the audit chain
+
+**Filed 2026-09-26 by O268's ruling (memory lens).** The largest replacement the
+engine performs — a whole vault swapped for an archive — leaves no record of itself,
+exactly as a key rotation did before A19. What a restored vault's chain holds is the
+archive's chain, so an operator reading history after a restore cannot tell a restore
+from a rollback without the report the restore printed.
+
+**Shape, for a ruling panel**: a `restore/` namespace appended after the swap (its
+`fenced_from_agent` ruled), weighed against what it costs: the restored head then
+differs from the archive's by one record, which breaks "the restored vault holds
+exactly the archive's head" that O268's report and O256's gate rely on, and it
+interacts with an O245 witness, which will read any restore as `RolledBack`.
+
+**Gate**: after a restore, history names it, and the report still lets an operator
+match the archive to its `backup create` report.
+
+### O275 — restore over an existing vault is implied broken on Windows, before and after O268
+
+**Filed 2026-09-26 by O268's ruling; read, not measured — nothing here runs on
+Windows.** SQLite's Windows VFS opens a database without `FILE_SHARE_DELETE`
+(`sqlite3.c` 3.46, around line 51817), so while O69's hold keeps `vault.db` open,
+neither today's `remove_dir_all` nor O268's rename-aside can succeed. O268's order
+fails at the first rename with nothing changed; today's may remove what it enumerated
+before the database. The moved-file check that makes the hold's drop harmless is
+unix-only, which O268's `NO_CKPT_ON_CLOSE` covers. Windows is a shipped release
+target that `windows-check` only compiles.
+
+**Shape**: a Windows-runner probe first; then a hold that can be released before the
+rename-aside without letting another process open the vault between, or a documented
+stop-the-server-and-move procedure for that platform.
+
+**Gate**: on a Windows runner, restore over an existing vault succeeds and verifies,
+and a held vault refuses with nothing changed.
 
 
 ---

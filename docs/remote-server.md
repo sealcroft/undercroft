@@ -239,8 +239,11 @@ GET    /v1/vaults/{id}/hallways         entity co-occurrence (wing, top?)
    witness routes are off MCP by the maintainer's ruling, O245) ─────────
 POST   /v1/vaults/{id}/backups          snapshot exactly the state it verified (409 if it fails verify)
 GET    /v1/vaults/{id}/backups          this vault's snapshots
-POST   /v1/vaults/{id}/backups/restore  {name}; 400 if the backup holds another
-                                        vault, 409 while the vault is in use
+POST   /v1/vaults/{id}/backups/restore  {name}; the archive is verified before the
+                                        vault is touched (409 + class integrity if
+                                        it does not verify, the vault unchanged);
+                                        400 if the backup holds another vault, 409
+                                        while the vault is in use
 GET    /v1/vaults/{id}/history          audit chain (subject?, limit?, offset?)
 GET    /v1/vaults/{id}/trust            wing trust assignments
 POST   /v1/vaults/{id}/trust            assign one (closed vocabulary)

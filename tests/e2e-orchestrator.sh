@@ -341,6 +341,20 @@ body_has "ops witness check" '"verdict":"extends"' -- -X POST "${ADMIN[@]}" -d "
 # fleet operator has — which is the entire justification for the routes.
 body_has "ops backup create" '"backup"'  -- -X POST "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/backups"
 body_has "ops backup list"   '"backups"' -- "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/backups"
+# ROADMAP O268: restore proves the archive before it touches the tenant's
+# vault, through the route and through the CLI alias, and answers with the
+# report of what it put in place.
+OPS_BK="$(curl -s "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/backups" \
+  | sed -n 's/.*"backups":\["\([^"]*\)".*/\1/p')"
+body_has "ops backup restore proves the archive first (O268)" '"archived_writes"' -- -X POST \
+  "${ADMIN[@]}" -d "{\"name\":\"$OPS_BK\"}" "$O/admin/tenants/$OPS_ID/ops/backups/restore"
+OPS_RESTORE="$("$ORCH" --db "$UNDERCROFT_ORCH_DB" ops "$OPS_ID" backup-restore \
+  --body "{\"name\":\"$OPS_BK\"}" 2>&1)"
+if grep -q '"archived_writes"' <<<"$OPS_RESTORE"; then
+  ok "orchestrator CLI ops backup-restore (O268)"
+else
+  fail "orchestrator CLI ops backup-restore (O268)" "$(head -c 300 <<<"$OPS_RESTORE")"
+fi
 # ROADMAP O222: whole-corpus movement is an operator capability too, by the
 # maintainer's ruling — export and import on this plane, beside the tenant's
 # own. The round trip is the operator's own payload, re-imported whole.
