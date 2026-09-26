@@ -2,16 +2,18 @@
 
 ## 1.7.0 — unreleased
 
-MINOR: one new capability, backward compatible, and nine fixes. The witness
+MINOR: one new capability, backward compatible, and ten fixes. The witness
 commands and routes are new; no default moves and no declaration can stop a
-start-up. Two fixes change what a deployment must do: every process writing a
+start-up. Three fixes change what a deployment must do: every process writing a
 vault must run the same build, and a server whose vault another process
-rotated now stops writing rather than destroy the rotated salt (O254); and a
-key rotation now refuses while any other process has the vault open (O257) —
-both in `UPGRADING.md`, beside O255's note that a destruction now holds the
+rotated now stops writing rather than destroy the rotated salt (O254); a
+key rotation now refuses while any other process has the vault open (O257);
+and a restore now proves the archive first, so it needs the key and the
+vault's embedder environment and refuses under `--read-only` (O268) — all in
+`UPGRADING.md`, beside O255's note that a destruction now holds the
 write lock for as long as it runs and O256's that an archive taken by an older
 release beside a writer may be torn. (This line said "one fix" while O243 and
-O246 were both below it; corrected with O247.)
+O246 were both below it; corrected with O247. It said "nine" until O268.)
 
 ### The external witness: `undercroft witness emit` / `check`, `GET`/`POST /v1/…/witness` (O245)
 
@@ -405,6 +407,67 @@ hold it as a live row — the second half escalated as a product question), O268
 PATCH-class inside the unreleased 1.7.0: the documented "verified snapshots,
 keeps last 10" is now true; the report's fields are additive. What an operator
 should know about older archives is in `UPGRADING.md`.
+
+### `backup restore` proves an archive before it touches the vault it replaces (O268)
+
+**A restore removed the vault first and asked questions never.** Both surfaces
+took O69's exclusive hold, REMOVED `vaults/<id>` and copied the archive in,
+checking only that the archive held a `vault.json` — whose vault id they had not
+verified. Measured on the release binary: an archive whose manifest was newer
+than its database, a half-truncated database, another installation's archive
+and one flipped byte near the end of the database **each restored at exit 0
+over a working vault**, which then refused to open (`possible tampering`, or a
+raw SQLite error at exit 1). A `vault.json` planted by a writer without the key,
+naming another vault, would have removed that vault on the next `--force`. And
+`--read-only backup restore` replaced the vault.
+
+**Now one door, both surfaces, and the archive is proven first.** The archive is
+copied into a stage in a restore area under `vaults/` — a directory whose
+129-byte name no vault id can have, so nothing that lists vaults sees it —
+through an allowlist of regular files that never follows a link (the old copy
+followed links and recursed, after the vault was already gone): the database
+under either name, its `-wal` (a 1.6.1 archive copied beside a writer can hold
+committed frames only there), the manifest's exact bytes through the one
+manifest writer, and a staged rotation manifest, which the store promotes only
+when the database's own key-generation marker proves the rotation committed.
+The stage is unlocked — its manifest's MAC is keyed by the vault id it names, so
+an archive edited to name another vault is refused before anything is removed —
+opened writable with the surface's own embedder factory, so what is swapped in
+is the verified post-migration state, verified over all nine legs, and checked
+with SQLite's `integrity_check`: `verify` reads no index, and one flipped byte
+in an index page passed `verify` on four of seven pages tried while
+`integrity_check` named the missing rows (`quick_check` passed all seven). The
+store is closed, the stage must hold exactly the database and the manifest at
+the verified head and height, and only then is the live vault held — with
+checkpoint-on-close off, so dropping the hold never rewrites it — and swapped by
+two renames. A refusal the archive causes changes no byte of the live vault,
+measured by hashing its files on a vault whose writer died with committed
+frames in its `-wal`. A restore interrupted between the renames keeps the vault
+it was replacing aside and names it; `vault create`, `init` and another restore
+refuse until an operator puts it back. `--read-only` refuses before any effect
+(the restore half of O212). The report says what was put in place: the chain the
+archive held — for an archive `backup create` took, equal to its report — the
+chain swapped in, anything the open healed, a re-recorded embedder, whether the
+replaced vault had been rotated since the archive, and what was not copied; on
+the CLI, on `/v1` beside `restored`/`from`, and through the orchestrator's ops
+plane. Ruled by a three-lens panel and a refuter, whose probes measured that
+dropping the old hold over a hot `-wal` folded it into the live database, and
+that a restore over a live vault KEPT a 1.6.1 archive's `-wal` — SQLite skips the
+close's checkpoint once the file has moved, a unix-only check the new hold no
+longer relies on.
+
+Filed beside it: O269 (`verify` is blind to storage corruption and exits 1 on
+the corruption it trips over), O270 (a restore over a vault whose database is
+missing refuses, including a fresh host `init` populated), O271 (`vault create`'s
+own check-then-write race), O272 (`validate_name` measures the trimmed value
+while callers keep the raw one), O273 (`backup create`'s stage follows a
+symlinked `.staging`), O274 (a restore records nothing in the chain), O275
+(restore over an existing vault on Windows).
+
+PATCH-class inside the unreleased 1.7.0: a restore that exited 0 and left an
+unopenable vault was the defect; needing the key removes nothing that worked;
+the report is additive; `--read-only` refusing is the flag keeping its promise.
+What a script that restores should expect is in `UPGRADING.md`.
 
 ## 1.6.1 — 2026-09-22
 

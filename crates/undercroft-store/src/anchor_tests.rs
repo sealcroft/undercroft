@@ -1817,8 +1817,20 @@ fn every_manifest_writer_and_anchor_caller_is_the_one_the_ruling_names() {
     assert!(body_of(&vault, "write_manifest_file").contains("fs::remove_file("));
     assert!(body_of(&vault, "sweep_orphan_temps").contains("fs::remove_file("));
     assert!(body_of(&vault, "remove_staged_if_unchanged").contains("fs::remove_file("));
+    // `unlock_as` is one line since ROADMAP O268: its body is `unlock_dir`,
+    // which the stage's unlock shares, so the check reads THAT body — asserting
+    // it of a one-line wrapper would pass with the deletion back in.
     assert!(
-        !body_of(&vault, "unlock_as").contains("remove_file"),
+        body_of(&vault, "unlock_as").contains("self.unlock_dir("),
+        "premise: unlock_as delegates to the shared body"
+    );
+    let shared = body_of(&vault, "unlock_dir");
+    assert!(
+        shared.contains("verify_hmac(") && shared.contains("pending_path()"),
+        "premise: the shared body is the unlock"
+    );
+    assert!(
+        !shared.contains("remove_file"),
         "an unlock deletes nothing (ROADMAP O257)"
     );
     let writer = body_of(&vault, "write_manifest_file");
@@ -1926,14 +1938,101 @@ fn every_manifest_writer_and_anchor_caller_is_the_one_the_ruling_names() {
             );
         }
     }
+    // `copy_dir` is RETIRED (ROADMAP O268): it followed links and recursed,
+    // and both restores ran it after removing the vault. Restore copies through
+    // the vault crate's allowlist now, and nothing may bring the helper back.
     let copy_dir_calls: usize = cli
         .iter()
+        .chain(&store)
         .map(|(_, t)| t.matches("copy_dir(").count())
         .sum();
     assert_eq!(
-        copy_dir_calls, 4,
-        "`copy_dir` call sites moved (one definition, one recursion, restore on the CLI and \
-         on /v1 — backup create copies through the store since ROADMAP O256): rule the new \
-         one against O69's hold"
+        copy_dir_calls, 0,
+        "`copy_dir` is back: restore through the one door"
     );
+
+    // The RESTORE (ROADMAP O268): its module writes the stage's manifest once
+    // through the one writer, renames exactly three times — the live vault
+    // aside, the stage in, the live vault back — all inside the swap, removes
+    // only a stage (dropped or stale) and an aside after a SUCCESSFUL swap, and
+    // deletes one file: an unpromoted staged manifest in its own stage.
+    let restores = production(&format!("{crates}/undercroft-vault/src/restores.rs"));
+    assert_eq!(
+        restores.matches("write_manifest_file(").count(),
+        1,
+        "the stage's manifest is written once, through the one writer"
+    );
+    assert!(body_of(&restores, "copy").contains("write_manifest_file("));
+    assert_eq!(
+        restores.matches("fs::rename(").count(),
+        3,
+        "restore renames"
+    );
+    assert_eq!(
+        body_of(&restores, "swap<H>").matches("fs::rename(").count(),
+        3,
+        "every restore rename is the swap's"
+    );
+    assert_eq!(
+        restores.matches("fs::remove_dir_all(").count(),
+        3,
+        "restore removals: a stale stage, an aside after a completed swap, a dropped stage"
+    );
+    assert!(body_of(&restores, "sweep_stale").contains("fs::remove_dir_all("));
+    assert!(body_of(&restores, "drop").contains("fs::remove_dir_all("));
+    let swap = body_of(&restores, "swap<H>");
+    let removed_at = swap
+        .find("fs::remove_dir_all(&aside)")
+        .expect("the aside is removed");
+    assert!(
+        swap[..removed_at].rfind("self.swapped = true").is_some()
+            && swap[..removed_at].contains("now != expected"),
+        "an aside is removed only after the swap completed and its manifest was re-read"
+    );
+    assert_eq!(restores.matches("fs::remove_file(").count(), 1);
+    assert!(body_of(&restores, "discard_unpromoted_staging").contains("fs::remove_file("));
+    for w in ["File::create(", "fs::write(", "fs::copy("] {
+        assert_eq!(
+            restores.matches(w).count(),
+            0,
+            "the restore module calls {w}"
+        );
+    }
+    // One door takes the hold and swaps: the stage is swapped in nowhere else,
+    // and only after the hold, which is taken only after the stage verified.
+    let door = &store
+        .iter()
+        .find(|(p, _)| p.ends_with("restore.rs") && !p.ends_with("_tests.rs"))
+        .expect("the restore door")
+        .1;
+    let swaps: usize = store
+        .iter()
+        .filter(|(p, _)| !p.ends_with("_tests.rs"))
+        .chain(&cli)
+        .chain(&orch)
+        .map(|(_, t)| t.matches(".swap(hold)").count())
+        .sum();
+    assert_eq!(swaps, 1, "one swap");
+    let (verified, held, swapped) = (
+        door.find("storage_check()").expect("the storage check"),
+        door.find("hold_vault_exclusively(").expect("the hold"),
+        door.find(".swap(hold)").expect("the swap"),
+    );
+    assert!(
+        verified < held && held < swapped,
+        "verify, then hold, then swap"
+    );
+    let holds: usize = cli
+        .iter()
+        .chain(&orch)
+        .map(|(_, t)| t.matches("hold_vault_exclusively(").count())
+        .sum();
+    assert_eq!(holds, 0, "no surface takes O69's hold itself any more");
+    let unlocks: usize = store
+        .iter()
+        .chain(&cli)
+        .chain(&orch)
+        .map(|(_, t)| t.matches(".unlock_stage(").count())
+        .sum();
+    assert_eq!(unlocks, 1, "the stage is unlocked by the door alone");
 }

@@ -174,27 +174,70 @@ very large `forget` into several; one destruction near 75,000 drawers holds
 the lock past another writer's busy timeout (ROADMAP O264). `undercroft config
 check` cannot see this: it depends on the data, not on a declaration.
 
-### an archive taken by 1.6.1 or earlier while anything held the vault may be torn, and a restore does not check it first (O256)
+### an archive taken by 1.6.1 or earlier while anything held the vault may be torn (O256)
 
-**Symptom:** restoring an older backup leaves a vault that refuses to open —
-`possible tampering` (`ManifestTampered`), an integrity finding about the audit
-chain, or one about key generations — where the vault it replaced opened fine.
-Nothing about the archive shows it beforehand.
+**Symptom:** `backup restore` of an older archive refuses with exit 2 (a `/v1`
+409 marked `class: "integrity"`) and says the live vault was not changed —
+naming a manifest that fails its MAC, a manifest ahead of its rows, or another
+key generation.
 
 **Cause:** until 1.7.0 `backup create` verified the vault and then copied its
 directory as files with no lock, so an archive taken while a server or another
 command was writing could hold a torn database, a manifest ahead of its rows,
 or a manifest from a different key generation (ROADMAP O256 measured all three).
-From 1.7.0 an archive is exactly the state its verify judged. `backup restore`
-still removes the vault before it copies an archive in (ROADMAP O268).
+From 1.7.0 an archive is exactly the state its verify judged, and a restore
+proves an archive before it touches the vault it replaces (O268, below), so a
+torn archive is refused instead of destroying a working vault.
 
-**Fix:** take a fresh backup after upgrading. Before restoring an archive made
-by an older release over a vault you still have, restore it into a scratch data
-directory holding a copy of the same `master.key` (or with the same
-passphrase) and run `undercroft verify` there first. Expect the `-wal` to grow
-while a backup runs — it holds one read snapshot for its verify and copy, 0.7 s
-at 10⁵ drawers — and shrink at the next checkpoint. `undercroft config check`
-cannot see any of this: it concerns the archives on disk, not a declaration.
+**Fix:** take a fresh backup after upgrading; an older archive that restore
+refuses cannot be restored as it is. Expect the `-wal` to grow while a backup
+runs — it holds one read snapshot for its verify and copy, 0.7 s at 10⁵ drawers
+— and shrink at the next checkpoint. `undercroft config check` cannot see any
+of this: it concerns the archives on disk, not a declaration.
+
+### `backup restore` proves an archive before it touches the vault, and refuses one that does not verify (O268)
+
+**Symptom, one of:** a restore that used to print `Restored` now exits 2 (a
+`/v1` 409 with `class: "integrity"`) with *"… does not verify, so nothing was
+restored and the live vault was not changed"*; it exits 1 because the master
+key, the passphrase or the embedder the vault records is not available where it
+runs; it exits 1 under `--read-only`; it exits 1 with *"a restore of vault … was
+interrupted"*; or it fails for lack of disk space where it used to succeed.
+
+**Cause:** until 1.7.0 a restore took the vault's exclusive hold, REMOVED the
+vault and then copied the archive in, checking only that the archive held a
+`vault.json` — whose vault id it never verified. A manifest ahead of its rows, a
+truncated database, another installation's archive and one flipped byte each
+restored at exit 0 over a working vault, which then refused to open. Now the
+archive is copied into a stage under `vaults/`, unlocked (its manifest's MAC is
+keyed by the vault id it names, so an archive edited to name another vault is
+refused), opened with this installation's key and the embedder the vault
+records, verified, and checked with SQLite's `integrity_check` — and only then
+swapped in by two renames under the same exclusive hold. A refusal the archive
+causes changes no byte of the live vault. That is why a restore now needs what
+any other command on the vault needs (the key or passphrase, and a served or
+model embedder's environment), why it needs free space for a whole copy of the
+archive on the `vaults/` filesystem (twice that while an older archive's schema
+is migrated), and why `--read-only` refuses it: it replaces a vault.
+
+**Fix:** run the restore where the vault can be opened — the same key material,
+passphrase and `UNDERCROFT_EMBEDDER` configuration as the server that serves it
+— with the server stopped, as before. The restore prints what it put in place:
+the chain height and head the archive held (for an archive taken by 1.7.0,
+equal to what `backup create` printed — compare them), anything it healed, any
+embedder identity it re-recorded, whether the vault it replaced had been
+rotated since the archive was taken (the restore brings the older keys back:
+rotate again if that rotation answered a compromise), and anything in the
+archive it did not copy. **If a restore is interrupted between its two
+renames** (a crash, a power loss), the vault it was replacing is kept under
+`vaults/.undercroft-restore-area--…/aside-<hash>` and `vaults/<vault>` may be
+empty; `vault create`, `init` and another restore of that vault refuse and
+print the `mv` that puts it back. An external witness taken after the archive
+reads the restored vault as `rolled back`, which is what a restore is — emit a
+new one. A vault whose directory holds a manifest and no database still
+refuses (ROADMAP O270): stop every process, move that directory aside, then
+restore. `undercroft config check` sees the embedder and key declarations and
+none of the rest.
 
 ## 1.6.1 (released 2026-09-22)
 

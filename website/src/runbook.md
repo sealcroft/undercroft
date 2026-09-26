@@ -188,12 +188,26 @@ Undercroft never lossily transforms your data, so the fix is a **verbatim
 restore**, not a repair-in-place of forged bytes:
 
 1. **Restore from the most recent good backup.** `backup` refuses to run if the
-   source failed verification, so a listed backup is known-good at capture time:
+   source failed verification, so a listed backup is known-good at capture time —
+   and `restore` proves it again before it touches the live vault: the archive is
+   copied into a stage, opened with this installation's key and the vault's
+   embedder, verified and checked with SQLite's `integrity_check`, and only then
+   swapped in. An archive that fails any of it exits 2 and the live vault is left
+   exactly as it was, which on this path is also your evidence (ROADMAP O268):
    ```bash
    undercroft backup list                          # names are <vault>-<stamp>
-   undercroft backup restore <vault>-<stamp> --force   # --force to overwrite the live vault
+   undercroft backup restore <vault>-<stamp> --force   # stop the server first; --force to overwrite the live vault
    undercroft verify --vault <vault>   # must now report 0 hmac failures, chain ok
    ```
+   The restore prints the chain height and head the archive held — compare them
+   with what `backup create` printed for that archive — and whether the vault it
+   replaced had been rotated since (it brings the older keys back: rotate again if
+   that rotation answered a compromise). Emit a new external witness afterwards;
+   an older one reads the restored vault as rolled back, which it is. If the live
+   vault's directory holds a manifest and **no database**, restore refuses (O270):
+   stop every process, move that directory aside, then restore. If a restore is
+   interrupted between its two renames, `vault create`, `init` and another
+   restore refuse and print the `mv` that puts the replaced vault back.
 2. **If a single *mined* record was hit and you have the source document**,
    re-mine it with the same path, `--wing` and `--mode` it was mined with: a mined
    drawer's id is derived from (wing, room, source, chunk index, normalize

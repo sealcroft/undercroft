@@ -27,6 +27,7 @@
 pub mod backups;
 pub mod bundle;
 pub mod keys;
+pub mod restores;
 pub mod seal;
 
 use serde::{Deserialize, Serialize};
@@ -113,6 +114,29 @@ pub enum VaultError {
         manifests: usize,
         /// The key source this process declared.
         declared: keys::KeySource,
+    },
+    /// A restore of this vault was interrupted between its two renames
+    /// (ROADMAP O268): the vault it was replacing sits in the restore area and
+    /// `vaults/<id>` may be empty. `create` and `backup restore` refuse until an
+    /// operator puts it back, so an `init` after the crash cannot mint an empty
+    /// vault over the one set aside. A posture refusal, never an integrity
+    /// verdict: exit 1, and a 409 with no class.
+    #[error(
+        "a restore of vault {id:?} was interrupted: the vault it was replacing is kept at {} \
+         and nothing was changed. Stop every process using the vault, then put it back with \
+         `mv '{}' '{}'`, or remove it once the vault at that path is the one you want \
+         (ROADMAP O268)",
+        aside.display(),
+        aside.display(),
+        target.display()
+    )]
+    RestoreInterrupted {
+        /// The vault the interrupted restore was replacing.
+        id: String,
+        /// Where that vault was set aside.
+        aside: PathBuf,
+        /// Where it goes back.
+        target: PathBuf,
     },
 }
 
@@ -286,6 +310,16 @@ pub enum Access {
     /// The caller must not write. Nothing on disk is touched; what would
     /// have been healed is recorded on [`Vault::unhealed`] instead.
     ReadOnly,
+}
+
+/// Whose manifest an unlock is checking, which decides whether a MAC failure
+/// raises the vault's tamper event (ROADMAP O268): a restore's staged copy of
+/// an archive is not the live vault, and an alert naming the live vault for an
+/// archive's fault would send an operator to the one thing that is intact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tamper {
+    LiveVault,
+    Archive,
 }
 
 /// The per-vault database's filename since 1.5.0 (ROADMAP O7). It sits
@@ -570,11 +604,28 @@ pub mod fixture {
         Fsync,
         /// The rename over the manifest fails.
         Rename,
+        /// A restore's rename of the live vault into the restore area fails
+        /// (ROADMAP O268).
+        SwapAside,
+        /// A restore's rename of its verified stage into `vaults/<id>` fails.
+        SwapIn,
+        /// A restore's rename of the live vault BACK after a failed `SwapIn`
+        /// fails, leaving both directories where the error says.
+        SwapBack,
     }
 
     thread_local! {
         static ARMED: Cell<Option<Fault>> = const { Cell::new(None) };
         static REMAINING: Cell<u32> = const { Cell::new(0) };
+        static THEN: Cell<Option<Fault>> = const { Cell::new(None) };
+    }
+
+    /// Arm `first` once, and `second` once after it fires — a restore's
+    /// failed move-in followed by a failed move back (ROADMAP O268), the
+    /// state a crash between its two renames leaves.
+    pub fn fail_in_turn(first: Fault, second: Fault) {
+        fail_times(first, 1);
+        THEN.with(|then| then.set(Some(second)));
     }
 
     /// Arm `fault` for this thread's next manifest operation that reaches that
@@ -590,6 +641,7 @@ pub mod fixture {
     pub fn fail_times(fault: Fault, times: u32) {
         ARMED.with(|armed| armed.set((times > 0).then_some(fault)));
         REMAINING.with(|left| left.set(times));
+        THEN.with(|then| then.set(None));
     }
 
     /// Whether an armed fault is still waiting to fire.
@@ -608,7 +660,11 @@ pub mod fixture {
                 n
             });
             if left == 0 {
-                armed.set(None);
+                let then = THEN.with(|then| then.take());
+                armed.set(then);
+                if then.is_some() {
+                    REMAINING.with(|left| left.set(1));
+                }
             }
             Err(std::io::Error::other(format!(
                 "injected {step:?} failure (the ROADMAP O254 test fixture)"
@@ -1642,6 +1698,11 @@ impl VaultManager {
         if self.exists(id) {
             return Err(VaultError::AlreadyExists(id.to_string()));
         }
+        // A restore interrupted between its renames left the vault it was
+        // replacing aside and `vaults/<id>` empty (ROADMAP O268): minting a new
+        // vault there — `init` does, on the team-server recipe's every start —
+        // would serve an empty one while the real vault sits in the restore area.
+        restores::refuse_if_interrupted(&self.root, id)?;
         self.key_opens_an_existing_vault()?;
         fs::create_dir_all(&dir)?;
         let salt = keys::new_vault_salt();
@@ -1697,11 +1758,42 @@ impl VaultManager {
     /// A manager opened read-only unlocks read-only whatever `access` says
     /// (ROADMAP O204): the posture belongs to the path, not to the call.
     pub fn unlock_as(&self, id: &str, access: Access) -> Result<Vault, VaultError> {
+        self.unlock_dir(self.vault_dir(id), id, access, Tamper::LiveVault)
+    }
+
+    /// Unlock the COPY a restore staged, writable (ROADMAP O268) — the only way
+    /// to unlock a vault anywhere but `vaults/<id>`.
+    ///
+    /// Keys derive from the master key, the manifest's salt and its id, never
+    /// from the directory, so any directory holding a genuine manifest would
+    /// unlock: taking only a [`restores::Stage`] this crate minted is what
+    /// keeps `backups/<name>` from ever being opened writable. A stage whose
+    /// manifest fails its MAC raises no tamper event under the vault's id — the
+    /// live vault is untouched, and the restore's refusal names the archive.
+    pub fn unlock_stage(&self, stage: &restores::Stage) -> Result<Vault, VaultError> {
+        self.writable("restoring a backup replaces a vault")?;
+        self.unlock_dir(
+            stage.dir().to_path_buf(),
+            stage.id(),
+            Access::ReadWrite,
+            Tamper::Archive,
+        )
+    }
+
+    /// `unlock_as`'s whole body, for any directory: one implementation of the
+    /// MAC check, the staged manifest, the version gate and the legacy name,
+    /// whichever door asked (ROADMAP O268).
+    fn unlock_dir(
+        &self,
+        dir: PathBuf,
+        id: &str,
+        access: Access,
+        tamper: Tamper,
+    ) -> Result<Vault, VaultError> {
         let access = match self.access {
             Access::ReadOnly => Access::ReadOnly,
             Access::ReadWrite => access,
         };
-        let dir = self.vault_dir(id);
         let manifest_path = dir.join("vault.json");
         if !manifest_path.exists() {
             return Err(VaultError::NotFound(id.to_string()));
@@ -1717,12 +1809,14 @@ impl VaultManager {
             .map_err(|e| VaultError::CorruptManifest(e.to_string()))?;
         if verify_hmac(&vault.manifest_key, &vault.manifest.canonical(), &stored).is_err() {
             let _ = expected;
-            undercroft_obs::hmac_verify_failed("manifest");
-            undercroft_obs::event_hmac_fail(
-                vault.id(),
-                "manifest",
-                undercroft_obs::TamperSite::default(),
-            );
+            if tamper == Tamper::LiveVault {
+                undercroft_obs::hmac_verify_failed("manifest");
+                undercroft_obs::event_hmac_fail(
+                    vault.id(),
+                    "manifest",
+                    undercroft_obs::TamperSite::default(),
+                );
+            }
             return Err(VaultError::ManifestTampered);
         }
         // Attach a pending rotation manifest (vault.json.next) for the

@@ -2374,38 +2374,59 @@ impl Tenancy {
         if !src.join("vault.json").exists() {
             return Err(RestError::new(404, format!("no backup named {name}")));
         }
-        let vault_name =
-            crate::read_backup_vault_id(&src).map_err(|e| RestError::new(400, e.to_string()))?;
-        if vault_name != id {
-            return Err(RestError::new(
-                400,
-                format!("backup '{name}' holds vault '{vault_name}', not '{id}'"),
-            ));
-        }
-        let dst = root.join(undercroft_vault::VAULTS_DIR).join(&vault_name);
+        // This process's own cached handle would be the holder the restore's
+        // hold refuses, so it goes first — behind `deny_co_resident` above,
+        // as every eviction here is. A refused restore costs a reopen.
         self.stores.remove(id);
-        let _hold = if dst.exists() {
-            Some(
-                // Only a HELD vault is "in use" (ROADMAP O257); a missing or
-                // doubled database, or an I/O error, is classed as itself.
-                undercroft_store::hold_vault_exclusively(&dst).map_err(|e| match e {
-                    StoreError::VaultHeld(_) => {
-                        RestError::new(409, "vault is in use — stop the server first")
-                    }
-                    other => store_err(other),
-                })?,
-            )
-        } else {
-            None
+        // **The archive is proven before the vault it replaces is touched
+        // (ROADMAP O268)**, through the one door the CLI calls: staged,
+        // unlocked (so the addressed id is checked against a MAC-verified
+        // manifest, not the unverified read this route used to make), opened
+        // with this server's own embedder factory, verified, checked, and only
+        // then held and swapped. An archive that fails any of it is a 409
+        // integrity verdict with the live vault unchanged — including one whose
+        // manifest does not parse, which this route answered 400 for while the
+        // CLI exited 2.
+        let factory = &self.factory;
+        let embed = |v: &Vault| {
+            factory(v).map_err(|e| {
+                StoreError::Vault(undercroft_vault::VaultError::Io(std::io::Error::other(
+                    format!(
+                        "building the embedder this backup's vault records: {e:#}; nothing \
+                         was restored and the live vault was not changed"
+                    ),
+                )))
+            })
         };
-        if dst.exists() {
-            std::fs::remove_dir_all(&dst).map_err(|e| RestError::new(500, e.to_string()))?;
-        }
-        crate::copy_dir(&src, &dst).map_err(|e| RestError::new(500, e.to_string()))?;
-        Ok((
-            200,
-            Body::Json(json!({ "restored": vault_name, "from": name })),
-        ))
+        let outcome =
+            undercroft_store::restore_archive(&self.manager, &src, Some(id), true, &embed)
+                .map_err(|e| match e {
+                    // Only a HELD vault is "in use" (ROADMAP O257, O69).
+                    StoreError::VaultHeld(_) => RestError::new(
+                        409,
+                        "vault is in use — stop the server first (the backup verified and nothing \
+                     was changed)",
+                    ),
+                    other => store_err(other),
+                })?;
+        let report = match outcome {
+            undercroft_store::RestoreOutcome::Restored(report) => report,
+            undercroft_store::RestoreOutcome::Refused(_) => {
+                return Err(RestError::new(
+                    409,
+                    format!(
+                        "refusing to restore backup '{name}': it fails integrity verification, \
+                         so nothing was restored and the live vault was not changed"
+                    ),
+                )
+                .integrity());
+            }
+        };
+        let mut body =
+            serde_json::to_value(&report).map_err(|e| RestError::new(500, e.to_string()))?;
+        body["restored"] = json!(report.vault);
+        body["from"] = json!(name);
+        Ok((200, Body::Json(body)))
     }
 
     /// `POST /v1/vaults/{id}/drawers/check-duplicate` — would this text be a
@@ -3798,6 +3819,11 @@ fn vault_err(e: undercroft_vault::VaultError) -> RestError {
         // problem is that the binary in front of it needs upgrading. That is
         // this function's own founding defect, one variant later.
         V::ManifestTooNew { .. } => 409,
+        // ROADMAP O268: a restore interrupted between its renames set a vault
+        // aside, and nothing may be created or restored over it until an
+        // operator puts it back. The state of the installation, not of any vault's bytes:
+        // 409 with no class.
+        V::RestoreInterrupted { .. } => 409,
         _ => 500,
     };
     let err = RestError::new(code, e.to_string());
@@ -3870,6 +3896,9 @@ fn store_err(e: StoreError) -> RestError {
         // too-new staging manifest a promote met): age, not tamper — the same
         // 409 `vault_err` answers for one refused at unlock (ROADMAP O238).
         StoreError::Vault(undercroft_vault::VaultError::ManifestTooNew { .. }) => 409,
+        // A restore refused over a vault an interrupted restore set aside
+        // (ROADMAP O268) — `vault_err`'s class for the same variant.
+        StoreError::Vault(undercroft_vault::VaultError::RestoreInterrupted { .. }) => 409,
         // "That record is not here" has ONE status class across every
         // route: `forget` and `admission` used to answer 400 for it while
         // GET/PUT on the same id answered 404, so a client could not key

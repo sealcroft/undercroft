@@ -1027,6 +1027,126 @@ mkdir -p "$UNDERCROFT_HOME/backups/.staging/0123456789abcdef0123456789abcdef"
 check "backup list never shows the stage" 0 "hidden" -- sh -c \
   "\"$BIN\" backup list | grep -qx '.staging' && echo LISTED || echo hidden"
 rm -rf "$UNDERCROFT_HOME/backups/.staging"
+
+echo "== Restore proves the archive before it touches the vault (ROADMAP O268) =="
+# `backup restore` used to take O69's hold, REMOVE the vault and copy the
+# archive in, knowing only that it had a `vault.json` whose id it never
+# verified: a manifest ahead of its rows, a truncated database, another
+# installation's archive and one flipped byte each restored at exit 0 over a
+# working vault, which then refused to open. Now the archive is staged, opened,
+# verified and checked first, and a refusal the archive causes changes no byte
+# of the live vault — checked by hashing its files, never by opening it (an
+# open heals), on a vault whose server was SIGKILLed with committed frames in
+# its -wal, the incident case.
+O268_AREA=".undercroft-restore-area--a-name-longer-than-any-vault-id-may-be--so-that-no-vault-can-ever-be-given-it--see-ROADMAP-O268-restore"
+o268_hash() { # every file under a directory, names and bytes, without opening it
+  (cd "$1" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum) | sha256sum | cut -c1-16
+}
+o268_opens() { # does an archive open and verify in a scratch root with this key?
+  local r; r="$(mktemp -d)"; mkdir -p "$r/vaults/$2"
+  cp "$UNDERCROFT_HOME/master.key" "$r/"
+  cp "$1"/* "$r/vaults/$2/" 2>/dev/null
+  if UNDERCROFT_HOME="$r" "$BIN" verify --vault "$2" 2>&1 | grep -q "VERIFY OK"; then
+    echo opens; else echo refuses; fi
+  rm -rf "$r"
+}
+O268_OUT="$("$BIN" backup create 2>&1)"
+O268_DIR="$(printf '%s\n' "$O268_OUT" | sed -n 's/^Backup created: //p')"
+O268_NAME="$(basename "$O268_DIR")"
+O268_H="$(printf '%s\n' "$O268_OUT" | sed -n 's/^  chain height: //p')"
+"$BIN" remember "O268: written after the archive, and replaced by the restore" >/dev/null 2>&1
+check "restore names the chain the archive held, equal to its create report" 0 \
+  "(the archive held $O268_H)" -- "$BIN" backup restore "$O268_NAME" --force
+check "and the restored vault verifies"                0 "VERIFY OK" -- "$BIN" verify
+
+# The incident case: a server holding the vault is SIGKILLed after writes,
+# leaving committed frames in the -wal and no holder. The 1.6.1 backup of that
+# state is the directory copied as files while the server held it.
+"$BIN" serve-http --port 18898 >/dev/null 2>&1 &
+O268_SRV=$!
+sleep 2
+for i in 1 2 3; do "$BIN" remember "O268: a write the killed server never checkpointed $i" >/dev/null 2>&1; done
+O268_LEGACY="$UNDERCROFT_HOME/backups/default-2026-01-01T00-00-00Z"
+rm -rf "$O268_LEGACY"; cp -r "$UNDERCROFT_HOME/vaults/default" "$O268_LEGACY"
+kill -9 "$O268_SRV" 2>/dev/null; wait "$O268_SRV" 2>/dev/null
+if [ -s "$UNDERCROFT_HOME/vaults/default/vault.db-wal" ]; then
+  echo "ok    O268 premise: the live vault has a hot -wal and no holder"; PASS=$((PASS+1))
+else
+  echo "FAIL  O268 premise: no hot -wal, so the byte-identity arms prove nothing"; FAIL=$((FAIL+1))
+fi
+# Four archives today's restore took at exit 0. The premise for each: it does
+# not open in a scratch root, so it is really damaged.
+O268_T1="$UNDERCROFT_HOME/backups/default-o268-torn"
+rm -rf "$O268_T1"; cp -r "$O268_DIR" "$O268_T1"
+cp "$UNDERCROFT_HOME/vaults/default/vault.json" "$O268_T1/vault.json"
+O268_T2="$UNDERCROFT_HOME/backups/default-o268-truncated"
+rm -rf "$O268_T2"; cp -r "$O268_DIR" "$O268_T2"
+O268_SZ="$(stat -c %s "$O268_T2/vault.db")"
+head -c $((O268_SZ / 2)) "$O268_T2/vault.db" > "$O268_T2/vault.db.half"
+mv "$O268_T2/vault.db.half" "$O268_T2/vault.db"
+O268_OTHER="$(mktemp -d)"
+UNDERCROFT_HOME="$O268_OTHER" "$BIN" init >/dev/null 2>&1
+UNDERCROFT_HOME="$O268_OTHER" "$BIN" remember "another installation's drawer" >/dev/null 2>&1
+UNDERCROFT_HOME="$O268_OTHER" "$BIN" backup create >/dev/null 2>&1
+O268_T3="$UNDERCROFT_HOME/backups/default-o268-foreign"
+rm -rf "$O268_T3"; cp -r "$(ls -d "$O268_OTHER"/backups/default-* | head -1)" "$O268_T3"
+rm -rf "$O268_OTHER"
+for t in T1:"$O268_T1" T2:"$O268_T2" T3:"$O268_T3"; do
+  check "O268 premise: archive ${t%%:*} does not open" 0 "refuses" -- o268_opens "${t#*:}" default
+  O268_BEFORE="$(o268_hash "$UNDERCROFT_HOME/vaults/default")"
+  check "restore refuses damaged archive ${t%%:*} as an integrity verdict" 2 \
+    "the live vault was not changed" -- "$BIN" backup restore "$(basename "${t#*:}")" --force
+  O268_AFTER="$(o268_hash "$UNDERCROFT_HOME/vaults/default")"
+  check "and the live vault is byte-identical after ${t%%:*}" 0 "same" -- sh -c \
+    "[ '$O268_BEFORE' = '$O268_AFTER' ] && echo same || echo 'differs: $O268_BEFORE $O268_AFTER'"
+done
+# The planted id: an archive whose manifest names ANOTHER vault — what a
+# writer without the key can make. Today's restore removed that vault.
+"$BIN" vault create o268victim >/dev/null 2>&1
+"$BIN" remember "the victim vault's own drawer" --vault o268victim >/dev/null 2>&1
+O268_T4="$UNDERCROFT_HOME/backups/o268victim-planted"
+rm -rf "$O268_T4"; cp -r "$O268_DIR" "$O268_T4"
+perl -0777 -pi -e 's/"id": "default"/"id": "o268victim"/' "$O268_T4/vault.json"
+check "O268 premise: the planted manifest names the victim" 0 "o268victim" -- \
+  grep -o '"id": "o268victim"' "$O268_T4/vault.json"
+O268_VBEFORE="$(o268_hash "$UNDERCROFT_HOME/vaults/o268victim")"
+check "restore refuses an archive planted to name another vault" 2 "fails its MAC" -- \
+  "$BIN" backup restore o268victim-planted --force
+O268_VAFTER="$(o268_hash "$UNDERCROFT_HOME/vaults/o268victim")"
+check "and the vault it named is byte-identical" 0 "same" -- sh -c \
+  "[ '$O268_VBEFORE' = '$O268_VAFTER' ] && echo same || echo differs"
+# --read-only writes nothing (ROADMAP O212's restore half, ruled in O268).
+O268_HOME_BEFORE="$(o268_hash "$UNDERCROFT_HOME")"
+check "restore is refused under --read-only" 1 "read-only posture" -- \
+  "$BIN" --read-only backup restore "$O268_NAME" --force
+O268_HOME_AFTER="$(o268_hash "$UNDERCROFT_HOME")"
+check "and not a byte of the data directory moved" 0 "same" -- sh -c \
+  "[ '$O268_HOME_BEFORE' = '$O268_HOME_AFTER' ] && echo same || echo differs"
+# The 1.6.1-shaped archive restores WHOLE: its committed frames are only in
+# its -wal, which is copied; its -shm is named and not.
+check "a 1.6.1 archive with frames in its -wal restores" 0 "not copied: vault.db-shm" -- \
+  "$BIN" backup restore default-2026-01-01T00-00-00Z --force
+check "and verifies"                                     0 "VERIFY OK" -- "$BIN" verify
+# A restore interrupted between its renames: the vault it was replacing sits
+# aside and `vaults/<id>` is vacant. `vault create` (so `init`) and another
+# restore refuse, naming the fix, until the operator puts it back.
+"$BIN" vault create o268c >/dev/null 2>&1
+"$BIN" remember "the interrupted vault's drawer" --vault o268c >/dev/null 2>&1
+O268C="$(basename "$("$BIN" backup create --vault o268c 2>&1 | sed -n 's/^Backup created: //p')")"
+mkdir -p "$UNDERCROFT_HOME/vaults/$O268_AREA"
+O268_ASIDE="$UNDERCROFT_HOME/vaults/$O268_AREA/aside-$(printf %s o268c | sha256sum | cut -d' ' -f1)"
+mv "$UNDERCROFT_HOME/vaults/o268c" "$O268_ASIDE"
+check "O268 premise: the restore area exists and holds the aside" 0 "aside" -- sh -c \
+  "ls \"$UNDERCROFT_HOME/vaults/$O268_AREA\" | grep -q '^aside-' && echo aside"
+check "nothing lists the restore area as a vault" 0 "hidden" -- sh -c \
+  "\"$BIN\" vault list | grep -q undercroft-restore-area && echo LISTED || echo hidden"
+check "create refuses while an interrupted restore's vault is aside" 1 "was interrupted" -- \
+  "$BIN" vault create o268c
+check "and so does another restore"                                   1 "was interrupted" -- \
+  "$BIN" backup restore "$O268C" --force
+mv "$O268_ASIDE" "$UNDERCROFT_HOME/vaults/o268c"
+rmdir "$UNDERCROFT_HOME/vaults/$O268_AREA" 2>/dev/null
+check "put back, the vault is the one set aside" 0 "VERIFY OK" -- "$BIN" verify --vault o268c
 check "repair passes"             0 "integrity: ok"                  -- "$BIN" repair
 check "hooks prints settings"     0 "PreCompact"                     -- "$BIN" hooks claude-code
 
@@ -2919,6 +3039,27 @@ rest_code "/v1 restore rejects an unknown backup" 404 -- -X POST \
 rest_code "/v1 restore refuses a backup of another vault" 400 -- -X POST \
   "$API/vaults/globex/backups/restore" -H "X-Vault-Assertion: $(sign globex)" \
   -d "{\"name\":\"$BK\"}"
+# ROADMAP O268: the archive is proven before acme is touched. A truncated copy
+# is a 409 integrity verdict (it used to restore at 200 and leave acme
+# unopenable), acme verifies afterwards, and a good archive restores with the
+# report of what it put in place.
+O268V="$REST_HOME/backups/acme-o268-truncated"
+rm -rf "$O268V"; cp -r "$REST_HOME/backups/$BK" "$O268V"
+O268V_SZ="$(stat -c %s "$O268V/vault.db")"
+head -c $((O268V_SZ / 2)) "$O268V/vault.db" > "$O268V/vault.db.half"
+mv "$O268V/vault.db.half" "$O268V/vault.db"
+rest_code "/v1 restore refuses an archive that does not verify (O268)" 409 -- -X POST \
+  "$API/vaults/acme/backups/restore" -H "X-Vault-Assertion: $(sign acme)" \
+  -d '{"name":"acme-o268-truncated"}'
+rest_body "/v1 and classes it as an integrity verdict (O268)" '"class":"integrity"' -- -X POST \
+  "$API/vaults/acme/backups/restore" -H "X-Vault-Assertion: $(sign acme)" \
+  -d '{"name":"acme-o268-truncated"}'
+rest_body "/v1 acme still verifies after the refusals (O268)" '"ok":true' -- -X POST \
+  "$API/vaults/acme/verify" -H "X-Vault-Assertion: $(sign acme)"
+rest_body "/v1 restore of a good archive reports what it put in place (O268)" \
+  '"archived_writes"' -- -X POST "$API/vaults/acme/backups/restore" \
+  -H "X-Vault-Assertion: $(sign acme)" -d "{\"name\":\"$BK\"}"
+rm -rf "$O268V"
 # ROADMAP O242: the vault this process ALSO serves over /mcp is refused, and
 # the refusal is EXPLICIT rather than accidental. `backup_restore` drops this
 # process's cached handle and then takes an exclusive lock — which used to

@@ -34,6 +34,10 @@ pub mod pq;
 mod pqidx;
 pub mod remote;
 mod replay;
+mod restore;
+mod restore_pause;
+#[cfg(test)]
+mod restore_tests;
 pub mod retention;
 mod rotate;
 mod rotate_pause;
@@ -52,6 +56,7 @@ pub use manage::{
 };
 pub use pqidx::WING_PQ_MIN_DEFAULT;
 pub use remote::PlaintextPush;
+pub use restore::{restore_archive, EmbedderFor, RestoreOutcome, RestoreReport};
 pub use rotate::RotationReport;
 pub use witness::{ChainWitness, WitnessVerdict, WITNESS_VERSION};
 
@@ -436,6 +441,27 @@ pub fn hold_vault_exclusively(dir: &std::path::Path) -> Result<VaultHold, StoreE
     // Fail fast. An operator waiting on a silent command is worse off than
     // one told immediately what holds the vault.
     let _ = conn.busy_timeout(std::time::Duration::from_millis(500));
+    // **The hold's close must touch nothing** (ROADMAP O268). A connection's
+    // last close checkpoints the `-wal` into the database and deletes it BY
+    // PATH — measured: over a vault whose writer was SIGKILLed with committed
+    // frames in its `-wal`, dropping this hold rewrote `vault.db` and removed
+    // the `-wal`. After a restore renames the directory away SQLite skips
+    // that, but only because the unix VFS notices the file moved; nothing
+    // else does. With checkpoint-on-close off, dropping the hold is inert on
+    // every VFS. Read back, like the locking mode below: the setting is the
+    // observable, not the call.
+    let no_ckpt = conn.set_db_config(
+        rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
+        true,
+    )?;
+    if !no_ckpt {
+        return Err(StoreError::Invalid(format!(
+            "could not turn off checkpoint-on-close for {} (sqlite reports it still on). \
+             Refusing rather than proceeding: dropping this hold would then rewrite the \
+             vault it guards",
+            db.display()
+        )));
+    }
     // **Read the mode back rather than trusting the call.** This was
     // `let _ = conn.pragma_update(…)`, which discarded the result of the one
     // statement that makes this function work at all: in WAL mode `BEGIN
@@ -3492,12 +3518,17 @@ impl VaultStore {
     /// Open for a role that must not write.
     ///
     /// A read-only replica still has to serve reads across an embedder
-    /// upgrade, so a mismatch here neither migrates nor refuses: it warns and
-    /// leaves the old vectors in place. The semantic leg is then comparing
-    /// vectors from two different spaces and is not trustworthy, which the
-    /// warning says — the lexical leg is unaffected, and `search` already
-    /// admits a hit on lexical evidence alone. A vault that has recorded no
-    /// identity at all gets none stamped here either: stamping is a write.
+    /// upgrade, so a KNOWN upgrade of the built-in embedder (or one
+    /// `UNDERCROFT_FORCE_EMBEDDER=1` declares) neither migrates nor refuses: it
+    /// warns and leaves the old vectors in place. The semantic leg is then
+    /// comparing vectors from two different spaces and is not trustworthy,
+    /// which the warning says — the lexical leg is unaffected, and `search`
+    /// already admits a hit on lexical evidence alone. An UNKNOWN mismatch
+    /// refuses as `EmbedderMismatch` here exactly as on a writable open: this
+    /// comment said a read-only open only ever warned, and ROADMAP O268's panel
+    /// found the refusal in `enforce_embedder_identity`. A vault that has
+    /// recorded no identity at all gets none stamped here either: stamping is
+    /// a write.
     ///
     /// Both stores `serve-http --read-only` opens take this path — the `/mcp`
     /// one as well as each `/v1` tenant vault — so the flag means the same
