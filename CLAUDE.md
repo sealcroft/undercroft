@@ -748,7 +748,10 @@ Consequences that are binding, not advisory:
   never the boundary (A28's shape): measured with a real second process, the
   handle's own commit does not move it and another connection or process
   does, so it may short-circuit the REPLAY and may never gate the prefix
-  check. Refusal is `IntegrityFinding`, and **`Regime::V1` /
+  check. It is comparable only within ONE connection — a fresh one reads
+  what a quiet long-lived one did before any foreign commit (O266's P5) —
+  so a handle that replaces its connection forgets the verdict (O276), as a
+  rotation's own re-step does (O266). Refusal is `IntegrityFinding`, and **`Regime::V1` /
   `LabelCommitment::Pending` MUST NOT refuse** — a clean legacy chain
   replays with labels bound by nothing, and refusing there would brick every
   pre-1.6.0 vault served `--read-only`, a documented contract change and
@@ -1466,8 +1469,14 @@ Consequences that are binding, not advisory:
   as `StoreError::VaultHeld` (exit 1; 409 with no class). The release is
   PROVEN from a zero-timeout second connection (`prove_released`), never
   by reading the pragma back, and a handle whose release cannot be proven
-  replaces its connection, counted on `lock_reconnects`; `/v1` also closes
-  its cached handle after every rotate. The promote writes the new
+  replaces its connection, counted on `lock_reconnects` — through
+  `replace_connection`, the ONE place a handle's connection is replaced,
+  which forgets the label guard's cached verdict because its cookie is
+  comparable only within the connection that read it (O276). The fallback
+  opens its replacement BEFORE closing the old connection, which the old
+  one's own lock refuses in the state the fallback exists for (O278,
+  measured, pinned as a cost); `/v1` also closes its cached handle after
+  every rotate, and the CLI exits. The promote writes the new
   manifest FROM MEMORY through `write_manifest_file` — idempotent, never
   lowering an anchor, removing `vault.json.next` only while it is still
   the bytes it staged — and a promote that fails every attempt answers Ok
@@ -2458,8 +2467,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (1134 run,
-                                      # 14 #[ignore]d = 1148 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (1137 run,
+                                      # 14 #[ignore]d = 1151 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote

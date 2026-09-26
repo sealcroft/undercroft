@@ -5034,10 +5034,18 @@ impl VaultStore {
     /// leaves SQLite's PENDING byte held, which no statement on this
     /// connection releases (read from the bundled source; nothing here runs
     /// on Windows). So a zero-timeout connection reads one row; if it cannot,
-    /// this handle's connection is closed — the one release that works on
-    /// every platform — and replaced, counted on
+    /// this handle opens a replacement and swaps it in, closing the old one —
+    /// the one release that works on every platform — counted on
     /// [`lock_reconnects`](Self::lock_reconnects). A long-lived handle left
     /// exclusive would lock every other process out of the vault in silence.
+    ///
+    /// **The replacement is opened BEFORE the old connection closes, and in
+    /// the state this fallback exists for that open is refused by the old
+    /// connection's own lock** (ROADMAP O278, measured and pinned as a cost):
+    /// it waits its busy timeout, the handle keeps the connection that holds
+    /// the vault, and the counter still reads one. The release then comes
+    /// from dropping the handle, which the CLI does by exiting and `/v1` by
+    /// evicting it after every rotate.
     pub(crate) fn prove_released(&mut self) {
         if self.lock_released() {
             return;
@@ -5049,7 +5057,7 @@ impl VaultStore {
             self.vault.id()
         );
         match Self::connect_writable(&self.vault) {
-            Ok(fresh) => self.conn = fresh,
+            Ok(fresh) => self.replace_connection(fresh),
             Err(e) => undercroft_obs::diag_warn!(
                 "vault {:?}: reconnecting failed ({e}); the hold is released when this handle \
                  is dropped",
@@ -5058,7 +5066,29 @@ impl VaultStore {
         }
     }
 
+    /// **The one place a handle's connection is replaced (ROADMAP O276)** —
+    /// and replacing it forgets what this handle keyed to the OLD one.
+    ///
+    /// The label guard caches its replay verdict under `PRAGMA
+    /// data_version`, and that cookie is comparable only within ONE
+    /// connection: a fresh connection reads the value a quiet long-lived one
+    /// did before any foreign commit (O266's P5), whatever was committed in
+    /// between. A verdict carried across the swap was therefore served as if
+    /// nothing had moved — measured, a correction another connection rolled
+    /// back read as the old text on the first guarded read after the swap.
+    /// The cached REPLAY is dropped; the append-only memory is kept, because
+    /// it describes audit ROWS, which do not change with a connection. Every
+    /// other connection setting is `connect_writable`'s, so nothing else the
+    /// handle holds is keyed to the connection it had.
+    fn replace_connection(&mut self, fresh: Connection) {
+        self.conn = fresh;
+        self.forget_label_verdict();
+    }
+
     fn lock_released(&self) -> bool {
+        if crate::rotate_pause::proof_refused(self.vault.dir()) {
+            return false;
+        }
         let Ok(probe) = Connection::open_with_flags(
             self.vault.db_path(),
             rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
