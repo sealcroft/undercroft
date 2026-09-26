@@ -138,6 +138,13 @@ pub enum VaultError {
         /// Where it goes back.
         target: PathBuf,
     },
+    /// This handle let go of the vault (ROADMAP O278) — a key rotation could
+    /// not prove its exclusive hold released, so it closed its database
+    /// connection — and reads no manifest now. The vault is untouched; the
+    /// handle is simply no longer attached to it. A posture refusal, never an
+    /// integrity verdict: exit 1, and a 409 with no class.
+    #[error("{0}")]
+    HandleReleased(String),
 }
 
 fn key_opens_no_vault_reading(declared: &keys::KeySource) -> &'static str {
@@ -275,6 +282,8 @@ enum NotInForce {
     /// `vault.json` does not verify under the handle's keys: the keys the
     /// database is sealed under are in no file.
     StagedLost(String),
+    /// The handle let go of the vault (ROADMAP O278): no manifest is read.
+    Released(String),
 }
 
 impl std::fmt::Debug for VerifiedManifest {
@@ -463,13 +472,23 @@ pub enum Retirement {
     /// `vault.json.next` holds them, so a reopen — whose writable open
     /// promotes it — is the whole remedy. Not an integrity finding.
     PromotionDeferred(String),
+    /// It let go of the vault (ROADMAP O278): a key rotation could not prove
+    /// its exclusive hold released, so the handle closed its database
+    /// connection rather than keep every other process locked out, and holds
+    /// nothing now. Unlike the other kinds it refuses READS too — there is no
+    /// database behind it, and a manifest read by path under keys another
+    /// process may since have rotated is a false tamper verdict. The reopen
+    /// class; the caller's next open is the retry.
+    Released(String),
 }
 
 impl Retirement {
     /// The reason, whichever the kind.
     pub fn why(&self) -> &str {
         match self {
-            Retirement::Integrity(why) | Retirement::PromotionDeferred(why) => why,
+            Retirement::Integrity(why)
+            | Retirement::PromotionDeferred(why)
+            | Retirement::Released(why) => why,
         }
     }
 }
@@ -1245,6 +1264,16 @@ impl Vault {
             .get_or_insert(Retirement::PromotionDeferred(why));
     }
 
+    /// Mark this handle as having let go of the vault (ROADMAP O278). It
+    /// OVERWRITES any earlier kind, where the other two keep the first reason:
+    /// a handle whose promote was deferred serves reads against the staged
+    /// manifest (O266), and a released one has nothing to serve them from, so
+    /// keeping the deferral would let reads fall through to a connection that
+    /// is no longer the vault's. Every manifest read refuses from here on.
+    pub fn release(&mut self, why: String) {
+        self.retired = Some(Retirement::Released(why));
+    }
+
     /// Why this handle may no longer write, whichever kind of retirement it
     /// is. `None` otherwise.
     pub fn retired(&self) -> Option<&str> {
@@ -1653,6 +1682,15 @@ impl Vault {
     ///
     /// [`adopt_deferred_promotion`]: Self::adopt_deferred_promotion
     fn manifest_in_force(&self) -> Result<InForce, NotInForce> {
+        // A handle that let go of the vault reads nothing (ROADMAP O278). FIRST,
+        // and here rather than at any caller: `verify`, the witness, a backup
+        // and an erasure receipt's check read the manifest by path before they
+        // touch the database, and after another process rotated the vault a
+        // read under this handle's keys is the tamper verdict below — false,
+        // and paging an operator.
+        if let Some(Retirement::Released(why)) = &self.retired {
+            return Err(NotInForce::Released(why.clone()));
+        }
         // `None`: not deferred. `Some(None)`: deferred, and `.next` is gone
         // or no longer the bytes this handle read or staged.
         let staged: Option<Option<Vec<u8>>> = match self.deferred_over {
@@ -1727,6 +1765,7 @@ impl Vault {
             NotInForce::Unreadable(e) => e.into(),
             NotInForce::Refused(e) => e,
             NotInForce::StagedLost(why) => VaultError::CorruptManifest(why),
+            NotInForce::Released(why) => VaultError::HandleReleased(why),
             NotInForce::Tampered => {
                 undercroft_obs::hmac_verify_failed("manifest");
                 undercroft_obs::event_hmac_fail(
