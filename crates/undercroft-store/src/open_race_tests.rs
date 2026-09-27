@@ -602,8 +602,11 @@ fn o279_a_hold_whose_database_vanished_creates_nothing() {
 }
 
 /// **G6 — P4, P11, the moved legacy file and the rename's ENOENT (ROADMAP
-/// O279, O280).** A legacy `palace.db` vault's rename step never creates or
-/// overwrites a database.
+/// O279, O280), and the step's hold (O281).** A legacy `palace.db` vault's
+/// rename step never creates or overwrites a database, and nothing opens the
+/// file while it renames: arm (d) here used to run a second Undercroft open to
+/// completion between the checkpoint and the rename, which the hold now makes
+/// impossible — (f) is that interleaving now.
 #[test]
 fn o280_the_legacy_rename_never_creates_or_overwrites_a_database() {
     // (a) P4: a restore swaps a `vault.db` in after the layout was read.
@@ -685,21 +688,117 @@ fn o280_the_legacy_rename_never_creates_or_overwrites_a_database() {
         after.keys().collect::<Vec<_>>()
     );
 
-    // (d) Another open renamed the legacy file between this one's checkpoint
-    // and its rename: the rename meets no file, and the open proceeds.
+    // (d) Something that is not Undercroft renamed the legacy file between
+    // this one's checkpoint and its rename (no Undercroft open can: the step
+    // holds the file exclusively there, ROADMAP O281): the directory read at
+    // the rename says so, and the open proceeds on `vault.db`.
     let dir = corpus(300);
     let root = dir.path().to_path_buf();
     make_legacy(&root);
-    let second = second_open_at(&root, Opener::LegacyRename);
+    let vd = vdir(&root);
+    at_rename(&vd, |vd| {
+        std::fs::rename(vd.join("palace.db"), vd.join("vault.db")).unwrap()
+    });
     let first = VaultStore::open(mgr(&root).unlock(VAULT).unwrap()).expect("the first open");
-    open_pause::clear(&vdir(&root));
-    assert!(second.lock().unwrap().is_some(), "premise: the window");
+    open_pause::clear(&vd);
     assert_eq!(first.count().unwrap(), 300);
     drop(first);
-    drop(second);
     let s = open_at(&root);
     assert!(s.verify().unwrap().ok());
     assert_eq!(s.count().unwrap(), 300);
+    drop(s);
+
+    // (e) A `vault.db` appeared beside the legacy file there: O7's two-files
+    // verdict, and `rename(2)` never replaces it.
+    let dir = corpus(300);
+    let root = dir.path().to_path_buf();
+    make_legacy(&root);
+    let vd = vdir(&root);
+    at_rename(&vd, |vd| {
+        std::fs::write(vd.join("vault.db"), b"a stray").unwrap()
+    });
+    let opened = VaultStore::open(mgr(&root).unlock(VAULT).unwrap());
+    open_pause::clear(&vd);
+    assert!(
+        matches!(opened, Err(StoreError::DatabaseAmbiguous { .. })),
+        "{:?}",
+        opened.err()
+    );
+    assert_eq!(
+        std::fs::read(vd.join("vault.db")).unwrap(),
+        b"a stray",
+        "the stray was not renamed over"
+    );
+    assert!(
+        vd.join("palace.db").exists(),
+        "and the vault is where it was"
+    );
+
+    // (f) Undercroft opens that race the step's hold, started between its
+    // checkpoint and its rename: neither renames, reads or writes the file —
+    // each waits on the lock and answers the reopen class once the rename
+    // lands — and a retry serves the renamed vault.
+    let dir = corpus(300);
+    let root = dir.path().to_path_buf();
+    make_legacy(&root);
+    let vd = vdir(&root);
+    type Racers = Arc<Mutex<Vec<std::thread::JoinHandle<Result<u64, StoreError>>>>>;
+    let racers: Racers = Default::default();
+    {
+        let (r, racers) = (root.clone(), racers.clone());
+        at_rename(&vd, move |_| {
+            let (w, ro) = (r.clone(), r.clone());
+            let mut racers = racers.lock().unwrap();
+            racers.push(std::thread::spawn(move || {
+                VaultStore::open(mgr(&w).unlock(VAULT).unwrap())?.count()
+            }));
+            racers.push(std::thread::spawn(move || {
+                let m = VaultManager::open_as(&ro, None, Access::ReadOnly).unwrap();
+                VaultStore::open_read_only(m.unlock(VAULT).unwrap(), Box::new(HashEmbedder))?
+                    .count()
+            }));
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        });
+    }
+    let first = VaultStore::open(mgr(&root).unlock(VAULT).unwrap()).expect("the first open");
+    open_pause::clear(&vd);
+    let racers: Vec<_> = std::mem::take(&mut *racers.lock().unwrap());
+    assert_eq!(
+        racers.len(),
+        2,
+        "premise: both racers started inside the hold"
+    );
+    for (racer, what) in racers.into_iter().zip(["writable", "read-only"]) {
+        match racer.join().unwrap() {
+            Err(e) => assert!(is_moved(&e), "the {what} racer: {e:?}"),
+            Ok(n) => panic!("the {what} racer read {n} drawers through the hold"),
+        }
+    }
+    assert_eq!(first.count().unwrap(), 300);
+    drop(first);
+    let s = open_at(&root);
+    assert_eq!(
+        s.count().unwrap(),
+        300,
+        "the retry serves the renamed vault"
+    );
+    assert!(s.verify().unwrap().ok());
+    assert!(vd.join("vault.db").exists() && !vd.join("palace.db").exists());
+}
+
+/// Run `f` once, the first time the legacy step reaches its rename for the
+/// vault in `vd` — inside its exclusive hold (ROADMAP O281).
+fn at_rename(vd: &Path, f: impl Fn(&Path) + Send + Sync + 'static) {
+    let armed = AtomicBool::new(true);
+    let at = vd.to_path_buf();
+    open_pause::set(
+        vd,
+        Arc::new(move |here| {
+            if here == Opener::LegacyRename && armed.swap(false, Ordering::SeqCst) {
+                f(&at)
+            }
+        }),
+    );
 }
 
 /// A second writable open, run to completion (it migrates a legacy vault) when

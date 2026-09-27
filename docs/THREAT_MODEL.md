@@ -634,8 +634,10 @@ empty a vault). Residuals, stated: an `immutable=1` read-only handle holds no
 lock, so a swap after its open goes unseen for its life (O285); a racer and a
 handle of the restored vault in ONE process share a `-shm` whose locks the racer
 can disturb inside its first statement, which no product surface does; Windows
-makes no moved-file check (O275); and the legacy rename still runs beneath an
-idle read-only replica (O281).
+makes no moved-file check (O275). The legacy `palace.db` rename takes an
+exclusive hold first and keeps the old name beside any other connection (O281):
+it used to rename beneath an idle holder, leaving a read-only replica on stale
+rows with a false `verify` failure and a writable holder's later commits lost.
 
 The chain also carries what left and what was read. Every export
 appends an `egress/export` record binding the surface, the recipient

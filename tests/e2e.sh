@@ -622,6 +622,55 @@ fi
 rm -f "$O7_TWIN/palace.db"
 check "the vault is intact after the O7 probes" 0 "VERIFY OK"          -- "$BIN" verify
 
+# ROADMAP O281 — a legacy-named vault held open by a live read-only server
+# keeps its name when a writable command opens it beside that server. The
+# rename used to go ahead beneath the server, which then served stale rows and
+# a false `verify` failure until it restarted. The store's gates drive holders
+# in other processes; this is the binary a user runs, beside the server a
+# deployment runs.
+mv "$O7_VAULT/vault.db" "$O7_VAULT/palace.db"
+rm -f "$O7_VAULT/vault.db-wal" "$O7_VAULT/vault.db-shm"
+"$BIN" serve-http --host 127.0.0.1 --port 18990 --read-only >/dev/null 2>&1 &
+O281SRV=$!
+for _ in $(seq 1 40); do curl -sf http://127.0.0.1:18990/healthz >/dev/null 2>&1 && break; sleep 0.25; done
+O281_N0=$(curl -s http://127.0.0.1:18990/v1/vaults/default/stats | grep -o '"drawers":[0-9]*' | cut -d: -f2)
+if [ -n "$O281_N0" ] && [ -f "$O7_VAULT/palace.db" ]; then
+  echo "ok    premise: a read-only server holds a legacy-named vault ($O281_N0 drawers)"; PASS=$((PASS+1))
+else
+  echo "FAIL  premise: the read-only server did not serve the legacy-named vault"; FAIL=$((FAIL+1))
+fi
+check "a writable command beside the server files its drawer" 0 "Filed drawer" -- "$BIN" remember \
+  "O281: filed beside a read-only server on a legacy-named vault" --wing o281
+if [ -f "$O7_VAULT/palace.db" ] && [ ! -f "$O7_VAULT/vault.db" ]; then
+  echo "ok    ...and kept the legacy name rather than renaming beneath the server"; PASS=$((PASS+1))
+else
+  echo "FAIL  the writable command renamed the database beneath a live server"
+  ls "$O7_VAULT" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+check "writable stats beside the server says why the name is kept" 0 \
+  "another connection has the vault open" -- "$BIN" stats
+O281_N1=$(curl -s http://127.0.0.1:18990/v1/vaults/default/stats | grep -o '"drawers":[0-9]*' | cut -d: -f2)
+if [ -n "$O281_N0" ] && [ "$O281_N1" = "$((O281_N0 + 1))" ]; then
+  echo "ok    the server reads the drawer filed beside it ($O281_N0 -> $O281_N1)"; PASS=$((PASS+1))
+else
+  echo "FAIL  the server reads ${O281_N1:-nothing} after one save beside it (was ${O281_N0:-nothing})"
+  FAIL=$((FAIL+1))
+fi
+O281_V=$(curl -s -X POST http://127.0.0.1:18990/v1/vaults/default/verify)
+if grep -qF '"ok":true' <<<"$O281_V"; then
+  echo "ok    ...and still verifies"; PASS=$((PASS+1))
+else
+  echo "FAIL  the server's verify after a save beside it: $O281_V"; FAIL=$((FAIL+1))
+fi
+kill $O281SRV 2>/dev/null; wait $O281SRV 2>/dev/null
+check "once the server has stopped, a writable open verifies" 0 "VERIFY OK" -- "$BIN" verify
+if [ -f "$O7_VAULT/vault.db" ] && [ ! -f "$O7_VAULT/palace.db" ]; then
+  echo "ok    ...and renamed palace.db to vault.db"; PASS=$((PASS+1))
+else
+  echo "FAIL  the writable open after the server stopped did not rename"
+  ls "$O7_VAULT" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+
 # ROADMAP O91, the SECOND and worse half — measured, not reasoned about. The
 # read-write connection was DROPPED at function end, and SQLite checkpoints the
 # `-wal` into the main database when the last connection closes. So the defect

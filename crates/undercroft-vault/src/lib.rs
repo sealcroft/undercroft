@@ -420,7 +420,8 @@ pub enum Unhealed {
     /// The database is still under its pre-1.5.0 name, `palace.db`
     /// (ROADMAP O7). Renaming it is a write, and one that needs a WAL
     /// checkpoint first, so a read-only open serves it where it is and a
-    /// writable open renames it.
+    /// writable open renames it — once no other connection has the vault open,
+    /// the read-only one reporting this included (ROADMAP O281).
     LegacyDatabaseName,
 }
 
@@ -429,7 +430,8 @@ impl std::fmt::Display for Unhealed {
         match self {
             Unhealed::LegacyDatabaseName => f.write_str(
                 "the database is still named palace.db (renaming it is a write, and it \
-                 needs a WAL checkpoint first); a writable open will rename it to vault.db",
+                 needs a WAL checkpoint first); a writable open renames it to vault.db once \
+                 no other connection has the vault open, this one included (ROADMAP O281)",
             ),
             Unhealed::TornStagingManifest => f.write_str(
                 "vault.json.next does not authenticate under this vault's keys and was left in \

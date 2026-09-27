@@ -35,6 +35,8 @@ pub mod forget;
 mod hnsw;
 pub mod kg;
 mod latestage;
+#[cfg(test)]
+mod legacy_rename_tests;
 pub mod manage;
 #[cfg(not(feature = "test-fixture"))]
 mod open_pause;
@@ -950,8 +952,9 @@ pub(crate) fn is_busy(e: &rusqlite::Error) -> bool {
 
 /// What an open says when another process holds the vault exclusively.
 pub(crate) const OPEN_HELD: &str =
-    "another process holds this vault exclusively — a key rotation or a backup restore is \
-     running. Nothing was read or written; retry once it finishes (ROADMAP O257)";
+    "another process holds this vault exclusively — a key rotation, a backup restore, or \
+     another open renaming its pre-1.5.0 palace.db is running. Nothing was read or written; \
+     retry once it finishes (ROADMAP O257, O281)";
 
 /// What a refused key rotation says (ROADMAP O257).
 pub(crate) const ROTATION_HELD: &str =
@@ -4265,17 +4268,36 @@ impl VaultStore {
     /// name, so `vault.db` beside a hot `palace.db-wal` silently loses every
     /// committed frame that was not yet checkpointed. The order is therefore
     /// checkpoint (TRUNCATE, so the `-wal` is empty afterwards), rename the
-    /// database, then remove the emptied sidecars — and a checkpoint that
-    /// could not complete (`busy`) leaves the name alone, so the open proceeds
-    /// on the legacy path and the next writable open tries again. A crash
-    /// between the checkpoint and the rename loses nothing; one after the
-    /// rename leaves empty sidecars that the next writable open sweeps.
+    /// database, then remove the emptied sidecars. A crash between the
+    /// checkpoint and the rename loses nothing; one after the rename leaves
+    /// empty sidecars that the next writable open sweeps.
     ///
-    /// **`busy` does not see an IDLE holder** (ROADMAP O281, open): a
-    /// checkpoint's busy result sees read marks, never an idle connection's
-    /// hold, so this step can rename beneath a read-only replica that holds the
-    /// vault idle. This doc said busy meant "another process holds the file"
-    /// until O279's ruling refuted it.
+    /// **Only a vault nobody else has open is renamed, and that is decided by a
+    /// hold, never by the checkpoint (ROADMAP O281).** This step used to leave
+    /// the name alone when the TRUNCATE checkpoint reported busy, but busy sees
+    /// only a reader in the middle of a read: an IDLE holder — a `--read-only`
+    /// server between requests, a writable handle of another process — holds a
+    /// shared lock and no read mark. Measured: the rename went ahead beneath an
+    /// idle replica in another process, which then served stale rows and a
+    /// false `verify` failure; beneath an idle WRITABLE holder, every commit it
+    /// made afterwards answered OK and was lost with its unlinked `-wal`. So
+    /// the step first puts the connection into `locking_mode=EXCLUSIVE`, read
+    /// back, before any statement touches the file — which also keeps the
+    /// wal-index in heap memory, so the step creates no `-shm` of its own — then
+    /// takes `BEGIN EXCLUSIVE` under a ZERO busy timeout and commits it: the
+    /// lock is refused at once beside any other connection HOLDING a lock on the
+    /// file — every connection that has read it holds one for as long as it is
+    /// open, idle or not — and once taken it survives the `COMMIT` (O257's
+    /// measurement), so the checkpoint and the rename run with no other
+    /// connection able to lock the file. Two connections hold no lock and are
+    /// not refused: one that has opened and not yet read (O279's door refuses it
+    /// once it reads the renamed file), and an `immutable=1` read-only handle
+    /// (O285). A refusal keeps the legacy name, as O7 intended: the open
+    /// proceeds on `palace.db` beside its holder and says so on `unhealed`, and
+    /// the first writable open once nothing else has the vault open renames it.
+    /// A `vault.db` found beside the legacy file at the rename is O7's two-files
+    /// verdict, before `rename(2)` can overwrite it. Off unix the hold is closed
+    /// before the rename, because the file it holds cannot be renamed there.
     ///
     /// **The legacy file is opened without `SQLITE_OPEN_CREATE`, through the
     /// one door (ROADMAP O279, O280).** With CREATE, a `palace.db` another open
@@ -4291,7 +4313,10 @@ impl VaultStore {
     ///
     /// Two database files under one manifest are refused rather than chosen
     /// between, on this posture and on the read-only one.
-    fn migrate_db_filename(vault: &Vault) -> Result<(), StoreError> {
+    ///
+    /// Answers the note a writable open that KEPT the legacy name carries on
+    /// `unhealed`, or `None`.
+    fn migrate_db_filename(vault: &Vault) -> Result<Option<String>, StoreError> {
         use undercroft_vault::DbLayout;
         let io = |e: std::io::Error| StoreError::Vault(VaultError::Io(e));
         let sidecars = |db: &std::path::Path| -> Vec<std::path::PathBuf> {
@@ -4309,12 +4334,26 @@ impl VaultStore {
                 // The legacy file is gone since the layout was read: another
                 // open renamed it, or a restore swapped the directory. Proceed
                 // only if the directory now holds `vault.db`.
-                let settled = || -> Result<(), StoreError> {
+                let settled = || -> Result<Option<String>, StoreError> {
                     match vault.db_layout() {
-                        DbLayout::Current => Ok(()),
+                        DbLayout::Current => Ok(None),
                         _ => Err(vault_db::moved(&from)),
                     }
                 };
+                // The name is kept, and the note says why (ROADMAP O281).
+                let keep = |note: &str| -> Option<String> {
+                    undercroft_obs::diag_warn!("vault {:?}: {note}", vault.id());
+                    Some(note.to_string())
+                };
+                const HELD: &str = "the database is still named palace.db: another connection \
+                     has the vault open, and renaming it beneath that connection would leave \
+                     it reading and writing a file this open no longer shares (ROADMAP O281). \
+                     A writable open renames it to vault.db once no other connection has the \
+                     vault open, this one included";
+                const UNCHECKPOINTED: &str = "the database is still named palace.db: its WAL \
+                     could not be checkpointed even under the rename's exclusive hold, and \
+                     renaming it now would orphan committed frames (ROADMAP O7, O281); a later \
+                     writable open retries";
                 let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
                     | rusqlite::OpenFlags::SQLITE_OPEN_URI
                     | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
@@ -4328,34 +4367,112 @@ impl VaultStore {
                     open_pause::Opener::Legacy,
                     true,
                     |conn| {
-                        conn.query_row("SELECT count(*) FROM sqlite_schema", [], |r| {
-                            r.get::<_, i64>(0)
-                        })?;
-                        Ok(())
+                        // No wait: a holder is usually a server that will not go
+                        // away, and the open proceeds beside it on the legacy name.
+                        conn.busy_timeout(std::time::Duration::ZERO)?;
+                        // The mode is the observable, so read it back — O69's
+                        // lesson: `BEGIN EXCLUSIVE` alone takes only the write
+                        // lock in WAL mode, which an idle holder does not hold.
+                        let mode: String =
+                            conn.query_row("PRAGMA locking_mode = EXCLUSIVE", [], |r| r.get(0))?;
+                        if !mode.eq_ignore_ascii_case("exclusive") {
+                            return Err(StoreError::Invalid(format!(
+                                "could not put {} into exclusive locking mode (sqlite reports \
+                                 {mode:?}); refusing rather than renaming a vault this open \
+                                 cannot prove nobody else holds (ROADMAP O281)",
+                                from.display()
+                            )));
+                        }
+                        // The first LOCKING statement, which the door proves the
+                        // file after (O279). The lock survives the COMMIT.
+                        match conn.execute_batch("BEGIN EXCLUSIVE") {
+                            Ok(()) => {
+                                conn.execute_batch("COMMIT")?;
+                                Ok(true)
+                            }
+                            Err(e) if is_busy(&e) => Ok(false),
+                            Err(e) => Err(e.into()),
+                        }
                     },
                 );
-                let busy: i64 = match opened {
-                    Ok(vault_db::Opened::Here(conn, ())) => {
-                        let busy =
-                            conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))?;
+                let conn = match opened {
+                    Ok(vault_db::Opened::Here(conn, true)) => conn,
+                    Ok(vault_db::Opened::Here(conn, false)) => {
                         conn.close().map_err(|(_, e)| StoreError::from(e))?;
-                        busy
+                        return Ok(keep(HELD));
                     }
                     Ok(vault_db::Opened::Moved) => return Err(vault_db::moved(&from)),
                     Err(_) if !from.exists() => return settled(),
                     Err(e) => return Err(e),
                 };
+                // Every step below runs under the hold: no other connection has
+                // the file open, and none can open it until this one closes.
+                let close = |conn: Connection| -> Result<(), StoreError> {
+                    conn.close().map_err(|(_, e)| StoreError::from(e))
+                };
+                let busy: i64 =
+                    match conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0)) {
+                        Ok(busy) => busy,
+                        Err(e) => {
+                            // The checkpoint's error is the one returned; a close
+                            // that fails too is said, never discarded (O278).
+                            if let Err(c) = close(conn) {
+                                undercroft_obs::diag_warn!(
+                                    "vault {:?}: closing the legacy rename's connection \
+                                     after its checkpoint failed also failed: {c}",
+                                    vault.id()
+                                );
+                            }
+                            return Err(e.into());
+                        }
+                    };
                 if busy != 0 {
-                    undercroft_obs::diag_warn!(
-                        "vault {:?}: {} could not be checkpointed (another process holds it), so \
-                         it keeps its pre-1.5.0 name for now; the next writable open will retry",
-                        vault.id(),
-                        from.display()
-                    );
-                    return Ok(());
+                    close(conn)?;
+                    return Ok(keep(UNCHECKPOINTED));
                 }
                 open_pause::fire(vault.dir(), open_pause::Opener::LegacyRename);
-                match std::fs::rename(&from, &to) {
+                // The directory again, at the rename: `rename(2)` replaces a
+                // `vault.db` that is already there, so two files are O7's
+                // two-files verdict here as everywhere, and a legacy file that is
+                // gone is another rename's finished work. No Undercroft open
+                // creates either name while this hold is taken (O280), so what
+                // this sees is the work of something that is not Undercroft.
+                match vault.db_layout() {
+                    DbLayout::Legacy => {}
+                    DbLayout::Ambiguous => {
+                        close(conn)?;
+                        return Err(StoreError::DatabaseAmbiguous {
+                            id: vault.id().to_string(),
+                            current: to.display().to_string(),
+                            legacy: from.display().to_string(),
+                        });
+                    }
+                    DbLayout::Current | DbLayout::Absent => {
+                        close(conn)?;
+                        return settled();
+                    }
+                }
+                // On unix the rename runs UNDER the hold: closed first, a
+                // connection could open the file in the gap and be renamed
+                // beneath, which is this step's own defect (O281's CF7).
+                #[cfg(unix)]
+                let renamed = {
+                    let renamed = std::fs::rename(&from, &to);
+                    close(conn)?;
+                    renamed
+                };
+                // Elsewhere SQLite's VFS opens a database without delete-sharing,
+                // so the file this connection holds cannot be renamed at all —
+                // renaming under the hold would refuse every legacy vault. The
+                // hold is closed first, and the OS itself then refuses the rename
+                // beneath any connection that opened the file in the gap, which
+                // fails this open as it did before 1.7.0 (ROADMAP O275, O281).
+                #[cfg(not(unix))]
+                let renamed = {
+                    close(conn)?;
+                    std::fs::rename(&from, &to)
+                };
+                match renamed {
                     Ok(()) => {}
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => return settled(),
                     Err(e) => return Err(io(e)),
@@ -4372,7 +4489,7 @@ impl VaultStore {
                     from.display(),
                     to.display()
                 );
-                Ok(())
+                Ok(None)
             }
             DbLayout::Current => {
                 // Sidecars orphaned by a crash after the rename above.
@@ -4381,14 +4498,14 @@ impl VaultStore {
                         std::fs::remove_file(&stray).map_err(io)?;
                     }
                 }
-                Ok(())
+                Ok(None)
             }
             DbLayout::Ambiguous => Err(StoreError::DatabaseAmbiguous {
                 id: vault.id().to_string(),
                 current: vault.current_db_path().display().to_string(),
                 legacy: vault.legacy_db_path().display().to_string(),
             }),
-            DbLayout::Absent => Ok(()),
+            DbLayout::Absent => Ok(None),
         }
     }
 
@@ -4406,12 +4523,29 @@ impl VaultStore {
     /// file is the path's, before `synchronous`, `foreign_keys` or any write.
     /// A file that moved, or vanished while the layout changed, answers the
     /// reopen class, which the CLI and `/v1` retry once.
-    fn connect_writable(vault: &Vault) -> Result<Connection, StoreError> {
+    ///
+    /// Answers the layout it opened by, so a note about the legacy name is
+    /// carried only by a handle that is really on `palace.db` (ROADMAP O281):
+    /// the rename step can keep the name and another open finish the rename
+    /// before this reads the directory. Two files are O7's two-files verdict
+    /// here too — this step can meet them only by way of something that is not
+    /// Undercroft, since the rename step refused them before it.
+    fn connect_writable(
+        vault: &Vault,
+    ) -> Result<(Connection, undercroft_vault::DbLayout), StoreError> {
         use undercroft_vault::DbLayout;
+        open_pause::fire(vault.dir(), open_pause::Opener::WritableLayout);
         let layout = vault.db_layout();
         let path = match layout {
             DbLayout::Legacy => vault.legacy_db_path(),
-            _ => vault.current_db_path(),
+            DbLayout::Ambiguous => {
+                return Err(StoreError::DatabaseAmbiguous {
+                    id: vault.id().to_string(),
+                    current: vault.current_db_path().display().to_string(),
+                    legacy: vault.legacy_db_path().display().to_string(),
+                })
+            }
+            DbLayout::Current | DbLayout::Absent => vault.current_db_path(),
         };
         let mut flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
             | rusqlite::OpenFlags::SQLITE_OPEN_URI
@@ -4466,12 +4600,17 @@ impl VaultStore {
         // crash case) — never ahead (the alarm case).
         conn.pragma_update(None, "synchronous", "FULL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
-        Ok(conn)
+        Ok((conn, layout))
     }
 
     fn open_inner(vault: Vault, embedder: Box<dyn Embedder + Send>) -> Result<Self, StoreError> {
-        Self::migrate_db_filename(&vault)?;
-        let conn = Self::connect_writable(&vault)?;
+        let kept_legacy_name = Self::migrate_db_filename(&vault)?;
+        let (conn, opened_by) = Self::connect_writable(&vault)?;
+        // The note describes the handle, so only one really on `palace.db`
+        // carries it: another open can finish the rename between the step that
+        // kept the name and the connect (ROADMAP O281).
+        let kept_legacy_name =
+            kept_legacy_name.filter(|_| opened_by == undercroft_vault::DbLayout::Legacy);
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS meta (
                  key TEXT PRIMARY KEY,
@@ -4535,6 +4674,9 @@ impl VaultStore {
             undercroft_obs::diag_warn!("vault {:?}: {note}", store.vault.id());
         }
         store.unhealed.extend(notes);
+        // A legacy name this open kept beside another connection (ROADMAP
+        // O281), already logged where it was decided.
+        store.unhealed.extend(kept_legacy_name);
         store.fts = store.init_fts_schema()?;
         store.init_kg_schema()?;
         store.init_manage_schema()?;
@@ -22733,20 +22875,27 @@ mod tests {
         assert!(s.verify().unwrap().ok());
     }
 
-    /// The rename must not lose a HOT WAL. A writer that never closed
-    /// (leaked here, as a crash leaves it) has its committed rows only in
-    /// `palace.db-wal`; a bare `rename` of the database would orphan them,
-    /// and SQLite would open `vault.db` at the state before those commits
-    /// with no error at all. The migration checkpoints first.
+    /// The rename must not lose a HOT WAL. A writer that crashed has its
+    /// committed rows only in `palace.db-wal`; a bare `rename` of the database
+    /// would orphan them, and SQLite would open `vault.db` at the state before
+    /// those commits with no error at all. The migration checkpoints first.
+    ///
+    /// **The hot WAL is a crash's, with no holder left (ROADMAP O281).** This
+    /// test used to build it by forgetting a live connection and renaming the
+    /// files beneath it — which is the defect O281 closed, encoded as passing
+    /// behaviour: that connection is an idle holder, and the migration now
+    /// keeps the name beside one (see the twin below). A connection closed
+    /// with checkpoint-on-close OFF leaves its frames in the WAL and holds
+    /// nothing afterwards, which is what a crash leaves.
     #[test]
     fn a_hot_wal_survives_the_rename() {
         let dir = TempDir::new().unwrap();
         let mgr = VaultManager::open(dir.path(), None).unwrap();
         let vault = mgr.create("test", SecurityLevel::Sealed).unwrap();
         let vdir = vault.current_db_path().parent().unwrap().to_path_buf();
-        let mut leaked = VaultStore::open(vault).unwrap();
+        let mut crashed = VaultStore::open(vault).unwrap();
         for i in 0..5u32 {
-            leaked
+            crashed
                 .upsert(&drawer(
                     "w",
                     "r",
@@ -22755,8 +22904,15 @@ mod tests {
                 ))
                 .unwrap();
         }
-        // Never closed: the connection is forgotten with its WAL unflushed.
-        std::mem::forget(leaked);
+        let no_ckpt = crashed
+            .conn
+            .set_db_config(
+                rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
+                true,
+            )
+            .unwrap();
+        assert!(no_ckpt, "premise: the close must not checkpoint");
+        drop(crashed);
         for f in ["vault.db", "vault.db-wal", "vault.db-shm"] {
             let to = f.replacen("vault.db", "palace.db", 1);
             std::fs::rename(vdir.join(f), vdir.join(to)).unwrap();
@@ -22773,6 +22929,74 @@ mod tests {
             "every committed row in the hot WAL survived the rename"
         );
         assert!(vdir.join("vault.db").exists() && !vdir.join("palace.db").exists());
+        assert!(
+            !vdir.join("palace.db-wal").exists() && !vdir.join("palace.db-shm").exists(),
+            "the emptied legacy sidecars are removed"
+        );
+        assert!(s.verify().unwrap().ok());
+    }
+
+    /// The twin (ROADMAP O281): a legacy vault held open IDLE by another
+    /// connection — in this process here, as a second handle would be — keeps
+    /// its name. A checkpoint's busy result never saw such a holder, so the
+    /// rename used to go ahead beneath it and unlink the `-wal` it had open.
+    /// Now the writable open proceeds on `palace.db` beside the holder, says so
+    /// on `unhealed`, and shares the file: the holder sees its write. Once the
+    /// holder has gone, the next writable open renames.
+    #[test]
+    fn a_legacy_vault_held_open_keeps_its_name_until_it_is_released() {
+        let (_d, mgr, vdir) = legacy_named_vault(3);
+        let holder = Connection::open(vdir.join("palace.db")).unwrap();
+        let read: i64 = holder
+            .query_row("SELECT count(*) FROM drawers", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            read, 3,
+            "premise: the holder has read the file, and is idle"
+        );
+        let t = std::time::Instant::now();
+        let mut s = VaultStore::open(mgr.unlock("test").unwrap()).unwrap();
+        let took = t.elapsed();
+        assert!(
+            vdir.join("palace.db").exists() && !vdir.join("vault.db").exists(),
+            "renamed beneath an idle holder"
+        );
+        assert!(
+            took < std::time::Duration::from_secs(2),
+            "the open waited on the holder ({took:?}); a holder is usually a server that \
+             will not go away, so the hold must not wait"
+        );
+        let notes = s.unhealed().to_vec();
+        assert!(
+            notes
+                .iter()
+                .any(|n| n.contains("palace.db") && n.contains("ROADMAP O281")),
+            "the writable open must say it kept the name: {notes:?}"
+        );
+        s.upsert(&drawer(
+            "w",
+            "r",
+            "a kestrel over the weir, beside the holder",
+            9,
+        ))
+        .unwrap();
+        let seen: i64 = holder
+            .query_row("SELECT count(*) FROM drawers", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(seen, 4, "the holder shares the file and sees the write");
+        drop(s);
+        drop(holder);
+        let s = VaultStore::open(mgr.unlock("test").unwrap()).unwrap();
+        assert!(
+            vdir.join("vault.db").exists() && !vdir.join("palace.db").exists(),
+            "renamed once nobody holds it"
+        );
+        assert!(
+            !s.unhealed().iter().any(|n| n.contains("ROADMAP O281")),
+            "{:?}",
+            s.unhealed()
+        );
+        assert_eq!(s.count().unwrap(), 4);
         assert!(s.verify().unwrap().ok());
     }
 

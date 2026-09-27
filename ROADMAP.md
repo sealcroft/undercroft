@@ -3998,7 +3998,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**316** of the **331** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**317** of the **332** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -9079,7 +9079,8 @@ reopen sweeping the legacy sidecars that read left) and the rename's ENOENT — 
 counterfactual, CREATE kept with the check present, empties the vault again. Real
 corpus: 20 rounds of two writable opens racing the rename, no row lost. Shipping
 with 1.7.0, not a 1.6.2 (the maintainer's ruling, 2026-09-27). O281 — the rename
-beneath an IDLE holder — is a different mechanism and stays open.
+beneath an IDLE holder — is a different mechanism and stayed open when this closed;
+it was closed later in the same release by a hold on the rename (O281, below).
 
 ### O282 — CLOSED 2026-09-27: a restore replaces a vault only under a hold — one that appeared at an absent target is refused, not renamed aside unheld
 
@@ -9135,6 +9136,218 @@ directory, a linked database, a link that appears at the swap, and a real
 directory still restoring), a counterfactual for each check, and the e2e suite
 through the CLI and `/v1`.
 
+
+### O281 — CLOSED 2026-09-27: a pre-1.5.0 `palace.db` is renamed only under an exclusive hold — a vault anything else has open keeps its old name
+
+**Filed 2026-09-27 by O279's ruling (its security lens, confirmed by the refuter);
+measured by the integrator (P-IDLE).** O7's mechanism leaves the legacy name alone
+when the TRUNCATE checkpoint reports busy, "another process holds the file" — but a
+checkpoint's busy result sees read marks, never an idle connection's hold. Measured
+across processes: a read-only replica holding a legacy vault idle; a writable open
+renamed `palace.db` to `vault.db` beneath it and removed the `palace.db-wal` and
+`-shm` it had open; the writer then wrote 40 drawers; the replica afterwards read the
+old count and its `verify` answered a false failure. Released since 1.5.0. A writable
+idle holder would split the WAL.
+
+**Shape** (the security lens's, confirmed by the refuter): `locking_mode=EXCLUSIVE`
+read back BEFORE any statement (a heap wal-index, no `-shm` name), a zero busy
+timeout, `BEGIN EXCLUSIVE` — busy keeps the legacy name, as O7 intended — `COMMIT`
+(the lock survives, O257's measurement), the identity check, the TRUNCATE checkpoint,
+a refusal if `vault.db` exists, the rename under the hold, the close, then the
+sidecars. `a_hot_wal_survives_the_rename` builds its hot WAL by renaming beneath a
+`mem::forget`ed live same-process connection — it encodes this defect as passing
+behaviour and is re-shaped (a hot `-wal` from a connection closed under
+`NO_CKPT_ON_CLOSE`, or from a killed child), never deleted, with an idle-holder twin.
+`UPGRADING.md`: a legacy vault beside a live holder keeps its name until the holder
+stops.
+
+**Gate**: P-IDLE inverted across processes — the name kept while the replica holds
+the vault, the replica's reads and `verify` true after the writer's saves, the rename
+on the next open once it has gone; the re-shaped hot-WAL test and its twin.
+
+#### MEASURED 2026-09-27 on `main` after O279 — and settled by the recorded shape and two precedents, so no panel was convened
+
+**The prior ruling, and why it is followed.** The shape above was written by O279's
+security lens and confirmed by its refuter, inside a ruling whose three lenses split
+on this very step ("no hold in migrate" was the engineering lens's dissent) and
+settled it by evidence, P-IDLE. Searched `rul(ed|ing)` in this entry, O279, O7, O257
+and O69: O7's naming ruling (`vault.db`, migrated on the first writable open) stands
+and its intent — a held file keeps its name for the next writable open — is what the
+shape restores; O257's measurement that an EXCLUSIVE lock is refused beside any open
+connection and survives a `COMMIT` is what it rests on. The shape is followed because
+the probes below measure every premise it states.
+
+**Probes** (Docker, release build, a temporary test module never committed, sealed
+vaults of 300 drawers, idle holders in their own PROCESS unless said otherwise):
+- **P1 — P-IDLE on today's tree.** A writable open renamed beneath an idle read-only
+  replica and wrote 40 drawers; the replica then read 300 against the writer's 340,
+  and its `verify` answered `(false, false)`. A fresh open reads 340 and verifies.
+- **P2 — a WRITABLE idle holder.** This entry said such a holder "would split the
+  WAL". Measured, it is worse: the holder's ten inserts after the rename each
+  answered OK, its close answered OK, and none of the ten is in the database
+  afterwards — `integrity_check` ok, the drawers intact, the holder's commits gone
+  without an error anywhere. Its WAL was unlinked beneath it.
+- **P3, P4, P5 — the shape beside an idle holder**: a read-only replica in another
+  process, a writable holder in another process, an idle connection in THIS process.
+  Each KEPT the name — `BEGIN EXCLUSIVE` busy at once under a zero timeout, in 74 to
+  208 µs — and each renamed once the holder had gone, in under a millisecond,
+  verifying and `integrity_check` ok. The replica's own reads and `verify` stayed
+  true. P5 is exactly the holder `a_hot_wal_survives_the_rename` renames beneath.
+- **P6 — a SIGKILLed writer's hot WAL** (123,632 bytes), renamed to the legacy name
+  with its database: the shape renamed in 8.3 ms with all 325 rows, verifying.
+  EXCLUSIVE mode recovers the WAL into its heap index and the TRUNCATE checkpoint
+  folds it in.
+- **P7 — opens racing the hold.** A writable and a read-only open started while the
+  hold was taken each waited on the lock and then answered O279's reopen class
+  (`StaleUnlock`) once the rename landed — never an integrity verdict — and a retry
+  served the renamed vault.
+- In P4, P5 and P7 no `palace.db-shm` existed after the lock: EXCLUSIVE mode read back
+  before the first statement keeps the wal-index in heap memory. The close leaves a
+  zero-length `palace.db-wal` (checkpoint-on-close stays off), which the step removes.
+
+**Two questions the shape leaves open, each settled by a rule already in the tree:**
+- *A `vault.db` found beside the legacy file at the rename* answers O7's two-files
+  verdict, `DatabaseAmbiguous`, exactly as the layout does when it reads both — a
+  refusal before the rename, which `rename(2)` would otherwise make an overwrite. A
+  `link`-then-`unlink` that cannot overwrite was considered and loses: between its
+  two steps every layout read sees both names and answers that same integrity
+  verdict about a vault nothing is wrong with. No Undercroft build creates
+  `vault.db` while `palace.db` exists (every open carries `SQLITE_OPEN_CREATE` only
+  when the directory holds neither, O280, and the rename never leaves it holding
+  neither), so the gap between the check and the rename is open to a foreign writer
+  alone, beneath a hold that refuses every Undercroft open.
+- *A writable open that keeps the name says so on `unhealed`*, as O257 made what an
+  unlock leaves unhealed reach the writable open's notes: the vault is still under
+  the old name, which is what `unhealed` exists to say (R4's posture doctrine applied
+  to a rename, O7). The read-only note's text — "a writable open will rename it" —
+  is wrong on a writable handle that just could not, so the note is its own.
+
+**Residual, stated.** A 1.5.x or 1.6.x process that opened `palace.db` before the
+hold was taken and runs its first statement after the rename has no door (O279):
+it reads the renamed file through a new `palace.db-wal` and splits the WAL as P2 did.
+Running two releases against one legacy vault at once is the only way to meet it.
+Windows has no moved-file check (O275), but the hold is SQLite's own lock and is
+seen there. **That last sentence was right about the hold and wrong about the
+rename** — corrected beside it by the BUILT record below: a file SQLite holds on
+Windows cannot be renamed at all, so renaming under the hold there refused every
+legacy vault, and the first build did exactly that.
+
+#### BUILT 2026-09-27, to the recorded shape — two refinements the build found, and one defect of mine in this entry
+
+**The step** (`migrate_db_filename`, through O279's door as `Opener::Legacy`):
+a zero busy timeout; `locking_mode=EXCLUSIVE` read back before any statement;
+`BEGIN EXCLUSIVE` as the first LOCKING statement, busy answered as "kept" rather
+than as an error; `COMMIT`, the lock surviving it; the door's identity check;
+the TRUNCATE checkpoint; the rename's pause point; the directory read again;
+the rename under the hold; `Connection::close()`; the emptied sidecars. A kept
+name returns a note that `open_inner` carries onto `unhealed` beside the
+unlock's notes (O257's precedent), and a writable open proceeds on
+`palace.db` beside its holder, sharing its file.
+
+**Refinements the build found, each measured by its gate.**
+- *"A refusal if `vault.db` exists"* became a read of the whole layout at the
+  rename, after its pause point. A bare existence check cannot tell a stray
+  second file — O7's two-files verdict — from a foreign rename's finished
+  work, where the open should proceed; and placed before the pause point, no
+  gate could plant anything for it to see.
+- O279's G6 arm (d) ran a second Undercroft open to completion between the
+  checkpoint and the rename — the interleaving this hold exists to make
+  impossible. It is three arms now: (d) a foreign rename during the hold (the
+  open proceeds on `vault.db`), (e) a stray `vault.db` during the hold (the
+  two-files verdict, the stray not overwritten), (f) a writable and a
+  read-only Undercroft open racing the hold (each answers the reopen class,
+  and a retry serves the renamed vault).
+- `OPEN_HELD` named a rotation and a restore; a racer that outwaits its busy
+  timeout on this step would have been told one of those was running, so it
+  names this step too. The read-only note said *"a writable open will rename
+  it"* — false while that read-only open holds the vault — and now says the
+  rename waits for every other connection, itself included.
+
+**My defect, reported as mine.** The edit that recorded the MEASURED section
+above swallowed the next entry's `### O284` heading marker: its anchor ended
+with the marker and its replacement did not. Caught by reading the result
+before anything else touched the file; the diff after the repair is a pure
+insertion.
+
+**Four more defects of mine, found by an independent adversarial review of the
+first build — not by a gate — and fixed with their gates before this landed.**
+- *HIGH — Windows.* The rename ran under the hold on every platform. SQLite's
+  win32 VFS opens a database without delete-sharing, so the file the hold keeps
+  open cannot be renamed there: every writable open of a legacy vault that
+  nothing else held would have failed with an I/O error on every retry, where
+  1.6.1 renamed it. `windows-check` compiles and runs nothing, so no gate could
+  see it. Now `#[cfg(unix)]` renames under the hold and elsewhere the hold is
+  closed first, which is the step's old order; the OS then refuses the rename
+  beneath anything that opened the file in that instant, and the open fails as
+  it did before 1.7.0. Unmeasured on Windows — nothing here runs there (O275).
+- *MEDIUM — a false note.* A writable open whose rename step kept the name, and
+  which then found `vault.db` because another open finished the rename before
+  it read the directory, carried the kept-name note on a handle on `vault.db`,
+  for a server's whole life. `connect_writable` now answers the layout it opened
+  by and `open_inner` carries the note only on `Legacy`; a new pause point,
+  `Opener::WritableLayout`, lets a gate hold the second open there.
+- *LOW — the note's advice.* It said the next writable open "once it has
+  closed" renames, but the handle reporting it is itself a holder; it now says
+  the rename waits for every other connection, this one included, as the
+  read-only note does. The checkpoint-busy branch, unreachable under the hold,
+  has a note of its own instead of the holder note.
+- *LOW — a discarded close.* On the checkpoint-error path the close's failure
+  was dropped with `let _`; it is said now (O278's class), and the checkpoint's
+  error is the one returned.
+The same review also found this entry's records overstating the hold ("any open
+connection" — a connection opened and not yet read holds no lock, and neither
+does an `immutable=1` handle), O280's body and O279's CHANGELOG section still
+calling O281 open, two pause-point docs describing the pre-O281 step, the
+mixed-release warning naming the narrow case, and the kept path opening a stray
+`vault.db` at the connect. Each is corrected; the last is now O7's two-files
+verdict there too.
+
+**Gates.** `legacy_rename_tests.rs`, holders in another PROCESS: P-IDLE
+inverted with a read-only replica (the name kept, `unhealed` names O281, the
+replica reads 340 against 300 and verifies, the rename on the next open once it
+has gone) and P2 inverted with a raw writable holder (its ten commits survive,
+`integrity_check` ok). The twin in `lib.rs` (a holder in this process; the open
+under two seconds). `a_hot_wal_survives_the_rename` re-shaped — its hot WAL from
+a close with checkpoint-on-close OFF, never beneath a live connection — and
+never deleted. G6 (d), (e), (f). From the review: the second open that kept the
+name and then found `vault.db` carries no note (held at `Opener::WritableLayout`
+inside the first open's hold, both holds counted as the premise), and a stray
+`vault.db` planted at the connect after the name was kept is the two-files
+verdict, never opened. Eight e2e checks: a writable `remember` and `stats`
+beside a live `serve-http --read-only`, the server reading the new drawer and
+verifying, the rename once it stops.
+
+**Counterfactuals, each run and each failing its gate** (applied to
+`migrate_db_filename` or `open_inner` alone, anchors asserted unique, the file
+restored from a saved copy and its hash compared): CF1 no EXCLUSIVE mode — the
+four holder gates; CF3 the note not carried — both `unhealed` assertions; CF4 no
+layout read at the rename — G6 (e), the stray overwritten; CF5 no zero busy
+timeout — the twin, the open waiting on its holder; CF6 no checkpoint — the
+hot-WAL test, its frames lost; CF7 the hold closed before the rename — G6 (f), a
+racing open renaming first; and from the review's fixes, CF8 the note carried on
+any handle — the vault.db-note gate; CF9 the connect opening a stray `vault.db`
+— the stray gate. All eight were run again on the tree after the review's fixes;
+the first re-run showed five that no longer APPLIED (their region's end anchor
+named the old one-line `connect_writable` signature), refused by the script
+rather than run, and they were re-anchored and run.
+
+**Real corpus.** The LoCoMo feed mined into 12 wings (1,020 sealed drawers)
+through this tree's release binary (probed: it carries the O281 strings), made a
+pre-1.5.0 vault. Beside a live `serve-http --read-only`: ten writable CLI saves
+in 19–26 ms each, the name kept, writable `stats` naming the holder; then a
+writable `serve-http` beside the replica as well — five `/v1` saves and three
+more CLI saves, both servers reading 1,038 of 1,038 and both verifying. With both
+stopped, the next writable open renamed in 25 ms: VERIFY OK, 1,038 records, no
+legacy sidecar left. Alone, the renaming open took 12 ms against 8 ms for the
+next. A SIGKILLed writable server's 251,352-byte hot `-wal`, renamed with its
+database to the legacy name: renamed in 25 ms, VERIFY OK, 1,025 of 1,025. Two
+writable opens racing the rename, 20 rounds: no row lost in any, and in 11 BOTH
+kept the legacy name — each saw the other's connection, which is the rule working
+— for the next writable open to rename, which it did. Run again after the
+review's fixes, on a freshly built binary: the same results — saves in 23–28 ms,
+1,038 of 1,038 on both servers, the rename in 30 ms once both stopped, the hot
+WAL's 1,025 of 1,025, and no row lost in 20 racing rounds, 13 of them keeping the
+legacy name.
 
 ## 1.6.1 — released 2026-09-22
 
@@ -29105,34 +29318,6 @@ anchor would be a false exit 2.
 a live handle refuse as integrity; a transient read error still falls back; the
 Windows probe first.
 
-### O281 — the legacy `palace.db` rename runs beneath an idle holder
-
-**Filed 2026-09-27 by O279's ruling (its security lens, confirmed by the refuter);
-measured by the integrator (P-IDLE).** O7's mechanism leaves the legacy name alone
-when the TRUNCATE checkpoint reports busy, "another process holds the file" — but a
-checkpoint's busy result sees read marks, never an idle connection's hold. Measured
-across processes: a read-only replica holding a legacy vault idle; a writable open
-renamed `palace.db` to `vault.db` beneath it and removed the `palace.db-wal` and
-`-shm` it had open; the writer then wrote 40 drawers; the replica afterwards read the
-old count and its `verify` answered a false failure. Released since 1.5.0. A writable
-idle holder would split the WAL.
-
-**Shape** (the security lens's, confirmed by the refuter): `locking_mode=EXCLUSIVE`
-read back BEFORE any statement (a heap wal-index, no `-shm` name), a zero busy
-timeout, `BEGIN EXCLUSIVE` — busy keeps the legacy name, as O7 intended — `COMMIT`
-(the lock survives, O257's measurement), the identity check, the TRUNCATE checkpoint,
-a refusal if `vault.db` exists, the rename under the hold, the close, then the
-sidecars. `a_hot_wal_survives_the_rename` builds its hot WAL by renaming beneath a
-`mem::forget`ed live same-process connection — it encodes this defect as passing
-behaviour and is re-shaped (a hot `-wal` from a connection closed under
-`NO_CKPT_ON_CLOSE`, or from a killed child), never deleted, with an idle-holder twin.
-`UPGRADING.md`: a legacy vault beside a live holder keeps its name until the holder
-stops.
-
-**Gate**: P-IDLE inverted across processes — the name kept while the replica holds
-the vault, the replica's reads and `verify` true after the writer's saves, the rename
-on the next open once it has gone; the re-shaped hot-WAL test and its twin.
-
 ### O284 — a handle whose unlock preceded a restore's swap carries the set-aside vault's unlock notes
 
 **Filed 2026-09-27 by O279's ruling (its memory lens, confirmed by the refuter);
@@ -29205,6 +29390,35 @@ that removes the escalation fails it if the escalation is what it claims.
 
 ---
 
+
+### O287 — the CLI panics, exit 101, when the reader of its stdout goes away early; twelve e2e checks meet it intermittently
+
+**Filed 2026-09-27 by O281's battery, which it turned red; measured the same
+day.** Rust ignores `SIGPIPE`, so a write to a closed pipe returns `EPIPE`, and
+`println!` panics on it: `thread 'main' panicked at library/std/src/io/stdio.rs:
+failed printing to stdout: Broken pipe (os error 32)`, exit **101**. Measured
+through the release binary on three wings of the LoCoMo feed: `undercroft search
+"the" --limit 500 | head -c 1` — 83,653 bytes of output against a 65,536-byte
+pipe — exited 101 with that panic on 5 of 5 runs. Exit 101 is none of the
+documented exit classes, and an operator's `| head` prints a panic. When the
+output fits one pipe buffer the binary usually finishes before the reader exits:
+the e2e pattern `"$BIN" … | grep -q …` under `set -o pipefail` failed 0 of 300
+times unloaded, and once inside a loaded battery ("mempalace-format import",
+whose search writes 270 bytes). `tests/e2e.sh` carries twelve such checks, so
+any of them can go red on a pull request that touched nothing near it.
+
+**Shape** (to be ruled; the options differ in what they cost): restoring the
+default `SIGPIPE` disposition at the start of `main` makes the process end
+quietly the way C tools do, but needs a second `unsafe` block, which CLAUDE.md's
+convention makes a decision for the maintainer; routing the CLI's stdout through
+one writer that answers `BrokenPipe` with a quiet exit 0 needs no `unsafe` but
+touches every print site, and an inventory gate would have to count them; either
+way the e2e checks should stop piping into `grep -q` — capture, then match — so
+a harness race is never read as a product verdict. **Gate**: the deterministic
+arm above (output over one pipe buffer into `head -c 1`) exits with a documented
+code and prints no panic, on the CLI — and on the orchestrator binary too if it
+prints through `println!` the same way, which this filing did not measure; and no
+e2e check pipes the binary into `grep -q`.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 

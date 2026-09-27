@@ -170,11 +170,13 @@ well, where only a tampered count fails.
    writable process, then retry).
 
    **The database is `vault.db` since 1.5.0**, beside `vault.json`; before
-   that it was `palace.db`. A vault created earlier keeps that name until its
-   first WRITABLE open, which checkpoints the WAL and renames it in place; a
-   read-only open serves the file where it is and reports the pending rename
-   on `unhealed`, so a replica of a not-yet-migrated primary says so rather
-   than failing. A directory holding BOTH files is refused on either posture
+   that it was `palace.db`. A vault created earlier keeps that name until the
+   first WRITABLE open that finds nothing else holding it, which checkpoints
+   the WAL and renames it in place; beside a running replica or server the
+   name is kept and that open says so on `unhealed` (ROADMAP O281 — renaming
+   beneath a holder left it on a file nobody else shared). A read-only open
+   serves the file where it is and reports the pending rename on `unhealed`,
+   so a replica of a not-yet-migrated primary says so rather than failing. A directory holding BOTH files is refused on either posture
    (409, exit 2 — one of them is a stray copy, and an open that picked one
    would serve the wrong vault silently): move the stray aside and reopen.
    Any script of yours that names the file — backups, the tamper demo in the
