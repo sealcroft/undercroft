@@ -2035,6 +2035,12 @@ impl VaultManager {
         };
         let mut vault = self.assemble(dir, manifest)?;
         vault.save_manifest()?;
+        // What a staging file there reads as, so the store's open compares a
+        // handle minted here the way it compares an unlocked one (ROADMAP O284):
+        // `None` must mean "no file", never "nothing was read" — a stray
+        // `vault.json.next` in a directory with no `vault.json` otherwise made
+        // the first open of the vault just created refuse every time.
+        vault.staged_seen = vault.staged_on_disk()?;
         Ok(vault)
     }
 
@@ -2415,6 +2421,60 @@ mod tests {
         let v = mgr.unlock("personal").unwrap();
         assert_eq!(v.level(), SecurityLevel::Sealed);
         assert_eq!(mgr.list().unwrap(), vec!["personal".to_string()]);
+    }
+
+    /// **Every piece of unlock-era state is ruled on (ROADMAP O284).** The
+    /// unlock reads the directory BY PATH before the store's open proves its
+    /// database file, and a restore between the two left a handle carrying
+    /// notes about the vault set aside. The store's open compares what the
+    /// unlock read with what the directory holds once the door has proved the
+    /// file; this names every field with no `..`, so a new one does not
+    /// compile until someone says which post-lock check covers it or why it
+    /// needs none.
+    #[test]
+    fn every_unlock_era_field_is_covered_after_the_open_proves_its_file() {
+        let dir = tempdir().unwrap();
+        let mgr = VaultManager::open(dir.path(), None).unwrap();
+        mgr.create("personal", SecurityLevel::Sealed).unwrap();
+        let Vault {
+            // The directory's name is the vault's identity and the AAD; a
+            // restore keeps it, and cross-vault access fails cryptographically.
+            id: _,
+            dir: _,
+            // From `vault.json`'s salt and level: a restore of another key
+            // generation is caught by the keycheck race arm (O257); the same
+            // generation derives the same keys and level.
+            level: _,
+            enc_key: _,
+            mac_key: _,
+            manifest_key: _,
+            sample_key: _,
+            chain_key: _,
+            keycheck: _,
+            // `vault.json` as the unlock read it: its cached head feeds
+            // `anchored_head`'s fall-back when the file is unreadable (O277),
+            // `init_chain`'s seed on an unseeded chain (unreachable after a
+            // restore: the stage's own open seeds it) and a rotation's writes;
+            // its salt feeds the deferral verdict, which is O288.
+            manifest: _,
+            // From `vault.json.next`'s bytes: compared by digest after the door
+            // (`staged_seen` against the file there now).
+            pending: _,
+            staged_seen: _,
+            // Its `.next` notes by that same digest; its one other note, the
+            // read-only legacy name, is re-derived from the file the store's
+            // read-only connector opened.
+            unhealed: _,
+            // Read only in the read-only committed arm, which needs a `.next`:
+            // across a restore the `.next` comparison covers it, but a promote
+            // landing after the unlock with `.next` unchanged does not — O288,
+            // with the unlock's read order.
+            manifest_seen: _,
+            deferred_over: _,
+            // `None` on every unlock; set only by this handle's own anchor or
+            // rotation, after the open.
+            retired: _,
+        } = mgr.unlock("personal").unwrap();
     }
 
     #[test]
