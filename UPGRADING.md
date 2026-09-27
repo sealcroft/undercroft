@@ -1208,7 +1208,8 @@ checkpoint that cannot complete because another process holds the file
 leaves the name alone and the next writable open retries. A READ-ONLY open
 (`--read-only`, a replica) never renames: it serves the file under whichever
 name it has and reports *"the database is still named palace.db … a
-writable open will rename it"* on `unhealed`, on every stats surface.
+writable open renames it to vault.db once no other connection has the vault
+open"* on `unhealed`, on every stats surface.
 
 **Symptom if it bites you:** a script that expects `palace.db` finds no such
 file on a vault the engine has already migrated (or on any vault created
@@ -1225,15 +1226,30 @@ each, with the other moved out, says which one the manifest's chain head
 anchors) and reopen.
 
 **Amended for 1.7.0 (ROADMAP O279, O280, O281).** "A checkpoint that cannot
-complete because another process holds the file leaves the name alone" is true
-only of a holder in the middle of a read: an IDLE holder — a `--read-only` server
-between requests — is not seen, and a writable open renames beneath it, after
-which that server serves stale rows and can report a false `verify` failure until
-it restarts (ROADMAP O281, open): restart any read-only server beside a vault
-still named `palace.db` once a writable open has run. And from 1.5.0 through
-1.6.1 two writable opens that raced the rename could EMPTY the vault (ROADMAP
-O280, fixed in 1.7.0): if a vault read empty after an upgrade-day start, restore
-it from a backup taken before.
+complete because another process holds the file leaves the name alone" was true,
+from 1.5.0 through 1.6.1, only of a holder in the middle of a read: an IDLE
+holder — a `--read-only` server between requests, another process's writable
+handle — was not seen, and a writable open renamed beneath it. The read-only
+server then served stale rows and could report a false `verify` failure until it
+restarted; a writable holder's later commits each answered OK and were lost
+(ROADMAP O281). **From 1.7.0 the rename takes an exclusive hold first**: while
+any other connection has the vault open, the vault keeps the name `palace.db`,
+the writable open proceeds on it beside that connection and says so on
+`unhealed` (*"the database is still named palace.db: another connection has the
+vault open …"*), and the first writable open once nothing else has it open
+renames it. So a vault served by a long-running replica keeps its old name until
+that replica stops — which changes nothing a script needs, beyond checking for
+both names as the fix above already says. Run every process that opens a
+legacy vault on the same release: a 1.5.x or 1.6.x writable open still decides
+by the checkpoint, so it renames beneath a 1.7.0 holder exactly as before, and
+a 1.5.x or 1.6.x process that opened the file before 1.7.0's hold and reads it
+after the rename is split from it the same way. On Windows, where an open file
+cannot be renamed at all, the rename runs just after the hold closes, and a
+process that opened the file in that instant makes the open fail as it did
+before 1.7.0; retrying it is safe. And from
+1.5.0 through 1.6.1 two writable opens that raced the rename could EMPTY the
+vault (ROADMAP O280, fixed in 1.7.0): if a vault read empty after an upgrade-day
+start, restore it from a backup taken before.
 
 **Not detectable before you restart** — this is per-vault on-disk state, not
 a declaration, so `undercroft config check` cannot see it. Nothing here

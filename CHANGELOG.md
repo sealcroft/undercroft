@@ -2,7 +2,7 @@
 
 ## 1.7.0 — unreleased
 
-MINOR: one new capability, backward compatible, and seventeen fixes. The witness
+MINOR: one new capability, backward compatible, and eighteen fixes. The witness
 commands and routes are new; no default moves and no declaration can stop a
 start-up. Four fixes change what a deployment must do: every process writing a
 vault must run the same build, and a server whose vault another process
@@ -16,9 +16,9 @@ every open (which `config check` pre-flights), O255's note that a destruction no
 holds the write lock for as long as it runs and O256's that an archive taken by an
 older release beside a writer may be torn. (This line said "one fix" while O243 and
 O246 were both below it; corrected with O247. It said "nine" until O268,
-"ten" until O266, "eleven" until O276, "twelve" until O278, and "thirteen"
-until O279, which closed four entries; it said "Three fixes change what a
-deployment must do" until O283 made it four.)
+"ten" until O266, "eleven" until O276, "twelve" until O278, "thirteen"
+until O279, which closed four entries, and "seventeen" until O281; it said
+"Three fixes change what a deployment must do" until O283 made it four.)
 
 ### The external witness: `undercroft witness emit` / `check`, `GET`/`POST /v1/…/witness` (O245)
 
@@ -681,8 +681,9 @@ counted by a test (the maintainer's ruling).
 
 Ruled by a three-lens panel plus an adversarial refuter, with three questions
 escalated to and answered by the maintainer (ROADMAP O279). Filed beside it:
-O281 (the legacy rename still runs beneath an IDLE holder — a read-only replica
-then serves stale rows and a false `verify` failure; released since 1.5.0),
+O281 (the legacy rename still ran beneath an IDLE holder — a read-only replica
+then served stale rows and a false `verify` failure; released since 1.5.0, and
+closed later in this release, below),
 O284 (unlock-era notes on a handle whose unlock preceded a swap), O285 (an
 `immutable=1` handle whose file moves after its open), and O286 (the test named
 for the `immutable=1` escalation does not reach it).
@@ -693,6 +694,72 @@ are unreleased; O280 is a released defect (1.5.0) fixed here, shipping with
 1.7.0 rather than a 1.6.2 by the maintainer's ruling. `UPGRADING.md` gains one
 entry (a filesystem whose inode numbers are unstable) and amendments to the
 restore and `palace.db` entries.
+
+### A pre-1.5.0 `palace.db` is renamed only when nothing else has the vault open (O281)
+
+The first writable open of a vault created before 1.5.0 renames its
+`palace.db` to `vault.db` (O7), and it left the name alone when "another
+process holds the file" — decided by whether its WAL checkpoint reported busy.
+Busy sees only a reader in the middle of a read. An IDLE holder — a
+`--read-only` server between requests, another process's writable handle —
+was renamed beneath. Measured across processes on a 300-drawer vault: a
+read-only replica then served 300 rows against the writer's 340, and its
+`verify` failed on an intact vault; a WRITABLE holder's next ten commits each
+answered OK, closed OK, and were gone — its `-wal` had been unlinked beneath
+it — with `integrity_check` clean. Released since 1.5.0.
+
+- **The rename takes an exclusive hold first**: `locking_mode=EXCLUSIVE`,
+  read back before any statement touches the file, then `BEGIN EXCLUSIVE`
+  under a zero busy timeout, which SQLite refuses at once beside any other
+  connection holding a lock on the file — and every connection that has read
+  it holds one for as long as it is open, idle or not, in this process or
+  another. Taken, the lock survives its `COMMIT`, so on unix the checkpoint
+  and the rename run with no other connection able to lock the file. Refused,
+  the vault keeps the name `palace.db`: the writable open proceeds on it
+  beside the holder, sharing its file, and the first writable open once
+  nothing else has it open renames it. Off unix a file SQLite holds cannot be
+  renamed at all, so there the hold is closed just before the rename, as the
+  step always did, and the OS refuses a rename beneath anything that opened
+  the file in between.
+- **A writable open that keeps the name says so** on `unhealed`, on every
+  stats surface: *"the database is still named palace.db: another connection
+  has the vault open …"* — and only a handle really left on `palace.db`
+  carries it, never one that found `vault.db` because another open finished
+  the rename first. The read-only open's note, and this one, both say the
+  rename waits for every other connection, the handle reporting it included.
+- **A `vault.db` that appears beside the legacy file at the rename**, or at
+  the connect after the name was kept, is O7's two-files verdict, where
+  `rename(2)` would have overwritten it and the connect would have opened it.
+- The held-open refusal names this step beside a rotation and a restore.
+
+Measured through the shape before it was built: the hold is refused in 74 to
+208 µs beside each kind of idle holder, renames in under a millisecond once
+the holder has gone, carries a SIGKILLed writer's 123,632-byte hot WAL through
+with all 325 rows, and an open racing the hold answers O279's reopen class,
+never an integrity verdict. `a_hot_wal_survives_the_rename` built its hot WAL
+beneath a live connection in its own process — this defect, encoded as passing
+behaviour; it now builds one from a close with checkpoint-on-close off, beside
+a twin that holds the vault and keeps the name. Gates: both holders in another
+process, P-IDLE and the lost commits inverted; the twin; three new arms of
+O279's legacy gate (a foreign rename during the hold, a stray `vault.db`, and
+two racing opens refused and reopened); an open that kept the name and then
+found `vault.db` carrying no note; a stray `vault.db` at the connect refused;
+eight counterfactuals, each failing its gate; and an e2e check of a writable
+command beside a live `serve-http --read-only`.
+
+Followed rather than ruled: the shape was recorded by O279's security lens
+and confirmed by its refuter, and the probes measured every premise it states
+(ROADMAP O281). An independent review of the first build found four defects
+of mine, each fixed with its gate before this landed: the rename ran under the
+hold on every platform, which on Windows would have refused every legacy
+vault's first writable open; a handle that ended on `vault.db` could carry the
+kept-name note; the note told an operator the wrong thing unblocked the
+rename; and one close failure was discarded. Stated residual: a 1.5.x or 1.6.x process that opened the file
+before the hold and first reads it after the rename has no door and splits the
+WAL — running two releases against one legacy vault at once is the only way to
+meet it. PATCH inside the unreleased 1.7.0, a released defect (1.5.0) shipping
+with 1.7.0 by the maintainer's ruling on O279; `UPGRADING.md`'s `palace.db`
+entry is amended.
 
 ## 1.6.1 — 2026-09-22
 

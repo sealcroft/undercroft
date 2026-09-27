@@ -14,6 +14,10 @@ use std::path::Path;
 /// Which open stops, and where.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Opener {
+    /// `connect_writable`: the directory's layout is not yet read (ROADMAP
+    /// O281 — the rename step can keep the legacy name, and another open finish
+    /// the rename, before this reads it).
+    WritableLayout,
     /// `connect_writable`: the descriptor is open; `journal_mode` has not run.
     Writable,
     /// `connect_read_only`: the descriptor is open; the probe has not run.
@@ -30,11 +34,12 @@ pub enum Opener {
     /// `migrate_db_filename`: the layout was read as legacy; the legacy
     /// database is not yet opened.
     LegacyLayout,
-    /// `migrate_db_filename`: the legacy database is open; its first read has
-    /// not run.
+    /// `migrate_db_filename`: the legacy database is open; its hold — the first
+    /// statement to take a lock — has not run.
     Legacy,
-    /// `migrate_db_filename`: the legacy connection is checkpointed and closed;
-    /// the rename has not run.
+    /// `migrate_db_filename`: the legacy connection holds the file exclusively
+    /// and is checkpointed; the directory is not yet read again and the rename
+    /// has not run (ROADMAP O281 — the hold is still taken here).
     LegacyRename,
     /// `lock_released`: the proof connection is open; its read has not run.
     LockProbe,

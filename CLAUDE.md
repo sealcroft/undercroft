@@ -396,7 +396,24 @@ Consequences that are binding, not advisory:
   store's WRITABLE open checkpoints the WAL and renames it — a bare rename
   orphans every committed frame in a hot `-wal`, silently — a read-only open
   reports it on `unhealed`, and two files refuse as an integrity verdict on
-  both postures. `database_exists` knows both names, or upgrade day would
+  both postures. **The rename runs only under an exclusive hold, and a vault
+  anything else has open keeps its old name (O281)**: busy from the WAL
+  checkpoint was the test, and busy sees only a reader mid-read, so an IDLE
+  holder was renamed beneath — a read-only replica then served stale rows and
+  a false `verify` failure, and a writable holder's later commits each
+  answered OK and were lost with the `-wal` unlinked beneath it (measured
+  across processes, released since 1.5.0). The step now reads
+  `locking_mode=EXCLUSIVE` back before any statement, then `BEGIN EXCLUSIVE`
+  under a zero busy timeout, refused at once beside any connection holding a
+  lock on the file (every one that has read it, idle or not — not one opened
+  and not yet read, which O279's door refuses once it reads) and, once taken,
+  held through the checkpoint and, on unix, the rename (O257's measurement);
+  off unix a file SQLite holds cannot be renamed, so the hold closes just
+  before it. Refused, the open proceeds on `palace.db` beside the holder, and
+  only a handle really left there says so on `unhealed` — the first build put
+  the note on one that found `vault.db`, and ran the rename under the hold on
+  Windows too, where it would have refused every legacy vault, both found by
+  an independent review rather than by a gate. `database_exists` knows both names, or upgrade day would
   read every older vault as A33's missing database;** keys.rs: master key + HKDF
   — **and the master key is created only where nothing refers to one (O204)**:
   `master_key` surveys the root by stat alone (`survey`, errors propagated,
@@ -1078,9 +1095,10 @@ Consequences that are binding, not advisory:
   7), and `config check` pre-flights a filesystem whose inode numbers are
   unstable. Residuals: an `immutable=1` handle's file moving after its open
   (O285), a same-process racer beside a same-process handle of the restored
-  vault (its `-shm` effects happen inside the first statement), Windows (no
-  moved-file check; O275), and the legacy rename beneath an IDLE holder
-  (O281). `open_pause.rs` holds the pause points, reachable from the CLI's
+  vault (its `-shm` effects happen inside the first statement), and Windows (no
+  moved-file check; O275); the legacy rename beneath an IDLE holder was a
+  fourth until O281 gave it a hold. `open_pause.rs` holds the pause points,
+  reachable from the CLI's
   tests through the store's `test-fixture` feature,
   write-path admission control (admission.rs + core admission.rs — C3.3
   phase 2: deterministic tier-1 detector, closed signal vocabulary,
@@ -2527,8 +2545,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (1167 run,
-                                      # 15 #[ignore]d = 1182 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (1172 run,
+                                      # 16 #[ignore]d = 1188 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2612,7 +2630,7 @@ docker compose run --rm test          # cargo unit + integration tests (1167 run
                                       # remembered — do not hand-edit one to
                                       # silence the gate; it is measuring the
                                       # suite, not this comment.
-                                      # The 15 ignored are 3 measurements needing
+                                      # The 16 ignored are 3 measurements needing
                                       # testdata/*_50k.txt, one in lib.rs, and four
                                       # in anchor_tests.rs (ROADMAP O254, O257): the
                                       # multi-process gate's child entry point,
@@ -2630,7 +2648,11 @@ docker compose run --rm test          # cargo unit + integration tests (1167 run
                                       # ~10^5, run by name), and one in
                                       # open_race_tests.rs (ROADMAP O279's
                                       # cross-process child entry, which returns
-                                      # at once unless its parent names a root).
+                                      # at once unless its parent names a root),
+                                      # and one in legacy_rename_tests.rs
+                                      # (ROADMAP O281's cross-process holder,
+                                      # which returns at once unless its parent
+                                      # names a role).
                                       # Run the first
                                       # four with `cargo test --release -- --ignored`:
                                       # 3 pass, and `measure_relation_promiscuity`
@@ -2668,7 +2690,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (722 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (730 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (171 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (60 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (157 checks; weaviate
