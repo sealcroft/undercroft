@@ -12,6 +12,10 @@
 //! * an append-only `audit` table records the tag of every write in order,
 //!   which must replay to the manifest's HMAC chain head.
 #![warn(missing_docs)]
+// The tree's one `unsafe` block is `vault_db::descriptor_has_moved`, allowed
+// there alone (ROADMAP O279, ruled by the maintainer 2026-09-27); a source gate
+// counts it.
+#![deny(unsafe_code)]
 
 pub mod admission;
 #[cfg(test)]
@@ -32,6 +36,14 @@ mod hnsw;
 pub mod kg;
 mod latestage;
 pub mod manage;
+#[cfg(not(feature = "test-fixture"))]
+mod open_pause;
+/// Pause points inside this crate's opens of a vault database, reachable from
+/// other crates' tests (ROADMAP O279); nothing in a production build.
+#[cfg(feature = "test-fixture")]
+pub mod open_pause;
+#[cfg(test)]
+mod open_race_tests;
 pub mod pq;
 mod pqidx;
 pub mod remote;
@@ -46,6 +58,7 @@ mod rotate_pause;
 #[cfg(test)]
 mod snapshot_tests;
 mod sweep_pause;
+mod vault_db;
 pub mod witness;
 
 pub use admission::{DestinationState, PendingAdmission, QUARANTINE_WING};
@@ -439,68 +452,85 @@ pub fn hold_vault_exclusively(dir: &std::path::Path) -> Result<VaultHold, StoreE
             )));
         }
     };
-    let conn = rusqlite::Connection::open(&db)?;
-    // Fail fast. An operator waiting on a silent command is worse off than
-    // one told immediately what holds the vault.
-    let _ = conn.busy_timeout(std::time::Duration::from_millis(500));
-    // **The hold's close must touch nothing** (ROADMAP O268). A connection's
-    // last close checkpoints the `-wal` into the database and deletes it BY
-    // PATH — measured: over a vault whose writer was SIGKILLed with committed
-    // frames in its `-wal`, dropping this hold rewrote `vault.db` and removed
-    // the `-wal`. After a restore renames the directory away SQLite skips
-    // that, but only because the unix VFS notices the file moved; nothing
-    // else does. With checkpoint-on-close off, dropping the hold is inert on
-    // every VFS. Read back, like the locking mode below: the setting is the
-    // observable, not the call.
-    let no_ckpt = conn.set_db_config(
-        rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
+    // **Through the one door (ROADMAP O279), and never with
+    // `SQLITE_OPEN_CREATE`**: the existence check above and this open are two
+    // steps, and a database that vanished between them was moved by another
+    // restore — creating an empty one to lock would hold nothing that matters.
+    // The door turns checkpoint-on-close OFF and this hold keeps it off: **the
+    // hold's close must touch nothing** (ROADMAP O268) — a connection's last
+    // close checkpoints the `-wal` into the database and deletes it BY PATH,
+    // measured over a vault whose writer was SIGKILLed with committed frames in
+    // its `-wal`; SQLite skips that after a rename only because the unix VFS
+    // notices the file moved, and nothing else does.
+    let flags =
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    open_pause::fire(dir, open_pause::Opener::HoldLayout);
+    let opened = vault_db::open_by_path(
+        dir,
+        &db,
+        vault_db::How::Plain(flags),
+        open_pause::Opener::Hold,
         true,
-    )?;
-    if !no_ckpt {
-        return Err(StoreError::Invalid(format!(
-            "could not turn off checkpoint-on-close for {} (sqlite reports it still on). \
-             Refusing rather than proceeding: dropping this hold would then rewrite the \
-             vault it guards",
-            db.display()
-        )));
+        |conn| {
+            // Fail fast. An operator waiting on a silent command is worse off
+            // than one told immediately what holds the vault.
+            let _ = conn.busy_timeout(std::time::Duration::from_millis(500));
+            // **Read the mode back rather than trusting the call.** This was
+            // `let _ = conn.pragma_update(…)`, which discarded the result of
+            // the one statement that makes this function work at all: in WAL
+            // mode `BEGIN EXCLUSIVE` takes only the WRITE lock, and an idle
+            // reader holds no write lock — so without `locking_mode=EXCLUSIVE`
+            // the hold stops detecting precisely the holder the doc above calls
+            // "the case that matters", and `backup restore` goes on to unlink a
+            // database a live server is still writing to. That is M30, the
+            // data-loss defect this guard exists to prevent, returning silently.
+            //
+            // `PRAGMA locking_mode=…` RETURNS the resulting mode, so this
+            // applies it and verifies it in one statement. The MODE is the
+            // observable; ask for it.
+            let mode: String =
+                conn.query_row("PRAGMA locking_mode = EXCLUSIVE", [], |r| r.get(0))?;
+            if !mode.eq_ignore_ascii_case("exclusive") {
+                return Err(StoreError::Invalid(format!(
+                    "could not put {} into exclusive locking mode (sqlite reports {mode:?}). \
+                     Refusing rather than proceeding: without it this hold cannot see an idle \
+                     reader, and the operation it guards replaces the vault directory",
+                    db.display()
+                )));
+            }
+            // Busy is the one refusal that means "in use" (ROADMAP O257): the
+            // CLI and `/v1` used to render EVERY error here as the vault being
+            // in use, a missing database and an I/O error included. This is the
+            // hold's first LOCKING statement, so the door proves the file after
+            // it.
+            conn.execute_batch("BEGIN EXCLUSIVE").map_err(|e| {
+                held_if_busy(
+                    e,
+                    "the vault is open in another process, and replacing it beneath that \
+                     process destroys it — the process keeps writing to the database file a \
+                     restore unlinks. Nothing was changed. Stop it, then retry (ROADMAP O69)",
+                )
+            })
+        },
+    );
+    // **Held means held on the file at the path (ROADMAP O279, P3).** A hold
+    // opened before ANOTHER restore's swap was granted on the file that restore
+    // set aside while a live store held the file now in place: the swap that
+    // followed would have moved a vault in use, O69's defect one level down.
+    let replaced = || {
+        StoreError::VaultHeld(format!(
+            "the vault at {} was replaced by another restore while this one took its hold, so \
+             the hold was on the database that restore set aside and could not see who holds \
+             the one now in place. Nothing was changed; retry (ROADMAP O279)",
+            dir.display()
+        ))
+    };
+    match opened {
+        Ok(vault_db::Opened::Here(conn, ())) => Ok(VaultHold(conn)),
+        Ok(vault_db::Opened::Moved) => Err(replaced()),
+        Err(_) if !db.exists() => Err(replaced()),
+        Err(e) => Err(e),
     }
-    // **Read the mode back rather than trusting the call.** This was
-    // `let _ = conn.pragma_update(…)`, which discarded the result of the one
-    // statement that makes this function work at all: in WAL mode `BEGIN
-    // EXCLUSIVE` takes only the WRITE lock, and an idle reader holds no write
-    // lock — so without `locking_mode=EXCLUSIVE` the hold stops detecting
-    // precisely the holder the doc above calls "the case that matters", and
-    // `backup restore` goes on to unlink a database a live server is still
-    // writing to. That is M30, the data-loss defect this guard exists to
-    // prevent, returning silently.
-    //
-    // `PRAGMA locking_mode=…` RETURNS the resulting mode, so this applies it
-    // and verifies it in one statement. Asking whether the call "succeeded"
-    // is the weaker question and the wrong shape besides: a pragma that
-    // yields a row is not an `execute`, so a driver is entitled to report an
-    // error for a statement that nonetheless took effect. The MODE is the
-    // observable; ask for it.
-    let mode: String = conn.query_row("PRAGMA locking_mode = EXCLUSIVE", [], |r| r.get(0))?;
-    if !mode.eq_ignore_ascii_case("exclusive") {
-        return Err(StoreError::Invalid(format!(
-            "could not put {} into exclusive locking mode (sqlite reports {mode:?}). \
-             Refusing rather than proceeding: without it this hold cannot see an idle \
-             reader, and the operation it guards replaces the vault directory",
-            db.display()
-        )));
-    }
-    // Busy is the one refusal that means "in use" (ROADMAP O257): the CLI and
-    // `/v1` used to render EVERY error here as the vault being in use, a
-    // missing database and an I/O error included.
-    conn.execute_batch("BEGIN EXCLUSIVE").map_err(|e| {
-        held_if_busy(
-            e,
-            "the vault is open in another process, and replacing it beneath that process \
-             destroys it — the process keeps writing to the database file a restore unlinks. \
-             Nothing was changed. Stop it, then retry (ROADMAP O69)",
-        )
-    })?;
-    Ok(VaultHold(conn))
 }
 
 /// `UNDERCROFT_PASSPHRASE`: derive the master key with Argon2id, so no key
@@ -4167,9 +4197,10 @@ impl VaultStore {
     ) -> Result<String, StoreError> {
         if vault.staged_on_disk()? != vault.staged_seen() || !vault.manifest_on_disk_is_mine() {
             return Err(StoreError::StaleUnlock(
-                "the vault's keys were rotated while this process opened it — vault.json or \
-                 vault.json.next changed after this process read it, and the database answers \
-                 to another key generation. Nothing was written; reopen the vault (ROADMAP O257)"
+                "the vault was rotated or restored while this process opened it — vault.json \
+                 or vault.json.next changed after this process read it, and the database \
+                 answers to another key generation. Nothing was written; reopen the vault \
+                 (ROADMAP O257, O279)"
                     .into(),
             ));
         }
@@ -4235,11 +4266,28 @@ impl VaultStore {
     /// committed frame that was not yet checkpointed. The order is therefore
     /// checkpoint (TRUNCATE, so the `-wal` is empty afterwards), rename the
     /// database, then remove the emptied sidecars — and a checkpoint that
-    /// could not complete (`busy`: another process holds the file) leaves
-    /// the name alone, so the open proceeds on the legacy path and the next
-    /// writable open tries again. A crash between the checkpoint and the
-    /// rename loses nothing; one after the rename leaves empty sidecars that
-    /// the next writable open sweeps.
+    /// could not complete (`busy`) leaves the name alone, so the open proceeds
+    /// on the legacy path and the next writable open tries again. A crash
+    /// between the checkpoint and the rename loses nothing; one after the
+    /// rename leaves empty sidecars that the next writable open sweeps.
+    ///
+    /// **`busy` does not see an IDLE holder** (ROADMAP O281, open): a
+    /// checkpoint's busy result sees read marks, never an idle connection's
+    /// hold, so this step can rename beneath a read-only replica that holds the
+    /// vault idle. This doc said busy meant "another process holds the file"
+    /// until O279's ruling refuted it.
+    ///
+    /// **The legacy file is opened without `SQLITE_OPEN_CREATE`, through the
+    /// one door (ROADMAP O279, O280).** With CREATE, a `palace.db` another open
+    /// had just renamed away — or a restore had swapped out — was CREATED empty
+    /// here, checkpointed, and renamed over the `vault.db` that held the vault:
+    /// measured, two writable opens racing this step emptied a 500-drawer vault,
+    /// and a restore's swap in the window emptied the restored one. A legacy file
+    /// that vanished, or a rename that meets no file, while the directory now
+    /// holds `vault.db` is another open's finished rename (or a restore's swap):
+    /// the open proceeds on `vault.db`, whose own open proves its file. A
+    /// descriptor whose file moved before its first read is refused with the
+    /// reopen class before the checkpoint can write to it.
     ///
     /// Two database files under one manifest are refused rather than chosen
     /// between, on this posture and on the read-only one.
@@ -4257,9 +4305,45 @@ impl VaultStore {
             DbLayout::Legacy => {
                 let from = vault.legacy_db_path();
                 let to = vault.current_db_path();
-                let busy: i64 = {
-                    let conn = Connection::open(&from)?;
-                    conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))?
+                open_pause::fire(vault.dir(), open_pause::Opener::LegacyLayout);
+                // The legacy file is gone since the layout was read: another
+                // open renamed it, or a restore swapped the directory. Proceed
+                // only if the directory now holds `vault.db`.
+                let settled = || -> Result<(), StoreError> {
+                    match vault.db_layout() {
+                        DbLayout::Current => Ok(()),
+                        _ => Err(vault_db::moved(&from)),
+                    }
+                };
+                let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+                    | rusqlite::OpenFlags::SQLITE_OPEN_URI
+                    | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+                // Checkpoint-on-close stays OFF on this connection: the close is
+                // inert, and the emptied sidecars are removed below by name,
+                // after the rename, as they always were.
+                let opened = vault_db::open_by_path(
+                    vault.dir(),
+                    &from,
+                    vault_db::How::Plain(flags),
+                    open_pause::Opener::Legacy,
+                    true,
+                    |conn| {
+                        conn.query_row("SELECT count(*) FROM sqlite_schema", [], |r| {
+                            r.get::<_, i64>(0)
+                        })?;
+                        Ok(())
+                    },
+                );
+                let busy: i64 = match opened {
+                    Ok(vault_db::Opened::Here(conn, ())) => {
+                        let busy =
+                            conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))?;
+                        conn.close().map_err(|(_, e)| StoreError::from(e))?;
+                        busy
+                    }
+                    Ok(vault_db::Opened::Moved) => return Err(vault_db::moved(&from)),
+                    Err(_) if !from.exists() => return settled(),
+                    Err(e) => return Err(e),
                 };
                 if busy != 0 {
                     undercroft_obs::diag_warn!(
@@ -4270,7 +4354,12 @@ impl VaultStore {
                     );
                     return Ok(());
                 }
-                std::fs::rename(&from, &to).map_err(io)?;
+                open_pause::fire(vault.dir(), open_pause::Opener::LegacyRename);
+                match std::fs::rename(&from, &to) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => return settled(),
+                    Err(e) => return Err(io(e)),
+                }
                 for stray in sidecars(&from) {
                     if stray.exists() {
                         std::fs::remove_file(&stray).map_err(io)?;
@@ -4304,28 +4393,70 @@ impl VaultStore {
     }
 
     /// The writable connection, configured the one way every writable
-    /// handle's is: at open, and when a handle must REPLACE its own connection
-    /// because releasing an exclusive hold could not be proven (ROADMAP O257).
+    /// handle's is. Its one caller is `open_inner`: since ROADMAP O278 a handle
+    /// that cannot prove its release closes its connection and reattaches
+    /// nothing, so nothing replaces a connection by path any more.
+    ///
+    /// **Through the one door (ROADMAP O279).** The layout is read ONCE and its
+    /// path is the one opened and the one proven; the file is opened without
+    /// `SQLITE_OPEN_CREATE` unless the directory holds no database at all —
+    /// a CREATE-bearing open of a file that vanished makes an empty database a
+    /// later step can rename over the vault (O280) — and after `journal_mode`,
+    /// the first statement that takes a lock, the door proves the descriptor's
+    /// file is the path's, before `synchronous`, `foreign_keys` or any write.
+    /// A file that moved, or vanished while the layout changed, answers the
+    /// reopen class, which the CLI and `/v1` retry once.
     fn connect_writable(vault: &Vault) -> Result<Connection, StoreError> {
-        let mut conn = Connection::open(vault.db_path())?;
-        // Every `transaction()` and `unchecked_transaction()` on this
-        // connection begins IMMEDIATE (ROADMAP O254, probe P2). Each one in
-        // the tree is a write, and a DEFERRED transaction that has read and
-        // must then upgrade is refused SQLITE_BUSY at once — SQLite never runs
-        // the busy handler for that upgrade. Measured once the anchor door
-        // held the write lock across its fsyncs: with two writer processes on
-        // audited DEFERRED writes, one writer took every write and the other
-        // failed all 200 of its own; three of four failed every write. An
-        // IMMEDIATE transaction takes the lock at BEGIN, where the busy
-        // handler does run, which is how `write_drawer`, the rotation and the
-        // chain switch already began theirs.
-        conn.set_transaction_behavior(rusqlite::TransactionBehavior::Immediate);
-        // The first statement that touches the file: busy here means another
-        // process holds the vault EXCLUSIVELY — a key rotation or a backup
-        // restore — and an open must say so rather than answer a bare
-        // "database is locked", which `/v1` classes as a 500 (ROADMAP O257).
-        conn.pragma_update(None, "journal_mode", "WAL")
-            .map_err(|e| held_if_busy(e, OPEN_HELD))?;
+        use undercroft_vault::DbLayout;
+        let layout = vault.db_layout();
+        let path = match layout {
+            DbLayout::Legacy => vault.legacy_db_path(),
+            _ => vault.current_db_path(),
+        };
+        let mut flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+            | rusqlite::OpenFlags::SQLITE_OPEN_URI
+            | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        if layout == DbLayout::Absent {
+            flags |= rusqlite::OpenFlags::SQLITE_OPEN_CREATE;
+        }
+        let opened = vault_db::open_by_path(
+            vault.dir(),
+            &path,
+            vault_db::How::Plain(flags),
+            open_pause::Opener::Writable,
+            false,
+            |conn| {
+                // Every `transaction()` and `unchecked_transaction()` on this
+                // connection begins IMMEDIATE (ROADMAP O254, probe P2). Each
+                // one in the tree is a write, and a DEFERRED transaction that
+                // has read and must then upgrade is refused SQLITE_BUSY at once
+                // — SQLite never runs the busy handler for that upgrade.
+                // Measured once the anchor door held the write lock across its
+                // fsyncs: with two writer processes on audited DEFERRED writes,
+                // one writer took every write and the other failed all 200 of
+                // its own; three of four failed every write. An IMMEDIATE
+                // transaction takes the lock at BEGIN, where the busy handler
+                // does run, which is how `write_drawer`, the rotation and the
+                // chain switch already began theirs.
+                conn.set_transaction_behavior(rusqlite::TransactionBehavior::Immediate);
+                // The first statement that touches the file: busy here means
+                // another process holds the vault EXCLUSIVELY — a key rotation
+                // or a backup restore — and an open must say so rather than
+                // answer a bare "database is locked", which `/v1` classes as a
+                // 500 (ROADMAP O257).
+                conn.pragma_update(None, "journal_mode", "WAL")
+                    .map_err(|e| held_if_busy(e, OPEN_HELD))
+            },
+        );
+        let conn = match opened {
+            Ok(vault_db::Opened::Here(conn, ())) => conn,
+            Ok(vault_db::Opened::Moved) => return Err(vault_db::moved(&path)),
+            // Opened without CREATE, a file that vanished since the layout was
+            // read is another process's work — a restore's swap, or another
+            // open's legacy rename — and the reopen reads the directory again.
+            Err(_) if vault.db_layout() != layout => return Err(vault_db::moved(&path)),
+            Err(e) => return Err(e),
+        };
         // Pinned explicitly rather than left to the compile-time default: the
         // manifest anchor is written *after* the transaction that produced a
         // chain head, and open-time reconciliation treats an anchor the
@@ -4666,15 +4797,17 @@ impl VaultStore {
     fn connect_read_only(vault: &Vault) -> Result<Connection, StoreError> {
         use rusqlite::OpenFlags;
         let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
-        let probe = |conn: &Connection| -> Result<(), rusqlite::Error> {
+        let probe = |conn: &mut Connection| -> Result<(), StoreError> {
             // Force the schema read: on a WAL database the wal-index is
             // reached here, not at `open`, so an `open` that succeeded can
-            // still be a connection that cannot read a page.
+            // still be a connection that cannot read a page. It is also the
+            // first statement that takes a LOCK — `query_only` touches no file
+            // — so the door proves the file after it (ROADMAP O279).
             conn.pragma_update(None, "query_only", "ON")?;
             conn.query_row("SELECT count(*) FROM sqlite_schema", [], |r| {
                 r.get::<_, i64>(0)
-            })
-            .map(|_| ())
+            })?;
+            Ok(())
         };
         let path = vault.db_path();
         // **Busy is not a reason to go immutable (ROADMAP O257, D1).** Every
@@ -4685,18 +4818,42 @@ impl VaultStore {
         // "schema predates this build" refusal on a young vault, and on a
         // checkpointed one a frozen snapshot served as the vault. A busy
         // database is held by someone; that is said, not read around.
-        match Connection::open_with_flags(&path, flags) {
-            Ok(conn) => match probe(&conn) {
-                Ok(()) => return Ok(conn),
-                Err(e) if is_busy(&e) => return Err(StoreError::VaultHeld(OPEN_HELD.into())),
-                Err(_) => {}
-            },
-            Err(e) if is_busy(&e) => return Err(StoreError::VaultHeld(OPEN_HELD.into())),
+        //
+        // **Nor is a file that moved (ROADMAP O279).** The door asks whether
+        // the descriptor is the path's file whatever the probe returned, so a
+        // probe that failed because a restore's swap ran beneath it — measured,
+        // a disk I/O error in the gap between the swap's two renames — is
+        // refused with the reopen class and never reopened `immutable=1` onto
+        // whatever the path names next.
+        match vault_db::open_by_path(
+            vault.dir(),
+            &path,
+            vault_db::How::Plain(flags),
+            open_pause::Opener::ReadOnly,
+            false,
+            probe,
+        ) {
+            Ok(vault_db::Opened::Here(conn, ())) => return Ok(conn),
+            Ok(vault_db::Opened::Moved) => return Err(vault_db::moved(&path)),
+            Err(StoreError::Sqlite(e)) if is_busy(&e) => {
+                return Err(StoreError::VaultHeld(OPEN_HELD.into()))
+            }
             Err(_) => {}
         }
-        let uri = backup::immutable_uri(&path);
-        let conn = Connection::open_with_flags(&uri, flags | OpenFlags::SQLITE_OPEN_URI)?;
-        probe(&conn)?;
+        // The escalation holds no lock at all, so the door's check covers its
+        // open and nothing after it: a restore that swaps the vault later is
+        // invisible to this handle for its life (ROADMAP O285).
+        let conn = match vault_db::open_by_path(
+            vault.dir(),
+            &path,
+            vault_db::How::Immutable(flags),
+            open_pause::Opener::Immutable,
+            false,
+            probe,
+        )? {
+            vault_db::Opened::Here(conn, ()) => conn,
+            vault_db::Opened::Moved => return Err(vault_db::moved(&path)),
+        };
         undercroft_obs::diag_warn!(
             "{} could not be opened read-only the ordinary way (a WAL database needs a \
              writable directory for its -shm wal-index); it was opened with immutable=1, \
@@ -5128,16 +5285,31 @@ impl VaultStore {
         if crate::rotate_pause::proof_refused(self.vault.dir()) {
             return false;
         }
-        let Ok(probe) = Connection::open_with_flags(
-            self.vault.db_path(),
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        ) else {
-            return false;
-        };
-        let _ = probe.busy_timeout(std::time::Duration::ZERO);
-        probe
-            .query_row("SELECT count(*) FROM meta", [], |r| r.get::<_, i64>(0))
-            .is_ok()
+        // Through the one door like every open of a vault's database by path
+        // (ROADMAP O279), though no restore can move this file: the handle's
+        // own connection still has it open, and O69's hold is refused beside
+        // it. A file that moved reads "not released" — the direction that lets
+        // go. Checkpoint-on-close stays off, so this probe is never a vault's
+        // last closer.
+        let path = self.vault.db_path();
+        matches!(
+            vault_db::open_by_path(
+                self.vault.dir(),
+                &path,
+                vault_db::How::Plain(
+                    rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+                        | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+                ),
+                open_pause::Opener::LockProbe,
+                true,
+                |probe| {
+                    probe.busy_timeout(std::time::Duration::ZERO)?;
+                    probe.query_row("SELECT count(*) FROM meta", [], |r| r.get::<_, i64>(0))?;
+                    Ok(())
+                },
+            ),
+            Ok(vault_db::Opened::Here(..))
+        )
     }
 
     /// The door's work under the write lock. Every failure is classed for
@@ -6000,33 +6172,52 @@ impl VaultStore {
     /// It also closes O91's residual by construction rather than by care: a
     /// `SQLITE_OPEN_READ_ONLY` connection cannot run a checkpoint, so this
     /// can no longer collapse a crashed writer's hot `-wal` on drop.
+    ///
+    /// **Through the one door (ROADMAP O279)**, because it runs on the path
+    /// ahead of the open on both surfaces (O91's lesson): a descriptor taken
+    /// before a restore's swap read the set-aside vault's identity. After the
+    /// reads — whatever they returned, so a moved file is never folded into
+    /// "nothing recorded" — the door proves the file, and a moved one answers
+    /// the reopen class.
     pub fn recorded_embedder(vault: &Vault) -> Result<Option<(String, usize)>, StoreError> {
         if !vault.database_exists() {
             return Ok(None);
         }
-        let conn = Connection::open_with_flags(
-            vault.db_path(),
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )?;
-        // A database with no `meta` table records nothing, and reads as
-        // `None` as it always has; a BUSY one is held by a rotation or a
-        // restore and is said (ROADMAP O257) — read as "nothing recorded", an
-        // external vault opened with the wrong embedder and failed later as a
-        // misleading `EmbedderMismatch`.
-        let recorded = |key: &str| -> Result<Option<String>, StoreError> {
-            match conn
-                .query_row("SELECT value FROM meta WHERE key = ?1", params![key], |r| {
-                    r.get(0)
-                })
-                .optional()
-            {
-                Ok(v) => Ok(v),
-                Err(e) if is_busy(&e) => Err(StoreError::VaultHeld(OPEN_HELD.into())),
-                Err(_) => Ok(None),
-            }
+        let path = vault.db_path();
+        let opened = vault_db::open_by_path(
+            vault.dir(),
+            &path,
+            vault_db::How::Plain(
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                    | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            ),
+            open_pause::Opener::RecordedEmbedder,
+            false,
+            |conn| {
+                // A database with no `meta` table records nothing, and reads as
+                // `None` as it always has; a BUSY one is held by a rotation or
+                // a restore and is said (ROADMAP O257) — read as "nothing
+                // recorded", an external vault opened with the wrong embedder
+                // and failed later as a misleading `EmbedderMismatch`.
+                let recorded = |key: &str| -> Result<Option<String>, StoreError> {
+                    match conn
+                        .query_row("SELECT value FROM meta WHERE key = ?1", params![key], |r| {
+                            r.get(0)
+                        })
+                        .optional()
+                    {
+                        Ok(v) => Ok(v),
+                        Err(e) if is_busy(&e) => Err(StoreError::VaultHeld(OPEN_HELD.into())),
+                        Err(_) => Ok(None),
+                    }
+                };
+                Ok((recorded("embedder_name")?, recorded("embedder_dim")?))
+            },
+        );
+        let (name, dim) = match opened? {
+            vault_db::Opened::Here(_, recorded) => recorded,
+            vault_db::Opened::Moved => return Err(vault_db::moved(&path)),
         };
-        let name = recorded("embedder_name")?;
-        let dim = recorded("embedder_dim")?;
         Ok(match (name, dim) {
             (Some(n), Some(d)) => Some((n, d.parse().unwrap_or(0))),
             _ => None,

@@ -2396,15 +2396,13 @@ impl Tenancy {
         };
         let outcome =
             undercroft_store::restore_archive(&self.manager, &src, Some(id), true, &embed)
-                .map_err(|e| match e {
-                    // Only a HELD vault is "in use" (ROADMAP O257, O69).
-                    StoreError::VaultHeld(_) => RestError::new(
-                        409,
-                        "vault is in use — stop the server first (the backup verified and nothing \
-                     was changed)",
-                    ),
-                    other => store_err(other),
-                })?;
+                // Only a HELD vault is refused as held (ROADMAP O257, O69), and
+                // in the store's own words: this route replaced them with "stop
+                // the server first", which is wrong for a vault another restore
+                // replaced while this one took its hold (ROADMAP O279) — there
+                // is no server to stop. `store_err` answers `VaultHeld` 409
+                // with no class and the store's text.
+                .map_err(store_err)?;
         let report = match outcome {
             undercroft_store::RestoreOutcome::Restored(report) => report,
             undercroft_store::RestoreOutcome::Refused(_) => {
@@ -3384,8 +3382,22 @@ impl Tenancy {
                     self.manager.unlock(vault_id)
                 }
                 .map_err(vault_err)?;
-                let embedder =
-                    (self.factory)(&vault).map_err(|e| RestError::new(500, e.to_string()))?;
+                // The factory reads the vault's recorded identity through the
+                // store (`recorded_embedder`), so its refusals are the store's
+                // and take the store's classes: a `VaultHeld` is 409 with no
+                // class (ROADMAP O257 items 1 and 7 — this line answered every
+                // factory error 500), and a file a restore swapped in mid-open
+                // is the reopen class, retried here once like the open's
+                // (ROADMAP O279). Anything else a factory raises — a model that
+                // will not load — stays a 500.
+                let embedder = match (self.factory)(&vault) {
+                    Ok(embedder) => embedder,
+                    Err(e) => match e.downcast::<StoreError>() {
+                        Ok(StoreError::StaleUnlock(_)) if attempts == 1 => continue,
+                        Ok(refused) => return Err(store_err(refused)),
+                        Err(e) => return Err(RestError::new(500, e.to_string())),
+                    },
+                };
                 // A read-only server must not rewrite the vault it is serving —
                 // an embedder migration is a bulk write, and the operator asked
                 // this process not to make any.

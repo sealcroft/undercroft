@@ -2,19 +2,23 @@
 
 ## 1.7.0 — unreleased
 
-MINOR: one new capability, backward compatible, and thirteen fixes. The witness
+MINOR: one new capability, backward compatible, and seventeen fixes. The witness
 commands and routes are new; no default moves and no declaration can stop a
-start-up. Three fixes change what a deployment must do: every process writing a
+start-up. Four fixes change what a deployment must do: every process writing a
 vault must run the same build, and a server whose vault another process
 rotated now stops writing rather than destroy the rotated salt (O254); a
 key rotation now refuses while any other process has the vault open (O257);
 and a restore now proves the archive first, so it needs the key and the
-vault's embedder environment and refuses under `--read-only` (O268) — all in
-`UPGRADING.md`, beside O255's note that a destruction now holds the
-write lock for as long as it runs and O256's that an archive taken by an older
-release beside a writer may be torn. (This line said "one fix" while O243 and
+vault's embedder environment and refuses under `--read-only` (O268); and a
+restore refuses over a symbolic link (O283) — all in `UPGRADING.md`, beside
+O279's note that a filesystem whose inode numbers are not stable now refuses
+every open (which `config check` pre-flights), O255's note that a destruction now
+holds the write lock for as long as it runs and O256's that an archive taken by an
+older release beside a writer may be torn. (This line said "one fix" while O243 and
 O246 were both below it; corrected with O247. It said "nine" until O268,
-"ten" until O266, "eleven" until O276, and "twelve" until O278.)
+"ten" until O266, "eleven" until O276, "twelve" until O278, and "thirteen"
+until O279, which closed four entries; it said "Three fixes change what a
+deployment must do" until O283 made it four.)
 
 ### The external witness: `undercroft witness emit` / `check`, `GET`/`POST /v1/…/witness` (O245)
 
@@ -600,6 +604,95 @@ restored one).
 PATCH-class inside the unreleased 1.7.0: the fallback, O276 and `StaleUnlock`
 are all unreleased, and the report fields are additive. No `UPGRADING.md` entry
 is owed.
+
+### An open that raced a `backup restore` is refused and reopened, instead of serving the vault set aside and corrupting the restored one (O279, O280, O282, O283)
+
+An open takes its database file at `Connection::open` and its first lock at its
+first statement, and between the two it holds nothing another process can see:
+the exclusive hold a restore takes before its two renames is granted beside it.
+A restore landing there left the open holding the database the restore set
+aside, while everything it or its store opened afterwards by path — the `-wal`,
+the `-shm`, the manifest beside them — named the restored vault. Measured on a
+2,000-drawer sealed vault through a real restore, across processes as well as
+within one: a writable open answered Ok, served the set-aside vault, and healed
+the restored manifest forward, after which the restored vault refused to open as
+tampered; one ordinary save through it put the set-aside file's pages into the
+restored `-wal`, and the restored database failed `integrity_check` and `verify`
+("database disk image is malformed") holding rows of neither vault — while the
+restore reported `Restored`. A read-only open served the vault that no longer
+existed.
+
+Now every open of a vault database by path goes through one door: it turns
+checkpoint-on-close off, runs the opener's first locking statement, and then
+proves the file it holds is the file at the path — SQLite's own moved-file check
+on the connection's descriptor, AND the path SQLite resolved naming the same file
+as the path the open used (the first alone misses a swapped symlinked vault
+directory; a check of the path alone misses a path that names another file only
+at the moment of the open). A moved file is closed without a checkpoint and the
+open answers the reopen class ("this handle must be reopened: the database file
+this open reached is not the one at … now"), which the CLI (and MCP) and `/v1`
+retry ONCE with a fresh unlock — so an operator sees the restored vault, and a
+second race in a row is said rather than chased (exit 1; 409 with no class).
+Every opener goes through it: the writable and read-only opens, the read-only
+open's `immutable=1` escalation (a probe that failed because it ran between the
+swap's two renames is refused, never reopened `immutable=1`), the embedder
+identity read both surfaces make before the open, the pre-1.5.0 `palace.db`
+rename, O69's restore hold, and the rotation's release probe. It needs the
+tree's one `unsafe` block — the moved-file check is a C call rusqlite does not
+wrap — confined to one function, denied everywhere else in the store, and
+counted by a test (the maintainer's ruling).
+
+- **Two writable opens of a pre-1.5.0 `palace.db` vault can no longer empty it**
+  (O280, shipped in 1.5.0). The rename step opened the legacy file with
+  `SQLITE_OPEN_CREATE`: when another open had just renamed it — or a restore had
+  swapped the directory — it created an empty `palace.db` and renamed it over the
+  vault's `vault.db`. Measured: 500 drawers to 0. No open of a vault database by
+  path creates one any more unless the directory holds none; a legacy file that
+  vanished is another open's finished rename, and the open proceeds on
+  `vault.db`.
+- **A second restore's hold is refused when the first swapped the vault under
+  it** — its own wording, never "stop the server" — instead of being granted on
+  the file the first set aside while a live store held the one in place. The
+  hold no longer creates a database that vanished between its check and its
+  open.
+- **A restore into an absent vault refuses a vault that appeared meanwhile**
+  (O282): with no hold taken (there was nothing to hold), a vault another
+  restore or a `vault create` put there was renamed aside and removed —
+  measured, its rows gone while its store kept serving them.
+- **A restore over a symbolic link refuses, changing nothing** (O283, ruled by
+  the maintainer): a linked `vaults/<id>`, or a linked database or manifest
+  inside the vault directory, was renamed aside as the LINK, orphaning what it
+  named and moving the vault onto the palace's own filesystem. Ordinary opens
+  still work through a link.
+- **The restore report's `key_generation_differs` names the vault it
+  replaced**: computed before the hold, a rotation promoted inside the hold's
+  wait left it saying `false` for a vault that had just been rotated.
+- **`/v1`'s embedder factory answers the store's classes**: a refusal raised
+  reading the vault's recorded embedder (a held vault, a swapped file) was a 500
+  outside the reopen retry; it is now 409 with no class, and a swapped file is
+  retried like the open's.
+- **Both restore surfaces print the store's own refusal** for a held vault: the
+  CLI's "is in use by another process … DESTROYS the vault" framing and `/v1`'s
+  "stop the server first" were wrong for a vault another restore had replaced.
+- **`config check` on a declared data directory compares a vault manifest's
+  identity through an open descriptor with its path's**, the observable the new
+  check compares — a filesystem whose inode numbers are unstable would refuse
+  every open, and this finds it in a pipeline instead (`UPGRADING.md`).
+
+Ruled by a three-lens panel plus an adversarial refuter, with three questions
+escalated to and answered by the maintainer (ROADMAP O279). Filed beside it:
+O281 (the legacy rename still runs beneath an IDLE holder — a read-only replica
+then serves stale rows and a false `verify` failure; released since 1.5.0),
+O284 (unlock-era notes on a handle whose unlock preceded a swap), O285 (an
+`immutable=1` handle whose file moves after its open), and O286 (the test named
+for the `immutable=1` escalation does not reach it).
+
+PATCH-class inside the unreleased 1.7.0: the refusal is the documented reopen
+class, already retried; the restore door, `VaultHeld` and `StaleUnlock`'s prefix
+are unreleased; O280 is a released defect (1.5.0) fixed here, shipping with
+1.7.0 rather than a 1.6.2 by the maintainer's ruling. `UPGRADING.md` gains one
+entry (a filesystem whose inode numbers are unstable) and amendments to the
+restore and `palace.db` entries.
 
 ## 1.6.1 — 2026-09-22
 

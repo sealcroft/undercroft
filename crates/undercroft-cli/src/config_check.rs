@@ -18,7 +18,10 @@
 //! Beyond the environment it reads the CA pins a declaration names, and,
 //! since ROADMAP O204, it STATS a declared data directory for its key files
 //! and its vaults — the same survey and classifier a start runs — without
-//! reading a key, deriving one or creating anything.
+//! reading a key, deriving one or creating anything; since ROADMAP O279 it
+//! also opens one vault's `vault.json` read-only, to compare its identity
+//! through the descriptor with its path's — a manifest file, never a vault
+//! or a database, holding no lock and writing nothing.
 //!
 //! **The classification is the inventory's, not a second copy.**
 //! `ENGINE_ENV_VARS` carries `(name, ConfigClass, Parse)` and is counted
@@ -109,17 +112,24 @@ pub fn run(verbose: bool, data_dir: Option<&Path>) -> (usize, usize, usize, usiz
     let declared = undercroft_store::resolve_passphrase(
         std::env::var("UNDERCROFT_PASSPHRASE").ok().as_deref(),
     );
-    match data_dir_line(data_dir, declared.as_ref().map(|p| p.as_deref()).ok()) {
-        DataDirLine::Ok(what) => println!("  ok      {what}"),
-        DataDirLine::Absent(what) => println!("  absent  {what}"),
-        DataDirLine::Skipped(why) => println!("  skipped {why}"),
-        DataDirLine::Warn(why) => {
-            warned += 1;
-            println!("  warn    {why}");
-        }
-        DataDirLine::Refuses(why) => {
-            fatal += 1;
-            println!("  REFUSES {why}");
+    let lines = std::iter::once(data_dir_line(
+        data_dir,
+        declared.as_ref().map(|p| p.as_deref()).ok(),
+    ))
+    .chain(identity_line(data_dir));
+    for line in lines {
+        match line {
+            DataDirLine::Ok(what) => println!("  ok      {what}"),
+            DataDirLine::Absent(what) => println!("  absent  {what}"),
+            DataDirLine::Skipped(why) => println!("  skipped {why}"),
+            DataDirLine::Warn(why) => {
+                warned += 1;
+                println!("  warn    {why}");
+            }
+            DataDirLine::Refuses(why) => {
+                fatal += 1;
+                println!("  REFUSES {why}");
+            }
         }
     }
     (fatal, warned, validated, accepted)
@@ -221,6 +231,82 @@ fn data_dir_line(dir: Option<&Path>, passphrase: Option<Option<&str>>) -> DataDi
         )),
         Err(e) => DataDirLine::Refuses(format!("data directory {shown} — {e}")),
     }
+}
+
+/// **Does this filesystem keep a file's identity?** (ROADMAP O279)
+///
+/// Every open of a vault database proves, after its first lock, that the file
+/// it holds is the file at its path: SQLite's moved-file check compares the
+/// inode its descriptor had at the open with a fresh `stat` of the path. A
+/// filesystem that hands one file a different inode number on each lookup — some
+/// network and FUSE mounts — would make every open refuse as "must be reopened",
+/// so a pipeline should hear it before a restart does. Asked the same way, on a
+/// vault's `vault.json`: through an open descriptor against a `stat` of the
+/// path. `vault.json` is a file SQLite never locks, so opening and closing it
+/// here drops no lock anything holds; no database is opened.
+///
+/// Only a DECLARED directory, like the key arm, and only one holding a vault —
+/// with none there is nothing to ask. `None` when not examined for either
+/// reason.
+fn identity_line(dir: Option<&Path>) -> Option<DataDirLine> {
+    let dir = dir?;
+    let mut manifests: Vec<std::path::PathBuf> =
+        std::fs::read_dir(dir.join(undercroft_vault::VAULTS_DIR))
+            .ok()?
+            .flatten()
+            .map(|e| e.path().join(undercroft_vault::MANIFEST_FILE))
+            .filter(|p| p.is_file())
+            .collect();
+    manifests.sort();
+    let manifest = manifests.into_iter().next()?;
+    Some(identity_verdict(&manifest, file_identity(&manifest)))
+}
+
+/// `(dev, ino)` of the file at `p` through an open descriptor, and through a
+/// `stat` of the path.
+#[cfg(unix)]
+type Ids = ((u64, u64), (u64, u64));
+
+#[cfg(unix)]
+fn file_identity(p: &Path) -> std::io::Result<Ids> {
+    use std::os::unix::fs::MetadataExt;
+    let open = std::fs::File::open(p)?.metadata()?;
+    let path = std::fs::metadata(p)?;
+    Ok(((open.dev(), open.ino()), (path.dev(), path.ino())))
+}
+
+#[cfg(unix)]
+fn identity_verdict(p: &Path, ids: std::io::Result<Ids>) -> DataDirLine {
+    let shown = p.display();
+    match ids {
+        Ok((open, path)) if open == path => DataDirLine::Ok(format!(
+            "data directory — {shown} is the same file through an open descriptor and through \
+             its path, so an open can tell its file from one a restore swapped in (ROADMAP O279)"
+        )),
+        Ok(_) => DataDirLine::Refuses(format!(
+            "data directory — {shown} is one file through an open descriptor and another through \
+             its path: this filesystem does not keep inode numbers stable, so every open of a \
+             vault here refuses as moved (\"this handle must be reopened\"). Keep the palace directory on a \
+             filesystem with stable inode numbers (ROADMAP O279)"
+        )),
+        Err(e) => DataDirLine::Refuses(format!(
+            "data directory — {shown} could not be examined: {e}; an open reads the same file"
+        )),
+    }
+}
+
+/// No moved-file check exists off unix (ROADMAP O275), so there is nothing to
+/// pre-flight.
+#[cfg(not(unix))]
+fn file_identity(_: &Path) {}
+
+#[cfg(not(unix))]
+fn identity_verdict(p: &Path, _: ()) -> DataDirLine {
+    DataDirLine::Skipped(format!(
+        "data directory — {} not examined for a stable file identity: an open makes no \
+         moved-file check on this platform (ROADMAP O275)",
+        p.display()
+    ))
 }
 
 /// One declaration, through the resolver that will run at start-up.
@@ -921,6 +1007,54 @@ mod tests {
             "the ConfigClass claim disagrees with what the resolver actually does:\n{}",
             wrong.join("\n")
         );
+    }
+
+    /// ROADMAP O279 — the identity arm: on an ordinary filesystem a vault's
+    /// manifest is one file through an open descriptor and through its path, so
+    /// the arm says `ok`; a directory with no vault, or none declared, is not
+    /// examined; and the verdict refuses where the two disagree — the case
+    /// that would make every open refuse as moved.
+    #[test]
+    fn the_identity_arm_says_whether_this_filesystem_keeps_a_file_s_identity() {
+        use undercroft_vault::{SecurityLevel, VaultManager};
+        let dir = tempfile::TempDir::new().unwrap();
+        assert!(
+            identity_line(None).is_none(),
+            "nothing declared, nothing asked"
+        );
+        assert!(
+            identity_line(Some(dir.path())).is_none(),
+            "no vault, nothing to ask"
+        );
+        VaultManager::open(dir.path(), None)
+            .unwrap()
+            .create("v", SecurityLevel::Sealed)
+            .unwrap();
+        match identity_line(Some(dir.path())) {
+            Some(DataDirLine::Ok(what)) => {
+                assert!(
+                    what.contains("same file") && what.contains("O279"),
+                    "{what}"
+                )
+            }
+            other => panic!("this filesystem keeps identities: {other:?}"),
+        }
+        #[cfg(unix)]
+        {
+            let p = dir.path().join("vaults/v/vault.json");
+            assert!(matches!(
+                identity_verdict(&p, Ok(((1, 2), (1, 3)))),
+                DataDirLine::Refuses(why) if why.contains("does not keep inode numbers stable")
+            ));
+            assert!(matches!(
+                identity_verdict(&p, Ok(((1, 2), (1, 2)))),
+                DataDirLine::Ok(_)
+            ));
+            assert!(matches!(
+                identity_verdict(&p, Err(std::io::Error::other("gone"))),
+                DataDirLine::Refuses(_)
+            ));
+        }
     }
 
     /// ROADMAP O204 — the data-directory arm refuses exactly where a writable start

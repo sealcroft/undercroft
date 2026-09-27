@@ -12,6 +12,11 @@ authors.workspace = true
 # without it carries zero extra deps. RAM-only index, never persisted — the
 # no-plaintext-derived-index-on-disk invariant holds for sealed vaults.
 hnsw = ["dep:instant-distance"]
+# ROADMAP O279: makes `open_pause`'s hooks reachable from other crates' tests,
+# so the CLI's `open_store_as` and `/v1`'s `store_for` can be driven through a
+# restore swapped in mid-open. Only ever a dev-dependency feature; a production
+# build carries no hook (the vault crate's `test-fixture` precedent).
+test-fixture = []
 
 [dependencies]
 rayon = { workspace = true }

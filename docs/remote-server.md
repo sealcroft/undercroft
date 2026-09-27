@@ -242,7 +242,8 @@ GET    /v1/vaults/{id}/backups          this vault's snapshots
 POST   /v1/vaults/{id}/backups/restore  {name}; the archive is verified before the
                                         vault is touched (409 + class integrity if
                                         it does not verify, the vault unchanged);
-                                        400 if the backup holds another vault, 409
+                                        400 if the backup holds another vault or
+                                        the vault is a symbolic link (O283), 409
                                         while the vault is in use
 GET    /v1/vaults/{id}/history          audit chain (subject?, limit?, offset?)
 GET    /v1/vaults/{id}/trust            wing trust assignments

@@ -975,9 +975,9 @@ BK_NAME="$("$BIN" backup list | grep '^default-' | head -1)"
 E2E_HOLDER=$!
 sleep 2
 if kill -0 "$E2E_HOLDER" 2>/dev/null; then
-  check "restore refuses while the vault is held" 1 "in use by another process" -- \
+  check "restore refuses while the vault is held" 1 "is open in another process" -- \
     "$BIN" backup restore "$BK_NAME" --force
-  check "the refusal says what would happen"      1 "DESTROYS the vault"         -- \
+  check "the refusal says what would happen"      1 "beneath that process destroys it" -- \
     "$BIN" backup restore "$BK_NAME" --force
   check "the held vault is untouched"             0 "hmac failures:   0"         -- \
     "$BIN" verify
@@ -1147,6 +1147,28 @@ check "and so does another restore"                                   1 "was int
 mv "$O268_ASIDE" "$UNDERCROFT_HOME/vaults/o268c"
 rmdir "$UNDERCROFT_HOME/vaults/$O268_AREA" 2>/dev/null
 check "put back, the vault is the one set aside" 0 "VERIFY OK" -- "$BIN" verify --vault o268c
+# ROADMAP O283, ruled by the maintainer 2026-09-27: "restore refuses
+# symlinks". The swap renames the PATH aside — for a symlinked vault directory,
+# the LINK — so the directory it named was orphaned and the restored vault moved
+# onto the palace's own filesystem. Refused before anything is staged; the link
+# and the directory it names are byte-identical; an open through the link works.
+"$BIN" vault create o283 >/dev/null 2>&1
+"$BIN" remember "the linked vault's drawer" --vault o283 >/dev/null 2>&1
+O283_BK="$(basename "$("$BIN" backup create --vault o283 2>&1 | sed -n 's/^Backup created: //p')")"
+O283_REAL="$(mktemp -d)/o283-real"
+mv "$UNDERCROFT_HOME/vaults/o283" "$O283_REAL"
+ln -s "$O283_REAL" "$UNDERCROFT_HOME/vaults/o283"
+check "O283 premise: a vault reached through a symlink opens" 0 "VERIFY OK" -- \
+  "$BIN" verify --vault o283
+O283_BEFORE="$(o268_hash "$O283_REAL")"
+check "restore refuses over a symlinked vault directory (O283)" 1 "symbolic link" -- \
+  "$BIN" backup restore "$O283_BK" --force
+O283_AFTER="$(o268_hash "$O283_REAL")"
+check "and the link and the directory it names are untouched" 0 "same" -- sh -c \
+  "[ -L \"$UNDERCROFT_HOME/vaults/o283\" ] && [ '$O283_BEFORE' = '$O283_AFTER' ] && echo same || echo differs"
+rm "$UNDERCROFT_HOME/vaults/o283"; mv "$O283_REAL" "$UNDERCROFT_HOME/vaults/o283"
+check "a real directory restores"                     0 "Restored" -- \
+  "$BIN" backup restore "$O283_BK" --force
 check "repair passes"             0 "integrity: ok"                  -- "$BIN" repair
 check "hooks prints settings"     0 "PreCompact"                     -- "$BIN" hooks claude-code
 
@@ -3060,6 +3082,24 @@ rest_body "/v1 restore of a good archive reports what it put in place (O268)" \
   '"archived_writes"' -- -X POST "$API/vaults/acme/backups/restore" \
   -H "X-Vault-Assertion: $(sign acme)" -d "{\"name\":\"$BK\"}"
 rm -rf "$O268V"
+# ROADMAP O283 on /v1: the same door, the same refusal — 400, the store's own
+# words, the link and the directory it names untouched.
+UNDERCROFT_HOME="$REST_HOME" "$BIN" vault create o283v >/dev/null 2>&1
+UNDERCROFT_HOME="$REST_HOME" "$BIN" remember "the /v1 linked vault's drawer" \
+  --vault o283v >/dev/null 2>&1
+O283V_BK="$(basename "$(UNDERCROFT_HOME="$REST_HOME" "$BIN" backup create --vault o283v 2>&1 \
+  | sed -n 's/^Backup created: //p')")"
+O283V_REAL="$(mktemp -d)/o283v-real"
+mv "$REST_HOME/vaults/o283v" "$O283V_REAL"
+ln -s "$O283V_REAL" "$REST_HOME/vaults/o283v"
+rest_code "/v1 restore refuses over a symlinked vault directory (O283)" 400 -- -X POST \
+  "$API/vaults/o283v/backups/restore" -H "X-Vault-Assertion: $(sign o283v)" \
+  -d "{\"name\":\"$O283V_BK\"}"
+rest_body "/v1 and says why, in the store's words (O283)" 'symbolic link' -- -X POST \
+  "$API/vaults/o283v/backups/restore" -H "X-Vault-Assertion: $(sign o283v)" \
+  -d "{\"name\":\"$O283V_BK\"}"
+check "/v1 left the link in place (O283)" 0 "link" -- sh -c \
+  "[ -L \"$REST_HOME/vaults/o283v\" ] && echo link || echo gone"
 # ROADMAP O242: the vault this process ALSO serves over /mcp is refused, and
 # the refusal is EXPLICIT rather than accidental. `backup_restore` drops this
 # process's cached handle and then takes an exclusive lock — which used to
@@ -3613,6 +3653,10 @@ check "O204: a passphrase over it refuses, exit 1"       1 "UNDERCROFT_PASSPHRAS
 check "O204: and gives both readings"                    1 "set up WITHOUT a passphrase"       -- ksp search note
 check "O204: init under it refuses instead of exiting 0" 1 "nothing was written"               -- ksp init
 check "O204: config check sees it before a restart"      1 "REFUSES data directory"                    -- ksp config check
+# ROADMAP O279: the same command asks whether this filesystem keeps a file's
+# identity — the observable every open's moved-file check compares.
+check "O279: config check finds the data directory keeps file identity" 0 \
+  "same file through an open descriptor" -- ks config check
 if [ -e "$KS_HOME/kdf.salt" ]; then
   echo "FAIL  O204: a refused passphrase wrote kdf.salt"; FAIL=$((FAIL+1))
 else

@@ -859,10 +859,15 @@ impl Vault {
     /// vault a writable open has renamed; `palace.db` for an older vault no
     /// writable open has touched yet (ROADMAP O7 — one word named both the
     /// installation and each vault's database, and the per-vault file is the
-    /// one that moved). A pure function of the directory, so a read-only
-    /// open serves whichever name is there and renames nothing; the rename
-    /// itself lives in the store's writable open, because it needs a WAL
-    /// checkpoint first and this crate does not speak SQLite.
+    /// one that moved). A function of the directory's CURRENT contents — it
+    /// stats both names at every call, so two calls can answer differently if
+    /// another process renames or swaps the directory between them — and so a
+    /// read-only open serves whichever name is there and renames nothing; the
+    /// rename itself lives in the store's writable open, because it needs a
+    /// WAL checkpoint first and this crate does not speak SQLite. A caller that
+    /// must know which file it opened reads the layout ONCE and uses that path
+    /// (ROADMAP O279: the store's writable connector does, and proves the file
+    /// after its first lock).
     pub fn db_path(&self) -> PathBuf {
         match self.db_layout() {
             DbLayout::Legacy => self.legacy_db_path(),

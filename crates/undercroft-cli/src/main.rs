@@ -9,6 +9,8 @@ mod config_check;
 mod http;
 mod i18n;
 mod mcp;
+#[cfg(test)]
+mod open_race_surface_tests;
 mod parity;
 mod refine;
 mod search;
@@ -4898,23 +4900,24 @@ fn collect_transcripts(path: &Path) -> Result<Vec<PathBuf>> {
     Ok(out)
 }
 
-/// How `backup restore` words a refusal: only a HELD vault is "in use"
-/// (ROADMAP O257, O69), and saying so names what replacing it beneath a
-/// server would do. Every other refusal is the store's own words.
+/// How `backup restore` words a refusal: a HELD vault (ROADMAP O257, O69) is
+/// named as the vault the restore would not replace, in the store's own words —
+/// which say what replacing it beneath a server would do, or that another
+/// restore replaced it first (ROADMAP O279). Every other refusal is the store's
+/// own error as it is.
 fn restore_refusal(src: &Path, e: undercroft_store::StoreError) -> anyhow::Error {
     if !matches!(e, undercroft_store::StoreError::VaultHeld(_)) {
         return anyhow::Error::from(e);
     }
+    // The store's own words (ROADMAP O279): its busy refusal already says the
+    // vault is open in another process, that restoring beneath it destroys the
+    // vault, and to stop it; its other `VaultHeld` — a vault another restore
+    // replaced while this one took its hold — has no server to stop, which the
+    // framing this used to put around every `VaultHeld` claimed.
     anyhow::anyhow!(
-        concat!(
-            "vault '{}' is in use by another process — refusing to restore over it. ",
-            "The backup verified and nothing was changed.\n\n",
-            "Restoring beneath a running server DESTROYS the vault: the server keeps ",
-            "writing to the database file this would replace, and the vault becomes ",
-            "unopenable. Stop the server, then retry.\n\nThe store reported: {}"
-        ),
+        "refusing to restore backup over vault '{}'; the backup verified and nothing was \
+         changed: {e}",
         read_backup_vault_id(src).unwrap_or_default(),
-        e
     )
 }
 

@@ -1038,7 +1038,50 @@ Consequences that are binding, not advisory:
   the restored vault's next open can no longer see), a re-recorded embedder,
   `key_generation_differs`, `replaced` and `skipped`. `restore_pause.rs` holds
   its pause points; the swap's renames take the vault crate's fixture faults
-  (`SwapAside`, `SwapIn`, `SwapBack`, and `fail_in_turn` for the crash state),
+  (`SwapAside`, `SwapIn`, `SwapBack`, and `fail_in_turn` for the crash state).
+  **The swap replaces a vault only under a hold** (O282 — a vault that
+  appeared at an absent target was renamed aside unheld and removed) **and
+  never a symbolic link** (O283, the maintainer's ruling: a linked
+  `vaults/<id>`, database or manifest was renamed aside as the LINK, orphaning
+  what it named — `restores::linked_target`, asked by the door before anything
+  is staged and by the swap), and `key_generation_differs` is read under the
+  hold. **And every open of a vault's database by PATH goes through ONE door
+  (`vault_db.rs`, `open_by_path`, ROADMAP O279)**: a connection takes its
+  descriptor at `Connection::open` and its first lock at its first statement,
+  and between them no fence sees it — O69's hold is granted beside it — so an
+  open that raced a restore's swap held the database set aside while its
+  `-wal`, `-shm` and manifest reads named the restored vault: measured, a
+  writable open served the old vault and healed the restored manifest
+  forward (the restored vault then refused as tampered), one save through it
+  corrupted the restored database, and the restore said `Restored`. The door
+  opens, turns checkpoint-on-close OFF (read back — every close before the
+  check is inert; SQLite's own moved-file guard skips a database it reads as
+  empty), runs the opener's first LOCKING statement, then proves the file:
+  SQLite's `SQLITE_FCNTL_HAS_MOVED` on the connection's own descriptor AND the
+  path SQLite resolved — read as bytes from `PRAGMA database_list`, never
+  `Connection::path()`, which is `None` under a non-UTF-8 root — naming the
+  same `(dev, ino)` as the path the open used. Each leg alone passes an unsafe
+  case (a swapped symlinked vault; a path naming another file only at the
+  open), both measured. A moved file is closed (never dropped) and refused
+  with the reopen class, which the CLI and `/v1` retry once; the hold
+  answers `VaultHeld` with its own wording. Every opener goes through it —
+  the writable and read-only connectors (a moved file never reaches the
+  `immutable=1` escalation, whose own probe is checked too),
+  `recorded_embedder`, O69's hold, the legacy rename and the release probe —
+  and a source gate counts every production open against the door and a
+  reasoned allowlist. **No such open carries `SQLITE_OPEN_CREATE` unless the
+  directory holds no database** (O280: the legacy rename CREATED an empty
+  `palace.db` another open had just renamed away and renamed it over the vault
+  — two upgrade-day opens emptied a 500-drawer vault, released since 1.5.0).
+  `/v1`'s embedder factory answers a store refusal in the store's class and
+  retries the reopen class (it was a 500 outside the retry — O257 items 1 and
+  7), and `config check` pre-flights a filesystem whose inode numbers are
+  unstable. Residuals: an `immutable=1` handle's file moving after its open
+  (O285), a same-process racer beside a same-process handle of the restored
+  vault (its `-shm` effects happen inside the first statement), Windows (no
+  moved-file check; O275), and the legacy rename beneath an IDLE holder
+  (O281). `open_pause.rs` holds the pause points, reachable from the CLI's
+  tests through the store's `test-fixture` feature,
   write-path admission control (admission.rs + core admission.rs — C3.3
   phase 2: deterministic tier-1 detector, closed signal vocabulary,
   offsets never content; **the screen lives at the write CHOKE POINT**
@@ -1474,11 +1517,13 @@ Consequences that are binding, not advisory:
   failed close — through `replace_connection`, the ONE place a handle's
   connection is replaced (O276), which swaps in a schema-less placeholder
   under `query_only`, forgets the label guard's cached verdict and drops the
-  derived caches, and it reattaches NOTHING. A reopen by path cannot tell its
-  own file from one a restore swapped in: a connection that has not yet read
-  is invisible to a fence, and one opened before a directory swap reads the
-  aside file and writes into the restored `-wal` (measured — O279 files that
-  race for an ordinary open). The handle is `Retirement::Released`, which
+  derived caches, and it reattaches NOTHING. A reopen by path could not tell
+  its own file from one a restore swapped in (measured: a connection opened
+  before a directory swap reads the aside file and writes into the restored
+  `-wal`); every open proves it now (O279, below), and the no-reattach
+  ruling stands for its other reasons — no consumer, `/v1`'s one loop, a
+  second implementation of the open's verdicts. The handle is
+  `Retirement::Released`, which
   OVERWRITES a deferral and which the vault crate's one manifest resolver
   and the store's `snapshot` door refuse, so no manifest read by path can
   raise a false tamper verdict; every door answers the reopen class
@@ -1955,10 +2000,13 @@ Consequences that are binding, not advisory:
   content, reconstructible, and the price of reading a WAL database at
   all; where the directory is NOT writable the open escalates to
   `immutable=1` and says so, which is what makes a write-protected mount
-  or a snapshot readable (R4's first item, settled by execution — the
-  test blocks the `-shm` with a directory rather than with `chmod`,
+  or a snapshot readable (R4's first item, said to be settled by execution —
+  the test blocks the `-shm` with a directory rather than with `chmod`,
   because the test container runs as root and permission bits do not bind
-  root);
+  root. **That test does not reach the escalation** (ROADMAP O286, measured by
+  O279: a read-only connection whose `-shm` cannot be mapped reads its `-wal`
+  without one and serves the ordinary way), so what a write-protected mount
+  does is unmeasured; O279's gate forces the escalation another way);
   ui.html: the vault admin console (incl. live MONITOR +
   KNOWLEDGE tabs), `include_str!`'d and served at `GET /ui` on every
   build; monitor.html: the Palace Monitor
@@ -2479,8 +2527,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (1143 run,
-                                      # 14 #[ignore]d = 1157 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (1167 run,
+                                      # 15 #[ignore]d = 1182 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2564,7 +2612,7 @@ docker compose run --rm test          # cargo unit + integration tests (1143 run
                                       # remembered — do not hand-edit one to
                                       # silence the gate; it is measuring the
                                       # suite, not this comment.
-                                      # The 14 ignored are 3 measurements needing
+                                      # The 15 ignored are 3 measurements needing
                                       # testdata/*_50k.txt, one in lib.rs, and four
                                       # in anchor_tests.rs (ROADMAP O254, O257): the
                                       # multi-process gate's child entry point,
@@ -2579,7 +2627,11 @@ docker compose run --rm test          # cargo unit + integration tests (1143 run
                                       # backup_tests.rs (ROADMAP O256's soak and
                                       # its cost at ~10^5, run by name), and one in
                                       # restore_tests.rs (ROADMAP O268's cost at
-                                      # ~10^5, run by name). Run the first
+                                      # ~10^5, run by name), and one in
+                                      # open_race_tests.rs (ROADMAP O279's
+                                      # cross-process child entry, which returns
+                                      # at once unless its parent names a root).
+                                      # Run the first
                                       # four with `cargo test --release -- --ignored`:
                                       # 3 pass, and `measure_relation_promiscuity`
                                       # FAILS on missing data, not on logic — it
@@ -2616,7 +2668,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (714 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (722 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (171 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (60 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (157 checks; weaviate
@@ -4180,6 +4232,15 @@ unwritten because a half-correct verdict is worse than a known-wrong one.
 - Rust 2021, workspace-level dependency versions, `thiserror` per-crate error
   enums, `anyhow` only in the CLI.
 - Keys live in `SecretKey` (zeroize-on-drop); never `Debug`-print key material.
+- **The tree has ONE `unsafe` block** — `undercroft-store`'s
+  `vault_db::descriptor_has_moved`, SQLite's moved-file check on a
+  connection's own descriptor, which rusqlite does not wrap (ROADMAP O279,
+  ruled by the maintainer 2026-09-27: "allow the unsafe"). Every safe
+  alternative measures a path and had a measured hole. It carries a
+  `// SAFETY:` comment, the store is `#![deny(unsafe_code)]` with one
+  `#[allow]` on it, and a source gate counts exactly one `unsafe` in every
+  crate's production code. A second one is a new decision for the
+  maintainer, not an extension of this one.
 - **Sealcroft is the HOUSE and never ships. Undercroft is this product.**
   Nothing is ever called bare `sealcroft` at the command line, in a crate, in
   an env var or in an MCP tool name — the product word carries the technical
@@ -4269,7 +4330,10 @@ unwritten because a half-correct verdict is worse than a known-wrong one.
   resolver that will run at start-up, opening nothing, so an upgrade fails in
   a pipeline instead of at a restart. Since O204 it also stats a DECLARED data
   directory through the key classifier a start runs — only a declared one,
-  because a CI runner's own home is a verdict about nothing.
+  because a CI runner's own home is a verdict about nothing — and since O279
+  opens one of its vaults' `vault.json` read-only to ask whether that
+  filesystem keeps a file's identity, the observable every open's moved-file
+  check compares.
   **The second axis exists because "I ran no parse" and "there is no parse to
   run" are different claims that READ IDENTICALLY (O52).** `check_one` falls
   to a catch-all rendering an unknown name as `Accepted` — printed as *"no
