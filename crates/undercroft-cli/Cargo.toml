@@ -57,6 +57,11 @@ assert_cmd = { workspace = true }
 predicates = { workspace = true }
 tempfile = { workspace = true }
 rusqlite = { workspace = true }
+# ROADMAP O279: the store's open pause points, so `open_store_as` and `/v1`'s
+# `store_for` are driven through a restore swapped in mid-open. The store is
+# already a dependency, so this compiles no new crate; a production build (no
+# dev-dependencies) carries no hook, the vault crate's `test-fixture` precedent.
+undercroft-store = { path = "../undercroft-store", features = ["test-fixture"] }
 
 # ROADMAP O157. The CLI and /v1 join over the GENERATED model fixture, run BY
 # NAME from the ort-build leg only, so a lost feature is a hard error rather than

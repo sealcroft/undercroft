@@ -618,7 +618,24 @@ one a `backup restore` swapped in — a connection opened before a directory
 swap reads the file set aside and writes into the restored vault's `-wal`,
 measured — and a manifest read under keys another process rotated since would
 have raised a false tamper verdict. The same swap race for an ORDINARY open is
-filed as ROADMAP O279.
+closed by ROADMAP O279: a connection takes its file at the open and its first
+lock at its first statement, invisible to every fence in between, so an open
+that raced a `backup restore` held the database the restore set aside while its
+`-wal`, `-shm` and manifest reads named the restored vault — measured, it served
+the old vault, healed the restored manifest forward (the restored vault then
+refused as tampered), and one save through it corrupted the restored database.
+Every open of a vault's database now proves, after its first lock, that it holds
+the file at its path — SQLite's moved-file check on the connection's own
+descriptor AND the path SQLite resolved naming the file the open's path names —
+and a moved file is closed and refused with the reopen class, which each surface
+retries once. No such open creates a database any more unless the directory
+holds none (O280: two upgrade-day opens racing the legacy `palace.db` rename could
+empty a vault). Residuals, stated: an `immutable=1` read-only handle holds no
+lock, so a swap after its open goes unseen for its life (O285); a racer and a
+handle of the restored vault in ONE process share a `-shm` whose locks the racer
+can disturb inside its first statement, which no product surface does; Windows
+makes no moved-file check (O275); and the legacy rename still runs beneath an
+idle read-only replica (O281).
 
 The chain also carries what left and what was read. Every export
 appends an `egress/export` record binding the surface, the recipient

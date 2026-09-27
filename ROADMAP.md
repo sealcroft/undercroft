@@ -3998,7 +3998,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**309** of the **324** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**316** of the **331** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -5854,6 +5854,14 @@ PE and PF — a reopen by path cannot tell its own file from a restore's — and
 the absence of any consumer that keeps a handle past a rotation. The fallback
 closes the connection and does not reattach; the handle answers the reopen class.
 
+**Items 1 and 7, found broken on `/v1` 2026-09-27 by O279's ruling** (recorded
+beside them). `store_for` maps every embedder-factory error to 500 outside its
+reopen retry, and the factory calls `recorded_embedder` first — so the `VaultHeld`
+item 7 makes it raise answered 500 on `/v1`, not item 1's 409 with no class. Fixed
+by O279: a factory's `StoreError` goes through `store_err` and the retry. And item 7
+was ruled "propagate their errors" and built "propagate busy": `recorded_embedder`
+still reads every other error as "nothing recorded" — noted, not changed.
+
 ### O253 — CLOSED 2026-09-24: a legitimate concurrent writer no longer makes the label guard refuse, `verify` report a broken chain or an open fail — every judgement reads what it compares from one snapshot, the manifest anchor before it
 
 **Filed 2026-09-24 by O247's refuter (reasoned) and measured by the
@@ -7642,6 +7650,16 @@ check. Windows is O275; a restore's chain record O274; a restore over a vault wi
 no database O270; the resurrection of drawers destroyed after an archive was taken
 stays escalated with O267 and O147.
 
+**Item 11, found not kept by this build 2026-09-27 by O279's ruling** (recorded
+beside it; the integrator's own defect). `key_generation_differs` was computed after
+`Phase::Closed` and BEFORE the hold: measured (P13), a rotation committed there and
+promoted inside the hold's busy wait left the report saying `Some(false)` for a vault
+that had just been rotated — exactly the case the field exists to warn about. It is
+computed under the hold since O279. Item 8's `NO_CKPT_ON_CLOSE` is extended by O279
+to every open of a vault's database by path, and the residual "a server still
+serving a moved or unlinked vault anchors by path" is narrowed for an OPEN racing the
+swap, which is now refused.
+
 ### O266 — CLOSED 2026-09-26: a rotation whose promote was deferred opens read-only and verifies against its staged manifest, and its rotating handle stops writing before anything commits
 
 **Filed 2026-09-25 by O256's ruling; measured by the integrator through the vault
@@ -8569,6 +8587,554 @@ passed.
 (which drives other processes) run ten times in a row: ten green.
 
 **Cost.** One enum comparison per snapshot; nothing else off the fallback.
+
+**Refined beside it 2026-09-27 by O279's ruling.** "A reopen by path cannot tell its
+own file from one a restore swapped in" is now answered for every open of a vault's
+database: after its first locking statement, SQLite's `SQLITE_FCNTL_HAS_MOVED` on the
+connection's own descriptor, AND the path SQLite resolved naming the same file as the
+path the open used. HAS_MOVED alone is NOT the sound check this ruling anticipated —
+SQLite stats the RESOLVED path, so a symlinked `vaults/<id>` or `vault.db` reads
+unmoved across a swap (measured, SL). The no-reattach ruling above stands for its
+other reasons: no consumer keeps a handle past a rotation, `/v1`'s one loop, and a
+second implementation of the open's verdicts.
+
+### O279 — CLOSED 2026-09-27: every open of a vault's database by path proves, after its first lock, that it holds the file at the path — an open that raced a restore's swap is refused and reopens onto the restored vault
+
+**Filed 2026-09-26 by O278's ruling (its refuter; the mechanism measured as PF by
+the integrator).** `VaultStore::open` takes its database descriptor at
+`Connection::open` and runs its first statement (`journal_mode`) after it; a
+read-only open does the same through `connect_read_only`. O69's exclusive hold —
+the hold a `backup restore` takes last, before its two renames — can be taken
+between those two calls, because a connection that has opened but not read is
+invisible to a fence (O278's PE). The first statement then waits out the swap
+(`restores.rs`: the vault renamed aside, the stage renamed in, the hold dropped)
+and proceeds on the ASIDE inode, with `-wal` and `-shm` opened by path in the
+restored directory. PF measured the shape: the aside file's pages are read, a
+write succeeds into the restored directory's `-wal`, and the restored content is
+silently replaced for every later reader, `integrity_check` `ok`. An open's own
+writes — the keycheck seed, the chain switch, the anchor — would land there; a
+read-only server would serve a vault that no longer exists.
+
+Its relation to O275 — whether a rename can happen at all with the database open is O275's, on Windows; what an open does when one happens is this entry's, on unix — is carried in O275's body since this entry closed.
+
+**Shape, for a ruling**: in each posture's connector, after the first statement
+that takes a lock and before any write, prove the descriptor's file is the path's
+(`SQLITE_FCNTL_HAS_MOVED`, or a stat of dev/inode before the open against one after
+that statement); a mismatch closes without a checkpoint and answers `StaleUnlock`,
+which `open_store_as` and `store_for` already retry once. Windows has no moved-file
+check; O275 owns whether a rename there can happen with a file open.
+
+**Gate**: a restore swap forced between an open's `Connection::open` and its first
+statement (a pause point) — the open refuses or retries onto the restored file,
+the restored directory is byte-identical, and a multi-page vault's
+`integrity_check` and `verify` pass after; PF on a real multi-page vault first, to
+size it.
+
+#### RULED 2026-09-27 by a three-lens panel (agentic memory architecture, security, software and SQLite engineering) plus an adversarial refuter; three escalations answered by the maintainer
+
+**The question.** How every open of a vault database by PATH stops acting on a
+file a `backup restore` swap moved between `Connection::open` (which takes the
+descriptor) and the connection's first locking statement: which identity check,
+in which openers and where in each, what a mismatch answers and how the
+connection closes, what "byte-identical" means for the restored directory, the
+residuals, and what is owed on paper. Working material (the brief, the three
+lenses' answers, the refuter's report, every probe and its log) is in the session
+scratchpad `o279-panel/`; this record is the ruling.
+
+**Measured before and during the panel** (Docker, release build of this tree, a
+test-only pause seam `open_pause.rs` between each opener's `Connection::open*`
+and its first statement, bundled SQLite 3.46.0, sealed vaults of 200–2,000
+drawers, a real `restore_archive`):
+
+- **PE, per connector.** O69's hold is GRANTED beside a connection that is only
+  open, and beside a read-only one that has run only `PRAGMA query_only`; it is
+  REFUSED once the writable connection has run `journal_mode=WAL`, the read-only
+  one its schema read, or `recorded_embedder` its meta read. Each opener's window
+  is exactly `Connection::open` → its first LOCKING statement.
+- **P1 — a writable open racing the swap.** It answers Ok, serves the SET-ASIDE
+  vault (2,050 drawers), and its anchor heal fast-forwards the RESTORED
+  `vault.json` (the archive's manifest verifies under the same key generation and
+  its head is an ancestor of the set-aside chain): a fresh open of the restored
+  vault then answers `ManifestTampered`. With one ordinary save through it, the
+  restored database is CORRUPT — `integrity_check` "wrong # of entries" in four
+  indexes, `verify` "database disk image is malformed", 2,005 rows, neither
+  vault's. PF's `integrity_check ok` was a one-page toy.
+- **P1b** — the realistic interleaving (the hold taken in the window, the first
+  statement waiting it out, 396 ms): the restore answers `Restored`, the racer's
+  save Ok, the restored database corrupt as P1. **P8** — the same across
+  PROCESSES: identical.
+- **P2 — a read-only open racing the swap** serves the vault that no longer
+  exists with `verify` OK.
+- **P3 — O69's own hold** opened before another restore's swap is GRANTED on the
+  set-aside file while a live store holds the file at the path.
+- **P4 — a legacy `palace.db` vault**: `migrate_db_filename`'s open carries
+  `SQLITE_OPEN_CREATE`; after the swap it creates an empty `palace.db` and renames
+  it over the restored `vault.db` — the restored vault is EMPTY. Its window is
+  before any descriptor exists.
+- **P11 — the same step with NO restore**: two writable opens of a legacy vault,
+  the second migrating inside the first's window, EMPTY the vault (500 drawers →
+  0, `verify` false). Released since 1.5.0.
+- **P-IDLE** — a writable open renames a legacy vault beneath an idle read-only
+  replica in ANOTHER process, which then serves stale rows and a false
+  `verify` failure: TRUNCATE's busy result never sees an idle holder. Released
+  since 1.5.0.
+- **P5** — `recorded_embedder` reads the set-aside identity. **P10** — a read-only
+  probe in the swap's two-rename gap fails "disk I/O error", which today falls into
+  the `immutable=1` escalation. **P12** — a restore between an unlock and its open
+  is benign for data (same generation: the restored vault is served; another
+  generation: O257's race arm answers `StaleUnlock`), and **P12b** carries the
+  unlock's torn-`.next` note onto a handle whose restored vault has none.
+- **P6/P7/ABA/SL/NC/PR2/X — what a check can SEE.** A pre-open/post-lock stat of
+  the path detects the swap, gives a harmless false positive when the swap lands
+  before the open (P7), and PASSES a deterministic A→B→A while the descriptor
+  reads B (ABA). `SQLITE_FCNTL_HAS_MOVED` detects the swap and ABA, but answers
+  NOT MOVED for a symlinked `vaults/<id>` or `vault.db` — SQLite resolves the path
+  it stats — and there the racer served the set-aside vault and left the restored
+  one `ManifestTampered` (SL). It works on an `immutable=1` connection and reports
+  moved in the two-rename gap (PR2). The integrator's predicate **X** — read
+  entirely after the first locking statement: HAS_MOVED false AND the `(dev, ino)`
+  of the path SQLite resolved EQUAL to that of the unresolved path the open used —
+  is correct on all eight shapes (none, window, before, ABA, symlinked directory
+  and database each with and without a swap). No false positive in ten ordinary
+  opens on overlay, an ext4 named volume, tmpfs, or a 9p/drvfs bind mount of a
+  Windows directory; on the latter the restore's rename-aside itself FAILED
+  "Permission denied" while a connection was open (O275's premise, through drvfs).
+- **P-NUTF8** — the store works today under a non-UTF-8 root; `Connection::path()`
+  answers `None` there, while `PRAGMA database_list` read as bytes names the file.
+  **P13** — `key_generation_differs` is computed before the hold: a rotation
+  committed there and promoted inside the hold's busy wait left the report saying
+  `Some(false)` for a vault that had just been rotated. **P14** — a vault created
+  and written at an ABSENT restore target while the restore ran was renamed aside
+  with no hold and removed; its open store kept serving 3 rows of an unlinked vault.
+- **P9b** — a same-process racer's first statement beside a live reader thread:
+  no SIGBUS, the reader intact over 197,034 reads (a truncate-and-regrow of the
+  `-shm` is not excluded by a size check).
+
+**Prior rulings found and their disposition** (searched `rul(ed|ing)` in this
+entry, O278, O268, O69, O257, O7, O275, O270, O271, O274, O91, O253, O254).
+**O278** — "a reopen by path cannot tell its own file from one a restore swapped
+in" and "a sound same-file check must follow the new connection's first locking
+statement and is unix-only": FOLLOWED; its implied reliance on HAS_MOVED alone
+REFINED (SL), recorded beside it. Its no-reattach ruling stands for its other
+reasons (no consumer, `/v1`'s one loop, a second implementation of the open's
+verdicts). **O268** item 8 (the hold's `NO_CKPT_ON_CLOSE`) FOLLOWED and extended to
+every by-path open; items 1 and 7 FOLLOWED; item 11 (the report describes the
+vault replaced) found NOT KEPT by its build (P13) and fixed, recorded beside it.
+**O69** — the hold held across the destructive step, no override: FOLLOWED, and
+"held" now means held on the file the swap moves (P3), recorded beside it.
+**O257** items 1, 4 and 7 FOLLOWED; item 1 and 7 are VIOLATED on `/v1`'s embedder
+factory, which answers every factory error 500 outside the retry — fixed here; its
+built narrowing of item 7 (only busy propagates) noted beside it. **O7** — the
+maintainer's naming ruling FOLLOWED; its mechanism claim that busy "leaves the name
+alone" while another process holds the file is REFUTED (P-IDLE) and P11 found,
+recorded beside it. **O91** ("a posture is a property of the path"): FOLLOWED —
+`recorded_embedder` and the legacy step sit on the path ahead of the connector.
+**O275**: FOLLOWED — Windows is its question. **R4**'s accepted residue (a read-only
+open's `-shm` and zero-length `-wal`) FOLLOWED for "byte-identical". No ruling on
+`unsafe` code exists anywhere in the tree (grep of `ROADMAP.md`, `CLAUDE.md`,
+`CHANGELOG.md`, `docs/`); it went to the maintainer.
+
+**Claims refuted, the brief's, the entry's and the lenses' included.**
+- *This entry's shape offers HAS_MOVED OR a pre/post stat*: each alone is unsound
+  (SL, ABA; plus inode-number reuse across two restores for the stat pair).
+- *"`open_store_as` and `store_for` already retry once"* (this entry): false on
+  `/v1`'s factory path, where `recorded_embedder` runs.
+- *HAS_MOVED is "exact"* (the brief): exact only about SQLite's RESOLVED path.
+- *"The mechanism does not depend on the process boundary"* (the brief): true of
+  the race, false of its `-shm` consequences — a same-process racer's first
+  statement cannot see its own process's DMS lock through `F_GETLK` and can
+  truncate a live same-process handle's `-shm`, before any check can run.
+- *NO_CKPT_ON_CLOSE only on the moved path* (engineering): `databaseIsUnmoved`
+  answers "unmoved" when `dbSize==0` (sqlite3.c 61230), which a racer whose read
+  transaction fails after opening another opener's `-wal` can reach; its close
+  would fold that opener's frames into the set-aside file and DELETE its `-wal`
+  by path. Set from the open.
+- *"Do not hold the legacy connection across its rename — two wal-index names"*
+  (engineering): `locking_mode=EXCLUSIVE` before the first statement makes a heap
+  wal-index with no `-shm` at all. It matters to O281, not here.
+- *A descriptor pin on `vault.db` as the safe fallback* (engineering): closing any
+  second descriptor on the database drops every POSIX lock this process holds on
+  it — a second handle in the process would vanish from O69's hold.
+- *The directory-incarnation pin as the identity check* (memory): it has the
+  inode-reuse hole it cited against the stat pair and cannot see an in-directory
+  replacement; its real target, unlock-era state, is O284.
+- *`Connection::path()` as the resolved-path leg* (the integrator's X as first
+  written): `None` under a non-UTF-8 root, so every open there would refuse.
+- *"Folding `recorded_embedder` into the open"* (memory, preferred): it moves the
+  factory signature on the CLI, `/v1` and the restore door to remove a residual
+  that is a loud `EmbedderMismatch`, only across an embedder change between the
+  archive and the live vault, cleared by a re-run. Lost on cost.
+- *"Three UPGRADING entries"* (security) and *"none owed"* (engineering): one new
+  entry plus an amendment of O7's, below.
+
+**The ruled shape.**
+1. **One door opens a vault's database by path**, in a module of its own:
+   open → `SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE` on, read back → the pause seam → the
+   caller's first LOCKING statement → the identity check, whatever the statement
+   returned → on a moved file, `Connection::close()` (never drop — O278) and the
+   caller's refusal; on the same file, NO_CKPT cleared and read back, unless the
+   caller keeps it (the hold does). A failed statement on the same file is the
+   caller's error as today.
+2. **The identity check (X, amended by the refuter)**, unix: SQLite's
+   `SQLITE_FCNTL_HAS_MOVED` on the connection's own descriptor, AND the
+   `(dev, ino)` of the path SQLite resolved — read as BYTES from `PRAGMA
+   database_list`, never `Connection::path()` — equal to that of the exact path
+   handed to the open. Any stat failure reads MOVED. A file control that does not
+   answer `SQLITE_OK` is an I/O-class refusal ("cannot tell"), never the reopen
+   class. Non-unix: `Unchecked`, stated as resting on O275, never "same".
+3. **The one `unsafe` block — ruled by the maintainer, 2026-09-27: allowed, confined.**
+   rusqlite 0.32 has no safe `file_control`; the call needs `Connection::handle()`.
+   It lives in ONE private function with a `// SAFETY:` comment (the handle live
+   for the borrow, a static C name, a stack out-parameter, the connection `!Sync`);
+   `#![deny(unsafe_code)]` crate-wide in `undercroft-store` with one `#[allow]`; a
+   source gate counts exactly one `unsafe` block in the workspace's production
+   code, at that function. The probe files' raw FFI does not survive into the tree.
+4. **Every opener, the check after its first LOCKING statement (PE):**
+   `connect_writable` — the layout read once and its path used; no
+   `SQLITE_OPEN_CREATE` unless the layout is Absent; after `journal_mode=WAL`, before
+   `synchronous`, `foreign_keys` and any write; a vanished file with the layout
+   changed answers the reopen class. `connect_read_only` — after the schema read,
+   never after `query_only`; busy stays `VaultHeld`; a non-busy failure asks the
+   identity BEFORE escalating, so a moved file is refused and never reopened
+   `immutable=1`; the `immutable=1` arm checked after its probe.
+   `recorded_embedder` — after its reads, whatever they returned (its "nothing
+   recorded" arm must not swallow a moved file). `hold_vault_exclusively` — no
+   CREATE; after `BEGIN EXCLUSIVE`; NO_CKPT kept. `migrate_db_filename` — `from`
+   opened without CREATE (a vanished `from` with the layout now Current is another
+   open's rename: proceed), a locking read, the check BEFORE the checkpoint, and a
+   rename meeting ENOENT treated the same way. `lock_released` — through the door,
+   a moved file reads "not released". Allowlisted, with reasons: the in-memory
+   placeholder, the backup stage's destination, `open_immutable` (stage and archive
+   copies only), `archived_state` (the stage).
+5. **What a mismatch answers.** The connectors and the legacy step:
+   `StaleUnlock`, worded at its mint site ("the database file this open reached is
+   not the one at <path> now — a backup restore replaced the vault while this
+   process was opening it; nothing was read from it or written through it; reopen
+   the vault (ROADMAP O279)"), which the CLI and `/v1` retry ONCE with a fresh
+   unlock. The hold: `VaultHeld` with its own wording — another restore replaced
+   the vault while this one took its hold, nothing was changed — never retried.
+   Never an integrity verdict: the name was rebound by a legitimate operation.
+   `settle_foreign_keycheck`'s race wording names a restore as well as a rotation.
+6. **`/v1`'s embedder factory** routes a `StoreError` through `store_err` and the
+   retry (a first-attempt `StaleUnlock` retries; `VaultHeld` answers 409 with no
+   class), which keeps O257 items 1 and 7 on `/v1`. **Both restore renderers carry
+   the store's own text** for `VaultHeld` rather than replacing it.
+7. **`key_generation_differs` is computed under the hold** (P13).
+8. **Folded into this unit, each its own entry closed by it:** O280 (P11, by the
+   no-CREATE rule), O282 (a vault appearing at an absent target is refused, never
+   renamed aside unheld — P14), and O283 (a restore refuses a symlinked target —
+   the maintainer's ruling).
+9. **"Byte-identical" for the restored directory**: `vault.db` and `vault.json`
+   byte-identical to the stage's; any `-wal` absent or zero-length where no other
+   opener exists, and byte-identical to that opener's where one does; `-shm` EXEMPT
+   and named (R4's residue); no other entry (no `palace.db`, no `-journal`), except
+   the empty `palace.db-wal`/`-shm` a legacy racer leaves, whose sweep by the next
+   writable open is asserted. Proven semantically too: `integrity_check` ok, a
+   fresh open verifying at the report's head, height and count. Files are hashed
+   only with no connection of the hashing process on those inodes, or from a child
+   process — `std::fs::read` of `vault.db` beside a live connection drops that
+   connection's POSIX locks.
+10. **Versioning**: PATCH inside the unreleased `1.7.0` — the open's new refusal is
+    the documented reopen class, already retried; the hold's is the unreleased
+    `VaultHeld`; `/v1`'s 409 is O257's documented class. The two released defects
+    (O280, O281) are PATCH; **the maintainer ruled 2026-09-27: they ship with
+    1.7.0, no 1.6.2.** `UPGRADING.md` owes ONE new entry — a filesystem whose open
+    files' inode numbers differ from their paths' refuses every open twice — with a
+    `config check` arm on a DECLARED data directory (the fstat of an open
+    `vault.json` against its stat, the observable HAS_MOVED compares, no database
+    opened), and an AMENDMENT of O7's entry (its busy claim; the two released
+    defects and their remedy), plus sentences in O268's restore entry (the open
+    that races a swap reopens once; the two new restore refusals).
+
+**Options that lost, with their cost.** HAS_MOVED alone (SL: the symlinked layout
+passes). A pre-open/post-lock stat alone (ABA, inode reuse) or with HAS_MOVED (P7's
+spurious refusal and pre-open state that X does without). A directory pin at the
+unlock (not an identity of the database). A descriptor pin on the database (lock
+loss). A VFS shim to leave no scaffolding (hundreds of lines of FFI against R4's
+accepted residue). Holding the legacy connection across its rename in this unit (a
+different defect, O281). Folding `recorded_embedder` (above).
+
+**Dissent.** Engineering: HAS_MOVED alone, NO_CKPT on the moved path, no hold in
+migrate — each settled by SL, `databaseIsUnmoved` and P-IDLE. Memory: a directory
+pin and the fold — settled above, the pin's real target filed as O284. Security:
+the stat pair as the second leg and three UPGRADING entries — X dominates the
+pair; the entries are one plus an amendment. None on the placement, the classes,
+the CREATE rule or the `/v1` fix.
+
+**Escalated and answered (the maintainer, 2026-09-27, verbatim): "allow the
+unsafe, ship with 1.7.0, restore refuses symlinks".**
+
+**Fails silently if**: HAS_MOVED is used alone, or the stat pair alone; the
+resolved leg uses `Connection::path()`, a fresh `db_path()`, or reads a failed stat
+as "same"; the check runs before the first locking statement or after
+`query_only`; NO_CKPT is set only on the moved arm, or never cleared, or not read
+back; the read-only open escalates before checking; `recorded_embedder` folds a
+moved file into "nothing recorded", or `/v1` still maps factory errors to 500; the
+legacy step keeps CREATE, or is fixed with the check alone; the hold keeps CREATE;
+the restore renderers keep overwriting `VaultHeld`'s text; the non-unix arm reports
+"same"; a retry runs while the racer is open; a gate hashes files in-process beside
+a live connection, asserts `-shm` bytes, skips the `-wal` length, runs one
+interleaving, runs once, runs its negative control only on tmpfs, or counts a
+same-process racer beside a same-process holder as clean; a scripted
+counterfactual fails to apply and still prints a pass; the probe files stay in the
+tree; Windows, where nothing here runs.
+
+**The gate.** G1 — P1 inverted on ≥2,000 sealed drawers: `StaleUnlock` by variant
+AND wording, the directory rule above, then the retry serving the restored vault at
+the report's state; counterfactual: no check. G2 — P1b looped ≥10 and P8 across
+processes looped ≥10; counterfactual: the check before the first statement. G3 —
+read-only P2 inverted and the P10 gap arm; counterfactual: escalation before the
+check. G4 — the `immutable=1` arm. G5 — P3 inverted (the second restore refused
+`VaultHeld`, the live store's vault unchanged); counterfactual: CREATE kept. G6 —
+P4, P11 and the rename's ENOENT inverted, the `palace.db-*` sweep asserted;
+counterfactual: CREATE kept with the check present. G7 — `recorded_embedder` through
+`open_store_as` and `store_for`, and a factory `VaultHeld` answering 409 on `/v1`;
+counterfactuals: the 500 path, a moved file folded into "nothing recorded". G8 —
+no false positive in ≥10 opens per filesystem; P7 (fails a stat-pair
+counterfactual), ABA (fails it too), a symlinked directory and database with and
+without a swap (fail a HAS_MOVED-only counterfactual), a non-UTF-8 root (fails a
+`path()` counterfactual). G9 — the surfaces, both postures. G10 — NO_CKPT cleared
+and read back; an ordinary close leaves two files; O268's post-condition gate green.
+G11 — source gates: the openers counted by function both ways, CREATE only in the
+Absent arm, exactly one `unsafe`, the door's statement order, `.close()` on a moved
+file, premise probes on planted text. G12 — P13 and P14 inverted; a symlinked target
+refused with nothing changed. G13 — `windows-check` compiles the unchecked arm. G14
+— a real corpus through the release binary, including a restore beside a loop of
+CLI opens in another process.
+
+**Residuals, stated.** An `immutable=1` handle holds no lock, so a swap after its
+open is invisible for its life (O285). A same-process racer beside a same-process
+handle of the restored vault (the `-shm` truncate and lock drop happen inside the
+first statement; no product surface has two such connections). Windows (O275). The
+descriptor's device is not compared by SQLite (the stat leg carries it). A symlink
+retargeted between the check's two stats (a non-SQLite writer on `vaults/`,
+microseconds). The locking styles that leave SQLite no inode record (macOS webdav,
+a read-only mount, filesystems without fcntl locks). The two-rename gap's retry
+answering "no such vault". A zero-length set-aside database, whose first statement
+deletes an existing restored `-wal` before any check (O270). The window between
+`recorded_embedder` and the open (a loud `EmbedderMismatch`). The swap's post-swap
+manifest re-read reporting a false failure if a legitimate write lands inside
+microseconds (O271).
+
+**Filed by this ruling**: O280 (two writable opens of a legacy vault empty it —
+closed by this unit), O281 (the legacy rename beneath an idle holder), O282 (a
+vault appearing at an absent restore target is renamed aside with no hold — closed
+by this unit), O283 (a restore over a symlinked vault directory orphans it — the
+maintainer's ruling, closed by this unit), O284 (unlock-era state on a handle whose
+unlock preceded a swap), O285 (an `immutable=1` handle whose database moved after
+its open).
+
+#### BUILT 2026-09-27, to the ruling — with the gate's own premise catching a wrong setup twice, and two defects of mine in the build scripts
+
+**The door.** `crates/undercroft-store/src/vault_db.rs` holds `open_by_path`, the
+one way this crate opens a vault's database by path: open (a plain path, or an
+`immutable=1` URI), checkpoint-on-close OFF and read back, `open_pause::fire`,
+the caller's first statement, then `identity` whatever it returned — a moved
+file closed with `Connection::close()` and answered `Opened::Moved`, the same
+file given checkpoint-on-close back (read back) unless the caller keeps it off.
+`identity` on unix is `descriptor_has_moved` (the tree's one `unsafe` block,
+`sqlite3_file_control(…, SQLITE_FCNTL_HAS_MOVED, …)`, a return code other than
+`SQLITE_OK` an I/O-class "cannot tell") AND `(dev, ino)` of the path SQLite
+resolved — read as bytes from `PRAGMA database_list` — equal to that of the path
+the open used, any stat failure reading moved; off unix it answers `Unchecked`,
+citing O275. `moved(path)` mints the reopen class (`StaleUnlock`, "the database
+file this open reached is not the one at … now … (ROADMAP O279)") with a
+`diag_warn!` at the same site. `#![deny(unsafe_code)]` is on the store's crate
+root with one `#[allow(unsafe_code)]` on that function.
+
+**The openers** (`lib.rs`), each through the door with the check after its
+first locking statement: `connect_writable` (the layout read once; no
+`SQLITE_OPEN_CREATE` unless Absent; after `journal_mode=WAL`, before
+`synchronous`/`foreign_keys`; a file that vanished with the layout changed is the
+reopen class), `connect_read_only` (after the schema read; busy stays
+`VaultHeld`; a moved file is refused and never reaches the `immutable=1`
+escalation, which is checked after its own probe), `recorded_embedder` (after
+its reads, a moved file never folded into "nothing recorded"),
+`hold_vault_exclusively` (no CREATE, a new `HoldLayout` pause before its open;
+after `BEGIN EXCLUSIVE`, checkpoint-on-close kept off; a moved or vanished file
+is `VaultHeld` with O279's own wording), `migrate_db_filename` (the legacy file
+opened without CREATE through the door, a locking read, the check before the
+TRUNCATE checkpoint, the connection closed inertly, a `LegacyRename` pause, and a
+vanished file or a rename's ENOENT with the directory now holding `vault.db`
+proceeding — another open's finished rename, O280 — otherwise the reopen
+class), and `lock_released` (a moved file reads "not released").
+`settle_foreign_keycheck`'s race wording names a restore. `open_pause.rs`
+carries the seam (`Opener::{Writable, ReadOnly, Immutable, HoldLayout, Hold,
+RecordedEmbedder, LegacyLayout, Legacy, LegacyRename, LockProbe}`), its hooks
+behind `cfg(any(test, feature = "test-fixture"))`; the store gained a
+`test-fixture` feature and the CLI takes it as a dev-dependency feature, so no
+production build carries a hook.
+
+**The restore door and the swap** (`restore.rs`, the vault crate's
+`restores.rs`): `key_generation_differs` computed under the hold (P13);
+`restores::linked_target` refusing a symbolic-link target — the door before
+anything is staged (`Invalid`), the swap for a link that appeared after the door
+looked (O283); and the swap refusing to replace a vault it holds no hold on
+(O282). **`/v1`** (`tenant.rs`): `store_for` downcasts an embedder-factory error
+to `StoreError` — a first-attempt `StaleUnlock` retries, any other store error
+goes through `store_err` (a `VaultHeld` is 409 with no class), anything else
+stays 500; `backup_restore` answers a refusal through `store_err`, the store's
+own text. **The CLI** (`main.rs`): `restore_refusal` prints the store's own text
+for a `VaultHeld`. **`config check`** (`config_check.rs`): a declared data
+directory holding a vault gets an identity line — a `vault.json` through an open
+descriptor against a `stat` of its path — refusing where they differ.
+
+**Gates.** The store's `open_race_tests.rs`, eighteen tests and one child entry
+(`#[ignore]`d, driven by the cross-process test): every opener raced through a
+REAL `restore_archive` over a sealed vault — 2,000 drawers where the ruling asks
+— in both interleavings (the swap inside the window; the hold taken inside it
+and the first statement waiting it out, measured ≥ 250 ms), across processes,
+each refusal matched by variant AND wording, the pause point asserted reached,
+and the restored directory compared with the stage hashed at `Phase::Held`
+(never with a connection of the hashing process on those files) — `vault.db`
+and `vault.json` byte-identical, any `-wal` empty, `-shm` exempt, nothing else —
+then `integrity_check` and a fresh open at the report's head, height and count;
+the gap arm (a read-only probe between the swap's renames refused, the
+escalation's pause point never reached); the `immutable=1` arm and its no-swap
+control; P3 and PR6 inverted; O280's four arms (P4, P11, a moved legacy file
+with the reopen's sweep of the legacy sidecars, the rename's ENOENT); the
+negative control (ten opens of every opener, and a restore landing BEFORE the
+open served, where a path-only check would refuse); the identity arms (A→B→A, a
+symlinked directory and a symlinked database each swapped, a non-UTF-8 root);
+checkpoint-on-close back on an ordinary connection and kept off on the hold's;
+P13, P14 and O283 inverted; and three source gates — every database open in
+the store's production code is the door or a reasoned allowlist entry, counted
+by function both ways, with CREATE once, in the Absent arm; the door's
+statement order, its `close` of a moved file and its two identity legs; and
+exactly one `unsafe` block in every crate's production code, under a `// SAFETY:`
+comment. The CLI's `open_race_surface_tests.rs`, five tests: `open_store_as` —
+which `serve-mcp` and `/mcp` open through — reopening onto the restored vault on
+both postures for a swap at the embedder read and at the open, and saying a
+second race in a row; `/v1` reopening onto it for a swap at its factory's read
+and at the open, a second race answering 409 with no class, and a factory's
+`VaultHeld` 409 with no class while a non-store factory failure stays 500 and the
+reopen class is retried exactly once. `config check` gained its identity arm's
+tests. The e2e suite: O283 through the CLI and `/v1`, and the identity line
+through `config check`.
+
+**Counterfactuals, each RUN** on this tree (applied from an exact anchor, every
+log carrying a `Compiling` line, the tree's diff identical before and after),
+each failing its gate: no check at all → ten arms fail (every race, the cross-process one, the identity arms, O280's and the door-order gate); the check before the first statement → the waited-out-the-hold arm (P1b) fails, the swap-inside-the-window arm passing as the ruling predicted; checkpoint-on-close set only on a moved file → the door-order gate and the hold's checkpoint arm; a moved read-only file escalated → the read-only arm; a moved file folded into `recorded_embedder`'s "nothing recorded" → its arm; `/v1`'s factory answering 500 → all three `/v1` arms; the legacy step keeping CREATE with the check present → O280's arm (the restored vault emptied again); the hold keeping CREATE → the vanished-database arm and the opener gate; HAS_MOVED alone → the identity arms (the symlinked ones); no HAS_MOVED → the identity arms (the A→B→A one); `Connection::path()` for the resolved leg → the identity arms (the non-UTF-8 root) and the door gate; `key_generation_differs` before the hold → P13's arm; the O282 guard removed → its arm; the O283 door check removed → its arm (the swap's check then answers, in the wrong class); the O283 swap check removed → its arm; a moved connection dropped instead of closed → the door gate alone, the behaviour being identical when a close succeeds.
+
+**Found by the build.**
+- *The escalation gate's first setup did not escalate — caught by its own
+  premise.* A `-shm` blocked by a directory, the setup
+  `a_vault_whose_wal_index_cannot_be_created_is_read_as_an_immutable_snapshot`
+  uses, leaves a read-only connection reading its `-wal` without a wal-index; the
+  escalation's pause point never fired. The gate now blocks the `-wal` inside
+  the ordinary arm's window. That older test never reaches the escalation it
+  names — measured, its warning is never printed — filed as O286.
+- *A defect of mine in an edit script, caught by reading the file back*: a Bash
+  heredoc turned the Rust line continuations in the hold's messages into one
+  collapsed line and mangled the em dashes. Redone through the Write tool, as the
+  handover warns; every later edit went that way, each byte-checked.
+- *Two defects of mine in the gate file, caught by re-reading it before the
+  first compile*: the identity arms unlocked the vault after moving the other
+  vault into place (so the unlock would have read the wrong manifest), and the
+  checkpoint arm dropped the writable store before the read-only one (leaving a
+  read-only last closer that cannot checkpoint).
+
+- *The ruled `config check` arm opens a file, and five surfaces say the command
+  "opens nothing"* — read in full, each says "no vault, no database, no socket,
+  no outbound call", and the command has always read the CA pins a declaration
+  names. The arm opens one `vault.json` read-only, holding no lock and writing
+  nothing, which that promise allows; the three surfaces that list what else it
+  reads (`UPGRADING.md`, the module doc, `CLAUDE.md`) now name it.
+
+**Real corpus.** The LoCoMo feed mined into 12 wings (1,020 sealed drawers), through release binaries of this tree and of `main` built from a detached worktree in its own target directory (probed: this tree's carries the O279 strings, `main`'s none). Latency over seven interleaved runs each, `main` then this: `--read-only stats` 5–8 against 4–6 ms, `stats` 4–7 against 4–6, `verify` 8–12 against 8–13, a search 61–67 against 61–68 — no cost that shows. The soak — a restore every 0.2 s against three loops of CLI processes, two `--read-only stats` and one writable `search` — eight runs of this build (10 or 40 rounds): 170 restores attempted, 72 restored and 98 refused as held (a reader had the vault open, which is right), 38,207 reader processes all exiting 0, the O279 refusal firing 43 times with every reopen served, no integrity, tamper or malformed line, and `verify` OK at the archive's rows after every run. `main`'s binary on the same soak, seven runs: in the first, 157 reader processes exited 2 (the integrity class) with 314 integrity, tamper or malformed lines, their text not captured; the six after it did not reproduce that, and in two of them a reader met a raw `unable to open database file` in the swap's two-rename gap — reported as seen once, never as proof: the store's gates measure the mechanism. A restore over a SIGKILLed server's 135,992-byte hot `-wal`: exit 0 in 34 ms, VERIFY OK at the archive's rows. A legacy `palace.db` vault: renamed at a writable open in 10 ms, VERIFY OK; two writable opens racing its rename, 20 rounds: no row lost.
+
+**Loops.** The store's eighteen O279 gates and the CLI's five surface tests, ten runs in a row: ten green each.
+
+**Cost.** Per open of a vault database: one file control, one `PRAGMA database_list` and two `stat`s after the first statement, plus two `set_db_config` calls — microseconds (the moved-file check measured 1–1.6 µs, a stat pair 2–9 µs, in the probes); nothing on any read or write after the open.
+
+### O280 — CLOSED 2026-09-27: two writable opens of a pre-1.5.0 `palace.db` vault can no longer empty it — no open of a vault's database by path creates one
+
+**Filed 2026-09-27 by O279's ruling; measured by the integrator (P11).**
+`migrate_db_filename` reads the layout, then opens the legacy `palace.db` with
+`Connection::open` — which carries `SQLITE_OPEN_CREATE` — checkpoints it and renames
+it over `vault.db`. When another writable open migrates the vault inside that window,
+the first one's open CREATES an empty `palace.db`, its checkpoint reports nothing
+busy, and its rename replaces the migrated `vault.db` with the empty file. Measured:
+500 drawers → 0, `verify` false, both handles then serving the empty database.
+Released since 1.5.0 (O7); no restore is needed. The same CREATE is how a restore
+swap in the window empties the restored vault (O279's P4), and the hold carries the
+same CREATE after an existence check.
+
+**Shape**: no open of a vault's database by path carries `SQLITE_OPEN_CREATE` unless
+the directory holds no database; a legacy `from` that vanished, or a rename that
+meets ENOENT, while the layout now reads Current is another open's completed rename
+and the open proceeds on `vault.db`.
+
+**Gate**: P11 inverted — the second open's migration inside the first's window
+leaves the vault's rows intact and both opens serving them; the rename's ENOENT arm;
+a counterfactual with CREATE kept empties the vault.
+
+**Closed 2026-09-27 by O279's build**, as its ruling's no-CREATE rule:
+`migrate_db_filename` opens the legacy file without `SQLITE_OPEN_CREATE` through
+the one door, proves the file before its checkpoint, and reads a vanished file or
+a rename's ENOENT, with the directory now holding `vault.db`, as another open's
+finished rename. Gate: `o280_the_legacy_rename_never_creates_or_overwrites_a_database`
+— P4, P11, a legacy file moved between its open and its first read (refused, the
+reopen sweeping the legacy sidecars that read left) and the rename's ENOENT — whose
+counterfactual, CREATE kept with the check present, empties the vault again. Real
+corpus: 20 rounds of two writable opens racing the rename, no row lost. Shipping
+with 1.7.0, not a 1.6.2 (the maintainer's ruling, 2026-09-27). O281 — the rename
+beneath an IDLE holder — is a different mechanism and stays open.
+
+### O282 — CLOSED 2026-09-27: a restore replaces a vault only under a hold — one that appeared at an absent target is refused, not renamed aside unheld
+
+**Filed 2026-09-27 by O279's ruling (its security lens, confirmed by the refuter);
+measured by the integrator (P14).** `restore_archive` takes O69's hold only when the
+target exists when it looks; `Stage::swap` decides for itself whether it is replacing
+a vault. A vault created and written at the target between the two — another
+restore's result, or a `vault create` — is renamed aside with nothing holding it and
+removed with the aside. Measured: 3 rows written into it gone, its open store still
+serving them from an unlinked file, the restore answering `Restored` with
+`replaced: true`. O69's data loss, one door over.
+
+**Shape**: the swap refuses when it would replace a vault and holds nothing, changing
+nothing; the stage is discarded as on every refusal.
+
+**Gate**: P14 inverted — the refusal, the created vault's rows and directory intact,
+its store still serving the file at the path; counterfactual: the guard removed.
+
+**Closed 2026-09-27 by O279's build.** `Stage::swap` refuses to replace a vault it
+holds no hold on, changing nothing; the stage is dropped as on every refusal. The
+refusal is `VaultError::Io` (exit 1), on the precedent of the swap's existing
+"appeared while the restore ran" refusal. Gate:
+`o282_a_vault_that_appears_at_an_absent_restore_target_is_not_replaced` (P14
+inverted: the created vault's rows intact at the path, its store still serving
+them, no stage or aside left); counterfactual: the guard removed fails it.
+
+### O283 — CLOSED 2026-09-27: a restore over a symbolic link refuses and changes nothing, by the maintainer's ruling
+
+**Filed 2026-09-27 by O279's ruling (its security lens, confirmed by the refuter);
+observed by the integrator (SL); ruled by the maintainer.** The swap renames
+`vaults/<id>` aside — for a symbolic link, the LINK — and `remove_dir_all` removes the
+link alone. The directory it named is orphaned where it was, and the restored vault
+silently moves onto the palace's own filesystem. Nothing documents a symlinked vault
+directory and nothing refused one.
+
+**Ruled by the maintainer, 2026-09-27, verbatim: "restore refuses symlinks".** A
+restore refuses, before any effect, a target that is a symbolic link, and a target
+directory whose database or manifest is one; ordinary opens keep working through a
+link. The swap refuses one too, for a link that appears after the door looked.
+
+**Gate**: a symlinked `vaults/<id>`, and a symlinked `vault.db` inside a real
+directory, each refused through the door, the CLI and `/v1` with nothing changed —
+the link, the directory it names and its files byte-identical, no stage left; a real
+directory still restores.
+
+**Closed 2026-09-27 by O279's build**, to the maintainer's ruling:
+`restores::linked_target` names a symbolic-link target — the vault directory, or
+its database or manifest — and the restore door refuses it as `Invalid` (400 on
+`/v1`, exit 1) before anything is staged, while the swap refuses one that appeared
+after the door looked. Gate:
+`o283_a_restore_over_a_symlinked_vault_is_refused_and_changes_nothing` (a linked
+directory, a linked database, a link that appears at the swap, and a real
+directory still restoring), a counterfactual for each check, and the e2e suite
+through the CLI and `/v1`.
+
 
 ## 1.6.1 — released 2026-09-22
 
@@ -19574,6 +20140,15 @@ renames before anything asks that question, so that test measures the
 migration; the checkpoint removed fails the hot-WAL test on the row count. Counts: tests 811 → 818, e2e
 463 → 474.
 
+**Its mechanism, REFUTED beside it 2026-09-27 by O279's ruling** (the naming
+ruling stands). "`busy` (another process holds the file) leaves the name alone" is
+false for an IDLE holder: a TRUNCATE checkpoint's busy result sees read marks, never
+an idle connection's hold, so a writable open renamed a legacy vault beneath an idle
+read-only replica in another process, which then served stale rows and a false
+`verify` failure (P-IDLE, filed as O281). And the rename's open carried
+`SQLITE_OPEN_CREATE`: two writable opens racing it EMPTY the vault (P11, filed as
+O280, fixed in 1.7.0 by O279's no-CREATE rule). Both shipped in 1.5.0.
+
 ---
 
 ## 1.4.0 — released 2026-09-07
@@ -24698,6 +25273,14 @@ directory is unlinked touches nothing. Measured (O268 P1b): a 1.6.1-shaped archi
 whose `-wal` held committed frames restored over the live vault kept them. The check
 is unix-only, which is why O268's hold sets `SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE`.
 
+**Refined beside it 2026-09-27 by O279's ruling.** The hold itself opens its
+database by path, and a connection that has opened but not locked is invisible to
+any fence: measured (P3), a hold opened before ANOTHER restore's swap was granted on
+the file that restore set aside while a live store held the file at the path. "Held"
+now means held on the file at the path — the hold proves its descriptor after
+`BEGIN EXCLUSIVE` and refuses otherwise — and it no longer opens with
+`SQLITE_OPEN_CREATE` after its existence check.
+
 ### O70 — CLOSED 2026-08-23: the assembly recipe is written, with the price of skipping it
 
 **CLOSED.** `docs/AGENTS.md` gained **§7.2 "Assembling the block — which
@@ -28491,7 +29074,12 @@ stop-the-server-and-move procedure for that platform.
 **Gate**: on a Windows runner, restore over an existing vault succeeds and verifies,
 and a held vault refuses with nothing changed.
 
-**Relations:** shares the restore swap with O279 — what an open that raced the swap reads and writes is O279's on unix, and whether the swap can happen with the database open is this entry's on Windows.
+O279 (closed 2026-09-27) made an open that races the swap refuse and reopen on unix;
+whether the swap can happen at all with the database open is this entry's, on
+Windows. O279's ruling recorded a first data point through Docker Desktop's drvfs
+mount of a Windows directory — not native Windows: the restore's rename-aside
+failed "Permission denied" while a SQLite connection was open in the directory,
+nothing restored and the live vault unchanged.
 
 ### O277 — `anchored_head` falls back to the cached head over a deleted `vault.json`, so an ordinary handle answers `VERIFY OK` with its manifest gone
 
@@ -28517,37 +29105,102 @@ anchor would be a false exit 2.
 a live handle refuse as integrity; a transient read error still falls back; the
 Windows probe first.
 
-### O279 — an open that races a restore's swap reads the vault set aside and writes into the restored one
+### O281 — the legacy `palace.db` rename runs beneath an idle holder
 
-**Filed 2026-09-26 by O278's ruling (its refuter; the mechanism measured as PF by
-the integrator).** `VaultStore::open` takes its database descriptor at
-`Connection::open` and runs its first statement (`journal_mode`) after it; a
-read-only open does the same through `connect_read_only`. O69's exclusive hold —
-the hold a `backup restore` takes last, before its two renames — can be taken
-between those two calls, because a connection that has opened but not read is
-invisible to a fence (O278's PE). The first statement then waits out the swap
-(`restores.rs`: the vault renamed aside, the stage renamed in, the hold dropped)
-and proceeds on the ASIDE inode, with `-wal` and `-shm` opened by path in the
-restored directory. PF measured the shape: the aside file's pages are read, a
-write succeeds into the restored directory's `-wal`, and the restored content is
-silently replaced for every later reader, `integrity_check` `ok`. An open's own
-writes — the keycheck seed, the chain switch, the anchor — would land there; a
-read-only server would serve a vault that no longer exists.
+**Filed 2026-09-27 by O279's ruling (its security lens, confirmed by the refuter);
+measured by the integrator (P-IDLE).** O7's mechanism leaves the legacy name alone
+when the TRUNCATE checkpoint reports busy, "another process holds the file" — but a
+checkpoint's busy result sees read marks, never an idle connection's hold. Measured
+across processes: a read-only replica holding a legacy vault idle; a writable open
+renamed `palace.db` to `vault.db` beneath it and removed the `palace.db-wal` and
+`-shm` it had open; the writer then wrote 40 drawers; the replica afterwards read the
+old count and its `verify` answered a false failure. Released since 1.5.0. A writable
+idle holder would split the WAL.
 
-**Relations:** shares the restore swap with O275 — whether a rename can happen at all with the database open is O275's on Windows, and what an open does when one happens is this entry's on unix.
+**Shape** (the security lens's, confirmed by the refuter): `locking_mode=EXCLUSIVE`
+read back BEFORE any statement (a heap wal-index, no `-shm` name), a zero busy
+timeout, `BEGIN EXCLUSIVE` — busy keeps the legacy name, as O7 intended — `COMMIT`
+(the lock survives, O257's measurement), the identity check, the TRUNCATE checkpoint,
+a refusal if `vault.db` exists, the rename under the hold, the close, then the
+sidecars. `a_hot_wal_survives_the_rename` builds its hot WAL by renaming beneath a
+`mem::forget`ed live same-process connection — it encodes this defect as passing
+behaviour and is re-shaped (a hot `-wal` from a connection closed under
+`NO_CKPT_ON_CLOSE`, or from a killed child), never deleted, with an idle-holder twin.
+`UPGRADING.md`: a legacy vault beside a live holder keeps its name until the holder
+stops.
 
-**Shape, for a ruling**: in each posture's connector, after the first statement
-that takes a lock and before any write, prove the descriptor's file is the path's
-(`SQLITE_FCNTL_HAS_MOVED`, or a stat of dev/inode before the open against one after
-that statement); a mismatch closes without a checkpoint and answers `StaleUnlock`,
-which `open_store_as` and `store_for` already retry once. Windows has no moved-file
-check; O275 owns whether a rename there can happen with a file open.
+**Gate**: P-IDLE inverted across processes — the name kept while the replica holds
+the vault, the replica's reads and `verify` true after the writer's saves, the rename
+on the next open once it has gone; the re-shaped hot-WAL test and its twin.
 
-**Gate**: a restore swap forced between an open's `Connection::open` and its first
-statement (a pause point) — the open refuses or retries onto the restored file,
-the restored directory is byte-identical, and a multi-page vault's
-`integrity_check` and `verify` pass after; PF on a real multi-page vault first, to
-size it.
+### O284 — a handle whose unlock preceded a restore's swap carries the set-aside vault's unlock notes
+
+**Filed 2026-09-27 by O279's ruling (its memory lens, confirmed by the refuter);
+measured by the integrator (P12b).** The unlock reads `vault.json` and
+`vault.json.next` by path before the database is opened, and records what it found:
+unhealed notes, the staged file's digest, the manifest it read. A restore landing
+between the unlock and the open leaves a handle on the RESTORED database carrying
+notes about the vault set aside — measured: a torn `.next` note on a handle whose
+restored vault holds no `.next`. The by-path decisions made from that state are
+byte-guarded (the promote and discard compare what the unlock read), so the data
+verdicts measured benign (P12); the notes are a false provenance claim on the forensic
+surface.
+
+**Shape, for a ruling**: the memory lens's directory-incarnation pin — the vault
+directory's identity recorded at the start of the unlock and compared after the
+open's first locking statement, a mismatch answering the reopen class — or the unlock
+notes re-derived from the directory the open proved.
+
+**Gate**: P12b inverted — the torn-`.next` note absent from a handle on a restored
+vault that holds none; a same-generation restore between the unlock and the open
+still served.
+
+### O285 — an `immutable=1` handle whose database moved after its open serves the set-aside vault for its life
+
+**Filed 2026-09-27 by O279's ruling (every lens and the refuter).** The read-only
+open's `immutable=1` escalation holds no lock, so no fence sees it and a restore can
+swap its vault at any time after the open's check; the handle then serves the
+set-aside database until it drops. It writes nothing and creates no file. Reached
+only where the ordinary read-only open fails for a non-busy reason — a directory this
+uid cannot write while another can rename `vaults/<id>` — which the escalation's own
+warning already calls wrong while anything writes (O257's residual, narrowed by
+O279's check at the open).
+
+**Shape, for a ruling**: the identity check re-run at the snapshot door for an
+`immutable=1` handle (about a microsecond per guarded read), a moved file answering
+the reopen class.
+
+**Gate**: an `immutable=1` handle (the escalation forced as O279's gate forces it —
+a `-shm` blocked by a directory does not escalate on this build, O286) across a swap
+refuses its next guarded read with the reopen class; a handle whose file did not move
+serves as before.
+
+### O286 — the test named for the read-only open's `immutable=1` escalation does not reach it
+
+**Filed 2026-09-27 by O279's build; measured by the integrator.**
+`a_vault_whose_wal_index_cannot_be_created_is_read_as_an_immutable_snapshot`
+blocks the vault's `-shm` with a directory and asserts only that a read-only
+open then serves reads. On this build it never reaches the escalation it names:
+a read-only connection that cannot map its wal-index reads its `-wal` without one
+(SQLite's unreliable-shm path) and serves the ordinary way — run with
+`--nocapture`, the escalation's own warning ("opened with immutable=1") is never
+printed. O279's gate for the escalation first used the same setup, and its
+premise assertion (the escalation's pause point must fire) failed; that gate now
+forces the escalation with a directory where the `-wal` goes, which SQLite
+cannot open. `CLAUDE.md`'s R4 passage says the escalation to `immutable=1` "where
+the directory is NOT writable" was "settled by execution — the test blocks the
+`-shm` with a directory rather than with `chmod`": the execution cited does not
+reach it, so what a genuinely write-protected mount does is unmeasured.
+
+**Shape**: measure a real write-protected directory — a read-only bind mount in
+Docker, since the test container runs as root and permission bits do not bind
+root — and assert which arm it takes (the escalation's pause point or its
+warning); then either correct the prose or the test, whichever the measurement
+contradicts. The old test's name and doc follow the measurement.
+
+**Gate**: the test asserts it reached the path its name claims (O279's
+`Opener::Immutable` pause point fired, or not, as measured); a counterfactual
+that removes the escalation fails it if the escalation is what it claims.
 
 
 ---

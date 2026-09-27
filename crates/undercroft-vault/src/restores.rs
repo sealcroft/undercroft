@@ -179,6 +179,33 @@ fn aside_path(vaults: &Path, id: &str) -> PathBuf {
     ))
 }
 
+/// Why a restore must not replace the vault directory `target`, when it is a
+/// symbolic link or holds one where its database or manifest belongs — `None`
+/// when it is neither (ROADMAP O283, ruled by the maintainer 2026-09-27:
+/// "restore refuses symlinks").
+///
+/// The swap renames the PATH aside and removes the aside afterwards. For a link
+/// that is the link alone: the directory it names was left orphaned where it
+/// was, and the restored vault silently moved onto the palace's own filesystem
+/// (measured). A linked database or manifest inside a real directory is left
+/// behind the same way. Nothing is followed; ordinary opens keep working
+/// through a link.
+pub fn linked_target(target: &Path) -> Option<String> {
+    let linked = |p: &Path| {
+        fs::symlink_metadata(p)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+    };
+    if linked(target) {
+        return Some(format!("{} is a symbolic link", target.display()));
+    }
+    [DB_FILE, LEGACY_DB_FILE, MANIFEST_FILE]
+        .into_iter()
+        .map(|name| target.join(name))
+        .find(|p| linked(p))
+        .map(|p| format!("{} is a symbolic link", p.display()))
+}
+
 /// Refuse as [`VaultError::RestoreInterrupted`] when a restore of `id` left the
 /// vault it was replacing aside under the palace at `root`.
 pub fn refuse_if_interrupted(root: &Path, id: &str) -> Result<(), VaultError> {
@@ -375,7 +402,27 @@ impl Stage {
         let aside = aside_path(&self.vaults, &self.id);
         refuse_if_interrupted(self.vaults.parent().unwrap_or(&self.vaults), &self.id)?;
         let expected = fs::read(self.dir.join(MANIFEST_FILE))?;
+        // A link that appeared after the door looked (ROADMAP O283).
+        if let Some(why) = linked_target(&target) {
+            return Err(VaultError::Io(io::Error::other(format!(
+                "{why}, so the restored vault was not put there; nothing was restored and the \
+                 live vault was not changed (ROADMAP O283)"
+            ))));
+        }
         let replaced = fs::symlink_metadata(&target).is_ok();
+        // ROADMAP O282. The door takes O69's hold only when the target existed
+        // when it looked; a vault created or restored there since — measured,
+        // written and served by another store — would be renamed aside with
+        // nothing holding it and removed with the aside: O69's data loss one
+        // door over. Replacing a vault is done under a hold, or not at all.
+        if replaced && hold.is_none() {
+            return Err(VaultError::Io(io::Error::other(format!(
+                "{} appeared while the restore ran, and nothing held it — another restore or a \
+                 `vault create` put a vault there, which may be in use. Nothing was restored \
+                 and it was not changed; retry the restore (ROADMAP O282)",
+                target.display()
+            ))));
+        }
         if replaced {
             // The injected fault takes the rename's own error path, message
             // and all — a test that met a different path would prove nothing.

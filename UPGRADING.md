@@ -16,7 +16,9 @@ the resolver that runs at start-up, and **opens nothing** — no vault, no
 database, no socket, no outbound call. Exit 1 means this environment would
 refuse to start; exit 0 means it starts. Given a declared data directory
 (`--data-dir` or `UNDERCROFT_HOME`), it also stats that directory's key files
-and vaults through the classifier a start runs (O204), reading no key.
+and vaults through the classifier a start runs (O204), reading no key, and
+opens one vault's `vault.json` read-only to ask whether the filesystem keeps a
+file's identity (O279) — a manifest file, never a vault or a database.
 
 **Every one of them, including the eight `UNDERCROFT_ORCH_*` the control
 plane reads.** Three of those were a coverage gap until 1.1.0 — their parses
@@ -238,6 +240,48 @@ new one. A vault whose directory holds a manifest and no database still
 refuses (ROADMAP O270): stop every process, move that directory aside, then
 restore. `undercroft config check` sees the embedder and key declarations and
 none of the rest.
+
+**And since O279, in the same release:** a restore over a symbolic link — a
+linked `vaults/<vault>`, or a linked database or manifest inside it — exits 1
+(`/v1` 400) with nothing changed, where it used to rename the LINK aside, orphan
+the directory it named and move the vault onto the palace's own filesystem: move
+the real directory into place, then restore (ROADMAP O283). A restore into a
+vault that does not exist exits 1 if a vault appears there while it runs, rather
+than replacing it with nothing holding it (O282). The refusal for a held vault
+now prints the store's own words — *"… is open in another process, and
+replacing it beneath that process destroys it …"*, or that another restore
+replaced it first — instead of *"is in use by another process"*; the exit code
+is unchanged (1), so a script matching the old text must match the new. And a
+command, server or replica that opens the vault while the restore swaps it in is
+refused and reopens once onto the restored vault; a second race in a row exits 1
+(`/v1` 409 with no class) with *"this handle must be reopened"* — run it again.
+
+### an open on a filesystem whose inode numbers are not stable refuses with "this handle must be reopened" (O279)
+
+**Symptom:** every command against a vault exits 1 — `/v1` answers 409 with no
+`class` — with *"this handle must be reopened: the database file this open
+reached is not the one at … now"*, twice in a row (each surface reopens once),
+on a vault nothing is restoring.
+
+**Cause:** since 1.7.0 every open of a vault database proves, after its first
+lock, that the file it holds is the file at its path: SQLite's own moved-file
+check compares the inode its descriptor had at the open with a fresh `stat` of
+the path, and the path SQLite resolved must name the same `(device, inode)` as
+the path the open used. That is how an open that raced a `backup restore` is
+refused instead of serving the vault set aside and corrupting the restored one
+(ROADMAP O279). A filesystem that hands the same file a different inode number
+on each lookup — some network and FUSE mounts do — makes every open read as
+moved. None was seen in measurement (local ext4, overlay, tmpfs and a 9p/drvfs
+bind mount of a Windows directory all read the same file as the same file), so
+this entry states a failure mode a deployment could meet rather than one a known
+filesystem has. Windows makes no such check (O275).
+
+**Fix:** keep the palace directory on a filesystem with stable inode numbers (for SMB/CIFS,
+server inode numbers, i.e. no `noserverino`). **`undercroft config check` detects
+it** on a declared data directory (`--data-dir` or `UNDERCROFT_HOME`): it opens a
+vault's `vault.json`, compares the identity its descriptor reports with a `stat`
+of the path, and refuses where they differ — the observable the open's check
+compares, with no database opened.
 
 ## 1.6.1 (released 2026-09-22)
 
@@ -1179,6 +1223,17 @@ stopping.
 refuses on two files, move the stray aside (`undercroft verify` against
 each, with the other moved out, says which one the manifest's chain head
 anchors) and reopen.
+
+**Amended for 1.7.0 (ROADMAP O279, O280, O281).** "A checkpoint that cannot
+complete because another process holds the file leaves the name alone" is true
+only of a holder in the middle of a read: an IDLE holder — a `--read-only` server
+between requests — is not seen, and a writable open renames beneath it, after
+which that server serves stale rows and can report a false `verify` failure until
+it restarts (ROADMAP O281, open): restart any read-only server beside a vault
+still named `palace.db` once a writable open has run. And from 1.5.0 through
+1.6.1 two writable opens that raced the rename could EMPTY the vault (ROADMAP
+O280, fixed in 1.7.0): if a vault read empty after an upgrade-day start, restore
+it from a backup taken before.
 
 **Not detectable before you restart** — this is per-vault on-disk state, not
 a declaration, so `undercroft config check` cannot see it. Nothing here

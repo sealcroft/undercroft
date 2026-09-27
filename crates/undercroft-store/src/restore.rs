@@ -224,6 +224,18 @@ pub fn restore_archive(
             "vault '{id}' exists; pass --force to overwrite it with the backup ({UNCHANGED})"
         )));
     }
+    // ROADMAP O283, ruled by the maintainer 2026-09-27: "restore refuses
+    // symlinks". The swap renames the PATH aside; for a link that is the link,
+    // so the directory it names was orphaned and the vault silently moved onto
+    // this palace's own filesystem. Refused before anything is staged.
+    if let Some(why) = undercroft_vault::restores::linked_target(&target) {
+        return Err(StoreError::Invalid(format!(
+            "vault '{id}' is not restored over: {why}. A restore replaces the directory at \
+             that path, which would leave what the link names behind and move the vault onto \
+             this palace's own filesystem. Replace the link with the directory itself, then \
+             restore ({UNCHANGED}; ROADMAP O283)"
+        )));
+    }
     if !archive.irregular().is_empty() {
         return Err(StoreError::IntegrityFinding(format!(
             "backup {name} does not verify, so {UNCHANGED}: it holds {:?} as something other \
@@ -313,7 +325,6 @@ pub fn restore_archive(
         ))));
     }
     pause::fire(root, Phase::Closed);
-    let key_generation_differs = archive.key_generation_differs(root);
     // O69's hold, taken only now: every refusal the archive can cause has
     // already been made, so none of them reaches the live vault.
     let hold = if std::fs::symlink_metadata(&target).is_ok() {
@@ -326,6 +337,12 @@ pub fn restore_archive(
     } else {
         None
     };
+    // Under the hold (ROADMAP O279, P13): computed before it, a rotation
+    // committed at that moment and promoted inside the hold's busy wait left
+    // the report saying `Some(false)` for a vault that had just been rotated —
+    // the one case this field exists to warn about. No rotation's fence can be
+    // taken while the hold is held.
+    let key_generation_differs = archive.key_generation_differs(root);
     pause::fire(root, Phase::Held);
     let swapped = stage.swap(hold)?;
     Ok(RestoreOutcome::Restored(RestoreReport {
