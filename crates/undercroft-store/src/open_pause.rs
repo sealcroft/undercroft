@@ -20,6 +20,10 @@ pub enum Opener {
     WritableLayout,
     /// `connect_writable`: the descriptor is open; `journal_mode` has not run.
     Writable,
+    /// `connect_read_only`: the unlock is done and the file is not yet chosen
+    /// or opened (ROADMAP O284 — a restore here leaves the unlock's state
+    /// describing the vault set aside).
+    ReadOnlyLayout,
     /// `connect_read_only`: the descriptor is open; the probe has not run.
     ReadOnly,
     /// `connect_read_only`'s `immutable=1` arm: open; its probe has not run.

@@ -60,6 +60,8 @@ mod rotate_pause;
 #[cfg(test)]
 mod snapshot_tests;
 mod sweep_pause;
+#[cfg(test)]
+mod unlock_state_tests;
 mod vault_db;
 pub mod witness;
 
@@ -4603,9 +4605,77 @@ impl VaultStore {
         Ok((conn, layout))
     }
 
+    /// **What the unlock read is still what the directory holds (ROADMAP
+    /// O284)**, asked on both postures once O279's door has proved the
+    /// database file and before the schema batch, a reconcile or any note is
+    /// copied. (The writable open's legacy rename and its sidecar sweep run
+    /// before it: they are the directory's own, derived from no unlock state.)
+    ///
+    /// The unlock reads `vault.json.next` by path before any connection
+    /// exists, and every note derived from it — a torn or too-new staging
+    /// file, and through the rotation it stages both deferral notes — is a
+    /// function of those bytes. A `backup restore` landing between the unlock
+    /// and the open left a handle on the RESTORED database carrying notes
+    /// about the vault set aside (measured: a torn-`.next` note on a vault
+    /// that holds none). So the digest of the bytes the unlock read is
+    /// compared with the file there now: `None` only for no file, so a torn
+    /// file counts, whether or not the unlock attached a rotation. Equal bytes
+    /// make the `.next`-derived notes true of the proven directory at the
+    /// comparison, whatever inode holds it — another process's writable open
+    /// may settle `.next` just after it, which the byte guards make benign, and
+    /// an `immutable=1` handle holds no lock at all (O285); the deferral
+    /// verdict also reads `vault.json`'s salt, which is O288 — no directory
+    /// pin, whose recycled inode
+    /// numbers measured A→B→A across restores, and nothing unix-only. A busy
+    /// writer never trips it: an anchor rewrites `vault.json`, never
+    /// `.next`. A difference is the reopen class, which the CLI and `/v1`
+    /// retry once with a fresh unlock; a read that fails is the unlock's own
+    /// error class, never a retry.
+    fn unlock_state_holds(vault: &Vault) -> Result<(), StoreError> {
+        // Only a staging file the unlock read and could NOT authenticate left a
+        // note behind that nothing else reconciles: a torn or too-new one. A
+        // valid one is a rotation's, attached as `pending`, and O254's ruled
+        // answer is that the open waits and promotes it in its reconcile under
+        // the byte guards — refusing it, or one that appeared after the
+        // unlock, turned that into a reopen, which O254's own gate caught. What
+        // a stale `pending` can still say is O288's.
+        if vault.staged_seen().is_none()
+            || vault.has_pending()
+            || vault.staged_on_disk()? == vault.staged_seen()
+        {
+            return Ok(());
+        }
+        undercroft_obs::diag_warn!(
+            "vault {:?}: vault.json.next is not the file this open's unlock read (ROADMAP \
+             O284); the open is refused and reopens",
+            vault.id()
+        );
+        Err(StoreError::StaleUnlock(format!(
+            "the vault's staging manifest (vault.json.next) changed between this open's unlock \
+             and its open — a backup restore replaced the vault, or a key rotation staged or \
+             another open settled one — so what the unlock found no longer describes the \
+             vault at {}. Nothing was served from it; reopen the vault (ROADMAP O284)",
+            vault.dir().display()
+        )))
+    }
+
+    /// Close a connection whose open was refused after the door: with
+    /// `Connection::close()`, never by drop, whose failure rusqlite discards
+    /// (ROADMAP O278). A close that fails is said and the refusal returned.
+    fn close_refused(conn: Connection) {
+        if let Err((_, e)) = conn.close() {
+            undercroft_obs::diag_warn!("closing a refused open's connection failed: {e}");
+        }
+    }
+
     fn open_inner(vault: Vault, embedder: Box<dyn Embedder + Send>) -> Result<Self, StoreError> {
         let kept_legacy_name = Self::migrate_db_filename(&vault)?;
         let (conn, opened_by) = Self::connect_writable(&vault)?;
+        // Before the schema batch, a reconcile or any note (O284).
+        if let Err(e) = Self::unlock_state_holds(&vault) {
+            Self::close_refused(conn);
+            return Err(e);
+        }
         // The note describes the handle, so only one really on `palace.db`
         // carries it: another open can finish the rename between the step that
         // kept the name and the connect (ROADMAP O281).
@@ -4866,7 +4936,13 @@ impl VaultStore {
                 path: vault.db_path().display().to_string(),
             });
         }
-        let conn = Self::connect_read_only(&vault)?;
+        let (conn, opened_by) = Self::connect_read_only(&vault)?;
+        // Before the keycheck read and `reconcile_read_only` (O284).
+        if let Err(e) = Self::unlock_state_holds(&vault) {
+            Self::close_refused(conn);
+            return Err(e);
+        }
+        let opened_legacy = opened_by == undercroft_vault::DbLayout::Legacy;
         // A busy database is said (ROADMAP O257); any other failure reads as
         // "no marker", which the schema check below then names properly — a
         // legacy vault's missing `meta` is `ReadOnlyUnmigrated`, not a raw
@@ -4901,11 +4977,20 @@ impl VaultStore {
         store.check_read_schema()?;
         store.fts = store.probe_fts_read_only();
         store.check_chain_read_only()?;
+        // The legacy-name note is DERIVED from the file the connector opened
+        // (ROADMAP O284, O281's rule on the read-only posture), never taken
+        // from the unlock's stat: a restore or another open's rename between
+        // the two moves the layout without touching `.next`, so the check
+        // above cannot see it.
         let notes: Vec<String> = store
             .vault
             .unhealed()
             .iter()
+            .filter(|u| !matches!(u, undercroft_vault::Unhealed::LegacyDatabaseName))
             .map(|u| u.to_string())
+            .chain(
+                opened_legacy.then(|| undercroft_vault::Unhealed::LegacyDatabaseName.to_string()),
+            )
             .collect();
         store.unhealed.extend(notes);
         // ROADMAP O251: LAST, after every step that can append —
@@ -4921,7 +5006,10 @@ impl VaultStore {
     }
 
     /// Open the connection read-only, escalating to an immutable read when
-    /// the filesystem itself is read-only.
+    /// the filesystem itself is read-only. Answers the layout it opened by —
+    /// the file the directory held at that moment, the escalation included —
+    /// from which the read-only legacy-name note is derived, as the writable
+    /// connector's answer decides the writable one (ROADMAP O281, O284).
     ///
     /// SQLite documents the escalation's cause precisely: a WAL database can
     /// be read by a read-only connection only if it can reach the `-shm`
@@ -4936,7 +5024,9 @@ impl VaultStore {
     /// the file and not only about us — pointing it at a live vault on a
     /// writable mount would read torn pages, which is why it is reached only
     /// after the ordinary open has failed.
-    fn connect_read_only(vault: &Vault) -> Result<Connection, StoreError> {
+    fn connect_read_only(
+        vault: &Vault,
+    ) -> Result<(Connection, undercroft_vault::DbLayout), StoreError> {
         use rusqlite::OpenFlags;
         let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
         let probe = |conn: &mut Connection| -> Result<(), StoreError> {
@@ -4951,7 +5041,13 @@ impl VaultStore {
             })?;
             Ok(())
         };
+        open_pause::fire(vault.dir(), open_pause::Opener::ReadOnlyLayout);
         let path = vault.db_path();
+        let layout = if path == vault.legacy_db_path() {
+            undercroft_vault::DbLayout::Legacy
+        } else {
+            undercroft_vault::DbLayout::Current
+        };
         // **Busy is not a reason to go immutable (ROADMAP O257, D1).** Every
         // failure used to fall through to the `immutable=1` escalation below,
         // SQLITE_BUSY included — so a read-only open arriving while a key
@@ -4975,7 +5071,7 @@ impl VaultStore {
             false,
             probe,
         ) {
-            Ok(vault_db::Opened::Here(conn, ())) => return Ok(conn),
+            Ok(vault_db::Opened::Here(conn, ())) => return Ok((conn, layout)),
             Ok(vault_db::Opened::Moved) => return Err(vault_db::moved(&path)),
             Err(StoreError::Sqlite(e)) if is_busy(&e) => {
                 return Err(StoreError::VaultHeld(OPEN_HELD.into()))
@@ -5003,7 +5099,7 @@ impl VaultStore {
              process is still writing to it",
             path.display()
         );
-        Ok(conn)
+        Ok((conn, layout))
     }
 
     /// Refuse a schema this build would have had to migrate, naming what is

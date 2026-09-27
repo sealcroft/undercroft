@@ -278,3 +278,38 @@ fn o279_v1_answers_the_factory_s_store_refusals_in_the_store_s_classes() {
         "the reopen class is retried exactly once"
     );
 }
+
+/// **ROADMAP O284 through `open_store_as`, both postures.** A torn
+/// `vault.json.next` in the live vault and a restore landing after the unlock
+/// and before the database open: the first attempt is refused with the reopen
+/// class, and the retry serves the restored vault's 200 rows with no note
+/// about the `.next` the vault set aside held.
+#[test]
+fn o284_open_store_as_drops_the_set_aside_vaults_unlock_notes() {
+    for (at, posture) in [
+        (Opener::WritableLayout, Posture::ReadWrite),
+        (Opener::ReadOnlyLayout, Posture::ReadOnly),
+    ] {
+        let (dir, arch) = vault_with_archive(200, 20);
+        let root = dir.path();
+        std::fs::write(vdir(root).join("vault.json.next"), b"{ torn").unwrap();
+        let ran = race(root, at, &arch, 1);
+        let opened = open_store_as(root, VAULT, posture);
+        open_pause::clear(&vdir(root));
+        assert_eq!(
+            ran.load(Ordering::SeqCst),
+            1,
+            "{at:?}: premise: the window was reached"
+        );
+        let store = opened.unwrap_or_else(|e| panic!("{at:?}: {e:#}"));
+        assert_eq!(store.count().unwrap(), 200, "{at:?}: the restored vault");
+        assert!(
+            !store
+                .unhealed()
+                .iter()
+                .any(|n| n.contains("vault.json.next")),
+            "{at:?}: the set-aside vault's note: {:?}",
+            store.unhealed()
+        );
+    }
+}

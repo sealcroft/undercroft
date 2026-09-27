@@ -2,7 +2,7 @@
 
 ## 1.7.0 — unreleased
 
-MINOR: one new capability, backward compatible, and eighteen fixes. The witness
+MINOR: one new capability, backward compatible, and nineteen fixes. The witness
 commands and routes are new; no default moves and no declaration can stop a
 start-up. Four fixes change what a deployment must do: every process writing a
 vault must run the same build, and a server whose vault another process
@@ -17,7 +17,7 @@ holds the write lock for as long as it runs and O256's that an archive taken by 
 older release beside a writer may be torn. (This line said "one fix" while O243 and
 O246 were both below it; corrected with O247. It said "nine" until O268,
 "ten" until O266, "eleven" until O276, "twelve" until O278, "thirteen"
-until O279, which closed four entries, and "seventeen" until O281; it said
+until O279, which closed four entries, "seventeen" until O281, and "eighteen" until O284; it said
 "Three fixes change what a deployment must do" until O283 made it four.)
 
 ### The external witness: `undercroft witness emit` / `check`, `GET`/`POST /v1/…/witness` (O245)
@@ -760,6 +760,53 @@ WAL — running two releases against one legacy vault at once is the only way to
 meet it. PATCH inside the unreleased 1.7.0, a released defect (1.5.0) shipping
 with 1.7.0 by the maintainer's ruling on O279; `UPGRADING.md`'s `palace.db`
 entry is amended.
+
+### A handle never reports unlock notes about a vault a restore set aside (O284)
+
+The unlock reads `vault.json.next` by path before any database connection
+exists, and records what it found on the handle — a torn or too-new staging
+file, and through a staged rotation both deferral notes. A `backup restore`
+landing between the unlock and the open (a window that holds the embedder's
+build, a model load or a served endpoint's dimension probe) left a handle on
+the RESTORED database carrying the notes of the vault set aside: measured on
+both postures, a torn-`.next` note on a vault that holds none, on every stats
+surface for a server's whole life.
+
+- **After O279's door proves the database file, the open compares the digest
+  of the `.next` bytes the unlock read with the file there now**, whenever the
+  unlock read one it could not authenticate — a torn or too-new file, the kind
+  that mints a note nothing else reconciles — on both postures (a valid staged
+  file is a rotation's, which the open still waits for and promotes, as O254
+  ruled; what a stale one can still say is O288), before the schema
+  batch, a reconcile or any note is copied. A difference answers the reopen
+  class, which the CLI and `/v1` retry once with a fresh unlock, and the
+  refused connection is closed, never dropped. Equal bytes make the
+  `.next`-derived notes true of the directory the door proved at that moment,
+  whatever inode holds it; a busy writer never trips it, since an anchor
+  rewrites `vault.json` and never `.next`. An `immutable=1` handle holds no
+  lock, so there it is a point-in-time check (O285).
+- **The read-only legacy-name note is derived from the file the connector
+  opened**, as O281 made the writable one, never from the unlock's stat.
+- A test destructures `Vault` field by field, so an unlock-era field added
+  later does not compile until someone says what covers it.
+- A vault `create` minted records the staging file its directory holds, so a
+  stray `vault.json.next` there no longer made its first open refuse.
+
+Ruled by three lenses plus an adversarial refuter (ROADMAP O284); an
+independent review of the build found the claims above overstated in three
+places, the refused connection dropped, `create`'s handle unrecorded and the
+busy-writer gate unable to prove the writer overlapped — each fixed. A directory
+pin lost on measurement: across 30 restores in a row, 28 landed on a directory
+identity already seen, so two restores in one window would pass it. Filed
+beside it: O288 (the unlock reads `vault.json` before `.next`, so a deferred
+rotation between the two reads can make a read-only open answer a false
+`Tampered`). Gates: P12b inverted on both postures and through
+`open_store_as`; a same-generation restore with no staging file served at
+once; the legacy note after a restore; fifty opens beside a writer anchoring
+in a loop, none refused; a staging file settled with no restore at all; three
+counterfactuals, each failing its gate. PATCH inside the unreleased 1.7.0; no
+`UPGRADING.md` entry — the refusal is the documented reopen class, raised only
+by a race and retried once.
 
 ## 1.6.1 — 2026-09-22
 

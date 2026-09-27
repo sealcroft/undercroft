@@ -2516,11 +2516,13 @@ fn every_manifest_writer_and_anchor_caller_is_the_one_the_ruling_names() {
 
     // No other crate writes a manifest, and the directory writer is pinned.
     // The STORE is scanned too (ROADMAP O256's refuter: a store-crate writer
-    // passed unseen), its test files aside — a test may plant a manifest.
+    // passed unseen), its test files aside — a test may plant a manifest, and
+    // the CLI's test files likewise (ROADMAP O284's surface gate plants a torn
+    // staging file).
     for (path, text) in store
         .iter()
         .filter(|(p, _)| !p.ends_with("_tests.rs"))
-        .chain(&cli)
+        .chain(cli.iter().filter(|(p, _)| !p.ends_with("_tests.rs")))
         .chain(&orch)
     {
         for line in text.lines().filter(|l| l.contains("vault.json")) {

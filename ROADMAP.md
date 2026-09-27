@@ -3998,7 +3998,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**317** of the **332** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**318** of the **333** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -9348,6 +9348,218 @@ review's fixes, on a freshly built binary: the same results — saves in 23–28
 1,038 of 1,038 on both servers, the rename in 30 ms once both stopped, the hot
 WAL's 1,025 of 1,025, and no row lost in 20 racing rounds, 13 of them keeping the
 legacy name.
+
+### O284 — CLOSED 2026-09-27: a handle never carries unlock notes about a vault a restore set aside — the open compares what the unlock read with what the proven directory holds
+
+**Filed 2026-09-27 by O279's ruling (its memory lens, confirmed by the refuter);
+measured by the integrator (P12b).** The unlock reads `vault.json` and
+`vault.json.next` by path before the database is opened, and records what it found:
+unhealed notes, the staged file's digest, the manifest it read. A restore landing
+between the unlock and the open leaves a handle on the RESTORED database carrying
+notes about the vault set aside — measured: a torn `.next` note on a handle whose
+restored vault holds no `.next`. The by-path decisions made from that state are
+byte-guarded (the promote and discard compare what the unlock read), so the data
+verdicts measured benign (P12); the notes are a false provenance claim on the forensic
+surface.
+
+**Shape, for a ruling**: the memory lens's directory-incarnation pin — the vault
+directory's identity recorded at the start of the unlock and compared after the
+open's first locking statement, a mismatch answering the reopen class — or the unlock
+notes re-derived from the directory the open proved.
+
+**Gate**: P12b inverted — the torn-`.next` note absent from a handle on a restored
+vault that holds none; a same-generation restore between the unlock and the open
+still served.
+
+
+#### RULED 2026-09-27 by three lenses (agentic memory architecture, security, software and SQLite engineering) and an adversarial refuter
+
+**The question.** How a handle stops carrying unlock-era state that describes a vault
+directory other than the one its database connection proved. Working material (the
+brief, the three lenses' answers, the refuter's report, the probe and its output) is in
+the session scratchpad `o284-panel/`; this record is the ruling.
+
+**Measured before the panel** (Docker, release build of `main` after O281, a temporary
+probe never committed): P12b on BOTH postures — a torn `vault.json.next` in the live
+vault, an archive taken before it, a restore between the unlock and the open: the handle
+serves the restored rows and still carries the torn-`.next` note, while the restored
+directory holds no `.next`. Twenty anchored writes never changed the `(dev, ino)` of
+`vaults/<id>`; one restore always did; thirty restores in a row landed 28 times on an
+identity already seen (the aside is removed after a swap and its inode recycled at once,
+alternating A→B→A).
+
+**Prior rulings found and their disposition** (searched `rul(ed|ing)` in O284, O279,
+O257, O266, O268, O281). **O257** — the byte guard compares with what the unlock READ,
+never with what it attached: FOLLOWED (a `has_pending()` check is its refuted draft).
+**O279** — the directory pin rejected as its identity check, and moving the embedder
+factory's signature rejected on cost: FOLLOWED here too (options A and E). **O268**'s
+two-file post-condition is load-bearing for the verdict. **O281** filtered the writable
+legacy note by the layout opened: EXTENDED to the read-only posture. **O266**'s
+`manifest_in_force` rule is untouched. The verdict overturns none.
+
+**The ruled shape (F, amended by the refuter).**
+1. **After O279's door returns the file proven, compare what the notes were built
+   from**: `vault.staged_on_disk()` against `vault.staged_seen()` — the digest of
+   `vault.json.next`'s bytes, `None` only for no file, so a torn file is `Some` — on BOTH
+   postures, whether or not the unlock attached a `pending`. A mismatch answers the
+   reopen class `StaleUnlock`, worded for this case, which the CLI and `/v1` retry once
+   with a fresh unlock. A read error propagates as the unlock's own does; it is not the
+   reopen class.
+2. **Placement**: on the writable open right after `connect_writable` and BEFORE the
+   schema batch, so a refused open creates nothing; on the read-only open right after
+   `connect_read_only` and before `reconcile_read_only`.
+3. **The read-only legacy-name note is DERIVED from the layout `connect_read_only`
+   actually opened by** (the `immutable=1` escalation included), never taken from the
+   unlock's stat: the one note F's comparison cannot reach, since across a swap the
+   digests can be equal only as `None == None`.
+4. A `Vault` destructured with no `..` in a vault-crate test pairs every unlock-era field
+   with the post-lock check that covers it or the reason it needs none, so a new by-path
+   field does not compile unruled.
+
+**Why F.** Every `.next`-derived note — `TornStagingManifest`, `StagingManifestTooNew`,
+and through `pending` both deferral notes — is a function of `.next`'s bytes with the
+master key, the id and the database's keycheck; equal bytes under the door's lock make
+the notes true of the proven directory whatever inode holds it. It has no A→B→A hole,
+works off unix (plain file reads; the door answers `Unchecked` there), and a busy writer
+never trips it (an anchor rewrites `vault.json` only). It also catches two window cases
+with NO restore that a directory pin cannot see: a rotation staging over a torn `.next`,
+and O281's rename between a read-only unlock and its open.
+
+**Options that lost, with their cost.** A, the directory pin: the measured A→B→A
+recycling reproduces the defect, two restores fit the window, a filesystem writer's
+`rename` keeps the inode, it is unix-only, and it is blind to both no-restore cases. B,
+re-derive the notes only: `pending` cannot be re-derived without the master key, and the
+two deferral notes derive from it, so it is a second copy of the unlock's classification.
+C, re-read and compare `vault.json` too: every anchor rewrites it, so opens beside a busy
+writer would refuse. D, the pin plus a second observable: directory times move on every
+anchor, birth time is filesystem-dependent and degrades to A, an inode generation needs
+an ioctl (a second `unsafe` block). E, unlock under the lock: either the lock is held
+across model loading and a 120 s dimension probe, or the API moves on the CLI, `/v1`, the
+restore door, the bench and the tests.
+
+**The split, settled by the refuter.** The memory lens asked for a `manifest_seen` check
+where it is consumed. Its stated case — a read-only deferred-state restore — is REFUTED:
+`manifest_seen` is read only in the read-only Committed arm, which needs a `.next`, and F
+already refuses there. The stale state it feared is reachable by ANOTHER route, the
+unlock's own read order (`vault.json` before `.next`), with a deferred rotation between
+the two reads answering a false `Tampered`. That is a different mechanism with its own
+gate, filed as **O288**, not folded in: this unit is sized to the restore window.
+
+**Claims refuted.** The brief's: the unlock→open window is NOT milliseconds —
+`recorded_embedder`'s own open, a model load or the served embedder's dimension probe
+(120 s timeout) run inside it on both surfaces; "the promote compares the bytes the unlock
+read" (only the removal does; the promote is authorised by the database keycheck and
+writes from memory); `LegacyDatabaseName` is a read-only unlock note only; "`pending` is
+benign" (true for data, false for the two deferral notes); the unlock-era state list
+omitted the keys, level and cached head. The security and engineering lenses': "only a
+rotation writes `.next`" and "the door's lock fences both inputs" — another process's
+writable open reconciles `.next` under a plain write lock, after F's comparison, which is
+benign (the removal is byte-guarded and the notes were true when compared); "a restored
+directory never holds a `.next`" — true at the swap only (an archive can carry one; the
+stage's own open promotes or discards it and the post-condition requires two files). The
+engineering lens's gate "a refused open writes nothing, by hashing the file" is
+miscalibrated: the door turns checkpoint-on-close back on, so a refused writable
+connection's close can fold the PROVEN file's own `-wal` — compare rows, chain, manifest
+and `.next`, never raw database bytes.
+
+**Fails silently if**: the comparison uses `has_pending()` or `.next`'s presence instead
+of digests; runs on one posture; runs before the door or after the schema batch or a
+reconcile; runs only when a `.next` exists; answers an integrity class, or a class a
+surface does not retry; the legacy note is filtered by a fresh stat instead of the
+connector's own layout; the warning or the note copy happens before the comparison.
+
+**The gate.** P12b inverted on both postures, the unlock's torn note asserted as the
+premise, `StaleUnlock` by variant and wording, then a fresh open serving the restored
+count with no torn note; the same through `open_store_as` on both postures; a legacy vault
+restored as current carrying no legacy note (counterfactual: filter removed); negative
+controls — a same-generation restore with no `.next` on either side served at once, and
+fifty opens beside a writer anchoring in a loop with a torn `.next` refusing none
+(counterfactual: a `vault.json` compare); the `Vault` destructuring; counterfactuals: no
+comparison, a `has_pending()` comparison.
+
+**Residuals, stated.** An `immutable=1` handle, and a read-only open whose `-shm` cannot
+be created, hold no lock, so F is a point-in-time check there (O285). Something that keeps
+rewriting `.next` forces a repeated exit 1 — it needs write access to the directory, and
+it is an availability cost, never a false verdict. `anchored_head`'s fall-back to the
+unlock's cached head when `vault.json` is unreadable (O277). The unlock's read order
+(O288).
+
+#### BUILT 2026-09-27, to the ruling
+
+**The check** (`VaultStore::unlock_state_holds`, one function both opens call):
+`vault.staged_on_disk()? == vault.staged_seen()`, answering `StaleUnlock` worded for
+this case otherwise; called right after `connect_writable` and before the schema batch,
+and right after `connect_read_only` and before the keycheck read and
+`reconcile_read_only`. `connect_read_only` now answers the path it opened, and the
+read-only open drops the unlock's legacy-name note and adds it back only when that path
+is `palace.db`. A new pause point, `Opener::ReadOnlyLayout`, sits at the top of
+`connect_read_only` (the writable path already had O281's `WritableLayout`), so a gate
+can land a restore after the unlock and before either open through `open_store_as`.
+The vault crate's `every_unlock_era_field_is_covered_after_the_open_proves_its_file`
+destructures `Vault` with no `..`, each field commented with what covers it.
+
+**Gates** (`unlock_state_tests.rs`, five; one surface test in the CLI; one in the vault
+crate): P12b inverted on both postures, the unlock's torn note asserted as the premise,
+`StaleUnlock` by variant and wording, then a fresh open serving the restored 100 rows
+with no torn note; `open_store_as` on both postures, a restore at the two layout pause
+points, the retry serving the restored 200 rows with no torn note; a same-generation
+restore with no staging file on either side served at once; the legacy note absent from
+a read-only handle whose vault a restore renamed to `vault.db`, and present on one that
+really opens `palace.db`; fifty read-only opens beside a writer anchoring in a loop with
+a torn `.next`, none refused; a staging file removed after the unlock with no restore at
+all, refused and reopened. Counterfactuals, each run and each failing its gate: CF1 no
+comparison — both P12b gates and the surface gate; CF2 the comparison only when the
+unlock attached a rotation (O257's refuted draft) — the same three; CF3 the legacy note
+taken from the unlock — the legacy gate.
+
+**Real corpus.** The LoCoMo feed mined into 12 wings (1,020 sealed drawers) with a torn
+`.next` planted, through this tree's release binary against `main`'s (probed: this one
+carries the O284 wording, `main`'s none), seven interleaved runs each: `--read-only
+stats` 5–7 ms against main's 6–8, `stats` 5–7 against 5–8, `verify` 9–12 against 9–12 —
+no cost that shows. This build's `stats` still names the torn file, and the vault
+verifies.
+
+**An independent adversarial review of the build found no false data verdict and six
+defects of mine, each fixed before this landed.** (1) The ruling's "Why F" omits an
+input: the deferral verdict also reads the unlock's `vault.json` salt through
+`rotation_verdict`, so a promote landing after a read-only unlock whose `.next` removal
+then fails leaves `.next` byte-identical and the check passes over a false
+`RotationPromotionDeferred` — recorded beside the ruling here and filed into O288, which
+owns the unlock's `vault.json`-derived state; the two destructuring comments that said
+otherwise are corrected. (2) "A refused open creates nothing / nothing was read or
+written" overclaimed: the writable open's legacy rename and sidecar sweep run before the
+check, and the refused connection was DROPPED after the door had turned
+checkpoint-on-close back on; it is now closed with `Connection::close()` (O278's rule),
+and the wording says what is true. (3) A vault `create` minted carried `staged_seen: None`
+without reading the directory, so a stray `.next` beside no `vault.json` made its first
+open refuse every time, and `POST /v1/vaults` does not retry; `create` now records what
+is there. (4) The busy-writer gate's premise (`writes > 0`) could not prove the writer
+overlapped the opens — strengthened, it FAILED on the first run, fifty opens having
+finished inside one write — so the opens now run until the writer has anchored three
+times during them, bounded at 60 s, green ten runs in a row. (5) The lock claim was
+stated unconditionally; the doc comment and CHANGELOG now name the point-in-time cases.
+(6) The legacy-note decision had two expressions; the read-only connector now answers the
+layout it opened by, as the writable one does.
+
+**Found by the battery, and amended beside the ruling: F compares only when the unlock
+read a staging file it could NOT authenticate** (a torn or too-new one — the files that
+mint a note nothing else reconciles). As ruled it refused O254's ruled P1 — an open that
+unlocks inside a rotation's staging window, waits at the fence, and promotes the staged
+file in its reconcile — as a reopen, caught by O254's own gate
+(`p1_an_open_inside_the_staging_window_waits_and_promotes_rather_than_discards`); a first
+narrowing (skip only when the unlock read no file) still refused it, because in P1 the
+unlock DID read the staged file, a valid one, and the rotation's promote then removed it.
+A valid staged file is attached as `pending` and belongs to the reconcile and its byte
+guards (O254, O257, O266); every P12b case, the torn one included, starts from a file the
+unlock could not authenticate. CF4 (the comparison as first ruled) and CF5 (the first
+narrowing) each fail that gate. **What this leaves, stated and filed into O288:** a
+restore that sets aside a vault whose `.next` was VALID leaves the handle's `pending`
+describing that vault, and a read-only reconcile can then mint a false deferral note —
+a note, never a data verdict (the reconcile's keycheck comparison and the byte guards
+hold), the same family as O288's other two routes.
+The same battery found the manifest-writer source gate refusing the CLI surface test's
+planted `.next`: its exemption said "a test may plant a manifest" and covered the store's
+test files only, and now covers the CLI's too, for its own stated reason.
 
 ## 1.6.1 — released 2026-09-22
 
@@ -29318,28 +29530,6 @@ anchor would be a false exit 2.
 a live handle refuse as integrity; a transient read error still falls back; the
 Windows probe first.
 
-### O284 — a handle whose unlock preceded a restore's swap carries the set-aside vault's unlock notes
-
-**Filed 2026-09-27 by O279's ruling (its memory lens, confirmed by the refuter);
-measured by the integrator (P12b).** The unlock reads `vault.json` and
-`vault.json.next` by path before the database is opened, and records what it found:
-unhealed notes, the staged file's digest, the manifest it read. A restore landing
-between the unlock and the open leaves a handle on the RESTORED database carrying
-notes about the vault set aside — measured: a torn `.next` note on a handle whose
-restored vault holds no `.next`. The by-path decisions made from that state are
-byte-guarded (the promote and discard compare what the unlock read), so the data
-verdicts measured benign (P12); the notes are a false provenance claim on the forensic
-surface.
-
-**Shape, for a ruling**: the memory lens's directory-incarnation pin — the vault
-directory's identity recorded at the start of the unlock and compared after the
-open's first locking statement, a mismatch answering the reopen class — or the unlock
-notes re-derived from the directory the open proved.
-
-**Gate**: P12b inverted — the torn-`.next` note absent from a handle on a restored
-vault that holds none; a same-generation restore between the unlock and the open
-still served.
-
 ### O285 — an `immutable=1` handle whose database moved after its open serves the set-aside vault for its life
 
 **Filed 2026-09-27 by O279's ruling (every lens and the refuter).** The read-only
@@ -29359,6 +29549,14 @@ the reopen class.
 a `-shm` blocked by a directory does not escalate on this build, O286) across a swap
 refuses its next guarded read with the reopen class; a handle whose file did not move
 serves as before.
+
+
+**Found by O284's refuter (2026-09-27), recorded here because it widens this entry's
+premise.** `connect_read_only`'s non-busy error arm also catches an open that FAILED —
+one that landed in a restore swap's gap between its two renames, where the path names no
+file — and escalates it to `immutable=1` on the restored vault, which then holds no lock,
+with only a warning. So "reached only where the directory cannot be written" is false: a
+racing read-only open can arrive at an `immutable=1` handle by that route too.
 
 ### O286 — the test named for the read-only open's `immutable=1` escalation does not reach it
 
@@ -29419,6 +29617,38 @@ arm above (output over one pipe buffer into `head -c 1`) exits with a documented
 code and prints no panic, on the CLI — and on the orchestrator binary too if it
 prints through `println!` the same way, which this filing did not measure; and no
 e2e check pipes the binary into `grep -q`.
+
+### O288 — the unlock reads `vault.json` before `vault.json.next`, so a deferred rotation between the two reads can make a read-only open answer a false `Tampered`
+
+**Filed 2026-09-27 by O284's ruling (its refuter, settling the memory lens's split);
+unmeasured.** `unlock_dir` reads and MAC-verifies `vault.json` (recording
+`manifest_seen`) and only afterwards reads `vault.json.next`. If, between those two
+reads, an old-generation writer anchors and closes and a key rotation stages, commits and
+fails to promote, the read-only unlock adopts the staged keys over a `manifest_seen` that
+was never the retired file, and `manifest_in_force` — finding `.next` intact and
+`vault.json` neither the retired bytes nor the new generation's — answers `Tampered`: a
+false exit 2 with the manifest tamper signal on a fresh read-only open. Narrow (it needs a
+deferred promote inside the unlock), real by reading.
+
+**A second route to the same false note, found by O284's review (no restore):** a
+read-only unlock reads generation N and a committed, deferred `.next` at N+1; another
+process's writable open then promotes, writing `vault.json` at N+1, and its `.next`
+removal fails or the process dies — a state O257 names as legitimate. The read-only
+open finds `.next` byte-identical, O284's check passes, and the Committed verdict,
+computed from the unlock's stale `vault.json` salt, carries `RotationPromotionDeferred`
+("Do NOT delete vault.json.next …") on a vault a fresh open reads as settled. The fix
+belongs with the read order: whatever re-reads `vault.json` after the lock owns both.
+**A third route, left by O284's scope:** a restore between an unlock and its open that
+sets aside a vault holding a VALID `.next` — O284 refuses only an unauthenticated one —
+leaves `pending` describing the set-aside vault, and the read-only reconcile can mint a
+false `RotationDiscardDeferred` or `RotationPromotionDeferred` on the restored one.
+
+**Shape**: O266 item 1's own ruled order applied to the unlock — read `.next` first, then
+`vault.json`. Once a `.next` exists, only a promote can change `vault.json`. No extra
+read, no retry. **Gate**: a pause point between the unlock's two reads, then an
+old-generation anchor, then a deferred rotation; the read-only open must not answer
+`ManifestTampered` (counterfactual: today's order); plus every O266 deferral gate still
+green.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 

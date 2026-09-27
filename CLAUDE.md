@@ -1097,7 +1097,20 @@ Consequences that are binding, not advisory:
   (O285), a same-process racer beside a same-process handle of the restored
   vault (its `-shm` effects happen inside the first statement), and Windows (no
   moved-file check; O275); the legacy rename beneath an IDLE holder was a
-  fourth until O281 gave it a hold. `open_pause.rs` holds the pause points,
+  fourth until O281 gave it a hold. **And what the UNLOCK read is checked
+  there too (O284)**: the unlock reads `vault.json.next` by path before any
+  connection exists, so a restore between the two left a handle carrying the
+  set-aside vault's notes; once the door has proved the file, both opens
+  compare the digest of the `.next` bytes the unlock read — whenever it read
+  one it could not authenticate, a torn or too-new one; a valid staged file is
+  a rotation's, which the open still promotes (O254) — with the file there
+  before the schema batch, a reconcile or any note,
+  and a difference is the reopen class, its connection closed, never
+  dropped. A directory pin lost on measurement — 28 of
+  30 restores in a row landed on a recycled directory identity. The read-only
+  legacy-name note is derived from the file the connector opened, and a test
+  destructures `Vault` so a new unlock-era field is ruled before it compiles.
+  The unlock's own read order is O288. `open_pause.rs` holds the pause points,
   reachable from the CLI's
   tests through the store's `test-fixture` feature,
   write-path admission control (admission.rs + core admission.rs — C3.3
@@ -2545,8 +2558,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (1172 run,
-                                      # 16 #[ignore]d = 1188 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (1179 run,
+                                      # 16 #[ignore]d = 1195 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
