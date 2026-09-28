@@ -1441,7 +1441,9 @@ fn a_rotation_beside_another_process_is_refused_and_every_exit_releases_the_vaul
 /// another process are both refused as `VaultHeld` — never served, and the
 /// read-only one never through `immutable=1`, which read the main file without
 /// the WAL and refused with a false "schema predates this build" (probe P-RO,
-/// D1).
+/// D1). "Refused" once the hold outlasts the connection's busy timeout, which
+/// this test's pause does: an open whose wait the rotation ends first proceeds
+/// after it (ROADMAP O288's read-only P1, in `rotation_state_tests.rs`).
 #[test]
 fn the_fence_holds_at_both_pauses_against_writable_and_read_only_opens() {
     for phase in [pause::Phase::Staged, pause::Phase::Committed] {
@@ -2420,8 +2422,10 @@ fn every_manifest_writer_and_anchor_caller_is_the_one_the_ruling_names() {
         "premise: unlock_as delegates to the shared body"
     );
     let shared = body_of(&vault, "unlock_dir");
+    // It reads the staging file by `dir.join(STAGING_FILE)` since ROADMAP O288:
+    // that read comes FIRST, before the `Vault` whose `pending_path()` it used.
     assert!(
-        shared.contains("verify_hmac(") && shared.contains("pending_path()"),
+        shared.contains("verify_hmac(") && shared.contains("dir.join(STAGING_FILE)"),
         "premise: the shared body is the unlock"
     );
     assert!(

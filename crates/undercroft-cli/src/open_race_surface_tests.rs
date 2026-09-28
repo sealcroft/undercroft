@@ -313,3 +313,177 @@ fn o284_open_store_as_drops_the_set_aside_vaults_unlock_notes() {
         );
     }
 }
+
+const DEFERRAL: &str = "adopted in memory only";
+
+/// A sealed vault of `n` drawers, no handle left open.
+fn fresh_vault(root: &std::path::Path, n: u32) {
+    let mut s = VaultStore::open(mgr(root).create(VAULT, SecurityLevel::Sealed).unwrap()).unwrap();
+    let batch: Vec<Drawer> = (0..n)
+        .map(|i| {
+            Drawer::new(
+                "w1",
+                "r",
+                format!("note {i}: the harbour ledger names cargo {i}"),
+                Some("o288s.md".into()),
+                i,
+                "test",
+            )
+        })
+        .collect();
+    s.upsert_many(&batch).unwrap();
+}
+
+/// A committed rotation whose promote was deferred, by O266's hand recipe:
+/// rotate, move the new `vault.json` to `vault.json.next`, put the retired
+/// bytes back.
+fn defer_by_hand(root: &std::path::Path) {
+    let retired = std::fs::read(vdir(root).join("vault.json")).unwrap();
+    {
+        let m = mgr(root);
+        let mut s = VaultStore::open(m.unlock(VAULT).unwrap()).unwrap();
+        s.rotate_keys(m.rotation_candidate(VAULT).unwrap()).unwrap();
+    }
+    std::fs::rename(
+        vdir(root).join("vault.json"),
+        vdir(root).join("vault.json.next"),
+    )
+    .unwrap();
+    std::fs::write(vdir(root).join("vault.json"), &retired).unwrap();
+}
+
+/// At the read-only open's layout pause, once, another open promotes the
+/// deferral — after the unlock read it, before the database open.
+fn promote_at_the_read_only_layout(root: &std::path::Path) -> Arc<AtomicUsize> {
+    let ran = Arc::new(AtomicUsize::new(0));
+    let (r, ran2) = (root.to_path_buf(), ran.clone());
+    open_pause::set(
+        &vdir(root),
+        Arc::new(move |here| {
+            if here == Opener::ReadOnlyLayout && ran2.load(Ordering::SeqCst) == 0 {
+                ran2.fetch_add(1, Ordering::SeqCst);
+                drop(VaultStore::open(mgr(&r).unlock(VAULT).unwrap()).unwrap());
+            }
+        }),
+    );
+    ran
+}
+
+/// **ROADMAP O288 through `open_store_as`, read-only.** A deferral, and another
+/// open PROMOTING it after the unlock and before the database open: the first
+/// attempt is refused with the reopen class and the retry serves the promoted
+/// vault. Before O288 the first attempt served it, saying the promotion was
+/// deferred and not to delete a staging file the promote had already removed.
+#[test]
+fn o288_open_store_as_drops_a_deferral_promoted_after_the_unlock() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    fresh_vault(root, 20);
+    defer_by_hand(root);
+    assert!(
+        open_store_as(root, VAULT, Posture::ReadOnly)
+            .unwrap()
+            .unhealed()
+            .iter()
+            .any(|n| n.contains(DEFERRAL)),
+        "premise: the hand recipe made a deferral a read-only open reports"
+    );
+    let ran = promote_at_the_read_only_layout(root);
+    let opened = open_store_as(root, VAULT, Posture::ReadOnly);
+    open_pause::clear(&vdir(root));
+    assert_eq!(
+        ran.load(Ordering::SeqCst),
+        1,
+        "premise: the window was reached"
+    );
+    assert!(
+        !vdir(root).join("vault.json.next").exists(),
+        "premise: the other open promoted it"
+    );
+    let store = opened.unwrap_or_else(|e| panic!("{e:#}"));
+    assert!(
+        !store.unhealed().iter().any(|n| n.contains(DEFERRAL)),
+        "a note about a deferral the promote had ended: {:?}",
+        store.unhealed()
+    );
+    assert_eq!(store.count().unwrap(), 20);
+}
+
+/// **ROADMAP O288's R1 through `open_store_as`, read-only.** An anchor, then a
+/// rotation that commits and whose promote is deferred, both between the
+/// unlock's two manifest reads: the unlock read no staging file (it reads
+/// `vault.json.next` first), O257's race arm refuses the first attempt, and the
+/// retry serves the deferral with its TRUE note. Read the old way round with
+/// nothing after it, the first attempt answered `ManifestTampered` — exit 2,
+/// never retried. This arm guards the SURFACE outcome and cannot tell the two
+/// mechanisms apart: with the open's rotation check in place, the old order
+/// also ends in one retry (measured, O288's counterfactuals), so the order
+/// itself is gated in the store (the O257 wording) and at the vault (the
+/// anchor read), and this arm fails only when both are gone.
+#[test]
+fn o288_open_store_as_serves_a_rotation_inside_the_unlock_after_one_retry() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    fresh_vault(root, 20);
+    let writer = VaultStore::open(mgr(root).unlock(VAULT).unwrap()).unwrap();
+    let fired = Arc::new(AtomicUsize::new(0));
+    let (r, f) = (root.to_path_buf(), fired.clone());
+    undercroft_vault::fixture::between_unlock_reads(move || {
+        f.fetch_add(1, Ordering::SeqCst);
+        let mut writer = writer;
+        writer
+            .upsert(&Drawer::new(
+                "w1",
+                "r",
+                "a late write the rotation retires".into(),
+                Some("o288s.md".into()),
+                99,
+                "test",
+            ))
+            .unwrap();
+        drop(writer);
+        defer_by_hand(&r);
+    });
+    let opened = open_store_as(root, VAULT, Posture::ReadOnly);
+    assert_eq!(
+        fired.load(Ordering::SeqCst),
+        1,
+        "premise: the hook ran inside the first unlock"
+    );
+    let store = opened.unwrap_or_else(|e| panic!("{e:#}"));
+    assert!(
+        store.unhealed().iter().any(|n| n.contains(DEFERRAL)),
+        "the retry reports the deferral that is really there: {:?}",
+        store.unhealed()
+    );
+    assert_eq!(store.count().unwrap(), 21);
+    assert!(store.verify().unwrap().ok());
+}
+
+/// **ROADMAP O288 on `/v1`, read-only**: `store_for` answers the same race
+/// with one reopen, and serves the promoted vault with no deferral note.
+#[test]
+fn o288_v1_read_only_drops_a_deferral_promoted_after_the_unlock() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    fresh_vault(root, 20);
+    defer_by_hand(root);
+    let ro = VaultManager::open_as(root, None, undercroft_vault::Access::ReadOnly).unwrap();
+    let mut tenancy =
+        tenant::Tenancy::new(ro, embedder_factory(), true).expect("no secret declared");
+    let ran = promote_at_the_read_only_layout(root);
+    let (code, body) = call(&mut tenancy, &format!("/v1/vaults/{VAULT}/stats"));
+    open_pause::clear(&vdir(root));
+    assert_eq!(
+        ran.load(Ordering::SeqCst),
+        1,
+        "premise: the window was reached"
+    );
+    assert!(
+        !vdir(root).join("vault.json.next").exists(),
+        "premise: the other open promoted it"
+    );
+    assert_eq!(code, 200, "{body}");
+    assert!(body.contains("\"drawers\":20"), "{body}");
+    assert!(!body.contains(DEFERRAL), "{body}");
+}

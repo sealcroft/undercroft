@@ -2,7 +2,7 @@
 
 ## 1.7.0 — unreleased
 
-MINOR: one new capability, backward compatible, and nineteen fixes. The witness
+MINOR: one new capability, backward compatible, and twenty fixes. The witness
 commands and routes are new; no default moves and no declaration can stop a
 start-up. Four fixes change what a deployment must do: every process writing a
 vault must run the same build, and a server whose vault another process
@@ -17,7 +17,8 @@ holds the write lock for as long as it runs and O256's that an archive taken by 
 older release beside a writer may be torn. (This line said "one fix" while O243 and
 O246 were both below it; corrected with O247. It said "nine" until O268,
 "ten" until O266, "eleven" until O276, "twelve" until O278, "thirteen"
-until O279, which closed four entries, "seventeen" until O281, and "eighteen" until O284; it said
+until O279, which closed four entries, "seventeen" until O281, "eighteen" until O284,
+and "nineteen" until O288; it said
 "Three fixes change what a deployment must do" until O283 made it four.)
 
 ### The external witness: `undercroft witness emit` / `check`, `GET`/`POST /v1/…/witness` (O245)
@@ -807,6 +808,69 @@ in a loop, none refused; a staging file settled with no restore at all; three
 counterfactuals, each failing its gate. PATCH inside the unreleased 1.7.0; no
 `UPGRADING.md` entry — the refusal is the documented reopen class, raised only
 by a race and retried once.
+
+### A read-only open never reports a key rotation its files no longer show (O288)
+
+The unlock reads `vault.json` and `vault.json.next` by path before any database
+connection exists, and a read-only open decided the rotation verdict — and minted
+`RotationPromotionDeferred` ("Do NOT delete vault.json.next") or
+`RotationDiscardDeferred` — from those two reads. Measured, on the read-only posture:
+
+- an old-generation anchor and a rotation that committed and failed its promote,
+  both between the unlock's two reads, made the open answer a false
+  `ManifestTampered` — exit 2, with the manifest tamper event that pages an
+  operator;
+- an ORDINARY rotation beneath a read-only open that had unlocked inside its hold —
+  no fault anywhere; a read-only connect waits at the rotation's fence rather than
+  being refused — left the open saying the promotion was deferred and not to delete a
+  staging file the promote had already removed, for a server's whole life; so did a
+  promote by another process after the unlock, whether or not its removal of `.next`
+  succeeded;
+- a discard of an abandoned stage after the unlock, and a `backup restore` after it
+  that set aside a vault whose staging file was valid, left a note about a file the
+  vault no longer had.
+
+`verify` passed in every case but the first; the writable posture, which re-decides
+under the database's write lock, was right on every route.
+
+- **The unlock reads `vault.json.next` first, then `vault.json`** — the order O266
+  ruled for the manifest rule. A promote writes `vault.json` before it removes
+  `.next`, so the two reads are consistent against one; a second rotation or a
+  restore between them is detected by the open, not prevented. A staging file that
+  cannot be read is held until `vault.json` is judged, so it never pre-empts a
+  tamper verdict — and only a regular file of a manifest's size is read at all,
+  since a FIFO planted as `.next` blocked the unlock forever and a link to
+  `/dev/zero` exhausted memory, ahead of that verdict.
+- **The read-only open asks, on the verdict its reconcile returned, whether the
+  files still say so** — a committed rotation through the manifest rule's own staged
+  branch (`.next` still the bytes the unlock read, `vault.json` still the retired
+  bytes), an abandoned one by `.next`'s digest — after the database door and before
+  a note is copied, the chain checked or a read served. A difference answers the
+  reopen class, which the CLI and `/v1` retry once; it raises no tamper event, and a
+  file that cannot be read is its own error. The writable posture gets no new check:
+  it waits at the fence and promotes, as O254 ruled — though the unlock's new order
+  turns a rotation committing between a writable unlock's two reads, served on the
+  first open before, into one retry.
+
+Ruled by three lenses plus an adversarial refuter (ROADMAP O288), who between them
+found four routes the filing had not named — the ordinary rotation among them — and
+two things the unlock's new order would have made worse on its own. Filed beside it:
+**O289** (a read-only handle whose deferred promote lands AFTER its open answers a
+later forged `vault.json` as the integrity class with no tamper event — measured) and
+**O290** (a writable open whose unlock attached a deferral heals an offline rollback
+beneath it into a crash note — measured, heights 27 → 24, `verify` OK). Gates: every
+route on the read-only posture at both security levels, and the routes that reach it
+on the writable posture too; a vault-level arm the store check cannot mask; two
+tamper-precedence arms (an unreadable staging file, and one that is no manifest);
+negative controls (a steady deferral, a busy writer beside an abandoned stage with
+its overlap measured per open, an unreadable file); and three surface arms through
+`open_store_as` and a read-only `/v1`. Twelve counterfactuals, each run and each
+failing its gate. An independent review of the build found the non-regular staging
+file, an unbounded wait in two tests (this unit's and O284's), a premise that did not
+prove overlap, and claims here that overstated — each fixed before this landed.
+PATCH inside the unreleased 1.7.0; no `UPGRADING.md`
+entry — the refusal is the documented reopen class, raised only by a race and retried
+once.
 
 ## 1.6.1 — 2026-09-22
 
