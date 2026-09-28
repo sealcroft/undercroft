@@ -686,6 +686,54 @@ fi
 kill "$DEF_S" 2>/dev/null; wait "$DEF_S" 2>/dev/null
 rm -rf "$DEF_HOME"
 
+echo "== a forged manifest after a promote beneath a deferred server pages (ROADMAP O289) =="
+# The held read-only server keeps its deferral for its life; before O289 a
+# vault.json forged after a writable open promoted beneath it answered as a
+# lost vault.json.next — 409 integrity with NO tamper signal — where an
+# ordinary server raises `undercroft_hmac_verify_failures_total{surface=
+# "manifest"}`. Only a telemetry build can see the difference: both answers
+# exit 2 and both are 409.
+PS_HOME="$(mktemp -d)"
+ps_cli() { env UNDERCROFT_HOME="$PS_HOME" "$BIN" "$@"; }
+ps_cli init >/dev/null 2>&1
+ps_cli remember "O289: a note the promoted vault still serves" --wing notes >/dev/null 2>&1
+PS_V="$PS_HOME/vaults/default"
+cp "$PS_V/vault.json" "$PS_HOME/retired.json"
+ps_cli vault rotate default >/dev/null 2>&1
+cp "$PS_V/vault.json" "$PS_HOME/staged.json"
+mv "$PS_V/vault.json" "$PS_V/vault.json.next"
+cp "$PS_HOME/retired.json" "$PS_V/vault.json"
+env UNDERCROFT_HOME="$PS_HOME" UNDERCROFT_MCP_HTTP_TOKEN="$TOKEN" UNDERCROFT_METRICS=1 \
+  "$BIN" serve-http --host 127.0.0.1 --port 8790 --read-only >"$PS_HOME/serve.log" 2>&1 &
+PS_S=$!
+wait_up 8790 || fail "the held read-only server did not start" "$(cat "$PS_HOME/serve.log")"
+ps_st=$(curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8790/v1/vaults/default/stats)
+ps_cli stats >/dev/null 2>&1
+ps_cli remember "O289: one more note, which moves the server's cookie" --wing notes >/dev/null 2>&1
+if grep -q 'NOT promoted over vault.json' <<<"$ps_st" && [ ! -e "$PS_V/vault.json.next" ] \
+   && cmp -s <(sed 's/"chain_head_hex": *"[0-9a-f]*"//; s/"writes": *[0-9]*//; s/"manifest_mac_hex": *"[0-9a-f]*"//' "$PS_V/vault.json") \
+             <(sed 's/"chain_head_hex": *"[0-9a-f]*"//; s/"writes": *[0-9]*//; s/"manifest_mac_hex": *"[0-9a-f]*"//' "$PS_HOME/staged.json"); then
+  pass "premise: the held server opened over the deferral, and a writable open promoted beneath it"
+else
+  fail "premise: the deferral or the promote did not land, so the arm below proves nothing"
+fi
+ps_m0=$(curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8790/metrics)
+pc="$(sed -n 's/.*"manifest_mac_hex": *"\(.\).*/\1/p' "$PS_V/vault.json")"
+pn=0; [ "$pc" = 0 ] && pn=1
+sed -i "s/\"manifest_mac_hex\": *\"$pc/\"manifest_mac_hex\": \"$pn/" "$PS_V/vault.json"
+ps_v=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" \
+  -X POST http://127.0.0.1:8790/v1/vaults/default/verify)
+ps_m=$(curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8790/metrics)
+if [ "$ps_v" = 409 ] && ! grep -q 'undercroft_hmac_verify_failures_total{[^}]*surface="manifest"' <<<"$ps_m0" \
+   && grep -q 'undercroft_hmac_verify_failures_total{[^}]*surface="manifest"' <<<"$ps_m"; then
+  pass "a forged vault.json after a promote beneath the held server raises the manifest tamper signal"
+else
+  fail "a forged vault.json after a promote did not raise the manifest tamper signal (verify $ps_v)" \
+    "$(grep hmac_verify_failures <<<"$ps_m")"
+fi
+kill "$PS_S" 2>/dev/null; wait "$PS_S" 2>/dev/null
+rm -rf "$PS_HOME"
+
 echo
 echo "telemetry e2e results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

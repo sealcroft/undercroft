@@ -4589,6 +4589,94 @@ fi
 check "O266: --read-only verify after the promote" 0 "VERIFY OK" -- o266 --read-only verify
 rm -rf "$O266_HOME"
 
+echo "== A promote beneath a live read-only server, then vault.json forged or gone (ROADMAP O289, O277) =="
+# A `serve-http --read-only` opened over a deferred promote keeps its deferral
+# for its life (no latch), and before O289 it answered a vault.json forged AFTER
+# a writable open promoted beneath it as a lost vault.json.next — integrity,
+# "restore the vault from a backup", and no tamper signal — where an ordinary
+# server answers "possible tampering". And an ordinary server fell back over a
+# vault.json that was GONE (O277), answering 200 with the vault unopenable.
+# O266's hand recipe again; every arm drives a live server.
+O289_HOME="$(mktemp -d)"
+o289() { UNDERCROFT_HOME="$O289_HOME" "$BIN" "$@"; }
+o289 init >/dev/null 2>&1
+for i in 1 2 3 4 5; do
+  o289 remember "O289: the harbour keeper logs the lighthouse lamp, entry $i" --wing notes >/dev/null 2>&1
+done
+O289_V="$O289_HOME/vaults/default"
+cp "$O289_V/vault.json" "$O289_HOME/retired.json"
+o289 vault rotate default >/dev/null 2>&1
+cp "$O289_V/vault.json" "$O289_HOME/staged.json"
+mv "$O289_V/vault.json" "$O289_V/vault.json.next"
+cp "$O289_HOME/retired.json" "$O289_V/vault.json"
+UNDERCROFT_HOME="$O289_HOME" "$BIN" serve-http --host 127.0.0.1 --port 18894 --read-only >/dev/null 2>&1 &
+O289_HELD=$!
+for _ in $(seq 1 40); do curl -sf http://127.0.0.1:18894/healthz >/dev/null 2>&1 && break; sleep 0.25; done
+O289_ST="$(curl -s http://127.0.0.1:18894/v1/vaults/default/stats)"
+if cmp -s "$O289_V/vault.json.next" "$O289_HOME/staged.json" && grep -q 'NOT promoted over vault.json' <<<"$O289_ST"; then
+  echo "ok    O289 premise: the held server opened over the deferral"; PASS=$((PASS+1))
+else
+  echo "FAIL  O289 premise: the held server opened over the deferral, or every arm below proves nothing"; echo "$O289_ST" | head -3 | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+check "O289 premise: a writable command promotes beneath the held server" 0 "" -- o289 stats
+if [ ! -e "$O289_V/vault.json.next" ] && cmp -s "$O289_V/vault.json" "$O289_HOME/staged.json"; then
+  echo "ok    O289 premise: promoted, vault.json.next gone"; PASS=$((PASS+1))
+else
+  echo "FAIL  O289 premise: promoted, vault.json.next gone"; FAIL=$((FAIL+1))
+fi
+UNDERCROFT_HOME="$O289_HOME" "$BIN" serve-http --host 127.0.0.1 --port 18895 --read-only >/dev/null 2>&1 &
+O289_CTL=$!
+for _ in $(seq 1 40); do curl -sf http://127.0.0.1:18895/healthz >/dev/null 2>&1 && break; sleep 0.25; done
+# The note is what the open found, and says so.
+O289_ST="$(curl -s http://127.0.0.1:18894/v1/vaults/default/stats)"
+if grep -q 'at this open, a committed key rotation was adopted in memory only' <<<"$O289_ST"; then
+  echo "ok    O289: the held server's deferral note says when it was true"; PASS=$((PASS+1))
+else
+  echo "FAIL  O289: the held server's deferral note says when it was true"; echo "$O289_ST" | head -3 | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+# One ordinary write moves both servers' cookies, so their next guarded read asks the manifest.
+o289 remember "O289: one more lamp" --wing notes >/dev/null 2>&1
+cp "$O289_V/vault.json" "$O289_HOME/intact.json"
+O289_C="$(sed -n 's/.*"manifest_mac_hex": *"\(.\).*/\1/p' "$O289_V/vault.json")"
+O289_N=0; [ "$O289_C" = 0 ] && O289_N=1
+sed -i "s/\"manifest_mac_hex\": *\"$O289_C/\"manifest_mac_hex\": \"$O289_N/" "$O289_V/vault.json"
+if [ -n "$O289_C" ] && ! cmp -s "$O289_V/vault.json" "$O289_HOME/intact.json"; then
+  for port in 18894 18895; do
+    O289_R="$(curl -s -w '\n%{http_code}' -X POST "http://127.0.0.1:$port/v1/vaults/default/verify")"
+    if [ "$(tail -1 <<<"$O289_R")" = 409 ] && grep -q 'possible tampering' <<<"$O289_R" \
+       && ! grep -q 'Restore the vault from a backup' <<<"$O289_R"; then
+      echo "ok    O289: a vault.json forged after the promote is the tamper verdict (port $port)"; PASS=$((PASS+1))
+    else
+      echo "FAIL  O289: a vault.json forged after the promote is the tamper verdict (port $port)"; echo "$O289_R" | sed 's/^/      /'; FAIL=$((FAIL+1))
+    fi
+  done
+else
+  echo "FAIL  O289 premise: the MAC flip did not land"; FAIL=$((FAIL+1))
+fi
+cp "$O289_HOME/intact.json" "$O289_V/vault.json"
+# O277: a vault.json that is gone — deleted, or a directory in its place — is
+# 409 integrity on the ORDINARY server and the held one alike; both answered
+# 200 (ordinary) or blamed vault.json.next (held) before.
+for how in deleted directory; do
+  rm -f "$O289_V/vault.json"
+  [ "$how" = directory ] && mkdir "$O289_V/vault.json"
+  for port in 18895 18894; do
+    O289_R="$(curl -s -w '\n%{http_code}' -X POST "http://127.0.0.1:$port/v1/vaults/default/verify")"
+    O289_W="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/v1/vaults/default/witness")"
+    if [ "$(tail -1 <<<"$O289_R")" = 409 ] && grep -qF '"class":"integrity"' <<<"$O289_R" \
+       && grep -q 'vault.json is \(missing from\|not a manifest file in\)' <<<"$O289_R" && [ "$O289_W" = 409 ]; then
+      echo "ok    O277: vault.json $how beneath a live server is 409 integrity on verify and the witness (port $port)"; PASS=$((PASS+1))
+    else
+      echo "FAIL  O277: vault.json $how beneath a live server is 409 integrity on verify and the witness (port $port)"; echo "$O289_R witness $O289_W" | sed 's/^/      /'; FAIL=$((FAIL+1))
+    fi
+  done
+  rm -rf "$O289_V/vault.json"
+  cp "$O289_HOME/intact.json" "$O289_V/vault.json"
+done
+kill "$O289_HELD" "$O289_CTL" 2>/dev/null; wait "$O289_HELD" "$O289_CTL" 2>/dev/null
+check "O289: the vault verifies once vault.json is back" 0 "VERIFY OK" -- o289 --read-only verify
+rm -rf "$O289_HOME"
+
 echo
 echo "e2e results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1
