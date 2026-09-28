@@ -3998,7 +3998,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**320** of the **335** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**324** of the **339** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -9914,6 +9914,475 @@ same capability that deletes it. On Windows (compiled by `windows-check`, run by
 nothing) a read racing a promote may meet a delete-pending `.next` or a transient
 absence during the rename-over, which answers `Io` rather than the reopen class — the
 class O275 (Windows) and O277 (a manifest that cannot be read) own.
+
+### O289 — CLOSED 2026-09-28: a forged `vault.json` is the tamper verdict on every handle, a deferred one whose promote landed after its open included, and a staging file that cannot be read is never served over
+
+**Filed 2026-09-28 by O288's ruling (all three lenses and the refuter); measured by the
+integrator (P-S5).** A read-only handle opened over a committed rotation whose promote
+was deferred carries `deferred_over`, and O254 item 2 forbids clearing it when a promote
+lands after the open. `manifest_in_force` then answers `StagedLost` — `CorruptManifest`,
+the integrity class, with no tamper event — whenever `.next` is gone and `vault.json`
+fails the handle's MAC or cannot be read. Measured, after a promote beneath a held
+read-only handle: `vault.json`'s MAC flipped — the held handle's `verify` AND `search`
+answer `CorruptManifest`, where an ordinary handle and a fresh unlock answer
+`ManifestTampered` and page an operator; `vault.json` replaced by a directory — the held
+handle's `verify` and `search` answer integrity (a guarded read misses into
+`anchored_head()?`), where an ordinary handle serves through O277's fall-back and a fresh
+unlock answers `Io`. O288 narrows the population — only a promote landing after the
+open's check leaves a stale `deferred_over` — and not the case.
+
+**Shape, for a ruling**: the fix revises ruled items — clearing the field is a latch
+(O254 item 2, O266's no-latch gate), and telling a forged manifest from an older
+generation's needs the retired key O266 rejected keeping — so a panel decides it. The
+question is what `manifest_in_force` answers when the deferral it was licensed by is
+provably over (`.next` gone) and `vault.json` fails or cannot be read: the fresh-open
+parity candidate is `ManifestTampered` with the event for a MAC failure and O277's answer
+for an unreadable file.
+
+**Gate**: P-S5 inverted — the held handle's `verify` and `search` answer what an ordinary
+handle answers for a flipped MAC (the tamper verdict and its event), and the unreadable
+case matches O277's ruling.
+
+**Relations:** shares a diff surface with O277 — both decide what `manifest_in_force` answers when `vault.json` cannot be read or fails its MAC.
+
+#### RULED 2026-09-28 by three lenses (agentic memory architecture, security, software and filesystem engineering) and an adversarial refuter — O277 ruled with it
+
+**The question.** What `Vault::manifest_in_force` answers — and so what its four readers
+answer — on a handle whose `deferred_over` a promote after its open made stale, when
+`vault.json` fails the handle's MAC or cannot be read; whether O277 (the same function's answer
+for an unreadable `vault.json` on an ordinary handle) is ruled with it; what the stale
+`RotationPromotionDeferred` note O288's review left to this entry says; versioning; the gate.
+Working material — the brief, the three lenses' answers, the refuter's report, the probe
+sources and their logs, and Rust 1.90's Windows `rename` source — is in the session scratchpad
+`o289/`; this record is the ruling.
+
+**Measured before the panel sat** (Docker, a release build of `main` `c8b5433`, a temporary
+probe never committed; sealed vaults, the flip at hmac-only too; deferrals through the fault
+seam). HELD is a read-only open over the deferral, ROTATING the rotating handle, CONTROL a
+read-only open after the promote, FRESH a new unlock and open; every guarded read was forced to
+miss by a raw commit.
+- P-S5 re-run: reproduced exactly.
+- After a promote beneath the held handle (HELD and ROTATING identical in every row): a flipped
+  MAC — HELD `CorruptManifest`, no event, on `verify`, `search`, the witness and a backup;
+  CONTROL and FRESH `ManifestTampered`. `vault.json` deleted — HELD integrity on all four;
+  CONTROL serves `verify`, `search` and the witness (O277), its backup `CorruptManifest`
+  ("missing"); FRESH `NotFound`. A directory — HELD integrity; CONTROL serves, its backup `Io`;
+  FRESH `Io`. The exact retired bytes put back — HELD integrity; CONTROL `ManifestTampered`;
+  FRESH `IntegrityFinding`. A genuine older generation-0 manifest that is not the retired bytes
+  — HELD integrity; CONTROL `ManifestTampered`; FRESH `IntegrityFinding`. Unparseable —
+  `CorruptManifest` everywhere. Before a promote: flipped — `ManifestTampered` HELD and FRESH;
+  deleted or a directory — HELD serves `verify`, `search` and the witness through the fall-back
+  (its backup refuses), FRESH `NotFound` or `Io`; a genuine older generation-0 manifest — HELD
+  `ManifestTampered`, FRESH serves (O266's stated residual).
+- Live, through a `--features telemetry` release binary and O266's hand recipe: a
+  `serve-http --read-only` over the deferral, a writable `stats` promoting beneath it, a control
+  server started after, one `remember` moving both cookies. The held server's `stats` and its
+  witness's `unhealed` still carry `RotationPromotionDeferred` ("Do NOT delete
+  vault.json.next") with no `.next` on disk. After a MAC flip its `verify` and `GET …/witness`
+  answer 409 integrity with "Restore the vault from a backup taken before this" and
+  `undercroft_hmac_verify_failures_total{surface="manifest"}` absent, where the control answers
+  "possible tampering", its counter reads 2 (one from `verify`, one from the witness) and a fresh
+  `--read-only verify` exits 2 with the event. After a deletion or a directory the held server
+  answers 409, the control 200, a fresh command exit 1. `/v1` and `/mcp` search stayed 200 on
+  both servers after every change — the guard's cached verdict (O252's class).
+- **Named by the refuter and run before this was recorded**: a `.next` READ ERROR on a deferred
+  handle. `vault.json.next` replaced by a directory — before a promote beside the retired
+  bytes, before a promote beside a flipped `vault.json`, after a promote beside the promoted
+  file, after a promote beside a flipped one — and the held handle answered `VERIFY OK`, served
+  `search` and the witness and raised nothing in all four (its backup `Io`); a fresh open
+  answered `Io` or, where flipped, `ManifestTampered`. The rule returns on a `.next` read error
+  before it reads `vault.json`, and `anchored_head` turns that into the fall-back. A FIFO at
+  `.next` (deferred) or at `vault.json` (ordinary): `stats` and `verify` blocked until a writer
+  opened the FIFO — the probe released them after 3 s; on a server that is the one request loop.
+- Rust **1.90**'s `std::fs::rename` on Windows, read from `rust-src` inside the project's image:
+  `MoveFileExW(MOVEFILE_REPLACE_EXISTING)`, then, on `ERROR_ACCESS_DENIED`,
+  `SetFileInformationByHandle(FileRenameInfoEx, REPLACE_IF_EXISTS | POSIX_SEMANTICS)`,
+  returning the original error when that fails; `OpenOptions`' default share mode includes
+  `FILE_SHARE_DELETE`. The lenses read the host's 1.92 source: the same shape. What SHIPS on
+  Windows is neither: `release.yml` builds it on the runner's unpinned stable (O294).
+
+**Prior rulings found and their disposition** (searched `rul(ed|ing)` in O289, O277, O266,
+O254, O256, O257, O284, O288 and O252; none on O289 or O277 themselves).
+- **O266 item 3(d) — REVISED**, recorded beside it. Its letter ("`.next` missing or changed while
+  `vault.json` is not a manifest of the handle's generation → the integrity class with NO HMAC
+  event") and item 3(e) ("a manifest failing its MAC that is not the retired bytes →
+  `ManifestTampered`") overlap on a forged file, and the build chose (d). (d)'s own stated
+  reason is fresh-open parity, and the refuted claim in O266 that founded it was measured with
+  `vault.json` the retired generation's file only; for a forged file a fresh unlock answers
+  `ManifestTampered` with the event — measured at both levels and live. New letter: `.next`
+  gone or changed while `vault.json` IS the retired bytes.
+- **O266 item 3(c) — REFINED**: the fall-back needs `.next` POSITIVELY intact (a `.next` read
+  error is not intact — the directory rows above), and an ABSENT `vault.json` is no longer a
+  read failure but an integrity verdict (O277, below).
+- **O266 items 1, 2 and 5 and its no-latch gate; O254 item 2 — FOLLOWED**: no latch;
+  `deferred_over` stays for the handle's life; the rule keeps four readers.
+- **O266's rejection of keeping the retired key — FOLLOWED** for a verify-only use, on cost
+  against benefit rather than on its letter: exact parity only on an offline edit where (A) is
+  merely louder, against retained key material, zeroize and rotation-completeness duties and a
+  second MAC site; re-deriving the key needs the master key, which no `Vault` holds.
+- **O254 item 3 and O256 item 3 — REFINED**: a non-regular or oversized file at `vault.json` is
+  absent — integrity — as a missing one already is on both doors; the directory case answered
+  `Io` on both.
+- **O257 item 5 — FOLLOWED** (a promote's verdict, untouched).
+- **O288 item 2's stated exception** (a `vault.json` unreadable after `.next` was found gone is a
+  reopen) **— REMOVED**: a documented consequence of the rule's `lost()` arm, pinned by no test,
+  and O288's own principle ("a read that fails is its own error") is met more exactly without
+  it. **O288's regular-file guard — EXTENDED** to every manifest read the unlock, the rule and
+  the anchor's strict read make. **O288's accepted residual**, a FIFO at `vault.json` blocking
+  the unlock, **— REVISED**: a hang has no exit code. **O288's declined note re-wording** —
+  decided here, item 5.
+- **O277's filed shape** ("`NotFound` as an integrity verdict … other I/O errors keeping the
+  fall-back") **— REFUTED in its discriminator** by measurement: the control serves the
+  directory row, which is `EISDIR` and so "other I/O", and on Windows reading a directory fails
+  `ACCESS_DENIED`. Ruled here, recorded under O277 too.
+- No maintainer ruling is overturned.
+
+**Claims refuted, the brief's and the lenses' included.**
+- The brief: "`/v1` answers 404 for `NotFound`" — only through `vault_err` (the unlock); a live
+  handle's `Vault(Io)` or `Vault(NotFound)` goes through `store_err`, which has no such arm: 500.
+  "Rust 1.90's rename" — not what ships on Windows. "The held handle cannot tell a forged file
+  from a genuine older one without a generation-0 key" — incomplete: a file carrying this
+  generation's salt and failing this generation's MAC can only be forged (the salt split, which
+  loses below). "Only `write_manifest_file` writes `vault.json`" — a mixed-build 1.6.x process
+  does too (O254's residual). The brief missed the rule's two unguarded reads, and the brief and
+  all three lenses missed the early `.next` return.
+- The memory lens: "classify only after a failed read" — a FIFO never fails, it blocks; an
+  absent file answered as a reopen at the open's check overrides O288 item 2 without refuting
+  it; "O288's exception must survive".
+- The security lens: an absent file as a reopen (the same); "an `UPGRADING.md` entry is owed" —
+  every new refusal meets a state that arose after the process started and that already fails
+  every restart on both builds (`unlock_dir` answers `NotFound` or `Io`), the upgrade's own
+  restart included; `chmod 000` listed as an evasion while its own table kept the fall-back for
+  it.
+- The engineering lens: "with `.next` lost, keep `lost()` for any `vault.json` miss" — `lost()`
+  says "no manifest on disk now derives … restore from a backup", false for a promoted file that
+  is merely unreadable, and a fresh open answers `Io`; "the vault directory gone → `NotFound`" —
+  the anchor door and backup already answer integrity for a missing manifest, a split in the rule
+  alone recreates O277's own defect (doors disagreeing about one state), `/v1` would answer it
+  500, and O266 already accepted "live integrity, fresh `NotFound`" for both files gone; "3(c)
+  needs no revision"; "matches backup's answer" (not for a directory); a Docker Desktop bind
+  mount offered as a Windows measurement — it measures Linux `rename(2)` through the
+  file-sharing layer, which O279 recorded as "not native".
+
+**The ruled shape.**
+1. **One guarded read for every manifest file** the unlock, the rule and the anchor's strict read
+   make: `fs::metadata` first, then a bounded read (`take`) of a regular file of at most
+   `MAX_MANIFEST_BYTES` (1 MiB, O288's bound). It answers Bytes; Missing (`NotFound`,
+   `NotADirectory`); NotAFile (not a regular file, or over the bound — never opened, so a FIFO
+   cannot block it); or Unreadable (any other error). `exists()` is never used: it swallows
+   errors.
+2. **On a deferred handle `.next` is read FIRST into a HELD result** — Intact (its digest is
+   `staged_seen`), Gone (Missing, or other bytes) or Unreadable (NotAFile, or a read error) —
+   with no early return. O288's held order, extended to the rule.
+3. **Then `vault.json`, in this order:**
+   a. Missing or NotAFile → **absent**: integrity (`CorruptManifest`, naming `.next` when it is
+      Intact), no event. `anchored_head` and `verified_manifest` refuse; `anchored_writes` is
+      `None`; `deferral_in_force` answers the read error in its own class, `Io` (O288 item 2).
+      On EVERY handle — this is O277.
+   b. Unreadable → on an ordinary handle, or a deferred one whose `.next` is Intact, today's
+      (`anchored_head` falls back, `verified_manifest` and `deferral_in_force` `Io`,
+      `anchored_writes` `None`); otherwise `Io` on every reader, no fall-back.
+   c. Its digest is the retired bytes R → `.next` Intact: the staged manifest is in force; Gone:
+      `lost()` (integrity, no event); Unreadable: `Io`.
+   d. Parse or id failure → `Refused`, as today.
+   e. Fails this handle's MAC → `Tampered`, with the event, whatever `.next` holds — **option
+      (A)**.
+   f. Otherwise in force, whatever `.next` holds — a promote happened, and this is what an
+      ordinary handle answers.
+4. **The unlock** answers Missing `NotFound` (as today) and NotAFile and Unreadable `Io` (a FIFO
+   no longer blocks it). **The anchor's strict read** (`verified_disk_read`, O254 item 3)
+   answers Missing and NotAFile `AnchorFault::Integrity`, Unreadable `AnchorFault::Io`.
+5. **The note stays the open's record, re-worded to say so**: `RotationPromotionDeferred` in the
+   past tense ("at this open …"), keeping the substrings gates and documents match — "adopted in
+   memory only", "NOT promoted over vault.json", "Do NOT delete vault.json.next" — so it is true
+   on a handle whose promote landed later. A live note (O288's option C) and clearing it (a
+   latch) stay rejected.
+6. **Windows: ruled now, reasoned rather than measured**, recorded under O275. Both rename paths
+   replace the name in one operation; the transients a Windows reader can meet (a sharing
+   violation, `ACCESS_DENIED`, delete-pending) are Unreadable, which keeps the fall-back; only a
+   transient `NotFound` during a legitimate rename would be a false verdict, and it would be
+   loud. `verified_manifest` has answered `NotFound` as integrity outside any lock since O256
+   with no Windows probe. The measurement is P-WIN (the gate): the Linux arm in the battery, and
+   the same test run by name on a `windows-latest` runner, which needs a push the maintainer
+   approves.
+
+**Options that lost.** (B) today's `lost()` — the silence the event exists to end, on the
+`--read-only` incident server A32 and R4 exist for, with a message that sends the operator to a
+`.next` a promote removed legitimately. (C) a verify-only generation-0 key — above. (D) a latch
+— breaks the no-latch gate, and the verdict would depend on whether the handle happened to read
+during the window. The salt split (tamper only when the file names this generation's salt) — the
+salt is unauthenticated, so the attacker would choose the quieter class. O277's `NotFound`-only
+split — the directory row. `O_NONBLOCK` and `fstat` on the descriptor — closes the stat/read race
+exactly, but needs per-target constants or a new `libc` edge, and on Windows a directory fails at
+the open before any `fstat`; filed as the upgrade path (O293). A reopen at the open's check for an
+absent file — O288 item 2.
+
+**Dissent.** The engineering lens preferred `NotFound` for a missing vault directory and `lost()`
+for any `vault.json` miss with `.next` gone; the memory and security lenses preferred a reopen at
+the open's check for an absent file; the security lens asked for an `UPGRADING.md` entry and a
+`config check` arm. Each settled by the refuter on the code and rulings above. None on (A), on
+ruling O277 here, on the guarded read, or on the note.
+
+**Fails silently if**: an arm asserts exit 2 or `is_err()` rather than the variant — both
+integrity outcomes exit 2; a search arm is served from the guard's cache (force a miss; premise:
+`chain_replays` moved); the flip moves the salt, or the premise that the bytes differ from R is
+not asserted; the `.next` error still returns early; the discriminator uses `exists()` or error
+kinds; the file is read before it is stat'ed; the injected fault fires on the `.next` read rather
+than `vault.json`'s; the tamper event is asserted only in store tests, which build no telemetry; a
+counterfactual copy is not force-recompiled.
+
+**The gate.** Store tests at both security levels on the held, rotating, control and fresh
+handles, the VARIANT asserted: a MAC flip after the promote → `ManifestTampered` on `verify`,
+`search` (a forced miss), the witness and a backup; `.next` a directory beside a flip →
+`ManifestTampered`; before a promote `.next` a directory beside R → `Io`, never served; `.next` a
+directory beside the promoted file → served; R after the promote → `CorruptManifest`; a genuine
+older generation-0 manifest → `ManifestTampered` (a pinned cost); `vault.json` deleted, or a
+directory, on an ordinary writable, an ordinary read-only, a deferred-intact and a deferred-gone
+handle → integrity; the vault directory removed → integrity; a FIFO at `vault.json` and at
+`.next`, each on a bounded thread, answering within the bound; a present file that cannot be read
+(a new fixture fault on the rule's `vault.json` read) with `.next` intact and gone → the fall-back
+and `Io`; P6 re-run (O277's measurement) — measured and pinned as it lands. **P-WIN**: a
+vault-crate test replacing `vault.json` through the real `write_manifest_file` in a loop while
+reader threads run the guarded read, one arm holding a `File` open throughout, premise that the
+readers saw both manifests, pass on zero Missing and zero NotAFile — in the battery on Linux, and
+by name on `windows-latest` if the maintainer approves. **e2e**: a live `serve-http` over a
+deleted `vault.json`, and over a directory, answers 409 integrity (was 200). **e2e-telemetry**:
+after a promote beneath a held read-only server, a flipped MAC moves the manifest counter — the
+only behavioural proof of the event. Source gates: the vault crate's manifest-read gate names the
+guarded read and admits no bare `fs::read` of a manifest file outside it; the tamper emits stay
+three and the rule's readers four; the note keeps its gated substrings in the past tense.
+Counterfactuals, each force-recompiled: today's MAC arm; the early `.next` return; a
+`NotFound`-only split; a read before the stat; an absent file answered as a reopen; an unreadable
+file with `.next` gone answered by the fall-back, and by `lost()`; a latch; the salt split.
+Negative controls: O266's eight deferral tests (both files gone keeps its integrity class,
+through absent now), O288's thirteen, O254's two-process gate, backup's missing-manifest test.
+Real corpus: the LoCoMo feed through O266's hand recipe — `--read-only` `stats`, `verify` and
+`search` latency this build against `main`'s, and a live server over the deferral with a promote
+beneath it and a flip.
+
+**Residuals, stated.** A genuine older generation-0 manifest, written by hand after a promote,
+pages where a fresh open answers `IntegrityFinding` — O266's accepted residual, now on both sides
+of the promote. The retired bytes put back after a promote read integrity on the held handle where
+an ordinary one pages (no latch). A live handle answers integrity for an absent manifest where a
+fresh open answers `NotFound` or `Io`. An `immutable=1` handle can meet one transient false
+integrity verdict inside a restore's two renames (O285). The stat/read race: a regular file
+swapped for a FIFO between them blocks the read — the same capability deletes the vault (O293).
+Windows, reasoned not measured, unless P-WIN runs there (O275). A live handle's I/O refusal is a
+500 on `/v1`, as every I/O refusal there is. `search` served from the guard's cache after a change
+that moves no cookie (O252).
+
+**Filed by this ruling**: O291 (a vault delete takes no hold beneath another process's live
+handle), O292 (a vault directory holding a database and no manifest), O293 (the manifest reads
+still unguarded, and `O_NONBLOCK` as the stat/read race's upgrade path), O294 (the native release
+targets build on an unpinned toolchain).
+
+**Versioning**: PATCH inside the unreleased `1.7.0`. (A) adds the event to a verdict that already
+exits 2 and answers 409 — surface that reports an existing silence is a fix (2026-09-08); an absent
+manifest replaces a shipped `VERIFY OK` over a vault no open can reopen; a `.next` read error no
+longer turns a forged or keyless vault into `VERIFY OK`; a FIFO no longer hangs a reader; the note
+becomes true. **No `UPGRADING.md` entry**: every new refusal meets a state that arose after the
+process started and that already fails every restart, on both builds. Nothing new for `config
+check` (O292 owns a directory with a database and no manifest).
+
+#### BUILT 2026-09-28, to the ruling — with one prediction of the refuter's corrected by measurement, and eleven findings of an independent review, each fixed before this landed
+
+**The guarded read** (`read_manifest_file`, vault `lib.rs`): `fs::metadata` first — `NotFound`
+and `NotADirectory` are Missing, any other stat error Unreadable — then only a regular file of at
+most `MAX_MANIFEST_BYTES` (1 MiB, O288's `MAX_STAGED_MANIFEST_BYTES` renamed, since it bounds every
+manifest read now) is opened, and read through `take(MAX + 1)`, one byte past the bound meaning
+NotAFile. Its callers: the unlock's two reads (`.next` into O288's held result; `vault.json`,
+Missing → `NotFound`, NotAFile and Unreadable → `Io`, the first `exists()` replaced by a stat), the
+rule's two reads, and `verified_disk_read` (Missing and NotAFile → `AnchorFault::Integrity`,
+Unreadable → `AnchorFault::Io`). **The rule** (`manifest_in_force`): a `Staged::{Intact, Gone,
+Unreadable}` held from the `.next` read; then `vault.json` Absent → `NotInForce::Absent { error,
+staged_intact }`; Unreadable → `NotInForce::Unreadable { error, fall_back }`, `fall_back` only
+when not deferred or `.next` Intact; the retired digest → staged / `lost()` / Unreadable without a
+fall-back; parse and id → Refused; MAC failure → `Tampered`, whatever `.next` holds. `anchored_head`
+falls back only on `fall_back: true`; `refusal` answers Absent as `CorruptManifest` naming the file
+("vault.json is missing from" / "is not a manifest file in" vault X's directory, and that
+`vault.json.next` still holds the keys when it is intact); `verified_manifest` lost its own
+NotFound arm, which Absent now covers; `deferral_in_force` answers Absent and Unreadable as the
+read error, and O288's stated exception is gone from both docs. `fixture::Fault::RuleRead` fires on
+the rule's `vault.json` read alone. `RotationPromotionDeferred` reads "at this open, a committed key
+rotation was adopted in memory only …", its gated phrases kept. `adopted_rotation_holds`' doc
+corrected. No surface code moved: `/v1` answers `CorruptManifest` 409 with `class: "integrity"`
+and `Io` 500 (`store_err`), the CLI exit 2 and 1, as before.
+
+**Gates.** The vault crate: `o289_the_guarded_read_classes_what_is_at_the_path` (a regular file, a
+missing one, one beneath a file, a directory, an oversized file, a FIFO and a device, each read on
+a bounded thread); `o289_the_deferral_note_says_when_it_was_true`; **P-WIN**,
+`o289_a_reader_never_finds_the_manifest_gone_while_it_is_replaced` — the real
+`write_manifest_file` replacing `vault.json` `O289_REPLACEMENTS` times (1,000 by default), three
+readers through the guarded read and a holder re-opening the current file; on Linux, 1,000
+replacements, no writer error, 6.9 M reads and 28,869 holds, none Missing, NotAFile or torn; and the
+source gate, which now counts the guarded read's five callers, the three bare manifest reads left
+in `lib.rs`, the helper's stat before its open and its bound, and no `return` or `?` between the
+rule's `.next` read and its `vault.json` read. The store crate (`manifest_rule_tests.rs`, eight
+tests, both security levels where the ruling asked, variants asserted — `CorruptManifest` and
+`IntegrityFinding` kept apart — every search from a forced guard miss with the replay counter as its
+premise): a forged manifest after a promote is `ManifestTampered` on `verify`, `search`, the witness
+and a backup of the held, rotating and control handles and on a fresh unlock; a `.next` that cannot
+be read beside the retired bytes, a flip and a promoted file (`Io`, `ManifestTampered`, served); the
+retired bytes after a promote (`CorruptManifest`, the control `ManifestTampered`, a fresh open's
+`IntegrityFinding`) and a genuine older manifest (`ManifestTampered`, the pinned cost); O277 on an
+ordinary writable, an ordinary read-only and a deferred handle before and after a promote, for a
+deleted `vault.json`, a directory, the vault directory moved away and replaced by a file; a present
+file that cannot be read (the fall-back on an ordinary handle and with `.next` intact, `Io` with it
+gone, a backup never falling back, and the read-only open's check answering `Io` — never a reopen —
+with `.next` intact, and with `.next` gone and `vault.json` unreadable or absent, the case O289
+moved); FIFOs at `vault.json` beneath a read-only handle (`verify`, `stats`), at the unlock, beneath
+a WRITABLE handle's anchor (the write commits, the handle retires) and at a deferred handle's
+`.next`, each bounded, released by a read-write open that cannot itself wait; a writable handle
+whose `vault.json` becomes a directory (the write commits, the handle retires with "replaced
+beneath a live handle", the next write `IntegrityFinding`); and P6 re-run. **e2e** (11 checks,
+`tests/e2e.sh`): through the release binary and O266's hand recipe, a `serve-http --read-only` over
+the deferral with a writable `stats` promoting beneath it and a second server started after — the
+note's "at this open", a flipped MAC answering "possible tampering" on both and never "Restore the
+vault from a backup", and a deleted `vault.json` and a directory answering 409 integrity on
+`verify` and the witness on both. **e2e-telemetry** (2 checks): the same promote beneath a held
+read-only server, then a flip, moves `undercroft_hmac_verify_failures_total{surface="manifest"}`
+— absent before the flip.
+
+**Counterfactuals, fifteen, each applied to the real sources, force-recompiled (a `Compiling
+undercroft-vault` line in every log), run, and restored from a saved copy compared byte for byte**
+(`scratchpad/o289/cf289.py`, `cf289_more.py`, `run-cf289.sh`, logs in `cf-logs/`): cf1 today's MAC
+arm (a lost `.next` for any MAC failure) — the forged-after-promote gate and the retired/older gate;
+cf2 the early `.next` return — the source gate, the unreadable-`.next` gate and the FIFO gate; cf3
+O277's filed `NotFound`-only split — the absent gate and the FIFO gate; cf4 a read before the stat —
+the guarded-read gate, O288's no-manifest `.next` gate and the FIFO gate; cf5 an absent file
+answered as a reopen at the open's check — O288's `o288_an_unreadable_file_after_the_unlock_is_an_error_not_a_retry`;
+cf6 and cf7 an unreadable file with `.next` gone answered by the fall-back and by `lost()` — the
+unreadable gate (cf7 re-run after the open's-check arm was added, failing it again); cf8 a latch —
+O266's no-latch gate among fourteen (the latch is process-global in the counterfactual, run on one
+thread); cf9 the salt split — the older-manifest arm; cf10 the old note — the note gate; cf11 the
+unlock's `vault.json` read unguarded — the source gate and the FIFO gate; and, added for the review's findings,
+cf12 the anchor's strict read answering a non-file as `AnchorFault::Io` — the writable-handle gate
+and the FIFO gate's anchor arm; cf13 the anchor's strict read unguarded — the source gate, the
+writable-handle gate and the FIFO gate; cf14 an answer from the held `.next` result placed after the
+hook — the source gate (whose window reached only the hook before the review), the unreadable-`.next`
+gate and the FIFO gate.
+
+**Real corpus.** The LoCoMo feed mined into 12 wings (1,020 sealed drawers, 1,021 audit records),
+this tree's release binary against `main` `c8b5433`'s (probed: the guarded read's text in this one
+only), seven interleaved runs each. Settled: `--read-only stats` 6–22 ms against main's 8–13,
+`verify` 10–12 against 9–12, `search` 48–64 against 47–60; over a deferral made by O266's hand
+recipe: 5–8 against 5–8, 10–13 against 11–15, 53–64 against 54–60; promoted: 7–11 against 6–10,
+12–18 against 12–17, 48–59 against 48–62 — no cost that shows; the guarded read adds one stat to
+each manifest read. Four live servers over the corpus: two read-only servers opened over the
+deferral (this build, main's), a writable `stats` promoting beneath them, two ordinary ones started
+after, one `remember`. A flipped MAC: this build's held server "possible tampering", main's
+"vault.json.next, which holds vault …" (the lost-`.next` text), both ordinary servers "possible
+tampering". A deleted `vault.json`: this build's servers 409 "vault.json is missing from vault …",
+main's held server the lost-`.next` text and main's ordinary server **200 `VERIFY OK`**. The vault
+verified once the file was back.
+
+**Found by the build, and corrected.**
+- *The refuter's prediction for P6 was wrong, measured*: it expected a live writable handle's next
+  write over a deleted `vault.json` to refuse before it commits. The write path reads no anchor
+  before its commit, so the write COMMITS and the anchor then retires the handle — O254 item 3's
+  ruled shape, unchanged here — and the write after it is refused. Pinned by
+  `o277_p6_a_live_writable_handle_over_a_deleted_manifest`; the same holds for a directory and a
+  FIFO at the anchor, pinned by the two writable arms.
+- *An independent adversarial review of the build found no false verdict in the rule — it walked
+  every cell of the state table — and eleven things of mine*, each fixed before this landed:
+  (1) the unit's governance was unfinished at the snapshot (CHANGELOG, the published counts, the
+  entries still open, no corpus figure) — done; (2) the anchor's strict read changed class for a
+  non-file and nothing tested it, so a counterfactual mapping it back to `Io`, or restoring its bare
+  read, passed every gate — the two writable arms and cf12/cf13; (3) the FIFO test's doc claimed the
+  anchor and `stats`, which it did not drive, and its rescue opened the FIFO write-only, which itself
+  waits for a reader — rescue made read-write, both arms added; (4) P-WIN's "holds a handle
+  throughout" held the ORIGINAL file, which names an unlinked inode after the first rename, and its
+  readers spun without yielding — a holder that re-opens the current file, `yield_now`; (5) the
+  source gate's no-early-return window ended at the hook, so an answer placed after it passed —
+  the window now runs to the `vault.json` read and refuses `?` too (cf14); (6) O293's inventory of
+  bare reads omitted `restores.rs`' live read under a restore's hold, `Stage::swap`, `backups.rs`,
+  and `staged_on_disk`'s lock-free callers, and the gate's scoping comment was false for the first —
+  both widened; (7) `class()` folded `CorruptManifest` and `IntegrityFinding` together, so "every
+  arm asserts the variant" was not true — separated; (8) the open's-check arm used an intact `.next`,
+  where O288 already answered `Io`, so it could not fail on the old behaviour — the `.next`-gone arm
+  added; (9) class changes at the unlock nobody had stated — below; (10) an `unused_mut` on Windows
+  in the new vault test — the O288 test's `cfg_attr`; (11) the Windows mechanism in O275's note and
+  O277's record ("reads `PermissionDenied`") — checked against 1.90's `decode_error_kind`, corrected
+  beside. And O277's `RULED` heading followed the doctrine's template only after the review said so.
+
+**Class changes, stated** (found by the review, none gated as a promise): at the unlock, a stat
+error other than a missing path — `EACCES`, a symlink loop, Windows' `InvalidFilename` — answers
+`Io` where `exists()` made it `NotFound`; an oversized `vault.json` answers `Io` where it answered
+`CorruptManifest` (or was served, if it was valid padded JSON); a directory or FIFO at `vault.json`
+answers `Io` (a FIFO hung). `VaultManager::exists`, `list`, `create` and `delete` still ask
+`exists()`, so `/v1`'s `store_for` still answers 404 where the CLI answers an I/O error for a
+permission error — an asymmetry older than this unit, left to O292's `create`/`list` work.
+
+**What the gate cannot see.** e2e cannot reach the FIFO or `.next`-directory arms without making
+them in a shell — the store tests do. P-WIN measures Linux in the battery; on Windows it runs only
+if a `windows-latest` job runs it by name (O275). The stat/read race and a Windows named pipe behind
+a symbolic link are O293's.
+
+**Cost.** One `stat` per manifest read; nothing else on the success path.
+
+### O277 — CLOSED 2026-09-28: a `vault.json` that is missing, or is not a manifest file, is the integrity verdict on every live handle, never a fall-back to `VERIFY OK`
+
+**Filed 2026-09-26 by O266's ruling (its security lens, confirmed by the
+refuter); measured by the integrator.** `Vault::anchored_head` returns the
+handle's cached head when `vault.json` cannot be READ, for any reason — the doc
+says "a read failure is not evidence of tampering". **P6** (O266): an ordinary
+writable handle whose `vault.json` was deleted answered `verify` with `chain_ok`
+and the verdict both true and emitted a witness; its next write committed and then
+retired the handle ("vault.json is missing"). Three doors disagree about one
+state: the anchor's read-modify-write calls a missing manifest an integrity fault
+(O254 item 3), `verified_manifest` refuses it (O256 item 3), and a fresh open
+answers `NotFound`. The manifest holds the vault's salt, so a vault whose only
+`vault.json` is gone cannot be reopened, while `verify` says it is fine. O266
+keeps this fall-back on a deferred handle only while `vault.json.next` is intact.
+
+**Shape, for a ruling**: `NotFound` as an integrity verdict on every
+`anchored_head` caller, other I/O errors keeping the fall-back — after a probe of
+Windows' rename-over (O254's P5), where a transient absence during a legitimate
+anchor would be a false exit 2.
+
+**Gate**: `verify`, the witness and a guarded read over a deleted `vault.json` on
+a live handle refuse as integrity; a transient read error still falls back; the
+Windows probe first.
+
+**Relations:** shares a diff surface with O289 — both decide what `manifest_in_force` answers when `vault.json` cannot be read or fails its MAC.
+
+#### RULED 2026-09-28 by three lenses (agentic memory architecture, security, software and filesystem engineering) and an adversarial refuter, with O289
+
+The full record is O289's `#### RULED 2026-09-28`; this is this entry's half, stated where
+the next session looks. **The filed discriminator is refuted by measurement**: an ordinary
+read-only handle with a directory in place of `vault.json` served `verify`, `search` and the
+witness — `EISDIR` is "other I/O" — and on Windows reading a directory fails `ACCESS_DENIED`,
+so "`NotFound` only" leaves a manifest that is gone answering `VERIFY OK`. **Ruled**: every
+manifest read goes through one guarded read (a stat, then a bounded read of a regular file of
+at most 1 MiB), and a `vault.json` that is missing (`NotFound`, `NotADirectory`) or is not a
+manifest-sized regular file is ABSENT — the integrity class (`CorruptManifest`), no tamper
+event — on every handle and through every reader: `anchored_head`, `verified_manifest` and the
+witness, `verify`, a backup and a guarded read refuse; `anchored_writes` is `None`; the
+read-only open's check answers `Io` (O288 item 2). A present regular file whose read fails keeps
+the fall-back on an ordinary handle, and on a deferred one only while `.next` is intact. **The
+Windows probe the filing put FIRST is not a precondition**: every transient a Windows reader can
+meet during a legitimate rename-over is neither `NotFound` nor `NotADirectory` — so it is
+Unreadable, which keeps the fall-back; only a
+transient `NotFound` would be a false verdict, and it would be loud; `verified_manifest` has
+answered `NotFound` as integrity outside any lock since O256. It is O289's P-WIN, recorded under
+O275 until it runs on Windows. Consequence, stated: a `vault delete` from another process
+beneath a live server now answers 409 integrity where it answered 200 (O291).
+
+#### BUILT 2026-09-28, with O289
+
+Built in O289's unit, to the shared ruling; O289's `#### BUILT` is the full record. This entry's
+gates: `o277_an_absent_manifest_is_the_integrity_verdict_on_every_handle` — `verify`, a guarded
+read from a forced miss, the witness and a backup answer `CorruptManifest` on an ordinary writable,
+an ordinary read-only and a deferred handle before and after a promote, for a deleted `vault.json`,
+a directory in its place, the vault directory moved away and the vault directory replaced by a
+file; the transient read error's fall-back and its limits in
+`o289_a_manifest_that_cannot_be_read_falls_back_only_where_the_keys_are_on_disk`; P6 re-run as
+`o277_p6_a_live_writable_handle_over_a_deleted_manifest` (`verify` and the witness now refuse; the
+next write commits and retires the handle, O254 item 3; the one after it is refused); e2e, a live
+server over a deleted `vault.json` and over a directory answering 409 integrity on `verify` and the
+witness where it answered 200. The Windows probe the filing put first is O289's P-WIN, in the
+battery on Linux and recorded under O275 until it runs on Windows. Counterfactual cf3 (this entry's
+filed `NotFound`-only split) fails the absent gate on the directory arm.
 
 ## 1.6.1 — released 2026-09-22
 
@@ -28069,6 +28538,8 @@ delete refuses and the source survives.
 
 **Relations:** shares a diff surface with O148 — both fixes edit `migrate_tenant` in `crates/undercroft-orchestrator/src/proxy.rs`: one conditions its closing source delete, the other refuses before the export or forces `keep_source` in that same branch.
 
+**Relations:** shares a diff surface with O291 — both change what `DELETE /v1/vaults/{v}` checks before it removes a vault: this one a chain head the caller stated, the other whether any other connection holds the vault.
+
 ### O148 — migrating a vault with a non-empty quarantine queue releases it at a non-screening destination
 
 **Filed 2026-09-12, needs a ruling rather than code.** The tenant data plane
@@ -29860,31 +30331,20 @@ mount of a Windows directory — not native Windows: the restore's rename-aside
 failed "Permission denied" while a SQLite connection was open in the directory,
 nothing restored and the live vault unchanged.
 
-### O277 — `anchored_head` falls back to the cached head over a deleted `vault.json`, so an ordinary handle answers `VERIFY OK` with its manifest gone
-
-**Filed 2026-09-26 by O266's ruling (its security lens, confirmed by the
-refuter); measured by the integrator.** `Vault::anchored_head` returns the
-handle's cached head when `vault.json` cannot be READ, for any reason — the doc
-says "a read failure is not evidence of tampering". **P6** (O266): an ordinary
-writable handle whose `vault.json` was deleted answered `verify` with `chain_ok`
-and the verdict both true and emitted a witness; its next write committed and then
-retired the handle ("vault.json is missing"). Three doors disagree about one
-state: the anchor's read-modify-write calls a missing manifest an integrity fault
-(O254 item 3), `verified_manifest` refuses it (O256 item 3), and a fresh open
-answers `NotFound`. The manifest holds the vault's salt, so a vault whose only
-`vault.json` is gone cannot be reopened, while `verify` says it is fine. O266
-keeps this fall-back on a deferred handle only while `vault.json.next` is intact.
-
-**Shape, for a ruling**: `NotFound` as an integrity verdict on every
-`anchored_head` caller, other I/O errors keeping the fall-back — after a probe of
-Windows' rename-over (O254's P5), where a transient absence during a legitimate
-anchor would be a false exit 2.
-
-**Gate**: `verify`, the witness and a guarded read over a deleted `vault.json` on
-a live handle refuse as integrity; a transient read error still falls back; the
-Windows probe first.
-
-**Relations:** shares a diff surface with O289 — both decide what `manifest_in_force` answers when `vault.json` cannot be read or fails its MAC.
+**Recorded by O289's ruling (2026-09-28).** O289 and O277 rule an absent `vault.json` an
+integrity verdict on every live handle. On Windows that rests on reading, not on measurement:
+Rust's `fs::rename` there is `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` and, on
+`ERROR_ACCESS_DENIED`, `SetFileInformationByHandle(FileRenameInfoEx, REPLACE_IF_EXISTS |
+POSIX_SEMANTICS)` — each replaces the name in one operation — and no transient a reader can
+meet there (a sharing violation, `ACCESS_DENIED`, delete-pending) is `NotFound` or
+`NotADirectory`, so each is Unreadable, which keeps the fall-back. (This note first said they
+all read `PermissionDenied`; O289's review checked 1.90's `decode_error_kind`: `ACCESS_DENIED`
+does, a sharing violation and delete-pending map to no specific kind — the conclusion stands, the
+mechanism was misstated.) The measurement is O289's P-WIN: a vault-crate test replacing
+`vault.json` through the real writer in a loop while readers run the guarded read and a holder
+re-opens the current file, run by name on a `windows-latest` runner. Until it runs there, a transient `NotFound` during a legitimate anchor on
+Windows would be a false exit 2 — loud, where the fall-back it replaced was a silent `VERIFY OK`
+over a manifest that was gone.
 
 ### O285 — an `immutable=1` handle whose database moved after its open serves the set-aside vault for its life
 
@@ -29913,6 +30373,13 @@ one that landed in a restore swap's gap between its two renames, where the path 
 file — and escalates it to `immutable=1` on the restored vault, which then holds no lock,
 with only a warning. So "reached only where the directory cannot be written" is false: a
 racing read-only open can arrive at an `immutable=1` handle by that route too.
+
+**Recorded by O289's ruling (2026-09-28), because it adds a cost to this entry's handle.**
+Since O289 an absent `vault.json` is an integrity verdict on every live handle. An
+`immutable=1` handle holds no lock, so nothing fences a restore from it, and one that reads its
+manifest inside the restore's gap between its two renames answers one transient false integrity
+verdict — where it used to serve the set-aside vault silently. This entry's shape, the moved-file
+check at the snapshot door answering the reopen class, closes both.
 
 ### O286 — the test named for the read-only open's `immutable=1` escalation does not reach it
 
@@ -29974,36 +30441,6 @@ code and prints no panic, on the CLI — and on the orchestrator binary too if i
 prints through `println!` the same way, which this filing did not measure; and no
 e2e check pipes the binary into `grep -q`.
 
-### O289 — a read-only handle whose deferred promote lands AFTER its open reads a later forged or unreadable `vault.json` as the integrity class, with no tamper event
-
-**Filed 2026-09-28 by O288's ruling (all three lenses and the refuter); measured by the
-integrator (P-S5).** A read-only handle opened over a committed rotation whose promote
-was deferred carries `deferred_over`, and O254 item 2 forbids clearing it when a promote
-lands after the open. `manifest_in_force` then answers `StagedLost` — `CorruptManifest`,
-the integrity class, with no tamper event — whenever `.next` is gone and `vault.json`
-fails the handle's MAC or cannot be read. Measured, after a promote beneath a held
-read-only handle: `vault.json`'s MAC flipped — the held handle's `verify` AND `search`
-answer `CorruptManifest`, where an ordinary handle and a fresh unlock answer
-`ManifestTampered` and page an operator; `vault.json` replaced by a directory — the held
-handle's `verify` and `search` answer integrity (a guarded read misses into
-`anchored_head()?`), where an ordinary handle serves through O277's fall-back and a fresh
-unlock answers `Io`. O288 narrows the population — only a promote landing after the
-open's check leaves a stale `deferred_over` — and not the case.
-
-**Shape, for a ruling**: the fix revises ruled items — clearing the field is a latch
-(O254 item 2, O266's no-latch gate), and telling a forged manifest from an older
-generation's needs the retired key O266 rejected keeping — so a panel decides it. The
-question is what `manifest_in_force` answers when the deferral it was licensed by is
-provably over (`.next` gone) and `vault.json` fails or cannot be read: the fresh-open
-parity candidate is `ManifestTampered` with the event for a MAC failure and O277's answer
-for an unreadable file.
-
-**Gate**: P-S5 inverted — the held handle's `verify` and `search` answer what an ordinary
-handle answers for a flipped MAC (the tamper verdict and its event), and the unreadable
-case matches O277's ruling.
-
-**Relations:** shares a diff surface with O277 — both decide what `manifest_in_force` answers when `vault.json` cannot be read or fails its MAC.
-
 ### O290 — a writable open whose unlock attached a deferred rotation heals an offline rollback beneath it: the database rolled back and `vault.json` deleted read as a crash
 
 **Filed 2026-09-28 by O288's ruling (its refuter; neither the brief nor the lenses saw
@@ -30026,6 +30463,86 @@ torn or missing manifest, which no unlock can read either).
 
 **Gate**: P-W inverted — the held writable open refuses, the rollback is reported by the
 fresh open, and O254's P1 and O257's crashed-promote heal stay green.
+
+### O291 — a vault delete takes no hold, so another process's live handle meets a vault that is gone, and a writable one commits into it
+
+**Filed 2026-09-28 by O289's ruling (its security lens, confirmed by the refuter); read in
+code, unmeasured.** `VaultManager::delete` is a `remove_dir_all` of the vault's directory with no
+hold (vault `lib.rs`, `delete`), and `/v1`'s `DELETE /v1/vaults/{v}` refuses only the vault this
+same process serves (`deny_co_resident`, `tenant.rs`). Another process's live handle therefore
+meets a vault that no longer exists. Before O289 its reads fell back and `verify` answered OK over
+a deleted vault; since O289 an absent manifest is an integrity verdict, so its reads refuse, loudly.
+A WRITABLE handle there is worse: on unix the database it holds lives on while it is open, so a
+write commits into an unlinked file, answers OK and then retires the handle at its anchor (O254
+item 3) — a write acknowledged and lost.
+
+**Shape, for a ruling**: the delete takes O69's hold — refused beside any connection that has
+read, as a restore's swap is since O282 — or it is documented that a delete beside a live handle is
+the operator's error, with the CLI and `/v1` saying so.
+
+**Gate**: a delete beside a live handle in another process refuses and changes nothing, a
+writable handle's next write answers what it answers today for a deleted vault, and a delete with
+no holder removes the vault.
+
+**Relations:** shares a diff surface with O147 — both change what `DELETE /v1/vaults/{v}` checks before it removes a vault: that one a chain head the caller stated, this one whether any other connection holds the vault.
+
+### O292 — a vault directory holding a database and no manifest reads as no vault at all, and `create` mints a new salt beside it
+
+**Filed 2026-09-28 by O289's ruling (its refuter); read in code, unmeasured.** A33's converse: a
+`vault.db` with no `vault.json` beside it. `VaultManager::exists` asks only whether `vault.json`
+exists, so such a directory reads `NotFound` on every open and drops out of `vault list`, and
+`create` — which `init` runs, and the team-server recipe runs `init` on every start — writes a new
+manifest with a FRESH salt into that directory, beside a database sealed under keys no manifest
+now derives. The database's keycheck then names another generation and every open refuses it as an
+integrity finding, so the vault's own state changes from "missing its manifest" to "two
+generations", which is harder to read during an incident.
+
+**Shape, for a ruling**: `create` refuses a directory that already holds a database, as the
+integrity class (the A33 shape), and `config check` reports such a directory before a restart.
+
+**Gate**: `create` over a directory holding a database refuses and writes nothing; `vault list`
+and `config check` name it.
+
+### O293 — the manifest reads outside O289's guarded read, and the stat-then-read race inside it
+
+**Filed 2026-09-28 by O289's ruling (its refuter), widened by O289's independent review.** O289
+routes every read the unlock, the manifest rule and the anchor's strict read make through one
+guarded read, so a FIFO or a directory at a manifest path no longer blocks or passes them. Bare
+reads are left. In `lib.rs`: `promote`'s read of `vault.json` (under the database's write lock);
+`staged_on_disk`'s of `vault.json.next` — under the write lock in `remove_staged_if_unchanged`,
+and with NO lock at every open (`unlock_state_holds`, the `Abandoned` arm of
+`adopted_rotation_holds`, `settle_foreign_keycheck`) and at `create`; and
+`key_opens_an_existing_vault`'s reads at `create`. In `restores.rs`: `key_generation_differs`,
+which reads the LIVE `vaults/<id>/vault.json` under a restore's hold — a FIFO there hangs `backup
+restore` while it holds the vault, on `/v1` the one request loop — and `Stage::swap`'s reads. In
+`backups.rs`: an archive's manifest read. Each carries a ruled decision about what its miss means
+(O257, O204, O268, O256), which is why O289 did not reroute them. Inside the guarded read, a
+regular file swapped for a FIFO between its stat and its read still blocks the read; and on
+Windows a symbolic link to a named pipe may pass the regular-file test and block in the read
+(unverified — it needs link privilege and a pipe server). O288 accepted the race on the unlock
+because the same capability deletes the vault, and O289 carried the acceptance over.
+
+**Shape**: route the three through the guarded read, each keeping its ruled miss; open with
+`O_NONBLOCK` and `fstat` the descriptor on unix, which closes the race exactly (a new `libc` edge
+or per-target constants; on Windows a directory already fails at the open).
+
+**Gate**: a FIFO at each path answers within a bound on a thread; the vault crate's manifest-read
+gate admits no read of a manifest file outside the guarded read.
+
+### O294 — the native release targets build on an unpinned toolchain
+
+**Filed 2026-09-28 by O289's ruling (its engineering lens, confirmed by the refuter).** The
+Docker images pin `rust:1.90-slim-bookworm`, so every suite, the lint and the Linux images build
+on 1.90. `release.yml`'s binary targets build with whatever stable toolchain each runner has
+installed (it only adds the target), and `windows-check` takes `dtolnay/rust-toolchain@stable` —
+so the Windows, macOS and native Linux artifacts are built by a compiler no suite ran, and a claim
+about "Rust 1.90's std" (O289's Windows reading) is not a claim about what ships.
+
+**Shape**: one pinned toolchain for every build — a `rust-toolchain.toml`, or the version named in
+both workflows — with a gate that the Dockerfile's image and the pin agree.
+
+**Gate**: a preflight comparing the Dockerfile's `rust:` tag with the workflows' toolchain, both
+directions.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 

@@ -2,7 +2,7 @@
 
 ## 1.7.0 — unreleased
 
-MINOR: one new capability, backward compatible, and twenty fixes. The witness
+MINOR: one new capability, backward compatible, and twenty-two fixes. The witness
 commands and routes are new; no default moves and no declaration can stop a
 start-up. Four fixes change what a deployment must do: every process writing a
 vault must run the same build, and a server whose vault another process
@@ -18,7 +18,7 @@ older release beside a writer may be torn. (This line said "one fix" while O243 
 O246 were both below it; corrected with O247. It said "nine" until O268,
 "ten" until O266, "eleven" until O276, "twelve" until O278, "thirteen"
 until O279, which closed four entries, "seventeen" until O281, "eighteen" until O284,
-and "nineteen" until O288; it said
+"nineteen" until O288, and "twenty" until O289, which closed two entries; it said
 "Three fixes change what a deployment must do" until O283 made it four.)
 
 ### The external witness: `undercroft witness emit` / `check`, `GET`/`POST /v1/…/witness` (O245)
@@ -871,6 +871,75 @@ prove overlap, and claims here that overstated — each fixed before this landed
 PATCH inside the unreleased 1.7.0; no `UPGRADING.md`
 entry — the refusal is the documented reopen class, raised only by a race and retried
 once.
+
+### A forged `vault.json` pages on every handle, and one that is gone is never `VERIFY OK` (O289, O277)
+
+Measured before the fix, at both security levels and through the release binary:
+
+- a `serve-http --read-only` opened over a key rotation whose promote was deferred,
+  with a writable command promoting beneath it — the ordinary way a responder's server
+  meets a rotation — answered a `vault.json` forged AFTER the promote with 409
+  integrity, "restore the vault from a backup taken before this", and **no manifest
+  tamper signal**, where a server started after the promote answered "possible
+  tampering" and raised `undercroft_hmac_verify_failures_total{surface="manifest"}`;
+- a `vault.json.next` replaced by a directory made such a handle answer `VERIFY OK`,
+  serve searches and emit a witness beside a forged `vault.json` — and, before any
+  promote, beside the retired one, with the vault's current keys in no readable file;
+- an ordinary server whose `vault.json` was deleted, or replaced by a directory,
+  answered `verify` with 200 and emitted a witness over a vault no process could
+  reopen (O277);
+- a FIFO at `vault.json`, or at a deferred handle's `vault.json.next`, blocked
+  `stats` and `verify` — on a server, its one request loop — and the unlock too.
+
+Now:
+
+- **One guarded read for every manifest read the unlock, the manifest rule and the
+  anchor make**: a stat, then a bounded read of a regular file of at most 1 MiB. A
+  FIFO is never opened, and what is at the path decides the answer, never the error
+  kind — a directory reads as "is a directory" on Linux and "access denied" on Windows.
+- **A `vault.json` failing the handle's MAC is the tamper verdict, with its signal, on
+  every handle, whatever `vault.json.next` holds.** Only the retired manifest's exact
+  bytes beside a lost `.next` stay the integrity verdict with no signal — the state in
+  which the vault's keys are in no file, which a fresh open reports the same way.
+- **A `vault.json` that is missing, or is not a manifest file, is the integrity verdict
+  on every live handle**: `verify`, the witness, a backup and a guarded read refuse —
+  409 with `class: "integrity"` on `/v1`, exit 2 on the CLI. A present file that
+  cannot be read still falls back to the handle's cached anchor, but only where the
+  keys are on disk: an ordinary handle, or a deferred one whose `vault.json.next` is
+  intact; otherwise the read error is the answer.
+- **A deferred handle's `vault.json.next` read is held until `vault.json` is judged**,
+  as the unlock's has been since O288.
+- **The deferral note says when it was true**: "at this open, a committed key rotation
+  was adopted in memory only …". It records what the open found; a promote landing
+  later leaves it standing, because clearing it would be a latch.
+
+Ruled by three lenses plus an adversarial refuter (ROADMAP O289, with O277 ruled beside
+it). The refuter refuted O277's filed `NotFound`-only split — a directory is "other
+I/O" and was served — and found the `.next` read error that none of the three lenses
+saw; O266's rule for a lost `.next` is narrowed to the retired bytes it was measured
+on. Measured on the LoCoMo feed (1,020 sealed drawers) against `main`'s binary: no
+latency change on `--read-only` `stats`, `verify` or `search`, settled or over a
+deferral. Known cost, pinned by a test: a genuine OLDER generation's `vault.json`,
+written back by hand after a promote, now pages on a held handle where a fresh open
+answers the integrity verdict — as it already did before a promote, and as an ordinary
+handle always has. A live writable handle's first write after its `vault.json`
+vanished still commits and then stops the handle writing (O254), as before. Filed
+beside it: O291 (a vault delete takes no hold beneath another process's live handle),
+O292 (a vault directory holding a database and no manifest reads as no vault, and
+`create` mints a new salt beside it), O293 (three manifest reads still unguarded, and
+the stat-then-read race), O294 (the native release targets build on an unpinned
+toolchain). Windows is reasoned rather than measured (O275). Gates: every door — `verify`, a
+guarded search from a forced miss, the witness and a backup — on held, rotating, ordinary and
+fresh handles at both security levels, the variant asserted; FIFOs at each manifest path on bounded
+threads, a writable handle's anchor among them; P-WIN, a reader racing the real manifest writer
+(1,000 replacements, never a missing file); 11 e2e and 2 e2e-telemetry checks through the release
+binary. Fifteen counterfactuals, each run and each failing its gate. An independent review of the
+build found no false verdict and eleven things of mine — an untested class change at the anchor, a
+FIFO test whose rescue could itself block, a Windows-probe holder that held an unlinked file, a
+source gate whose window stopped short, an inventory of unguarded reads that was incomplete, and
+claims here that overstated among them — each fixed before this landed. PATCH inside the unreleased
+1.7.0; no `UPGRADING.md` entry — every new refusal meets a state that arose after the
+process started and that already fails every restart.
 
 ## 1.6.1 — 2026-09-22
 

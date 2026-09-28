@@ -457,10 +457,28 @@ Consequences that are binding, not advisory:
   licensed by (a digest of the very buffer whose MAC was verified) and
   `.next` byte for byte what the handle read. A `vault.json` verifying
   under the adopted key is a promote since, followed, never latched; a lost
-  `.next` is integrity with no tamper event; only the refusal arm raises the
-  manifest tamper signal. The strict readers — `manifest_on_disk_is_mine`,
+  `.next` beside the RETIRED bytes is integrity with no tamper event, and any
+  other `vault.json` failing the handle's MAC is the tamper verdict whatever
+  `.next` holds — **O289**: the rule answered a lost `.next` there, so a
+  read-only handle whose promote landed after its open met a forged manifest
+  with no page, where an ordinary handle and a fresh unlock page; only the
+  refusal arm raises the manifest tamper signal. **Every manifest read the
+  unlock, the rule and the anchor's strict read make goes through ONE guarded
+  read (O289)**, `read_manifest_file` — a stat, then a bounded read of a
+  regular file of at most 1 MiB, so a FIFO is never opened and what is AT the
+  path decides the class, never the error kind — and a `vault.json` that is
+  missing or not a manifest file is the integrity verdict on EVERY handle
+  (**O277**: `anchored_head` fell back over it and `verify` answered OK over a
+  vault no open could reopen; a directory there was "other I/O" and still
+  would have been under the filed `NotFound`-only split). A present file that
+  cannot be read falls back only on an ordinary handle or where `.next` is
+  intact, and `.next`'s own read is HELD until `vault.json` is judged — an
+  early return there turned a directory planted at `.next` into `VERIFY OK`
+  beside a forged manifest. The strict readers — `manifest_on_disk_is_mine`,
   the anchor's own read, `promote` — never take it, and a source gate
-  counts the four readers and every manifest-file read in the crate; a
+  counts the four readers, the guarded read's callers, and the three bare
+  manifest reads left in `lib.rs` (O293 files them, and the ones in
+  `restores.rs` and `backups.rs`); a
   `test-fixture` feature carries the fault seam, since a nonce name cannot
   be targeted from outside; backups.rs: the archive side of `backup
   create` (ROADMAP O256, O265) — a stage under `backups/.staging/<nonce>`
@@ -1125,9 +1143,12 @@ Consequences that are binding, not advisory:
   them — left `RotationPromotionDeferred` or `RotationDiscardDeferred` on a
   vault holding no such file. A difference is the reopen class with no tamper
   event; the writable posture gets no new check (O254's P1), though the new
-  order turns a rotation committing between its unlock's reads into one retry. What a promote AFTER
-  the check leaves on a read-only handle is O289, and what an offline writer
-  can do inside a writable unlock's window is O290. `open_pause.rs` holds the pause points,
+  order turns a rotation committing between its unlock's reads into one retry. A promote AFTER
+  the check leaves the handle its note — worded since O289 as what the open
+  found — and `deferred_over`, both for its life (clearing either is a latch),
+  and since O289 neither changes what a later forged or absent `vault.json`
+  answers; what an offline writer can do inside a writable unlock's window is
+  O290. `open_pause.rs` holds the pause points,
   reachable from the CLI's
   tests through the store's `test-fixture` feature,
   write-path admission control (admission.rs + core admission.rs — C3.3
@@ -2575,8 +2596,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (1197 run,
-                                      # 16 #[ignore]d = 1213 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (1208 run,
+                                      # 16 #[ignore]d = 1224 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2720,9 +2741,9 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (730 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (741 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (171 checks)
-docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (60 checks)
+docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (62 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (157 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
                                       # answers HTTP before its Raft leader exists)

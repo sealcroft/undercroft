@@ -148,10 +148,16 @@ well, where only a tampered count fails.
    once, so the note is true at the moment the open checks it. It is not
    re-checked after that: a promote landing later — even within one command,
    and for the whole life of a long-lived server — leaves the note describing
-   the vault as it was at that open (ROADMAP O289). **Do not delete
-   `vault.json.next` in that state**: it is the only file holding the vault's
-   current keys, and a read-only open refuses as an integrity verdict once it
-   is gone. A prefilter loads an index but never builds one. What the open
+   the vault as it was at that open, and the note says so ("at this open");
+   since ROADMAP O289 that server answers a `vault.json` forged afterwards
+   with the tamper verdict and its alert, as any server does. **Do not delete
+   `vault.json.next` while it is there**: until a writable open promotes it,
+   it is the only file holding the vault's current keys, and a read-only open
+   refuses as an integrity verdict once it is gone. A live server whose
+   `vault.json` is deleted, or replaced by anything that is not a manifest
+   file, answers the integrity verdict on `verify`, the witness and a backup
+   (ROADMAP O277) — it used to answer `VERIFY OK` over a vault no process
+   could reopen. A prefilter loads an index but never builds one. What the open
    declined to repair is printed as a warning and readable afterwards on
    `undercroft stats` (and `GET /v1/vaults/{id}/stats`) as `unhealed` — during
    an incident, read it: "vault.json.next does not authenticate … and was

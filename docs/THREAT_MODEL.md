@@ -348,7 +348,11 @@ verified against that staged manifest while the disk still shows the
 interrupted state: from 1.1.0 the open had MAC-checked the retired
 `vault.json` under the staged keys and refused as tampering, and a lost or
 edited `.next` beside the retired file is now the integrity verdict a fresh
-open gives, with no tamper signal; since ROADMAP O288 the unlock reads
+open gives, with no tamper signal — while any OTHER `vault.json` failing the
+staged keys' MAC, a forgery after a promote beneath the open included, is the
+tamper verdict with its signal, as on every handle, and a `vault.json` that is
+missing or not a manifest file is the integrity verdict on every live handle
+rather than a fall-back to `VERIFY OK` (ROADMAP O289, O277); since ROADMAP O288 the unlock reads
 `.next` before `vault.json`, and the open re-checks the rotation it is about
 to report against the files after its database door, so a promote, a discard
 or a restore between the unlock and the open is refused with the reopen class

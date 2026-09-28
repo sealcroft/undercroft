@@ -38,6 +38,8 @@ mod latestage;
 #[cfg(test)]
 mod legacy_rename_tests;
 pub mod manage;
+#[cfg(test)]
+mod manifest_rule_tests;
 #[cfg(not(feature = "test-fixture"))]
 mod open_pause;
 /// Pause points inside this crate's opens of a vault database, reachable from
@@ -4691,13 +4693,16 @@ impl VaultStore {
     ///
     /// A difference is the reopen class, which the CLI and `/v1` retry once
     /// with a fresh unlock — a real tamper surfaces there, with its event; this
-    /// raises none. A read that fails is its own error, never a retry, except a
-    /// `vault.json` unreadable after `.next` was already found gone or changed,
-    /// which is a reopen ([`Vault::deferral_in_force`] says why). Only the
+    /// raises none. A read that fails is its own error, never a retry, and so
+    /// is a `vault.json` that is no longer there to read ([`Vault::deferral_in_force`]
+    /// says why; the exception O288 stated here went with ROADMAP O289). Only the
     /// READ-ONLY posture asks: the writable reconcile re-decides under the
     /// write lock with byte-guarded removals and mints no deferral note, and a
     /// comparison there refused O254's ruled P1. A promote after this check
-    /// leaves the note stale for the handle's life (O289).
+    /// leaves the note — what this open found, and worded as such — and
+    /// `deferred_over` for the handle's life, never cleared (a latch, O254 item
+    /// 2); the manifest rule answers a later forged or absent `vault.json` on
+    /// such a handle as it would on any other (ROADMAP O289).
     fn adopted_rotation_holds(vault: &Vault, verdict: RotationVerdict) -> Result<(), StoreError> {
         let holds = match verdict {
             RotationVerdict::Committed => vault.deferral_in_force()?,
