@@ -141,7 +141,14 @@ well, where only a tampered count fails.
    promote) opens read-only, verifies against the STAGED manifest, and says
    so on `unhealed`. From 1.1.0 until then that open answered
    `ManifestTampered`, exit 2 — if you met it right after a rotation, a
-   writable open would have promoted and verified. **Do not delete
+   writable open would have promoted and verified. The note is re-checked
+   against the files once the open has its database (ROADMAP O288): if a
+   promote, a discard or a restore lands between the open's unlock and its
+   database open, the command is refused with the reopen class and retried
+   once, so the note is true at the moment the open checks it. It is not
+   re-checked after that: a promote landing later — even within one command,
+   and for the whole life of a long-lived server — leaves the note describing
+   the vault as it was at that open (ROADMAP O289). **Do not delete
    `vault.json.next` in that state**: it is the only file holding the vault's
    current keys, and a read-only open refuses as an integrity verdict once it
    is gone. A prefilter loads an index but never builds one. What the open

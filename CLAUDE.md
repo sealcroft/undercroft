@@ -447,8 +447,9 @@ Consequences that are binding, not advisory:
   read-modify-write, whose failures come back as `AnchorFault::{Io,
   Integrity}` for the store's door to act on (ROADMAP O254) — **and ONE
   rule for which manifest a handle's rows answer to (O266)**:
-  `manifest_in_force`, read by `anchored_head`, `anchored_writes` and
-  `verified_manifest` alone. Ordinarily `vault.json`; on a handle whose
+  `manifest_in_force`, read by `anchored_head`, `anchored_writes`,
+  `verified_manifest` and, since O288, the read-only open's
+  `deferral_in_force` alone. Ordinarily `vault.json`; on a handle whose
   keys came from `vault.json.next` (a read-only open that adopted a
   committed rotation, or the rotating handle after a deferred promote),
   the STAGED manifest — `.next` read first, then `vault.json`, and only
@@ -459,7 +460,7 @@ Consequences that are binding, not advisory:
   `.next` is integrity with no tamper event; only the refusal arm raises the
   manifest tamper signal. The strict readers — `manifest_on_disk_is_mine`,
   the anchor's own read, `promote` — never take it, and a source gate
-  counts the three readers and every manifest-file read in the crate; a
+  counts the four readers and every manifest-file read in the crate; a
   `test-fixture` feature carries the fault seam, since a nonce name cannot
   be targeted from outside; backups.rs: the archive side of `backup
   create` (ROADMAP O256, O265) — a stage under `backups/.staging/<nonce>`
@@ -1110,7 +1111,23 @@ Consequences that are binding, not advisory:
   30 restores in a row landed on a recycled directory identity. The read-only
   legacy-name note is derived from the file the connector opened, and a test
   destructures `Vault` so a new unlock-era field is ruled before it compiles.
-  The unlock's own read order is O288. `open_pause.rs` holds the pause points,
+  **And the unlock reads `vault.json.next` FIRST, then `vault.json` (O288)**,
+  O266's order, holding a `.next` read error until the manifest's MAC is
+  judged and reading no `.next` that is not a regular file of a manifest's size
+  (a planted FIFO blocked, `/dev/zero` never ended, ahead of the tamper
+  verdict); the read-only open then asks, on the verdict its reconcile RETURNED,
+  whether the files still say so — `Committed` through the manifest rule's own
+  staged branch (`deferral_in_force`), `Abandoned` by `.next`'s digest —
+  before a note is copied or a read served. Measured before it: an anchor and a
+  deferred rotation between the old order's two reads answered a false
+  `ManifestTampered`, and a promote, a discard or a restore after the unlock —
+  an ORDINARY rotation beneath a read-only open that waited at its fence among
+  them — left `RotationPromotionDeferred` or `RotationDiscardDeferred` on a
+  vault holding no such file. A difference is the reopen class with no tamper
+  event; the writable posture gets no new check (O254's P1), though the new
+  order turns a rotation committing between its unlock's reads into one retry. What a promote AFTER
+  the check leaves on a read-only handle is O289, and what an offline writer
+  can do inside a writable unlock's window is O290. `open_pause.rs` holds the pause points,
   reachable from the CLI's
   tests through the store's `test-fixture` feature,
   write-path admission control (admission.rs + core admission.rs — C3.3
@@ -2558,8 +2575,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (1179 run,
-                                      # 16 #[ignore]d = 1195 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (1197 run,
+                                      # 16 #[ignore]d = 1213 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote

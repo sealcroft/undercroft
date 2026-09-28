@@ -348,7 +348,13 @@ verified against that staged manifest while the disk still shows the
 interrupted state: from 1.1.0 the open had MAC-checked the retired
 `vault.json` under the staged keys and refused as tampering, and a lost or
 edited `.next` beside the retired file is now the integrity verdict a fresh
-open gives, with no tamper signal — and a prefilter loads an index but
+open gives, with no tamper signal; since ROADMAP O288 the unlock reads
+`.next` before `vault.json`, and the open re-checks the rotation it is about
+to report against the files after its database door, so a promote, a discard
+or a restore between the unlock and the open is refused with the reopen class
+and retried rather than reported as a deferral the vault no longer holds (an
+anchor and a deferred rotation between the old order's two reads had answered
+a false `ManifestTampered`) — and a prefilter loads an index but
 never builds one. That last operation is the one the incident runbook's own
 "freeze writes" step used to perform: a read-only open could **delete** a
 writer's staging manifest (A32). What the open declined to repair is warned

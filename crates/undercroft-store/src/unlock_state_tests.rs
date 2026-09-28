@@ -239,7 +239,14 @@ fn o284_opens_beside_a_writer_anchoring_in_a_loop_are_never_refused() {
             i
         })
     };
+    // Bounded, and a writer that dies fails the test rather than hanging it
+    // (found by O288's review; this wait had no bound).
+    let waited = std::time::Instant::now();
     while written.load(Ordering::SeqCst) == 0 {
+        assert!(
+            !writer.is_finished() && waited.elapsed() < std::time::Duration::from_secs(30),
+            "the writer never wrote"
+        );
         std::thread::yield_now();
     }
     let before = written.load(Ordering::SeqCst);

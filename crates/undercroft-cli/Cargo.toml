@@ -62,6 +62,11 @@ rusqlite = { workspace = true }
 # already a dependency, so this compiles no new crate; a production build (no
 # dev-dependencies) carries no hook, the vault crate's `test-fixture` precedent.
 undercroft-store = { path = "../undercroft-store", features = ["test-fixture"] }
+# ROADMAP O288: the vault crate's hook between an unlock's two manifest reads,
+# so `open_store_as` is driven through a rotation landing inside the unlock.
+# Already a dependency: this compiles no new crate, and a production build
+# carries no hook.
+undercroft-vault = { path = "../undercroft-vault", features = ["test-fixture"] }
 
 # ROADMAP O157. The CLI and /v1 join over the GENERATED model fixture, run BY
 # NAME from the ort-build leg only, so a lost feature is a hard error rather than

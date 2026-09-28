@@ -58,6 +58,8 @@ pub mod retention;
 mod rotate;
 mod rotate_pause;
 #[cfg(test)]
+mod rotation_state_tests;
+#[cfg(test)]
 mod snapshot_tests;
 mod sweep_pause;
 #[cfg(test)]
@@ -4617,20 +4619,21 @@ impl VaultStore {
     /// function of those bytes. A `backup restore` landing between the unlock
     /// and the open left a handle on the RESTORED database carrying notes
     /// about the vault set aside (measured: a torn-`.next` note on a vault
-    /// that holds none). So the digest of the bytes the unlock read is
-    /// compared with the file there now: `None` only for no file, so a torn
-    /// file counts, whether or not the unlock attached a rotation. Equal bytes
-    /// make the `.next`-derived notes true of the proven directory at the
-    /// comparison, whatever inode holds it — another process's writable open
-    /// may settle `.next` just after it, which the byte guards make benign, and
-    /// an `immutable=1` handle holds no lock at all (O285); the deferral
-    /// verdict also reads `vault.json`'s salt, which is O288 — no directory
-    /// pin, whose recycled inode
-    /// numbers measured A→B→A across restores, and nothing unix-only. A busy
-    /// writer never trips it: an anchor rewrites `vault.json`, never
-    /// `.next`. A difference is the reopen class, which the CLI and `/v1`
-    /// retry once with a fresh unlock; a read that fails is the unlock's own
-    /// error class, never a retry.
+    /// that holds none). So, whenever the unlock read a staging file it could
+    /// NOT authenticate, the digest of those bytes is compared with the file
+    /// there now (`None` only for no file). Equal bytes make the torn or
+    /// too-new note true of the proven directory at the comparison, whatever
+    /// inode holds it — no directory pin, whose recycled inode numbers
+    /// measured A→B→A across restores, and nothing unix-only. Another
+    /// process's writable open may settle `.next` just after it, which the
+    /// byte guards make benign, and an `immutable=1` handle holds no lock at
+    /// all (O285). A VALID staged file is not compared here: the writable
+    /// reconcile re-decides it under the write lock, and what the read-only
+    /// reconcile mints from it is re-checked after that reconcile, by
+    /// `adopted_rotation_holds` (O288). A busy writer never trips this: an
+    /// anchor rewrites `vault.json`, never `.next`. A difference is the reopen
+    /// class, which the CLI and `/v1` retry once with a fresh unlock; a read
+    /// that fails is the unlock's own error class, never a retry.
     fn unlock_state_holds(vault: &Vault) -> Result<(), StoreError> {
         // Only a staging file the unlock read and could NOT authenticate left a
         // note behind that nothing else reconciles: a torn or too-new one. A
@@ -4638,7 +4641,8 @@ impl VaultStore {
         // answer is that the open waits and promotes it in its reconcile under
         // the byte guards — refusing it, or one that appeared after the
         // unlock, turned that into a reopen, which O254's own gate caught. What
-        // a stale `pending` can still say is O288's.
+        // a stale `pending` mints on the read-only posture is re-checked after
+        // the reconcile, by `adopted_rotation_holds` (O288).
         if vault.staged_seen().is_none()
             || vault.has_pending()
             || vault.staged_on_disk()? == vault.staged_seen()
@@ -4655,6 +4659,65 @@ impl VaultStore {
              and its open — a backup restore replaced the vault, or a key rotation staged or \
              another open settled one — so what the unlock found no longer describes the \
              vault at {}. Nothing was served from it; reopen the vault (ROADMAP O284)",
+            vault.dir().display()
+        )))
+    }
+
+    /// **What the read-only reconcile decided is still what the directory
+    /// holds (ROADMAP O288)** — asked on the verdict
+    /// [`Vault::reconcile_read_only`] returned, before the handle is
+    /// assembled, the chain is checked or a note is copied.
+    ///
+    /// That verdict, and the note it mints, are decided from what the unlock
+    /// read by path before any connection existed. A promote, a discard or a
+    /// `backup restore` landing between the unlock and the open left the
+    /// handle saying so anyway — measured: `RotationPromotionDeferred` ("Do NOT
+    /// delete vault.json.next") after an ordinary rotation promoted beneath an
+    /// open that had waited at its fence, over a vault with no `.next` at all,
+    /// and `RotationDiscardDeferred` after another open discarded the file. So:
+    ///
+    /// - **`Committed`**: [`Vault::deferral_in_force`] — the manifest rule's
+    ///   own staged branch: `.next` still the bytes the unlock read (read
+    ///   first), `vault.json` still the retired bytes the adoption was licensed
+    ///   by. Byte identity, never "verifies under a key": nothing anchors while
+    ///   the verdict is `Committed` (an old-generation anchor is refused by the
+    ///   keycheck, a new-generation one needs a promoted `vault.json`), so a
+    ///   change there is a promote, a restore or an edit, never a busy writer.
+    /// - **`Abandoned`**: `.next`'s digest only — an old-generation writer may
+    ///   legitimately anchor beside an abandoned stage, and comparing
+    ///   `vault.json` there would refuse opens beside it (O284's option C).
+    /// - **`Settled`** mints no note; **`Foreign`** is judged by
+    ///   `settle_foreign_keycheck`.
+    ///
+    /// A difference is the reopen class, which the CLI and `/v1` retry once
+    /// with a fresh unlock — a real tamper surfaces there, with its event; this
+    /// raises none. A read that fails is its own error, never a retry, except a
+    /// `vault.json` unreadable after `.next` was already found gone or changed,
+    /// which is a reopen ([`Vault::deferral_in_force`] says why). Only the
+    /// READ-ONLY posture asks: the writable reconcile re-decides under the
+    /// write lock with byte-guarded removals and mints no deferral note, and a
+    /// comparison there refused O254's ruled P1. A promote after this check
+    /// leaves the note stale for the handle's life (O289).
+    fn adopted_rotation_holds(vault: &Vault, verdict: RotationVerdict) -> Result<(), StoreError> {
+        let holds = match verdict {
+            RotationVerdict::Committed => vault.deferral_in_force()?,
+            RotationVerdict::Abandoned => vault.staged_on_disk()? == vault.staged_seen(),
+            RotationVerdict::Settled | RotationVerdict::Foreign => true,
+        };
+        if holds {
+            return Ok(());
+        }
+        undercroft_obs::diag_warn!(
+            "vault {:?}: the key rotation this open's unlock found changed before the open \
+             (ROADMAP O288); the open is refused and reopens",
+            vault.id()
+        );
+        Err(StoreError::StaleUnlock(format!(
+            "the vault's key rotation state changed between this open's unlock and its open — \
+             a promote, a discard or a backup restore changed vault.json or vault.json.next \
+             after the unlock read them — so the staged rotation the unlock found no longer \
+             describes the vault at {}. Nothing was served from it; reopen the vault (ROADMAP \
+             O288)",
             vault.dir().display()
         )))
     }
@@ -4965,12 +5028,22 @@ impl VaultStore {
         // open does, and refused rather than served as a stream of false
         // integrity failures (ROADMAP O257).
         let mut foreign_note = None;
-        if vault.reconcile_read_only(db_kc.as_deref()) == RotationVerdict::Foreign {
-            // No store exists yet, so no handle counts this snapshot; nothing
-            // it reads is remembered (ROADMAP O253).
-            foreign_note = Some(chain::snapshot(&conn, &std::cell::Cell::new(0), |snap| {
-                Self::settle_foreign_keycheck(snap, &vault, false)
-            })?);
+        match vault.reconcile_read_only(db_kc.as_deref()) {
+            RotationVerdict::Foreign => {
+                // No store exists yet, so no handle counts this snapshot;
+                // nothing it reads is remembered (ROADMAP O253).
+                foreign_note = Some(chain::snapshot(&conn, &std::cell::Cell::new(0), |snap| {
+                    Self::settle_foreign_keycheck(snap, &vault, false)
+                })?);
+            }
+            // The verdict the reconcile RETURNED, never one recomputed after
+            // its swap, and before a note is copied or a read served (O288).
+            verdict => {
+                if let Err(e) = Self::adopted_rotation_holds(&vault, verdict) {
+                    Self::close_refused(conn);
+                    return Err(e);
+                }
+            }
         }
         let mut store = Self::assemble(conn, vault, embedder, true)?;
         store.unhealed.extend(foreign_note);
