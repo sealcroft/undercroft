@@ -1666,10 +1666,11 @@ Consequences that are binding, not advisory:
   handle's keycheck the database does not hold, absent included; the
   open's `reconcile_rotation` never overwrites a present foreign keycheck
   — a race (`StaleUnlock`, reopened once by the CLI and `/v1`), a heal
-  when the chain replays under the manifest's keys, or an integrity
+  when the chain replays under the manifest's keys and reaches its anchor,
+  a rollback (`ManifestTampered`), or an integrity
   verdict — and takes the write lock only when there is something to
   decide; no unlock deletes a staged manifest. **And the open's promote is
-  LICENSED (O290)**: `Vault::take_licensed_promotion` asks the manifest rule
+  LICENSED (O290)**: `Vault::license_promotion` asks the manifest rule
   once, under that lock, with the unlock's `manifest_seen` as the retired
   digest — the staged branch (`.next` still the staged bytes, `vault.json`
   still the retired bytes the unlock verified) writes, a `vault.json`
@@ -1685,7 +1686,29 @@ Consequences that are binding, not advisory:
   lag and a forged manifest was overwritten with no event; the rotation's
   own `promote` keeps that heal, its anchor being the head it just committed
   (O295 files its missing report). A leftover or an abandoned stage is
-  removed only while `vault.json` verifies under the handle's key. Test pause points live in
+  removed only while `vault.json` verifies under the handle's key. **And
+  every arm JUDGES before it acts (O296)**: under that lock, after the
+  licence's ask (which writes nothing — `Licence::promote_licensed` makes the
+  promote) and a foreign marker's race check, `judge_chain` — the ONE
+  judgement `reconcile_chain` shares, which RETURNS a verdict each caller
+  classifies — replays the audit chain, FORCED, under the keys the handle
+  will hold against the anchor of the manifest it will answer to, and only
+  then come the promote, the removals and the keycheck seed. The ordinary
+  open keeps the `anchor == head` short-circuit (O237); here it is refused
+  because `chain_meta`'s head is a clear value, and with it forged the open
+  deleted `.next` or wrote S over R and opened Ok. Measured before it, a
+  marker deleted or planted during a deferral, a pre-rotation database
+  restored beside a stage, or one carrying the staged generation's copied
+  marker each deleted `.next` — or wrote S over the only manifest that
+  database answers to — and only then refused; no committed head beside a
+  stage, or beside a foreign marker, now refuses too. What a replay cannot
+  see, stated: a transplant or truncation of the chain's clear rows makes
+  every value the reconcile reads name one generation, and the effect runs
+  (`verify` fails) — what deleting the salt file achieves; a pre-rotation
+  database restored exactly AT the anchor is a crash before the commit to
+  every value there is, and its stage is discarded (A2's); and the licence
+  is acted on one replay after it is asked, a window only an offline edit
+  lands in (O304). `chain_answers_to` is gone. Test pause points live in
   `rotate_pause.rs`, never inline here — an inline `#[cfg(test)]` blinds
   `rotation_names_every_key_derived_artifact`),
   bulk ingest
@@ -2660,8 +2683,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (1244 run,
-                                      # 17 #[ignore]d = 1261 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (1260 run,
+                                      # 17 #[ignore]d = 1277 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote

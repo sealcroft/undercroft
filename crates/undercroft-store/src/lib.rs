@@ -26,6 +26,8 @@ mod backup_pause;
 mod backup_tests;
 mod chain;
 #[cfg(test)]
+mod contradiction_tests;
+#[cfg(test)]
 mod deferral_tests;
 mod delete;
 mod delete_pause;
@@ -2571,6 +2573,66 @@ struct OpenVerdict {
     verdict: (bool, LabelCommitment),
 }
 
+/// Whether the one chain judgement may short-circuit on an anchor that equals
+/// the committed head (ROADMAP O296).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplayPolicy {
+    /// Answer `Current` without replaying when the anchor equals the committed
+    /// head: the ordinary open, O(1) in `audit` (ROADMAP O237).
+    ShortCircuit,
+    /// Always replay: the rotation reconcile, before an effect that cannot be
+    /// undone — the committed head is a clear value an offline writer can set.
+    Forced,
+}
+
+/// What [`VaultStore::judge_chain`] found the audit chain to say against a
+/// manifest's anchor (ROADMAP O296). Each caller classifies it.
+enum ChainJudgement {
+    /// The rows answer to the keys at the anchor, or there is no head to judge.
+    Answers(ChainAnswer),
+    /// The regime and the head keys disagree — never produced by this store.
+    Inconsistent(String),
+    /// The rows do not reproduce the committed head under these keys: an
+    /// in-database edit, or a database of another key generation.
+    HeadMismatch,
+    /// The rows reproduce their head and never pass through the anchor: the
+    /// rollback the anchor exists to catch.
+    AnchorNotSeen,
+}
+
+/// A chain that answers: what the ordinary open reports or heals.
+enum ChainAnswer {
+    /// No committed head: a fresh vault, or a database older than `chain_meta`.
+    Unseeded,
+    /// The anchor is the committed head.
+    Current,
+    /// The anchor is a strict ancestor of the committed head — a crash lag, a
+    /// writer committing beside the open, or an older `vault.json` put back.
+    Behind {
+        /// Records after the anchor.
+        behind_by: usize,
+        /// The replay's verdict, offered to the label guard (ROADMAP O251).
+        offered: OpenVerdict,
+    },
+}
+
+impl ChainJudgement {
+    /// The ordinary open's answer: the chain's own refusals, as
+    /// `reconcile_chain` has always raised them — `IntegrityFinding` for an
+    /// inconsistent regime, `Integrity("audit-chain head")` for a head the rows
+    /// do not reproduce, `ManifestTampered` for an anchor they never reach.
+    fn answer(self) -> Result<ChainAnswer, StoreError> {
+        match self {
+            ChainJudgement::Answers(answer) => Ok(answer),
+            ChainJudgement::Inconsistent(finding) => Err(StoreError::IntegrityFinding(finding)),
+            ChainJudgement::HeadMismatch => Err(StoreError::Integrity("audit-chain head".into())),
+            ChainJudgement::AnchorNotSeen => Err(StoreError::Vault(
+                undercroft_vault::VaultError::ManifestTampered,
+            )),
+        }
+    }
+}
+
 /// What the manifest's rollback anchor was found to be, relative to the
 /// committed chain head in `chain_meta`.
 ///
@@ -4148,12 +4210,14 @@ impl VaultStore {
     ///
     /// **A present marker that is not this handle's is never overwritten
     /// blind (ROADMAP O257).** What it means is decided from the rest of the
-    /// evidence ([`Self::settle_foreign_keycheck`]): a rotation that moved
-    /// `vault.json` or `.next` since this unlock read them is a race, refused
-    /// for a reopen; a database whose audit chain replays under this handle's
-    /// keys answers to them, and the marker is re-seeded WITH a note — the
-    /// state a pre-1.7 re-seed left, which 1.6.x heals and this build must not
-    /// refuse; anything else is an integrity verdict.
+    /// evidence ([`Self::foreign_race`], [`Self::settle_foreign`]): a rotation
+    /// that moved `vault.json` or `.next` since this unlock read them is a race,
+    /// refused for a reopen; a database whose audit chain replays under this
+    /// handle's keys and reaches its manifest's anchor answers to them, and the
+    /// marker is re-seeded WITH a note — the state a pre-1.7 re-seed left,
+    /// which 1.6.x heals and this build must not refuse; a rollback beneath the
+    /// marker is `ManifestTampered` (ROADMAP O296); anything else is an
+    /// integrity verdict.
     ///
     /// A staged file is promoted or removed only while it is still exactly the
     /// bytes this unlock read, so an open that attached one rotation's
@@ -4164,12 +4228,31 @@ impl VaultStore {
     /// licence — `.next` still the staged bytes and `vault.json` still the
     /// retired bytes the unlock verified — or skipped when `vault.json` already
     /// verifies under the new key; anything else refuses in the rule's own class
-    /// with nothing written ([`Vault::take_licensed_promotion`]). A leftover or
+    /// with nothing written ([`Vault::license_promotion`]). A leftover or
     /// an abandoned stage is removed only while `vault.json` verifies under this
     /// handle's key. The open used to heal a deleted, torn or forged `vault.json`
     /// from the twin's anchor — the anchor the UNLOCK read — which laundered a
     /// rollback beneath it into a crash lag, overwrote a tamper signal, and
     /// deleted a leftover that was the last copy of the keys before refusing.
+    ///
+    /// **And only once the database is judged to answer to the manifest the
+    /// handle will answer to (ROADMAP O296).** Every arm judges before it acts:
+    /// the audit chain is REPLAYED, in this lock's snapshot, under the keys the
+    /// handle will hold — the twin's on `Committed`, its own otherwise —
+    /// against the anchor of that manifest — the licence's on `Committed`,
+    /// `vault.json`'s otherwise — and a head the rows do not reproduce, or an
+    /// anchor they never reached, refuses with nothing written. The promote,
+    /// every removal, the foreign re-seed and the absent-marker seed come after
+    /// it. Measured before it: a keycheck row deleted during a deferral, a
+    /// pre-rotation database restored beside the stage, or one restored with
+    /// the live marker copied onto it, each made the open delete
+    /// `vault.json.next` — the only copy of a salt — or write the staged
+    /// manifest over the retired one, and only then refuse. The replay is
+    /// FORCED here: the ordinary open's short-circuit compares the anchor with
+    /// `chain_meta`'s head, a clear value an offline writer can set, and with it
+    /// set the same routes destroyed the file and opened Ok. A database with no
+    /// committed head beside a staged rotation or a foreign marker refuses too —
+    /// no build writes one.
     fn reconcile_rotation(
         conn: &Connection,
         mut vault: Vault,
@@ -4194,25 +4277,57 @@ impl VaultStore {
         }
         let lock = WriteLock::begin(conn)?;
         let db_kc = read_keycheck()?;
+        let verdict = vault.rotation_verdict(db_kc.as_deref());
+        // A staged file of any generation is attached: beside it, a database
+        // with no committed head is refused rather than judged (O296).
+        let staged = vault.has_pending();
+        // ASK, never act, before the judgement (ROADMAP O296). The licence is
+        // asked under this lock and never before it (O290), and writes
+        // nothing; a foreign marker's race check comes first, so a rotation
+        // since answers the reopen class before any anchor is read — a read
+        // that raises the tamper event on a manifest another rotation replaced.
+        let licence = match verdict {
+            RotationVerdict::Committed => Some(vault.license_promotion()?),
+            RotationVerdict::Foreign => {
+                Self::foreign_race(&vault)?;
+                None
+            }
+            RotationVerdict::Abandoned | RotationVerdict::Settled => None,
+        };
+        // JUDGE: the chain replayed, forced, under the keys this handle will
+        // answer to, against the anchor of the manifest it will answer to —
+        // read inside this lock, which every anchor also takes (ROADMAP O253's
+        // write-locked reads), and after the race check.
+        let judged = {
+            let (stepper, anchor): (&Vault, String) = match &licence {
+                Some(licence) => (licence.vault(), licence.anchor().to_string()),
+                None => (&vault, vault.anchored_head()?),
+            };
+            Self::judge_chain(&lock.snapshot()?, stepper, &anchor, ReplayPolicy::Forced)?
+        };
         let mut note = None;
-        match vault.rotation_verdict(db_kc.as_deref()) {
+        if verdict == RotationVerdict::Foreign {
+            note = Some(Self::settle_foreign(judged, true)?);
+        } else {
+            Self::refuse_before_effect(judged, staged)?;
+        }
+        // ACT, only now: nothing above wrote a byte.
+        match verdict {
             RotationVerdict::Committed => {
-                // LICENSED, under this lock and never before it (ROADMAP
-                // O290): the promote writes the staged manifest only while
-                // `.next` and `vault.json` are still what the unlock read, and
-                // a miss is the manifest rule's own refusal with nothing
-                // written — it used to heal whatever it found from memory, so
-                // a rollback beneath this open, with `vault.json` deleted,
-                // opened as a crash lag.
-                vault = *vault.take_licensed_promotion()?;
+                // LICENSED (ROADMAP O290): the promote writes the staged
+                // manifest only while `.next` and `vault.json` were still what
+                // the unlock read, or follows a promote since; a miss was the
+                // manifest rule's own refusal above, with nothing written.
+                let licence = licence.expect("the Committed arm asked the licence");
+                vault = *licence.promote_licensed()?;
             }
             RotationVerdict::Abandoned => {
                 let pending = vault.take_pending().expect("verdict saw a pending twin");
                 // Only while `vault.json` still verifies under this handle's
                 // key (ROADMAP O290): an old-generation writer's anchors beside
-                // an abandoned stage still verify, and a deleted or forged
-                // `vault.json` leaves the stage where it is for the chain's
-                // verdict below.
+                // an abandoned stage still verify, and a `vault.json` that is
+                // unreadable — which the anchor's read falls back over — leaves
+                // the stage where it is.
                 if vault.manifest_on_disk_is_mine() {
                     pending.remove_staged_if_unchanged()?;
                 }
@@ -4231,13 +4346,6 @@ impl VaultStore {
             }
             RotationVerdict::Foreign => {
                 vault.take_pending();
-                // Judged in the lock's own transaction: the marker, the head
-                // and the rows it replays are one state (ROADMAP O253).
-                note = Some(Self::settle_foreign_keycheck(
-                    &lock.snapshot()?,
-                    &vault,
-                    true,
-                )?);
             }
         }
         // Every arm that could leave the marker other than this handle's has
@@ -4256,27 +4364,18 @@ impl VaultStore {
         Ok((vault, note))
     }
 
-    /// Decide what a present keycheck that is neither this handle's nor a
-    /// staged generation's means (ROADMAP O257), from the evidence around it.
-    /// `writable` only changes the wording of the heal note.
+    /// **The race arm of a present keycheck that is neither this handle's nor a
+    /// staged generation's** (ROADMAP O257): `vault.json` no longer verifies
+    /// under this handle's key, or `vault.json.next` is not the bytes this
+    /// unlock read — another process rotated the vault after this process read
+    /// it. [`StoreError::StaleUnlock`], which the CLI and `/v1` reopen once.
+    /// Compared with what the unlock READ rather than with what it attached, or
+    /// an unchanged torn file beside a foreign marker would read as a race on
+    /// every retry.
     ///
-    /// - **A race** — `vault.json` no longer verifies under this handle's key,
-    ///   or `vault.json.next` is not the bytes this unlock read: another
-    ///   process rotated the vault after this process read it.
-    ///   [`StoreError::StaleUnlock`], which the CLI and `/v1` reopen once.
-    ///   Compared with what the unlock READ rather than with what it
-    ///   attached, or an unchanged torn file beside a foreign marker would
-    ///   read as a race on every retry.
-    /// - **Answers to these keys** — the audit chain replays to its committed
-    ///   head under them: the marker is stale, not the data. The note says so.
-    /// - **Otherwise** an integrity verdict: a manifest rolled back to an
-    ///   older generation, a lost promote, a database from another
-    ///   generation.
-    fn settle_foreign_keycheck(
-        snap: &chain::Snapshot<'_>,
-        vault: &Vault,
-        writable: bool,
-    ) -> Result<String, StoreError> {
+    /// Asked FIRST, before any anchor is read (ROADMAP O296): the anchor's read
+    /// of a `vault.json` another rotation replaced raises the tamper event.
+    fn foreign_race(vault: &Vault) -> Result<(), StoreError> {
         if vault.staged_on_disk()? != vault.staged_seen() || !vault.manifest_on_disk_is_mine() {
             return Err(StoreError::StaleUnlock(
                 "the vault was rotated or restored while this process opened it — vault.json \
@@ -4286,57 +4385,185 @@ impl VaultStore {
                     .into(),
             ));
         }
-        if !Self::chain_answers_to(snap, vault)? {
-            return Err(StoreError::IntegrityFinding(
-                "the database's key-generation marker names another generation, vault.json \
-                 names this one, and the audit chain does not replay under this one's keys: \
-                 the database and the manifest are from different key generations — a \
-                 manifest restored from before a key rotation, or a rotation whose new \
-                 manifest was lost. Nothing was written. Restore the vault from a backup \
-                 that verifies (ROADMAP O257)"
-                    .into(),
-            ));
-        }
-        Ok(format!(
-            "the database's key-generation marker named another generation while vault.json \
-             and the audit chain both answer to this one — what a key rotation beside a racing \
-             open left before 1.7.0, or an edited marker — {} (ROADMAP O257)",
-            if writable {
-                "it was re-seeded to this generation"
-            } else {
-                "a writable open re-seeds it"
-            }
-        ))
+        Ok(())
     }
 
-    /// Whether the audit chain replays to its committed head under `vault`'s
-    /// keys — the evidence that the database answers to them (ROADMAP O257).
-    /// A rotation re-steps every row under the next generation, so a database
-    /// from another generation cannot pass. A vault with no chain yet has
-    /// nothing keyed to contradict it, and every later read still verifies
-    /// its own tag.
+    /// Decide what a present keycheck that is neither this handle's nor a
+    /// staged generation's means (ROADMAP O257), once [`Self::foreign_race`]
+    /// found no race, from the chain judged under this handle's keys against
+    /// its manifest's anchor. `writable` only changes the wording of the heal
+    /// note.
     ///
-    /// The head and the rows are read in `snap`, one state (ROADMAP O253): read
-    /// in two, a legitimate commit between them made a database that DOES
-    /// answer to these keys read as one that does not — an integrity verdict
-    /// on an open beside a writer.
-    fn chain_answers_to(snap: &chain::Snapshot<'_>, vault: &Vault) -> Result<bool, StoreError> {
+    /// - **Answers to these keys at the anchor** — the audit chain replays to
+    ///   its committed head under them and reaches the anchor: the marker is
+    ///   stale, not the data. The note says so.
+    /// - **The chain reaches its head and never the anchor** — a rollback
+    ///   beneath a foreign marker: `ManifestTampered`, as the ordinary open
+    ///   answers a rollback. The check this replaced replayed with no anchor,
+    ///   so it re-seeded the marker over the edit and the open refused only
+    ///   afterwards (ROADMAP O296).
+    /// - **Otherwise** an integrity verdict: a manifest rolled back to an
+    ///   older generation, a lost promote, a database from another
+    ///   generation, or no committed head to judge by.
+    fn settle_foreign(judged: ChainJudgement, writable: bool) -> Result<String, StoreError> {
+        match judged {
+            ChainJudgement::Answers(ChainAnswer::Current | ChainAnswer::Behind { .. }) => {
+                Ok(format!(
+                    "the database's key-generation marker named another generation while \
+                     vault.json and the audit chain both answer to this one — what a key \
+                     rotation beside a racing open left before 1.7.0, or an edited marker — {} \
+                     (ROADMAP O257)",
+                    if writable {
+                        "it was re-seeded to this generation"
+                    } else {
+                        "a writable open re-seeds it"
+                    }
+                ))
+            }
+            ChainJudgement::AnchorNotSeen => Err(StoreError::Vault(
+                undercroft_vault::VaultError::ManifestTampered,
+            )),
+            ChainJudgement::Answers(ChainAnswer::Unseeded) => Err(StoreError::IntegrityFinding(
+                "the database's key-generation marker names another generation, and the \
+                 database has no committed audit-chain head to judge which generation it answers \
+                 to — no build writes that state. Nothing was written. Restore the vault from a \
+                 backup that verifies (ROADMAP O257, O296)"
+                    .into(),
+            )),
+            ChainJudgement::HeadMismatch | ChainJudgement::Inconsistent(_) => {
+                Err(StoreError::IntegrityFinding(
+                    "the database's key-generation marker names another generation, vault.json \
+                     names this one, and the audit chain does not replay under this one's keys: \
+                     the database and the manifest are from different key generations — a \
+                     manifest restored from before a key rotation, or a rotation whose new \
+                     manifest was lost. Nothing was written. Restore the vault from a backup \
+                     that verifies (ROADMAP O257)"
+                        .into(),
+                ))
+            }
+        }
+    }
+
+    /// The rotation reconcile's refusal for a chain judged before any effect
+    /// (ROADMAP O296): the one the ordinary open's [`Self::reconcile_chain`]
+    /// answers ([`ChainJudgement::answer`]), and, beside a staged file of any
+    /// generation, a database with no committed head — which no build writes
+    /// beside a stage, a rotation needing a seeded chain and this handle's own
+    /// marker. With no stage, no head is a fresh vault or a legacy one, and
+    /// `init_chain` seeds it.
+    fn refuse_before_effect(judged: ChainJudgement, staged: bool) -> Result<(), StoreError> {
+        match judged.answer()? {
+            ChainAnswer::Unseeded if staged => Err(StoreError::IntegrityFinding(
+                "a key rotation's staged manifest, vault.json.next, is beside this vault, and \
+                 its database has no committed audit-chain head to judge which key generation it \
+                 answers to — no build writes that state. The rotation reconcile wrote nothing: \
+                 vault.json, vault.json.next and the key-generation marker are as found. \
+                 vault.json.next may hold the only copy of a key generation's salt — do NOT \
+                 delete it; restore the vault from a backup that verifies (ROADMAP O296)"
+                    .into(),
+            )),
+            ChainAnswer::Unseeded | ChainAnswer::Current | ChainAnswer::Behind { .. } => Ok(()),
+        }
+    }
+
+    /// **What the audit chain says against a manifest's anchor, under
+    /// `stepper`'s keys — the ONE judgement** (ROADMAP O296), made by the
+    /// ordinary open's [`Self::reconcile_chain`] and by the rotation reconcile
+    /// before any effect, each classifying what it RETURNS: the arithmetic is
+    /// the tamper detection, and a second copy of it is a second place for the
+    /// alarm to be subtly wrong.
+    ///
+    /// Read in `snap`, one state (ROADMAP O253). The anchor is read by the
+    /// caller BEFORE a read snapshot pins, or inside a write lock, where no
+    /// anchor can move.
+    ///
+    /// [`ReplayPolicy::ShortCircuit`] answers `Current` without replaying when
+    /// the anchor equals the committed head — the ordinary open's O(1) cost
+    /// (ROADMAP O237), whose forged head the label guard's lazy replay and
+    /// `verify` see. [`ReplayPolicy::Forced`] always replays: the committed
+    /// head is a clear value an offline writer can set, so before an effect
+    /// that cannot be undone — the only copy of a salt removed, the only
+    /// manifest a database answers to overwritten — only the keyed replay is
+    /// evidence.
+    fn judge_chain(
+        snap: &chain::Snapshot<'_>,
+        stepper: &Vault,
+        anchor: &str,
+        policy: ReplayPolicy,
+    ) -> Result<ChainJudgement, StoreError> {
         let conn = snap.conn();
+        // The rotation reconcile runs before `init_chain` creates the table.
         let has_chain: i64 = conn.query_row(
             "SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name = 'chain_meta'",
             [],
             |r| r.get(0),
         )?;
         if has_chain == 0 {
-            return Ok(true);
+            return Ok(match chain::regime(conn)? {
+                chain::Regime::V1 => ChainJudgement::Answers(ChainAnswer::Unseeded),
+                chain::Regime::V2 { .. } => ChainJudgement::Inconsistent(
+                    "audit chain: a `migrate/chain-v2` commitment record with no `chain_meta` \
+                     table"
+                        .into(),
+                ),
+            });
         }
-        match chain::head_state(conn)? {
-            chain::HeadState::Unseeded => Ok(true),
-            chain::HeadState::Seeded(head) => {
-                Ok(chain::replay(snap, vault, None)?.head == head.head)
+        // The LIVE head: `head_v2` on a switched chain, `head` before it
+        // (ROADMAP O233). Read once and used twice: the judged head decides the
+        // anchor arithmetic below, the unjudged state feeds `chain::verdict`.
+        let head_state = chain::head_state(conn)?;
+        let db_head = match &head_state {
+            chain::HeadState::Unseeded => {
+                return Ok(ChainJudgement::Answers(ChainAnswer::Unseeded))
             }
-            chain::HeadState::Inconsistent { .. } => Ok(false),
+            chain::HeadState::Inconsistent { finding } => {
+                return Ok(ChainJudgement::Inconsistent(finding.clone()))
+            }
+            chain::HeadState::Seeded(head) => head.head.clone(),
+        };
+        if policy == ReplayPolicy::ShortCircuit && anchor == db_head {
+            return Ok(ChainJudgement::Answers(ChainAnswer::Current));
         }
+        // Replay the audit rows and decide crash vs rollback, through the one
+        // replay (ROADMAP O233). A crash between a switch's commit and its
+        // anchor leaves the anchor on a version-1 head, and the version-1
+        // prefix is unchanged, so it is found here and healed.
+        let replayed = chain::replay(snap, stepper, Some(anchor))?;
+        // **ROADMAP O251: this replay is the guard's replay**, offered rather
+        // than installed: the open goes on to run two at-rest migrations and
+        // the version-2 switch, each of which APPENDS, and this connection's
+        // own commits do not move `data_version` — so a verdict installed here
+        // would go stale behind an unmoved cookie, which is O242 option (C)'s
+        // shape. `adopt_open_verdict` takes it only if the chain has not moved
+        // since. The cookie is the SNAPSHOT's (P7), so it is exactly the
+        // version of the rows this verdict describes — O251's "cookie before
+        // the replay", met strictly rather than probably (ROADMAP O253). Only
+        // the ordinary open offers it; the rotation reconcile discards it.
+        // Built BEFORE the verdicts below, in the order `reconcile_chain` has
+        // always built it, so a missing height answers as it always has.
+        let offered = OpenVerdict {
+            data_version: snap.data_version(),
+            head: db_head.clone(),
+            writes: chain::writes(conn)?,
+            verdict: chain::verdict(&replayed, &head_state),
+        };
+        if replayed.head != db_head {
+            // The committed head doesn't match its own audit rows under these
+            // keys, read in the same snapshot — in-database corruption, or a
+            // database of another key generation; not timing, and not an
+            // anchoring artifact.
+            return Ok(ChainJudgement::HeadMismatch);
+        }
+        if !replayed.anchor_seen {
+            return Ok(ChainJudgement::AnchorNotSeen);
+        }
+        if anchor == db_head {
+            return Ok(ChainJudgement::Answers(ChainAnswer::Current));
+        }
+        Ok(ChainJudgement::Answers(ChainAnswer::Behind {
+            behind_by: replayed.behind_by,
+            offered,
+        }))
     }
 
     /// ROADMAP O7: bring a pre-1.5.0 vault's database under its current
@@ -4768,7 +4995,7 @@ impl VaultStore {
     ///   legitimately anchor beside an abandoned stage, and comparing
     ///   `vault.json` there would refuse opens beside it (O284's option C).
     /// - **`Settled`** mints no note; **`Foreign`** is judged by
-    ///   `settle_foreign_keycheck`.
+    ///   `foreign_race` and `settle_foreign`.
     ///
     /// A difference is the reopen class, which the CLI and `/v1` retry once
     /// with a fresh unlock — a real tamper surfaces there, with its event; this
@@ -4781,7 +5008,7 @@ impl VaultStore {
     /// where no legitimate writer moves either file, so its question is a
     /// LICENCE for its promote rather than a reopen — the rule's staged branch
     /// writes, a promote since skips the write, and anything else refuses in the
-    /// rule's own class ([`Vault::take_licensed_promotion`], ROADMAP O290); a
+    /// rule's own class ([`Vault::license_promotion`], ROADMAP O290); a
     /// byte comparison there refused O254's ruled P1, and the licence accepts
     /// that promote. A promote after this check
     /// leaves the note — what this open found, and worded as such — and
@@ -5134,11 +5361,16 @@ impl VaultStore {
         let mut foreign_note = None;
         match vault.reconcile_read_only(db_kc.as_deref()) {
             RotationVerdict::Foreign => {
-                // No store exists yet, so no handle counts this snapshot;
-                // nothing it reads is remembered (ROADMAP O253).
-                foreign_note = Some(chain::snapshot(&conn, &std::cell::Cell::new(0), |snap| {
-                    Self::settle_foreign_keycheck(snap, &vault, false)
-                })?);
+                // The race check first, then the anchor BEFORE the snapshot
+                // pins (ROADMAP O253), then the one judgement, forced as the
+                // writable open's is (ROADMAP O296). No store exists yet, so no
+                // handle counts this snapshot; nothing it reads is remembered.
+                Self::foreign_race(&vault)?;
+                let anchor = vault.anchored_head()?;
+                let judged = chain::snapshot(&conn, &std::cell::Cell::new(0), |snap| {
+                    Self::judge_chain(snap, &vault, &anchor, ReplayPolicy::Forced)
+                })?;
+                foreign_note = Some(Self::settle_foreign(judged, false)?);
             }
             // The verdict the reconcile RETURNED, never one recomputed after
             // its swap, and before a note is copied or a read served (O288).
@@ -5815,70 +6047,17 @@ impl VaultStore {
         // reading fresh and the one that raises `ManifestTampered` reading
         // stale.
         let anchor = self.vault.anchored_head()?;
-        enum Judged {
-            Unseeded,
-            Current,
-            Behind {
-                behind_by: usize,
-                offered: OpenVerdict,
-            },
-        }
+        // The ONE judgement (ROADMAP O296), with the short-circuit: the open
+        // stays O(1) in `audit` when the anchor is current (ROADMAP O237). A
+        // regime and a head key that disagree refuse here as an integrity
+        // finding — the read-only open reports it instead.
         let judged = self.snapshot(|snap| {
-            // The LIVE head: `head_v2` on a switched chain, `head` before it
-            // (ROADMAP O233). A regime and a head key that disagree refuse
-            // here as an integrity finding — the read-only open reports it
-            // instead. Read once and used twice: the judged head decides the
-            // anchor arithmetic below, the unjudged state feeds
-            // `chain::verdict`.
-            let head_state = chain::head_state(snap.conn())?;
-            let Some(db_head) = head_state.clone().into_committed()?.map(|h| h.head) else {
-                return Ok(Judged::Unseeded);
-            };
-            if anchor == db_head {
-                return Ok(Judged::Current);
-            }
-            // Heads differ: replay the audit rows and decide crash vs
-            // rollback, through the one replay (ROADMAP O233). A crash
-            // between a switch's commit and its anchor leaves the anchor on a
-            // version-1 head, and the version-1 prefix is unchanged, so it is
-            // found here and healed.
-            let replayed = chain::replay(snap, &self.vault, Some(&anchor))?;
-            // **ROADMAP O251: this replay is the guard's replay**, offered
-            // rather than installed: the open goes on to run two at-rest
-            // migrations and the version-2 switch, each of which APPENDS, and
-            // this connection's own commits do not move `data_version` — so a
-            // verdict installed here would go stale behind an unmoved cookie,
-            // which is O242 option (C)'s shape. `adopt_open_verdict` takes it
-            // only if the chain has not moved since. The cookie is the
-            // SNAPSHOT's (P7), so it is exactly the version of the rows this
-            // verdict describes — O251's "cookie before the replay", met
-            // strictly rather than probably (ROADMAP O253).
-            let offered = OpenVerdict {
-                data_version: snap.data_version(),
-                head: db_head.clone(),
-                writes: chain::writes(snap.conn())?,
-                verdict: chain::verdict(&replayed, &head_state),
-            };
-            if replayed.head != db_head {
-                // The committed head doesn't match its own audit rows, read
-                // in the same snapshot — in-database corruption, not timing
-                // and not an anchoring artifact.
-                return Err(StoreError::Integrity("audit-chain head".into()));
-            }
-            if !replayed.anchor_seen {
-                return Err(StoreError::Vault(
-                    undercroft_vault::VaultError::ManifestTampered,
-                ));
-            }
-            Ok(Judged::Behind {
-                behind_by: replayed.behind_by,
-                offered,
-            })
+            Self::judge_chain(snap, &self.vault, &anchor, ReplayPolicy::ShortCircuit)
         })?;
-        match judged {
-            Judged::Unseeded => Ok((AnchorState::Unseeded, None)),
-            Judged::Current => Ok((AnchorState::Current, None)),
-            Judged::Behind { behind_by, offered } => {
+        match judged.answer()? {
+            ChainAnswer::Unseeded => Ok((AnchorState::Unseeded, None)),
+            ChainAnswer::Current => Ok((AnchorState::Current, None)),
+            ChainAnswer::Behind { behind_by, offered } => {
                 self.open_verdict = Some(offered);
                 // Crash artifact, or a writer that committed after the anchor
                 // was read: the anchor is a strict ancestor. Fast-forward it —

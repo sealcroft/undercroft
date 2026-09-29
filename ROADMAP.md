@@ -3998,7 +3998,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**332** of the **347** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**335** of the **350** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -5863,6 +5863,8 @@ was ruled "propagate their errors" and built "propagate busy": `recorded_embedde
 still reads every other error as "nothing recorded" — noted, not changed.
 
 **Item 5's heal clause, REVISED 2026-09-29 by O290's ruling** (recorded beside it, not in its place). "(which also heals a corrupt or missing `vault.json`)" is withdrawn for the store's open, and kept for the rotation. Refuted: the carve-out from O254's door was justified only by the key mismatch between the old manifest and the new, and the clause widened it to missing, torn and forged files, which O254 item 3 refuses as integrity; the committed keycheck authenticates the generation, never the anchor, and the heal wrote both from what the unlock read before any connection existed — measured, a rollback from height 27 to 24 beneath a held writable unlock opened Ok with a lag note, a forged `vault.json` was overwritten with no tamper event, a missing or torn one was rewritten with no note, and a settled leftover was deleted beside a deleted `vault.json` before the open refused; and the heal served no crash in any build, since the one manifest writer is atomic and every torn or missing file already refuses at the unlock. The store's open now promotes only under the manifest rule's licence (O290), and removes a leftover or an abandoned stage only while `vault.json` still verifies under its key. 1.6.1 promoted by renaming `.next`, so these were regressions of the unreleased 1.7.0.
+
+**Item 4, REFINED twice 2026-09-29 by O296's ruling** (recorded beside it, not in its place). Its data check — "the audit chain replays to its committed head under this handle's keys" — must also reach the manifest's anchor: a database two writes behind its anchor beside a foreign marker passed it, the marker was re-seeded over the edit, and only then did the open refuse `ManifestTampered` (O296's `foreign_behind`, measured). And its discard clause — a pending twin DISCARDED "with the database on this handle's keycheck" — never covered the ABSENT marker that 1.6.1 and 1.7.0 map to `Abandoned`: a keycheck row deleted during a deferral made the open delete `vault.json.next`, the only copy of the staged salt, seed the retired generation's marker and then refuse. Both are ruled by O296: every arm of the rotation reconcile judges before it acts — the chain replayed, FORCED, under the keys the handle will hold against the anchor of the manifest it will answer to, through the one judgement `reconcile_chain` shares — so a twin is discarded, a foreign marker re-seeded or an absent one seeded only when the chain answers to the handle's keys at the anchor; the anchor-blind `chain_answers_to` is removed. The heal this item ruled for its one legitimate state (the pre-1.7 re-seed) is kept, text and all.
 
 
 ### O253 — CLOSED 2026-09-24: a legitimate concurrent writer no longer makes the label guard refuse, `verify` report a broken chain or an open fail — every judgement reads what it compares from one snapshot, the manifest anchor before it
@@ -10622,6 +10624,16 @@ manifest, a different question (O296); the guard ruled here is a component of O2
 second implementation of it. The engineering lens would add `Relations:` lines with O293 — refuted
 above. None on C, on the licence's placement, or on the class of a miss.
 
+**The dissent's other half, MET 2026-09-29 by O296's ruling** (recorded beside it). The security lens's
+deferral of every `Settled`/`Abandoned` removal until after the chain verdict, settled here for O296
+because it covered the deletion and not the absent-marker seed, is met by O296 in a stronger form:
+under the reconcile's own lock, every effect — the licensed promote, each removal, the foreign
+re-seed and the absent-marker seed — waits for a forced replay of the chain against the anchor of the
+manifest the handle will answer to. This entry's licence is split so the judgement sits between its
+answer and its write (`Vault::license_promotion` asks and writes nothing; `Licence::promote_licensed`
+makes the promote on that answer, still read by nothing else), and the guards item 3 ruled stay in
+front of each removal: they also cover the anchor's fall-back over an unreadable `vault.json`.
+
 **Fails silently if**: the licence maps `is_ok()` or `deferral_in_force`'s boolean to "current" (the
 write is skipped, `.next` removed, the salt in no file) or treats `Ok(staged: false)` as a miss (P1
 refuses); it reads the twin's `manifest_seen` (a false page on every recovery) or the outer handle's
@@ -10845,13 +10857,6 @@ emit, not by a telemetry build. A refusal raised after the reconcile — in `ini
 connection rather than closing it, as every such refusal did before. The guards are a check then a
 removal under the write lock: an edit landing between the two, sub-millisecond, is the same
 capability that could delete `.next` itself. Windows and lock-less mounts, reasoned not measured.
-
-## 1.6.1 — released 2026-09-22
-
-Fixes only. Each makes an existing silence visible — a surface added to
-REPORT a defect adds no capability, and the defect was the silence (the
-2026-09-08 ruling), so this is PATCH.
-
 
 ### O291 — CLOSED 2026-09-29: a vault delete removes a vault only under O69's hold, by one rename out of `vaults/` and a removal judged by what is left — or refuses, changing nothing
 
@@ -11225,6 +11230,418 @@ And the ruling's residuals: O285, lock-less filesystems, Windows (O275), erasure
 
 **Versioning**: PATCH inside the unreleased `1.7.0`, one `UPGRADING.md` entry. Figures: `test`
 1244 run / 17 ignored, `e2e` 750, `orchestrator-e2e` 185; the landing tiles 1244 and 1185.
+
+### O296 — CLOSED 2026-09-29: a writable open judges the audit chain before it removes `vault.json.next`, writes `vault.json` or seeds a keycheck, and a database whose chain does not reach the manifest it would answer to is refused with nothing written
+
+**Filed 2026-09-29 by O290's ruling (its security lens, confirmed by the refuter); measured by the
+integrator, reachable by a FRESH open.** `reconcile_rotation` decides the rotation verdict from the
+database's `meta.keycheck`, acts on it — removing `.next`, seeding an absent keycheck — and COMMITS,
+and only then does `init_chain`'s `reconcile_chain` judge whether the rows answer to the manifest.
+Measured at both security levels, during a deferral (`vault.json` the retired generation, `.next` the
+committed one): with the `meta.keycheck` row deleted, `rotation_verdict` reads `Abandoned`, the open
+deletes `.next` — the only copy of the new generation's salt — commits the retired generation's
+keycheck over a database sealed under the new one, and then refuses `Integrity` ("audit-chain head");
+with a pre-rotation database copy two writes behind restored, it deletes `.next` and then refuses
+`ManifestTampered`. Every later open reads the vault as abandoned; there is no route back in the
+engine. O257's own complaint, an open that writes before it refuses. 1.6.1 deleted an abandoned
+stage unconditionally too, so this is not a regression; O290 guards the removals against an edited
+`vault.json` and leaves this — the database contradicting the manifest — to its own ruling.
+
+**Shape, for a ruling**: no `Settled`/`Abandoned` removal and no absent-marker seed before the chain
+verdict; on an absent marker the data decides first (the chain answers to the pending keys, to the
+handle's keys, or to neither — `chain_answers_to`, O257 item 4's evidence), then write. O290's
+guard is a component of it, not a second implementation.
+
+**Gate**: both measured routes leave `.next` and the keycheck byte-identical and refuse; a genuine
+abandoned stage beside an old-generation writer is still removed.
+
+#### RULED 2026-09-29 by three lenses (agentic memory architecture, security, software and SQLite engineering) and an adversarial refuter
+
+**The question.** What the WRITABLE open's `reconcile_rotation` must establish, and in what
+order, before it removes `vault.json.next`, writes `vault.json` or seeds `meta.keycheck` — and
+what it answers in each state where the database contradicts the manifest. Working material — the
+brief, the probe, the three lens answers, the refuter's report, and two addenda of probes run while
+the panel sat — is in the session scratchpad `o296/`; this record is the ruling.
+
+**Measured** (Docker, a release build of `main` `66dafb3`, a temporary probe never committed: per
+row, `chain_answers_to` under the unlock's keys and the staged twin's, an emulation of the ruled
+judgement, a fresh read-only open and two fresh writable opens; Sealed and HmacOnly identical in
+every effect).
+- **Written, then refused** — the read-only open refuses each in the same class and writes
+  nothing: `kc_absent` (the keycheck row deleted during a deferral) — `.next` deleted and G0's
+  keycheck seeded over a G1 database, then `Integrity`; `g0marker_deferral` (G0's marker planted) —
+  `.next` deleted, then `Integrity`; `predb_behind` (a pre-rotation copy two writes behind R's anchor
+  restored) — `.next` deleted, then `ManifestTampered`; **`committed_g0db`**, not in the filing (a
+  pre-rotation copy restored with the live G1 marker, a clear value, copied onto it) — **S written
+  over R** and `.next` deleted, then `Integrity`, leaving the G0 database no manifest that derives its
+  keys; `foreign_behind` (a rollback beside a foreign marker) — the marker re-seeded over the edit,
+  then `ManifestTampered`; `settled_oldmanifest` (an older `vault.json` put back over a rotated vault,
+  the keycheck deleted) — G0's marker seeded over a G1 database, then `Integrity`.
+- **Written, then opened Ok**, both postures, only `verify` seeing it: the same routes with
+  `chain_meta`'s unauthenticated head set to the manifest's anchor (`kc_absent_forged_head`,
+  `committed_g0db_forged_head`) — `.next` deleted, or S written over R, and `reconcile_chain`'s
+  `anchor == head` short-circuit reads `Current`; every `chain_meta` row and the `migrate/chain-v2`
+  commitment deleted beside a stage (`unseeded_all_predb_behind`) — `.next` deleted, then
+  `init_chain`'s legacy adoption seeds `chain_meta` from the manifest.
+- **Written, then a raw error**: `head`, `head_v2` and the commitment deleted, `writes` left
+  (`unseeded_predb_behind`, `unseeded_committed_g0db`) — `.next` deleted or S over R, then
+  `UNIQUE constraint failed: chain_meta.key`, a 500 on `/v1`.
+- **Settled, as they must stay**: a deferral promoted, and one over an older G0 `vault.json`; an
+  abandoned stage beside anchors removed, and one beside an anchor two records behind (the lag healed
+  with O246's note); a promote's leftover removed; O257's foreign heal, with its note; a legacy
+  absent marker and a fresh vault seeded; an absent marker beside a stage the chain says was
+  abandoned (`kc_absent_abandoned`) discarded.
+- **The emulated judgement** — a keyed replay under the arm's keys against the arm's anchor, forced —
+  refuses every written-then-refused and written-then-opened row (`HeadMismatch`, `AnchorNotSeen` or
+  `Unseeded`) and passes every settled row. The same judgement WITH the short-circuit passes both
+  forged-head rows (`Current`), and would heal `pd_foreign_forged_rollback` (a foreign marker beside a
+  rollback whose head is forged), which today refuses `IntegrityFinding` because `chain_answers_to`
+  replays in full.
+- **Passed by the forced judgement too — residuals**: `transplant_committed` (G1's `rotate/` row,
+  `chain_meta` rows and marker copied onto a pre-rotation G0 copy: rotation preserves audit tags and
+  re-steps only heads, so the twin's keys replay it to S's anchor) — S written over R, both postures
+  open Ok, `verify` fails; `pa_truncate` (a G1 database with its `rotate/` row deleted, head and
+  `writes` set to R's, G0's marker planted: the handle's keys replay it to R's anchor) — `.next`
+  deleted, both postures open Ok, `verify` fails; `rollback_forged_head` and
+  `unseeded_all_plain_rollback`, no rotation at all, open Ok — the O(1) open's residual, and O303.
+- **P-B**: 1.6.1's `rotation_verdict` mapped every non-matching marker — absent, the handle's or
+  foreign — to `Abandoned`, and its reconcile deleted `.next` unconditionally and overwrote the
+  marker in autocommit, before `init_chain` judged; its `Committed` arm promoted by RENAMING `.next`
+  over R (`git show v1.6.1`, vault `lib.rs` 789-797, store `lib.rs` 3692-3715). No route here is a
+  regression of 1.7.0.
+
+**Prior rulings found and their disposition** (searched `rul(ed|ing)` in O296, O290, O257, O254,
+O266, O288, O289, O253, O237, O251 and O235).
+- **O257 item 4 — FOLLOWED and REFINED twice**, recorded beside it. Followed: one lock with the
+  seed inside it; a present marker never overwritten blind. Refined: its data check ("the audit chain
+  replays to its committed head under this handle's keys") must also reach the manifest's anchor —
+  `foreign_behind` passes the check and is a rollback; and its discard clause ("with the database on
+  this handle's keycheck") never covered the ABSENT marker that 1.6.1 and 1.7.0 map to `Abandoned` —
+  ruled here: discard only when the chain answers to the handle's keys at the anchor.
+- **O257 item 7 — FOLLOWED**: both postures classify a foreign marker through one judgement; the
+  posture divergence below is stated.
+- **O290's revision of O257 item 5, reason (d)** — a heal that serves no crash is withdrawn —
+  FOLLOWED, and it decides the absent-marker question.
+- **O290 items 1–3 — FOLLOWED**; item 1 REFINED to ask → judge → write. **O290's guards stay**: they
+  also cover `anchored_head`'s fall-back to the cached head over an unreadable `vault.json`. **O290's
+  dissent** (its security lens would have deferred every removal until after the chain verdict,
+  which covered the deletion and not the seed) — met: the judgement precedes the seed as well.
+- **O254 items 2–3 and P1 — FOLLOWED**: a promote since is judged against the promoted `vault.json`'s
+  head, and skipped. **O266**, "memory alone" rejected — FOLLOWED: the licence's staged head is bound
+  by `.next`'s digest to the bytes the unlock parsed. **O288 item 3**, as O290 refined it —
+  FOLLOWED: every miss is the integrity family, never the reopen class. **O253 — FOLLOWED**: the anchor
+  is read inside the write lock (`Origin::WriteLocked`, the precedent `switch_chain_to_v2` set), after
+  the race check. **O237 — FOLLOWED**: the forced replay runs only on the reconcile's lock-taking
+  path, never at every open. **O251**: the reconcile's replay is never offered to the label guard —
+  the open appends after it. **O235 — FOLLOWED**: the "HMAC mismatch" wording on these refusals is
+  its, and its body is amended (item 8).
+- No maintainer ruling is overturned; the 2026-09-08 versioning ruling is followed.
+
+**Claims refuted — the brief's, the filing's and the lenses' included.**
+- The filing's shape: `chain_answers_to` replays with no anchor (store `lib.rs` ~4336), so on
+  `predb_behind` it answers "the handle's" and the discard still runs before `ManifestTampered`;
+  option E fails the same way.
+- The brief's option B as written ("its snapshot body, extracted") keeps the `anchor == head`
+  short-circuit, which compares two copyable clear values: measured, it passes both forged-head
+  routes and would heal `pd_foreign_forged_rollback`, weakening O257's foreign evidence.
+- The brief's "an attacker without the key cannot forge" a replay under the twin's keys: the attacker
+  cannot compute one, but can COPY or TRUNCATE one — `transplant_committed` and `pa_truncate`,
+  measured. The forced replay raises the bar from one clear edit to three; it does not close the
+  route.
+- The brief's option C, "exactly one generation can replay": false on an unseeded or missing
+  `chain_meta` (both answer) and under a transplant.
+- The integrator's reading "the read-only open already reaches the verdict with no effect": true of
+  the probe's first table only; on every unseeded and forged-head row the read-only open answers Ok.
+- The memory lens's "the filed shape and gate conflict": under B the data decides whether the effect
+  happens, and the gate's refusal stands. The security lens's prediction that the three-row bypass
+  opens Ok: it answers a raw `UNIQUE` error while `writes` survives; only the full deletion opens Ok.
+  The security lens's retirement of `chain_answers_to` into a judgement that RAISES: that turns
+  O257's `IntegrityFinding` ("different key generations") into `Integrity("audit-chain head")` and
+  flips `settled_oldmanifest_kc` on both postures — the judgement RETURNS a verdict and each caller
+  classifies it. The engineering lens's keeping `chain_answers_to` beside the judgement: a second copy
+  of the head comparison, and two replays per heal.
+- The filing's "there is no route back in the engine": under this ruling nothing is destroyed — the
+  vault stays refused and intact, and recovery is the edit undone by hand, or a backup.
+
+**The ruled shape.**
+1. **Judge, then act — under the reconcile's existing `WriteLock`, in its snapshot, before any
+   effect.** After the marker read and `rotation_verdict`: `Committed` asks the licence, which writes
+   nothing; `Foreign` runs the race check first, so a rotation since answers `StaleUnlock` and never a
+   tamper page. Then the keys and anchor the handle will answer to — for `Committed`, the twin's keys
+   and the licence's head (S on the staged branch, the promoted `vault.json` on a promote since); for
+   every other arm, the handle's keys and `anchored_head()`, read inside the lock after the race
+   check — then the judgement. Only then the effects: the promote on the licence's own decision (the
+   fixture hook between the licence and the promote kept), O290's guarded removals, the foreign
+   re-seed, the absent-marker seed.
+2. **One judgement, forced for this caller.** `reconcile_chain`'s snapshot body is extracted into one
+   function that RETURNS a verdict — unseeded (or no `chain_meta` table), inconsistent, head
+   mismatch, anchor not seen, current, behind — under a replay POLICY: the reconcile passes the forced
+   replay (no `anchor == head` short-circuit); `reconcile_chain` passes the short-circuit, so the
+   ordinary open's cost is unchanged (O237). Each caller classifies: `reconcile_chain` exactly as today
+   (`Integrity("audit-chain head")`, `ManifestTampered`, the inconsistent finding); the rotation
+   reconcile the same, per arm; `settle_foreign_keycheck` a head mismatch or an inconsistent chain as
+   O257's `IntegrityFinding` with its text unchanged, an anchor not seen as `ManifestTampered`, current
+   or behind as its heal note.
+3. **`chain_answers_to` is removed.** The read-only open's `Foreign` path uses the same judgement, its
+   anchor read after the race check and before its snapshot.
+4. **An unseeded chain, or no `chain_meta` table, beside an attached twin or a foreign marker
+   refuses** as `IntegrityFinding`, naming what was found. No build produces it: a rotation needs a
+   seeded chain and the handle's own marker. `Settled` with no twin proceeds (a fresh vault, a legacy
+   one).
+5. **A refusal writes nothing**: the lock guard rolls back and the connection is closed with
+   `close_refused` (O290 item 5's convention).
+6. **An absent marker stays `Abandoned`** (option B), with no new verdict variant: beside a twin whose
+   chain answers to the twin it refuses `Integrity` with nothing written — what the read-only open
+   already answers. No build produces that state: the only writer of a twin-generation marker is the
+   committing rotation, inside its own transaction.
+7. **Classes and surfaces.** Every route in the first measured list keeps its class; what changes is
+   that nothing is written before it. Newly refused: the unseeded rows beside a twin (a raw 500, or
+   Ok, today) and the forged-head rotation rows (Ok today) — the integrity family, exit 2, `/v1` 409
+   with `class: "integrity"`, never retried. No surface code moves. The writable open now refuses
+   where the read-only open serves on the unseeded and forged-head rows: stated, not closed here — the
+   read-only open writes nothing, and already serves an inconsistent chain the writable open refuses.
+8. **Texts unchanged in this unit**, so both postures stay byte-identical; the "HMAC mismatch" wording
+   on these refusals, and a "`vault.json.next` is intact — do NOT delete it" clause wherever a twin is
+   attached, are added to O235's body, for both postures at once.
+9. **Records**: beside O257 item 4 (both refinements) and O290's dissent; `CLAUDE.md`'s store bullet,
+   through the pull request the maintainer approves; the CHANGELOG; `docs/THREAT_MODEL.md` (the
+   transplant and truncation residuals); the platform-views key-rotation diagram if it states the
+   order.
+
+**Options that lost, with their cost.** **A** (today): writes before it refuses — deletes the only
+copy of a salt, overwrites the only manifest a database answers to, re-seeds over an edit's evidence.
+**B as briefed** (the short-circuit kept): passes the forged-head routes and weakens O257's foreign
+evidence (P-D). **C** (an absent marker healed on the chain's evidence): a heal that serves no crash
+(O290's reason d), a second decision path that needs adoption-on-evidence on the read-only posture too
+(O257 item 7), and evidence a transplant can copy. **D** (the effects after `init_chain`): a second
+lock and a second verdict (a TOCTOU), and `init_chain`'s anchor door would meet a `vault.json` of the
+old generation. **E** (`chain_answers_to` alone): blind to the anchor — `predb_behind`,
+`foreign_behind`.
+
+**Dissent.** The memory lens ruled C, with read-only parity — settled for B by the refuter on O290's
+reason (d), the absence of a producer, and the transplant (the evidence C would trust is copyable).
+The engineering lens kept `chain_answers_to` beside the judgement — settled by the per-caller mapping,
+which keeps O257's text without a second copy. The security lens would fold the unseeded rule into
+`init_chain` here — settled for filing (O303): a different verdict, reached on every open with no
+rotation, pinned unchanged in this unit. None on the order, the forced replay, the licence split or the
+classes.
+
+**Fails silently if**: the reconcile's judgement keeps the short-circuit (only the forged-head arms and
+P-D's arm see it); the `Committed` arm is judged with the handle's keys or anchor (`committed_g0db`
+then writes S over R with its class unchanged); the judgement sits inside a removal guard, so the seed
+runs unjudged; O290's guard is replaced by the judgement's success (an unreadable `vault.json` falls
+back to the cached head); the anchor is read — with its tamper emit — before the race check (a false
+page, and store tests build no telemetry); unseeded is accepted beside a twin; the judgement raises
+(O257's text flips), or `init_chain` is given the forced policy (every open replays, O237 violated,
+nothing fails); the replay is handed to the label guard; a test asserts the class alone — the classes
+are the same on `main` and on this ruling, and only the files' bytes, the marker, `chain_meta` and the
+height tell them apart; premises go unasserted (the deferral deferred, the copy below the anchor, the
+marker absent or edited); a counterfactual copy is not force-recompiled; Windows and a filesystem
+whose locks are not shared.
+
+**The gate.** Store tests at both security levels, each row over writable open #1, writable open #2
+and a read-only open, asserting the variant and a text fragment, `vault.json`'s and `.next`'s SHA-256,
+the marker or its absence, the `chain_meta` rows, the height and the `audit` row count. Refused with
+nothing written: `kc_absent`, `g0marker_deferral`, `predb_behind`, `committed_g0db`, `foreign_behind`,
+`settled_oldmanifest`, both forged-head rotation rows, the unseeded rows beside a twin, `chain_meta`
+dropped beside a `Committed` and an `Abandoned` twin, and a held-window arm (the open-pause hook:
+`vault.json` deleted and the marker absent beside a stage — nothing seeded). Unchanged, with today's
+notes and `verify` OK: every settled probe row, O290's licence tests, O257's foreign heal and its
+integrity arm ("different key generations", both postures), O257's R1/R2, O254's P1s,
+`rotation_state_tests.rs`, `manifest_rule_tests.rs`, `deferral_tests.rs`. Pinned as costs:
+`transplant_committed`, `pa_truncate`, `predb_eq` (a pre-rotation database restored at the anchor —
+indistinguishable from a crash before the commit; A2's), `rollback_forged_head`, and
+`unseeded_all_plain_rollback` (O303's). Surfaces: the CLI's `open_store_as` and `/v1`'s `store_for` on
+`kc_absent` and `committed_g0db` — exit 2 and 409 `class: "integrity"`, not retried, the files
+intact. Source gates: in `reconcile_rotation` exactly one judgement call, carrying the forced policy,
+after `WriteLock::begin(`, the licence ask and the race check, and before every
+`.remove_staged_if_unchanged()`, the promote and the keycheck `INSERT`; `chain_answers_to` gone;
+`chain::replay(` call sites counted, none left inside `reconcile_chain`, whose judgement carries the
+short-circuit; O290's gates re-pointed to the split licence without weakening a needle.
+Counterfactuals, each force-recompiled and restored by SHA-256: today's order (every byte arm fails
+and the class arms stay green — the expected partial fire); the short-circuit kept (only the
+forged-head arms and P-D's — a diagnostic partial fire); E (`predb_behind`, `foreign_behind`);
+unseeded accepted (the unseeded and dropped-table arms); a raising judgement (O257's integrity arm);
+the judgement inside the guard (the held-window seed arm); the anchor before the race check (the race
+arm must answer `StaleUnlock`); the judgement after the licence's write (`committed_g0db`'s bytes); C
+(`kc_absent`'s refusal). Real corpus: the LoCoMo feed under O266's hand-recipe deferral, promoted by a
+writable `stats`, against `main`; the fast-path open unchanged; `kc_absent` and `committed_g0db`
+through the release binary, exit 2 with the files intact.
+
+**The replay's cost, cited rather than re-taken**: it is one `chain::replay`, whose cost O237 and O251
+measured — about 88–93 ms at 10⁵ audit rows and 836 ms at 10⁶ — held under the write lock, below the
+5 s busy timeout, and paid only on the reconcile's lock-taking path (a deferral's promote, a discard,
+a leftover, a foreign or an absent marker), once per such transition. The refuter's P-C — the hold
+re-measured at 10⁵ and 10⁶ — is a long run, asked for separately.
+
+**Residuals, stated.** The transplant and the truncation: an offline writer who copies or truncates the
+chain's clear rows makes every value the reconcile consults name one generation while the re-keyed
+rows say the other; the promote or the discard then runs and the open answers Ok — which is what
+deleting the salt file achieves, and the same writer can do that directly; `verify` and the first read
+fail loudly. Only a walk of every re-keyed row could tell them apart, which is O(corpus) at an open
+(O237). The writable open refuses where the read-only open serves on the unseeded and forged-head
+rows. An edit landing between the judgement and the effect (sub-millisecond; O290's residual). An
+older triple restored together — the database, R and S — A2's. Windows and lock-less mounts, reasoned
+not measured.
+
+**Filed by this ruling**: **O303** (a writable open adopts an emptied `chain_meta` from the manifest
+without replaying, so a rollback opens Ok). O235's body is amended (item 8).
+
+**Corrected beside it 2026-09-29, by the build's independent review.** Two statements above were
+wrong, and are corrected here rather than in place. (1) The residual "an edit landing between the
+judgement and the effect (sub-millisecond; O290's residual)" is not the window that matters on the
+`Committed` arm: the licence reads `.next` and `vault.json` BEFORE the judgement, and the promote
+writes on that answer AFTER it, so the window is one forced replay long under the write lock — about
+90 ms at 10⁵ audit rows, 836 ms at 10⁶ — where O290's ask and write were back to back. Only an offline
+edit lands there, and it costs a forged `vault.json` overwritten by the staged manifest with no tamper
+page; pinned by a test and filed as **O304**. (2) Item 7's "newly refused" list omits one state: a
+FOREIGN marker beside a database with no committed head (no stage at all) — accepted on `main` (the
+anchor-blind check read it as answering, and `init_chain` adopted `chain_meta` from the manifest, or
+failed on a raw `UNIQUE` error) — is now an `IntegrityFinding` on both postures, by item 4's rule; and
+with no `chain_meta` table the read-only open's answer for it moves from `ReadOnlyUnmigrated` (exit 1)
+to that finding (exit 2). No build writes either state.
+
+**Versioning**: PATCH inside the unreleased `1.7.0`; every route is 1.6.1's too (P-B). **No
+`UPGRADING.md` entry**: no state here has a supported producer, and each refused state was already
+refused — only after the effect. Nothing new for `config check`.
+
+#### BUILT 2026-09-29, to the ruling — fourteen counterfactuals over two rounds, each failing its gate, and ten findings of an independent review, each fixed or filed before this landed
+
+**The vault** (`crates/undercroft-vault/src/lib.rs`): the licence is split. `Vault::license_promotion`
+takes the unlock's twin, sets the unlock-minted handle's `manifest_seen` as its retired digest, asks
+the rule's strict reader ONCE, clears the digest and returns a `Licence` — the twin, the promote the
+rule decided (write on the staged branch, skip on a promote since) and the head of the manifest in
+force (S's on the staged branch, bound by `.next`'s digest to the bytes the unlock parsed; the
+promoted `vault.json`'s, read from disk, on a promote since) — writing NOTHING.
+`Licence::promote_licensed` runs the `between_licence_and_promote` hook and `promote_as` on that
+decision; no read of `vault.json` decides the write. `take_licensed_promotion` is gone.
+
+**The store** (`crates/undercroft-store/src/lib.rs`): `judge_chain(snap, stepper, anchor, policy)` is
+`reconcile_chain`'s snapshot arithmetic, extracted and RETURNING a `ChainJudgement` —
+`Answers(Unseeded | Current | Behind{behind_by, offered})`, `Inconsistent`, `HeadMismatch`,
+`AnchorNotSeen` — under a `ReplayPolicy` (`ShortCircuit`, `Forced`), `offered` built right after the
+replay and before the verdicts, as `reconcile_chain` always built it (the review found the first
+build moved it, which changed one class reachable only by deleting the `writes` row). A missing
+`chain_meta` table reads `Unseeded` on a version-1 regime and `Inconsistent` beside a version-2
+commitment. `ChainJudgement::answer` is the ordinary open's classification, unchanged;
+`reconcile_chain` calls the judgement with the short-circuit and keeps no replay of its own.
+`reconcile_rotation`, under its `WriteLock`: the marker, the verdict and whether a staged file is
+attached; the licence's ask (`Committed`) or `foreign_race` (`Foreign`, O257's race arm, its text
+byte for byte); the keys and anchor the handle will answer to — the licence's, or the handle's own
+and `anchored_head()` read after the race check; ONE forced `judge_chain` in the lock's snapshot;
+`settle_foreign` (the heal note; `ManifestTampered` for an anchor never reached; O257's
+`IntegrityFinding` text for a head mismatch or an inconsistent regime; an `IntegrityFinding` for no
+committed head) or `refuse_before_effect` (the ordinary open's classes, and no committed head beside
+a staged file of any generation as an `IntegrityFinding` whose text says the staged file must not be
+deleted); and only then the promote, O290's guarded removals and the seed. The read-only open's
+`Foreign` path makes the same race check, the anchor read before its snapshot, and the same forced
+judgement. `chain_answers_to` and `settle_foreign_keycheck` are gone.
+
+**Gates.** `contradiction_tests.rs`, fourteen, both security levels in every arm. Each route's
+refusal asserts its variant and a text fragment and `vault.json`'s and `.next`'s bytes, the marker,
+the `chain_meta` rows and the `audit` row count across two writable opens and a read-only one: the
+deleted marker (`Integrity`), the planted old marker, the pre-rotation database behind the anchor
+(`ManifestTampered`), the copied marker over an old database (the retired manifest kept), the
+foreign marker over a rollback (the planted marker kept), the old manifest over a rotated database
+(nothing seeded), both forged-head routes (the read-only open serving, as the ruling states), the
+foreign marker over a forged rollback (O257's text), no committed head beside an abandoned and a
+committed twin and beside a foreign marker (partial and full deletions; the foreign rows refused on
+the read-only open too), and `chain_meta` dropped beside both twins (the read-only open's
+`ReadOnlyUnmigrated` asserted). The held-window arm makes ONE writable open: the unlock is held and
+`vault.json` deleted before its open, which is equivalent to the open-pause hook the ruling named,
+since nothing in `open_inner` before the reconcile reads `vault.json`. The guard arm runs a control
+first — the anchor's read alone failing, the judgement answering on the fallen-back anchor, and the
+stage REMOVED — so the stage kept beside the `RuleRead`-then-`Read` pair is the guard's strict read.
+Every legitimate state settles with its note; the costs are pinned (the transplant, the truncation,
+a pre-rotation database at the anchor, a forged head and an emptied `chain_meta` with no stage, and
+O304's window, the staged branch's hook forging `vault.json`). The CLI (`open_race_surface_tests.rs`):
+both surface routes through `open_store_as` (exit 2, the variant in the error chain) and `/v1`'s
+`store_for` (409, `class: "integrity"`), files unchanged; that neither is retried is not asserted — a
+retry of these states answers the same refusal, so a retry is invisible to the arm. Source gates
+(`anchor_tests.rs`): the licence writes nothing by any route and the promote makes its decision
+reading nothing; one `license_promotion` and one `promote_licensed` in the reconcile, none in the
+rotation's fence; exactly one forced judgement in the reconcile, after the lock, the ask and the race
+check, with nothing that can write textually before it (any `.execute(`, SQL write, removal, manifest
+write or commit) and every effect after it; the anchor read after the race check; the read-only
+foreign path's race check, anchor and judgement in order; one `chain::replay(` in `judge_chain` and
+none in the reconcile, `reconcile_chain`, either open, `settle_foreign` or `foreign_race`; no
+`chain_answers_to`. The vault crate's rule gate names `license_promotion` as the strict reader's one
+asker and one of the digest's two setters.
+
+**Counterfactuals, fourteen over two rounds, each applied to the real sources, force-recompiled (two
+`Compiling undercroft-store` lines in every log), run, and restored from a saved snapshot verified by
+SHA-256** (`scratchpad/o296/cf296.py`, `run-cf296.sh`; round 1 in `cf-logs-run1/`, round 2 in
+`cf-logs/`). Round 1: cf1 today's code — every contradiction arm, both surface arms and the source
+gate fail, the legitimate states and the pinned costs stay green, and the guard arm fails on its
+premise (today's removal precedes the anchor read); cf2 the short-circuit kept — the forged-head arm,
+P-D's arm and the source gate only (the diagnostic partial fire the refuter predicted); cf3 option E
+(the anchor ignored) — the pre-rotation and foreign-rollback arms; cf4 unseeded accepted beside a
+stage — the no-committed-head arm; cf5 a judgement that raises — O257's foreign integrity arm, P-D's,
+and O266's, O289's and O290's lost-keys arms, which assert the same text; cf6 the judgement inside the
+removal guard — the held-window arm; cf7 the anchor read before the race check — O257's P1 (the
+reopen class) and the source gate; cf7b the same read with its error discarded — the source gate
+ONLY, because store tests build no telemetry and the false tamper page is the whole defect; cf8 the
+judgement after the licence's write — the copied-marker, forged-head and committed-unseeded arms,
+both surfaces and the source gate; cf9 option C (an absent marker beside a twin read as committed) —
+the deleted-marker arm, both surfaces and one legitimate row; cf10 the guard removed — the guard arm
+and the source gate. Round 2, after the review's fixes, re-ran cf1, cf2, cf7b and cf10 (same results,
+the pinned O304 arm green on today's code as a cost must be) and three new ones: cf11 a foreign marker
+beside no committed head healed — the no-committed-head test's foreign rows; cf12 the read-only
+foreign path's anchor read first — the source gate only; cf13 a write spelled `UPDATE meta` before the
+judgement — the source gate only.
+
+**Found by an independent adversarial review of the build, and each fixed or filed before this
+landed** — it found no write before the judgement and no legitimate state answered wrongly, and a
+list of mine: (1) the licence-to-promote window is one forced replay long, not the "sub-millisecond"
+the ruling's residual says — corrected beside the ruling, pinned by a test, filed as **O304**; (2) a
+foreign marker beside no committed head was newly refused on both postures, untested, with no
+counterfactual, and misdescribed in the CHANGELOG — rows added, cf11 added, the text and item 7's
+list corrected beside the ruling; (3) the runbook, the diagram's description and this entry's
+heading said any database contradicting the manifest is refused with every file kept, which a
+pre-rotation database restored AT the anchor refutes (A2's) — each qualified, and the at-anchor case
+named on the CHANGELOG, `docs/THREAT_MODEL.md` and `CLAUDE.md` beside the transplant and the
+truncation; (4) the CHANGELOG said every state kept its class while two of its own bullets were newly
+refused — corrected; (5) "every refusal across two writable opens and a read-only one" overstated the
+held-window arm and a read-only arm that accepted any error — the variant now asserted, the held window
+stated; (6) source-gate needles narrower than their claims — widened (above), with cf12 and cf13 to
+show them fire; (7) the guard arm's premise proved only that both faults fired — the control added;
+(8) the new no-committed-head text lacked "do NOT delete" and claimed the database untouched while the
+schema batch runs in autocommit before the reconcile — reworded; (9) `offered` built after the
+verdicts — moved back; (10) O293 named the removed `settle_foreign_keycheck` — amended beside it; and
+O291's closed entry had sat under `## 1.6.1` on `main`, moved here, a misplacement the headings
+preflight cannot see — filed as **O305**. Observations it made and this unit leaves: the forced replay
+is not counted on `chain_replays`, as `reconcile_chain`'s never was; an open meeting a lag on the
+reconcile's path pays two replays; the read-only open's `Foreign` refusals drop rather than close
+their connection, as on `main`.
+
+**Real corpus.** The LoCoMo feed mined into 12 wings (1,020 sealed drawers, audit height 1,021), this
+tree's final release binary (the O296 text in it and not in `main`'s) against `main` `66dafb3`'s,
+fifteen interleaved runs of each writable command, every exit code checked (none non-zero); medians
+in ms, this against `main`: settled `stats` 5 / 5, `verify` 9 / 9, `search` 42 / 44; over O266's
+hand-recipe deferral re-made before every run, each open promoting, `stats` 30 / 30, `verify` 37 / 35,
+`search` 72 / 70 (ranges overlapping); over a hand-made abandoned stage re-made before every run, each
+open discarding it, `stats` 23 / 22, `search` 61 / 60; settled again 4 / 4, 10 / 10, 44 / 45. `verify`
+OK after the last promote. Through the release binaries, the three routes — the marker deleted during
+a deferral, the old marker planted, an old database carrying the copied new marker — exit 2 in the
+same class on both builds; `main` deleted `.next` (and seeded the marker, or wrote S over R) and this
+build left `vault.json`, `.next` and the marker byte-identical. A first corpus run, before the
+review's fixes, measured the same within a millisecond and is superseded by this one.
+
+**The battery at the final tree**: `test` 1260 run (17 ignored — 1244 before, fourteen new store tests
+and two new surface arms), `e2e` 750, `orchestrator-e2e` 185, `e2e-telemetry` 62, `backends-e2e` 157,
+`obs-config` 17, `site` 7, `tls-pins` 31; `lint` and `arch-check` green.
+
+**What the gate cannot see.** The replay's cost at 10⁵ and 10⁶ audit rows is cited from O237 and
+O251, not re-measured (the refuter's P-C, a long run). The tamper event on the promote's forged arm
+(O304's cost) is invisible to a store test. The transplant and the truncation pass the judgement by
+construction. Windows and lock-less mounts, reasoned not measured.
+
+## 1.6.1 — released 2026-09-22
+
+Fixes only. Each makes an existing silence visible — a surface added to
+REPORT a defect adds no capability, and the defect was the silence (the
+2026-09-08 ruling), so this is PATCH.
+
 
 ### O250 — CLOSED 2026-09-22: the audit trail's size is published and the replay that walks it is counted by nothing in production
 
@@ -30619,6 +31036,15 @@ with the family's exit 2 / 409 `integrity` class unchanged.
 **Gate**: every `Integrity` mint site's message names what was compared, pinned
 by a source count. **Counterfactual**: today's single message.
 
+**Amended 2026-09-29 by O296's ruling (its item 8).** Two of the sites this entry names answer states
+O296 now refuses before any effect, on both postures: the rotation reconcile's `Integrity("audit-chain
+head")` over a database that answers to a different key generation than the manifest — a generation
+mismatch, which the "HMAC mismatch" wording misstates — and every such refusal made while a
+`vault.json.next` is attached, which should also say that the staged file is intact and must NOT be
+deleted: misleading text there pushes an operator towards the one destructive recovery. O296 kept the
+texts unchanged so both postures stay byte-identical; the change belongs here, for both postures at
+once.
+
 ### O236 — `create_tunnel` appends a chain record for a create that wrote nothing
 
 **Filed 2026-09-19 by O233/O234's ruling; established by reading.**
@@ -31353,6 +31779,8 @@ or per-target constants; on Windows a directory already fails at the open).
 **Gate**: a FIFO at each path answers within a bound on a thread; the vault crate's manifest-read
 gate admits no read of a manifest file outside the guarded read.
 
+**Amended 2026-09-29 by O296's build.** `settle_foreign_keycheck`, named above, is now two functions: `foreign_race` (the race check, asked first) and `settle_foreign` (the classification of the one chain judgement); the race check's reads are the same.
+
 **Amended 2026-09-29 by O290's ruling.** The store's open no longer reaches `promote`'s bare read of `vault.json`: its promote is licensed by the manifest rule's guarded reads, and the body that writes reads no `vault.json`. The rotation alone still makes that read, under its exclusive hold, where a FIFO would hold the fence; its ruled miss stays the rotation's heal, and an unreadable file must stay `Io`, never "not current, so write". The bare `staged_on_disk` read inside `remove_staged_if_unchanged` is still reached under the write lock on the licence's promoted-since branch, so a FIFO at `.next` there still blocks — this entry's, with how an unreadable `.next` beside a verified `vault.json` answers. Sequenced after O290 deliberately: a guarded `promote` read refusing a missing file, landed first, would have closed two of O290's arms on its own and let its counterfactual pass.
 
 **Noted 2026-09-29 by O291's ruling.** Restore's hold on a FIFO at `vault.db` answers a raw SQLite `SystemIoFailure` ("disk I/O error") in 78 µs — no hang, but no named refusal either (O291's PR5). O291's delete refuses any entry that is not a regular file before its hold opens anything; restore's door surveys no entries, so this stays here with its other bare reads.
@@ -31394,30 +31822,6 @@ generation's MAC (the handle is still that generation's there). A missing file g
 
 **Gate**: a deleted and a MAC-flipped `vault.json` at the rotation's `Committed` pause are reported on
 every renderer, the flip with the event; an ordinary rotation reports nothing.
-
-### O296 — an open whose database contradicts its manifest removes `vault.json.next`, and seeds a keycheck, before it refuses
-
-**Filed 2026-09-29 by O290's ruling (its security lens, confirmed by the refuter); measured by the
-integrator, reachable by a FRESH open.** `reconcile_rotation` decides the rotation verdict from the
-database's `meta.keycheck`, acts on it — removing `.next`, seeding an absent keycheck — and COMMITS,
-and only then does `init_chain`'s `reconcile_chain` judge whether the rows answer to the manifest.
-Measured at both security levels, during a deferral (`vault.json` the retired generation, `.next` the
-committed one): with the `meta.keycheck` row deleted, `rotation_verdict` reads `Abandoned`, the open
-deletes `.next` — the only copy of the new generation's salt — commits the retired generation's
-keycheck over a database sealed under the new one, and then refuses `Integrity` ("audit-chain head");
-with a pre-rotation database copy two writes behind restored, it deletes `.next` and then refuses
-`ManifestTampered`. Every later open reads the vault as abandoned; there is no route back in the
-engine. O257's own complaint, an open that writes before it refuses. 1.6.1 deleted an abandoned
-stage unconditionally too, so this is not a regression; O290 guards the removals against an edited
-`vault.json` and leaves this — the database contradicting the manifest — to its own ruling.
-
-**Shape, for a ruling**: no `Settled`/`Abandoned` removal and no absent-marker seed before the chain
-verdict; on an absent marker the data decides first (the chain answers to the pending keys, to the
-handle's keys, or to neither — `chain_answers_to`, O257 item 4's evidence), then write. O290's
-guard is a component of it, not a second implementation.
-
-**Gate**: both measured routes leave `.next` and the keycheck byte-identical and refuse; a genuine
-abandoned stage beside an old-generation writer is still removed.
 
 ### O297 — a rollback the anchor detects raises no tamper metric, so the rollback alarm cannot page
 
@@ -31512,6 +31916,63 @@ manifest's MAC or keycheck refuses — and the O271 and O284 neighbourhood.
 
 **Gate**: unlock, delete, create, connect — the open answers the reopen class and the new vault's
 directory is byte-identical.
+
+### O303 — a writable open adopts an emptied `chain_meta` from the manifest without replaying, so a rollback opens Ok
+
+**Filed 2026-09-29 by O296's ruling (its security lens, confirmed by the refuter); measured by the
+integrator.** `init_chain`'s `AnchorState::Unseeded` arm — the adoption of a database older than
+`chain_meta` (0.19.0) — seeds the committed head and height FROM THE MANIFEST (`chain::seed` with the
+handle's `chain_head_hex()` and `writes()`, store `lib.rs`) without replaying the audit rows it then
+vouches for. `head_state` reads `Unseeded` whenever `chain_meta` holds no head and `audit` holds no
+`migrate/chain-v2` commitment, so an offline writer who deletes every `chain_meta` row and that one
+audit row makes any vault read as a legacy one. Measured by O296's probe, both security levels: a
+database rolled back two records behind the anchor, with those rows deleted, OPENS Ok on the writable
+posture at the manifest's height, with only the note that the chain's labels are not
+chain-authenticated, and `verify` fails; with `writes` left in `chain_meta`, the seed's INSERT fails
+as a raw `UNIQUE constraint failed: chain_meta.key` — a 500 on `/v1`; the read-only open serves both
+with its "predates the transactional chain head" note. Beside a staged rotation, O296's ruling now
+refuses before any effect; with no stage the open reaches `init_chain` by the fast path and nothing
+judges.
+
+**Shape, for a ruling**: with a non-empty `audit`, the adoption replays the rows against the manifest's
+anchor — an anchor not seen is `ManifestTampered`, and the head seeded is the REPLAYED one; a partly
+present `chain_meta` is `IntegrityFinding`, never a raw SQLite error; the read-only open's note becomes
+the same verdict. A genuine pre-0.19.0 database replays to its anchor and is adopted as today; a fresh
+vault has no rows. The replay's cost falls on the one open that adopts.
+
+**Gate**: the emptied rollback refused with nothing written, on both postures; the partial deletion
+answering 409 `class: "integrity"`, not a 500; a fresh vault and a genuine legacy database unchanged.
+
+### O304 — a writable open acts on its licence for a staged rotation's promote one forced replay after asking it
+
+**Filed 2026-09-29 by O296's build (its independent review); pinned by a test.** O296's ruling put the
+chain judgement between the licence's ask and its write, so the window between the licence's read of
+`vault.json.next` and `vault.json` and the promote's write now spans one forced replay under the write
+lock — about 90 ms at 10⁵ audit rows, 836 ms at 10⁶ — where under O290 alone the ask and the write
+were back to back. No legitimate writer lands in it: an anchor needs the lock, a rotation the fence, a
+restore or a delete O69's hold. An offline edit does, and costs a forged `vault.json` overwritten by the
+staged manifest the database answers to, with no tamper page; no key and no row is lost
+(`o296_the_licence_is_acted_on_after_the_judgement_pinned`).
+
+**Shape, for a ruling**: after the judgement, ask the licence again and act only when it answers the
+same branch with the same anchor, refusing otherwise in the rule's own class — a second ask that can
+only refuse, never decide write versus skip (O290 item 2's concern) — or judge first against the
+twin's digest-bound staged head and ask the licence last.
+
+**Gate**: the pinned arm inverted — a `vault.json` forged in the window refused as `ManifestTampered`
+with the forged bytes kept — and O254's P1 and every O290 and O296 arm still green.
+
+### O305 — the ROADMAP headings preflight cannot see a closed entry placed under a release that shipped before it
+
+**Filed 2026-09-29 by O296's build (its independent review).** O291, closed 2026-09-29 as a fix of the
+unreleased 1.7.0, sat under `## 1.6.1 — released 2026-09-22` on `main` `66dafb3` while its CHANGELOG
+entry sat under 1.7.0; O296's unit moved it. The preflight's placement arm refuses a closed entry only
+under `## Unversioned` or `## Open`, so it could not see the misplacement.
+
+**Shape**: a closed entry under a RELEASED section must carry a closing date no later than that
+section's release date — an entry closed after a release cannot have shipped in it.
+
+**Gate**: O291 put back under 1.6.1 fails the preflight, naming the entry; the tree passes.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 

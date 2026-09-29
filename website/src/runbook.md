@@ -163,7 +163,17 @@ well, where only a tampered count fails.
    refusal for a too-new one, an I/O error for one it cannot read — and leaves
    both files exactly as found (ROADMAP O290): it used to write the staged
    manifest back from memory, which turned a database restored beneath it into
-   a crash heal and overwrote a forged manifest with no alert. A prefilter loads an index but never builds one. What the open
+   a crash heal and overwrote a forged manifest with no alert. And a writable
+   open whose DATABASE does not answer to the manifest it would adopt — its
+   key-generation marker deleted or edited beside a deferred rotation, or an
+   older copy of the database restored behind the manifest's anchor — refuses
+   before it removes `vault.json.next`, writes `vault.json` or re-seeds the
+   marker, and leaves all three as found (ROADMAP O296): it used to delete the
+   staged file, the only copy of the new keys, and only then refuse. An older
+   copy restored exactly AT the anchor is indistinguishable from a rotation
+   that crashed before its commit: the open discards the staged file and serves
+   the older state, as a crash would — keep a copy of `vault.json.next` before
+   restoring a database by hand beside it. A prefilter loads an index but never builds one. What the open
    declined to repair is printed as a warning and readable afterwards on
    `undercroft stats` (and `GET /v1/vaults/{id}/stats`) as `unhealed` — during
    an incident, read it: "vault.json.next does not authenticate … and was
