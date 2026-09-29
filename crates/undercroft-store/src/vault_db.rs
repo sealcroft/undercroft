@@ -138,10 +138,31 @@ pub(crate) fn moved(path: &Path) -> StoreError {
     );
     StoreError::StaleUnlock(format!(
         "the database file this open reached is not the one at {} now — a backup restore \
-         replaced the vault while this process was opening it, or another process renamed \
-         its pre-1.5.0 palace.db. It was closed without a checkpoint; nothing was read from \
-         it or written through it. Reopen the vault (ROADMAP O279)",
+         replaced the vault while this process was opening it, another process renamed \
+         its pre-1.5.0 palace.db, or a vault delete removed it. It was closed without a \
+         checkpoint; nothing was read from it or written through it. Reopen the vault \
+         (ROADMAP O279, O291)",
         path.display()
+    ))
+}
+
+/// Whether the vault directory `dir` is gone — a vault delete took it out of
+/// service since this process unlocked it (ROADMAP O291). Only "not found"
+/// counts; any other stat failure is not evidence of a delete.
+pub(crate) fn vault_gone(dir: &Path) -> bool {
+    matches!(std::fs::symlink_metadata(dir), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+}
+
+/// The refusal an open answers when the vault was deleted beneath it: the
+/// reopen class, whose retry answers "not found" (ROADMAP O291). It was a raw
+/// SQLite "unable to open" on the writable posture and `DatabaseMissing`, an
+/// integrity verdict, on the read-only one.
+pub(crate) fn deleted(dir: &Path) -> StoreError {
+    StoreError::StaleUnlock(format!(
+        "the vault at {} was deleted while this process was opening it — its directory is \
+         gone. Nothing was read or written. Reopen it, which finds no such vault (ROADMAP \
+         O291)",
+        dir.display()
     ))
 }
 

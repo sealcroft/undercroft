@@ -439,7 +439,8 @@ Consequences that are binding, not advisory:
   since O257 the promote, since O256 the manifest an archive is
   published with, and since O268 the manifest a restore stages go through
   it, so the crate renames a manifest in ONE place — its other renames
-  publish an archive's stage and swap a restore's stage in — and deletes
+  publish an archive's stage, swap a restore's stage in and take a deleted
+  vault out of service — and deletes
   only files it can name as its own; no unlock deletes a
   `vault.json.next` on either posture, a too-new one included — and the
   bare legacy `vault.json.tmp` a 1.6.x process still
@@ -500,6 +501,18 @@ Consequences that are binding, not advisory:
   renames under the store's hold, an `aside-<sha256 of the id>` that is
   NEVER swept or removed on a failure path, and `create` refusing
   `RestoreInterrupted` while one exists;
+  deletes.rs: the filesystem side of a vault delete (ROADMAP O291) — what
+  is at `vaults/<id>`, surveyed by `symlink_metadata` with every stat error
+  propagated (`Path::exists` follows links and reads any error as absence,
+  which is how an unreadable manifest read as no vault), the empty
+  `vault.db` a manifest-only vault is held on (made with `create_new`,
+  owned only when this call made it, removed while still empty), ONE rename
+  of the vault into the restore area as `deleting-<sha256 of the id>` —
+  never `aside-`, beside which `create` refuses and tells the operator to
+  put the vault back, and never a nonce, which no retry could find — and
+  ONE removal judged by what is left, never by `remove_dir_all`'s result.
+  It observes and refuses nothing; the store's door classifies. `DbLayout::of`
+  is the ONE layout rule, `Vault::db_layout` and O69's hold both asking it;
   bundle.rs:
   recipient-encrypted export bundles — **the vault-sized paths take the
   buffer rather than borrowing it** (`encrypt_for_into` seals IN PLACE and
@@ -1081,7 +1094,35 @@ Consequences that are binding, not advisory:
   `vaults/<id>`, database or manifest was renamed aside as the LINK, orphaning
   what it named — `restores::linked_target`, asked by the door before anything
   is staged and by the swap), and `key_generation_differs` is read under the
-  hold. **And every open of a vault's database by PATH goes through ONE door
+  hold. **`DELETE /v1/vaults/{id}`, one door (delete.rs, `delete_vault`,
+  ROADMAP O291)** — it removed the vault directory with nothing held:
+  beside an idle writable handle in another process the delete answered
+  `Ok` and so did that handle's next write, committed into the unlinked
+  file and lost; a replica whose label guard was warm kept serving the
+  deleted vault; a link answered "deleted" over what it named; a database
+  with no manifest, or a restore's aside, answered 404, which the
+  orchestrator reads as erased. Now, in the ruling's order and every step
+  before the rename changing nothing: the posture, the name (`Invalid`),
+  a restore's aside (`RestoreInterrupted`), the survey (any entry that is
+  not a regular file is `Invalid` — a delete never follows a link, O283
+  extended for the maintainer's ratification), two databases (integrity),
+  an empty database created for a manifest-only vault, O69's hold taken
+  as `hold_vault_exclusively(dir, HoldFor::Delete)` — the hold's purpose
+  words its refusal, and restore's texts are byte-identical — the checks
+  again under it, and ONE rename out of `vaults/` UNDER the hold (off unix
+  try first, then release and retry once — O275), then the removal. A
+  refusal after the hold undoes the empty database under it; a removal that
+  fails names where the files are, and the next delete finishes it — a
+  retry never answers 404 over them. `delete_pause.rs` holds its pause
+  points (`Surveyed`, `Held` — where O147's check will go — `Aside`).
+  Racing opens answer the reopen class where the vault's directory is gone
+  (`vault_db::vault_gone`), in the writable and read-only connectors and
+  `recorded_embedder`, never a raw "unable to open" or `DatabaseMissing`.
+  `VaultManager::delete` is gone, and a source gate reads every production
+  `remove_dir_all` in the workspace from the tree: `backups.rs`,
+  `restores.rs`, `deletes.rs`, nothing else. What "deleted" covers is the
+  vault directory — not `backups/`, a remote mirror or another hard link,
+  escalated to the maintainer. **And every open of a vault's database by PATH goes through ONE door
   (`vault_db.rs`, `open_by_path`, ROADMAP O279)**: a connection takes its
   descriptor at `Connection::open` and its first lock at its first statement,
   and between them no fence sees it — O69's hold is granted beside it — so an
@@ -2619,8 +2660,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (1225 run,
-                                      # 16 #[ignore]d = 1241 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (1244 run,
+                                      # 17 #[ignore]d = 1261 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2704,7 +2745,7 @@ docker compose run --rm test          # cargo unit + integration tests (1225 run
                                       # remembered — do not hand-edit one to
                                       # silence the gate; it is measuring the
                                       # suite, not this comment.
-                                      # The 16 ignored are 3 measurements needing
+                                      # The 17 ignored are 3 measurements needing
                                       # testdata/*_50k.txt, one in lib.rs, and four
                                       # in anchor_tests.rs (ROADMAP O254, O257): the
                                       # multi-process gate's child entry point,
@@ -2726,7 +2767,9 @@ docker compose run --rm test          # cargo unit + integration tests (1225 run
                                       # and one in legacy_rename_tests.rs
                                       # (ROADMAP O281's cross-process holder,
                                       # which returns at once unless its parent
-                                      # names a role).
+                                      # names a role), and one in
+                                      # delete_tests.rs (ROADMAP O291's
+                                      # cross-process holder, the same shape).
                                       # Run the first
                                       # four with `cargo test --release -- --ignored`:
                                       # 3 pass, and `measure_relation_promiscuity`
@@ -2764,8 +2807,8 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (741 checks)
-docker compose run --rm orchestrator-e2e  # two engines + orchestrator (171 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (750 checks)
+docker compose run --rm orchestrator-e2e  # two engines + orchestrator (185 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (62 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (157 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it

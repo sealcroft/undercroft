@@ -54,7 +54,7 @@ export UNDERCROFT_ORCH_KEY="00112233445566778899aabbccddeeff00112233445566778899
 export UNDERCROFT_ORCH_ADMIN_TOKEN="e2e-admin-token-0123456789"
 "$ORCH" serve --addr "127.0.0.1:$PORT_O" >/tmp/orch.log 2>&1 &
 ORCH_PID=$!
-trap 'kill $ENGINE_A $ENGINE_B $ORCH_PID ${REPLICA_PID:-} ${ENGINE_Q:-} 2>/dev/null' EXIT
+trap 'kill $ENGINE_A $ENGINE_B $ORCH_PID ${REPLICA_PID:-} ${ENGINE_Q:-} ${REPLICA_H:-} 2>/dev/null' EXIT
 
 for p in $PORT_A $PORT_B $PORT_O; do
   for _ in $(seq 1 100); do
@@ -1002,6 +1002,69 @@ fi
 grep -q "CONTROL PLANE only" /tmp/orch-cc-ok.log \
   && ok "the pass message says it covers the control plane only" \
   || fail "the pre-flight implied it covered the engines too"
+
+echo "== A delete beside a replica of the vault refuses; the mapping and the source are kept (ROADMAP O291) =="
+# The engine's delete takes O69's hold since O291, so a process that has the
+# tenant's vault open — here a read-only replica of engine-b's own data
+# directory — makes it refuse, 409 with nothing deleted. The control plane
+# must keep the mapping on that refusal, and a migration whose source delete
+# is refused must say the source was QUIET and why it was kept.
+PORT_H=18804
+HELDT="$(curl -s -X POST "${ADMIN[@]}" -d '{"name":"heldtenant","instance":"engine-b"}' "$O/admin/tenants")"
+HELDT_ID="$(sed -n 's/.*"id":"\([0-9a-f]*\)".*/\1/p' <<<"$HELDT")"
+HELDT_TOKEN="$(sed -n 's/.*"token":"\([0-9a-f]*\)".*/\1/p' <<<"$HELDT")"
+body_has "O291: a tenant on engine-b takes a save" '"created":true' -- -X POST \
+  -H "Authorization: Bearer $HELDT_TOKEN" \
+  -d '{"text":"the held tenant keeps its harbour ledger","wing":"eng","room":"notes"}' "$O/t/drawers"
+UNDERCROFT_HOME="$HOME_B" "$BIN" serve-http --host 127.0.0.1 --port "$PORT_H" --read-only \
+  --vault "tenant-$HELDT_ID" >/tmp/engine-h.log 2>&1 &
+REPLICA_H=$!
+for _ in $(seq 1 100); do
+  curl -sf "http://127.0.0.1:$PORT_H/healthz" >/dev/null 2>&1 && break; sleep 0.1
+done
+code_is "O291 premise: the replica serves the tenant's vault" 200 -- \
+  "http://127.0.0.1:$PORT_H/v1/vaults/tenant-$HELDT_ID/stats"
+code_is "O291: an admin tenant delete beside a replica is 409" 409 -- -X DELETE "${ADMIN[@]}" \
+  "$O/admin/tenants/$HELDT_ID"
+body_has "O291: the mapping is kept after the refused delete" "\"$HELDT_ID\"" -- "${ADMIN[@]}" "$O/admin/tenants"
+[ -f "$HOME_B/vaults/tenant-$HELDT_ID/vault.db" ] \
+  && ok "O291: the refused delete left the vault on engine-b" \
+  || fail "O291: the refused delete left the vault on engine-b" "$(ls -la "$HOME_B/vaults" 2>&1)"
+if "$ORCH" --db "$UNDERCROFT_ORCH_DB" tenant-delete "$HELDT_ID" >/tmp/o291-td.log 2>&1; then
+  fail "O291: tenant-delete beside a replica must fail" "$(cat /tmp/o291-td.log)"
+else
+  ok "O291: tenant-delete beside a replica fails"
+fi
+body_has "O291: the CLI's refusal keeps the mapping too" "\"$HELDT_ID\"" -- "${ADMIN[@]}" "$O/admin/tenants"
+# A migration off engine-b while the replica holds the source: the copy is
+# faithful, the source was quiet, and its delete was refused — so it is kept,
+# and the response says so rather than calling a quiet source busy.
+body_has "O291: engine-a registered again" '"added":"engine-a"' -- -X POST "${ADMIN[@]}" \
+  -d "{\"name\":\"engine-a\",\"url\":\"http://127.0.0.1:$PORT_A\",\"bearer\":\"$BEARER_A\",\"assertion_secret\":\"$SECRET_A\"}" \
+  "$O/admin/instances"
+MIG_H="$(curl -s -X POST "${ADMIN[@]}" -d '{"to":"engine-a"}' "$O/admin/tenants/$HELDT_ID/migrate")"
+if grep -qF '"source_deleted":false' <<<"$MIG_H" && grep -qF '"source_quiet_at_delete":true' <<<"$MIG_H" \
+   && grep -qF '"source_delete_refused":"engine refused vault delete (409)' <<<"$MIG_H"; then
+  ok "O291: a migration beside a replica reports the quiet source kept, and why"
+else
+  fail "O291: a migration beside a replica reports the quiet source kept, and why" "$MIG_H"
+fi
+[ -f "$HOME_B/vaults/tenant-$HELDT_ID/vault.db" ] \
+  && ok "O291: the source is kept on engine-b" \
+  || fail "O291: the source is kept on engine-b" "$(ls -la "$HOME_B/vaults" 2>&1)"
+body_has "O291: the migrated tenant reads from engine-a" 'harbour ledger' -- -X POST \
+  -H "Authorization: Bearer $HELDT_TOKEN" -d '{"query":"harbour ledger"}' "$O/t/search"
+kill "$REPLICA_H" 2>/dev/null; wait "$REPLICA_H" 2>/dev/null
+# With the replica stopped: the tenant deletes, and the kept source deletes
+# through its own engine.
+body_has "O291: once nothing holds it the tenant deletes" "\"deleted\":\"$HELDT_ID\"" -- -X DELETE \
+  "${ADMIN[@]}" "$O/admin/tenants/$HELDT_ID"
+SIGN_H="$(UNDERCROFT_ASSERTION_SECRET="$SECRET_B" "$BIN" assert-header "tenant-$HELDT_ID")"
+code_is "O291: the kept source deletes once the replica stopped" 200 -- -X DELETE \
+  -H "Authorization: Bearer $BEARER_B" -H "X-Vault-Assertion: $SIGN_H" \
+  "http://127.0.0.1:$PORT_B/v1/vaults/tenant-$HELDT_ID"
+body_has "O291: engine-a unregistered again" '"removed":true' -- -X DELETE "${ADMIN[@]}" \
+  "$O/admin/instances/engine-a"
 
 echo ""
 echo "orchestrator e2e results: $PASS passed, $FAIL failed"

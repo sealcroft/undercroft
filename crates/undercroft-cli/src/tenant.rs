@@ -585,16 +585,26 @@ impl Tenancy {
         Ok((200, Body::Json(json!({ "vaults": ids }))))
     }
 
+    /// `DELETE /v1/vaults/{id}` — through the store's one door (ROADMAP
+    /// O291), which removes the vault only under O69's hold: another process
+    /// holding it (a replica, a server, a `mine`) is 409 with no class and
+    /// nothing deleted; a link or non-file entry 400; a restore's aside 409; two
+    /// databases the integrity class; a removal that failed part-way 500 naming
+    /// where the files are, finished by retrying. The co-resident fence stays
+    /// and is CORRECTNESS here (O242's correction C1): dropping this process's
+    /// handle would otherwise release the one `/mcp` serves from, and the hold
+    /// would be granted beneath it.
     fn delete_vault(&mut self, id: &str, req: &Request, now: i64) -> RestResult {
         self.assert_or_401(id, req, now)?;
-        // Dropping the Tenancy's handle does not close the `/mcp` one.
         self.deny_co_resident(id, "deleting a vault", "delete it while nothing serves it")?;
+        // This server's own idle handle is a holder the hold would refuse
+        // beside; a refused delete costs it a reopen, as a refused restore does.
         self.stores.remove(id);
-        let deleted = self.manager.delete(id).map_err(vault_err)?;
-        if deleted {
-            Ok((200, Body::Json(json!({ "id": id, "deleted": true }))))
-        } else {
-            Err(RestError::new(404, "no such vault"))
+        match undercroft_store::delete_vault(&self.manager, id).map_err(store_err)? {
+            undercroft_store::Deleted::Removed => {
+                Ok((200, Body::Json(json!({ "id": id, "deleted": true }))))
+            }
+            undercroft_store::Deleted::Absent => Err(RestError::new(404, "no such vault")),
         }
     }
 
@@ -3909,8 +3919,14 @@ fn store_err(e: StoreError) -> RestError {
         // 409 `vault_err` answers for one refused at unlock (ROADMAP O238).
         StoreError::Vault(undercroft_vault::VaultError::ManifestTooNew { .. }) => 409,
         // A restore refused over a vault an interrupted restore set aside
-        // (ROADMAP O268) — `vault_err`'s class for the same variant.
+        // (ROADMAP O268) — `vault_err`'s class for the same variant. A vault
+        // delete meets it too (ROADMAP O291).
         StoreError::Vault(undercroft_vault::VaultError::RestoreInterrupted { .. }) => 409,
+        // A door refusing under a read-only posture — a restore (O212) or a
+        // delete (O291) — `vault_err`'s class for the same variant. Reached
+        // only beneath `mutates`, which refuses a read-only server's writes in
+        // front of dispatch; one decision still answers one class.
+        StoreError::Vault(undercroft_vault::VaultError::ReadOnly(_)) => 409,
         // A handle that let go of the vault (ROADMAP O278) — `vault_err`'s
         // class for the same variant, and `StaleUnlock`'s.
         StoreError::Vault(undercroft_vault::VaultError::HandleReleased(_)) => 409,
@@ -4094,8 +4110,10 @@ mod tests {
         }
         // PREMISE. A scanner whose pattern stopped matching would report a
         // clean tree, which is this project's oldest trap.
+        // Three since ROADMAP O291: a vault delete left the manager for the
+        // store's door, and answers through `store_err`.
         assert!(
-            sites >= 4,
+            sites >= 3,
             "premise failed: only {sites} classified manager call(s) found — \
              this scanner examined nothing"
         );

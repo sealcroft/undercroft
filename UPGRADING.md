@@ -129,6 +129,68 @@ SMB, or a Windows host and a Docker Desktop container sharing one bind mount
 (the two do not see each other's locks), it can grant beside a live process —
 run every process on a vault from one side of such a mount.
 
+### `DELETE /v1/vaults/{id}` refuses while any other process has the vault open (O291)
+
+**Symptom:** `DELETE /v1/vaults/{id}` answers 409 with NO `class` field and
+`the vault is open in another process — a server (a read-only replica
+included; one that has served the vault holds it until it stops), … Nothing
+was deleted. Stop it, then delete`. Through the orchestrator,
+`DELETE /admin/tenants/{id}` relays that 409 and keeps the tenant mapping,
+`undercroft-orchestrator tenant-delete` exits non-zero and keeps it too, and a
+`migrate` completes with `"source_deleted": false`,
+`"source_quiet_at_delete": true` and the engine's refusal in
+`"source_delete_refused"`. Before 1.7.0 the same delete answered 200.
+
+**Cause:** a vault delete now takes O69's hold, as `backup restore` and
+`vault rotate` already do (ROADMAP O291). It used to remove the vault's
+directory with nothing held. Beside another process that had the vault open,
+that was a write acknowledged and then lost — a writable holder committed into
+the unlinked database and answered `Ok` — or a read-only replica serving the
+deleted vault's content until it restarted, while the delete answered
+"deleted". A script that deleted beside a running server used to get 200 and,
+from that server, either lost writes or a vault that was not gone.
+
+**Fix:** stop every process that has the vault open, then delete. **Any
+`serve-http` that has served the vault holds it until it stops** — the server
+keeps an open handle on every vault it has answered for — read-only replicas
+included, with one exception the fence cannot see: a read-only process that
+opened the vault with `immutable=1` (it says so at start-up — a write-protected
+mount or a snapshot) holds no lock, so the delete proceeds beside it and that
+process goes on serving the deleted content until it stops (ROADMAP O285). There is no override, for the reason O69's `backup restore` has
+none: SQLite's locks belong to a process, so a crashed one leaves files that
+hold nothing and the delete runs. `undercroft config check` cannot see this: it
+is a route's behaviour, not a declaration.
+
+**Also refused now, each changing nothing:**
+- a vault path that is a symbolic link, or a vault directory holding any entry
+  that is not a regular file — a link, a subdirectory, a FIFO: **400**. A delete
+  never follows a link; it used to remove the link alone and answer "deleted"
+  while what the link named survived. Replace the link with what it names, or
+  move the entry out, then delete;
+- a vault a `backup restore` left set aside (an interrupted restore): 409
+  `RestoreInterrupted`, as `vault create` already answers — put the vault back
+  as that message says first;
+- a vault directory holding two databases (`vault.db` and `palace.db`): 409 with
+  `class: "integrity"`.
+
+**What changed for the better, stated so nobody is surprised:** a directory
+holding a database and no `vault.json` is now deleted (it answered 404 and was
+kept, which the orchestrator read as erased). A delete whose removal fails
+part-way answers 500 naming where the files are — the vault is out of service
+and NOT yet erased — and running the same delete again finishes it; it never
+answers 404 over them. A directory under `vaults/` holding neither a manifest
+nor a database (a stray empty one) is removed and answers 200, where it answered
+404 and was left. An open that loses a race with a delete answers "no such
+vault" (404 on `/v1`, exit 1), where a writable one answered a raw 500 and a
+read-only one `DatabaseMissing`, the integrity verdict.
+
+**What "deleted" covers:** the vault's directory under `vaults/` and every
+regular file in it. It does NOT reach archives under `backups/`, a remote index
+mirror, another hard link to one of its files, an `immutable=1` reader still
+serving it, or blocks already freed on disk;
+whether it should is escalated to the maintainer (ROADMAP O291). **The fence is
+only as good as the filesystem's locks**, as for `vault rotate` above.
+
 ### a server whose vault another key generation took over stops writing, and says why (O254)
 
 **Symptom:** a long-lived writer (`serve-http`, `daemon --watch`, …) answers

@@ -544,7 +544,7 @@ fn o279_a_hold_opened_before_another_restores_swap_is_refused() {
             }),
         );
     }
-    let second = hold_vault_exclusively(&vdir(&root));
+    let second = hold_vault_exclusively(&vdir(&root), crate::HoldFor::Restore);
     open_pause::clear(&vdir(&root));
     match second {
         Err(StoreError::VaultHeld(m)) => assert!(
@@ -558,14 +558,14 @@ fn o279_a_hold_opened_before_another_restores_swap_is_refused() {
     live.upsert(&drawer("w3", "written by the live store".into(), 1))
         .unwrap();
     assert_eq!(live.count().unwrap(), 201, "the live store still serves");
-    match hold_vault_exclusively(&vdir(&root)) {
+    match hold_vault_exclusively(&vdir(&root), crate::HoldFor::Restore) {
         Err(StoreError::VaultHeld(m)) => {
             assert!(m.contains("open in another process"), "{m}")
         }
         other => panic!("a fresh hold beside the live store: {:?}", other.err()),
     }
     drop(live);
-    assert!(hold_vault_exclusively(&vdir(&root)).is_ok());
+    assert!(hold_vault_exclusively(&vdir(&root), crate::HoldFor::Restore).is_ok());
 }
 
 /// **G5b — PR6.** A database that vanished between the hold's existence check
@@ -590,7 +590,7 @@ fn o279_a_hold_whose_database_vanished_creates_nothing() {
             }),
         );
     }
-    let held = hold_vault_exclusively(&vd);
+    let held = hold_vault_exclusively(&vd, crate::HoldFor::Restore);
     open_pause::clear(&vd);
     let created = db.exists();
     std::fs::rename(&away, &db).unwrap();
@@ -985,7 +985,7 @@ fn o279_no_open_is_refused_without_a_swap() {
         assert!(VaultStore::recorded_embedder(&v).unwrap().is_some());
         assert_eq!(VaultStore::open(v).unwrap().count().unwrap(), 100);
         assert_eq!(open_ro(&root).unwrap().count().unwrap(), 100);
-        drop(hold_vault_exclusively(&vdir(&root)).unwrap());
+        drop(hold_vault_exclusively(&vdir(&root), crate::HoldFor::Restore).unwrap());
     }
     open_pause::clear(&vdir(&root));
     let fired = fired.lock().unwrap().clone();
@@ -1123,7 +1123,7 @@ fn o279_the_identity_check_sees_the_descriptor_and_the_path() {
     assert!(VaultStore::recorded_embedder(&v).unwrap().is_some());
     assert_eq!(VaultStore::open(v).unwrap().count().unwrap(), 20);
     assert_eq!(open_ro(root).unwrap().count().unwrap(), 20);
-    drop(hold_vault_exclusively(&vdir(root)).unwrap());
+    drop(hold_vault_exclusively(&vdir(root), crate::HoldFor::Restore).unwrap());
 }
 
 /// **G10 — checkpoint-on-close is back on an ordinary connection**, and kept
@@ -1151,7 +1151,7 @@ fn o279_checkpoint_on_close_is_back_on_and_the_hold_keeps_it_off() {
         ["vault.db", "vault.json"],
         "the last close left two files"
     );
-    let hold = hold_vault_exclusively(&vdir(&root)).unwrap();
+    let hold = hold_vault_exclusively(&vdir(&root), crate::HoldFor::Restore).unwrap();
     assert!(
         no_ckpt(&hold.0),
         "the hold's close must touch nothing (O268)"
@@ -1228,7 +1228,7 @@ fn o282_a_vault_that_appears_at_an_absent_restore_target_is_not_replaced() {
     let dir = corpus(50);
     let root = dir.path().to_path_buf();
     let (arch, _) = archive(&root);
-    mgr(&root).delete(VAULT).unwrap();
+    crate::delete_vault(&mgr(&root), VAULT).unwrap();
     assert!(!vdir(&root).exists(), "premise: the target is absent");
     let live: Arc<Mutex<Option<VaultStore>>> = Default::default();
     {
@@ -1350,7 +1350,7 @@ fn o283_a_restore_over_a_symlinked_vault_is_refused_and_changes_nothing() {
     let dir = corpus(40);
     let root = dir.path().to_path_buf();
     let (arch, _) = archive(&root);
-    mgr(&root).delete(VAULT).unwrap();
+    crate::delete_vault(&mgr(&root), VAULT).unwrap();
     let elsewhere = TempDir::new().unwrap();
     let target_of_link = elsewhere.path().join("somewhere");
     std::fs::create_dir(&target_of_link).unwrap();

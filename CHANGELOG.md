@@ -2,15 +2,17 @@
 
 ## 1.7.0 — unreleased
 
-MINOR: one new capability, backward compatible, and twenty-three fixes. The witness
+MINOR: one new capability, backward compatible, and twenty-four fixes. The witness
 commands and routes are new; no default moves and no declaration can stop a
-start-up. Four fixes change what a deployment must do: every process writing a
+start-up. Five fixes change what a deployment must do: every process writing a
 vault must run the same build, and a server whose vault another process
 rotated now stops writing rather than destroy the rotated salt (O254); a
 key rotation now refuses while any other process has the vault open (O257);
 and a restore now proves the archive first, so it needs the key and the
-vault's embedder environment and refuses under `--read-only` (O268); and a
-restore refuses over a symbolic link (O283) — all in `UPGRADING.md`, beside
+vault's embedder environment and refuses under `--read-only` (O268); a
+restore refuses over a symbolic link (O283); and a vault delete refuses while
+any other process has the vault open, a replica included (O291) — all in
+`UPGRADING.md`, beside
 O279's note that a filesystem whose inode numbers are not stable now refuses
 every open (which `config check` pre-flights), O255's note that a destruction now
 holds the write lock for as long as it runs and O256's that an archive taken by an
@@ -19,8 +21,9 @@ O246 were both below it; corrected with O247. It said "nine" until O268,
 "ten" until O266, "eleven" until O276, "twelve" until O278, "thirteen"
 until O279, which closed four entries, "seventeen" until O281, "eighteen" until O284,
 "nineteen" until O288, "twenty" until O289, which closed two entries, and
-"twenty-two" until O290; it said
-"Three fixes change what a deployment must do" until O283 made it four.)
+"twenty-two" until O290 and "twenty-three" until O291; it said
+"Three fixes change what a deployment must do" until O283 made it four, and
+"Four" until O291 made it five.)
 
 ### The external witness: `undercroft witness emit` / `check`, `GET`/`POST /v1/…/witness` (O245)
 
@@ -1030,6 +1033,56 @@ overwrites an edited `vault.json`), O296 (an open whose database contradicts its
 O297 (a rollback the anchor detects raises no tamper metric, so the shipped alert cannot page on
 it). PATCH inside the unreleased 1.7.0; no `UPGRADING.md` entry — every new refusal meets a state
 that only an edit produces and that already fails every restart.
+
+### A vault delete takes O69's hold, or refuses and changes nothing (O291)
+
+`DELETE /v1/vaults/{id}` — the route the orchestrator's tenant delete and every
+migration reach — removed the vault's directory with nothing held. Measured on `main`
+`0667b76`, at both security levels:
+
+- beside an idle **writable** handle in another process, the delete answered `Ok` and
+  so did that handle's next write — committed at height 5 into the unlinked database,
+  then lost;
+- beside an idle **read-only replica**, `get` and `recent` went on serving the deleted
+  vault's content on every later call; only `verify` refused;
+- a symlinked vault and a symlinked database each answered `deleted: true` while
+  the content they named survived (a hard-linked database does too, and still does:
+  escalated, below);
+- a directory holding a database and no manifest, and a vault an interrupted restore
+  had set aside, answered 404 — which the orchestrator reads as erased, and then drops
+  the only record of whose content it was;
+- an open that raced a delete answered a raw SQLite "unable to open" (a 500 on `/v1`)
+  on the writable posture and `DatabaseMissing`, the integrity verdict, on the
+  read-only one.
+
+Now, ruled by three lenses and an adversarial refuter and recorded before the build
+(ROADMAP O291), following O69, O257 and O282:
+
+- **One door**, `undercroft_store::delete_vault`, with its filesystem effects in the
+  vault crate's new `deletes.rs`; `VaultManager::delete` is gone. It surveys the path
+  without following a link, takes O69's hold on the database — creating an empty one
+  exclusively for a vault that has none, and removing it again on any refusal after the
+  hold — checks again under the hold, and takes the vault out of service by ONE rename
+  into the restore area before removing it, judged by what is left.
+- **Refused, changing nothing**: another process holding the vault (409 with no class;
+  its text never says "restore"), a link or any entry that is not a regular file (400 —
+  a delete never follows a link, extending the maintainer's "restore refuses symlinks"
+  for ratification), a restore's aside for the vault (409), two databases (409,
+  integrity). A removal that fails part-way names where the files are, and the next
+  delete finishes it — never a 404 over them.
+- **Racing opens** answer the reopen class, and their retry "no such vault".
+- **The orchestrator** reports a quiet source as quiet whatever its delete answered,
+  carries the refusal in `source_delete_refused`, and says a partial copy was removed
+  only when it was.
+
+Gates: `delete_tests.rs` (both levels; holders in ANOTHER process, a writable one and a
+read-only replica that has read, looped; pause witnesses of which steps ran on every
+refusal), a source gate that reads every production `remove_dir_all` in the workspace
+from the tree, surface arms through `open_store_as` and `/v1`, e2e arms with a real
+replica process, and orchestrator arms beside a replica. **Escalated to the
+maintainer**: whether "deleted" should also reach hard links, `backups/` archives and a
+remote mirror — joined to the open erasure-scope question; today it covers the vault
+directory, and the docs say so. Filed: O298–O302.
 
 ## 1.6.1 — 2026-09-22
 

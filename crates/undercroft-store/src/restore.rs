@@ -328,12 +328,16 @@ pub fn restore_archive(
     // O69's hold, taken only now: every refusal the archive can cause has
     // already been made, so none of them reaches the live vault.
     let hold = if std::fs::symlink_metadata(&target).is_ok() {
-        Some(crate::hold_vault_exclusively(&target).map_err(|e| match e {
-            StoreError::Invalid(why) => StoreError::Invalid(format!(
-                "{why}; {UNCHANGED} (a vault with no database is ROADMAP O270)"
-            )),
-            other => other,
-        })?)
+        Some(
+            crate::hold_vault_exclusively(&target, crate::HoldFor::Restore).map_err(
+                |e| match e {
+                    StoreError::Invalid(why) => StoreError::Invalid(format!(
+                        "{why}; {UNCHANGED} (a vault with no database is ROADMAP O270)"
+                    )),
+                    other => other,
+                },
+            )?,
+        )
     } else {
         None
     };

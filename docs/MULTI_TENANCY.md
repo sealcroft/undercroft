@@ -49,7 +49,7 @@ counted against `route()` in both directions, is in
 |---|---|
 | `POST /v1/vaults` | create a vault (`sealed` or `hmac-only`; optional `external:<name>@<dim>` embedder identity) |
 | `GET /v1/vaults` | list vault ids (bearer-gated; disabled under per-vault assertions) |
-| `DELETE /v1/vaults/{id}` | delete a vault (409 for the vault the same process serves over `/mcp`) |
+| `DELETE /v1/vaults/{id}` | delete a vault (409 for the vault the same process serves over `/mcp`, and while any other process holds it — a replica included — with nothing deleted, O291; the orchestrator keeps the tenant mapping on that refusal) |
 | `POST /v1/vaults/{id}/drawers` | save a drawer (deterministic-id upsert; opt-in cosine dedup). **Admission-screened on every arm**; on the default arm a diverted save answers **202** with `quarantined: true` and the id the drawer actually landed under on **every** arm, including `dedup_threshold` and external-vault saves, which reported clean before 1.0.0 (§5) |
 | `POST /v1/vaults/{id}/search` | hybrid search (cosine + BM25, optional reranker); declared read-time parameters (`language`, `calendar`, `date_order`, `wing`, `room`, `kind`, `min_trust`, `offset`, `ranked_at`) |
 | `DELETE /v1/vaults/{id}/drawers/{drawer_id}` | delete a drawer (refused for quarantine-pending evidence — ruling on it is `admission allow`/`deny`) |
@@ -554,7 +554,12 @@ the source (the v0.18 artifact-carrying NDJSON, so token matrices restore
 by copy, not re-encode) → import on the target → **judged against the source
 vault's own snapshot** → mapping flip → source vault delete (`keep_source`
 opts out). Any failure before the flip leaves the source authoritative and
-removes the partial copy.
+asks the destination to remove the partial copy — and says whether it did: since
+O291 a destination vault another process holds refuses the delete, and the
+refusal then names the copy left there. A source whose own delete is refused the
+same way is kept, reported `"source_deleted": false` with
+`"source_quiet_at_delete": true` and the engine's answer in
+`"source_delete_refused"`.
 
 **What "judged" means, since a count on its own judges nothing** (ROADMAP
 O140): the source's `records` is read with its audit-chain height BEFORE the
@@ -569,7 +574,7 @@ records land on one row. The mapping flip is a compare-and-set, so two
 concurrent migrations cannot both move one tenant. The import half is admission-screened like any other write — a
 migration used to be a re-admission of the whole corpus past the screen,
 because every export line carries a `vector` and a caller-supplied vector
-reached the raw writer (§4). The e2e suite (`tests/e2e-orchestrator.sh`, 171 checks,
+reached the raw writer (§4). The e2e suite (`tests/e2e-orchestrator.sh`, 185 checks,
 `docker compose run --rm orchestrator-e2e`) exercises the whole story
 against two live engine instances, including the source engine provably
 losing the vault after migration and a read replica converging on the

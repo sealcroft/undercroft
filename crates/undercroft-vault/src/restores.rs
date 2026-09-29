@@ -172,9 +172,16 @@ impl Archive {
 /// Where a vault set aside by a restore of `id` sits — deterministic, so
 /// [`VaultManager::create`](crate::VaultManager::create) can ask in one stat.
 fn aside_path(vaults: &Path, id: &str) -> PathBuf {
+    per_id(vaults, ASIDE_PREFIX, id)
+}
+
+/// `<restore area>/<prefix><sha256 of the id>` — the one naming rule for a
+/// directory the restore area keeps per vault id: a restore's aside, and a
+/// delete's (ROADMAP O291), which differ only in their prefix.
+pub(crate) fn per_id(vaults: &Path, prefix: &str, id: &str) -> PathBuf {
     use sha2::{Digest, Sha256};
     vaults.join(RESTORE_ROOT).join(format!(
-        "{ASIDE_PREFIX}{}",
+        "{prefix}{}",
         hex::encode(Sha256::digest(id.as_bytes()))
     ))
 }
@@ -224,8 +231,9 @@ pub fn refuse_if_interrupted(root: &Path, id: &str) -> Result<(), VaultError> {
 
 /// The restore area under `vaults`, made if absent — refused if something that
 /// is not a plain directory sits at its name, since a link there would aim the
-/// stage, the aside and the sweep somewhere else.
-fn container(vaults: &Path) -> Result<PathBuf, VaultError> {
+/// stage, the aside and the sweep somewhere else. A vault delete sets its
+/// vault aside here too (ROADMAP O291).
+pub(crate) fn container(vaults: &Path) -> Result<PathBuf, VaultError> {
     let root = vaults.join(RESTORE_ROOT);
     for _ in 0..3 {
         match fs::symlink_metadata(&root) {

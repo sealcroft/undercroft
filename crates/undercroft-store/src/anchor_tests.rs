@@ -2203,6 +2203,155 @@ fn sources(dir: &str) -> Vec<(String, String)> {
     out
 }
 
+/// **ROADMAP O291: a vault is deleted through ONE door, under O69's hold, and
+/// no production code anywhere removes a directory tree but the three modules
+/// that own one.** The delete used to be a bare `remove_dir_all` any caller of
+/// `VaultManager::delete` reached with nothing held. A hold witness in a type
+/// proves nothing (a generic accepts `()`), so this is the guarantee: the
+/// census is READ FROM THE TREE — every `.rs` under every crate's `src/`,
+/// test files and test modules aside — and never compared with a second list
+/// standing in for it (ROADMAP O80).
+#[test]
+fn o291_every_vault_delete_goes_through_the_one_door() {
+    let crates = concat!(env!("CARGO_MANIFEST_DIR"), "/..");
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                walk(&p, out);
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                out.push(p);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    for krate in std::fs::read_dir(crates).unwrap().flatten() {
+        let src = krate.path().join("src");
+        if src.is_dir() {
+            walk(&src, &mut files);
+        }
+    }
+    assert!(
+        files.len() > 50,
+        "premise: the workspace's sources were read"
+    );
+    let mut census: Vec<(String, usize)> = files
+        .iter()
+        .filter(|p| !p.to_string_lossy().ends_with("_tests.rs"))
+        .filter_map(|p| {
+            let n = production(&p.display().to_string())
+                .matches("fs::remove_dir_all(")
+                .count();
+            let rel = p
+                .strip_prefix(crates)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            (n > 0).then_some((rel.trim_start_matches('/').to_string(), n))
+        })
+        .collect();
+    census.sort();
+    assert_eq!(
+        census,
+        vec![
+            ("undercroft-vault/src/backups.rs".to_string(), 3),
+            ("undercroft-vault/src/deletes.rs".to_string(), 1),
+            ("undercroft-vault/src/restores.rs".to_string(), 3),
+        ],
+        "a directory tree is removed outside the modules that own one"
+    );
+
+    // The delete module's effects, pinned: ONE rename (out of `vaults/`), ONE
+    // recursive removal (judged by what is left), ONE file removal (the empty
+    // database the door made), and nothing it writes.
+    let deletes = production(&format!("{crates}/undercroft-vault/src/deletes.rs"));
+    for (effect, owner) in [
+        ("fs::rename(", "set_aside<H>"),
+        ("fs::remove_dir_all(", "remove_judged"),
+        ("fs::remove_file(", "remove_if_empty"),
+    ] {
+        assert_eq!(deletes.matches(effect).count(), 1, "deletes.rs {effect}");
+        assert!(
+            body_of(&deletes, owner).contains(effect),
+            "{effect} is {owner}'s"
+        );
+    }
+    for w in [
+        "fs::write(",
+        "fs::copy(",
+        "File::create(",
+        "write_manifest_file(",
+    ] {
+        assert_eq!(deletes.matches(w).count(), 0, "deletes.rs calls {w}");
+    }
+    // The manager no longer deletes, and its crate root removes no tree.
+    let vault = production(&format!("{crates}/undercroft-vault/src/lib.rs"));
+    assert!(
+        !vault.contains("pub fn delete("),
+        "VaultManager::delete is back"
+    );
+
+    // ONE caller of the set-aside, and it is the door — after the survey, the
+    // empty database and the hold, in that order, for a delete's purpose.
+    let store = sources(&format!("{crates}/undercroft-store/src"));
+    let cli = sources(&format!("{crates}/undercroft-cli/src"));
+    let orch = sources(&format!("{crates}/undercroft-orchestrator/src"));
+    let production_files = || {
+        store
+            .iter()
+            .chain(&cli)
+            .chain(&orch)
+            .filter(|(p, _)| !p.ends_with("_tests.rs"))
+    };
+    let callers: Vec<&String> = production_files()
+        .filter(|(_, t)| t.contains("deletes::set_aside("))
+        .map(|(p, _)| p)
+        .collect();
+    assert_eq!(callers.len(), 1, "set-aside callers: {callers:?}");
+    assert!(callers[0].ends_with("delete.rs"), "{callers:?}");
+    let door = &production_files()
+        .find(|(p, _)| p.ends_with("delete.rs"))
+        .unwrap()
+        .1;
+    let at = |needle: &str| {
+        door.find(needle)
+            .unwrap_or_else(|| panic!("the door has no {needle}"))
+    };
+    assert!(
+        at("deletes::survey(") < at("deletes::create_database(")
+            && at("deletes::create_database(") < at("hold_vault_exclusively(")
+            && at("hold_vault_exclusively(") < at("deletes::set_aside("),
+        "survey, then the empty database, then the hold, then the set-aside"
+    );
+    assert!(door.contains("HoldFor::Delete"), "the hold names a delete");
+    let deletes_users: Vec<&String> = production_files()
+        .filter(|(_, t)| t.contains("deletes::"))
+        .map(|(p, _)| p)
+        .collect();
+    assert_eq!(deletes_users.len(), 1, "{deletes_users:?}");
+    // The surfaces reach it only through the door.
+    let surface_calls: usize = cli
+        .iter()
+        .chain(&orch)
+        .filter(|(p, _)| !p.ends_with("_tests.rs"))
+        .map(|(_, t)| t.matches("undercroft_store::delete_vault(").count())
+        .sum();
+    assert_eq!(surface_calls, 1, "the /v1 route is the one surface caller");
+    // The hold's purpose is matched at both message sites.
+    let lib = &store.iter().find(|(p, _)| p.ends_with("lib.rs")).unwrap().1;
+    let hold = body_of(lib, "hold_vault_exclusively");
+    assert_eq!(
+        hold.matches("HoldFor::Delete").count(),
+        2,
+        "busy and replaced"
+    );
+    assert_eq!(
+        hold.matches("HoldFor::Restore").count(),
+        2,
+        "busy and replaced"
+    );
+}
+
 /// The body of `fn <name>` in `text`, up to the next top-level item.
 fn body_of<'a>(text: &'a str, name: &str) -> &'a str {
     let at = text

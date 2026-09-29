@@ -1634,6 +1634,22 @@ fn engine_response(msg: &str) -> Response<std::io::Cursor<Vec<u8>>> {
     }
 }
 
+/// Remove a migration's partial copy from the destination and SAY what
+/// happened (ROADMAP O291): "removed" only when the engine answered `Ok`.
+/// Every clean-up discarded the delete's result, and several told the operator
+/// the copy was removed — false beside an engine 5xx or a co-resident fence,
+/// and since O291 beside any process holding the destination vault, which a
+/// delete now refuses rather than removes beneath.
+fn remove_partial(dst: &crate::state::InstanceCreds, vault: &str) -> String {
+    match engine::delete_vault(dst, vault) {
+        Ok(()) => "The partial copy was removed".to_string(),
+        Err(e) => format!(
+            "The partial copy could NOT be removed from the destination ({e}): vault {vault:?} \
+             is still there, and must be deleted once nothing holds it"
+        ),
+    }
+}
+
 /// Turn one of `engine.rs`'s stringified failures back into a class.
 ///
 /// `engine.rs` renders a relayed refusal with the status in parentheses
@@ -1752,7 +1768,7 @@ impl MigrationVerdict {
             MigrationVerdict::SourceChanged { record } => Some(format!("the source vault changed while the export was drawn (audit record {record:?}), so the copy is a picture of a vault that has already moved. Nothing was lost and nothing was deleted: run the migration again when the tenant is quiet")),
             MigrationVerdict::DeltaUnreadable { expected, read } => Some(format!("the source appended {expected} audit record(s) while the export was drawn and only {read} could be read back, so this hop cannot tell whether any of them changed the vault. Nothing was lost and nothing was deleted: retry when the tenant is quieter")),
             MigrationVerdict::ExportOmitsRows { declared, source } => Some(format!("the export declares {declared} drawer(s) but the source engine held {source} at the same snapshot, with no audit record explaining the difference — so the export does not carry what the source has. The source is untouched and still authoritative")),
-            MigrationVerdict::DestinationDiverged { held, declared } => Some(format!("the destination holds {held} drawer(s) after importing an export of {declared} — the copy is not faithful even though every record was accepted, so the source is left authoritative and the partial copy was removed")),
+            MigrationVerdict::DestinationDiverged { held, declared } => Some(format!("the destination holds {held} drawer(s) after importing an export of {declared} — the copy is not faithful even though every record was accepted, so the source is left authoritative")),
         }
     }
 }
@@ -1931,8 +1947,17 @@ pub(crate) fn migrate_tenant(
     // both sibling branches below call `delete_vault`, so a retry answered
     // 409 "already exists" with a cause that named nothing.
     let got = engine::import_vault(&dst, &tenant.vault, &ndjson).map_err(|e| {
-        let _ = engine::delete_vault(&dst, &tenant.vault);
-        engine_err(e)
+        // Classified from the import's OWN answer, then the clean-up said: the
+        // status `engine_err` recovers is the first one in the text, so a
+        // refused clean-up appended first turned a transport failure into its
+        // 409 (found by O291's review).
+        let cleanup = remove_partial(&dst, &tenant.vault);
+        match engine_err(e) {
+            MigrateError::Engine(code, msg) => {
+                MigrateError::Engine(code, format!("{msg}. {cleanup}"))
+            }
+            other => other,
+        }
     })?;
     // A diverted drawer is COUNTED in `imported` but is not filed where the
     // payload aimed it: it sits in `quarantine-pending`, excluded from
@@ -1958,12 +1983,11 @@ pub(crate) fn migrate_tenant(
     // the partial copy so the retry is clean, and name the remedy that
     // actually exists.
     if got.quarantined > 0 && !keep_source {
-        let _ = engine::delete_vault(&dst, &tenant.vault);
+        let cleanup = remove_partial(&dst, &tenant.vault);
         return Err(MigrateError::Unfaithful(format!(
             "destination screened {} of {} drawer(s) into quarantine-pending, so \
-             the copy is not faithful and the source must not be dropped. The \
-             partial copy was removed so this can be retried: re-run with \
-             keep_source=true, rule on the destination's queue (`admission \
+             the copy is not faithful and the source must not be dropped. {cleanup}. \
+             Re-run with keep_source=true, rule on the destination's queue (`admission \
              list`/`allow`), then drop the source yourself once it is clean",
             got.quarantined, got.drawers
         )));
@@ -1979,9 +2003,10 @@ pub(crate) fn migrate_tenant(
         && got.tunnels == expected.3;
     if !counts_match {
         // Leave the source authoritative; remove the partial copy.
-        let _ = engine::delete_vault(&dst, &tenant.vault);
+        let cleanup = remove_partial(&dst, &tenant.vault);
         return Err(MigrateError::Unfaithful(format!(
-            "import count mismatch (drawers {} of {}, kg {} of {}) — source left authoritative",
+            "import count mismatch (drawers {} of {}, kg {} of {}) — source left authoritative. \
+             {cleanup}",
             got.drawers, expected.0, got.kg_triples, expected.1
         )));
     }
@@ -1994,16 +2019,16 @@ pub(crate) fn migrate_tenant(
     // replaces it. Every count on the old path agreed, and the source was
     // deleted.
     let destination = engine::vault_snapshot(&dst, &tenant.vault).map_err(|e| {
-        let _ = engine::delete_vault(&dst, &tenant.vault);
-        MigrateError::Unbound(format!("the destination vault {:?} would not report what it holds after the import ({e}), so the copy cannot be judged. The partial copy was removed and the source is untouched", tenant.vault))
+        let cleanup = remove_partial(&dst, &tenant.vault);
+        MigrateError::Unbound(format!("the destination vault {:?} would not report what it holds after the import ({e}), so the copy cannot be judged. {cleanup}, and the source is untouched", tenant.vault))
     })?;
     // The source again, and the delta between the two snapshots. Reading it is
     // bounded: a tenant being read continuously under
     // `UNDERCROFT_READ_AUDIT=chain` can append faster than this pages, and a
     // refusal naming the bound is the honest answer to that.
     let after = engine::vault_snapshot(&src, &tenant.vault).map_err(|e| {
-        let _ = engine::delete_vault(&dst, &tenant.vault);
-        MigrateError::Unbound(format!("the source vault {:?} stopped answering before its copy could be judged ({e}). The partial copy was removed and the source is untouched", tenant.vault))
+        let cleanup = remove_partial(&dst, &tenant.vault);
+        MigrateError::Unbound(format!("the source vault {:?} stopped answering before its copy could be judged ({e}). {cleanup}, and the source is untouched", tenant.vault))
     })?;
     let delta_expected = after.writes.saturating_sub(snapshot.writes);
     let mut delta: Vec<(i64, String)> = Vec::new();
@@ -2013,8 +2038,8 @@ pub(crate) fn migrate_tenant(
             let page = match engine::vault_history(&src, &tenant.vault, DELTA_PAGE, offset) {
                 Ok(p) => p,
                 Err(e) => {
-                    let _ = engine::delete_vault(&dst, &tenant.vault);
-                    return Err(MigrateError::Unbound(format!("the source vault {:?} would not report the audit records appended while the export was drawn ({e}). The partial copy was removed and the source is untouched", tenant.vault)));
+                    let cleanup = remove_partial(&dst, &tenant.vault);
+                    return Err(MigrateError::Unbound(format!("the source vault {:?} would not report the audit records appended while the export was drawn ({e}). {cleanup}, and the source is untouched", tenant.vault)));
                 }
             };
             let exhausted = page.len() < DELTA_PAGE;
@@ -2042,16 +2067,16 @@ pub(crate) fn migrate_tenant(
         delta_expected,
     );
     if let Some(refusal) = verdict.refusal() {
-        let _ = engine::delete_vault(&dst, &tenant.vault);
-        return Err(MigrateError::Unfaithful(refusal));
+        let cleanup = remove_partial(&dst, &tenant.vault);
+        return Err(MigrateError::Unfaithful(format!("{refusal}. {cleanup}")));
     }
     let imported = got.drawers;
     // Compare-and-set: flip only while the tenant still sits where this
     // migration found it. The loser refuses rather than overwriting the
     // winner, and removes its own copy.
     if !orch.tenant_set_instance_if(id, &tenant.instance, to)? {
-        let _ = engine::delete_vault(&dst, &tenant.vault);
-        return Err(MigrateError::TenantMoved(format!("tenant {id:?} is no longer on {:?} — another migration moved it while this one ran, so this copy was removed rather than flipped over the one that is now routing", tenant.instance)));
+        let cleanup = remove_partial(&dst, &tenant.vault);
+        return Err(MigrateError::TenantMoved(format!("tenant {id:?} is no longer on {:?} — another migration moved it while this one ran, so this copy was not flipped over the one that is now routing. {cleanup}", tenant.instance)));
     }
     // The last look before the irreversible step. A write acknowledged by the
     // source after the export is destroyed by this delete, and a forget,
@@ -2060,14 +2085,24 @@ pub(crate) fn migrate_tenant(
     // closed from this side — only an engine-side conditional delete can do
     // that — so it is DETECTED and the source is kept, which is the difference
     // between a refusal and silent loss.
-    let source_deleted = if keep_source {
-        false
+    //
+    // Whether the source was QUIET is the snapshot comparison's answer, never
+    // the delete's (ROADMAP O291): since the engine's delete takes O69's hold,
+    // a quiet source whose delete is refused — a replica or another server
+    // holding it — is an ordinary outcome, and reporting it "not quiet" sent
+    // the operator after writes that never happened. The refusal travels on
+    // the response instead.
+    let (source_quiet, source_deleted, source_delete_refused) = if keep_source {
+        (true, false, None)
     } else {
         match engine::vault_snapshot(&src, &tenant.vault) {
             Ok(last) if last.writes == after.writes => {
-                engine::delete_vault(&src, &tenant.vault).is_ok()
+                match engine::delete_vault(&src, &tenant.vault) {
+                    Ok(()) => (true, true, None),
+                    Err(e) => (true, false, Some(e)),
+                }
             }
-            _ => false,
+            _ => (false, false, None),
         }
     };
     Ok(serde_json::json!({
@@ -2086,6 +2121,10 @@ pub(crate) fn migrate_tenant(
         // for every deployment that does not.
         "quarantined": got.quarantined,
         "source_deleted": source_deleted,
+        // The engine's answer when a quiet source's delete was refused — the
+        // vault held by another process since O291 — so `source_deleted: false`
+        // says WHY. `null` otherwise.
+        "source_delete_refused": source_delete_refused,
         // What was actually checked, rather than a claim that it was. An
         // operator reading `source_deleted: false` on a successful migration
         // needs to know the source stayed because it was still being written
@@ -2097,7 +2136,7 @@ pub(crate) fn migrate_tenant(
             "chain_head_before": snapshot.chain_head,
             "chain_head_after": after.chain_head,
             "audit_records_during_export": delta_expected,
-            "source_quiet_at_delete": source_deleted || keep_source,
+            "source_quiet_at_delete": source_quiet,
         },
     }))
 }
@@ -2326,6 +2365,9 @@ mod tests {
         delta: String,
         export: String,
         import: String,
+        /// The status `DELETE /v1/vaults/{v}` answers: 200, or 409 for a vault
+        /// another process holds (ROADMAP O291).
+        delete: u16,
     }
 
     /// A scripted engine on loopback, with the request log that makes the
@@ -2354,8 +2396,16 @@ mod tests {
                 let mut body = Vec::new();
                 let _ = req.as_reader().read_to_end(&mut body);
                 let create = method == "POST" && url == "/v1/vaults";
-                let (code, payload) = if create || method == "DELETE" {
+                let (code, payload) = if create {
                     (200, "{}".to_string())
+                } else if method == "DELETE" {
+                    let body = if script.delete == 200 {
+                        "{}".to_string()
+                    } else {
+                        "{\"error\":\"the vault is open in another process; Nothing was deleted\"}"
+                            .to_string()
+                    };
+                    (script.delete, body)
                 } else if url.contains("/stats") {
                     let next = if stats.len() > 1 {
                         stats.remove(0)
@@ -2380,7 +2430,12 @@ mod tests {
                 } else if url.contains("/export") {
                     (200, script.export.clone())
                 } else if url.contains("/import") {
-                    (200, script.import.clone())
+                    // An empty reply spells an engine that failed the import.
+                    if script.import.is_empty() {
+                        (500, "{}".to_string())
+                    } else {
+                        (200, script.import.clone())
+                    }
                 } else {
                     (404, "{}".to_string())
                 };
@@ -2465,6 +2520,7 @@ mod tests {
             delta,
             export: manifest_export(2),
             import: import_reply(0),
+            delete: 200,
         };
         let dst = |held: u64| Script {
             stats: vec![stats_body(held, 0, "dsthead")],
@@ -2472,6 +2528,7 @@ mod tests {
             delta: records(&[]),
             export: String::new(),
             import: import_reply(2),
+            delete: 200,
         };
 
         // ARM 1 — the quiet migration still works, and the source is dropped.
@@ -2573,7 +2630,7 @@ mod tests {
         // shipped code, where an unreadable source degraded to no check and
         // still authorised the delete.
         let (out, _alog, blog) = run_migration(
-            src(vec![String::new()], anchor_100, quiet_delta),
+            src(vec![String::new()], anchor_100.clone(), quiet_delta.clone()),
             dst(2),
             false,
         );
@@ -2583,6 +2640,118 @@ mod tests {
             blog.is_empty(),
             "nothing may be created on the destination before the source is bound: {blog:?}"
         );
+
+        // ARM 5 — a QUIET source whose delete the engine refuses, because
+        // another process holds it (ROADMAP O291). The source was quiet; it was
+        // not deleted; the refusal says why. `source_quiet_at_delete` used to be
+        // `source_deleted || keep_source`, so a quiet source read NOT quiet and
+        // sent the operator after writes that never happened.
+        let held_src = Script {
+            stats: vec![
+                stats_body(2, 10, "head0"),
+                stats_body(2, 11, "head1"),
+                stats_body(2, 11, "head1"),
+            ],
+            anchor: anchor_100.clone(),
+            delta: quiet_delta.clone(),
+            export: manifest_export(2),
+            import: import_reply(0),
+            delete: 409,
+        };
+        let (out, alog, _blog) = run_migration(held_src, dst(2), false);
+        let v = out.expect("the copy is faithful; only the source's delete was refused");
+        assert!(
+            alog.iter().any(|l| l.starts_with("DELETE ")),
+            "premise: the delete was asked: {alog:?}"
+        );
+        assert_eq!(v["source_deleted"], serde_json::json!(false), "{v}");
+        assert_eq!(
+            v["verified"]["source_quiet_at_delete"],
+            serde_json::json!(true),
+            "a quiet source is quiet whatever its delete answered: {v}"
+        );
+        let refused = v["source_delete_refused"].as_str().unwrap_or_default();
+        assert!(
+            refused.contains("409") && refused.contains("another process"),
+            "the refusal travels on the response: {v}"
+        );
+        let (out, _alog, _blog) = run_migration(
+            Script {
+                stats: vec![
+                    stats_body(2, 10, "head0"),
+                    stats_body(2, 11, "head1"),
+                    stats_body(2, 11, "head1"),
+                ],
+                anchor: anchor_100.clone(),
+                delta: quiet_delta.clone(),
+                export: manifest_export(2),
+                import: import_reply(0),
+                delete: 200,
+            },
+            dst(2),
+            false,
+        );
+        let v = out.expect("a quiet migration");
+        assert_eq!(v["source_delete_refused"], serde_json::Value::Null, "{v}");
+
+        // ARM 6 — a partial copy the destination REFUSES to delete is said to
+        // be there, never "removed": the collision of ARM 2 with the clean-up
+        // refused.
+        let held_dst = Script {
+            stats: vec![stats_body(1, 0, "dsthead")],
+            anchor: records(&[]),
+            delta: records(&[]),
+            export: String::new(),
+            import: import_reply(2),
+            delete: 409,
+        };
+        let (out, _alog, blog) = run_migration(
+            src(
+                vec![stats_body(2, 10, "head0"), stats_body(2, 11, "head1")],
+                anchor_100.clone(),
+                quiet_delta.clone(),
+            ),
+            held_dst,
+            false,
+        );
+        let msg = out.expect_err("a diverged copy refuses").to_string();
+        assert!(
+            blog.iter().any(|l| l.starts_with("DELETE ")),
+            "premise: the clean-up was asked: {blog:?}"
+        );
+        assert!(
+            msg.contains("could NOT be removed") && !msg.contains("copy was removed"),
+            "a refused clean-up is said: {msg}"
+        );
+
+        // ARM 7 — an import the destination FAILS (a 5xx), then a clean-up it
+        // refuses (409): the migration answers the import's class, 502, never
+        // the clean-up's 409 (found by O291's review: the clean-up text was
+        // appended before the status was read out of it).
+        let failing_dst = Script {
+            stats: vec![stats_body(0, 0, "dsthead")],
+            anchor: records(&[]),
+            delta: records(&[]),
+            export: String::new(),
+            import: String::new(),
+            delete: 409,
+        };
+        let (out, _alog, blog) = run_migration(
+            src(
+                vec![stats_body(2, 10, "head0"), stats_body(2, 11, "head1")],
+                anchor_100.clone(),
+                quiet_delta.clone(),
+            ),
+            failing_dst,
+            false,
+        );
+        let e = out.expect_err("a failed import refuses");
+        assert!(
+            blog.iter().any(|l| l.starts_with("DELETE ")),
+            "premise: the clean-up was asked: {blog:?}"
+        );
+        assert_eq!(e.status(), 502, "{e}");
+        assert!(e.to_string().contains("could NOT be removed"), "{e}");
     }
 
     /// ROADMAP O149: the re-point route that O136's refusal, its own pinned
@@ -2601,6 +2770,7 @@ mod tests {
             delta: "{\"records\":[]}".to_string(),
             export: String::new(),
             import: String::new(),
+            delete: 200,
         };
         // An empty stats reply is how this harness spells "this engine will
         // not answer for that vault": a 500, which is what an engine that
@@ -2611,6 +2781,7 @@ mod tests {
             delta: "{\"records\":[]}".to_string(),
             export: String::new(),
             import: String::new(),
+            delete: 200,
         };
 
         let (_dir, orch) = orch_for_tests();

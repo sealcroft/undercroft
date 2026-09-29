@@ -26,6 +26,7 @@
 
 pub mod backups;
 pub mod bundle;
+pub mod deletes;
 pub mod keys;
 pub mod restores;
 pub mod seal;
@@ -429,6 +430,24 @@ pub enum DbLayout {
     Ambiguous,
 }
 
+impl DbLayout {
+    /// Which database file the vault directory `dir` holds — the ONE layout
+    /// rule (ROADMAP O291): an unlocked vault asks it through
+    /// [`Vault::db_layout`], and a door holding only a directory — O69's hold,
+    /// a vault delete — asks it here, where each used to carry its own copy.
+    pub fn of(dir: &Path) -> DbLayout {
+        match (
+            dir.join(DB_FILE).exists(),
+            dir.join(LEGACY_DB_FILE).exists(),
+        ) {
+            (true, true) => DbLayout::Ambiguous,
+            (true, false) => DbLayout::Current,
+            (false, true) => DbLayout::Legacy,
+            (false, false) => DbLayout::Absent,
+        }
+    }
+}
+
 /// Something a read-only unlock found and deliberately did **not** repair.
 ///
 /// A refusal would be worse than a report: a vault whose writer crashed
@@ -828,6 +847,12 @@ pub mod fixture {
         /// new `vault.json` was written (ROADMAP O266): a promote that is
         /// done, whose leftover the next writable open removes.
         RemoveStaged,
+        /// A vault delete's rename of `vaults/<id>` into the restore area fails
+        /// (ROADMAP O291): nothing was moved.
+        DeleteAside,
+        /// A vault delete's removal of the vault it set aside fails, leaving
+        /// the aside whole: the vault is out of service and not yet erased.
+        DeleteRemove,
     }
 
     thread_local! {
@@ -1056,15 +1081,7 @@ impl Vault {
 
     /// Which database file this vault's directory holds (ROADMAP O7).
     pub fn db_layout(&self) -> DbLayout {
-        match (
-            self.current_db_path().exists(),
-            self.legacy_db_path().exists(),
-        ) {
-            (true, true) => DbLayout::Ambiguous,
-            (true, false) => DbLayout::Current,
-            (false, true) => DbLayout::Legacy,
-            (false, false) => DbLayout::Absent,
-        }
+        DbLayout::of(&self.dir)
     }
 
     /// Whether this vault's database file is actually there, under either
@@ -1821,8 +1838,9 @@ impl Vault {
     /// Under the write lock no legitimate writer moves either file — an anchor
     /// holds the lock, a rotation the fence, a restore O69's hold — so a miss
     /// is an edit and answers what a live handle answers, never the reopen
-    /// class. (A `vault delete` from another process takes no hold at all —
-    /// ROADMAP O291 — and meets the absent-manifest verdict here.) The write-or-skip is taken from that one answer, never from a
+    /// class. (A vault delete takes O69's hold since ROADMAP O291 and is
+    /// refused beside this open's connection; one landing between an unlock
+    /// and its connect is the reopen class there.) The write-or-skip is taken from that one answer, never from a
     /// second read: an offline delete between the two would put the stale
     /// anchor back. This replaced a heal that wrote the twin's anchor over a
     /// deleted, torn or forged `vault.json` — measured, a database rolled back
@@ -2465,22 +2483,6 @@ impl VaultManager {
         // the first open of the vault just created refuse every time.
         vault.staged_seen = vault.staged_on_disk()?;
         Ok(vault)
-    }
-
-    /// Permanently delete a vault: its manifest, database, and directory.
-    /// Returns `false` if the vault did not exist. Irreversible — the
-    /// caller (e.g. an orchestrator migrating a tenant) is responsible for
-    /// having exported/verified the contents first. Each vault is fully
-    /// self-contained (its own dir + manifest), so removal touches nothing
-    /// else in the palace.
-    pub fn delete(&self, id: &str) -> Result<bool, VaultError> {
-        undercroft_core::validate_name(id, "vault")?;
-        self.writable("deleting a vault writes to the data directory")?;
-        if !self.exists(id) {
-            return Ok(false);
-        }
-        fs::remove_dir_all(self.vault_dir(id))?;
-        Ok(true)
     }
 
     /// Unlock an existing vault: derive its keys and verify the manifest MAC.
@@ -4454,7 +4456,7 @@ mod tests {
             Err(VaultError::ReadOnly(_))
         ));
         assert!(!root.join("vaults/u").exists());
-        assert!(matches!(ro.delete("t"), Err(VaultError::ReadOnly(_))));
+        // A read-only delete is refused by the store's door (ROADMAP O291).
         assert!(ro.exists("t"));
         assert!(matches!(
             ro.rotation_candidate("t"),
