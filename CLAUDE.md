@@ -1142,13 +1142,19 @@ Consequences that are binding, not advisory:
   an ORDINARY rotation beneath a read-only open that waited at its fence among
   them — left `RotationPromotionDeferred` or `RotationDiscardDeferred` on a
   vault holding no such file. A difference is the reopen class with no tamper
-  event; the writable posture gets no new check (O254's P1), though the new
+  event; the writable posture gets no REOPEN check (O254's P1), though the new
   order turns a rotation committing between its unlock's reads into one retry. A promote AFTER
   the check leaves the handle its note — worded since O289 as what the open
   found — and `deferred_over`, both for its life (clearing either is a latch),
   and since O289 neither changes what a later forged or absent `vault.json`
-  answers; what an offline writer can do inside a writable unlock's window is
-  O290. `open_pause.rs` holds the pause points,
+  answers; an absent one at the check itself is the integrity verdict since
+  O290. What an offline writer could do inside a writable unlock's window
+  with `vault.json` deleted, torn, forged or put back as the retired bytes —
+  a rollback healed into a crash lag, a forged manifest overwritten — is
+  closed by O290's licence (the rotation bullet below); the retired
+  `vault.json`, the staged `.next` AND an older database put back together
+  is still accepted by every open, A2's pair restore, which only the witness
+  sees. `open_pause.rs` holds the pause points,
   reachable from the CLI's
   tests through the store's `test-fixture` feature,
   write-path admission control (admission.rs + core admission.rs — C3.3
@@ -1621,7 +1627,24 @@ Consequences that are binding, not advisory:
   — a race (`StaleUnlock`, reopened once by the CLI and `/v1`), a heal
   when the chain replays under the manifest's keys, or an integrity
   verdict — and takes the write lock only when there is something to
-  decide; no unlock deletes a staged manifest. Test pause points live in
+  decide; no unlock deletes a staged manifest. **And the open's promote is
+  LICENSED (O290)**: `Vault::take_licensed_promotion` asks the manifest rule
+  once, under that lock, with the unlock's `manifest_seen` as the retired
+  digest — the staged branch (`.next` still the staged bytes, `vault.json`
+  still the retired bytes the unlock verified) writes, a `vault.json`
+  verifying under the new key (a promote since, O254's P1) skips the write,
+  and anything else is the rule's own refusal with nothing written; one body
+  (`promote_as`) writes on that answer — no read of `vault.json` decides the
+  write — and removes `.next` only while `vault.json` verifies under the new
+  key (a removal on the earlier answer alone lost the last key copy to a
+  `vault.json` deleted in between, found by the unit's review), and the twin
+  never keeps the digest. It used to heal whatever `vault.json` had
+  become from the twin's anchor — the one the UNLOCK read — so a database
+  rolled back beneath the open with `vault.json` deleted opened as a crash
+  lag and a forged manifest was overwritten with no event; the rotation's
+  own `promote` keeps that heal, its anchor being the head it just committed
+  (O295 files its missing report). A leftover or an abandoned stage is
+  removed only while `vault.json` verifies under the handle's key. Test pause points live in
   `rotate_pause.rs`, never inline here — an inline `#[cfg(test)]` blinds
   `rotation_names_every_key_derived_artifact`),
   bulk ingest
@@ -2596,8 +2619,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (1208 run,
-                                      # 16 #[ignore]d = 1224 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (1225 run,
+                                      # 16 #[ignore]d = 1241 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote

@@ -3998,7 +3998,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**324** of the **339** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**327** of the **342** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -5861,6 +5861,9 @@ item 7 makes it raise answered 500 on `/v1`, not item 1's 409 with no class. Fix
 by O279: a factory's `StoreError` goes through `store_err` and the retry. And item 7
 was ruled "propagate their errors" and built "propagate busy": `recorded_embedder`
 still reads every other error as "nothing recorded" — noted, not changed.
+
+**Item 5's heal clause, REVISED 2026-09-29 by O290's ruling** (recorded beside it, not in its place). "(which also heals a corrupt or missing `vault.json`)" is withdrawn for the store's open, and kept for the rotation. Refuted: the carve-out from O254's door was justified only by the key mismatch between the old manifest and the new, and the clause widened it to missing, torn and forged files, which O254 item 3 refuses as integrity; the committed keycheck authenticates the generation, never the anchor, and the heal wrote both from what the unlock read before any connection existed — measured, a rollback from height 27 to 24 beneath a held writable unlock opened Ok with a lag note, a forged `vault.json` was overwritten with no tamper event, a missing or torn one was rewritten with no note, and a settled leftover was deleted beside a deleted `vault.json` before the open refused; and the heal served no crash in any build, since the one manifest writer is atomic and every torn or missing file already refuses at the unlock. The store's open now promotes only under the manifest rule's licence (O290), and removes a leftover or an abandoned stage only while `vault.json` still verifies under its key. 1.6.1 promoted by renaming `.next`, so these were regressions of the unreleased 1.7.0.
+
 
 ### O253 — CLOSED 2026-09-24: a legitimate concurrent writer no longer makes the label guard refuse, `verify` report a broken chain or an open fail — every judgement reads what it compares from one snapshot, the manifest anchor before it
 
@@ -8110,6 +8113,9 @@ file of a few hundred bytes.
   rustfmt's line wrapping, and clippy's `cloned_ref_to_slice_refs` on
   `&[id.clone()]`, now `std::slice::from_ref`.
 
+**The residual "no door writes memory out", CORRECTED 2026-09-29 by O290's ruling** (recorded beside it). It was false from O257 (2026-09-24): the writable open's reconcile promoted the unlock's in-memory twin whenever `vault.json` did not verify under the new key, missing included — measured by O288's integrator and again by O290's. It is true since O290, which licenses that promote with this entry's rule (item 1 REFINED: the reconcile's promote decision goes through the rule, `promote`'s own check stays strict and stays the rotation's).
+
+
 ### O276 — CLOSED 2026-09-26: a handle that replaces its connection forgets the label guard's cached verdict, whose cookie only the old connection could compare
 
 **Filed 2026-09-26 by O266's ruling (its memory lens, confirmed by the refuter);
@@ -9915,6 +9921,9 @@ nothing) a read racing a promote may meet a delete-pending `.next` or a transien
 absence during the rename-over, which answers `Io` rather than the reopen class — the
 class O275 (Windows) and O277 (a manifest that cannot be read) own.
 
+**Item 3, REFINED 2026-09-29 by O290's ruling** (recorded beside it). "The writable posture gets no check" becomes "no reopen check": the writable reconcile's `Committed` arm now asks the manifest rule, under the write lock, whether its promote is licensed — the staged branch writes, a `vault.json` verifying under the new key (a promote since, O254's P1) skips the write, anything else answers the rule's own refusal class. It is not the byte compare that refused P1 (O284's CF4, CF5), and probe5 of O290 found no legitimate event that makes it miss.
+
+
 ### O289 — CLOSED 2026-09-28: a forged `vault.json` is the tamper verdict on every handle, a deferred one whose promote landed after its open included, and a staging file that cannot be read is never served over
 
 **Filed 2026-09-28 by O288's ruling (all three lenses and the refuter); measured by the
@@ -10320,6 +10329,9 @@ a symbolic link are O293's.
 
 **Cost.** One `stat` per manifest read; nothing else on the success path.
 
+**Item 3a's `deferral_in_force` clause, REVISED 2026-09-29 by O290's ruling** (recorded beside it). An absent `vault.json` on the read-only open's check answers `CorruptManifest` (no event, never a reopen), no longer `Io`: the item itself rules absent "integrity … on EVERY handle", its carve-out cited O288 item 2's read-failure principle while this entry reclassified absent as no read failure, and measured, one state answered exit 1 and a `/v1` 500 on the deferred read-only window where the non-deferred windows answer exit 2 and 409 integrity. An unreadable file stays `Io`.
+
+
 ### O277 — CLOSED 2026-09-28: a `vault.json` that is missing, or is not a manifest file, is the integrity verdict on every live handle, never a fall-back to `VERIFY OK`
 
 **Filed 2026-09-26 by O266's ruling (its security lens, confirmed by the
@@ -10383,6 +10395,443 @@ server over a deleted `vault.json` and over a directory answering 409 integrity 
 witness where it answered 200. The Windows probe the filing put first is O289's P-WIN, in the
 battery on Linux and recorded under O275 until it runs on Windows. Counterfactual cf3 (this entry's
 filed `NotFound`-only split) fails the absent gate on the directory arm.
+
+### O290 — CLOSED 2026-09-29: a writable open promotes a staged key rotation only while `vault.json.next` and `vault.json` still say what its unlock read, and a `vault.json` deleted, torn, forged or put back as the retired bytes since is refused in the class a live handle gives, with nothing written over it
+
+**Filed 2026-09-28 by O288's ruling (its refuter; neither the brief nor the lenses saw
+it); measured by the integrator (P-W).** O257 item 5's promote "heals a corrupt or missing
+`vault.json`", authorised by the committed keycheck under the write lock, and that heal is
+reachable only in the window between a writable unlock and its reconcile, since the
+unlock itself needs a verifying manifest. A writable unlock over a deferral attaches the
+staged manifest; another open promotes and writes; an offline writer then restores an
+older copy of the database and deletes `vault.json`. The held writable open writes the
+staged manifest from memory and `reconcile_chain` fast-forwards the anchor: measured,
+heights 27 → 24, the open answers Ok with an anchor-heal note ("2 record(s) behind") and
+`verify` OK — the rollback the anchor exists to catch is laundered into a crash heal,
+where a fresh open answers `NotFound`.
+
+**Shape, for a ruling**: a candidate from the refuter — on the writable posture, in the
+`Committed` arm, require `vault.json` to be the bytes the unlock read or to verify under
+the pending key, else the reopen class — keeps O254's P1 green but revises O257 item 5's
+heal, so a panel decides it, weighing what else item 5's heal is for (a crashed promote's
+torn or missing manifest, which no unlock can read either).
+
+**Gate**: P-W inverted — the held writable open refuses, the rollback is reported by the
+fresh open, and O254's P1 and O257's crashed-promote heal stay green.
+
+#### RULED 2026-09-29 by three lenses (agentic memory architecture, security, software and SQLite engineering) and an adversarial refuter
+
+**The question.** What each arm of the WRITABLE open's `reconcile_rotation` may do to `vault.json`
+and `vault.json.next` once either changed after the unlock read them, and what the open answers.
+The unlock reads both files by path before any connection exists; the reconcile then acts under
+the write lock on what it read, and until now nothing re-checked, before a file operation, that
+the files still license it. Working material — the brief, the three lenses' answers, the
+refuter's report, the probe and its results — is in the session scratchpad `o290/`; this record
+is the ruling.
+
+**Measured before the panel sat and while it sat** (Docker, a release build of `main`
+`4565516`, a temporary probe never committed; Sealed and HmacOnly identical in every row). "Held"
+is an unlock taken before the event and opened after it; "fresh" a new unlock and open. The
+deferral is 20 drawers and a rotation that commits and fails every promote attempt (`vault.json`
+the retired bytes R, `.next` the staged manifest S, keycheck G1, height 22).
+- **P-W** (the filing): another open promotes and writes to 27, the database is restored to a
+  copy at 24, `vault.json` deleted — fresh before `NotFound`; held **Ok at height 24, `verify`
+  OK, an O246 "2 record(s) behind" note**; fresh after Ok, height 24, no note.
+- **P-W′** (the integrator's variant): as P-W with R written back instead of deleting — fresh
+  before `IntegrityFinding`; held Ok at height 24 with the lag note. The filed candidate (the bytes
+  the unlock read, or verifying under the pending key) accepts it.
+- **M, T, F** (O257 item 5's heal): `vault.json` deleted, truncated, or its MAC flipped, no
+  rollback — fresh before `NotFound`, `CorruptManifest`, `ManifestTampered`; held **Ok, the file
+  rewritten from memory, no note** — for F, the forged file overwritten and no event.
+- **D**: a directory at `vault.json` — held `Io` "Is a directory" (`promote`'s bare read).
+- **S-M**: a settled leftover (`.next` naming `vault.json`'s own generation) with `vault.json`
+  deleted — held `CorruptManifest` **after deleting `.next`**; fresh after `NotFound`, neither
+  file on disk.
+- Every other posture of the window already refuses: no deferral, `CorruptManifest` (the rule's
+  absent arm); the promoted file kept, `ManifestTampered`; read-only deferred, `Io`
+  (`deferral_in_force`); read-only not deferred, `CorruptManifest`.
+- **PAIR** (the database and `vault.json` both rolled back) and **P-W‴** (the refuter's: R and S
+  both put back beside the database at 24) are accepted by the held open AND by a fresh open, with
+  the lag note for P-W‴ — A2, the witness's (O245), before and after this ruling.
+- The rotation's OWN promote with `vault.json` deleted or flipped at its `Committed` pause
+  (inside the fence) writes the new manifest at the committed head, no note.
+- **Named by the lenses and the refuter, and run**: the licence option C asks, emulated with no
+  file effect, after every LEGITIMATE event between a held writable unlock and its reconcile —
+  none, a read-only open, a promote, a promote whose `.next` removal fails, a promote plus
+  anchors, a promote whose rename fails (`staged: true`), restores of a deferral-era and a
+  post-promote archive, a second rotation staging and aborting after a promote (`staged: false`,
+  its stage kept) — answers `Ok(staged: true)` or `Ok(staged: false)` every time; a second
+  rotation reads `Foreign` and a pre-rotation restore `Abandoned`. **No legitimate event produces
+  a miss.** A vault deleted before the connect fails at the connect with a raw SQLite error
+  (O291's). And the security lens's route, reachable by a FRESH open: during a deferral the
+  `meta.keycheck` row deleted, or a pre-rotation database copy two writes behind restored — the
+  open deletes `.next` (the only copy of the G1 salt), commits a G0 keycheck in the first case,
+  and only then refuses (`Integrity`, `ManifestTampered`).
+
+**Prior rulings found and their disposition** (searched `rul(ed|ing)` in O290, O257, O254, O246,
+O266, O288, O289, O277 and O293).
+- **O257 item 5 — REVISED for the reconcile caller**, recorded beside it: its clause "(which also
+  heals a corrupt or missing `vault.json`)". (a) O257 carved the promote out of O254's door only
+  because the door verifies under the HANDLE's key and a promote replaces a manifest under the
+  old key with one under the new — which justifies the retired-key case alone; the clause widened
+  the carve-out to missing, torn and forged files, the states O254 item 3 refuses as integrity.
+  (b) The committed keycheck authenticates the GENERATION, never the anchor, and the heal wrote
+  both: the twin's anchor is the one the unlock read before any connection existed (P-W, P-W′).
+  (c) F, M, T and S-M, measured. (d) It serves no crash in any build: `write_manifest_file` is a
+  nonce temp, fsync, rename and directory sync, a crash between a promote's write and its removal
+  is `Settled`, and every torn or missing file refuses at the unlock itself, so the heal was
+  reachable only through an unlock held across an edit. (e) P-W, P-W′ and S-M are regressions of
+  the unreleased 1.7.0: 1.6.1's reconcile promoted by RENAMING `.next` (`git show v1.6.1`, store
+  `lib.rs` and vault `promote_manifest`), so a lost `.next` refused with `Io`; O257's
+  write-from-memory removed that implicit licence. M, T and F healed by rename in 1.6.1 too,
+  undocumented. **KEPT for the rotation caller**: the rotation writes the head it committed under
+  its own exclusive hold, so nothing is laundered.
+- **O257's removal rule — REFINED**: the `Settled` and `Abandoned` removals also require
+  `vault.json` to verify under the handle's key.
+- **O257 items 4, 6, 7 and BUILT finding 1 (the fast path) — FOLLOWED.**
+- **O254 items 2 and 3, and its P1 — FOLLOWED**; item 4's carve-out narrowed back to its
+  justification. After this ruling the reconcile's promote refuses what the anchor door refuses.
+- **O266 item 1 — REFINED**: the reconcile's promote decision goes through the rule (the
+  licence); `promote`'s own check stays strict and stays the rotation's. O266's reason for keeping
+  `promote` strict — a lenient check skips the write and removes `.next` — is met by mapping the
+  staged branch to WRITE. **O266's rejection of "memory alone for the anchor" — FOLLOWED**, and its
+  residual "no door writes memory out" is found FALSE for 2026-09-24 onward (the reconcile's
+  promote wrote the unlock's twin from memory; P-W measured it), corrected beside it; true after
+  this ruling.
+- **O288 item 3 — REFINED**, recorded beside it: "the writable posture gets no check" becomes "no
+  reopen check": the rule's licence accepts a promote since, so it is not the byte compare that
+  refused P1 (O284's CF4 and CF5). **O288 item 2 — FOLLOWED on the read-only posture**, whose check
+  runs with no lock; the asymmetry is argued, not accidental.
+- **O289 item 3a — REVISED for `deferral_in_force`'s absent arm**, recorded beside it: the item
+  rules an absent `vault.json` "integrity … on EVERY handle — this is O277" and in the same breath
+  answers it `Io` on this one reader; the carve-out cites O288 item 2's read-failure principle while
+  O289 itself reclassified absent as not a read failure; measured, the read-only deferred window
+  answers `Io` (exit 1, a 500 on `/v1`, whose `store_err` has no `Io` arm) where the read-only and
+  writable non-deferred windows answer `CorruptManifest` (exit 2, 409 integrity). Unreleased.
+  "Never a reopen" stands; only the class moves. **O289's rule otherwise, and O277 — FOLLOWED.**
+- **O246 — FOLLOWED**: an absent or unlicensed manifest is not a lag; every lag is still healed and
+  reported. **A2, O241, O245 — FOLLOWED**: PAIR and P-W‴ stay the witness's.
+- No maintainer ruling is overturned; the 2026-09-08 versioning ruling is followed.
+
+**Claims refuted, the brief's, the filing's and the lenses' included.**
+- The brief: "nothing re-checks …" — overstated: `.next` is byte-checked before every removal and
+  `promote` re-checks "already this generation"; what was missing is a licence for the WRITE and
+  any check of `vault.json` before a REMOVAL. `promote`'s overwrite list omitted another vault's
+  id, and it does not overwrite a directory, an unreadable file or a too-new one. "Reachable only
+  by a held unlock" — the rotation's own promote reaches it too. Option D's "the next fresh open
+  reads a crash lag" — the held open's own `reconcile_chain` fast-forwards, and the next fresh
+  open reads Current with no note (measured); that describes E. Option C "exactly what
+  `reconcile_read_only` does" — that function keeps `deferred_over` for the handle's life and
+  pushes the deferral note; the licence must do neither. C's refusal list omitted `ManifestTooNew`
+  and put a directory at `Io` (it is `CorruptManifest`, the rule's absent arm). F's "the event
+  fires" was read, not measured — store tests build no telemetry. The "fresh before" column was a
+  read-only open, unstated. The window was unsized: `recorded_embedder` and the embedder factory —
+  a model load, an HTTP dimension probe — run between the unlock and the open on both surfaces,
+  plus up to 5 s at a rotation's fence. "PAIR shows the capability already defeats every open" —
+  P-W needs strictly less (a database copy and a deletion) and is loud against a fresh open; P-W‴
+  is the variant that is silent against every open.
+- The filing: "(a crashed promote's torn or missing manifest, which no unlock can read either)" —
+  refutes itself: because no unlock can read one, the heal never served a crash; the handover's
+  "must stay a heal" for M and T is wrong for the same reason. Its gate, "the rollback is reported
+  by the fresh open", is unachievable for P-W — the deleted file was the evidence, and a fresh open
+  can only say `NotFound`; the gate asserts the held open's refusal, that nothing was written, and
+  that the fresh open's answer is unchanged. "O257's crashed-promote heal stay green" — no such
+  test or legitimate state exists; the crashed rotation's recovery (R and S, `staged: true`) is
+  the one kept.
+- The lenses: "Relations lines both ways" with O293 — O290 leaves `## Open` when it lands, and the
+  preflight then reports O293's line as naming no open entry; no line. "Absent through
+  `refusal(Absent)` in `deferral_in_force`" — the vault gate forbids `self.refusal(` in that body; a
+  non-emitting helper shared with `refusal`'s absent arm. The security lens's gate line "a
+  directory answers `Io`" pins the wrong class. "Only P-W′ catches an outer-handle licence" —
+  asked with the retired digest, every promote since reads as a false `Tampered` under G0's MAC,
+  which P1 catches loudly. "Close-never-drop is O278's rule" — O278 ruled it for
+  `replace_connection`; `close_refused` on a refused open is O284/O288's convention and every other
+  post-door `?` in `open_inner` drops; hygiene, taken here. "A keycheck edited to G0 is dismissed by
+  'the same capability can delete `.next`'" — that argument would dismiss S-M too; the
+  discriminator is O257's own, an open that writes before it refuses (O296 below).
+
+**The ruled shape.**
+1. **The licence (the `Committed` arm, writable).** Under the reconcile's existing `WriteLock`, and
+   never before it, a vault-crate method takes the pending twin and the OUTER handle's
+   `manifest_seen` — the digest of the `vault.json` bytes the unlock MAC-verified, captured before
+   `take_pending`, never the twin's own (`None`) — and fails closed when it is `None`. It sets the
+   retired digest on the owned twin, asks the ONE rule once through its strict reader
+   (`verified_manifest`: no fall-back), and clears it before the twin becomes the handle: the
+   finished handle never carries `deferred_over`. `Ok(staged: true)` (`.next` still S AND
+   `vault.json` still R) → WRITE the staged manifest; `Ok(staged: false)` (`vault.json` verifies
+   under the new key — a promote since, O254's P1) → SKIP the write; both then run the byte-guarded
+   removal. Any miss answers the rule's own refusal: an absent `vault.json` or a lost `.next`
+   beside R, `CorruptManifest`; a parse or id failure, `CorruptManifest`; a too-new file,
+   `ManifestTooNew`; a MAC failure, `ManifestTampered` WITH the event, raised once, by `refusal`;
+   an unreadable file, `Io`. Nothing is written, `.next` is untouched, the lock rolls back.
+2. **The licence decides, never a second read.** The write-or-skip is taken from the licence's
+   answer: one private body writes (when told to) and removes, holding the crate's one promote
+   `write_manifest_file(` call and no read of `vault.json` — an offline delete between the licence
+   and a re-read would otherwise write the stale anchor anyway. `promote()` keeps its strict
+   current-check and its heal for the rotation, and calls the same body.
+3. **`Settled` and `Abandoned` remove `.next` only while `vault.json` verifies under this handle's
+   key** (`manifest_on_disk_is_mine`, the strict guarded read O257's race arm uses), under the lock.
+   Otherwise no file operation: `reconcile_chain` answers the rule's class, and `.next` survives.
+   The legitimate removals still run — a leftover beside its promoted `vault.json`, an abandoned
+   stage beside an old-generation writer's anchors (a "verifies under the key" test, never a byte
+   compare, so O284 option C's cost does not arise).
+4. **`deferral_in_force` answers an absent `vault.json` as `CorruptManifest`**, with no event, through
+   a helper `refusal`'s absent arm shares; an unreadable file stays `Io`; never a reopen.
+5. **A refused open's connection is closed**, not dropped, when the reconcile refuses (the
+   `close_refused` convention).
+6. **Surfaces and documents**: no surface code moves — `/v1` answers `CorruptManifest` and
+   `ManifestTampered` 409 with `class: "integrity"`, `ManifestTooNew` 409 without, `Io` 500; the
+   CLI exit 2, 2, 1, 1; neither retries them. `promote`'s doc comment, the store's
+   `reconcile_rotation` doc, `CLAUDE.md`'s store bullet (through the pull request the maintainer
+   approves), the platform-views key-rotation diagram if it states the heal, the CHANGELOG, and the
+   records beside O257, O266, O288 and O289 follow. O293's body is amended (below); O292's names the
+   state C leaves.
+
+**Options that lost, with their cost.** **A** (today): launders P-W and P-W′, erases F's page,
+rewrites M and T silently, destroys S-M's last key copy. **B** (the filed candidate): a second
+implementation of the staged branch (O288's rejected mechanism), blind to `.next`, launders P-W′.
+**C′** (every miss the reopen class): under the lock no legitimate event produces a miss (probe5),
+so it names an edit a race; a library caller never gets F's page; the retry's `NotFound` invites
+`vault create` (O292); a second unlock and embedder factory per refusal. **C″** (the security
+lens's: StagedLost, Tampered and Refused to the reopen class): the same costs for those arms, and it
+avoids paging only on a genuine older generation-0 manifest swapped in for R, which O266 and O289
+already accepted as a page on live deferred handles. **D** (heal and report): identical on disk to
+today — the held open's own reconcile fast-forwards, the next fresh open is clean — and it still
+overwrites F. **E** (write the keys, refuse the verdict): the next fresh open heals S's anchor with
+a crash-attributed note; writes before it refuses. **Heal only while `.next` is intact**: launders
+once a promote's removal failed (a legitimate O257 leftover) and anchors moved on. **Write the
+in-memory S back to `.next`, or to a side file no unlock reads**: a new key-bearing writer the
+backup and restore allowlists drop, deletable by the same attacker, and it re-arms P-W′ for any
+later hand restore of R. **The outer handle's G0 key to accept a genuine older G0 manifest**:
+silences an offline edit. **The cost of C, stated**: in P-W today's heal happens to write the salt
+back; under C it is in no file — the state the attacker created, which every fresh open already
+answers `NotFound`; recovery is a backup (O266's residual for both files gone).
+
+**Dissent.** The engineering and memory lenses would file the rotation's report; the security lens
+would build it here — settled by the refuter for filing (nothing laundered; `RotationReport` on four
+renderers). The security lens would defer every `Settled`/`Abandoned` removal until after the chain
+verdict — settled by measurement: that covers `predb_behind` and kc_absent's deletion but not
+kc_absent's committed G0 seed, and both are fresh-open routes where the DATABASE contradicts the
+manifest, a different question (O296); the guard ruled here is a component of O296's shape, not a
+second implementation of it. The engineering lens would add `Relations:` lines with O293 — refuted
+above. None on C, on the licence's placement, or on the class of a miss.
+
+**Fails silently if**: the licence maps `is_ok()` or `deferral_in_force`'s boolean to "current" (the
+write is skipped, `.next` removed, the salt in no file) or treats `Ok(staged: false)` as a miss (P1
+refuses); it reads the twin's `manifest_seen` (a false page on every recovery) or the outer handle's
+key; it runs before `WriteLock::begin`; `deferred_over` survives on the finished handle (silent: only
+"R and S put back beneath the live writable handle answer `Tampered`" sees it); `promote`'s re-read
+decides instead of the licence; S-M, M, T, F or P-W′ are asserted by class alone (S-M already
+refuses today — `.next`'s bytes are the discriminator, and every refusal arm asserts the files
+byte-identical); a gate asserts `is_err()` or exit 2 (three integrity variants exit 2); P-W's premises
+(the promote landed, `.next` is gone, the copy is below the final height) are unasserted; F is built
+unparseable rather than MAC-flipped; P-W′'s R is re-serialised rather than byte-identical; the
+vault crate's `Fault::RuleRead` or `between_manifest_reads` hooks, armed for a later reader, fire
+inside a writable setup open; the reader-count gate's needle is blind to a new caller of
+`verified_manifest`; a counterfactual copy is not force-recompiled; the event is taken as proven by a
+store test (it is proven by the source gate that the tamper arm goes through `refusal`, and by the
+unlock's own emit on the retry-free fresh open); Windows, and a filesystem whose locks are not shared,
+where the lock argument is void.
+
+**The gate.** Store tests at both security levels, the variant asserted, the files' bytes and the
+database's height and keycheck asserted unchanged after every refusal: P-W (`CorruptManifest`
+"missing", both files still absent, height 24, no heal note; a fresh open `NotFound`); P-W′ (the
+lost-`.next` text; R byte-identical; fresh `IntegrityFinding`); M (the text naming `.next` intact;
+`.next` byte-identical; fresh `NotFound`); T; F (`ManifestTampered`; the forged bytes and `.next`
+kept); D (`CorruptManifest` "not a manifest file"; the directory kept); a too-new `vault.json`
+(`ManifestTooNew`, kept); a FIFO at `vault.json` answering within a bound on a thread; the
+`RuleRead` fault at the licence (`Io`, nothing written); the steady deferral promoting (`vault.json`
+at S's head, `.next` gone, no note, `!promotion_deferred()`); a promote since, with the promoter's
+removal failing and succeeding and with anchors after it (served, `vault.json` untouched, no heal
+note); a second rotation's aborted stage kept; R and S put back beneath the live writable handle
+answering `ManifestTampered`; S-M and a settled leftover beside a forged `vault.json` keeping `.next`;
+an abandoned stage beside a deleted or forged `vault.json` keeping `.next`; a hook between the licence
+and the write deleting `vault.json` on the `staged: false` branch, nothing written; the read-only
+deferred window answering `CorruptManifest`, never a reopen. Pinned as costs: the promoted file kept
+(`ManifestTampered`), no deferral (`CorruptManifest`), PAIR and P-W‴ (accepted, the lag note).
+Negative controls: O254's two P1 tests and its two-process gate; O257's R1/R2 and staged-leftover
+tests; `crash_after_commit_promotes_staging_manifest`; O288's `rotation_state_tests.rs` (the writable
+R2 and R3 arms among them); O289's `manifest_rule_tests.rs` with the one `deferral_in_force` arm
+inverted from `Io` to integrity; the vault crate's from-memory promote test. Surfaces, through the
+open-pause hook after the unlock: the CLI's `open_store_as` answering P-W and F with the integrity
+class and no retry, and `/v1`'s `store_for` 409 with `class: "integrity"`, "possible tampering" for F —
+a C′ build answers `NotFound` and 404 there, so these tell C from C′. Source gates: the licence has one
+call site, after `WriteLock::begin(` in the `Committed` arm; O257's call-site gate widened to the new
+method; the rule's readers stay four and `verified_manifest`'s callers are counted; the manifest tamper
+emits stay three; the promote body reads no `vault.json`; the `write_manifest_file(` count is unchanged;
+`deferral_in_force` contains no `self.refusal(`; each `Settled`/`Abandoned` removal is preceded by the
+guard. Counterfactuals, each force-recompiled and restored byte for byte: today's code; B; C′;
+`is_ok()`; `Ok(false)` as a miss; `deferred_over` kept; the twin's `manifest_seen`; the re-read deciding;
+an unguarded `Settled`; an unguarded `Abandoned`; `Io` for absent. Real corpus: the LoCoMo feed over
+O266's hand-recipe deferral, promoted by a writable `stats`, latency against `main`; the no-pending
+fast path is untouched.
+
+**Residuals, stated.** A rollback beneath a deferral that restores R, S and the database together
+(P-W‴), and PAIR, are accepted by every open — A2, the witness's. Under C the salt of P-W is in no
+file (above). The rotation's own promote still overwrites a `vault.json` edited inside its fence, with
+no report (O295). An open whose database contradicts the manifest still removes `.next` and seeds a
+keycheck before it refuses (O296). The rollback alarm raises no tamper metric (O297). A vault
+deleted beneath the window fails at the connect with a raw SQLite error (O291's). Windows and
+lock-less mounts, reasoned not measured.
+
+**Filed by this ruling**: **O295** (the rotation's own promote reports a `vault.json` that is not the
+retired bytes it verified), **O296** (an open removes `.next` or seeds a keycheck before its verdict
+when the database contradicts the manifest — measured), **O297** (a rollback the anchor detects
+raises no tamper metric, so `PalaceTamperDetected` cannot page on it). O293 takes no `Relations:`
+line: this entry closes when it lands, and its body is amended — the reconcile no longer reaches
+`promote`'s bare read, which the rotation alone still makes, and the `staged_on_disk` read in the
+removal's byte guard stays O293's.
+
+**Versioning**: PATCH inside the unreleased `1.7.0`. P-W, P-W′ and S-M are unreleased O257
+regressions; M, T and F healed undocumented in 1.6.1, and only after an offline edit; the read-only
+class change (exit 1 → 2, 500 → 409) sits on O289's unreleased `Io`. **No `UPGRADING.md` entry**:
+every new refusal meets a state with no producer in a supported deployment, and that state already
+fails every restart, on both builds (O289's argument). Nothing new for `config check`.
+
+#### BUILT 2026-09-29, to the ruling — with one window an independent review found and the ruling had not, twelve counterfactuals, and three defects of mine in the counterfactual runner
+
+**The licence** (`Vault::take_licensed_promotion`, vault `lib.rs`): called on the handle the unlock
+minted, on a `Committed` verdict, under the reconcile's `WriteLock`; it takes the twin and the
+handle's `manifest_seen` (failing closed, as an `Io` error, when either is absent), sets that digest
+as the twin's `deferred_over`, asks `verified_manifest` once, and clears it before anything else —
+`Ok(staged)` → `Promotion::Write`, `Ok(_)` → `Promotion::Skip`, `Err` → the refusal as returned. The
+fixture hook `between_licence_and_promote` sits between the answer and the promote. **One promote
+body**, `promote_as(Promotion)`, holds the crate's promote `write_manifest_file(` call; no read of
+`vault.json` decides the write, and its one read is the removal's guard: `.next` is removed only
+while it is still the bytes seen AND `vault.json` verifies under the promoting key. `promote()`
+keeps its strict current-check and heal for the rotation and calls it. **The store**
+(`reconcile_rotation`): `Committed` is `vault = *vault.take_licensed_promotion()?`; `Abandoned` and
+`Settled` remove `.next` only inside `if vault.manifest_on_disk_is_mine()`; `open_inner` closes the
+connection with `close_refused` when the reconcile refuses (later refusals, in `init_chain`, drop it
+as before). **`deferral_in_force`** answers an absent `vault.json` through `absent`, the helper
+`refusal`'s absent arm now shares, with no event. Doc comments corrected: `promote`,
+`take_licensed_promotion` (naming O291's unheld delete), `adopt_deferred_promotion`,
+`NotInForce::Absent`, `deferral_in_force`, `reconcile_rotation`, `adopted_rotation_holds`.
+
+**Found by an independent adversarial review of the build, and fixed before this landed** — it found
+no false verdict in the code, and a list of mine:
+- **A window the ruling had not seen (its R2).** On the licence's promoted-since branch a leftover
+  `.next` — a promoter whose removal failed — was removed on the licence's earlier answer, so a
+  `vault.json` deleted between that answer and the removal left the keys in no file and the open then
+  refused: S-M's outcome, by timing. The removal in `promote_as` now carries item 3's leftover rule
+  (`vault.json` must verify), for both callers; for the rotation it changes nothing in legitimate
+  operation, since the rotation just wrote or confirmed the file. Its gate is the hook arm's
+  removal-failed variant, and cf12 below.
+- **The ruling's gate was not fully met, while this record and the CHANGELOG said it was**: the
+  files and database state were compared after two refusal arms, not every one; the no-deferral cost,
+  M's fresh `NotFound`, a `/v1` forged arm and the FIFO arm at HmacOnly were missing; the pinned
+  kept-manifest arm asserted the held open alone. All added.
+- **Source-gate needles a regression could pass**: `promote_as`'s read check (now a closed list and
+  one guard read, write → guard → removal inside it), the reconcile's guard check (a removal after a
+  closed guard passed; it must now sit inside it), no `.take_licensed_promotion()` inside the
+  rotation's fence, no UFCS call to the strict reader, and `deferred_over` set in exactly two named
+  places.
+- **Twelve document errors**, each corrected: this entry's heading claimed "a rollback beneath it"
+  while PAIR and P-W‴ are rollbacks it accepts; `CLAUDE.md` and the threat model generalised past
+  the staged manifest; the CHANGELOG over-claimed the connection close, what the licence
+  measurement covered (an emulation on `main`, and two events that never reach the licence) and the
+  search measurement (none over the deferral), named no regressions and gave the leftover's the wrong
+  reason; the runbook's "refuses the same way" was wrong for a too-new or unreadable file; the corpus
+  count was inherited, not in the log; two counterfactual lists were incomplete.
+
+**Gates.** `promote_licence_tests.rs`, thirteen, both security levels in every arm, the variant
+asserted and — for every refusal the licence and its guards produce — the files' bytes, the height
+and the keycheck compared before and after: P-W (`CorruptManifest` "missing", both files still
+absent, height 24, a fresh open `NotFound` on both postures); P-W′ (the lost-staging text, R
+byte-identical, a fresh open's `IntegrityFinding`); `vault.json` deleted (the text naming `.next`
+intact, a fresh `NotFound` on both postures), torn, forged (`ManifestTampered`), a directory ("not a
+manifest file") and too new (`ManifestTooNew`); a FIFO at `vault.json`, answering within five seconds
+on a thread and left in place; the `RuleRead` fault at the licence (`Io`); the steady deferral
+promoted (S's head, `.next` gone, no heal note, `!promotion_deferred()`); the retired pair put back
+beneath that promoted handle (`ManifestTampered`); a promote since — its removal succeeding, failing,
+and with three anchors after it — followed with `vault.json` untouched and no heal note; a second
+rotation's aborted stage kept; the licence-to-promote hook deleting `vault.json` on the
+promoted-since branch, with and without the promoter's leftover (nothing written, the absent
+verdict, the leftover kept); a settled leftover and an abandoned stage beside a deleted and a forged
+`vault.json` kept, and each removed beside an intact one; the read-only window's absent manifest as
+integrity, never a reopen; and the costs pinned — the promoted manifest kept (`ManifestTampered`, held
+and fresh), no deferral (the absent verdict held, `NotFound` fresh), PAIR (served at its height,
+`verify` OK), P-W‴ (served with the lag note, held and fresh). The CLI (`open_race_surface_tests.rs`),
+at the writable layout pause: P-W through `open_store_as` — `CorruptManifest` "missing",
+`integrity_verdict` true, not retried, nothing written — and through `/v1`'s `store_for`, 409 with
+`class: "integrity"`; a forged `vault.json` through each, "possible tampering", exit 2 and 409,
+`.next` kept. Inverted as ruled, never deleted: O289's `absent=true` arm (`io` → `integrity`) and,
+found by the suite, O288's `o288_an_unreadable_file_after_the_unlock_is_an_error_not_a_retry` (a
+directory at `vault.json` after a read-only unlock, `Io` → `CorruptManifest` "not a manifest file";
+`.next`'s arm stays `Io`) — the same state, the same revision. Source gates: O257's call-site gate
+(`anchor_tests.rs`) now requires `.promote()` inside the rotation's fence only, one
+`.take_licensed_promotion()` in `reconcile_rotation` after `WriteLock::begin(` and none in the fence,
+every reconcile removal inside its arm's guard, `promote_as` writing, then guarding, then removing
+inside the guard with no other read, `promote` and the licence reaching it, and the licence asking the
+strict reader, then clearing the digest, then promoting, reading `self.manifest_seen`; the vault
+crate's rule gate adds `promote_as` to the strict readers, names the licence as the ONE caller of the
+strict reader in the crate (and no UFCS call), `deferred_over` set in `adopt_deferred_promotion` and
+the licence only, and keeps `absent` silent. The rule's readers stay four; the tamper emits stay
+three.
+
+**Counterfactuals, twelve, each applied to the real sources of the tree that lands, force-recompiled
+(two `Compiling undercroft-store` lines in every log), run, and restored from a saved snapshot
+compared by SHA-256** (`scratchpad/o290/cf290.py`, `run-cf290.sh`, logs in `cf-logs/`; the first run
+of eleven, against the pre-review test file, is kept in `cf-logs-run1/`): cf1 today's heal (the
+`Committed` arm alone, the guards left in) — P-W, P-W′, the edited-manifest arm, the read fault, the
+hook arm, the FIFO arm, which measured the heal's bare read BLOCKING under the write lock until the
+test's rescue opened the FIFO, all four surface arms and the source gate (eleven); the arms the heal
+also serves (the steady deferral, a promote since, the aborted stage) and the arms other parts of the
+ruling carry stayed green, as they should; cf2 the licence without its `.next` half — P-W′, both
+source gates, and two arms through the counterfactual's own construction (the absent text lost its
+intact-`.next` clause, and its extra read masked the injected fault); cf3 every miss the reopen class
+— the store's variant arms, the FIFO arm, and the two P-W surface arms (a retry's `NotFound`); cf4 any
+answer read as current — twenty-eight tests across O257's, O266's, O277's, O278's, O288's, O289's and
+O290's, every writable recovery of a deferral leaving the new keys in no file; cf5 a promote since as
+a miss — O254's P1, the promote-since, aborted-stage, hook and pinned arms, O288's writable R2 and R3;
+cf6 the digest kept — the retired-pair arm, `!promotion_deferred()` in two arms, the source gate; cf7
+the twin's own digest — thirty-six tests, the steady deferral and every surface arm among them; cf8 a
+second read deciding — the hook arm and the source gate; cf9 and cf10 an unguarded settled and
+abandoned removal — the leftover arm and the source gate each; cf11 `Io` for an absent manifest — the
+read-only window arm and the two inverted arms; cf12 the removal in `promote_as` unguarded (the
+review's window) — the hook arm's leftover variant and the source gate.
+
+**Also found by the build.**
+- *A surface arm cannot tell C from C′ for a forged manifest*, measured: under cf3 both forged
+  surface arms (CLI and `/v1`) stayed GREEN, because the reopen's fresh unlock raises "possible
+  tampering" too. They guard the surface outcome; the mechanism is pinned in the store
+  (`ManifestTampered` from the held open, the forged bytes kept). The P-W surface arms do tell them
+  apart — a retry answers `NotFound`.
+- *The O257 gate's `body_of` ends a function only at a PRIVATE `fn`*, so the new assertions about
+  `promote_as` and the licence take each method's exact extent to its closing brace.
+- *Three defects of mine in the counterfactual runner, none in the code under test.* The first run
+  was started under a ten-minute tool timeout; stopping it left cf1 applied to the store and its
+  container building — restored from the snapshot at once. The stopped task's shell script kept
+  running, applied cf2 and raced a relaunched runner — both killed, both containers stopped, the
+  sources restored and verified by SHA-256 before one runner was started. And that relaunch's signal
+  trap restored the files without exiting, so `kill` left its loop running — `kill -9`, restored,
+  verified, the trap fixed to exit.
+
+**Real corpus.** The LoCoMo feed mined into 12 wings — `stats` in the log: 1,020 records, audit-chain
+height 1,021 — this tree's release binary, rebuilt after the review's fix (a `Compiling
+undercroft-vault` line and a changed binary digest; a symbol grep proved nothing, a release binary
+carrying no function names), against `main` `4565516`'s (the O290 text in this one only), fifteen
+interleaved runs of each WRITABLE command, every exit code checked (none non-zero). Medians in ms,
+this against main: settled `stats` 4 / 4, `verify` 8 / 9, `search` 42 / 43; over O266's hand-recipe
+deferral re-made before every run, so that each open promoted it — this build under the licence, main
+by the heal — `stats` 16 / 16, `verify` 21 / 21, `search` 58 / 55 (ranges 54–63 against 54–59); settled
+again 4 / 5, 9 / 9, 50 / 49. No cost that shows; the licence reads two files of a few hundred bytes,
+and only when a staged twin is attached. `verify` passed after the last promote, and a deleted
+`vault.json` beside an intact `.next` answers "not found" on both builds at a fresh open, as before.
+A first run of seven interleaved runs, before the review's fix, is superseded by this one.
+
+**The battery at the final tree**: `test` 1225 run (16 ignored — 1208 before, thirteen new store
+tests and four new surface arms), `e2e` 741, `orchestrator-e2e` 171, `e2e-telemetry` 62,
+`backends-e2e` 157, `obs-config` 17, `site` 7, `tls-pins` 31; `lint` and `arch-check` green.
+
+**What the gate cannot see.** The window between an unlock and its open is not reachable through the
+release binary (no fixture seam); the CLI-crate arms drive `open_store_as` and `store_for`, and the
+corpus measures the licence on every promote. The tamper event on the forged arm is proven by the
+source gate (the tamper arm reaches `refusal`, the emits stay three) and by the fresh unlock's own
+emit, not by a telemetry build. A refusal raised after the reconcile — in `init_chain` — drops the
+connection rather than closing it, as every such refusal did before. The guards are a check then a
+removal under the write lock: an edit landing between the two, sub-millisecond, is the same
+capability that could delete `.next` itself. Windows and lock-less mounts, reasoned not measured.
 
 ## 1.6.1 — released 2026-09-22
 
@@ -30441,29 +30890,6 @@ code and prints no panic, on the CLI — and on the orchestrator binary too if i
 prints through `println!` the same way, which this filing did not measure; and no
 e2e check pipes the binary into `grep -q`.
 
-### O290 — a writable open whose unlock attached a deferred rotation heals an offline rollback beneath it: the database rolled back and `vault.json` deleted read as a crash
-
-**Filed 2026-09-28 by O288's ruling (its refuter; neither the brief nor the lenses saw
-it); measured by the integrator (P-W).** O257 item 5's promote "heals a corrupt or missing
-`vault.json`", authorised by the committed keycheck under the write lock, and that heal is
-reachable only in the window between a writable unlock and its reconcile, since the
-unlock itself needs a verifying manifest. A writable unlock over a deferral attaches the
-staged manifest; another open promotes and writes; an offline writer then restores an
-older copy of the database and deletes `vault.json`. The held writable open writes the
-staged manifest from memory and `reconcile_chain` fast-forwards the anchor: measured,
-heights 27 → 24, the open answers Ok with an anchor-heal note ("2 record(s) behind") and
-`verify` OK — the rollback the anchor exists to catch is laundered into a crash heal,
-where a fresh open answers `NotFound`.
-
-**Shape, for a ruling**: a candidate from the refuter — on the writable posture, in the
-`Committed` arm, require `vault.json` to be the bytes the unlock read or to verify under
-the pending key, else the reopen class — keeps O254's P1 green but revises O257 item 5's
-heal, so a panel decides it, weighing what else item 5's heal is for (a crashed promote's
-torn or missing manifest, which no unlock can read either).
-
-**Gate**: P-W inverted — the held writable open refuses, the rollback is reported by the
-fresh open, and O254's P1 and O257's crashed-promote heal stay green.
-
 ### O291 — a vault delete takes no hold, so another process's live handle meets a vault that is gone, and a writable one commits into it
 
 **Filed 2026-09-28 by O289's ruling (its security lens, confirmed by the refuter); read in
@@ -30503,6 +30929,9 @@ integrity class (the A33 shape), and `config check` reports such a directory bef
 **Gate**: `create` over a directory holding a database refuses and writes nothing; `vault list`
 and `config check` name it.
 
+**Noted 2026-09-29 by O290's ruling.** O290 refuses a writable open whose `vault.json` went missing after its unlock and leaves the files as found; with `.next` intact beside the database, its message names `.next` as the file holding the keys, but every later fresh open reads that directory as no vault at all (`NotFound`) and `create` would mint over it — this entry's state, now reachable after a refusal that says why.
+
+
 ### O293 — the manifest reads outside O289's guarded read, and the stat-then-read race inside it
 
 **Filed 2026-09-28 by O289's ruling (its refuter), widened by O289's independent review.** O289
@@ -30529,6 +30958,9 @@ or per-target constants; on Windows a directory already fails at the open).
 **Gate**: a FIFO at each path answers within a bound on a thread; the vault crate's manifest-read
 gate admits no read of a manifest file outside the guarded read.
 
+**Amended 2026-09-29 by O290's ruling.** The store's open no longer reaches `promote`'s bare read of `vault.json`: its promote is licensed by the manifest rule's guarded reads, and the body that writes reads no `vault.json`. The rotation alone still makes that read, under its exclusive hold, where a FIFO would hold the fence; its ruled miss stays the rotation's heal, and an unreadable file must stay `Io`, never "not current, so write". The bare `staged_on_disk` read inside `remove_staged_if_unchanged` is still reached under the write lock on the licence's promoted-since branch, so a FIFO at `.next` there still blocks — this entry's, with how an unreadable `.next` beside a verified `vault.json` answers. Sequenced after O290 deliberately: a guarded `promote` read refusing a missing file, landed first, would have closed two of O290's arms on its own and let its counterfactual pass.
+
+
 ### O294 — the native release targets build on an unpinned toolchain
 
 **Filed 2026-09-28 by O289's ruling (its engineering lens, confirmed by the refuter).** The
@@ -30543,6 +30975,73 @@ both workflows — with a gate that the Dockerfile's image and the pin agree.
 
 **Gate**: a preflight comparing the Dockerfile's `rust:` tag with the workflows' toolchain, both
 directions.
+
+### O295 — the rotation's own promote overwrites a `vault.json` edited inside its fence, and reports nothing
+
+**Filed 2026-09-29 by O290's ruling (all three lenses and the refuter); measured by the
+integrator.** `rotate_keys` verifies `vault.json` under its exclusive hold and keeps the digest of
+those bytes (`retired_manifest`, `rotate.rs`), then commits and promotes through `Vault::promote`,
+whose strict check asks only whether `vault.json` already verifies under the NEW key. The retired
+bytes never do, so a file deleted or MAC-flipped between the rotation's check and its promote is
+indistinguishable from them: measured at the rotation's `Committed` pause, both a deleted and a
+flipped `vault.json` were overwritten, the rotation answered Ok, and nothing was noted or raised. The
+anchor it writes is the head it committed under the hold, so nothing is laundered (O290 kept O257
+item 5's heal for this caller); what is lost is the evidence that something edited the manifest
+beneath an exclusive fence — and, for a flipped file, the tamper page every other door raises.
+
+**Shape**: before the first promote attempt, read `vault.json` through the guarded read and compare
+its digest with `retired_manifest`; on a difference, still write, then carry the fact on
+`RotationReport` (a `HAND_PROJECTED` field on all four renderers) and on `unhealed`, and raise the
+manifest tamper event when the file is present, parses, names this vault and fails the retired
+generation's MAC (the handle is still that generation's there). A missing file gets the note only
+(O277's convention). Deferring instead of writing lost at O290: a flipped byte would become an outage.
+
+**Gate**: a deleted and a MAC-flipped `vault.json` at the rotation's `Committed` pause are reported on
+every renderer, the flip with the event; an ordinary rotation reports nothing.
+
+### O296 — an open whose database contradicts its manifest removes `vault.json.next`, and seeds a keycheck, before it refuses
+
+**Filed 2026-09-29 by O290's ruling (its security lens, confirmed by the refuter); measured by the
+integrator, reachable by a FRESH open.** `reconcile_rotation` decides the rotation verdict from the
+database's `meta.keycheck`, acts on it — removing `.next`, seeding an absent keycheck — and COMMITS,
+and only then does `init_chain`'s `reconcile_chain` judge whether the rows answer to the manifest.
+Measured at both security levels, during a deferral (`vault.json` the retired generation, `.next` the
+committed one): with the `meta.keycheck` row deleted, `rotation_verdict` reads `Abandoned`, the open
+deletes `.next` — the only copy of the new generation's salt — commits the retired generation's
+keycheck over a database sealed under the new one, and then refuses `Integrity` ("audit-chain head");
+with a pre-rotation database copy two writes behind restored, it deletes `.next` and then refuses
+`ManifestTampered`. Every later open reads the vault as abandoned; there is no route back in the
+engine. O257's own complaint, an open that writes before it refuses. 1.6.1 deleted an abandoned
+stage unconditionally too, so this is not a regression; O290 guards the removals against an edited
+`vault.json` and leaves this — the database contradicting the manifest — to its own ruling.
+
+**Shape, for a ruling**: no `Settled`/`Abandoned` removal and no absent-marker seed before the chain
+verdict; on an absent marker the data decides first (the chain answers to the pending keys, to the
+handle's keys, or to neither — `chain_answers_to`, O257 item 4's evidence), then write. O290's
+guard is a component of it, not a second implementation.
+
+**Gate**: both measured routes leave `.next` and the keycheck byte-identical and refuse; a genuine
+abandoned stage beside an old-generation writer is still removed.
+
+### O297 — a rollback the anchor detects raises no tamper metric, so the rollback alarm cannot page
+
+**Filed 2026-09-29 by O290's ruling (its security lens, confirmed by the refuter); read in code.**
+`reconcile_chain` answers a database whose replay never reaches the manifest's anchor —
+`!replayed.anchor_seen`, the rollback the anchor exists to catch — with
+`StoreError::Vault(ManifestTampered)` constructed in place (store `lib.rs`), and raises neither
+`hmac_verify_failed` nor `event_hmac_fail`: the vault crate's manifest tamper emits are pinned at
+three (the unlock, the rule's refusal, O204's key refusal) and this is none of them. The shipped
+`PalaceTamperDetected` alert fires only on `undercroft_hmac_verify_failures_total`
+(`deploy/observability/alerts.yml`), so the threat model's rollback alarm pages no one: the open
+refuses, exit 2 or a 409, and the fleet's alerting is silent. No filing covered it.
+
+**Shape, for a ruling**: whether a detected rollback raises the manifest tamper event (or a series of
+its own) — a design decision, since restoring an archive older than the running vault legitimately
+reads as a rollback beside the live database (the runbook), and a new alert must not page on the
+recovery path; the ruling names the counter, the label, the alert and its `alerts_test.yml` block.
+
+**Gate**: a rollback detected at open moves the chosen series on a telemetry build, and the recovery
+path the ruling exempts does not.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 

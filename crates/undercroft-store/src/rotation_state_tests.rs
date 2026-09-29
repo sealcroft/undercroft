@@ -653,9 +653,13 @@ fn o288_opens_beside_a_writer_anchoring_by_an_abandoned_stage_are_never_refused(
     }
 }
 
-/// **A read that fails is its own error, never the reopen class**: a staging
-/// file, then a `vault.json`, that cannot be read once the unlock has read it
-/// answers `Io` — a retry would read nothing better.
+/// **A file that goes after the unlock read it is its own verdict, never the
+/// reopen class** — a retry would read nothing better. A staging file that is
+/// no longer a file answers `Io`, the read error. A `vault.json` that is no
+/// longer a manifest file is ABSENT, and answers the integrity verdict every
+/// other handle answers for it (ROADMAP O290, revising O289 item 3a: it
+/// answered `Io` here, exit 1 and a `/v1` 500, where every other posture of
+/// the window answered exit 2 and 409).
 #[test]
 fn o288_an_unreadable_file_after_the_unlock_is_an_error_not_a_retry() {
     for (level, target) in LEVELS
@@ -669,9 +673,11 @@ fn o288_an_unreadable_file_after_the_unlock_is_an_error_not_a_retry() {
         let path = vdir(root).join(target);
         std::fs::remove_file(&path).unwrap();
         std::fs::create_dir(&path).unwrap();
-        match open(v, true) {
-            Err(StoreError::Vault(VaultError::Io(_))) => {}
-            other => panic!("{target}: {:?}", other.err()),
+        match (target, open(v, true)) {
+            ("vault.json.next", Err(StoreError::Vault(VaultError::Io(_)))) => {}
+            ("vault.json", Err(StoreError::Vault(VaultError::CorruptManifest(m))))
+                if m.contains("is not a manifest file in") => {}
+            (_, other) => panic!("{target}: {:?}", other.err()),
         }
     }
 }

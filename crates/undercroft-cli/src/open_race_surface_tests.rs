@@ -460,6 +460,189 @@ fn o288_open_store_as_serves_a_rotation_inside_the_unlock_after_one_retry() {
     assert!(store.verify().unwrap().ok());
 }
 
+/// At the writable open's layout pause, once — after its unlock read the
+/// deferral, before its database open — `edit` runs: the P-W rollback (another
+/// open promotes and writes, the database is restored to a copy two writes
+/// behind, `vault.json` deleted) or a forged `vault.json`.
+fn edit_at_the_writable_layout(root: &std::path::Path, edit: &'static str) -> Arc<AtomicUsize> {
+    let ran = Arc::new(AtomicUsize::new(0));
+    let (r, ran2) = (root.to_path_buf(), ran.clone());
+    open_pause::set(
+        &vdir(root),
+        Arc::new(move |here| {
+            if here != Opener::WritableLayout || ran2.fetch_add(1, Ordering::SeqCst) != 0 {
+                return;
+            }
+            let json = vdir(&r).join("vault.json");
+            if edit == "forged" {
+                let mut v: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(&json).unwrap()).unwrap();
+                let mac = v["manifest_mac_hex"].as_str().unwrap().to_string();
+                let first = if mac.starts_with('0') { "1" } else { "0" };
+                v["manifest_mac_hex"] = serde_json::Value::String(format!("{first}{}", &mac[1..]));
+                std::fs::write(&json, serde_json::to_vec_pretty(&v).unwrap()).unwrap();
+                return;
+            }
+            let copy = r.join("copy.db");
+            {
+                let mut s = VaultStore::open(mgr(&r).unlock(VAULT).unwrap()).unwrap();
+                let save = |s: &mut VaultStore, i: u32| {
+                    s.upsert(&Drawer::new(
+                        "w1",
+                        "r",
+                        format!("after the promote {i}"),
+                        Some("o290s.md".into()),
+                        i,
+                        "test",
+                    ))
+                    .unwrap();
+                };
+                save(&mut s, 0);
+                save(&mut s, 1);
+                let c = rusqlite::Connection::open(vdir(&r).join("vault.db")).unwrap();
+                c.execute("VACUUM INTO ?1", [copy.to_str().unwrap()])
+                    .unwrap();
+                drop(c);
+                for i in 2..5 {
+                    save(&mut s, i);
+                }
+            }
+            assert!(
+                !vdir(&r).join("vault.json.next").exists(),
+                "premise: the other open promoted the deferral"
+            );
+            std::fs::remove_file(&json).unwrap();
+            for f in ["vault.db", "vault.db-wal", "vault.db-shm"] {
+                let _ = std::fs::remove_file(vdir(&r).join(f));
+            }
+            std::fs::copy(&copy, vdir(&r).join("vault.db")).unwrap();
+        }),
+    );
+    ran
+}
+
+/// **ROADMAP O290 through `open_store_as`, writable.** A deferral, and the P-W
+/// rollback landed between the open's unlock and its database open: the open
+/// refuses with the integrity verdict for the absent manifest — exit 2 — and is
+/// NOT retried, so the answer is not the fresh unlock's `NotFound`. Before O290
+/// it served the rolled-back vault, `verify` clean, with a crash-lag note.
+#[test]
+fn o290_open_store_as_refuses_a_rollback_in_the_writable_window_without_a_retry() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    fresh_vault(root, 20);
+    defer_by_hand(root);
+    let ran = edit_at_the_writable_layout(root, "rollback");
+    let opened = open_store_as(root, VAULT, Posture::ReadWrite);
+    open_pause::clear(&vdir(root));
+    assert!(
+        ran.load(Ordering::SeqCst) >= 1,
+        "premise: the window was reached"
+    );
+    let e = match opened {
+        Err(e) => e,
+        Ok(s) => panic!(
+            "served the rolled-back vault at height {:?}: {:?}",
+            s.chain_state().map(|c| c.1),
+            s.unhealed()
+        ),
+    };
+    assert!(
+        e.chain().any(|l| matches!(
+            l.downcast_ref::<StoreError>(),
+            Some(StoreError::Vault(undercroft_vault::VaultError::CorruptManifest(m)))
+                if m.contains("vault.json is missing from")
+        )),
+        "the absent manifest's verdict, never a retry's NotFound: {e:#}"
+    );
+    assert!(integrity_verdict(&e), "exit 2: {e:#}");
+    assert!(
+        !vdir(root).join("vault.json").exists(),
+        "nothing written over the gap"
+    );
+}
+
+/// **ROADMAP O290 through `open_store_as`, writable: a forged manifest in the
+/// window pages.** The heal overwrote it with the staged manifest and served,
+/// with no tamper event; it is now the tamper verdict, and the forged file is
+/// left for the operator.
+#[test]
+fn o290_open_store_as_refuses_a_forged_manifest_in_the_writable_window() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    fresh_vault(root, 20);
+    defer_by_hand(root);
+    let ran = edit_at_the_writable_layout(root, "forged");
+    let opened = open_store_as(root, VAULT, Posture::ReadWrite);
+    open_pause::clear(&vdir(root));
+    assert_eq!(
+        ran.load(Ordering::SeqCst),
+        1,
+        "premise: the window was reached"
+    );
+    let e = opened.err().expect("a forged vault.json was served");
+    assert!(
+        format!("{e:#}").contains("possible tampering"),
+        "the tamper verdict: {e:#}"
+    );
+    assert!(integrity_verdict(&e), "exit 2: {e:#}");
+    assert!(
+        vdir(root).join("vault.json.next").exists(),
+        "the staged manifest is left beside the forged one"
+    );
+}
+
+/// **ROADMAP O290 on `/v1`, writable**: `store_for` answers the P-W rollback in
+/// the window with 409 and the integrity class. It answered 200.
+#[test]
+fn o290_v1_writable_refuses_a_rollback_in_the_window_as_integrity() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    fresh_vault(root, 20);
+    defer_by_hand(root);
+    let mut tenancy =
+        tenant::Tenancy::new(mgr(root), embedder_factory(), false).expect("no secret declared");
+    let ran = edit_at_the_writable_layout(root, "rollback");
+    let (code, body) = call(&mut tenancy, &format!("/v1/vaults/{VAULT}/stats"));
+    open_pause::clear(&vdir(root));
+    assert!(
+        ran.load(Ordering::SeqCst) >= 1,
+        "premise: the window was reached"
+    );
+    assert_eq!(code, 409, "{body}");
+    assert!(body.contains("\"class\":\"integrity\""), "{body}");
+    assert!(body.contains("vault.json is missing from"), "{body}");
+}
+
+/// **ROADMAP O290 on `/v1`, writable: a forged manifest in the window is the
+/// tamper verdict**, 409 with the integrity class; it was overwritten and
+/// served. Like the CLI's forged arm this guards the surface OUTCOME — a reopen's
+/// fresh unlock would page too (measured under O290's cf3) — and the store's
+/// arm pins the mechanism.
+#[test]
+fn o290_v1_writable_refuses_a_forged_manifest_in_the_window() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    fresh_vault(root, 20);
+    defer_by_hand(root);
+    let mut tenancy =
+        tenant::Tenancy::new(mgr(root), embedder_factory(), false).expect("no secret declared");
+    let ran = edit_at_the_writable_layout(root, "forged");
+    let (code, body) = call(&mut tenancy, &format!("/v1/vaults/{VAULT}/stats"));
+    open_pause::clear(&vdir(root));
+    assert!(
+        ran.load(Ordering::SeqCst) >= 1,
+        "premise: the window was reached"
+    );
+    assert_eq!(code, 409, "{body}");
+    assert!(body.contains("\"class\":\"integrity\""), "{body}");
+    assert!(body.contains("possible tampering"), "{body}");
+    assert!(
+        vdir(root).join("vault.json.next").exists(),
+        "the staged manifest is left beside the forged one"
+    );
+}
+
 /// **ROADMAP O288 on `/v1`, read-only**: `store_for` answers the same race
 /// with one reopen, and serves the promoted vault with no deferral note.
 #[test]

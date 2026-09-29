@@ -50,6 +50,8 @@ pub mod open_pause;
 mod open_race_tests;
 pub mod pq;
 mod pqidx;
+#[cfg(test)]
+mod promote_licence_tests;
 pub mod remote;
 mod replay;
 mod restore;
@@ -4114,6 +4116,18 @@ impl VaultStore {
     /// A staged file is promoted or removed only while it is still exactly the
     /// bytes this unlock read, so an open that attached one rotation's
     /// abandoned file cannot delete a later rotation's.
+    ///
+    /// **And only while `vault.json` still licenses it (ROADMAP O290).** A
+    /// committed twin's manifest is written only under the manifest rule's
+    /// licence — `.next` still the staged bytes and `vault.json` still the
+    /// retired bytes the unlock verified — or skipped when `vault.json` already
+    /// verifies under the new key; anything else refuses in the rule's own class
+    /// with nothing written ([`Vault::take_licensed_promotion`]). A leftover or
+    /// an abandoned stage is removed only while `vault.json` verifies under this
+    /// handle's key. The open used to heal a deleted, torn or forged `vault.json`
+    /// from the twin's anchor — the anchor the UNLOCK read — which laundered a
+    /// rollback beneath it into a crash lag, overwrote a tamper signal, and
+    /// deleted a leftover that was the last copy of the keys before refusing.
     fn reconcile_rotation(
         conn: &Connection,
         mut vault: Vault,
@@ -4141,19 +4155,36 @@ impl VaultStore {
         let mut note = None;
         match vault.rotation_verdict(db_kc.as_deref()) {
             RotationVerdict::Committed => {
-                let pending = vault.take_pending().expect("verdict saw a pending twin");
-                pending.promote()?;
-                vault = *pending;
+                // LICENSED, under this lock and never before it (ROADMAP
+                // O290): the promote writes the staged manifest only while
+                // `.next` and `vault.json` are still what the unlock read, and
+                // a miss is the manifest rule's own refusal with nothing
+                // written — it used to heal whatever it found from memory, so
+                // a rollback beneath this open, with `vault.json` deleted,
+                // opened as a crash lag.
+                vault = *vault.take_licensed_promotion()?;
             }
             RotationVerdict::Abandoned => {
                 let pending = vault.take_pending().expect("verdict saw a pending twin");
-                pending.remove_staged_if_unchanged()?;
+                // Only while `vault.json` still verifies under this handle's
+                // key (ROADMAP O290): an old-generation writer's anchors beside
+                // an abandoned stage still verify, and a deleted or forged
+                // `vault.json` leaves the stage where it is for the chain's
+                // verdict below.
+                if vault.manifest_on_disk_is_mine() {
+                    pending.remove_staged_if_unchanged()?;
+                }
             }
             RotationVerdict::Settled => {
                 // A staged file naming this very generation is what a promote
-                // leaves when it stops between its write and its removal.
+                // leaves when it stops between its write and its removal — a
+                // duplicate of `vault.json` only while `vault.json` is there to
+                // duplicate (ROADMAP O290): with it deleted, the leftover was
+                // removed and the open refused, the keys then in no file.
                 if let Some(leftover) = vault.take_pending() {
-                    leftover.remove_staged_if_unchanged()?;
+                    if vault.manifest_on_disk_is_mine() {
+                        leftover.remove_staged_if_unchanged()?;
+                    }
                 }
             }
             RotationVerdict::Foreign => {
@@ -4695,10 +4726,16 @@ impl VaultStore {
     /// with a fresh unlock — a real tamper surfaces there, with its event; this
     /// raises none. A read that fails is its own error, never a retry, and so
     /// is a `vault.json` that is no longer there to read ([`Vault::deferral_in_force`]
-    /// says why; the exception O288 stated here went with ROADMAP O289). Only the
-    /// READ-ONLY posture asks: the writable reconcile re-decides under the
-    /// write lock with byte-guarded removals and mints no deferral note, and a
-    /// comparison there refused O254's ruled P1. A promote after this check
+    /// says why, and answers an absent one as the integrity verdict since
+    /// ROADMAP O290). Only the READ-ONLY posture asks this, and with the reopen
+    /// class: its check runs with no lock, so a legitimate promote or restore
+    /// can land in it. The writable reconcile re-decides under the write lock,
+    /// where no legitimate writer moves either file, so its question is a
+    /// LICENCE for its promote rather than a reopen — the rule's staged branch
+    /// writes, a promote since skips the write, and anything else refuses in the
+    /// rule's own class ([`Vault::take_licensed_promotion`], ROADMAP O290); a
+    /// byte comparison there refused O254's ruled P1, and the licence accepts
+    /// that promote. A promote after this check
     /// leaves the note — what this open found, and worded as such — and
     /// `deferred_over` for the handle's life, never cleared (a latch, O254 item
     /// 2); the manifest rule answers a later forged or absent `vault.json` on
@@ -4795,7 +4832,15 @@ impl VaultStore {
              -- deletions unindexed.
              CREATE INDEX IF NOT EXISTS idx_audit_record_id ON audit(record_id);",
         )?;
-        let (vault, reseeded) = Self::reconcile_rotation(&conn, vault)?;
+        // A refused reconcile closes its connection rather than dropping it
+        // (O284's convention; ROADMAP O290 made the licence refuse here).
+        let (vault, reseeded) = match Self::reconcile_rotation(&conn, vault) {
+            Ok(settled) => settled,
+            Err(e) => {
+                Self::close_refused(conn);
+                return Err(e);
+            }
+        };
         let mut store = Self::assemble(conn, vault, embedder, false)?;
         // What the unlock found and did not repair — a staging manifest it
         // could not authenticate or that a newer build wrote — reaches the
