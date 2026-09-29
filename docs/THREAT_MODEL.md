@@ -211,12 +211,23 @@ still called that a known defect after O254 closed; corrected with O253.)*
 And a concurrent writer no longer makes the label guard, `verify` or an
 open report a broken chain that is not broken: every judgement reads what it
 compares from one database state, the manifest anchor before that state is
-pinned (ROADMAP O253).
+pinned (ROADMAP O253). And a writable open no longer writes a staged key
+rotation's manifest over a `vault.json` that changed after its unlock read it:
+its promote wrote the staged manifest from memory over whatever `vault.json` had
+become, so a database rolled back beneath it with `vault.json` deleted opened
+as a crash heal with `verify` clean, and a forged `vault.json` was overwritten
+with no tamper signal. Since 1.7.0 it promotes only while `vault.json.next` and
+`vault.json` are still what its unlock read, or skips the write when a promote
+has already happened, and otherwise refuses in the class any live handle gives,
+writing nothing (ROADMAP O290).
 
 **Residual (documented)**: an attacker with full disk control who
 restores a **consistent old database + manifest pair together** rewinds
 the vault to a state that was genuine at the time; the chain cannot
-distinguish that from the machine having been off. The mitigation is an
+distinguish that from the machine having been off — during a deferred key
+rotation that pair is three files, the retired `vault.json` and the staged
+`vault.json.next` beside the older database, and every open accepts it with a
+lag note (ROADMAP O290 pins it). The mitigation is an
 external witness — a record of the chain kept where this attacker cannot
 write — filed as ROADMAP O245 and **ruled 2026-09-23**, with two facts
 that decide what such a witness must be. It cannot be the chain HEAD

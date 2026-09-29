@@ -157,7 +157,13 @@ well, where only a tampered count fails.
    `vault.json` is deleted, or replaced by anything that is not a manifest
    file, answers the integrity verdict on `verify`, the witness and a backup
    (ROADMAP O277) — it used to answer `VERIFY OK` over a vault no process
-   could reopen. A prefilter loads an index but never builds one. What the open
+   could reopen. A writable open over a deferred rotation whose `vault.json`
+   went missing, or was edited, between its unlock and its database open
+   refuses — the integrity verdict for a missing, torn or forged file, the age
+   refusal for a too-new one, an I/O error for one it cannot read — and leaves
+   both files exactly as found (ROADMAP O290): it used to write the staged
+   manifest back from memory, which turned a database restored beneath it into
+   a crash heal and overwrote a forged manifest with no alert. A prefilter loads an index but never builds one. What the open
    declined to repair is printed as a warning and readable afterwards on
    `undercroft stats` (and `GET /v1/vaults/{id}/stats`) as `unhealed` — during
    an incident, read it: "vault.json.next does not authenticate … and was

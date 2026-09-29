@@ -2390,7 +2390,87 @@ fn every_manifest_writer_and_anchor_caller_is_the_one_the_ruling_names() {
     // `create_new`; no truncating create.
     assert_eq!(vault.matches("fs::rename(").count(), 1, "vault renames");
     assert!(body_of(&vault, "write_manifest_file").contains("fs::rename("));
-    assert!(body_of(&vault, "promote").contains("write_manifest_file("));
+    // The promote's ONE body writes (ROADMAP O290): the rotation's `promote`
+    // and the writable open's licensed promotion both reach it, each having
+    // decided once whether to write, and it reads no `vault.json` itself — a
+    // second read between the licence and the write would let an offline
+    // delete put the unlock's stale anchor back.
+    // Exact extents, to the method's own closing brace: `body_of` ends only at
+    // a PRIVATE `fn`, so for these it would run on through the public methods
+    // after them — `staged_on_disk`'s bare read among them.
+    let method = |name: &str| -> &str {
+        let at = vault
+            .find(&format!("fn {name}("))
+            .unwrap_or_else(|| panic!("no fn {name}"));
+        let end = vault[at..]
+            .find("\n    }\n")
+            .unwrap_or_else(|| panic!("fn {name} closes"));
+        &vault[at..at + end]
+    };
+    let promote_as = method("promote_as");
+    // Its ONE read is the removal's guard, AFTER the write it cannot decide
+    // (O290's review): a second read deciding the write, or a removal outside
+    // the guard, is the defect.
+    for read in [
+        "fs::read(",
+        "read_manifest_file(",
+        "manifest_in_force(",
+        "verified_disk_read(",
+        "verified_disk_manifest(",
+        "verified_manifest(",
+        "anchored_head(",
+        "staged_on_disk(",
+    ] {
+        assert!(
+            !promote_as.contains(read),
+            "promote_as reads a manifest: {read}"
+        );
+    }
+    assert_eq!(
+        promote_as.matches("manifest_on_disk_is_mine()").count(),
+        1,
+        "one guard read"
+    );
+    let (write, guard, remove) = (
+        promote_as
+            .find("write_manifest_file(")
+            .expect("promote_as writes"),
+        promote_as
+            .find("if self.manifest_on_disk_is_mine() {")
+            .expect("the guard"),
+        promote_as
+            .find("self.remove_staged_if_unchanged()")
+            .expect("the removal"),
+    );
+    assert!(
+        write < guard && guard < remove && !promote_as[guard..remove].contains('}'),
+        "write, then the guard, then the removal INSIDE it"
+    );
+    assert!(!method("promote").contains("write_manifest_file("));
+    assert!(method("promote").contains("self.promote_as("));
+    let licensed = method("take_licensed_promotion");
+    assert!(licensed.contains("twin.promote_as("));
+    assert!(
+        !licensed.contains("fs::read(") && !licensed.contains("read_manifest_file("),
+        "the licence reads the files through the rule alone"
+    );
+    let (ask, clear, write) = (
+        licensed
+            .find("twin.verified_manifest()")
+            .expect("the licence asks the rule's strict reader"),
+        licensed
+            .find("twin.deferred_over = None")
+            .expect("the licence clears the retired digest"),
+        licensed.find("twin.promote_as(").unwrap(),
+    );
+    assert!(
+        ask < clear && clear < write,
+        "asked, then cleared before the twin is promoted and returned"
+    );
+    assert!(
+        licensed.contains("self.manifest_seen"),
+        "the retired digest is the unlock-minted handle's, never the twin's own"
+    );
     assert_eq!(vault.matches(".create_new(true)").count(), 1);
     assert_eq!(
         vault.matches("File::create(").count(),
@@ -2498,7 +2578,11 @@ fn every_manifest_writer_and_anchor_caller_is_the_one_the_ruling_names() {
             .expect("the fence is taken"),
         fenced.find("drop(hold)").expect("the fence is dropped"),
     );
-    for call in [".promote()", ".remove_staged_if_unchanged()"] {
+    for call in [
+        ".promote()",
+        ".remove_staged_if_unchanged()",
+        ".take_licensed_promotion()",
+    ] {
         let total: usize = store.iter().map(|(_, t)| t.matches(call).count()).sum();
         let locked = reconcile.matches(call).count();
         let in_fence = fenced
@@ -2510,7 +2594,40 @@ fn every_manifest_writer_and_anchor_caller_is_the_one_the_ruling_names() {
             locked + in_fence,
             "{call}: a call site outside the write lock and the fence"
         );
-        assert!(locked >= 1, "premise: {call} is reached from reconcile");
+    }
+    // Which door reaches which (ROADMAP O290): the store's OPEN promotes only
+    // under the manifest rule's licence, ONCE, after the write lock is taken —
+    // its unlock-time twin never reaches the rotation's own `promote`, whose
+    // heal wrote that twin's anchor over a deleted or forged `vault.json`; the
+    // rotation keeps `promote`, inside its fence.
+    assert_eq!(reconcile.matches(".promote()").count(), 0);
+    assert_eq!(reconcile.matches(".take_licensed_promotion()").count(), 1);
+    assert_eq!(
+        fenced.matches(".take_licensed_promotion()").count(),
+        0,
+        "the rotation promotes what it committed, never an unlock's twin"
+    );
+    assert!(
+        reconcile.find("WriteLock::begin(").unwrap()
+            < reconcile.find(".take_licensed_promotion()").unwrap(),
+        "the licence is asked under the write lock, never before it"
+    );
+    assert!(
+        reconcile.matches(".remove_staged_if_unchanged()").count() >= 1,
+        "premise: a leftover or an abandoned stage is removed from reconcile"
+    );
+    // Each removal there only while `vault.json` still verifies under the
+    // handle's key (ROADMAP O290): with it deleted, a settled leftover was the
+    // last copy of the keys, removed before the open refused.
+    for (at, _) in reconcile.match_indices(".remove_staged_if_unchanged()") {
+        let before = &reconcile[..at];
+        let guard = before
+            .rfind("if vault.manifest_on_disk_is_mine() {")
+            .expect("a removal guarded by the manifest");
+        assert!(
+            !before[guard..].contains("RotationVerdict::") && !before[guard..].contains('}'),
+            "the removal sits INSIDE its own arm's guard, not after a closed one"
+        );
     }
     assert_eq!(
         fenced.matches(".promote()").count(),

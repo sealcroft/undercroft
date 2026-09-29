@@ -2,7 +2,7 @@
 
 ## 1.7.0 — unreleased
 
-MINOR: one new capability, backward compatible, and twenty-two fixes. The witness
+MINOR: one new capability, backward compatible, and twenty-three fixes. The witness
 commands and routes are new; no default moves and no declaration can stop a
 start-up. Four fixes change what a deployment must do: every process writing a
 vault must run the same build, and a server whose vault another process
@@ -18,7 +18,8 @@ older release beside a writer may be torn. (This line said "one fix" while O243 
 O246 were both below it; corrected with O247. It said "nine" until O268,
 "ten" until O266, "eleven" until O276, "twelve" until O278, "thirteen"
 until O279, which closed four entries, "seventeen" until O281, "eighteen" until O284,
-"nineteen" until O288, and "twenty" until O289, which closed two entries; it said
+"nineteen" until O288, "twenty" until O289, which closed two entries, and
+"twenty-two" until O290; it said
 "Three fixes change what a deployment must do" until O283 made it four.)
 
 ### The external witness: `undercroft witness emit` / `check`, `GET`/`POST /v1/…/witness` (O245)
@@ -940,6 +941,95 @@ source gate whose window stopped short, an inventory of unguarded reads that was
 claims here that overstated among them — each fixed before this landed. PATCH inside the unreleased
 1.7.0; no `UPGRADING.md` entry — every new refusal meets a state that arose after the
 process started and that already fails every restart.
+
+### A writable open promotes a staged key rotation only while the files still license it (O290)
+
+Measured before the fix, at both security levels, on the window between a writable
+open's unlock — which reads `vault.json.next` and `vault.json` by path — and its
+database open, over a key rotation whose promote was deferred:
+
+- another open promoted the rotation and wrote to 27 records, the database was
+  restored to a copy at 24 and `vault.json` deleted: the held open answered **Ok at
+  height 24 with `verify` clean** and a note calling it an ordinary crash lag, and every
+  later open saw a clean vault, where a fresh open had answered "no such vault";
+- the same with the retired `vault.json` written back instead of deleted — which a fresh
+  open answers as an integrity finding — opened the same way;
+- a `vault.json` deleted, torn or **forged** in that window, with no rollback, was
+  rewritten from the staged manifest in memory with no note — the forged one with no
+  tamper signal, where every fresh open answers "possible tampering" and pages;
+- a same-generation `vault.json.next` left by a promote whose removal failed, beside a
+  `vault.json` deleted in the window: the open **deleted `.next` — the last file holding
+  the vault's keys — and then refused**;
+- a FIFO at `vault.json` in the window blocked the open while it held the write lock.
+
+The promote "healed" any `vault.json` that did not verify under the new keys, on the
+authority of the database's key-generation marker — which says which KEYS the vault is
+in, never which ANCHOR, and the anchor it wrote was the one the unlock read. Three of
+these never shipped: the two rollbacks were new in 1.7.0 — 1.6.1 promoted by renaming
+`.next`, which a lost `.next` refused — and so was the deleted leftover, which 1.6.1
+renamed over the missing `vault.json` instead of deleting it. The deleted, torn and
+forged manifests were rewritten by 1.6.1 too.
+
+Now:
+
+- **The writable open asks the manifest rule once, under the database's write lock,
+  whether its promote is licensed**: `.next` still the staged bytes and `vault.json`
+  still the retired bytes its unlock verified → the staged manifest is written; a
+  `vault.json` that already verifies under the new keys (another open promoted since)
+  → nothing is written; **anything else is the rule's own verdict, with nothing written
+  and both files left as found** — an absent `vault.json` or the retired bytes beside a
+  lost `.next` the integrity verdict (409 with `class: "integrity"` on `/v1`, exit 2),
+  a forged one "possible tampering" with its signal, a too-new one the age refusal,
+  an unreadable one an I/O error. The write is taken from that one answer, never from a
+  second read of the file.
+- **A leftover or an abandoned `vault.json.next` is removed only while `vault.json`
+  verifies under the handle's keys**, so it outlives a `vault.json` that went.
+- **A read-only open whose deferred rotation's `vault.json` went missing answers the
+  integrity verdict** (exit 2, 409), as every other open does for that state, not an
+  I/O error (exit 1, a 500).
+- An open whose rotation reconcile refuses closes its database connection rather than
+  dropping it.
+
+The rotation's own promote keeps writing its manifest over a `vault.json` that went
+missing or was edited inside its exclusive hold — its anchor is the head it has just
+committed, so nothing is laundered — and says nothing when it does (O295). Stated, not
+closed: a rollback that puts the retired `vault.json`, the staged `vault.json.next` and
+an older database back together is accepted by every open, fresh ones included, with a
+lag note — the threat model's pair restore, which only the external witness sees.
+
+Ruled by three lenses plus an adversarial refuter (ROADMAP O290), recorded before the build.
+The filed fix — accept `vault.json` if it is the bytes the unlock read — was refuted by
+measurement: the retired bytes written back after a promote pass it and launder the rollback
+the same way; the rule's own staged branch, which also requires `vault.json.next` to be the
+staged bytes, does not. The integrator's probe, run before the panel sat, found the
+forged-manifest and deleted-leftover cases the filing had not named; the engineering lens found,
+and the refuter confirmed, that O257's heal of a "corrupt or missing" manifest served no crash in
+any build (the one manifest writer is atomic, and every torn or missing file already refuses at
+the unlock) and that three of the cases were regressions of this release. Emulating the licence
+on `main` after each legitimate event that reaches it — a promote, one whose removal failed, one
+whose rename failed, anchors after a promote, restores of a deferral-era and of a post-promote
+archive, and a second rotation that staged and aborted — never missed; a committed second rotation
+and a pre-rotation restore never reach it (another arm of the reconcile answers them). An
+independent review of the build found no false verdict and a window neither the ruling nor the
+build had: on the promoted-since branch a leftover `.next` was removed on the licence's earlier
+answer, so a `vault.json` deleted in between left the keys in no file — the removal now waits for
+`vault.json` to verify, as the leftover rule states. It also found gate arms the ruling asked for
+and claims here that overstated, each fixed before this landed. Gates: thirteen store tests at
+both security levels, every refusal the licence and its guards produce asserting its variant, the
+files' bytes and the database's height and key marker unchanged; four surface arms through
+`open_store_as` and `/v1`'s `store_for`; the O257 and O266 source gates widened to the licence and
+the removal's guard. Twelve counterfactuals, each run on the tree that lands and each failing its
+gate — the two forged-manifest surface arms cannot tell this fix from answering with the reopen
+class, because the retry's fresh unlock pages too, and say so. Measured on the LoCoMo feed (1,020
+sealed drawers) against `main`'s binary, fifteen interleaved runs of each writable command: the
+medians of `stats`, `verify` and `search` settled, and of `stats` and `verify` with every open
+promoting a deferral, within a millisecond of `main`'s; `search` over the deferral 58 ms against 55,
+its ranges overlapping. Filed beside it: O295 (the rotation's own promote reports nothing when it
+overwrites an edited `vault.json`), O296 (an open whose database contradicts its manifest removes
+`vault.json.next` and seeds a key marker before it refuses — measured, reachable by a fresh open),
+O297 (a rollback the anchor detects raises no tamper metric, so the shipped alert cannot page on
+it). PATCH inside the unreleased 1.7.0; no `UPGRADING.md` entry — every new refusal meets a state
+that only an edit produces and that already fails every restart.
 
 ## 1.6.1 — 2026-09-22
 

@@ -442,7 +442,8 @@ fn o277_an_absent_manifest_is_the_integrity_verdict_on_every_handle() {
 /// deferred one whose `.next` is intact. After a promote the held handle's
 /// `.next` is gone, and the read error is the answer. A backup never falls
 /// back. At the read-only open's check it is `Io`, never a reopen (O288 item
-/// 2): the exception O288 stated there is gone with the arm that made it.
+/// 2): the exception O288 stated there is gone with the arm that made it. A
+/// `vault.json` ABSENT at that check is the integrity verdict (ROADMAP O290).
 #[test]
 fn o289_a_manifest_that_cannot_be_read_falls_back_only_where_the_keys_are_on_disk() {
     for level in LEVELS {
@@ -491,8 +492,11 @@ fn o289_a_manifest_that_cannot_be_read_falls_back_only_where_the_keys_are_on_dis
         );
         // The case O289 moved: `.next` gone after the unlock read it, and then
         // `vault.json` unreadable, or absent. The rule answered a lost `.next`
-        // and the check a REOPEN (O288's stated exception); now it is the read
-        // error, as every other read failure at the check is.
+        // and the check a REOPEN (O288's stated exception). Unreadable, it is
+        // the read error, as every other read failure at the check is; ABSENT,
+        // it is the integrity verdict every other handle answers for a missing
+        // manifest (ROADMAP O290, revising O289 item 3a, which answered it `Io`
+        // here). Never a reopen, either way.
         for absent in [false, true] {
             let d = deferred(level);
             let root = d.dir.path();
@@ -515,7 +519,11 @@ fn o289_a_manifest_that_cannot_be_read_falls_back_only_where_the_keys_are_on_dis
                 !matches!(opened, Err(StoreError::StaleUnlock(_))),
                 "{level:?} absent={absent}: never a reopen"
             );
-            assert_eq!(class(&opened), "io", "{level:?} absent={absent}");
+            assert_eq!(
+                class(&opened),
+                if absent { "integrity" } else { "io" },
+                "{level:?} absent={absent}"
+            );
             assert!(fixture::armed().is_none(), "premise: nothing left armed");
         }
     }
