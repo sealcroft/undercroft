@@ -2597,29 +2597,62 @@ fn every_manifest_writer_and_anchor_caller_is_the_one_the_ruling_names() {
     );
     assert!(!method("promote").contains("write_manifest_file("));
     assert!(method("promote").contains("self.promote_as("));
-    let licensed = method("take_licensed_promotion");
-    assert!(licensed.contains("twin.promote_as("));
+    // The licence ASKS and writes nothing (ROADMAP O296): the store judges
+    // the chain between its answer and the promote, which the licence's own
+    // decision makes.
+    let licensed = method("license_promotion");
+    for write in [
+        "promote_as(",
+        "write_manifest_file(",
+        "remove_staged_if_unchanged(",
+        "remove_file(",
+        "fs::write(",
+        "fs::rename(",
+        "save_manifest",
+        "anchor_manifest(",
+    ] {
+        assert!(
+            !licensed.contains(write),
+            "the licence writes nothing: {write}"
+        );
+    }
     assert!(
         !licensed.contains("fs::read(") && !licensed.contains("read_manifest_file("),
         "the licence reads the files through the rule alone"
     );
-    let (ask, clear, write) = (
+    let (ask, clear) = (
         licensed
             .find("twin.verified_manifest()")
             .expect("the licence asks the rule's strict reader"),
         licensed
             .find("twin.deferred_over = None")
             .expect("the licence clears the retired digest"),
-        licensed.find("twin.promote_as(").unwrap(),
     );
     assert!(
-        ask < clear && clear < write,
-        "asked, then cleared before the twin is promoted and returned"
+        ask < clear,
+        "asked, then cleared before the twin is returned"
     );
     assert!(
         licensed.contains("self.manifest_seen"),
         "the retired digest is the unlock-minted handle's, never the twin's own"
     );
+    let promote_licensed = method("promote_licensed");
+    assert!(
+        promote_licensed.contains("self.twin.promote_as(self.how)"),
+        "the promote makes the licence's own decision"
+    );
+    for read in [
+        "fs::read(",
+        "read_manifest_file(",
+        "manifest_in_force(",
+        "verified_manifest(",
+        "anchored_head(",
+    ] {
+        assert!(
+            !promote_licensed.contains(read),
+            "no second read decides the licensed write: {read}"
+        );
+    }
     assert_eq!(vault.matches(".create_new(true)").count(), 1);
     assert_eq!(
         vault.matches("File::create(").count(),
@@ -2730,7 +2763,8 @@ fn every_manifest_writer_and_anchor_caller_is_the_one_the_ruling_names() {
     for call in [
         ".promote()",
         ".remove_staged_if_unchanged()",
-        ".take_licensed_promotion()",
+        ".license_promotion()",
+        ".promote_licensed()",
     ] {
         let total: usize = store.iter().map(|(_, t)| t.matches(call).count()).sum();
         let locked = reconcile.matches(call).count();
@@ -2750,16 +2784,128 @@ fn every_manifest_writer_and_anchor_caller_is_the_one_the_ruling_names() {
     // heal wrote that twin's anchor over a deleted or forged `vault.json`; the
     // rotation keeps `promote`, inside its fence.
     assert_eq!(reconcile.matches(".promote()").count(), 0);
-    assert_eq!(reconcile.matches(".take_licensed_promotion()").count(), 1);
-    assert_eq!(
-        fenced.matches(".take_licensed_promotion()").count(),
-        0,
-        "the rotation promotes what it committed, never an unlock's twin"
-    );
+    assert_eq!(reconcile.matches(".license_promotion()").count(), 1);
+    assert_eq!(reconcile.matches(".promote_licensed()").count(), 1);
+    for call in [".license_promotion()", ".promote_licensed()"] {
+        assert_eq!(
+            fenced.matches(call).count(),
+            0,
+            "the rotation promotes what it committed, never an unlock's twin"
+        );
+    }
     assert!(
         reconcile.find("WriteLock::begin(").unwrap()
-            < reconcile.find(".take_licensed_promotion()").unwrap(),
+            < reconcile.find(".license_promotion()").unwrap(),
         "the licence is asked under the write lock, never before it"
+    );
+    // ROADMAP O296: JUDGE, then act. Exactly one judgement in the reconcile,
+    // FORCED (the ordinary open's short-circuit compares two clear values an
+    // offline writer can set), after the lock, the licence's ask and the
+    // foreign race check, and before every effect — the promote, each removal
+    // and the keycheck seed.
+    let judge = "Self::judge_chain(";
+    assert_eq!(reconcile.matches(judge).count(), 1, "one judgement");
+    let judge_at = reconcile.find(judge).unwrap();
+    assert!(
+        reconcile[judge_at..].starts_with(
+            "Self::judge_chain(&lock.snapshot()?, stepper, &anchor, ReplayPolicy::Forced)"
+        ),
+        "the reconcile's judgement is forced, in the lock's own snapshot"
+    );
+    for before in [
+        "WriteLock::begin(",
+        ".license_promotion()",
+        "Self::foreign_race(&vault)?",
+    ] {
+        assert!(
+            reconcile.find(before).expect(before) < judge_at,
+            "{before} precedes the judgement"
+        );
+    }
+    for effect in [
+        ".promote_licensed()",
+        ".remove_staged_if_unchanged()",
+        "INSERT INTO meta",
+        "Self::settle_foreign(",
+        "Self::refuse_before_effect(",
+    ] {
+        let first = reconcile.find(effect).expect(effect);
+        assert!(first > judge_at, "{effect} before the judgement");
+    }
+    for write in [
+        ".execute(",
+        "execute_batch(",
+        "INSERT",
+        "UPDATE",
+        "DELETE",
+        "remove_file(",
+        "write_manifest_file(",
+        "promote_as(",
+        ".promote()",
+        "save_manifest",
+        "anchor_manifest(",
+        ".commit()",
+    ] {
+        assert!(
+            !reconcile[..judge_at].contains(write),
+            "{write} before the judgement"
+        );
+    }
+    // The anchor is read after the race check: its read of a `vault.json`
+    // another rotation replaced raises the tamper event.
+    assert!(
+        reconcile.find("Self::foreign_race(&vault)?").unwrap()
+            < reconcile
+                .find("vault.anchored_head()")
+                .expect("the handle's anchor"),
+        "the anchor is read after the race check"
+    );
+    // One judgement body, and nothing replays beside it in the reconcile or the
+    // ordinary open's check; the ordinary open keeps its short-circuit (O237).
+    let replay = concat!("chain::re", "play(");
+    let judge_body = body_of(lib, "judge_chain");
+    assert_eq!(judge_body.matches(replay).count(), 1);
+    assert_eq!(reconcile.matches(replay).count(), 0);
+    for open in [
+        "open_inner",
+        "open_inner_read_only",
+        "settle_foreign",
+        "foreign_race",
+    ] {
+        assert_eq!(
+            body_of(lib, open).matches(replay).count(),
+            0,
+            "{open} replays outside the one judgement"
+        );
+    }
+    // The read-only open's foreign path: the race check, then the anchor
+    // before its snapshot pins (ROADMAP O253), then the same forced judgement.
+    let read_only = body_of(lib, "open_inner_read_only");
+    let (race, anchor_read, judged) = (
+        read_only
+            .find("Self::foreign_race(&vault)?")
+            .expect("the read-only race check"),
+        read_only
+            .find("vault.anchored_head()")
+            .expect("the read-only anchor"),
+        read_only
+            .find("Self::judge_chain(snap, &vault, &anchor, ReplayPolicy::Forced)")
+            .expect("the read-only forced judgement"),
+    );
+    assert!(
+        race < anchor_read && anchor_read < judged,
+        "read-only: the race check, the anchor, then the judgement"
+    );
+    let ordinary = body_of(lib, "reconcile_chain");
+    assert_eq!(ordinary.matches(replay).count(), 0);
+    assert!(
+        ordinary.contains("ReplayPolicy::ShortCircuit")
+            && !ordinary.contains("ReplayPolicy::Forced"),
+        "the ordinary open keeps its short-circuit"
+    );
+    assert!(
+        !lib.contains(concat!("fn chain_answers", "_to(")),
+        "the anchor-blind check the judgement replaced"
     );
     assert!(
         reconcile.matches(".remove_staged_if_unchanged()").count() >= 1,

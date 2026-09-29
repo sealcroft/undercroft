@@ -323,6 +323,49 @@ enum Promotion {
     Skip,
 }
 
+/// **A writable open's promote of a staged key rotation, licensed and not yet
+/// made** (ROADMAP O290, O296) — what [`Vault::license_promotion`] answers.
+///
+/// It carries what the manifest rule answered, once: whether the staged
+/// manifest is to be written or a promote since is to be followed, the twin's
+/// keys, and the anchor of the manifest the database's rows answer to. The
+/// store judges its audit chain under those keys against that anchor BEFORE
+/// anything is written, and only then calls
+/// [`promote_licensed`](Self::promote_licensed): a database that contradicts
+/// the staged manifest used to have S written over the retired `vault.json` —
+/// the only manifest it could answer to — before the open refused.
+pub struct Licence {
+    twin: Box<Vault>,
+    how: Promotion,
+    anchor: String,
+}
+
+impl Licence {
+    /// The keys the handle answers to once promoted: the staged generation's.
+    pub fn vault(&self) -> &Vault {
+        &self.twin
+    }
+
+    /// The chain head the database's rows must reach under those keys: the
+    /// staged manifest's on the rule's staged branch, the promoted
+    /// `vault.json`'s on a promote since (O254's P1). Read by the rule from the
+    /// bytes on disk, never from memory alone (ROADMAP O266).
+    pub fn anchor(&self) -> &str {
+        &self.anchor
+    }
+
+    /// Make the promote the licence decided — the staged manifest written, or
+    /// nothing written after a promote since — then remove `vault.json.next`
+    /// under [`Vault::promote_as`]'s guard, and hand back the promoted twin.
+    /// No read of `vault.json` decides the write (ROADMAP O290 item 2).
+    pub fn promote_licensed(self) -> Result<Box<Vault>, VaultError> {
+        #[cfg(any(test, feature = "test-fixture"))]
+        fixture::run_between_licence_and_promote();
+        self.twin.promote_as(self.how)?;
+        Ok(self.twin)
+    }
+}
+
 impl std::fmt::Debug for VerifiedManifest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("VerifiedManifest")
@@ -1671,7 +1714,7 @@ impl Vault {
     /// that adopted a committed rotation in memory, and the rotating handle
     /// whose own promote failed every attempt. (The writable open's licence
     /// sets the field on the unlock's twin for one question and clears it
-    /// before the twin is returned — [`take_licensed_promotion`], ROADMAP
+    /// before the twin is returned — [`license_promotion`], ROADMAP
     /// O290.) From then on the manifest the rows answer to is the
     /// STAGED one — the retired file's anchor is not a head a replay under
     /// these keys produces — but only while the disk still shows that state:
@@ -1682,7 +1725,7 @@ impl Vault {
     /// let a second rotation stage over the only file holding these keys, or
     /// a promote remove `.next` with nothing written.
     ///
-    /// [`take_licensed_promotion`]: Self::take_licensed_promotion
+    /// [`license_promotion`]: Self::license_promotion
     pub fn adopt_deferred_promotion(&mut self, retired_manifest: [u8; 32]) {
         self.deferred_over = Some(retired_manifest);
     }
@@ -1786,12 +1829,12 @@ impl Vault {
     /// carries only the anchor that unlock read, and healing a deleted, torn
     /// or forged `vault.json` with it laundered a rollback beneath the open
     /// into a crash lag and overwrote a tamper signal; its promote is licensed
-    /// by the manifest rule instead, in [`take_licensed_promotion`]. A crash
+    /// by the manifest rule instead, in [`license_promotion`]. A crash
     /// between the write and the removal leaves both files naming one
     /// generation, which [`rotation_verdict`](Self::rotation_verdict) reads as
     /// settled.
     ///
-    /// [`take_licensed_promotion`]: Self::take_licensed_promotion
+    /// [`license_promotion`]: Self::license_promotion
     pub fn promote(&self) -> Result<(), VaultError> {
         let current = match fs::read(self.dir.join(MANIFEST_FILE)) {
             Ok(raw) => match Manifest::parse(&raw) {
@@ -1809,11 +1852,15 @@ impl Vault {
         })
     }
 
-    /// **The writable open's promote of the staged twin its unlock attached,
-    /// licensed by the manifest rule** (ROADMAP O290). Called on the handle the
-    /// unlock minted, by the store under the database's write lock on a
-    /// `Committed` verdict; takes that handle's twin and returns it promoted,
-    /// for the store to adopt.
+    /// **The licence for the writable open's promote of the staged twin its
+    /// unlock attached, asked of the manifest rule** (ROADMAP O290). Called on
+    /// the handle the unlock minted, by the store under the database's write
+    /// lock on a `Committed` verdict; takes that handle's twin and returns it
+    /// inside a [`Licence`], with NOTHING written — the store judges the
+    /// database's audit chain under the twin's keys against the licence's
+    /// anchor, and only then promotes through [`Licence::promote_licensed`]
+    /// (ROADMAP O296: the promote used to write S over the retired `vault.json`
+    /// before the open found that the database answered to neither).
     ///
     /// The unlock read `vault.json.next` and `vault.json` by path before any
     /// connection existed, and what licenses writing the twin's manifest is
@@ -1823,12 +1870,12 @@ impl Vault {
     /// ([`verified_manifest`](Self::verified_manifest)), with this handle's
     /// `manifest_seen` as the retired digest. It answers:
     ///
-    /// - **the staged branch**: the staged manifest is written, and `.next`
-    ///   removed;
+    /// - **the staged branch**: the licence will write the staged manifest,
+    ///   and remove `.next`; its anchor is the staged manifest's head;
     /// - **`vault.json` verifies under the new key** — a promote since, and
-    ///   anchors after it (O254's P1): nothing is written, and `.next` is
-    ///   removed only while it is still the staged bytes and `vault.json`
-    ///   still verifies (`promote_as`);
+    ///   anchors after it (O254's P1): the licence will write nothing, and
+    ///   remove `.next` only while it is still the staged bytes and `vault.json`
+    ///   still verifies (`promote_as`); its anchor is that `vault.json`'s head;
     /// - **anything else is the rule's own refusal**, with NOTHING written and
     ///   `.next` untouched: a `vault.json` that is missing or no manifest file,
     ///   or the retired bytes beside a lost `.next`, `CorruptManifest`; a
@@ -1840,9 +1887,10 @@ impl Vault {
     /// is an edit and answers what a live handle answers, never the reopen
     /// class. (A vault delete takes O69's hold since ROADMAP O291 and is
     /// refused beside this open's connection; one landing between an unlock
-    /// and its connect is the reopen class there.) The write-or-skip is taken from that one answer, never from a
-    /// second read: an offline delete between the two would put the stale
-    /// anchor back. This replaced a heal that wrote the twin's anchor over a
+    /// and its connect is the reopen class there.) The write-or-skip, and the
+    /// anchor the store judges against, are taken from that one answer, never
+    /// from a second read: an offline delete between the two would put the
+    /// stale anchor back. This replaced a heal that wrote the twin's anchor over a
     /// deleted, torn or forged `vault.json` — measured, a database rolled back
     /// from 27 records to 24 beneath a held unlock opened Ok with a crash-lag
     /// note, and a forged manifest was overwritten with no event. The retired
@@ -1851,7 +1899,7 @@ impl Vault {
     /// (it would read `.next` first for its life, and serve the retired pair
     /// put back as a deferral again). A handle no unlock minted read no
     /// `vault.json`, and is refused rather than licensed.
-    pub fn take_licensed_promotion(&mut self) -> Result<Box<Vault>, VaultError> {
+    pub fn license_promotion(&mut self) -> Result<Licence, VaultError> {
         let Some(mut twin) = self.pending.take() else {
             return Err(VaultError::Io(std::io::Error::other(
                 "no staged rotation is attached to this unlock (ROADMAP O290)",
@@ -1866,15 +1914,12 @@ impl Vault {
         twin.deferred_over = Some(retired);
         let licence = twin.verified_manifest();
         twin.deferred_over = None;
-        let how = match licence {
-            Ok(m) if m.is_staged() => Promotion::Write,
-            Ok(_) => Promotion::Skip,
+        let (how, anchor) = match licence {
+            Ok(m) if m.is_staged() => (Promotion::Write, m.head),
+            Ok(m) => (Promotion::Skip, m.head),
             Err(refused) => return Err(refused),
         };
-        #[cfg(any(test, feature = "test-fixture"))]
-        fixture::run_between_licence_and_promote();
-        twin.promote_as(how)?;
-        Ok(twin)
+        Ok(Licence { twin, how, anchor })
     }
 
     /// The ONE body a promote runs, told whether to write (ROADMAP O290): the
@@ -2047,7 +2092,7 @@ impl Vault {
     ///    licensed by: `.next` intact — still deferred, and the staged manifest
     ///    is the one in force, its bytes from disk, never re-serialised; `.next`
     ///    gone — the keys the database is sealed under are in no file, which is
-    ///    what a fresh open answers too (`settle_foreign_keycheck`, O257 item
+    ///    what a fresh open answers too (`settle_foreign`, O257 item
     ///    5), an integrity verdict and NOT the tamper event; `.next` unreadable
     ///    — its read error.
     /// 4. A `vault.json` that does not parse or names another vault: refused.
@@ -2566,7 +2611,7 @@ impl VaultManager {
         // were no longer the retired file, and a read-only open answered a false
         // `ManifestTampered`. No connection exists yet, so a second rotation or a
         // restore between the two reads is not PREVENTED; the store's open
-        // detects it (`settle_foreign_keycheck`, and O288's check on the
+        // detects it (`foreign_race` and `settle_foreign`, and O288's check on the
         // read-only posture).
         //
         // HELD rather than `?`ed: a `.next` that cannot be read must not pre-empt
@@ -4640,7 +4685,7 @@ mod tests {
         }
         assert_eq!(
             askers,
-            ["take_licensed_promotion"],
+            ["license_promotion"],
             "the rule's strict reader is asked in the vault crate by the licence alone"
         );
         assert!(
@@ -4661,7 +4706,7 @@ mod tests {
         }
         assert_eq!(
             setters,
-            ["adopt_deferred_promotion", "take_licensed_promotion"],
+            ["adopt_deferred_promotion", "license_promotion"],
             "who sets the retired digest"
         );
 

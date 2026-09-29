@@ -2,7 +2,7 @@
 
 ## 1.7.0 — unreleased
 
-MINOR: one new capability, backward compatible, and twenty-four fixes. The witness
+MINOR: one new capability, backward compatible, and twenty-five fixes. The witness
 commands and routes are new; no default moves and no declaration can stop a
 start-up. Five fixes change what a deployment must do: every process writing a
 vault must run the same build, and a server whose vault another process
@@ -21,7 +21,7 @@ O246 were both below it; corrected with O247. It said "nine" until O268,
 "ten" until O266, "eleven" until O276, "twelve" until O278, "thirteen"
 until O279, which closed four entries, "seventeen" until O281, "eighteen" until O284,
 "nineteen" until O288, "twenty" until O289, which closed two entries, and
-"twenty-two" until O290 and "twenty-three" until O291; it said
+"twenty-two" until O290, "twenty-three" until O291 and "twenty-four" until O296; it said
 "Three fixes change what a deployment must do" until O283 made it four, and
 "Four" until O291 made it five.)
 
@@ -1083,6 +1083,102 @@ replica process, and orchestrator arms beside a replica. **Escalated to the
 maintainer**: whether "deleted" should also reach hard links, `backups/` archives and a
 remote mirror — joined to the open erasure-scope question; today it covers the vault
 directory, and the docs say so. Filed: O298–O302.
+
+### A writable open judges the database before it removes, writes or seeds anything over a staged key rotation (O296)
+
+Measured on `main` `66dafb3`, at both security levels. The first six states below were
+refused on `main` too, in the class they are refused in now — what changed is that
+nothing is written first; the last was not refused at all:
+
+- **the key-generation marker deleted during a deferred rotation**: the open deleted
+  `vault.json.next` — the only copy of the new salt — seeded the retired generation's
+  marker over a database sealed under the new one, and only then refused;
+- **the retired generation's marker planted** (a clear value, copyable from any older
+  copy of the database): `.next` deleted, then refused;
+- **a pre-rotation copy of the database restored beside the stage**, two writes behind
+  the anchor: `.next` deleted, then refused as tampering;
+- **a pre-rotation database restored with the new marker copied onto it**: the open
+  wrote the staged manifest OVER the retired one — the only manifest that database
+  answers to — removed `.next`, then refused;
+- **a foreign marker beside a rollback**: the marker was re-seeded over the edit, then
+  the open refused as tampering;
+- **an older `vault.json` put back over a rotated vault, the marker deleted**: the old
+  generation's marker was seeded over the new database, then the open refused;
+- and with `chain_meta`'s clear head ALSO set to the manifest's anchor, the first and
+  fourth routes deleted `.next` or overwrote the retired manifest and then **opened
+  Ok** — only `verify` saw it.
+
+Now, ruled by three lenses and an adversarial refuter and recorded before the build
+(ROADMAP O296):
+
+- **Judge, then act.** Under the reconcile's write lock, after the licence's ask (which
+  now writes nothing — `Vault::license_promotion` returns a `Licence`, and
+  `Licence::promote_licensed` makes the promote on its answer) and a foreign marker's
+  race check, the audit chain is REPLAYED under the keys the open will hold, against the
+  anchor of the manifest it will answer to, and a head the rows do not reproduce or an
+  anchor they never reach refuses with nothing written. Only then come the promote, the
+  removals, the foreign re-seed and the absent-marker seed.
+- **One judgement.** `reconcile_chain`'s arithmetic is extracted into `judge_chain`,
+  which returns a verdict each caller classifies. The ordinary open keeps its
+  `anchor == head` short-circuit, so its cost and its classes are unchanged; the
+  rotation reconcile forces the replay, because that head is a clear value an offline
+  writer can set. The anchor-blind `chain_answers_to` is removed; O257's foreign heal
+  keeps its texts.
+- **No committed head beside a staged rotation, or beside a foreign marker** — the heads
+  and the version-2 commitment deleted, which answered a raw SQLite error (a 500) after
+  deleting `.next`, or every `chain_meta` row deleted, which opened Ok after deleting it —
+  now refuses as an integrity finding, nothing written. These states and the forged-head
+  ones above are NEWLY refused.
+- **O290's guards stay** in front of each removal: the anchor's read falls back over a
+  `vault.json` it cannot read, and the guard does not.
+
+Every refusal is the integrity family — exit 2, `/v1` 409 with `class: "integrity"` — and
+no surface code moves. What a replay cannot see, stated and pinned by a test: an offline
+writer who copies or truncates the chain's clear rows can make every value the open reads
+name one key generation while the re-keyed rows say the other; the promote or the discard
+then runs and the open answers Ok, and `verify` and the first read fail — what deleting
+the salt file achieves, which the same writer can do directly. A pre-rotation database
+restored exactly AT the manifest's anchor is, to every value there is, a rotation that
+crashed before its commit: its stage is discarded and the older state served (A2's). The
+licence for a promote is read one replay before the promote writes on it, a window only an
+offline edit of `vault.json` lands in, which it overwrites with no tamper signal (filed as
+**O304**). The read-only open still serves the forged-head states and the unseeded ones
+beside a stage (it writes nothing); beside a foreign marker it refuses them now too. Filed
+as well: **O303** (a writable open adopts an emptied `chain_meta` from the manifest without
+replaying, so a rollback with those rows deleted opens Ok — no rotation needed) and
+**O305** (the ROADMAP headings preflight cannot see a closed entry under a release that
+shipped before it; O291's entry sat under 1.6.1, and this unit moved it). O235's body
+carries this unit's refusal texts, for both postures at once.
+
+Gates: fourteen store tests at both security levels — each route's refusal asserting its
+variant and text and the files' bytes, the marker, `chain_meta` and the `audit` row count
+across two writable opens and a read-only one (the held-window arm makes its one writable
+open; the dropped-table arms assert the read-only open's `ReadOnlyUnmigrated`); every
+legitimate state settling with its note; the costs pinned, O304's window among them — and
+two surface arms through `open_store_as` (exit 2) and `/v1` (409 integrity), files
+unchanged. Source gates hold the order: one forced judgement in the reconcile, after the
+lock, the licence's ask and the race check, with nothing that can write before it; the
+licence writes nothing; the read-only foreign path's race check, anchor read and
+judgement in that order; one replay body. Fourteen counterfactuals over two rounds, each
+run against the real sources and each failing its gate — the short-circuit kept fails only
+the forged-head arms, and three (an anchor read before the race check with its error
+discarded, the read-only path's anchor read first, a write spelled differently before the
+judgement) are caught by the source gate alone, because what each changes no store test
+can see. An independent review of the build found no write before the judgement and ten
+things of mine — the licence window above, the foreign unseeded state untested and
+misdescribed here, an over-claim on the runbook and the diagram that a restore at the
+anchor refutes, source-gate needles narrower than their claims, a test premise that proved
+too little, and a class the extracted judgement moved, among them — each fixed, or filed,
+before this landed. Measured on the LoCoMo feed (1,020 sealed drawers, 15 interleaved runs
+each) against `main`'s binary: the settled open unchanged, a deferral's promoting open
+within 2 ms with the ranges overlapping, an abandoned stage's discarding open within 1 ms;
+through the release binary, the three routes exit 2 on both builds and only `main`
+destroys a file.
+
+PATCH inside the unreleased 1.7.0: every route here was 1.6.1's too, which deleted
+`.next` unconditionally and overwrote the marker before any check. No `UPGRADING.md`
+entry — no state here has a supported producer: the six that were refused still are,
+and the newly refused ones exist only by an edit of the database.
 
 ## 1.6.1 — 2026-09-22
 

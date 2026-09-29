@@ -812,3 +812,113 @@ fn o291_v1_delete_evicts_its_own_handle_and_refuses_beside_a_holder() {
     let (code, _) = call_method(&mut tenancy, "DELETE", &format!("/v1/vaults/{VAULT}"));
     assert_eq!(code, 404);
 }
+
+/// The files and marker a rotation reconcile could write (ROADMAP O296).
+fn o296_disk(root: &std::path::Path) -> (Vec<u8>, Option<Vec<u8>>, Option<String>) {
+    let c = rusqlite::Connection::open_with_flags(
+        vdir(root).join("vault.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    (
+        std::fs::read(vdir(root).join("vault.json")).unwrap(),
+        std::fs::read(vdir(root).join("vault.json.next")).ok(),
+        rusqlite::OptionalExtension::optional(c.query_row(
+            "SELECT value FROM meta WHERE key = 'keycheck'",
+            [],
+            |r| r.get(0),
+        ))
+        .unwrap(),
+    )
+}
+
+/// ROADMAP O296's two surface routes, built by O266's hand recipe: `deleted`,
+/// the marker row deleted beside the deferral; otherwise a pre-rotation copy of
+/// the database restored with the live staged-generation marker copied onto it.
+fn o296_contradiction(root: &std::path::Path, deleted: bool) {
+    fresh_vault(root, 20);
+    let copy = root.join("copy.db");
+    rusqlite::Connection::open(vdir(root).join("vault.db"))
+        .unwrap()
+        .execute("VACUUM INTO ?1", [copy.to_str().unwrap()])
+        .unwrap();
+    defer_by_hand(root);
+    let db = vdir(root).join("vault.db");
+    if deleted {
+        let n = rusqlite::Connection::open(&db)
+            .unwrap()
+            .execute("DELETE FROM meta WHERE key = 'keycheck'", [])
+            .unwrap();
+        assert_eq!(n, 1, "premise: a marker to delete");
+        return;
+    }
+    let (_, _, g1) = o296_disk(root);
+    for f in ["vault.db", "vault.db-wal", "vault.db-shm"] {
+        let _ = std::fs::remove_file(vdir(root).join(f));
+    }
+    std::fs::copy(&copy, &db).unwrap();
+    rusqlite::Connection::open(&db)
+        .unwrap()
+        .execute(
+            "UPDATE meta SET value = ?1 WHERE key = 'keycheck'",
+            [g1.expect("premise: the staged generation's marker")],
+        )
+        .unwrap();
+}
+
+/// **ROADMAP O296 through `open_store_as`, writable**: a database that
+/// contradicts its manifest — the marker deleted during a deferral, or an old
+/// database carrying the staged generation's marker — is the integrity verdict
+/// (exit 2) with `vault.json`, `vault.json.next` and the marker exactly as
+/// found. It used to delete `.next` — or write the staged manifest over the
+/// retired one — and seed the marker, and only then refuse in the same class.
+#[test]
+fn o296_open_store_as_refuses_a_contradicting_database_and_writes_nothing() {
+    for deleted in [true, false] {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        o296_contradiction(root, deleted);
+        let before = o296_disk(root);
+        assert!(before.1.is_some(), "premise: the stage is on disk");
+        let e = match open_store_as(root, VAULT, Posture::ReadWrite) {
+            Err(e) => e,
+            Ok(_) => panic!("deleted={deleted}: served a contradicting database"),
+        };
+        assert!(
+            e.chain().any(|l| matches!(
+                l.downcast_ref::<StoreError>(),
+                Some(StoreError::Integrity(m)) if m == "audit-chain head"
+            )),
+            "deleted={deleted}: {e:#}"
+        );
+        assert!(integrity_verdict(&e), "exit 2: {e:#}");
+        assert_eq!(
+            o296_disk(root),
+            before,
+            "deleted={deleted}: nothing written"
+        );
+    }
+}
+
+/// **ROADMAP O296 on `/v1`, writable**: `store_for` answers the same two states
+/// 409 with the integrity class, and writes nothing.
+#[test]
+fn o296_v1_refuses_a_contradicting_database_and_writes_nothing() {
+    for deleted in [true, false] {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        o296_contradiction(root, deleted);
+        let before = o296_disk(root);
+        let mut tenancy =
+            tenant::Tenancy::new(mgr(root), embedder_factory(), false).expect("no secret declared");
+        let (code, body) = call(&mut tenancy, &format!("/v1/vaults/{VAULT}/stats"));
+        assert_eq!(code, 409, "deleted={deleted}: {body}");
+        assert!(body.contains("\"class\":\"integrity\""), "{body}");
+        assert!(body.contains("audit-chain head"), "{body}");
+        assert_eq!(
+            o296_disk(root),
+            before,
+            "deleted={deleted}: nothing written"
+        );
+    }
+}

@@ -219,7 +219,27 @@ as a crash heal with `verify` clean, and a forged `vault.json` was overwritten
 with no tamper signal. Since 1.7.0 it promotes only while `vault.json.next` and
 `vault.json` are still what its unlock read, or skips the write when a promote
 has already happened, and otherwise refuses in the class any live handle gives,
-writing nothing (ROADMAP O290).
+writing nothing (ROADMAP O290). And no writable open removes `vault.json.next`,
+writes the staged manifest or seeds the key-generation marker before it has
+judged that the database answers to the manifest it will answer to: the audit
+chain is replayed, under the keys the open will hold, against that manifest's
+anchor, first. A marker deleted or planted during a deferred rotation, a
+pre-rotation database restored beside the staged file, or one carrying the new
+generation's marker copied from the live database each made the open delete the
+only copy of the new salt, or write the new manifest over the only one the
+database answers to, and only then refuse (ROADMAP O296). **Residual**: every
+value that judgement reads is in clear rows an offline writer can copy or
+truncate — the rotation preserves audit tags and re-steps only the heads — so a
+database made to replay under the other generation's keys passes it, the open
+removes or promotes, and `verify` and the first read then fail: the effect of
+deleting the salt file, which the same writer can do directly. Only a walk of
+every re-keyed row could tell them apart, which an open does not make. A
+pre-rotation database restored exactly at the manifest's anchor beside the staged
+file is, to every value there is, a rotation that crashed before its commit: the
+stage is discarded and the vault opens at the older state (A2's pair restore,
+the witness's). And the licence for a promote is read one replay before the
+promote writes on it, so an offline edit of `vault.json` landing in that window
+is overwritten by the staged manifest with no tamper signal (ROADMAP O304).
 
 **Residual (documented)**: an attacker with full disk control who
 restores a **consistent old database + manifest pair together** rewinds

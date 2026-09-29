@@ -288,7 +288,7 @@ fn apply(root: &Path, how: Break) {
 /// A `vault.json` no generation's MAC verifies is the tamper verdict on both.
 /// A lost or edited `.next` beside the retired `vault.json` is the integrity
 /// verdict with no tamper event — what a fresh open answers through
-/// `settle_foreign_keycheck`. With both files gone the live handle answers
+/// `settle_foreign` (ROADMAP O257, O296). With both files gone the live handle answers
 /// integrity and a fresh open `NotFound` (stated in the ruling).
 #[test]
 fn o266_a_broken_deferral_refuses_as_a_fresh_open_would_on_a_live_handle() {
