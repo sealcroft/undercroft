@@ -3998,7 +3998,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**327** of the **342** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**332** of the **347** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -10380,6 +10380,12 @@ answered `NotFound` as integrity outside any lock since O256. It is O289's P-WIN
 O275 until it runs on Windows. Consequence, stated: a `vault delete` from another process
 beneath a live server now answers 409 integrity where it answered 200 (O291).
 
+**Corrected beside it 2026-09-29 by O291's ruling (item 17), from O291's probes.** The delete
+itself answered 200 — it took no hold — and what answered integrity afterwards was a live handle's
+`verify` and a guarded read that MISSED: a handle whose label guard was warm kept serving `get` and
+`recent` over the deleted vault on every call, writable or read-only (O291's P2 and PF2). Since
+O291 the delete takes O69's hold and refuses, 409 with no class, beside any handle that has read.
+
 #### BUILT 2026-09-28, with O289
 
 Built in O289's unit, to the shared ruling; O289's `#### BUILT` is the full record. This entry's
@@ -10674,6 +10680,13 @@ keycheck before it refuses (O296). The rollback alarm raises no tamper metric (O
 deleted beneath the window fails at the connect with a raw SQLite error (O291's). Windows and
 lock-less mounts, reasoned not measured.
 
+**Closed beside it 2026-09-29 by O291's build.** The raw SQLite error at the connect, marked
+"(O291's)" here and in the probe list above, is the reopen class now: where the vault's directory
+is gone, `connect_writable`, `connect_read_only` (which no longer escalates to `immutable=1` onto
+a missing directory), `open_inner_read_only` (which answered `DatabaseMissing`, the integrity
+verdict) and `recorded_embedder` answer it, and the CLI's and `/v1`'s one retry answers "no such
+vault". A delete no longer lands unheld beneath a writable open's window at all.
+
 **Filed by this ruling**: **O295** (the rotation's own promote reports a `vault.json` that is not the
 retired bytes it verified), **O296** (an open removes `.next` or seeds a keycheck before its verdict
 when the database contradicts the manifest — measured), **O297** (a rollback the anchor detects
@@ -10838,6 +10851,380 @@ capability that could delete `.next` itself. Windows and lock-less mounts, reaso
 Fixes only. Each makes an existing silence visible — a surface added to
 REPORT a defect adds no capability, and the defect was the silence (the
 2026-09-08 ruling), so this is PATCH.
+
+
+### O291 — CLOSED 2026-09-29: a vault delete removes a vault only under O69's hold, by one rename out of `vaults/` and a removal judged by what is left — or refuses, changing nothing
+
+**Filed 2026-09-28 by O289's ruling (its security lens, confirmed by the refuter); read in
+code, unmeasured.** `VaultManager::delete` is a `remove_dir_all` of the vault's directory with no
+hold (vault `lib.rs`, `delete`), and `/v1`'s `DELETE /v1/vaults/{v}` refuses only the vault this
+same process serves (`deny_co_resident`, `tenant.rs`). Another process's live handle therefore
+meets a vault that no longer exists. Before O289 its reads fell back and `verify` answered OK over
+a deleted vault; since O289 an absent manifest is an integrity verdict, so its reads refuse, loudly.
+A WRITABLE handle there is worse: on unix the database it holds lives on while it is open, so a
+write commits into an unlinked file, answers OK and then retires the handle at its anchor (O254
+item 3) — a write acknowledged and lost.
+
+**Shape, for a ruling**: the delete takes O69's hold — refused beside any connection that has
+read, as a restore's swap is since O282 — or it is documented that a delete beside a live handle is
+the operator's error, with the CLI and `/v1` saying so.
+
+**Gate**: a delete beside a live handle in another process refuses and changes nothing, a
+writable handle's next write answers what it answers today for a deleted vault, and a delete with
+no holder removes the vault.
+
+**Corrected beside the filing 2026-09-29 by its ruling (item 17).** "Since O289 … its reads
+refuse, loudly" was true only of a handle whose label guard MISSED: a warm one kept serving `get` and
+`recent` over the deleted vault on every call, writable or read-only (P2, PF2). "The CLI and `/v1`
+saying so": there is no CLI vault delete (O66). The gate's middle clause had no subject after the
+fix — every writable store takes a lock the hold sees — and was restated by the ruling.
+
+**Relations:** shares a diff surface with O147 — both change what `DELETE /v1/vaults/{v}` checks before it removes a vault: that one a chain head the caller stated, this one whether any other connection holds the vault.
+
+#### RULED 2026-09-29 by the Agentic Memory Architecture, Security and Software Engineering lenses and the adversarial refuter
+
+**The question.** Does a vault delete take O69's hold, or is a delete beside a live handle the
+operator's error; and, if it is held, how a directory is removed under a hold, what a vault with no
+database, with two databases, with a link or with a database and no manifest gets, what Windows
+does, what the refusal says, and what `deleted: true` may promise. One brief, three read-only
+lenses with no sight of each other, then a refuter over the brief, the lenses and every probe.
+
+**Measured by the integrator** (store probes in Docker on Linux, in one process; logs and sources
+in the session's scratchpad `o291/`, never committed):
+- **Before the panel.** P1: beside an idle WRITABLE handle the hold refuses, today's delete answers
+  `Ok(true)`, and the handle's next write answers **`Ok`**, commits at height 5 into the unlinked
+  file and counts one anchor failure; its next write is refused as integrity. P2: after a delete a
+  READ-ONLY handle's `get` and `recent` **keep serving** the deleted vault's content on every repeat,
+  both levels; only `verify` refuses. P3: the hold refuses a manifest-only vault ("has no
+  database"), which today's delete removes. P4: `remove_dir_all` under the hold works on Linux (the
+  hold 0.2 ms), and nothing reappears once it drops. P5: a writable open of a manifest recording 4
+  writes whose database is gone answers `Ok` at height 4 and CREATES a database (loud: `unhealed`
+  says the chain does not replay, `get` refuses integrity). P6: a symlinked `vaults/<id>` and a
+  symlinked `vault.db` each delete at `Ok(true)` while the content they name survives.
+- **After the lenses.** PR3: a read-only store whose `-shm` is blocked by a directory (O286's
+  setup) is SEEN by the hold. PR4: a raw `immutable=1` reader is NOT (O285). PR5: a FIFO at
+  `vault.db` makes the hold fail in 78 µs with a raw SQLite "disk I/O error" — no hang, wrong class.
+  Openers racing a rename under the hold, a removal under the hold and today's unheld removal answer
+  IDENTICALLY: at their descriptor-open pause the reopen class then `NotFound`, before their layout
+  read a raw `CannotOpen` (the read-only one after escalating to `immutable=1`); nothing is created
+  at `vaults/<id>`. The manifest-only strategies answer racers identically too; **an UNHELD rename
+  of a vault that gained a live writer** gave that writer a false `CorruptManifest`, acknowledged
+  its write into the moved file, and **retired its handle** after the put-back. P10: a database with
+  no manifest answers `Ok(false)` (404) and is kept. P11: a restore's `aside-<sha256(id)>` answers
+  404 with `vaults/<id>` absent and 200 beside it, the aside kept either way. P12: a hard-linked
+  `vault.db` (`nlink` 2) deletes at `Ok(true)` with the linked copy intact; a fresh vault's `nlink` is 1.
+- **After the refuter.** PF1: a read-only open that unlocked before a delete answers
+  **`DatabaseMissing`** — a false integrity verdict for an ordinary race — and a writable one a raw
+  `CannotOpen`. PF2: a WARM writable handle serves a deleted vault on every repeat and a cold
+  read-only one refuses, so P1′/P2 differ by the label guard's warmth, not by posture. PF3: an
+  `O_EXCL` create then the hold is granted on a manifest-only vault; the hold adds a 512-byte
+  `vault.db-journal` its close removes, and is otherwise inert; a writer that created and wrote first
+  makes the create answer `AlreadyExists`, the hold refuses and the writer carries on (0 anchor
+  failures); after a fault past a granted hold, the owned zero-length file unlinked under the hold
+  leaves the directory byte-identical and turns a racer holding its descriptor into the reopen
+  class, whose retry opens normally. PF4: the same over A33's state leaves a read-only open answering
+  `DatabaseMissing`. PF8: two concurrent `remove_dir_all` of one tree both answer `Ok` (5 of 5).
+
+**Prior rulings found and their disposition** (searched `rul(ed|ing)` in O291 and in O69, O257,
+O282, O283, O281, O279, O280, O270, O242, O277/O289, O290, O147, O256/O267, O285, O292, O7, O213).
+- **Followed.** O69 (refuse while held, no override, the hold held across the destroy, and its
+  reason — "documentation does not make an exit-0 honest" — rejects the filing's document-only
+  shape); O257 (`VaultHeld`, 409 with no class, the `UPGRADING.md` template, the lock-less caveat);
+  **O282 ("under a hold, or not at all"), which settles the manifest-only split**; O279/O280 (one
+  open door and its identity check; no SQLite CREATE unless the directory holds no database — the
+  ruled create is a plain `O_EXCL` file create where neither database name exists); O242
+  (`deny_co_resident` kept — **for this route it is correctness, O242's correction C1, not
+  policy**); O290's assignment of the raw connect error to O291; the 2026-09-08 versioning ruling.
+- **Followed with a named extension.** O283, the maintainer's "restore refuses symlinks": applied
+  to delete and widened to "every entry must be a regular file", on three grounds the tree settles —
+  following a link is a general deletion primitive, removing only the link answers `deleted: true`
+  over content the vault's own path named, and the orchestrator reads the status alone. The pull
+  request names the extension so the maintainer's approval ratifies it.
+- **Followed in part.** O281: its two-files rule (a rename step meeting both database names
+  answers O7's verdict before any rename) is followed; its Windows "close the hold just before"
+  order is NOT transferred, its premise being certain for a FILE its connection holds and unmeasured
+  for a DIRECTORY holding one. O7: two databases refused on every posture, for consistency and
+  O281's rule rather than O7's own reason, since a delete removes both.
+- **Refined, not overturned.** O69's sub-decision that the hold never creates a database was a
+  restore decision ("noise" in a directory about to be replaced); a delete may `O_EXCL`-create an
+  empty database file in a directory with none, in order to hold it. Restore's hold is unchanged.
+- **Touched, not ruled.** O270 (restore's no-database case; its rename-then-look shape was measured
+  here and lost for delete), O213 (not applicable: a delete reads no key), O292's own shape, O147,
+  O275, O285, and the unanswered O256/O267 erasure-scope escalation.
+
+**The ruling, as items a build is held to.**
+1. **A vault directory is removed only under O69's hold**, taken on a database file at the path and
+   identity-proved (O279), or not at all. No override; document-only rejected.
+2. **One door**: `undercroft_store::delete_vault(manager, id) -> Result<Deleted, StoreError>` in a
+   new `delete.rs` beside `restore.rs`, `Deleted::{Removed, Absent}` (`Removed` also when the call
+   only finished a leftover); the filesystem effects in a new vault-crate `deletes.rs` sharing
+   `restores.rs`'s container and name helpers, whose pinned counts do not move.
+   **`VaultManager::delete` is removed.** `DbLayout::of(dir)` becomes the ONE layout rule —
+   `Vault::db_layout` and the hold delegate to it. The hold takes a purpose,
+   `HoldFor::{Restore, Delete}`, matched exhaustively at every message site.
+3. **The door's order; every step before (j) changes nothing.** (a) a read-only manager →
+   `ReadOnly`; (b) `validate_name`; (c) a restore's `aside-<sha256(id)>` → `RestoreInterrupted`
+   (409, no class) — a delete never answers 404 or 200 while a restore aside holds a vault; (d)
+   `symlink_metadata(vaults/<id>)`, errors PROPAGATED and never read as absence (never `exists()`):
+   NotFound → finish a `deleting-<sha256(id)>` leftover and answer `Removed`, else `Absent`; a link
+   or a non-directory → `Invalid` (400); a directory → every entry read by `symlink_metadata`, and
+   **any entry that is not a regular file** (a link, a directory, a FIFO, a socket, a device) →
+   `Invalid`, naming it, "nothing was deleted; a delete never follows a link" (subsumes P6 and PR5);
+   (e) `DbLayout::of`: two databases → the integrity class, worded for a delete (never
+   `DatabaseAmbiguous`'s "then reopen", never the hold's `Invalid`, which `/v1` answers 400); (f) no
+   database → `O_EXCL` create of `vault.db`, recording whether the door owns it (`AlreadyExists` is
+   a racer's file, never owned); (g) `hold_vault_exclusively(dir, HoldFor::Delete)` — busy is
+   `VaultHeld`, replaced at the hold is a delete-worded `VaultHeld`, any other error is returned; an
+   owned file is left on these paths, the hold not being granted; (h) under the hold, (c)–(e)
+   again, a change refusing with item 5; (i) a pause point (`delete_pause.rs`), where O147's check
+   will go; (j) a `deleting-<sha256(id)>` leftover is removed; (k) ONE
+   `rename(vaults/<id>, <restore area>/deleting-<sha256(id)>)`, the container taken with
+   `Stage::copy`'s three-attempt NotFound loop — on unix under the hold, elsewhere item 9; a failure
+   is `Io`, "nothing was deleted", with item 5; (l) `vaults/` and the container synced, a failure
+   `Io` naming the aside ("the vault is out of service; its files are at …; the erasure is NOT
+   complete; retry the delete to finish"); (m) the hold dropped, its close inert; (n)
+   `remove_dir_all(aside)`, judged by the POST-CONDITION `symlink_metadata(aside)` = NotFound, never
+   by the call's result, then the container synced and removed if empty — any failure `Io` naming
+   the aside, **never `Removed`**; (o) `Removed`.
+4. **A witness does not prove the hold; a source gate does.** The rename primitive takes the hold
+   by value to fix the drop point, not as proof (`restores.rs`'s generic accepts `()`). The gate
+   counts one production caller of the vault crate's set-aside primitive, the order link survey →
+   hold → rename in the door, no `fn delete` on `VaultManager`, and every production
+   `remove_dir_all(` in the tree — read from the tree, never two hand lists (O80).
+5. **A manifest-only vault: create-then-hold.** On any refusal after a GRANTED hold the door unlinks
+   `vault.db` if it owns it and it is still zero bytes — under the hold on unix, so a racer holding
+   a descriptor fails O279's identity check and reopens; elsewhere after the release, best effort.
+   The manifest's `writes` decides nothing.
+6. **Two databases are refused** (item 3e).
+7. **A `deleting-` leftover is removed by the door without a hold**, every such aside having been
+   set aside under a granted hold. `create` neither refuses beside one nor removes it. Sweeping
+   other ids' leftovers is permitted, not required.
+8. **O292's state (a database and no manifest) is deleted under the hold**, never answered 404.
+9. **Windows: try-first.** Rename under the hold; on `Err` drop the hold and retry ONCE; a second
+   failure is `Io`, "nothing was deleted". It equals close-first where NTFS refuses to move a
+   directory holding an open file, and is safe where NTFS permits it; recorded as unmeasured under
+   O275.
+10. **Classes and wording.** `VaultHeld`, 409 with no class: its text names another process holding
+    the vault (servers, read-only replicas included, `daemon --watch`, a `mine`, a `backup create`),
+    what a delete beneath it does (it keeps serving or writing a vault that no longer exists),
+    "Nothing was deleted", "stop it, then delete", "(ROADMAP O291)", and never says "restore".
+    **Restore's two texts stay byte-identical** (`tests/e2e.sh` pins them). `OPEN_HELD` names a vault
+    delete and keeps its prefix "another process holds this vault exclusively"; `vault_db::moved`
+    adds "or a vault delete removed it". A link or non-file entry is `Invalid` (400); a restore
+    aside `RestoreInterrupted` (409); two databases the integrity class (409); a removal or sync
+    failure `Io` (500; relayed as 502 by the orchestrator), naming the aside.
+11. **The racers' reopen class (folded).** Where the vault DIRECTORY no longer exists:
+    `connect_writable`'s raw error arm, `connect_read_only`'s escalation to `immutable=1`, and
+    `open_inner_read_only`'s `DatabaseMissing` each answer the reopen class, which the CLI and `/v1`
+    retry once and whose retry answers `NotFound`. A33 is untouched: a present manifest with an
+    absent database stays `DatabaseMissing`. Proven through `/v1`'s `store_for` and the CLI's
+    `open_store_as`, never through `VaultStore::open` alone (O91).
+12. **`/v1`'s order**: `mutates` (403), `assert_or_401`, `deny_co_resident` (load-bearing),
+    `self.stores.remove(id)`, the door; `Removed` → 200 `{id, deleted: true}`, `Absent` → 404. A
+    refused delete costs the server a reopen, the per-handle counters and the first open's unread
+    `unhealed` notes, on restore's precedent.
+13. **The orchestrator (folded; a fix that reports an existing silence).**
+    `source_quiet_at_delete` comes from the snapshot comparison or `keep_source`, never from the
+    delete's result; a refused source delete carries the engine's answer on the response; every
+    destination clean-up says "removed" only when the delete answered `Ok`, otherwise naming the
+    engine's answer and the vault left on the destination.
+14. **What `deleted: true` promises**, at the reply: nothing is named `vaults/<id>` and no
+    `deleting-<sha256(id)>` exists; every entry was a regular file and all were unlinked; on unix the
+    unlinks were synced first; when it was set aside, no connection held a SQLite lock on the
+    database, on a filesystem whose locks the processes share. **It does not promise** freed blocks
+    overwritten (O267), archives under `backups/`, the remote mirror collection or another hard link
+    removed (escalated below), an `immutable=1` handle stopped serving (O285), Windows behaviour or
+    durability, NFS or SMB lock semantics, or any record that the erasure happened.
+15. **PATCH inside the unreleased `1.7.0`**: every change replaces a false answer, and no documented
+    contract moves (the docs promised a 409 only for the co-resident vault). `UPGRADING.md` owes one
+    entry on O257's template — "`DELETE /v1/vaults/{id}` refuses while any other process has the
+    vault open (O291)", with the symptom on `/v1`, the admin plane, `tenant-delete` and `migrate`;
+    the fix (stop every holder; **any `serve-http` that has served the vault holds it until it
+    stops, read-only replicas included**; no override); the 400, 409 and 500 cases; the database
+    with no manifest now deleted; "deleted" covering the vault directory only; and the lock caveat.
+    `config check` owes nothing. The docs and every diagram that names the delete move with it.
+16. **O147 stays O147's** (MINOR). Its check must read `chain_meta` through the HOLD's own
+    connection, inside its `BEGIN EXCLUSIVE`, at item 3(i); read anywhere else it reopens the window.
+    `VaultHold` is opaque and will need a narrow accessor then; a manifest-only vault is held on a
+    zero-length database with no chain, so O147 rules what a stated head means there. No unused
+    parameter is added now.
+17. **Records corrected beside their originals**: O277's consequence line (the delete answered 200;
+    what answers integrity is a live handle's `verify` and a guarded miss, while a warm handle keeps
+    serving); O291's filing ("its reads refuse, loudly" and "the CLI"); the vault crate's doc sentence
+    that a vault delete takes no hold; O290's "(O291's)" residual lines.
+
+**Options that lost, with their cost.** *Document only*: O69's reason. *A hold taken at `/v1`
+around `VaultManager::delete`*: the unheld delete stays callable from anywhere, the pattern O268
+removed. *A store-handle delete fencing on its own connection*: cannot delete a vault that will not
+open, and needs a path-based door anyway. *`remove_dir_all` in place, held*: the lock is on the old
+inode, so an opener meeting a half-removed directory CREATES a database in it (P5). *A nonce
+aside*: a crash leftover no retry can find, so the retry answers 404 over content. *Rename-then-look
+for a manifest-only vault*: an unheld rename of a vault that gained a live writer retires it and
+serves false integrity verdicts for at least the hold's 500 ms busy wait — O282's defect, measured.
+*Refusing a manifest-only vault*: breaks the e2e `globex` delete and `tenant-create` then
+`tenant-delete` of an unused tenant. *Holding both of two databases*: a second hold shape for a
+state no build makes, against O281's rule. *Close-first on Windows*: opens a gap in which a new
+holder is moved beneath with no moved-file check, where NTFS permits the rename. *Refusing hard
+links now*: pre-empts the maintainer on erasure scope. *404, or an integrity refusal, for O292's
+state*: a false erasure the orchestrator reads as done, or an erasure withheld from an operator who
+asked for exactly it.
+
+**Claims refuted.** In the brief: the O242 gloss (for a drop-then-hold route the fence is
+correctness); the cross-process evidence (O281's tests measure the legacy rename's own hold, and
+`hold_vault_exclusively` has never been measured across processes against a read-only replica — the
+build owes it); Q6's premise, half verified (SQLite opens without `FILE_SHARE_DELETE`; whether NTFS
+refuses to rename the DIRECTORY is unknown, and Rust's rename has a POSIX-semantics fallback).
+In the filing and records: "its reads refuse, loudly" (a warm handle of either posture serves, P2
+and PF2); O277's consequence line; "the CLI" (there is no CLI vault delete, O66). In the lenses:
+memory's and engineering's rename-then-look contradicts their own reliance on O282 and their own
+rejection of rename-first for a database-bearing vault; engineering's manifest-only gate arm, with
+an IDLE racer, would pass the defect; security's "erasure-denial lever" (the planter can already
+copy the database); memory's and security's claim that today's Windows removal leaves O292's state
+(every database name collates before `vault.json`; unmeasured either way); the probe summary's
+"neither `DatabaseMissing`" (its pause point came after that check; PF1 measured it).
+
+**Dissent, settled by evidence.** Q3: memory and engineering (rename-then-look) — by the measured
+unheld-rename retirement and O282. Q4: security and memory (hold both) — by O281's rule and O7.
+Q6: security and memory (close-first) — by dominance. Hard links: engineering (refuse), security
+(escalate), memory (residual) — escalated. Security's aside name `deleted-` — `deleting-`, since it
+names a delete in progress.
+
+**Escalated to the maintainer, with this analysis attached.** (1) **Hard links, joined to the
+unanswered O256/O267 erasure-scope question**: does `deleted: true` promise that the vault's BYTES
+are unreachable, or that its DIRECTORY is gone? Directory scope: hard links, archives and the remote
+mirror are copies, the docs say so, nothing is refused. Byte scope: a delete refuses `nlink > 1`
+(unix only) and must answer for `backups/` and the mirror too, a larger MINOR change. The panel
+recommends directory scope, stated in the docs; interim, a stated residual and no behaviour change.
+(2) **Ratification, not an open question**: the extension of O283 above. The availability trade — a
+fleet cannot erase a tenant while a replica serves it — is not re-escalated: O69 settles it, and
+the refusal blocks only a false erasure.
+
+**Owed by the build.** PF6 (cross-process holders — an idle writable store, an idle read-only store,
+`serve-http --read-only`, a paused `backup create` — looped at least ten times), PF9 (the container
+vanishing between `container()` and the rename), PF11 (the cost at about 10⁵ drawers, and a refused
+delete's latency on `/v1`'s one loop), PF12 (the orchestrator beside a read-only replica), PF13 (a
+linked `-wal`). **Stay unmeasured, stated**: PF7 (Windows) and PF10 (a mount point at
+`vaults/<id>`).
+
+**Fails silently if**: in-process holders stand in for other processes; the manifest-only arm's
+racer is idle; a replica arm's guard is cold (its counterfactual then refuses on its own); the
+assertions read end states only (a create-then-unlink and a rename-then-put-back both end looking
+unchanged — assert pause witnesses of which steps ran); "refused" is asserted without the variant;
+the hold is released before the rename on unix; `deleted: true` is taken from `remove_dir_all`'s
+result or given before the syncs, or a retry answers 404 while a `deleting-` aside exists;
+existence is decided by `vault.json`; the entry survey follows links or runs only before the hold;
+a `deleting-` matcher shares a prefix with `aside-` or `stage-`; `deny_co_resident` moves after the
+drop or is deleted as policy; the reopen-class fix is tested on `VaultStore::open` alone; Windows is
+compiled and never run; the filesystem's locks do not reach across processes; a counterfactual copy
+is not force-recompiled; a source gate compares two hand lists.
+
+**Residuals, stated.** O285's `immutable=1` handle serves a deleted vault for its life (PR4).
+Lock-less filesystems (O257's caveat). Windows unmeasured, `sync_dir` a no-op there. Erasure scope
+(escalated). Unlinking is not overwriting (O267). No record of the erasure survives in the engine. A
+refused delete blocks `/v1`'s one loop for up to 500 ms and costs the server its cached handle. A
+busy-hold refusal on a manifest-only vault may leave the zero-length database a racer adopted. A
+link or non-file entry planted after the under-hold re-scan is renamed along and removed as a link.
+A mount point at `vaults/<id>` refuses with nothing changed. On Windows a trailing-space id (O272)
+defeats the co-resident fence's string compare; the hold still refuses, naming the wrong id.
+
+**Filed by this ruling**: O298 (a vault id reused after a delete), O299 (a delete leaves the vault's
+remote mirror collection), O300 (an interrupted delete's leftover is removed only by a later delete
+of the same id), O301 (restore's link check covers three names), O302 (an open whose unlock predates
+a delete and whose connect follows a `create` of the same id), and a note under O293 (restore's hold
+on a FIFO answers a raw SQLite error).
+
+#### BUILT 2026-09-29, to the ruling — with four defects an independent review found and nothing else had, and three of mine the battery found
+
+**What landed.** `undercroft_store::delete_vault` (`delete.rs`) in the ruling's order, its pause
+points in `delete_pause.rs` (`Surveyed`, `Held`, `Aside`), and the filesystem half in the vault
+crate's `deletes.rs` — `survey` (`symlink_metadata`, errors propagated, any entry that is not a
+regular file named), `create_database`/`OwnedDatabase::remove_if_empty`, `set_aside` (ONE rename
+into `<restore area>/deleting-<sha256 of the id>`, under the hold on unix, try-first off it, then
+the syncs, then the release; `SetAsideFailed` carries the hold back, and `moved` for a sync that
+failed after the rename), `Aside::remove` and `finish_leftover` (one `remove_dir_all`, judged by
+what is left; the leftover's removal synced). `VaultManager::delete` is gone. `DbLayout::of` is the
+one layout rule. `hold_vault_exclusively(dir, HoldFor)` words its refusals per purpose, restore's
+byte-identical; `OPEN_HELD` and `vault_db::moved` name a delete. `vault_db::vault_gone`/`deleted`
+give the writable and read-only connectors and `recorded_embedder` the reopen class for a vault
+deleted beneath them. `/v1`'s route calls the door behind the kept co-resident fence; a bad name is
+`Invalid` (400, the class `vault_err` gave it) and `store_err` gains `vault_err`'s 409 for a
+read-only refusal. The orchestrator: `remove_partial` says "removed" only on `Ok`, and the import's
+own class is read before the clean-up text is added; `source_quiet_at_delete` from the snapshot;
+`source_delete_refused` on the response.
+
+**Gates.** `delete_tests.rs` (15 tests and a cross-process child entry, `#[ignore]`d like O281's):
+holders in ANOTHER process — a writable store and a read-only replica, each WARM — at both levels,
+five rounds each, with pause witnesses, byte snapshots and the holder's write read back; the
+no-holder delete at current, legacy and manifest-only layouts; racing opens at four pause points,
+the unlocked-then-deleted opens and `recorded_embedder`; `OPEN_HELD` under the hold; the
+manifest-only vault with an ACTIVE writer in another process; the undo after a granted hold with a
+racer holding a descriptor; links (a linked directory, database, `-wal`, manifest), a FIFO and a
+subdirectory; two databases; a restore aside with and without the vault; the removal fault and a
+crash leftover; a database with no manifest; the read-only manager and a bad name; the checks made
+again under the hold (the review's); the hard-link residual pinned both ways; a leftover that is
+neither an aside nor a stage. The source gate `o291_every_vault_delete_goes_through_the_one_door`
+reads every production `fs::remove_dir_all(` in the workspace from the tree
+(`backups.rs` 3, `restores.rs` 3, `deletes.rs` 1), pins `deletes.rs`'s effects, one set-aside caller
+in the order survey, empty database, hold, set-aside, and the hold's two purposes at both message
+sites. CLI surface arms (`open_store_as` at both postures and `recorded_embedder`; `/v1` at two
+pause points; the `/v1` route's eviction, its 409 beside a holder, 200, then 404); orchestrator ARMs
+5–7; e2e (9 checks, a real replica process) and orchestrator e2e (14 checks, a replica of engine-b's
+data directory, the admin plane, `tenant-delete` and a migration). Looped: 10 × 33 tests, no failure.
+
+**Counterfactuals** — each applied to the real sources, force-recompiled (a `Compiling` line
+required), run, restored and compared byte for byte with the snapshot. Fourteen on the tree before
+the review's fixes, each failing its gate: no hold (the holder arms, the active-writer arm,
+`OPEN_HELD`, the source gate), the survey following links, no restore-aside check, no reopen arms
+(the store race arm and both CLI surface arms), no undo, the removal's result trusted, 404 over a
+leftover, existence by manifest, no two-database check, restore's wording, the old `OPEN_HELD`, the
+orchestrator's quiet flag and its clean-up claims (ARMs 5 and 6), and an in-place removal (the
+source gate). Then, on the final tree after the review's fixes, two more and two re-run, each failing its gate: the checks never made again under the hold (the review's new arm), the clean-up text read before the import's class (ARM 7), and again the removal's result trusted and 404 over a leftover; all sources compared byte for byte afterwards, none differing. **The runner's own final check was broken, mine**: its `sha256sum -c`
+read Git Bash's `*path` lines as no checksum lines and reported the sources DIFFERENT; a `cmp` of
+every file against the snapshot, with a probe that `cmp` sees a difference, found them identical,
+and the runner now uses it.
+
+**Measured on a real corpus** (the LoCoMo feed, this build against `main` `0667b76`'s, 15
+interleaved runs through `/v1`, every status checked, none wrong): 1,020 drawers (2 MB) — a delete
+with nothing holding it 1 ms on `main`, 9 ms here; 102,000 drawers (198 MB) — 22 ms and 30 ms, the
+difference the hold, the rename and the syncs. Beside a real read-only replica that had read the
+vault, `main` answered 200, the directory was gone, and the replica went on serving 5 hits; this
+build answered 409 fifteen times at a median of 502 ms — the hold's 500 ms busy wait on `/v1`'s one
+loop, the ruling's stated cost — with the vault intact.
+
+**Found by the independent adversarial review, and fixed** (it found no false verdict in the door,
+and confirmed the order, the post-condition, same-id delete races, A33 untouched by the reopen arms,
+restore's texts and `OPEN_HELD`'s prefix): (1) the tree would have failed the preflight — O291's
+relation to O147 (resolved by this closure, O147's side made a note) and the landing's derived e2e
+tile and `docs/MULTI_TENANCY.md`'s check count; (2) **a regression of mine**: a failed import's
+clean-up text was appended before `engine_err` read a status out of the string, so a transport
+failure or an engine 5xx followed by a refused clean-up answered the clean-up's 409 — now the
+import's class first, gated by ARM 7; (3) **a false claim of mine** in `UPGRADING.md` and
+`docs/AGENTS.md`: every replica holds the vault — one that fell back to `immutable=1` holds no lock
+(O285, PR4); (4) the re-check under the hold was exercised by no test — now it is. Also fixed: two
+functions I had inserted between another item's doc comment and that item (`remove_partial` above
+`engine_err`, the source gate above `body_of` — the scripted-edit trap this project's guide names),
+the leftover's removal unsynced before `Removed`, an unheld rename retried up to three times off
+unix where the ruling allows one, `undo`'s doc, and stale lines in `CHANGELOG.md`,
+`docs/MULTI_TENANCY.md` and `UPGRADING.md` (a stray empty directory now answers 200).
+
+**Found by the battery, mine**: a `bind_instead_of_map` and a `type_complexity` lint; the
+`vault_err` gate's premise floor, which counted the removed manager call; and, caught before any
+battery, a bad name that would have answered 500 through `store_err`.
+
+**Stated, not closed.** The gates see "the hold released before the rename" only as text order, and
+the census matches the spelling `fs::remove_dir_all(`. PF6's paused `backup create` holder, PF9 (a
+container vanishing at the rename) and a read-only race driven through `/v1` were not run. A
+refused rename leaves an empty restore area; `vault_db::deleted` also names a restore's swap window
+as a delete; `remove_partial` says the copy "is still there" on a transport error it cannot see
+past; `UPGRADING.md`'s 1.5.2 note on `source_deleted: false` and the migration diagram do not name
+`source_delete_refused`. Plausible and unprobed (the review's): a stray `vault.db-wal` beside a
+manifest-only vault may be removed by SQLite when the hold opens the delete's empty database; a
+non-busy hold failure leaves the empty database, moving A33's read-only verdict from
+`DatabaseMissing` to `ReadOnlyUnmigrated`; a holder closing during the survey answers a bare 500.
+And the ruling's residuals: O285, lock-less filesystems, Windows (O275), erasure scope (escalated).
+
+**Versioning**: PATCH inside the unreleased `1.7.0`, one `UPGRADING.md` entry. Figures: `test`
+1244 run / 17 ignored, `e2e` 750, `orchestrator-e2e` 185; the landing tiles 1244 and 1185.
 
 ### O250 — CLOSED 2026-09-22: the audit trail's size is published and the replay that walks it is counted by nothing in production
 
@@ -28987,7 +29374,14 @@ delete refuses and the source survives.
 
 **Relations:** shares a diff surface with O148 — both fixes edit `migrate_tenant` in `crates/undercroft-orchestrator/src/proxy.rs`: one conditions its closing source delete, the other refuses before the export or forces `keep_source` in that same branch.
 
-**Relations:** shares a diff surface with O291 — both change what `DELETE /v1/vaults/{v}` checks before it removes a vault: this one a chain head the caller stated, the other whether any other connection holds the vault.
+**Noted 2026-09-29 by O291's ruling (item 16).** The engine's delete takes O69's hold since
+O291, and this entry's check is sound only when it is made UNDER that hold: `chain_meta` read
+through the hold's OWN connection, inside its `BEGIN EXCLUSIVE`, at the door's `Held` pause point
+(`crates/undercroft-store/src/delete.rs`) — after the checks made again under the hold and before
+the rename. Read anywhere else it reopens the window this entry exists to close. `VaultHold` is
+opaque and will need a narrow accessor then; a manifest-only vault is held on a zero-length database
+with no chain, so this entry rules what a stated head means there. O291 added no unused parameter
+for it.
 
 ### O148 — migrating a vault with a non-empty quarantine queue releases it at a non-screening destination
 
@@ -30686,6 +31080,13 @@ runbook states the manual step.
 archive, restores and verifies; a manifest recording writes with its database removed
 still refuses as ruled.
 
+**Noted 2026-09-29 by O291's ruling.** This entry's rename-then-look shape was measured for a
+DELETE of a manifest-only vault, and lost there: a vault that gained a live writer between the look
+and the unheld rename served that writer a false integrity verdict and retired its handle after the
+put-back (O291's probe, "held, renamed without a hold"). The delete creates an empty database
+exclusively and holds it instead. Restore's no-database case stays this entry's to rule, with that
+evidence.
+
 ### O271 — `vault create` checks for the vault, then writes, with nothing in between
 
 **Filed 2026-09-26 by O268's ruling (security, memory and storage lenses).**
@@ -30795,6 +31196,13 @@ re-opens the current file, run by name on a `windows-latest` runner. Until it ru
 Windows would be a false exit 2 — loud, where the fall-back it replaced was a silent `VERIFY OK`
 over a manifest that was gone.
 
+**Noted 2026-09-29 by O291's ruling.** A vault delete on Windows takes the hold, renames the
+vault directory under it, and on a refusal releases the hold and retries the rename ONCE
+(try-first). Unmeasured: whether NTFS refuses to rename a directory holding a file SQLite opened
+without `FILE_SHARE_DELETE`, what Rust's POSIX-semantics rename fallback does there, what today's
+in-place removal removed before failing, and whether a delete is durable at all (`sync_dir` is a
+no-op off unix). O291's PF7 is the probe; it belongs here beside P-WIN.
+
 ### O285 — an `immutable=1` handle whose database moved after its open serves the set-aside vault for its life
 
 **Filed 2026-09-27 by O279's ruling (every lens and the refuter).** The read-only
@@ -30829,6 +31237,11 @@ Since O289 an absent `vault.json` is an integrity verdict on every live handle. 
 manifest inside the restore's gap between its two renames answers one transient false integrity
 verdict — where it used to serve the set-aside vault silently. This entry's shape, the moved-file
 check at the snapshot door answering the reopen class, closes both.
+
+**Noted 2026-09-29 by O291's ruling.** An `immutable=1` handle holds no lock, so a vault
+delete's hold is GRANTED beside one (measured, O291's PR4): such a handle serves a deleted vault's
+content for its life. O291 states it as a residual of the delete; this entry's identity check at the
+snapshot door would turn it into the reopen class.
 
 ### O286 — the test named for the read-only open's `immutable=1` escalation does not reach it
 
@@ -30890,28 +31303,6 @@ code and prints no panic, on the CLI — and on the orchestrator binary too if i
 prints through `println!` the same way, which this filing did not measure; and no
 e2e check pipes the binary into `grep -q`.
 
-### O291 — a vault delete takes no hold, so another process's live handle meets a vault that is gone, and a writable one commits into it
-
-**Filed 2026-09-28 by O289's ruling (its security lens, confirmed by the refuter); read in
-code, unmeasured.** `VaultManager::delete` is a `remove_dir_all` of the vault's directory with no
-hold (vault `lib.rs`, `delete`), and `/v1`'s `DELETE /v1/vaults/{v}` refuses only the vault this
-same process serves (`deny_co_resident`, `tenant.rs`). Another process's live handle therefore
-meets a vault that no longer exists. Before O289 its reads fell back and `verify` answered OK over
-a deleted vault; since O289 an absent manifest is an integrity verdict, so its reads refuse, loudly.
-A WRITABLE handle there is worse: on unix the database it holds lives on while it is open, so a
-write commits into an unlinked file, answers OK and then retires the handle at its anchor (O254
-item 3) — a write acknowledged and lost.
-
-**Shape, for a ruling**: the delete takes O69's hold — refused beside any connection that has
-read, as a restore's swap is since O282 — or it is documented that a delete beside a live handle is
-the operator's error, with the CLI and `/v1` saying so.
-
-**Gate**: a delete beside a live handle in another process refuses and changes nothing, a
-writable handle's next write answers what it answers today for a deleted vault, and a delete with
-no holder removes the vault.
-
-**Relations:** shares a diff surface with O147 — both change what `DELETE /v1/vaults/{v}` checks before it removes a vault: that one a chain head the caller stated, this one whether any other connection holds the vault.
-
 ### O292 — a vault directory holding a database and no manifest reads as no vault at all, and `create` mints a new salt beside it
 
 **Filed 2026-09-28 by O289's ruling (its refuter); read in code, unmeasured.** A33's converse: a
@@ -30931,6 +31322,10 @@ and `config check` name it.
 
 **Noted 2026-09-29 by O290's ruling.** O290 refuses a writable open whose `vault.json` went missing after its unlock and leaves the files as found; with `.next` intact beside the database, its message names `.next` as the file holding the keys, but every later fresh open reads that directory as no vault at all (`NotFound`) and `create` would mint over it — this entry's state, now reachable after a refusal that says why.
 
+**Noted 2026-09-29 by O291's ruling.** A vault delete now removes a directory holding a
+database and no manifest, under the hold — it answered 404 and kept the database, which the
+orchestrator reads as erased (O291's P10). This entry's own shape (`create`, `vault list`,
+`config check`) is untouched by it.
 
 ### O293 — the manifest reads outside O289's guarded read, and the stat-then-read race inside it
 
@@ -30960,6 +31355,7 @@ gate admits no read of a manifest file outside the guarded read.
 
 **Amended 2026-09-29 by O290's ruling.** The store's open no longer reaches `promote`'s bare read of `vault.json`: its promote is licensed by the manifest rule's guarded reads, and the body that writes reads no `vault.json`. The rotation alone still makes that read, under its exclusive hold, where a FIFO would hold the fence; its ruled miss stays the rotation's heal, and an unreadable file must stay `Io`, never "not current, so write". The bare `staged_on_disk` read inside `remove_staged_if_unchanged` is still reached under the write lock on the licence's promoted-since branch, so a FIFO at `.next` there still blocks — this entry's, with how an unreadable `.next` beside a verified `vault.json` answers. Sequenced after O290 deliberately: a guarded `promote` read refusing a missing file, landed first, would have closed two of O290's arms on its own and let its counterfactual pass.
 
+**Noted 2026-09-29 by O291's ruling.** Restore's hold on a FIFO at `vault.db` answers a raw SQLite `SystemIoFailure` ("disk I/O error") in 78 µs — no hang, but no named refusal either (O291's PR5). O291's delete refuses any entry that is not a regular file before its hold opens anything; restore's door surveys no entries, so this stays here with its other bare reads.
 
 ### O294 — the native release targets build on an unpinned toolchain
 
@@ -31042,6 +31438,80 @@ recovery path; the ruling names the counter, the label, the alert and its `alert
 
 **Gate**: a rollback detected at open moves the chosen series on a telemetry build, and the recovery
 path the ruling exempts does not.
+
+### O298 — a vault id reused after a delete resolves an agent's remembered drawer id to another vault's content
+
+**Filed 2026-09-29 by O291's ruling (its memory lens, confirmed by the refuter); read in code,
+unmeasured.** `drawer_id` carries no vault and no incarnation component (`crates/undercroft-core/src/ids.rs`,
+the recipe over wing, room, source, chunk index and normalize version), and a save's append index
+restarts with each database. So after `DELETE /v1/vaults/{v}` and a `create` of the same id, a
+(vault, drawer id) pair an agent learned before the delete can resolve to the successor's content,
+with no error on any surface.
+
+**Shape, for a ruling — likely escalated as what an id promises**: an incarnation component on the
+addressing (a digest of the manifest's salt, which a re-created vault never shares), or a documented
+rule that a deleted vault's id is not reused, refused by `create` while a record of the deletion
+exists.
+
+**Gate**: delete, re-create, then an agent's remembered id answers not-found (or the documented
+refusal) instead of the successor's drawer.
+
+### O299 — a vault delete leaves the vault's remote index mirror collection, which a later vault of the same id addresses
+
+**Filed 2026-09-29 by O291's ruling (its memory and security lenses, confirmed by the refuter);
+read in code, unmeasured.** An `index push` mirrors a vault into the collection
+`undercroft_<id>` (`crates/undercroft-store/src/remote.rs`), and nothing removes it when the vault is
+deleted. On an hmac-only vault pushed with `--allow-plaintext` the collection holds plaintext, and a
+later vault created under the same id addresses the same collection.
+
+**Shape, joined to the unanswered O256/O267 erasure-scope escalation**: the delete answers for the
+mirror where a backend is declared (drops the collection, or refuses naming it), or the docs state
+that a delete leaves the mirror.
+
+**Gate**: a pushed vault deleted, then the collection is absent (or the delete's answer names it),
+and a re-created vault of the same id does not search the predecessor's vectors.
+
+### O300 — an interrupted delete's leftover is removed only by a later delete of the same id
+
+**Filed 2026-09-29 by O291's ruling (its engineering lens, confirmed by the refuter).** After
+O291, a delete that crashes between its rename and its removal leaves
+`<restore area>/deleting-<sha256(id)>` — the vault's content, out of service — and only a later
+delete of the same id finishes it. A `create` of the id neither refuses beside it nor removes it,
+and nothing lists it.
+
+**Shape**: `create` of the id, or any delete, finishes it; `config check` and `vault list` name
+one that remains.
+
+**Gate**: a planted `deleting-` leftover is removed by the chosen door and named until it is.
+
+### O301 — restore's link check covers three names, so a linked `-wal` or `.next` in the live vault is left behind by the swap
+
+**Filed 2026-09-29 by O291's ruling (its security lens, confirmed by the refuter); read in code,
+unmeasured.** `restores::linked_target` asks whether `vaults/<id>`, `vault.db`, `palace.db` or
+`vault.json` is a symbolic link, and no other entry. A linked `vault.db-wal` — committed frames — or
+a linked `vault.json.next` in the live vault is renamed aside with the directory and removed as a
+link, leaving what it names where it was. O291's delete refuses any entry that is not a regular
+file; the maintainer's "restore refuses symlinks" already covers the rest.
+
+**Shape**: restore's door and swap use the delete's regular-file survey.
+
+**Gate**: a linked `-wal` and a linked `.next` in the live vault each refuse a restore, with the
+link and what it names byte-identical.
+
+### O302 — an open whose unlock predates a delete and whose connect follows a `create` of the same id reaches the new vault with the old keys
+
+**Filed 2026-09-29 by O291's ruling (its engineering lens, confirmed by the refuter); read in
+code, unmeasured.** A writable open that unlocked a vault, then met a delete and a `create` of the
+same id before its connect, reaches the NEW directory holding the OLD vault's keys: a CREATE of a
+database, or stray WAL files, under keys the new manifest does not name. The read-only open's
+`immutable=1` escalation reaches the new vault the same way. Loud where it is met — the new
+manifest's MAC or keycheck refuses — and the O271 and O284 neighbourhood.
+
+**Shape, for a ruling**: the connect compares the directory's manifest with the one its unlock read
+(O284's digest) on the writable posture too, where O254's P1 allows it, answering the reopen class.
+
+**Gate**: unlock, delete, create, connect — the open answers the reopen class and the new vault's
+directory is byte-identical.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 

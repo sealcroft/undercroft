@@ -168,9 +168,14 @@ fn o279_open_store_as_says_a_second_race_in_a_row() {
 
 /// One `/v1` request answered by `tenancy`: status and body.
 fn call(tenancy: &mut tenant::Tenancy, path: &str) -> (u16, String) {
+    call_method(tenancy, "GET", path)
+}
+
+/// [`call`] with the method stated — `DELETE /v1/vaults/{id}` (ROADMAP O291).
+fn call_method(tenancy: &mut tenant::Tenancy, method: &str, path: &str) -> (u16, String) {
     let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
     let addr = server.server_addr().to_ip().expect("tcp listener");
-    let raw = format!("GET {path} HTTP/1.0\r\n\r\n");
+    let raw = format!("{method} {path} HTTP/1.0\r\n\r\n");
     let client = std::thread::spawn(move || {
         let mut stream = std::net::TcpStream::connect(addr).unwrap();
         stream.write_all(raw.as_bytes()).unwrap();
@@ -669,4 +674,141 @@ fn o288_v1_read_only_drops_a_deferral_promoted_after_the_unlock() {
     assert_eq!(code, 200, "{body}");
     assert!(body.contains("\"drawers\":20"), "{body}");
     assert!(!body.contains(DEFERRAL), "{body}");
+}
+
+/// **ROADMAP O291 through the CLI's open**: a vault deleted between
+/// `open_store_as`'s unlock and its connect — at the writable and read-only
+/// layouts, and inside the recorded-embedder read the surface makes first —
+/// reaches the operator as "no such vault" (exit 1) through the reopen class
+/// and its one retry. It was a raw SQLite "unable to open" on the writable
+/// posture and `DatabaseMissing`, the integrity verdict (exit 2), on the
+/// read-only one; and no open creates the directory back.
+#[test]
+fn o291_open_store_as_meets_a_delete_in_its_window_as_no_such_vault() {
+    for (posture, at) in [
+        (Posture::ReadWrite, Opener::WritableLayout),
+        (Posture::ReadOnly, Opener::ReadOnlyLayout),
+        (Posture::ReadWrite, Opener::RecordedEmbedder),
+    ] {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        fresh_vault(root, 5);
+        let ran = Arc::new(AtomicUsize::new(0));
+        {
+            let (r, ran) = (root.to_path_buf(), ran.clone());
+            open_pause::set(
+                &vdir(root),
+                Arc::new(move |here| {
+                    if here == at && ran.fetch_add(1, Ordering::SeqCst) == 0 {
+                        assert_eq!(
+                            undercroft_store::delete_vault(&mgr(&r), VAULT).unwrap(),
+                            undercroft_store::Deleted::Removed
+                        );
+                    }
+                }),
+            );
+        }
+        let opened = open_store_as(root, VAULT, posture);
+        open_pause::clear(&vdir(root));
+        assert!(
+            ran.load(Ordering::SeqCst) >= 1,
+            "premise: {at:?} was reached"
+        );
+        let e = match opened {
+            Err(e) => e,
+            Ok(_) => panic!("{at:?}: served a deleted vault"),
+        };
+        assert!(
+            e.chain().any(|l| matches!(
+                l.downcast_ref::<StoreError>(),
+                Some(StoreError::Vault(undercroft_vault::VaultError::NotFound(_)))
+            ) || matches!(
+                l.downcast_ref::<undercroft_vault::VaultError>(),
+                Some(undercroft_vault::VaultError::NotFound(_))
+            )),
+            "{at:?}: the retry finds no vault: {e:#}"
+        );
+        assert!(
+            !integrity_verdict(&e),
+            "{at:?}: a delete is not tampering: {e:#}"
+        );
+        assert!(
+            !vdir(root).exists(),
+            "{at:?}: an open created the vault back"
+        );
+    }
+}
+
+/// **ROADMAP O291 through `/v1`'s open**: the same window answers 404, never a
+/// 500 or the integrity class.
+#[test]
+fn o291_v1_meets_a_delete_in_its_window_as_404() {
+    for at in [Opener::WritableLayout, Opener::RecordedEmbedder] {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        fresh_vault(root, 5);
+        let mut tenancy =
+            tenant::Tenancy::new(mgr(root), embedder_factory(), false).expect("no secret declared");
+        let ran = Arc::new(AtomicUsize::new(0));
+        {
+            let (r, ran) = (root.to_path_buf(), ran.clone());
+            open_pause::set(
+                &vdir(root),
+                Arc::new(move |here| {
+                    if here == at && ran.fetch_add(1, Ordering::SeqCst) == 0 {
+                        undercroft_store::delete_vault(&mgr(&r), VAULT).unwrap();
+                    }
+                }),
+            );
+        }
+        let (code, body) = call(&mut tenancy, &format!("/v1/vaults/{VAULT}/stats"));
+        open_pause::clear(&vdir(root));
+        assert!(
+            ran.load(Ordering::SeqCst) >= 1,
+            "premise: {at:?} was reached"
+        );
+        assert_eq!(code, 404, "{at:?}: {body}");
+        assert!(!body.contains("\"class\""), "{at:?}: {body}");
+    }
+}
+
+/// **ROADMAP O291, the `/v1` route**: `DELETE /v1/vaults/{id}` evicts this
+/// server's own handle and deletes (200, then 404); beside another connection
+/// holding the vault it answers 409 with NO class, names a delete, and changes
+/// nothing — where it answered 200 and removed the vault beneath the holder.
+#[test]
+fn o291_v1_delete_evicts_its_own_handle_and_refuses_beside_a_holder() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    fresh_vault(root, 5);
+    let mut tenancy =
+        tenant::Tenancy::new(mgr(root), embedder_factory(), false).expect("no secret declared");
+    // A holder: another connection that has read.
+    let holder = VaultStore::open(mgr(root).unlock(VAULT).unwrap()).unwrap();
+    assert_eq!(holder.count().unwrap(), 5, "premise: the holder read");
+    let (code, _) = call(&mut tenancy, &format!("/v1/vaults/{VAULT}/stats"));
+    assert_eq!(code, 200, "premise: /v1 cached its own handle");
+    let (code, body) = call_method(&mut tenancy, "DELETE", &format!("/v1/vaults/{VAULT}"));
+    assert_eq!(code, 409, "{body}");
+    assert!(!body.contains("\"class\""), "{body}");
+    assert!(
+        body.contains("Nothing was deleted") && !body.contains("restore"),
+        "{body}"
+    );
+    assert!(vdir(root).join("vault.json").exists() && vdir(root).join("vault.db").exists());
+    assert_eq!(
+        holder.count().unwrap(),
+        5,
+        "the holder serves a vault that still exists"
+    );
+    drop(holder);
+    // Its own handle (re-opened by this stats call) is evicted by the route.
+    let (code, _) = call(&mut tenancy, &format!("/v1/vaults/{VAULT}/stats"));
+    assert_eq!(code, 200);
+    let (code, body) = call_method(&mut tenancy, "DELETE", &format!("/v1/vaults/{VAULT}"));
+    assert_eq!(code, 200, "{body}");
+    assert!(body.contains("\"deleted\":true"), "{body}");
+    assert!(!vdir(root).exists());
+    let (code, _) = call_method(&mut tenancy, "DELETE", &format!("/v1/vaults/{VAULT}"));
+    assert_eq!(code, 404);
 }

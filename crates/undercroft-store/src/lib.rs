@@ -27,6 +27,10 @@ mod backup_tests;
 mod chain;
 #[cfg(test)]
 mod deferral_tests;
+mod delete;
+mod delete_pause;
+#[cfg(test)]
+mod delete_tests;
 #[cfg(test)]
 mod destruction_tests;
 mod fdeidx;
@@ -73,6 +77,7 @@ pub mod witness;
 
 pub use admission::{DestinationState, PendingAdmission, QUARANTINE_WING};
 pub use backup::{BackupOutcome, BackupReport};
+pub use delete::{delete_vault, Deleted};
 pub use forget::{AttestationVerdict, ForgetAttestation, MirrorDelete};
 pub use kg::{KgStats, ReceiptStatus, ReceiptVerdict, SupersessionStatus, Triple, TripleExport};
 pub use manage::{
@@ -404,6 +409,17 @@ pub struct VaultHold(
     #[allow(dead_code)] rusqlite::Connection,
 );
 
+/// What a hold on a vault directory is FOR (ROADMAP O291): which operation
+/// its refusals describe. A delete and a restore take the same hold and must
+/// not tell an operator the other one is running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HoldFor {
+    /// `backup restore` replaces the vault (ROADMAP O69, O268).
+    Restore,
+    /// A vault delete removes it (ROADMAP O291).
+    Delete,
+}
+
 /// Take an exclusive hold on `dir`'s vault database, or say who has it.
 ///
 /// **ROADMAP O69.** `backup restore` unlinks a vault directory and copies a
@@ -433,13 +449,17 @@ pub struct VaultHold(
 /// a crashed server releases them and leaves only files. The refusal fires
 /// when someone genuinely holds the vault, which is exactly when a
 /// destructive restore must not proceed.
-pub fn hold_vault_exclusively(dir: &std::path::Path) -> Result<VaultHold, StoreError> {
-    // The file the directory HOLDS, under either name (ROADMAP O7): a bare
-    // directory has no `Vault` to ask, so the same rule is applied here.
+pub fn hold_vault_exclusively(
+    dir: &std::path::Path,
+    purpose: HoldFor,
+) -> Result<VaultHold, StoreError> {
+    // The file the directory HOLDS, under either name (ROADMAP O7), by the
+    // ONE layout rule (ROADMAP O291): a bare directory has no `Vault` to ask.
+    use undercroft_vault::DbLayout;
     let current = dir.join(undercroft_vault::DB_FILE);
     let legacy = dir.join(undercroft_vault::LEGACY_DB_FILE);
-    let db = match (current.exists(), legacy.exists()) {
-        (true, true) => {
+    let db = match DbLayout::of(dir) {
+        DbLayout::Ambiguous => {
             return Err(StoreError::Invalid(format!(
                 "vault directory {} holds two databases ({} and {}); move the stray one aside \
                  before holding it",
@@ -448,9 +468,9 @@ pub fn hold_vault_exclusively(dir: &std::path::Path) -> Result<VaultHold, StoreE
                 undercroft_vault::LEGACY_DB_FILE
             )));
         }
-        (true, false) => current,
-        (false, true) => legacy,
-        (false, false) => {
+        DbLayout::Current => current,
+        DbLayout::Legacy => legacy,
+        DbLayout::Absent => {
             // Opening would CREATE it, which for a directory about to be
             // replaced is noise; and a vault with no database has no holder
             // to find.
@@ -516,9 +536,15 @@ pub fn hold_vault_exclusively(dir: &std::path::Path) -> Result<VaultHold, StoreE
             conn.execute_batch("BEGIN EXCLUSIVE").map_err(|e| {
                 held_if_busy(
                     e,
-                    "the vault is open in another process, and replacing it beneath that \
-                     process destroys it — the process keeps writing to the database file a \
-                     restore unlinks. Nothing was changed. Stop it, then retry (ROADMAP O69)",
+                    match purpose {
+                        HoldFor::Restore => {
+                            "the vault is open in another process, and replacing it beneath \
+                             that process destroys it — the process keeps writing to the \
+                             database file a restore unlinks. Nothing was changed. Stop it, \
+                             then retry (ROADMAP O69)"
+                        }
+                        HoldFor::Delete => DELETE_HELD,
+                    },
                 )
             })
         },
@@ -528,12 +554,20 @@ pub fn hold_vault_exclusively(dir: &std::path::Path) -> Result<VaultHold, StoreE
     // set aside while a live store held the file now in place: the swap that
     // followed would have moved a vault in use, O69's defect one level down.
     let replaced = || {
-        StoreError::VaultHeld(format!(
-            "the vault at {} was replaced by another restore while this one took its hold, so \
-             the hold was on the database that restore set aside and could not see who holds \
-             the one now in place. Nothing was changed; retry (ROADMAP O279)",
-            dir.display()
-        ))
+        StoreError::VaultHeld(match purpose {
+            HoldFor::Restore => format!(
+                "the vault at {} was replaced by another restore while this one took its hold, \
+                 so the hold was on the database that restore set aside and could not see who \
+                 holds the one now in place. Nothing was changed; retry (ROADMAP O279)",
+                dir.display()
+            ),
+            HoldFor::Delete => format!(
+                "the vault at {} was replaced or removed by a restore or another delete while \
+                 this delete took its hold, so the hold was on a database that is no longer \
+                 the one at that path. Nothing was deleted; retry (ROADMAP O291)",
+                dir.display()
+            ),
+        })
     };
     match opened {
         Ok(vault_db::Opened::Here(conn, ())) => Ok(VaultHold(conn)),
@@ -960,9 +994,17 @@ pub(crate) fn is_busy(e: &rusqlite::Error) -> bool {
 
 /// What an open says when another process holds the vault exclusively.
 pub(crate) const OPEN_HELD: &str =
-    "another process holds this vault exclusively — a key rotation, a backup restore, or \
-     another open renaming its pre-1.5.0 palace.db is running. Nothing was read or written; \
-     retry once it finishes (ROADMAP O257, O281)";
+    "another process holds this vault exclusively — a key rotation, a backup restore, a \
+     vault delete, or another open renaming its pre-1.5.0 palace.db is running. Nothing was \
+     read or written; retry once it finishes (ROADMAP O257, O281, O291)";
+
+/// What a refused vault delete says (ROADMAP O291).
+pub(crate) const DELETE_HELD: &str =
+    "the vault is open in another process — a server (a read-only replica included; one \
+     that has served the vault holds it until it stops), `daemon --watch`, a `mine`, a \
+     `backup create`, or a command still running — and deleting it beneath that process \
+     would leave it serving or writing a vault that no longer exists. Nothing was deleted. \
+     Stop it, then delete (ROADMAP O291)";
 
 /// What a refused key rotation says (ROADMAP O257).
 pub(crate) const ROTATION_HELD: &str =
@@ -4625,6 +4667,12 @@ impl VaultStore {
             // Opened without CREATE, a file that vanished since the layout was
             // read is another process's work — a restore's swap, or another
             // open's legacy rename — and the reopen reads the directory again.
+            // A vault DELETED since the unlock (ROADMAP O291): its directory is
+            // gone, so a CREATE-open fails with a raw "unable to open" that
+            // `/v1` answered 500. The reopen finds no vault.
+            Err(_) if vault_db::vault_gone(vault.dir()) => {
+                return Err(vault_db::deleted(vault.dir()))
+            }
             Err(_) if vault.db_layout() != layout => return Err(vault_db::moved(&path)),
             Err(e) => return Err(e),
         };
@@ -5044,6 +5092,12 @@ impl VaultStore {
         // file too, but with a bare "unable to open database file" that
         // names neither the file nor why a read-only role will not make one.
         if !vault.database_exists() {
+            // A vault DELETED since the unlock is not a missing database
+            // (ROADMAP O291): measured, an ordinary delete race answered this
+            // integrity verdict, exit 2. A33 stays for a present manifest.
+            if vault_db::vault_gone(vault.dir()) {
+                return Err(vault_db::deleted(vault.dir()));
+            }
             return Err(StoreError::DatabaseMissing {
                 id: vault.id().to_string(),
                 path: vault.db_path().display().to_string(),
@@ -5199,6 +5253,11 @@ impl VaultStore {
             Err(StoreError::Sqlite(e)) if is_busy(&e) => {
                 return Err(StoreError::VaultHeld(OPEN_HELD.into()))
             }
+            // Nor is a vault DELETED since the unlock (ROADMAP O291): escalating
+            // onto a missing directory answered a raw "unable to open".
+            Err(_) if vault_db::vault_gone(vault.dir()) => {
+                return Err(vault_db::deleted(vault.dir()))
+            }
             Err(_) => {}
         }
         // The escalation holds no lock at all, so the door's check covers its
@@ -5211,9 +5270,13 @@ impl VaultStore {
             open_pause::Opener::Immutable,
             false,
             probe,
-        )? {
-            vault_db::Opened::Here(conn, ()) => conn,
-            vault_db::Opened::Moved => return Err(vault_db::moved(&path)),
+        ) {
+            Ok(vault_db::Opened::Here(conn, ())) => conn,
+            Ok(vault_db::Opened::Moved) => return Err(vault_db::moved(&path)),
+            Err(_) if vault_db::vault_gone(vault.dir()) => {
+                return Err(vault_db::deleted(vault.dir()))
+            }
+            Err(e) => return Err(e),
         };
         undercroft_obs::diag_warn!(
             "{} could not be opened read-only the ordinary way (a WAL database needs a \
@@ -6575,9 +6638,15 @@ impl VaultStore {
                 Ok((recorded("embedder_name")?, recorded("embedder_dim")?))
             },
         );
-        let (name, dim) = match opened? {
-            vault_db::Opened::Here(_, recorded) => recorded,
-            vault_db::Opened::Moved => return Err(vault_db::moved(&path)),
+        let (name, dim) = match opened {
+            Ok(vault_db::Opened::Here(_, recorded)) => recorded,
+            Ok(vault_db::Opened::Moved) => return Err(vault_db::moved(&path)),
+            // Deleted since the unlock (ROADMAP O291): the surfaces call this
+            // before their open, so it answers the same reopen class.
+            Err(_) if vault_db::vault_gone(vault.dir()) => {
+                return Err(vault_db::deleted(vault.dir()))
+            }
+            Err(e) => return Err(e),
         };
         Ok(match (name, dim) {
             (Some(n), Some(d)) => Some((n, d.parse().unwrap_or(0))),
@@ -12791,7 +12860,7 @@ mod tests {
         // A live holder — exactly what `serve-http` is, from the file's point
         // of view. SQLite locks are per-connection, so an open store in this
         // same process is a faithful stand-in for another process.
-        let held = hold_vault_exclusively(&vault_dir);
+        let held = hold_vault_exclusively(&vault_dir, HoldFor::Restore);
         assert!(
             held.is_err(),
             "a vault held by an open store must refuse an exclusive hold"
@@ -12800,7 +12869,7 @@ mod tests {
         // Let go, and it must grant — otherwise the guard has simply broken
         // restore for everyone.
         drop(store);
-        let granted = hold_vault_exclusively(&vault_dir);
+        let granted = hold_vault_exclusively(&vault_dir, HoldFor::Restore);
         assert!(
             granted.is_ok(),
             "with no holder the exclusive hold must be granted: {:?}",
@@ -12810,7 +12879,7 @@ mod tests {
         // And the hold is real: while it is alive, the next one is refused.
         // This is what makes holding it ACROSS the destroy-and-copy close the
         // window a probe-then-act would leave open.
-        let second = hold_vault_exclusively(&vault_dir);
+        let second = hold_vault_exclusively(&vault_dir, HoldFor::Restore);
         assert!(
             second.is_err(),
             "a live hold must exclude the next one, or holding it across the \
@@ -12818,7 +12887,7 @@ mod tests {
         );
         drop(granted);
         assert!(
-            hold_vault_exclusively(&vault_dir).is_ok(),
+            hold_vault_exclusively(&vault_dir, HoldFor::Restore).is_ok(),
             "dropping the hold must release it"
         );
     }
@@ -12830,7 +12899,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let empty = dir.path().join("vaults/absent");
         std::fs::create_dir_all(&empty).unwrap();
-        assert!(hold_vault_exclusively(&empty).is_err());
+        assert!(hold_vault_exclusively(&empty, HoldFor::Restore).is_err());
         assert!(
             !empty.join("vault.db").exists(),
             "the probe must not have created the database it went looking for"

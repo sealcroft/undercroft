@@ -149,7 +149,8 @@ out, not the operator-scope `history` route below.)
 ── lifecycle ────────────────────────────────────────────────────────────
 POST   /v1/vaults                      {id, level?, embedder?}   create vault
 GET    /v1/vaults                                                list vault ids
-DELETE /v1/vaults/{id}                                           delete vault
+DELETE /v1/vaults/{id}                                           delete vault (409 while another
+                                                                 process holds it; 400 over a link)
 
 ── read / write ─────────────────────────────────────────────────────────
 GET    /v1/vaults/{id}/stats            (records AND drawers — one drawer

@@ -4677,6 +4677,100 @@ kill "$O289_HELD" "$O289_CTL" 2>/dev/null; wait "$O289_HELD" "$O289_CTL" 2>/dev/
 check "O289: the vault verifies once vault.json is back" 0 "VERIFY OK" -- o289 --read-only verify
 rm -rf "$O289_HOME"
 
+echo "== A vault delete takes O69's hold, or refuses and changes nothing (ROADMAP O291) =="
+# `DELETE /v1/vaults/{id}` removed the vault directory with nothing held.
+# Beside another process that had the vault open that was a write acknowledged
+# and lost (a writable holder committed into the unlinked file) and a replica
+# serving a deleted vault; over a link it answered "deleted" while what the
+# link named survived. The holder here is a REAL second process — a read-only
+# replica that has read the vault — because SQLite's locks belong to the
+# process.
+O291_HOME="$(mktemp -d)"
+o291() { UNDERCROFT_HOME="$O291_HOME" "$BIN" "$@"; }
+o291 init >/dev/null 2>&1
+for v in held served linked; do
+  o291 vault create "$v" >/dev/null 2>&1
+  o291 remember "a memory in the $v vault" --vault "$v" --wing notes >/dev/null 2>&1
+done
+# Premise: the binary under test carries the new refusal (a stale binary passes
+# every old check by construction).
+if grep -a -q 'Stop it, then delete (ROADMAP O291)' "$BIN"; then
+  echo "ok    O291 premise: the binary carries the delete's refusal"; PASS=$((PASS+1))
+else
+  echo "FAIL  O291 premise: the binary under test predates the delete's hold"; FAIL=$((FAIL+1))
+fi
+UNDERCROFT_HOME="$O291_HOME" "$BIN" serve-http --host 127.0.0.1 --port 18872 >/dev/null 2>&1 &
+O291_A=$!
+UNDERCROFT_HOME="$O291_HOME" "$BIN" serve-http --host 127.0.0.1 --port 18873 --read-only --vault held >/dev/null 2>&1 &
+O291_B=$!
+for _ in $(seq 1 40); do
+  curl -sf http://127.0.0.1:18872/healthz >/dev/null 2>&1 && curl -sf http://127.0.0.1:18873/healthz >/dev/null 2>&1 && break
+  sleep 0.25
+done
+O291_HB="$(curl -s -w '\n%{http_code}' http://127.0.0.1:18873/v1/vaults/held/stats)"
+if kill -0 "$O291_B" 2>/dev/null && [ "$(tail -1 <<<"$O291_HB")" = 200 ]; then
+  echo "ok    O291 premise: the read-only replica is running and has read the vault"; PASS=$((PASS+1))
+else
+  echo "FAIL  O291 premise: the holder process did not start or did not read, so the refusal arm below would prove nothing"; echo "$O291_HB" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+O291_R="$(curl -s -w '\n%{http_code}' -X DELETE http://127.0.0.1:18872/v1/vaults/held)"
+if [ "$(tail -1 <<<"$O291_R")" = 409 ] && grep -q 'Nothing was deleted' <<<"$O291_R" \
+   && ! grep -q '"class"' <<<"$O291_R" && ! grep -q 'restore' <<<"$O291_R"; then
+  echo "ok    O291: a delete beside a replica in another process is 409, no class, names a delete"; PASS=$((PASS+1))
+else
+  echo "FAIL  O291: a delete beside a holder must be 409 without a class"; echo "$O291_R" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+if [ -f "$O291_HOME/vaults/held/vault.json" ] && [ -f "$O291_HOME/vaults/held/vault.db" ]; then
+  echo "ok    O291: the refused delete left the vault in place"; PASS=$((PASS+1))
+else
+  echo "FAIL  O291: the refused delete removed files"; ls -la "$O291_HOME/vaults/held" 2>&1 | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+O291_HB="$(curl -s -w '\n%{http_code}' http://127.0.0.1:18873/v1/vaults/held/stats)"
+if [ "$(tail -1 <<<"$O291_HB")" = 200 ] && grep -q '"drawers":1' <<<"$O291_HB"; then
+  echo "ok    O291: the replica serves a vault that still exists"; PASS=$((PASS+1))
+else
+  echo "FAIL  O291: the replica must still serve the vault"; echo "$O291_HB" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+kill "$O291_B" 2>/dev/null; wait "$O291_B" 2>/dev/null
+# The O69 lesson: a fence indistinguishable from one that always refuses is not
+# a fence. With the replica stopped the same delete runs.
+O291_R="$(curl -s -w '\n%{http_code}' -X DELETE http://127.0.0.1:18872/v1/vaults/held)"
+if [ "$(tail -1 <<<"$O291_R")" = 200 ] && grep -q '"deleted":true' <<<"$O291_R" \
+   && [ ! -e "$O291_HOME/vaults/held" ]; then
+  echo "ok    O291: once nothing holds it the vault is deleted"; PASS=$((PASS+1))
+else
+  echo "FAIL  O291: the delete must succeed once the holder is gone"; echo "$O291_R" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+O291_C="$(curl -s -o /dev/null -w '%{http_code}' -X DELETE http://127.0.0.1:18872/v1/vaults/held)"
+if [ "$O291_C" = 404 ]; then
+  echo "ok    O291: a second delete is 404"; PASS=$((PASS+1))
+else
+  echo "FAIL  O291: a second delete must be 404, got $O291_C"; FAIL=$((FAIL+1))
+fi
+# A vault this server itself serves: its own cached handle is evicted by the
+# route, never mistaken for another process's.
+O291_C="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18872/v1/vaults/served/stats)"
+O291_R="$(curl -s -w '\n%{http_code}' -X DELETE http://127.0.0.1:18872/v1/vaults/served)"
+if [ "$O291_C" = 200 ] && [ "$(tail -1 <<<"$O291_R")" = 200 ] && [ ! -e "$O291_HOME/vaults/served" ]; then
+  echo "ok    O291: a vault the deleting server had open is deleted (its own handle evicted)"; PASS=$((PASS+1))
+else
+  echo "FAIL  O291: a vault the server had open must still delete (stats $O291_C)"; echo "$O291_R" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+# A symbolic link at the vault's path: refused, the link and what it names
+# untouched. It answered "deleted" and removed the link alone.
+mv "$O291_HOME/vaults/linked" "$O291_HOME/real-linked"
+ln -s "$O291_HOME/real-linked" "$O291_HOME/vaults/linked"
+O291_R="$(curl -s -w '\n%{http_code}' -X DELETE http://127.0.0.1:18872/v1/vaults/linked)"
+if [ "$(tail -1 <<<"$O291_R")" = 400 ] && grep -q 'never follows a link' <<<"$O291_R" \
+   && [ -L "$O291_HOME/vaults/linked" ] && [ -f "$O291_HOME/real-linked/vault.db" ] \
+   && [ -f "$O291_HOME/real-linked/vault.json" ]; then
+  echo "ok    O291: a symlinked vault is refused 400 and nothing is removed"; PASS=$((PASS+1))
+else
+  echo "FAIL  O291: a symlinked vault must be refused with nothing changed"; echo "$O291_R" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+kill "$O291_A" 2>/dev/null; wait "$O291_A" 2>/dev/null
+rm -rf "$O291_HOME"
+
 echo
 echo "e2e results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1

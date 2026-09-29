@@ -3042,7 +3042,6 @@ HIER_ALLOW=(
   "${HIER_W} (at|dir|directory|location|volume|root)::the installation's own path"
   "(Open|opening) the ${HIER_W}::opening the installation at its root"
   "under the ${HIER_W}::every vault sits under one installation"
-  "else in the ${HIER_W}::the rest of the installation, beside one vault"
   "${HIER_W} store::the engine store, whose contents are sealed VAULTS"
   "${HIER_W} model::the upstream project model, in the parity table"
   "First ${HIER_W}::getting-started: creating the installation"
