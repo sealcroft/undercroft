@@ -345,6 +345,34 @@ vault's `vault.json`, compares the identity its descriptor reports with a `stat`
 of the path, and refuses where they differ — the observable the open's check
 compares, with no database opened.
 
+### a vault whose `chain_meta` has lost its committed head, or its height, is refused instead of adopted (O303)
+
+**Symptom:** a writable open exits 2 — `/v1` answers 409 with `class:
+"integrity"` — with *"audit chain: `chain_meta` holds no committed head while
+`audit` holds records"* (or *"… holds a committed height"*), or with *"a
+committed head with no committed height (`chain_meta.writes`)"*; or it answers
+`ManifestTampered` where every `audit` row is gone beside a manifest past
+genesis. A read-only open reports the first two on `unhealed` and its reads and
+`stats` refuse; before 1.7.0 a missing height served reads with `verify` OK
+while every write answered a raw 500.
+
+**Cause:** 1.6.1 and earlier adopted a database with no committed head by
+seeding `chain_meta` from the manifest, replaying nothing, so a database rolled
+back beneath its anchor with those rows deleted opened, took writes, and moved
+the anchor over the rollback (ROADMAP O303). Since 1.7.0 only a fresh vault's
+EMPTY chain is adopted. No release since 1.0.0 writes any other head-less state:
+it is an offline edit, or a database written by a source build of this
+repository older than 0.19.0 that no 1.x build has opened since — 1.0.0 declared
+nothing before it needs to open.
+
+**Fix:** restore the vault from a backup that verifies. On 1.6.1, `undercroft
+verify` already fails where the rows do not reach the manifest's anchor — a
+rollback, a deleted version-2 commitment, an erased trail — and a missing height
+shows only as every write failing with "Query returned no rows". (1.6.1 adopted
+every head-less database from the manifest; where the rows ended exactly at the
+anchor, that adoption was sound.) `undercroft
+config check` cannot detect it — it opens no database.
+
 ## 1.6.1 (released 2026-09-22)
 
 ### The manifest carries a version fence from this release on (O238)

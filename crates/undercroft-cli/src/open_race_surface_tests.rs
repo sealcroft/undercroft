@@ -922,3 +922,244 @@ fn o296_v1_refuses_a_contradicting_database_and_writes_nothing() {
         );
     }
 }
+
+/// What an open over a head-less chain could write (ROADMAP O303): the
+/// manifest's bytes, the marker, `chain_meta` and the `audit` row count.
+type O303Disk = (Vec<u8>, Option<String>, Vec<(String, String)>, i64);
+
+fn o303_disk(root: &std::path::Path) -> O303Disk {
+    let c = rusqlite::Connection::open_with_flags(
+        vdir(root).join("vault.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let chain_meta = c
+        .prepare("SELECT key, value FROM chain_meta ORDER BY key")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    (
+        std::fs::read(vdir(root).join("vault.json")).unwrap(),
+        rusqlite::OptionalExtension::optional(c.query_row(
+            "SELECT value FROM meta WHERE key = 'keycheck'",
+            [],
+            |r| r.get(0),
+        ))
+        .unwrap(),
+        chain_meta,
+        c.query_row("SELECT count(*) FROM audit", [], |r| r.get(0))
+            .unwrap(),
+    )
+}
+
+/// ROADMAP O303's two surface states: `headless`, every `chain_meta` row and
+/// the version-2 commitment deleted (records, no head — `main` opened it at the
+/// manifest's height and took writes); otherwise the height alone deleted
+/// (`main` served reads and answered every write a raw 500).
+fn o303_state(root: &std::path::Path, headless: bool) -> &'static str {
+    fresh_vault(root, 20);
+    let c = rusqlite::Connection::open(vdir(root).join("vault.db")).unwrap();
+    if headless {
+        assert!(c.execute("DELETE FROM chain_meta", []).unwrap() >= 1);
+        assert_eq!(
+            c.execute("DELETE FROM audit WHERE record_id = 'migrate/chain-v2'", [])
+                .unwrap(),
+            1,
+            "premise: the version-2 commitment"
+        );
+        "holds no committed head while `audit` holds records"
+    } else {
+        assert_eq!(
+            c.execute("DELETE FROM chain_meta WHERE key = 'writes'", [])
+                .unwrap(),
+            1,
+            "premise: a height to delete"
+        );
+        "a committed head with no committed height"
+    }
+}
+
+/// **ROADMAP O303 through `open_store_as`, writable**: a head-less chain with
+/// records, and a head with no height, are the integrity verdict (exit 2) with
+/// the manifest, the marker, `chain_meta` and `audit` exactly as found.
+#[test]
+fn o303_open_store_as_refuses_a_headless_chain_and_writes_nothing() {
+    for headless in [true, false] {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let fragment = o303_state(root, headless);
+        let before = o303_disk(root);
+        let e = match open_store_as(root, VAULT, Posture::ReadWrite) {
+            Err(e) => e,
+            Ok(_) => panic!("headless={headless}: served"),
+        };
+        assert!(
+            e.chain().any(|l| matches!(
+                l.downcast_ref::<StoreError>(),
+                Some(StoreError::IntegrityFinding(m)) if m.contains(fragment)
+            )),
+            "headless={headless}: {e:#}"
+        );
+        assert!(integrity_verdict(&e), "exit 2: {e:#}");
+        assert_eq!(
+            o303_disk(root),
+            before,
+            "headless={headless}: nothing written"
+        );
+    }
+}
+
+/// **ROADMAP O303, the two other answers through the surfaces**: an erased
+/// audit trail beside a manifest past genesis is the tamper verdict through
+/// `open_store_as` (exit 2), nothing written — `main` opened it as an empty
+/// vault at the manifest's height and took writes; and a READ-ONLY server over
+/// a fresh vault's empty chain answers 409 with NO integrity class, the posture
+/// error its absent-table twin answers.
+#[test]
+fn o303_surfaces_answer_an_erased_trail_and_the_empty_chain() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    fresh_vault(root, 20);
+    {
+        let c = rusqlite::Connection::open(vdir(root).join("vault.db")).unwrap();
+        c.execute("DELETE FROM chain_meta", []).unwrap();
+        c.execute("DELETE FROM audit", []).unwrap();
+    }
+    let before = o303_disk(root);
+    let e = match open_store_as(root, VAULT, Posture::ReadWrite) {
+        Err(e) => e,
+        Ok(_) => panic!("served an erased trail"),
+    };
+    assert!(
+        e.chain().any(|l| matches!(
+            l.downcast_ref::<StoreError>(),
+            Some(StoreError::Vault(
+                undercroft_vault::VaultError::ManifestTampered
+            ))
+        )),
+        "{e:#}"
+    );
+    assert!(integrity_verdict(&e), "exit 2: {e:#}");
+    assert_eq!(o303_disk(root), before, "nothing written");
+
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    mgr(root).create(VAULT, SecurityLevel::Sealed).unwrap();
+    let created = std::fs::read(vdir(root).join("vault.json")).unwrap();
+    drop(open_store_as(root, VAULT, Posture::ReadWrite).unwrap());
+    {
+        let c = rusqlite::Connection::open(vdir(root).join("vault.db")).unwrap();
+        c.execute("DELETE FROM chain_meta", []).unwrap();
+        c.execute("DELETE FROM audit", []).unwrap();
+    }
+    std::fs::write(vdir(root).join("vault.json"), &created).unwrap();
+    let ro = VaultManager::open_as(root, None, undercroft_vault::Access::ReadOnly).unwrap();
+    let mut tenancy =
+        tenant::Tenancy::new(ro, embedder_factory(), true).expect("no secret declared");
+    let (code, body) = call(&mut tenancy, &format!("/v1/vaults/{VAULT}/stats"));
+    assert_eq!(code, 409, "{body}");
+    assert!(
+        !body.contains("\"class\""),
+        "a posture error, not a verdict: {body}"
+    );
+    assert!(body.contains("chain_meta"), "{body}");
+}
+
+/// **ROADMAP O303 on `/v1`**: `store_for` answers both states 409 with the
+/// integrity class and writes nothing; a READ-ONLY server serves them with the
+/// finding reported, and its `stats` — whose height read answered a
+/// `CorruptRow` or a raw "Query returned no rows", a 500 — answers 409 too.
+#[test]
+fn o303_v1_refuses_a_headless_chain_and_never_answers_500() {
+    for headless in [true, false] {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        let fragment = o303_state(root, headless);
+        let before = o303_disk(root);
+        let mut tenancy =
+            tenant::Tenancy::new(mgr(root), embedder_factory(), false).expect("no secret declared");
+        let (code, body) = call(&mut tenancy, &format!("/v1/vaults/{VAULT}/stats"));
+        assert_eq!(code, 409, "headless={headless}: {body}");
+        assert!(body.contains("\"class\":\"integrity\""), "{body}");
+        assert!(body.contains(fragment), "{body}");
+        assert_eq!(
+            o303_disk(root),
+            before,
+            "headless={headless}: nothing written"
+        );
+
+        let ro = VaultManager::open_as(root, None, undercroft_vault::Access::ReadOnly).unwrap();
+        let mut tenancy =
+            tenant::Tenancy::new(ro, embedder_factory(), true).expect("no secret declared");
+        let (code, body) = call(&mut tenancy, &format!("/v1/vaults/{VAULT}/stats"));
+        assert_eq!(code, 409, "read-only headless={headless}: {body}");
+        assert!(body.contains("\"class\":\"integrity\""), "{body}");
+        assert_eq!(o303_disk(root), before, "read-only headless={headless}");
+    }
+}
+
+/// **ROADMAP O303, `POST …/anchor` beneath a cached handle**: `chain_meta`
+/// emptied while the server holds the vault. `main` answered 500 — the reconcile
+/// read "unseeded", then `chain_state` answered `CorruptRow`. It is 409 with the
+/// integrity class, and nothing is anchored or seeded.
+#[test]
+fn o303_v1_anchor_beneath_a_cached_handle_refuses() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    fresh_vault(root, 5);
+    let mut tenancy =
+        tenant::Tenancy::new(mgr(root), embedder_factory(), false).expect("no secret declared");
+    let (code, body) = call(&mut tenancy, &format!("/v1/vaults/{VAULT}/stats"));
+    assert_eq!(code, 200, "premise: the handle is open and cached: {body}");
+    assert!(
+        rusqlite::Connection::open(vdir(root).join("vault.db"))
+            .unwrap()
+            .execute("DELETE FROM chain_meta", [])
+            .unwrap()
+            >= 1
+    );
+    let before = o303_disk(root);
+    let (code, body) = call_method(&mut tenancy, "POST", &format!("/v1/vaults/{VAULT}/anchor"));
+    assert_eq!(code, 409, "{body}");
+    assert!(body.contains("\"class\":\"integrity\""), "{body}");
+    assert_eq!(o303_disk(root), before, "nothing anchored or seeded");
+}
+
+/// **ROADMAP O303, read-only, the EMPTY chain** — a fresh vault's, left by a
+/// crash between the table's creation and its seed: the read-only open, which
+/// may not seed it, answers the class its absent-table twin already answers —
+/// `ReadOnlyUnmigrated`, exit 1, never the tamper verdict — and a writable open
+/// adopts it.
+#[test]
+fn o303_open_store_as_read_only_declines_the_empty_chain() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    mgr(root).create(VAULT, SecurityLevel::Sealed).unwrap();
+    let created = std::fs::read(vdir(root).join("vault.json")).unwrap();
+    drop(open_store_as(root, VAULT, Posture::ReadWrite).unwrap());
+    {
+        let c = rusqlite::Connection::open(vdir(root).join("vault.db")).unwrap();
+        c.execute("DELETE FROM chain_meta", []).unwrap();
+        c.execute("DELETE FROM audit", []).unwrap();
+    }
+    std::fs::write(vdir(root).join("vault.json"), &created).unwrap();
+    let e = match open_store_as(root, VAULT, Posture::ReadOnly) {
+        Err(e) => e,
+        Ok(_) => panic!("served an unseeded chain read-only"),
+    };
+    assert!(
+        e.chain().any(|l| matches!(
+            l.downcast_ref::<StoreError>(),
+            Some(StoreError::ReadOnlyUnmigrated { .. })
+        )),
+        "{e:#}"
+    );
+    assert!(
+        !integrity_verdict(&e),
+        "exit 1, not the tamper verdict: {e:#}"
+    );
+    let s = open_store_as(root, VAULT, Posture::ReadWrite).expect("adopted");
+    assert!(s.verify().unwrap().ok());
+}

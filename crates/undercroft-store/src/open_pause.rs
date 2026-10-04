@@ -47,6 +47,13 @@ pub enum Opener {
     LegacyRename,
     /// `lock_released`: the proof connection is open; its read has not run.
     LockProbe,
+    /// `adopt_empty_chain`: the open judged a fresh vault's chain empty; the
+    /// write lock it seeds under is not yet taken (ROADMAP O303 — another first
+    /// open can seed here).
+    Adopting,
+    /// `init_chain`: the adoption found the chain seeded by another open; the
+    /// open's second judgement has not run (ROADMAP O303).
+    Readopting,
 }
 
 /// Run whatever hook a test set for the vault directory `dir`. A no-op

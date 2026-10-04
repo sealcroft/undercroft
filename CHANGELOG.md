@@ -1180,6 +1180,109 @@ PATCH inside the unreleased 1.7.0: every route here was 1.6.1's too, which delet
 entry — no state here has a supported producer: the six that were refused still are,
 and the newly refused ones exist only by an edit of the database.
 
+### An open adopts only a fresh vault's empty audit chain, and refuses every other chain with no committed head (O303)
+
+Measured on `main` `5fc6171`, at both security levels. A database whose `chain_meta`
+held no committed head was adopted by seeding `chain_meta` FROM THE MANIFEST — its
+head and its height — with no replay of the rows it then vouched for:
+
+- **a database rolled back two records behind its anchor, with every `chain_meta` row
+  and the version-2 commitment deleted**, opened on the writable posture at the
+  manifest's height; every read that decides from a label was refused, but the open
+  **accepted writes**, and the first one re-anchored `vault.json` at a head the rows
+  never produced — overwriting the only evidence of the rollback — and left a chain no
+  later open, `verify` or read could pass. The same with no rollback at all, on a
+  never-switched version-1 vault, with the whole audit trail deleted (the open reported
+  height 21 over zero rows), and with the key-generation marker deleted too (the open
+  seeded a marker first);
+- **the heads deleted and the height left** answered a raw `UNIQUE constraint failed:
+  chain_meta.key` — a 500 on `/v1`;
+- **the height deleted and the heads left**, not in the filing, opened on both
+  postures, served reads and answered `verify` OK while `stats` and every write
+  answered a raw "Query returned no rows".
+
+Now an open adopts only the EMPTY chain — no audit record, no height, the manifest at
+the genesis head and height 0, which is what a fresh vault's first open finds — and
+seeds it with those constants, under the write lock, after judging it again inside
+that lock; nothing from the manifest reaches the seed. Records or a height with no
+head, and a head with no height, are integrity findings (exit 2, `/v1` 409 with
+`class: "integrity"`): the writable open refuses with nothing written — the table is
+not even created — and the read-only open reports them and serves, as it reports an
+inconsistent chain. One exception, filed as **O308**: a `vault.db` deleted outright is
+still CREATED by the writable open's connect before the refusal, which then answers
+tampering where a read-only open answered `DatabaseMissing`; on `main` that open served
+an empty vault at the manifest's height and took writes. An erased trail beside a later anchor is
+`ManifestTampered` on both postures. The empty chain on the read-only posture, which
+may not seed it, answers `ReadOnlyUnmigrated` (exit 1), the class its absent-table twin
+already answered. `require_head` and the height read answer the integrity finding
+instead of a `CorruptRow` or a raw error, so `stats`, `vault status`, `/v1 …/anchor`,
+backup and forget answer 409 over such a chain rather than 500 (by reading; `stats`,
+`vault anchor` and the witness are driven), the witness names an erased trail rather than
+"no records yet", and
+`vault anchor` beneath a handle whose `chain_meta` was emptied refuses rather than
+reporting "nothing to anchor". Two first opens of one fresh vault seed one chain: the
+unlocked seed answered a raw `UNIQUE` error to one of them in 200 two-process runs.
+
+**What the filing proposed was refused too.** It prescribed replaying the rows and
+seeding the replayed head. Measured on a version-1 chain with one row appended by a
+writer WITHOUT the key: the store then computed the keyed head over the forged row,
+the open healed the anchor over it and the version-2 switch bound its label — `chain_ok`
+true, labels `Intact` — where 1.6.1 leaves that chain failing for good.
+
+**Disclosed, not closed**: the history in this repository was rewritten when the
+project was renamed, and a source build of it older than 0.19.0 derives the same keys
+as this one. Measured: a vault written by a source build of `5c4e696^` (0.18.0) opened,
+migrated, verified and answered a search under 1.6.1 — the adoption from the manifest
+was live code for that population. 1.7.0 refuses such a database when no 1.x build has
+opened it since, as 1.0.0 declared ("nothing before it needs to be"). The alternative
+the ruling names — replay a head-less chain and adopt it only when its rows end exactly
+at the anchor — is sound and was not chosen, on precedent and cost; it is the
+maintainer's to take instead. The 1.0.0 entry's "a vault written by any earlier build
+cannot be opened by this one" is corrected beside it: true of every released binary,
+not of a source build.
+
+Gates: store tests at both levels over two writable opens and a read-only one, each
+asserting the refusal's variant and text and the manifest's bytes, the marker, the
+table, the `chain_meta` rows and the `audit` count; the empty chain adopted with its
+table absent and present; the two-first-opens race through a new open-pause point, and a seed landing between an open's
+judgement and its lock;
+`vault anchor` beneath an emptied chain; O296's pinned arm for the emptied `chain_meta`
+inverted, its forged-head half still pinned; the CLI's `open_store_as` (exit 2, and
+exit 1 for the empty chain read-only) and `/v1`'s `store_for`, read-only `stats` and
+`POST …/anchor` (409 with the integrity class, never 500); and source gates — the seed
+takes no value at all and has one caller, under the lock, after the table's creation;
+`init_chain` reads no manifest field. Nineteen counterfactuals over four runs, each run against the
+real sources and each failing its gate — among them the filing's own replayed-head seed (the
+forged-tail arm) and option C (the source-built arm, which it adopts). One, first written for the
+locked re-judgement, failed nothing: the race arm's second open anchored before the first resumed,
+so the manifest's height alone refused the seed; a narrower arm — a seed committed between the
+judgement and the lock, not yet anchored — was added, and it fails that one alone. Another,
+for a garbled height, reverted nothing (it re-wrapped its own change) and was rewritten.
+
+Measured on the LoCoMo feed mined into 12 wings (1,020 sealed drawers, audit height 1,021),
+this build's release binary against `main`'s, 15 interleaved runs each: the ordinary open is
+unchanged — writable `stats` 4 / 4 ms, `verify` 8 / 8, `search` 42 / 41; read-only `stats` 4 / 4,
+`search` 41 / 41 (medians, this / `main`). Through the release binaries, each on its own copy:
+the rollback with `chain_meta` emptied, the same with no rollback, and an erased trail each
+opened on `main` and took a write (exit 0), the write re-anchoring `vault.json`; a deleted height
+answered a raw error (exit 1). This build exits 2 on every one, `vault.json`, `chain_meta`,
+`audit` and the marker byte-identical. Two processes making a fresh vault's first open at
+once, 200 runs: no `UNIQUE` error (one in 200 on `main`); the remaining failures are O307's
+column race and a classified `VaultHeld`.
+
+Filed: **O306** (the manifest anchor is written over one its committed head does not
+descend from, when `chain_meta` is edited beneath an open handle), **O307** (two first
+opens of a fresh vault race the `ADD COLUMN` migrations; two runs in 200 answered a raw
+`duplicate column name`) and **O308** (above). An independent review of the build found
+the O308 path and a list of mine — among them a read-only answer naming a remedy that
+refuses, a source gate that saw one file, a witness text, and a garbled height still a
+500 — each fixed or filed before this landed.
+
+PATCH inside the unreleased 1.7.0: every newly refused state is an offline edit, or a
+database from a source build 1.0.0 declared unsupported. **`UPGRADING.md` carries an
+entry**, because unlike O296's these states RUN on 1.6.1 — they take writes, or serve
+reads with `verify` OK.
+
 ## 1.6.1 — 2026-09-22
 
 PATCH: fixes only. Each adds a surface that REPORTS an existing silence, and
@@ -10557,6 +10660,13 @@ Nothing before this release is installable, and nothing before it needs to be
 — a vault written by any earlier build cannot be opened by this one, because
 the crypto domain separation carried the old name and moved with it.
 
+*Corrected beside, 2026-09-30 (ROADMAP O303): "any earlier build" is true of every
+released binary and false of a SOURCE build. The history in this repository was
+rewritten at the rename, so its commits before 1.0.0 derive the same keys this
+release does; measured, a vault written by a source build of 0.18.0 opened under
+1.6.1. Since 1.7.0 such a database is refused when no 1.x build has opened it
+since — the decision this entry states.*
+
 ### the project is renamed to Undercroft, under the Sealcroft house
 
 Every identifier moved. **No pre-rename vault, export bundle or remote mirror
@@ -16070,6 +16180,10 @@ statement pairs in a transaction.
   `chain_genesis_hex` + `anchor_manifest` (the store owns *where* the head
   lives; the vault owns the key). Existing databases adopt `chain_meta`
   from the manifest on first open — no migration step.
+  *Superseded, recorded beside it 2026-09-30 (ROADMAP O303): 1.0.0 withdrew
+  every pre-1.0.0 upgrade path, and seeding from the manifest vouched for rows
+  nothing replayed — a rollback with `chain_meta` deleted opened and took
+  writes. Since 1.7.0 only a fresh vault's empty chain is adopted.*
 - Known residual (documented): an attacker replacing db **and** manifest
   together with a mutually-consistent older pair remains undetectable
   without an external witness — unchanged from before, noted for a future

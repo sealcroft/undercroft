@@ -279,9 +279,6 @@ fn is(e: &StoreError, want: Want) -> bool {
 enum ReadOnly {
     Refuses(Want),
     Serves,
-    /// `ReadOnlyUnmigrated`: a schema the posture may not create — with no
-    /// `chain_meta` table the read-only open cannot read the chain at all.
-    Declines,
 }
 
 /// Two writable opens refuse as `want` and write NOTHING; the read-only open
@@ -305,7 +302,6 @@ fn refused(label: &str, root: &Path, want: Want, ro: ReadOnly) {
     }
     match (ro, read_only(root)) {
         (ReadOnly::Refuses(w), Err(e)) => assert!(is(&e, w), "{label}: read-only: {e}"),
-        (ReadOnly::Declines, Err(StoreError::ReadOnlyUnmigrated { .. })) => {}
         (ReadOnly::Serves, Ok(_)) => {}
         (ro, other) => panic!(
             "{label}: read-only expected {ro:?}, got {:?}",
@@ -607,7 +603,9 @@ fn o296_no_committed_head_beside_a_stage_is_refused_and_writes_nothing() {
             &format!("{level:?} chain_meta dropped beside a committed twin"),
             root,
             Want::Finding("no `chain_meta` table"),
-            ReadOnly::Declines,
+            // `ReadOnlyUnmigrated` here until ROADMAP O303: its remedy, a
+            // writable open, refuses the same database.
+            ReadOnly::Refuses(Want::Finding("no `chain_meta` table")),
         );
         let dir = TempDir::new().unwrap();
         let root = dir.path();
@@ -618,7 +616,9 @@ fn o296_no_committed_head_beside_a_stage_is_refused_and_writes_nothing() {
             &format!("{level:?} chain_meta dropped beside an abandoned twin"),
             root,
             Want::Finding("no `chain_meta` table"),
-            ReadOnly::Declines,
+            // `ReadOnlyUnmigrated` here until ROADMAP O303: its remedy, a
+            // writable open, refuses the same database.
+            ReadOnly::Refuses(Want::Finding("no `chain_meta` table")),
         );
     }
 }
@@ -782,8 +782,9 @@ fn o296_every_legitimate_state_still_settles() {
 /// open answers Ok; `verify` and the first read fail — what deleting the salt
 /// file achieves, which the same writer can do directly. A pre-rotation
 /// database restored AT the anchor is a crash before the commit to every value
-/// there is (A2's). And with no stage at all, a forged head or an emptied
-/// `chain_meta` opens Ok (the O(1) open's residual, and O303).
+/// there is (A2's). And with no stage at all, a forged head opens Ok (the O(1)
+/// open's residual). An emptied `chain_meta` did too, pinned here as O303's
+/// cost; ROADMAP O303 refuses it, and its arm below is inverted, not deleted.
 #[test]
 fn o296_what_the_judgement_cannot_see_is_pinned() {
     for level in LEVELS {
@@ -881,22 +882,32 @@ fn o296_what_the_judgement_cannot_see_is_pinned() {
         assert!(s.verify().unwrap().ok(), "{level:?}");
         assert!(!staging(root).exists(), "{level:?}");
 
-        // No stage: a forged head, and an emptied `chain_meta` (O303).
-        for emptied in [false, true] {
-            let dir = TempDir::new().unwrap();
-            let root = dir.path();
-            plain(root, level, 18);
-            copy_db(root);
-            write_some(root, 18, 2);
-            restore_db(root);
-            if emptied {
-                unseed(root, true);
-            } else {
-                forge_head(root, &head_in(&manifest(root)));
-            }
-            let s = writable(root).expect("COST: the O(1) open's residual, and O303");
-            assert!(!s.verify().unwrap().ok(), "{level:?} emptied={emptied}");
-        }
+        // No stage: a forged head — the O(1) open's residual, still a cost.
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        plain(root, level, 18);
+        copy_db(root);
+        write_some(root, 18, 2);
+        restore_db(root);
+        forge_head(root, &head_in(&manifest(root)));
+        let s = writable(root).expect("COST: the O(1) open's residual");
+        assert!(!s.verify().unwrap().ok(), "{level:?}");
+
+        // No stage, `chain_meta` emptied: pinned here as O303's cost until
+        // ROADMAP O303 refused it — inverted, never deleted. Nothing written.
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        plain(root, level, 18);
+        copy_db(root);
+        write_some(root, 18, 2);
+        restore_db(root);
+        unseed(root, true);
+        refused(
+            &format!("{level:?} no stage, chain_meta emptied (O303)"),
+            root,
+            Want::Finding("holds no committed head while `audit` holds records"),
+            ReadOnly::Serves,
+        );
     }
 }
 

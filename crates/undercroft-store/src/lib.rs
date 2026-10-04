@@ -37,6 +37,8 @@ mod delete_tests;
 mod destruction_tests;
 mod fdeidx;
 pub mod forget;
+#[cfg(test)]
+mod headless_tests;
 #[cfg(feature = "hnsw")]
 mod hnsw;
 pub mod kg;
@@ -2588,8 +2590,12 @@ enum ReplayPolicy {
 /// What [`VaultStore::judge_chain`] found the audit chain to say against a
 /// manifest's anchor (ROADMAP O296). Each caller classifies it.
 enum ChainJudgement {
-    /// The rows answer to the keys at the anchor, or there is no head to judge.
+    /// The rows answer to the keys at the anchor.
     Answers(ChainAnswer),
+    /// `chain_meta` holds no committed head (ROADMAP O303): classified by what
+    /// else the snapshot holds, never `Inconsistent`, so O296's texts beside a
+    /// staged rotation and a foreign marker stay theirs.
+    Headless(Headless),
     /// The regime and the head keys disagree — never produced by this store.
     Inconsistent(String),
     /// The rows do not reproduce the committed head under these keys: an
@@ -2600,9 +2606,47 @@ enum ChainJudgement {
     AnchorNotSeen,
 }
 
+/// A head-less chain, by what else the snapshot holds (ROADMAP O303).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Headless {
+    /// No record, no height, and the anchor at the genesis constant: a fresh
+    /// vault's chain, which its first writable open seeds. The only head-less
+    /// state an open adopts.
+    Empty,
+    /// No record and no height beside an anchor past genesis: an audit trail
+    /// erased — `ManifestTampered`, as any rollback the anchor catches.
+    Erased,
+    /// Records, or a committed height, and no head. No release since 1.0.0
+    /// writes it — every 1.x build seeds `chain_meta` before a vault's first
+    /// record — so it is an edit, or a database a source build older than
+    /// 0.19.0 wrote and no 1.x build has opened since.
+    Orphaned {
+        /// Whether `audit` holds records (otherwise only a height is left).
+        records: bool,
+    },
+}
+
+impl Headless {
+    /// The finding an orphaned chain is, without its remedy — the writable
+    /// open adds one and the read-only report another (ROADMAP O303).
+    fn finding(records: bool) -> String {
+        format!(
+            "audit chain: `chain_meta` holds no committed head while {} — no release since \
+             1.0.0 writes that state: a database edited offline, or one written by a source \
+             build older than 0.19.0 and never opened by a 1.x build",
+            if records {
+                "`audit` holds records"
+            } else {
+                "`chain_meta` holds a committed height"
+            }
+        )
+    }
+}
+
 /// A chain that answers: what the ordinary open reports or heals.
 enum ChainAnswer {
-    /// No committed head: a fresh vault, or a database older than `chain_meta`.
+    /// No committed head, and nothing else either: a fresh vault's empty chain
+    /// ([`Headless::Empty`]), which the writable open seeds (ROADMAP O303).
     Unseeded,
     /// The anchor is the committed head.
     Current,
@@ -2624,6 +2668,20 @@ impl ChainJudgement {
     fn answer(self) -> Result<ChainAnswer, StoreError> {
         match self {
             ChainJudgement::Answers(answer) => Ok(answer),
+            // ROADMAP O303: only the empty chain is adopted; an erased trail is
+            // the rollback the anchor exists to catch; records or a height with
+            // no head is refused with nothing written.
+            ChainJudgement::Headless(Headless::Empty) => Ok(ChainAnswer::Unseeded),
+            ChainJudgement::Headless(Headless::Erased) => Err(StoreError::Vault(
+                undercroft_vault::VaultError::ManifestTampered,
+            )),
+            ChainJudgement::Headless(Headless::Orphaned { records }) => {
+                Err(StoreError::IntegrityFinding(format!(
+                    "{}. Nothing was written. Restore the vault from a backup that verifies \
+                     (ROADMAP O303)",
+                    Headless::finding(records)
+                )))
+            }
             ChainJudgement::Inconsistent(finding) => Err(StoreError::IntegrityFinding(finding)),
             ChainJudgement::HeadMismatch => Err(StoreError::Integrity("audit-chain head".into())),
             ChainJudgement::AnchorNotSeen => Err(StoreError::Vault(
@@ -2637,17 +2695,18 @@ impl ChainJudgement {
 /// committed chain head in `chain_meta`.
 ///
 /// Reported rather than inferred from a boolean, because the three cases
-/// mean different things to an operator: nothing to do, a database that
-/// predates the transactional head, and a real lag that a crash between a
-/// commit and its anchor leaves behind. The two tamper verdicts are errors,
+/// mean different things to an operator: nothing to do, a fresh vault's
+/// empty chain this open seeded (ROADMAP O303), and a real lag that a crash
+/// between a commit and its anchor leaves behind. The two tamper verdicts are errors,
 /// not states — see [`VaultStore::tighten_anchor`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum AnchorState {
     /// The anchor already names the committed head.
     Current,
-    /// `chain_meta` holds no head yet: a pre-chain database, or one whose
-    /// very first open has not finished. Only a writable open seeds it.
+    /// `chain_meta` held no head and nothing else: a fresh vault's empty chain,
+    /// which this writable open seeded with the genesis head and height 0. No
+    /// other head-less chain is adopted (ROADMAP O303).
     Unseeded,
     /// The anchor was a strict ancestor of the committed head by
     /// `behind_by` records — and has been fast-forwarded, unless the caller
@@ -3723,7 +3782,8 @@ impl VaultStore {
     /// `idx_drawers_filed_at`, and — the one A32 called evidence
     /// destruction — does not promote or delete a writer's `vault.json.next`.
     /// What it left alone is handled three ways. *Reported* on
-    /// [`unhealed`](Self::unhealed): an unseeded `chain_meta`, a lagging
+    /// [`unhealed`](Self::unhealed): a chain with no committed head beside
+    /// records or a height, or a head with no height (ROADMAP O303), a lagging
     /// anchor, a staged `vault.json.next`, and A10/U12 rows skipped for
     /// failing verification. *Warned only*, once per tier: a missing or
     /// stale FTS index (`probe_fts_read_only` → exact scan). *Not examined
@@ -4423,13 +4483,15 @@ impl VaultStore {
             ChainJudgement::AnchorNotSeen => Err(StoreError::Vault(
                 undercroft_vault::VaultError::ManifestTampered,
             )),
-            ChainJudgement::Answers(ChainAnswer::Unseeded) => Err(StoreError::IntegrityFinding(
-                "the database's key-generation marker names another generation, and the \
+            ChainJudgement::Answers(ChainAnswer::Unseeded) | ChainJudgement::Headless(_) => {
+                Err(StoreError::IntegrityFinding(
+                    "the database's key-generation marker names another generation, and the \
                  database has no committed audit-chain head to judge which generation it answers \
                  to — no build writes that state. Nothing was written. Restore the vault from a \
                  backup that verifies (ROADMAP O257, O296)"
-                    .into(),
-            )),
+                        .into(),
+                ))
+            }
             ChainJudgement::HeadMismatch | ChainJudgement::Inconsistent(_) => {
                 Err(StoreError::IntegrityFinding(
                     "the database's key-generation marker names another generation, vault.json \
@@ -4449,11 +4511,13 @@ impl VaultStore {
     /// answers ([`ChainJudgement::answer`]), and, beside a staged file of any
     /// generation, a database with no committed head — which no build writes
     /// beside a stage, a rotation needing a seeded chain and this handle's own
-    /// marker. With no stage, no head is a fresh vault or a legacy one, and
-    /// `init_chain` seeds it.
+    /// marker. With no stage, no head is refused unless the chain is EMPTY — a
+    /// fresh vault, which `init_chain` seeds (ROADMAP O303, refining O296 item
+    /// 4's "or a legacy one", recorded beside it) — and asked BEFORE
+    /// `answer()`, so every head-less state beside a stage keeps this text.
     fn refuse_before_effect(judged: ChainJudgement, staged: bool) -> Result<(), StoreError> {
-        match judged.answer()? {
-            ChainAnswer::Unseeded if staged => Err(StoreError::IntegrityFinding(
+        if staged && matches!(judged, ChainJudgement::Headless(_)) {
+            return Err(StoreError::IntegrityFinding(
                 "a key rotation's staged manifest, vault.json.next, is beside this vault, and \
                  its database has no committed audit-chain head to judge which key generation it \
                  answers to — no build writes that state. The rotation reconcile wrote nothing: \
@@ -4461,7 +4525,9 @@ impl VaultStore {
                  vault.json.next may hold the only copy of a key generation's salt — do NOT \
                  delete it; restore the vault from a backup that verifies (ROADMAP O296)"
                     .into(),
-            )),
+            ));
+        }
+        match judged.answer()? {
             ChainAnswer::Unseeded | ChainAnswer::Current | ChainAnswer::Behind { .. } => Ok(()),
         }
     }
@@ -4500,7 +4566,7 @@ impl VaultStore {
         )?;
         if has_chain == 0 {
             return Ok(match chain::regime(conn)? {
-                chain::Regime::V1 => ChainJudgement::Answers(ChainAnswer::Unseeded),
+                chain::Regime::V1 => Self::judge_headless(conn, anchor, false)?,
                 chain::Regime::V2 { .. } => ChainJudgement::Inconsistent(
                     "audit chain: a `migrate/chain-v2` commitment record with no `chain_meta` \
                      table"
@@ -4513,9 +4579,7 @@ impl VaultStore {
         // anchor arithmetic below, the unjudged state feeds `chain::verdict`.
         let head_state = chain::head_state(conn)?;
         let db_head = match &head_state {
-            chain::HeadState::Unseeded => {
-                return Ok(ChainJudgement::Answers(ChainAnswer::Unseeded))
-            }
+            chain::HeadState::Unseeded => return Self::judge_headless(conn, anchor, true),
             chain::HeadState::Inconsistent { finding } => {
                 return Ok(ChainJudgement::Inconsistent(finding.clone()))
             }
@@ -4563,6 +4627,42 @@ impl VaultStore {
         Ok(ChainJudgement::Answers(ChainAnswer::Behind {
             behind_by: replayed.behind_by,
             offered,
+        }))
+    }
+
+    /// **A chain with no committed head, classified by what else the snapshot
+    /// holds** (ROADMAP O303) — inside [`Self::judge_chain`], in its snapshot,
+    /// with NO replay: whether `audit` holds a record (`EXISTS`, never a count,
+    /// on the open path), whether `chain_meta` holds a height, and whether the
+    /// anchor is the genesis constant.
+    ///
+    /// It used to answer "unseeded" for all of them, and `init_chain` then
+    /// seeded `chain_meta` FROM THE MANIFEST — vouching for rows nothing had
+    /// replayed: a rollback with `chain_meta` deleted opened Ok, took writes, and
+    /// its first write moved the anchor over the evidence. Seeding the REPLAYED
+    /// head instead (the filing's shape) was measured worse: it computes the
+    /// keyed head over rows a writer without the key appended. Only the empty
+    /// chain is adopted; a database a source build older than 0.19.0 wrote is
+    /// refused with it, as 1.0.0 declared.
+    fn judge_headless(
+        conn: &Connection,
+        anchor: &str,
+        table: bool,
+    ) -> Result<ChainJudgement, StoreError> {
+        let records: bool =
+            conn.query_row("SELECT EXISTS (SELECT 1 FROM audit)", [], |r| r.get(0))?;
+        let height: bool = table
+            && conn.query_row(
+                "SELECT EXISTS (SELECT 1 FROM chain_meta WHERE key = ?1)",
+                params![chain::WRITES_KEY],
+                |r| r.get(0),
+            )?;
+        Ok(ChainJudgement::Headless(if records || height {
+            Headless::Orphaned { records }
+        } else if anchor == Vault::chain_genesis_hex() {
+            Headless::Empty
+        } else {
+            Headless::Erased
         }))
     }
 
@@ -5139,7 +5239,12 @@ impl VaultStore {
         store.init_kg_schema()?;
         store.init_manage_schema()?;
         store.init_retention_schema()?;
-        store.init_chain()?;
+        // A refused judgement closes its connection rather than dropping it
+        // (O284's convention, O290 item 5; ROADMAP O303 refuses here).
+        if let Err(e) = store.init_chain() {
+            Self::close_refused(store.conn);
+            return Err(e);
+        }
         // **The two at-rest migrations, AFTER the chain is seeded.**
         //
         // Both are whole-vault mutations that run unattended at the next
@@ -5383,6 +5488,7 @@ impl VaultStore {
         }
         let mut store = Self::assemble(conn, vault, embedder, true)?;
         store.unhealed.extend(foreign_note);
+        store.refuse_headless_without_table()?;
         store.check_read_schema()?;
         store.fts = store.probe_fts_read_only();
         store.check_chain_read_only()?;
@@ -5591,47 +5697,91 @@ impl VaultStore {
         fresh
     }
 
+    /// **A database with `audit` records and no `chain_meta` table, refused on
+    /// the read-only posture before the schema check** (ROADMAP O303).
+    ///
+    /// `check_read_schema` would answer `ReadOnlyUnmigrated`, whose remedy — a
+    /// writable open — refuses the same database: an erased trail with no table
+    /// is refused too, and so is a version-2 commitment with no table, which the
+    /// writable open refuses as an inconsistent chain (moving O296's pinned
+    /// read-only class, recorded beside it). Only the empty chain falls through
+    /// to that check.
+    fn refuse_headless_without_table(&self) -> Result<(), StoreError> {
+        let (chain_meta, audit): (i64, i64) = self.conn.query_row(
+            "SELECT \
+                 (SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name = 'chain_meta'), \
+                 (SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name = 'audit')",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        if chain_meta != 0 || audit == 0 {
+            return Ok(());
+        }
+        let anchor = self.vault.anchored_head()?;
+        let judged = self.snapshot(|snap| {
+            Self::judge_chain(snap, &self.vault, &anchor, ReplayPolicy::ShortCircuit)
+        })?;
+        match judged {
+            ChainJudgement::Headless(Headless::Orphaned { .. } | Headless::Erased)
+            | ChainJudgement::Inconsistent(_) => judged.answer().map(|_| ()),
+            _ => Ok(()),
+        }
+    }
+
     /// [`reconcile_chain`](Self::reconcile_chain)'s verdict without its heal.
     fn check_chain_read_only(&mut self) -> Result<(), StoreError> {
+        // The anchor BEFORE the snapshot (ROADMAP O253), then the one
+        // judgement, with the regime the V1 note needs read in that same
+        // snapshot — it was a bare `head_state` of its own (ROADMAP O303).
+        let anchor = self.vault.anchored_head()?;
+        let (judged, v1) = self.snapshot(|snap| {
+            let judged = Self::judge_chain(snap, &self.vault, &anchor, ReplayPolicy::ShortCircuit)?;
+            let v1 = matches!(judged, ChainJudgement::Answers(_))
+                && chain::regime(snap.conn())? == chain::Regime::V1;
+            Ok((judged, v1))
+        })?;
         // ROADMAP O233. A regime and a head key that disagree is an integrity
         // finding, which the writable open refuses; this posture reports it
         // and serves, as it does a torn staging manifest — `verify` then
-        // reads the chain as broken. A chain that has not switched is still
-        // fully readable; it says its labels are not yet bound.
-        match chain::head_state(&self.conn)? {
-            chain::HeadState::Inconsistent { finding, .. } => {
-                self.unhealed.push(format!(
-                    "{finding} — an integrity finding a writable open refuses; run \
-                     `undercroft verify`"
-                ));
-                return Ok(());
+        // reads the chain as broken. ROADMAP O303 puts records or a height with
+        // no head beside it, and the empty chain with its absent-table twin: a
+        // writable open seeds it.
+        let report = match &judged {
+            ChainJudgement::Inconsistent(finding) => Some(finding.clone()),
+            ChainJudgement::Headless(Headless::Orphaned { records }) => {
+                Some(format!("{} (ROADMAP O303)", Headless::finding(*records)))
             }
-            chain::HeadState::Seeded(h) if h.regime == chain::Regime::V1 => {
-                self.unhealed.push(
-                    "the audit chain's labels are not yet chain-authenticated: the switch to \
-                     the labelled chain (ROADMAP O233) is a write, and runs at the next \
-                     writable open"
-                        .to_string(),
-                );
+            ChainJudgement::Headless(Headless::Empty) => {
+                return Err(StoreError::ReadOnlyUnmigrated {
+                    missing: "chain_meta.head".into(),
+                })
             }
-            _ => {}
+            _ => None,
+        };
+        if let Some(finding) = report {
+            self.unhealed.push(format!(
+                "{finding} — an integrity finding a writable open refuses; run \
+                 `undercroft verify`"
+            ));
+            return Ok(());
         }
-        self.anchor_at_open = self.reconcile_chain(false)?.0;
+        // A chain that has not switched is still fully readable; it says its
+        // labels are not yet bound.
+        if v1 {
+            self.unhealed.push(
+                "the audit chain's labels are not yet chain-authenticated: the switch to \
+                 the labelled chain (ROADMAP O233) is a write, and runs at the next \
+                 writable open"
+                    .to_string(),
+            );
+        }
+        self.anchor_at_open = self.settle_chain(judged, false)?.0;
         match self.anchor_at_open {
             AnchorState::Current => Ok(()),
-            AnchorState::Unseeded => {
-                // A legacy (pre-`chain_meta`) database. The writable open
-                // seeds it from the manifest; seeding is a write, so this
-                // one says so and serves — every read still verifies its
-                // own record HMAC.
-                self.unhealed.push(
-                    "this database predates the transactional chain head and `chain_meta` \
-                     was not seeded (seeding is a write); the manifest anchor stays \
-                     authoritative until a writable open seeds it"
-                        .to_string(),
-                );
-                Ok(())
-            }
+            // Only the empty chain answers `Unseeded`, and it was refused above.
+            AnchorState::Unseeded => Err(StoreError::ReadOnlyUnmigrated {
+                missing: "chain_meta.head".into(),
+            }),
             AnchorState::Healed { behind_by } => {
                 self.unhealed.push(format!(
                     "the manifest rollback anchor is {behind_by} record(s) behind the \
@@ -5741,6 +5891,19 @@ impl VaultStore {
         // The operator ASKED for the anchor, so an anchor that did not happen
         // is this call's failure — unlike a write's, whose commit stands.
         let (state, healed) = self.reconcile_chain(true)?;
+        // Every open seeds `chain_meta` or refuses, so an empty chain beneath
+        // an open handle was deleted while it was open (ROADMAP O303): the
+        // operator asked for an anchor, and answering "nothing to anchor" was a
+        // false all-clear. The anchor is never seeded here — that would heal
+        // an edit.
+        if state == AnchorState::Unseeded {
+            return Err(StoreError::IntegrityFinding(
+                "audit chain: `chain_meta` holds no committed head beneath this open handle, \
+                 whose open seeded one — the database was edited while it was open. Nothing was \
+                 anchored; run `undercroft verify` (ROADMAP O303)"
+                    .into(),
+            ));
+        }
         match healed {
             Some(AnchorOutcome::Deferred(why)) => Err(StoreError::Vault(VaultError::Io(
                 std::io::Error::other(format!("the manifest anchor was deferred: {why}")),
@@ -6054,6 +6217,19 @@ impl VaultStore {
         let judged = self.snapshot(|snap| {
             Self::judge_chain(snap, &self.vault, &anchor, ReplayPolicy::ShortCircuit)
         })?;
+        self.settle_chain(judged, heal)
+    }
+
+    /// What the ordinary open does with the one judgement: the chain's own
+    /// refusals ([`ChainJudgement::answer`]), the anchor's heal, and the
+    /// replay's verdict offered to the label guard. Shared by
+    /// [`Self::reconcile_chain`] and the read-only report, which first takes the
+    /// states it REPORTS rather than refuses (O233 item 3, ROADMAP O303).
+    fn settle_chain(
+        &mut self,
+        judged: ChainJudgement,
+        heal: bool,
+    ) -> Result<(AnchorState, Option<AnchorOutcome>), StoreError> {
         match judged.answer()? {
             ChainAnswer::Unseeded => Ok((AnchorState::Unseeded, None)),
             ChainAnswer::Current => Ok((AnchorState::Current, None)),
@@ -6240,20 +6416,30 @@ impl VaultStore {
     ///
     /// A power loss is not a tamper alarm; a restored old database still is.
     fn init_chain(&mut self) -> Result<(), StoreError> {
-        self.conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS chain_meta (
-                 key   TEXT PRIMARY KEY,
-                 value TEXT NOT NULL
-             );",
-        )?;
-        let (state, healed) = self.reconcile_chain(true)?;
+        // Judged BEFORE `chain_meta` exists (ROADMAP O303): the judgement reads
+        // an absent table as a head-less chain, and a refused open must not
+        // leave the table behind.
+        let (mut state, mut healed) = self.reconcile_chain(true)?;
+        if state == AnchorState::Unseeded && !self.adopt_empty_chain()? {
+            // Another first open seeded it between this open's judgement and
+            // its lock: judge what it wrote, as any open would.
+            open_pause::fire(self.vault.dir(), open_pause::Opener::Readopting);
+            (state, healed) = self.reconcile_chain(true)?;
+            // Seeded under the lock a moment ago, and gone again: an edit
+            // racing this open, never a second adoption (ROADMAP O303).
+            if state == AnchorState::Unseeded {
+                return Err(StoreError::IntegrityFinding(
+                    "audit chain: `chain_meta` was seeded by another open and emptied again \
+                     while this one opened — the database was edited. Nothing was written; run \
+                     `undercroft verify` (ROADMAP O303)"
+                        .into(),
+                ));
+            }
+        }
         self.anchor_at_open = state;
         match self.anchor_at_open {
-            AnchorState::Unseeded => {
-                // Legacy adoption (pre-chain_meta database) or a fresh vault:
-                // seed from the manifest, which was authoritative until now.
-                chain::seed(&self.conn, self.vault.chain_head_hex(), self.vault.writes())?;
-            }
+            // A fresh vault's empty chain, adopted above with the constants.
+            AnchorState::Unseeded => {}
             // **The writable open SAYS what it healed** (ROADMAP O246). The
             // read-only open reports a lagging anchor on `unhealed`; this
             // path healed it and, until O246, discarded the verdict into a
@@ -6302,6 +6488,51 @@ impl VaultStore {
             AnchorState::Current => {}
         }
         Ok(())
+    }
+
+    /// **Adopt a fresh vault's EMPTY chain — and nothing else** (ROADMAP O303).
+    ///
+    /// Under the write lock: create `chain_meta`, read the manifest strictly
+    /// (no fall-back to the handle's cached head), judge the chain again in the
+    /// lock's own snapshot — nothing else can commit into it — and seed the
+    /// constants only when it is still [`Headless::Empty`] beside a manifest at
+    /// genesis AND height 0. Seeding under the lock is what stops two first
+    /// opens of one fresh vault both inserting: measured, one in 200 answered a
+    /// raw `UNIQUE constraint failed: chain_meta.key`. A genesis head with a
+    /// nonzero height is a manifest only a key holder writes, refused as
+    /// tampering. Any other head-less state refuses in the judgement's class,
+    /// and the lock rolls the table back with it.
+    ///
+    /// `false` when the chain was seeded since — another first open won — and
+    /// the caller judges what it wrote.
+    fn adopt_empty_chain(&mut self) -> Result<bool, StoreError> {
+        open_pause::fire(self.vault.dir(), open_pause::Opener::Adopting);
+        let lock = WriteLock::begin(&self.conn)?;
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS chain_meta (
+                 key   TEXT PRIMARY KEY,
+                 value TEXT NOT NULL
+             );",
+        )?;
+        let manifest = self.vault.verified_manifest()?;
+        let judged = Self::judge_chain(
+            &lock.snapshot()?,
+            &self.vault,
+            manifest.chain_head(),
+            ReplayPolicy::ShortCircuit,
+        )?;
+        match judged {
+            ChainJudgement::Headless(Headless::Empty) if manifest.writes() == 0 => {
+                chain::seed_empty(&self.conn)?;
+                lock.commit()?;
+                Ok(true)
+            }
+            ChainJudgement::Headless(Headless::Empty) => Err(StoreError::Vault(
+                undercroft_vault::VaultError::ManifestTampered,
+            )),
+            ChainJudgement::Headless(_) => judged.answer().map(|_| false),
+            _ => Ok(false),
+        }
     }
 
     /// **Test only: turn this vault's chain back into a legacy version-1
