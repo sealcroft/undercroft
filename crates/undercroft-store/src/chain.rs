@@ -49,6 +49,8 @@ use crate::StoreError;
 pub(crate) const FROZEN_HEAD: &str = "head";
 /// The `chain_meta` key of the live head once the chain has switched.
 pub(crate) const LIVE_HEAD: &str = "head_v2";
+/// The `chain_meta` key of the committed record count — the height.
+pub(crate) const WRITES_KEY: &str = "writes";
 /// The rest of the commitment's label, under [`Namespace::Migrate`].
 pub(crate) const COMMITMENT_KIND: &str = "chain-v2";
 /// Domain string of the commitment digest.
@@ -124,8 +126,12 @@ pub(crate) struct Head {
 /// What `chain_meta` says, before it is judged.
 #[derive(Clone)]
 pub(crate) enum HeadState {
-    /// No head at all: a database older than `chain_meta`, or a fresh one the
-    /// open has not seeded yet.
+    /// No head key at all. Legitimate only as a fresh vault's EMPTY chain —
+    /// no record, no height, the manifest at genesis — which its first
+    /// writable open seeds with the constants; the store's `judge_chain`
+    /// classifies every head-less state by what else the snapshot holds
+    /// (ROADMAP O303). A committed height beside no head stays here, so that
+    /// judgement — not this one — names it.
     Unseeded,
     /// A head consistent with the regime.
     Seeded(Head),
@@ -157,6 +163,17 @@ pub(crate) fn head_state(conn: &Connection) -> Result<HeadState, StoreError> {
     let inconsistent = |finding: &str| HeadState::Inconsistent {
         finding: finding.to_string(),
     };
+    // **The third key (ROADMAP O303, O233 item 3 extended).** Every writer
+    // sets the head and the height in one statement or one transaction, so a
+    // head with no height is an edit — and it opened, served reads and
+    // answered `verify` OK while every write and `stats` failed on a raw
+    // "Query returned no rows".
+    let height = get(WRITES_KEY)?.is_some();
+    if !height && (frozen.is_some() || live.is_some()) {
+        return Ok(inconsistent(
+            "audit chain: a committed head with no committed height (`chain_meta.writes`)",
+        ));
+    }
     Ok(match (regime, frozen, live) {
         (Regime::V1, None, None) => HeadState::Unseeded,
         (Regime::V1, Some(head), None) => HeadState::Seeded(Head { regime, head }),
@@ -189,8 +206,9 @@ impl HeadState {
     /// quiet vault and could straddle a concurrent commit on a busy one,
     /// which is one function disagreeing with itself about its own chain.
     ///
-    /// **"Once" is three statements** ([`head_state`] reads the regime and
-    /// two keys), so it is still three snapshots on a busy vault and can
+    /// **"Once" is four statements** ([`head_state`] reads the regime, two
+    /// head keys and — since ROADMAP O303 — the height), so it is still four
+    /// snapshots on a busy vault outside one, and can
     /// straddle another handle's version-2 switch (ROADMAP O253, corrected
     /// 2026-09-24). The fix is one read snapshot around the whole judgement.
     pub(crate) fn into_committed(self) -> Result<Option<Head>, StoreError> {
@@ -242,23 +260,39 @@ pub(crate) fn verdict(replayed: &Replay, head: &HeadState) -> (bool, crate::Labe
     (chain_ok, label_commitment)
 }
 
-/// The committed head, which every caller that ADVANCES the chain needs to
-/// exist. An unseeded chain here is the `chain_meta/head` row the old
-/// `query_row` would have failed to find.
+/// The committed head, which every caller that ADVANCES the chain — or reports
+/// it — needs to exist.
+///
+/// **No head beneath an open handle is an integrity finding** (ROADMAP O303):
+/// every open seeds `chain_meta` or refuses, so a head that is missing now was
+/// deleted while the handle was open. It was a `CorruptRow` — a 500 on `/v1`
+/// for a verdict about stored evidence.
 pub(crate) fn require_head(conn: &Connection) -> Result<Head, StoreError> {
-    committed_head(conn)?.ok_or_else(|| StoreError::CorruptRow {
-        id: "chain_meta/head".into(),
-        reason: "the audit chain has no committed head".into(),
+    committed_head(conn)?.ok_or_else(|| {
+        StoreError::IntegrityFinding(
+            "audit chain: `chain_meta` holds no committed head — the database was edited: \
+             no release since 1.0.0 leaves a chain with records and no head, and a writable open \
+             refuses one. Nothing was written; run `undercroft verify` (ROADMAP O303)"
+                .into(),
+        )
     })
 }
 
-/// Seed an unseeded chain from the manifest — a legacy database older than
-/// `chain_meta`, or a fresh one. The head it writes is the version-1 head: a
-/// chain switches only through [`switch`]'s commitment.
-pub(crate) fn seed(conn: &Connection, head: &str, writes: u64) -> Result<(), StoreError> {
+/// **Seed an EMPTY chain: the genesis head and height 0, and nothing else**
+/// (ROADMAP O303).
+///
+/// It takes no head and no height ON PURPOSE. It used to take the manifest's,
+/// and adopting a head-less database at the manifest's head vouched for rows
+/// nothing had replayed: a rollback with `chain_meta` deleted opened Ok and
+/// its first write moved the anchor. The only head-less chain an open adopts
+/// is a fresh vault's — no record, no height, the anchor at genesis — whose
+/// head and height ARE these constants, so no value from anywhere else can
+/// reach this `INSERT`. The head it writes is the version-1 head: a chain
+/// switches only through [`switch`]'s commitment.
+pub(crate) fn seed_empty(conn: &Connection) -> Result<(), StoreError> {
     conn.execute(
-        "INSERT INTO chain_meta (key, value) VALUES (?1, ?2), ('writes', ?3)",
-        params![FROZEN_HEAD, head, writes.to_string()],
+        "INSERT INTO chain_meta (key, value) VALUES (?1, ?2), (?3, '0')",
+        params![FROZEN_HEAD, Vault::chain_genesis_hex(), WRITES_KEY],
     )?;
     Ok(())
 }
@@ -273,23 +307,42 @@ pub(crate) fn set_head(conn: &Connection, regime: Regime, head: &str) -> Result<
 }
 
 /// The committed record count (`chain_meta.writes`).
+///
+/// A missing row is an integrity finding (ROADMAP O303): every writer sets the
+/// height with the head, and it was a raw "Query returned no rows" — a 500 on
+/// every write and on `stats`, while reads served and `verify` said OK.
 pub(crate) fn writes(conn: &Connection) -> Result<u64, StoreError> {
-    let v: String = conn.query_row(
-        "SELECT value FROM chain_meta WHERE key = 'writes'",
-        [],
-        |r| r.get(0),
-    )?;
-    v.parse::<u64>().map_err(|e| StoreError::CorruptRow {
-        id: "chain_meta/writes".into(),
-        reason: e.to_string(),
+    let v: String = conn
+        .query_row(
+            "SELECT value FROM chain_meta WHERE key = ?1",
+            params![WRITES_KEY],
+            |r| r.get(0),
+        )
+        .optional()?
+        .ok_or_else(|| {
+            StoreError::IntegrityFinding(
+                "audit chain: a committed head with no committed height \
+                 (`chain_meta.writes`) — the database was edited. Nothing was written; run \
+                 `undercroft verify` (ROADMAP O303)"
+                    .into(),
+            )
+        })?;
+    // Not a number is the same edit as none at all (ROADMAP O303): it was a
+    // `CorruptRow`, a 500, for a verdict about stored evidence.
+    v.parse::<u64>().map_err(|e| {
+        StoreError::IntegrityFinding(format!(
+            "audit chain: the committed height (`chain_meta.writes`) is not a number ({e}) — \
+             the database was edited. Nothing was written; run `undercroft verify` (ROADMAP \
+             O303)"
+        ))
     })
 }
 
 /// Set the committed record count, inside the caller's transaction.
 pub(crate) fn set_writes(conn: &Connection, writes: u64) -> Result<(), StoreError> {
     conn.execute(
-        "UPDATE chain_meta SET value = ?1 WHERE key = 'writes'",
-        params![writes.to_string()],
+        "UPDATE chain_meta SET value = ?1 WHERE key = ?2",
+        params![writes.to_string(), WRITES_KEY],
     )?;
     Ok(())
 }

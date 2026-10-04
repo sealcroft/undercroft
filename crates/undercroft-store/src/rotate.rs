@@ -831,16 +831,10 @@ impl VaultStore {
             &rotate_tag,
             &rotated_at,
         )?;
-        let writes: u64 = self
-            .conn
-            .query_row(
-                "SELECT value FROM chain_meta WHERE key = 'writes'",
-                [],
-                |r| r.get::<_, String>(0),
-            )
-            .optional()?
-            .and_then(|v| v.parse().ok())
-            .unwrap_or_else(|| self.vault.writes());
+        // The committed height, never the manifest's (ROADMAP O303): a
+        // missing or garbled one is an integrity finding, which the
+        // rotation's own verify has already refused as an inconsistent chain.
+        let writes: u64 = crate::chain::writes(&self.conn)?;
         // The rotation record is a write, so the counter has to count it or
         // the anchor commits a height the chain does not have.
         let writes = writes + 1;

@@ -3998,7 +3998,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**335** of the **350** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**338** of the **353** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -11501,6 +11501,18 @@ failed on a raw `UNIQUE` error) — is now an `IntegrityFinding` on both posture
 with no `chain_meta` table the read-only open's answer for it moves from `ReadOnlyUnmigrated` (exit 1)
 to that finding (exit 2). No build writes either state.
 
+**Refined beside it 2026-09-30, by O303's ruling.** Item 4's "`Settled` with no twin proceeds (a
+fresh vault, a legacy one)", and `refuse_before_effect`'s "with no stage, no head is a fresh vault or
+a legacy one, and `init_chain` seeds it": a legacy one is no longer seeded. With no stage, only an
+EMPTY chain — no record, no height, the anchor at genesis — passes the judgement; records or a height
+with no head, and an erased trail, are refused there in the ordinary open's classes, so the rotation
+reconcile's lock path refuses before its marker seed. The texts this ruling pins, beside a stage and
+beside a foreign marker, are unchanged byte for byte. One read-only CLASS moves, by O303's build (its
+review's F3): `chain_meta` dropped beside a committed or an abandoned twin, which this record's gate
+pinned as `ReadOnlyUnmigrated`, is refused on the read-only posture as the judgement's own finding ("no
+`chain_meta` table") — `ReadOnlyUnmigrated` named a writable open as the remedy, and that open refuses
+the same database.
+
 **Versioning**: PATCH inside the unreleased `1.7.0`; every route is 1.6.1's too (P-B). **No
 `UPGRADING.md` entry**: no state here has a supported producer, and each refused state was already
 refused — only after the effect. Nothing new for `config check`.
@@ -11635,6 +11647,400 @@ and two new surface arms), `e2e` 750, `orchestrator-e2e` 185, `e2e-telemetry` 62
 O251, not re-measured (the refuter's P-C, a long run). The tamper event on the promote's forged arm
 (O304's cost) is invisible to a store test. The transplant and the truncation pass the judgement by
 construction. Windows and lock-less mounts, reasoned not measured.
+
+### O303 — CLOSED 2026-09-30: an open adopts only a fresh vault's EMPTY audit chain; a chain with no committed head, or a head with no height, is refused by a writable open and reported by a read-only one
+
+**Filed 2026-09-29 by O296's ruling (its security lens, confirmed by the refuter); measured by the
+integrator.** `init_chain`'s `AnchorState::Unseeded` arm — the adoption of a database older than
+`chain_meta` (0.19.0) — seeds the committed head and height FROM THE MANIFEST (`chain::seed` with the
+handle's `chain_head_hex()` and `writes()`, store `lib.rs`) without replaying the audit rows it then
+vouches for. `head_state` reads `Unseeded` whenever `chain_meta` holds no head and `audit` holds no
+`migrate/chain-v2` commitment, so an offline writer who deletes every `chain_meta` row and that one
+audit row makes any vault read as a legacy one. Measured by O296's probe, both security levels: a
+database rolled back two records behind the anchor, with those rows deleted, OPENS Ok on the writable
+posture at the manifest's height, with only the note that the chain's labels are not
+chain-authenticated, and `verify` fails; with `writes` left in `chain_meta`, the seed's INSERT fails
+as a raw `UNIQUE constraint failed: chain_meta.key` — a 500 on `/v1`; the read-only open serves both
+with its "predates the transactional chain head" note. Beside a staged rotation, O296's ruling now
+refuses before any effect; with no stage the open reaches `init_chain` by the fast path and nothing
+judges.
+
+**Shape, for a ruling**: with a non-empty `audit`, the adoption replays the rows against the manifest's
+anchor — an anchor not seen is `ManifestTampered`, and the head seeded is the REPLAYED one; a partly
+present `chain_meta` is `IntegrityFinding`, never a raw SQLite error; the read-only open's note becomes
+the same verdict. A genuine pre-0.19.0 database replays to its anchor and is adopted as today; a fresh
+vault has no rows. The replay's cost falls on the one open that adopts.
+
+**Gate**: the emptied rollback refused with nothing written, on both postures; the partial deletion
+answering 409 `class: "integrity"`, not a 500; a fresh vault and a genuine legacy database unchanged.
+
+#### RULED 2026-09-30 by three lenses (agentic memory architecture, security, software and SQLite engineering) and an adversarial refuter
+
+**The question.** What a store open must establish before it ADOPTS a database whose `chain_meta` holds no
+committed head, what it answers in each such state on the writable and the read-only posture, and what a
+partly present `chain_meta` is. Working material — the brief, four probes, the three lens answers, the
+refuter's report and an addendum run while the panel sat — is in the session scratchpad `o303/`; this
+record is the ruling.
+
+**Measured** (Docker, a release build of `main` `5fc6171` plus a temporary probe never committed; each
+row a fresh read-only open, a writable open and one `upsert` through it, and a second writable open; Sealed
+and HmacOnly identical in every effect).
+- **The filing's route, and more than it says**: a database rolled back two records behind the anchor, every
+  `chain_meta` row and the `migrate/chain-v2` commitment deleted, OPENS Ok at the manifest's height; every
+  guarded read is then refused by the label guard (`chain_ok` false), and the open **accepts writes** — the
+  first one re-anchors `vault.json` at a head the rows never produced, overwriting the only out-of-database
+  evidence of the rollback, and leaves a chain no later open, `verify` or read passes. The same with the
+  marker deleted too (the rotation reconcile's lock path seeds a marker first); with no rollback at all
+  (only `chain_meta` and the commitment deleted); with the whole `audit` table emptied (the open reports
+  height 21 over zero rows); and on a never-switched version-1 vault.
+- **The partial deletions**: the heads deleted and `writes` left — a raw `UNIQUE constraint failed:
+  chain_meta.key` on every writable open (a 500 on `/v1`); **`writes` deleted and the heads left, not in the
+  filing** — both postures open, serve reads and answer `verify` OK, while `stats` and EVERY write answer a
+  raw `Query returned no rows` (a 500).
+- **The oracle** (addendum; two lenses named it): on a version-1 chain, one row appended by a writer
+  without the key and `chain_meta` emptied, then the filing's own shape ("the head seeded is the REPLAYED
+  one") emulated by seeding the replayed head — both postures then open with `chain_ok` TRUE, the anchor is
+  healed over the forged row, and the version-2 switch binds its label as `Intact`. Today the same row
+  leaves the chain `chain_ok = false` for good.
+- **P-SRC** (the refuter's): the tree at `5c4e696^` (0.18.0, before `chain_meta`) built from source, a vault
+  created and written five times with it, then opened by `main`'s binary. It unlocks — the rewritten
+  pre-rename history derives `undercroft.v1/vault/<id>/<label>` exactly as this build does, with the same
+  manifest canonical and version-1 step — and the writable open renames `palace.db` (O7), migrates the
+  embedder, adopts `chain_meta` from the manifest, switches the chain, and answers `verify` OK and a search;
+  the read-only open answers `ReadOnlyUnmigrated`. **So the adoption with rows is live code for one
+  population: a database written by a source build of this repository older than 0.19.0 and never opened
+  by any 1.x build since.** No released binary writes one: the withdrawn pre-1.0.0 releases derived their
+  keys under the former name (CHANGELOG `## 1.0.0`), and every 1.x build seeds `chain_meta` at a vault's
+  first open, before any audit row exists.
+- **P-RACE** (the refuter's): two processes making a fresh vault's first open at once, 200 runs on `main`:
+  196 both Ok; one raw `UNIQUE constraint failed: chain_meta.key` (the unlocked seed, reading 7); two raw
+  `duplicate column name: supersedes` — a DIFFERENT race, `init_manage_schema`'s `PRAGMA table_info` then
+  `ALTER TABLE … ADD COLUMN` in autocommit (`manage.rs` ~620), filed as **O307**; one O279 moved-file
+  refusal answered as `VaultHeld` (classified, retryable).
+
+**Prior rulings found and their disposition** (searched `rul(ed|ing)` in O303, O296, O290, O237, O251,
+O244, O233, O240, O246, O253, O254).
+- **O296 — FOLLOWED and REFINED.** Items 2 (one judgement returning a verdict each caller classifies), 4
+  (an unseeded chain beside a twin or a foreign marker refuses), 5 (a refusal writes nothing, the
+  connection closed) and 6, and its texts, byte for byte. Refined: item 4's "With no stage, no head is a
+  fresh vault or a legacy one, and `init_chain` seeds it" (`refuse_before_effect`'s doc) — a legacy one is
+  no longer seeded (below). Its dissent's settlement of the memory lens's evidence-trusting option "on
+  O290's reason (d), the absence of a producer, and the transplant" is the precedent that decides split 1.
+- **O290 reason (d) — FOLLOWED**: "a heal that serves no crash is withdrawn".
+- **O237 rulings 1 and 3 — FOLLOWED.** The seeded open stays O(1) in `audit` — this ruling adds no replay
+  anywhere; ruling 3's exemption is for a SEEDED version-1 chain, which is untouched: only an UNSEEDED one
+  is refused.
+- **O244 — FOLLOWED**: the only seed is the constant (genesis, 0), on an empty chain; nothing is stored as
+  a start point.
+- **O233 item 3 — REFINED**, extended to the third key: a committed head with no committed height is an
+  integrity finding (a writable open refuses, a read-only one reports).
+- **O246 — FOLLOWED**: no new heal; a lag is healed only on a seeded chain, where the head is a keyed
+  value the rows must reproduce.
+- **O251, O253, O254 — FOLLOWED**: nothing is offered to the label guard at the adoption; the anchor is
+  read inside the adoption's lock; the adoption writes no manifest.
+- **A2 and O240 — FOLLOWED, not widened.**
+- **The maintainer's 1.0.0 decision — FOLLOWED**: "Nothing before this release is installable, and nothing
+  before it needs to be" (CHANGELOG `## 1.0.0`). Its companion sentence, "a vault written by any earlier
+  build cannot be opened by this one", is true of every released binary and FALSE of a source build of the
+  rewritten history (P-SRC); it is corrected beside its text in this unit.
+- **0.19.0's "Existing databases adopt `chain_meta` from the manifest on first open" — REFUTED and
+  superseded**, recorded beside its text: it described a pre-1.0.0 upgrade path 1.0.0 withdrew, it seeded
+  the manifest's head even where the rows ran past it (P: `legacy_lag`, bricked today), and adopting a
+  head-less chain with rows is either that withdrawn path or an edit.
+- No maintainer ruling is overturned; the 2026-09-08 versioning ruling is followed.
+
+**Claims refuted — the filing's, the brief's and the lenses'.**
+- The filing's shape, "the head seeded is the REPLAYED one": the oracle above — it launders a forged
+  append on a version-1 chain into a keyed, anchored, label-bound record. Its "with a non-empty `audit`"
+  would adopt a total erasure beside a non-genesis anchor. Its "a genuine pre-0.19.0 database … is adopted
+  as today": only at the anchor — a pre-0.19.0 crash between a commit and its manifest save leaves rows
+  past the anchor, and any later write FORKED the manifest (`commit_write` chained from its stale head,
+  `git show 5c4e696^`), so the anchor is never reached; and the population is source builds only.
+- The brief's readings 2 and 6 ("GENUINE" states) hold only for that population; its option D's cost
+  ("would brick a genuine legacy vault and `v1_crash_before_seed`") likewise; `/v1 …/anchor` over an
+  unseeded chain answers 500 (`chain_state()` → `CorruptRow`), not `anchored: false`.
+- The memory lens's "no build that can open a vault produces an unseeded chain with records", and the text
+  "no build writes that state": false for a source build (P-SRC). The security lens's `vault anchor` "nothing
+  to anchor, exit 0": the CLI's own open seeds first, and `/v1` answers 500. The engineering lens's "no
+  deployment running on 1.6.x stops": the head-less states with rows accept writes on 1.6.1, and `writes`
+  missing serves reads with `verify` OK. The security lens's filing premise (a descent check at the anchor
+  door would catch the pinned forged-head route): there the first write's head DOES descend from the anchor
+  by one step — O237's ruled O(1) residual.
+- The height-with-no-head split: folding it (or the whole head-less family) into `HeadState::Inconsistent`
+  sends it through `answer()` and `settle_foreign`'s `HeadMismatch | Inconsistent` arm and changes O296's
+  pinned texts — 6 of its rows (the `all = false` deletions), or all 12 and the "vault.json.next may hold
+  the only copy … do NOT delete it" clause.
+
+**The ruled shape (D′: adopt only the empty chain).**
+1. **One classification of a head-less chain, inside `judge_chain`, in its snapshot, with no replay.** With
+   no head key — or no `chain_meta` table on a version-1 regime — the judgement reads, in the same
+   snapshot, `EXISTS (SELECT 1 FROM audit)` (never `count(*)` on the open path) and whether `writes` is
+   present, and answers a head-less family distinct from `Inconsistent`: **W1** no height, no record, and
+   the anchor at the genesis constant; **W2** no height, no record, the anchor anywhere else — an erased
+   trail; **W3** a record or a height with no head. A missing table beside a version-2 commitment keeps
+   O296's `Inconsistent` text.
+2. **Callers classify.** `ChainJudgement::answer` (the ordinary open, the read-only report, `tighten_anchor`):
+   W1 → `Unseeded`; W2 → `ManifestTampered`; W3 → `IntegrityFinding` with the O303 text below.
+   `refuse_before_effect` matches a staged file plus ANY head-less state BEFORE `answer()`, and
+   `settle_foreign` maps the whole family to its existing refusal — O296's texts byte for byte. So the
+   rotation reconcile's lock path refuses W2 and W3 before its marker seed.
+3. **`chain::head_state` reads `writes`**: a head with no height is `Inconsistent` ("audit chain: a
+   committed head with no committed height (`chain_meta.writes`)"), W4.
+4. **The adoption, in `init_chain`, under the write lock.** No `CREATE TABLE` before the judgement. On
+   `Unseeded`: `WriteLock::begin`; `CREATE TABLE IF NOT EXISTS chain_meta`; the manifest read strictly
+   (`verified_manifest()`, no fall-back); the judgement again in the lock's snapshot against that head; on
+   W1 — and only with the manifest's height 0 as well — `chain::seed(Vault::chain_genesis_hex(), 0)`, the
+   constants, then commit; if the chain is found seeded (another first open won) the lock commits nothing
+   of its own and the ordinary reconcile runs; any refusal rolls back (the table with it) and the
+   connection is closed with `close_refused`. No manifest field is read by the seed; `anchor_at_open` stays
+   `Unseeded` for the adopting open. `init_chain`'s manifest seed is deleted.
+5. **Read-only**: W1 → `ReadOnlyUnmigrated` (missing `chain_meta.head`) — the answer its absent-table twin
+   already gets; W2 → `ManifestTampered`; W3 and W4 with the table present → reported with O233's suffix
+   ("an integrity finding a writable open refuses; run `undercroft verify`") and served, the guard refusing
+   every guarded read; no `chain_meta` TABLE with audit records → the W3 `IntegrityFinding`, decided before
+   `check_read_schema`, whose `ReadOnlyUnmigrated` would name a remedy — a writable open — that now
+   refuses. The note "this database predates the transactional chain head … the manifest anchor stays
+   authoritative" is deleted: false since 1.0.0 for every released database.
+6. **No raw error**: `require_head`'s no-head arm (today `CorruptRow`, a 500) and `chain::writes`'s missing
+   row (today a raw `QueryReturnedNoRows`) become `IntegrityFinding` — `chain_append`, `chain_state` (`stats`,
+   `vault status`, `/v1 …/anchor`, restore), backup, forget and the witness answer 409 `class:
+   "integrity"` / exit 2 there. Callers that discard the error (`adopt_open_verdict`, restore's probe) are
+   unchanged.
+7. **`tighten_anchor` meeting no committed head beneath a live handle** refuses `IntegrityFinding`; the
+   public `AnchorState::Unseeded` stays (a serde type; a fresh vault's adopting open still reports it).
+8. **Texts.** W3: "audit chain: `chain_meta` holds no committed head while `audit` holds records" (or "…
+   while `chain_meta` holds a committed height") "— no release since 1.0.0 writes that state: a database
+   edited offline, or one written by a source build older than 0.19.0 and never opened by a 1.x build.
+   Nothing was written. Restore the vault from a backup that verifies (ROADMAP O303)". Never "no build".
+9. **Records**: beside O296 item 4 and `refuse_before_effect`'s doc; beside 0.19.0's and 1.0.0's CHANGELOG
+   sentences; `CLAUDE.md`'s store bullet, through the pull request the maintainer approves; the CHANGELOG;
+   `UPGRADING.md`; `docs/THREAT_MODEL.md` and `docs/security.md` where they describe the reconciliation;
+   every diagram in the three sets that names the legacy adoption (O105's audit, run).
+
+**Options that lost, with their cost.** **A** (the filing's: seed the replayed head, heal a lag): the oracle
+— a keyless forged append laundered into a keyed, label-bound record; plus a linear replay at every
+adopting or read-only open of a head-less vault. **B** (A under a lock): the same laundering. **C** (the
+engineering lens's: replay a head-less chain and adopt it when its rows end EXACTLY at the anchor, seeding
+the replayed head and requiring the manifest's height to equal the rows): SOUND against a writer without
+the key — it seeds only what the seeded path already accepts, and widens neither O240 nor A2 — and it
+keeps the source-built population opening; it lost on precedent (O290 reason (d); O296's settlement of the
+same evidence-trusting option; the maintainer's 1.0.0 decision that nothing pre-1.0.0 needs to open) and on
+cost (a replay on each head-less open for a population no release produces). It is the named alternative if
+the maintainer wants that population kept. **D as briefed** (refuse every head-less chain with rows): right,
+but it lacked W2's genesis check and the lock. **E** (keep the manifest seed, type the `UNIQUE`): leaves the
+defect. The partial deletion handled only at the seed: misses W4, which is seeded and never reaches it.
+Judging only under the lock, or a `data_version` shortcut around the locked re-judgement: every open would
+take the lock (O258's starvation), or the accelerator would become the licence.
+
+**Dissent.** The engineering lens ruled C — settled for D′ by precedent, not by soundness, and disclosed. The
+security lens would have the empty read-only chain served with a genesis head (`chain::verdict`,
+`chain_state`) — settled for `ReadOnlyUnmigrated`: one state, one class, and no change to the arithmetic
+the guard and `verify` share. The security lens also required the rotation reconcile's lock-free fast path
+to check for a seeded chain — refuted as redundant: that path runs no statement, and nothing between it and
+`init_chain` writes on a 1.x database. The memory lens and the engineering lens held that no
+`UPGRADING.md` entry is owed — settled for an entry: O296 took none because every state it refused was
+already refused, only after the effect, while O303 refuses states that RUN on 1.6.1 (they accept writes,
+or serve reads with `verify` OK); O237's, O230's, O234's and O206's entries are the precedent.
+
+**Fails silently if**: the classification sits outside `judge_chain`'s snapshot (a false W3 beside a
+concurrent first open; only the race arm sees it); only `init_chain` classifies (the lock path seeds a
+marker first — only the no-marker arm sees it); O296's `Want` fragments are edited to pass (the `.next`
+warning lost); the seed reads the manifest (on W1 byte-identical to the constants — only the source gate
+sees it); W1 omits the genesis check or the height (the erased trail adopted); `CREATE TABLE` stays before
+the judgement (the table appears on a refusal); tests assert the class alone, cover one security level, or
+drive the race through one connection; a counterfactual copy is not force-recompiled; `AnchorState::Unseeded`
+is deleted as tidying; the refusal text says "no build" (false, P-SRC). For the source-built population
+"nothing written" is not literal: O7's rename and the schema batch run before the chain is judged; the
+byte gate is scoped to 1.x constructions and says so.
+
+**The gate.** Store tests at both security levels, each row over a read-only open, writable open #1 plus
+one `upsert`, and writable open #2, asserting the variant and a text fragment, `vault.json`'s SHA-256, the
+marker (absent stays absent), the `chain_meta` rows and the table's presence in `sqlite_schema`, the
+`audit` count and the height. Refused with nothing written: every probe row above, the no-marker variant,
+the forged tail on an emptied version-1 chain, the height alone with zero records, and a source-built
+shape (version-1 rows, no `chain_meta` table). W1 adopted with the table absent and with it empty, bytes
+as `main`'s. The race: a new `open_pause` point between the unlocked judgement and the lock, two handles —
+both open, one seed; and across two processes, no `UNIQUE` (O307's column race stays, filed). O296's
+pinned arm inverted for the emptied `chain_meta` (bytes), its forged-head half kept pinned; every O296
+`Want` literal unchanged. Surfaces: `open_store_as` exit 2 (W2, W3, W4) and exit 1 (W1 read-only);
+`store_for` 409 with the integrity class, or with none for W1 read-only; a read-only `/stats` on W3/W4 409,
+not 500; `/v1 …/anchor` with `chain_meta` emptied beneath a cached handle 409, not 500. Source gates: one
+production `chain::seed(`, after `WriteLock::begin(` and the `CREATE TABLE … chain_meta` inside it, with
+constant arguments; no `chain_head_hex()` or manifest `writes()` in `init_chain`; `chain::replay(`'s call
+count unchanged; `head_state` reads `writes`. Counterfactuals, each force-recompiled and restored by
+SHA-256: `main`'s manifest seed (the byte arms); the family classified only in `init_chain` (the marker
+arm); the family folded into `Inconsistent` (O296's texts); A (the forged tail); C (the source-built and
+empty-table-with-rows arms must refuse); no genesis check (the erased trail); no locked re-judgement (the
+race); `CREATE` before the judgement (table presence); `head_state` blind to `writes` (W4); `CorruptRow`
+kept (the 409 arms); `ReadOnlyUnmigrated` for a missing table with records (the read-only source-built
+arm). Real corpus: the LoCoMo feed through the release binary with `chain_meta` emptied — refused, bytes
+unchanged — and the ordinary open's latency against `main`.
+
+**Residuals, stated.** A database written by a source build older than 0.19.0 and never opened by a 1.x
+build is refused (option C is the sound alternative; whether `UPGRADING.md` names "open it once with 1.6.1"
+is the maintainer's). The forged head equal to the anchor, with a forged height, still opens by the O(1)
+short-circuit and its first write moves the anchor (O237's residual; O296's pinned arm). The first-open
+column race (O307). Windows and lock-less mounts, reasoned not measured.
+
+**Filed by this ruling**: **O306** (the anchor door writes over an anchor its committed head does not
+descend from, when `chain_meta` is edited beneath a live handle); **O307** (two first opens of a fresh
+vault race the `ADD COLUMN` migrations). O235's body is amended: `refuse_unless_authentic` says "its records
+do not replay to the committed head" for every `chain_ok = false`, a head-less or inconsistent chain
+included. A note on O213: the empty chain's read-only answer takes the absent-table class, and follows
+whatever O213 rules for it.
+
+**Versioning**: PATCH inside the unreleased `1.7.0`: every newly refused state is an offline edit or a
+pre-1.0.0 database 1.0.0 declared unsupported. **`UPGRADING.md` owes an entry** — symptom (a writable open
+exit 2 / 409 naming `chain_meta`; `ManifestTampered` over an erased audit trail; reads refused where only
+`chain_meta.writes` is missing), cause, fix (restore a backup that verifies) — and `config check` cannot
+see it, since it opens no database.
+
+#### BUILT 2026-09-30, to the ruling — nineteen counterfactuals over four runs, each failing its gate, and an independent review's findings, each fixed or filed
+
+**The chain** (`crates/undercroft-store/src/chain.rs`): `head_state` reads the height (`WRITES_KEY`),
+and a committed head with no committed height is `Inconsistent` — O233 item 3 on its third key; a
+height with no head stays `Unseeded`, so the store's judgement names it. `require_head`'s missing head
+and `writes()`'s missing row are `IntegrityFinding` (they were a `CorruptRow` and a raw
+`QueryReturnedNoRows`, both a 500). The seed is `seed_empty(conn)`: the genesis head and height 0, and
+no parameter at all, so no manifest field can reach it. `seed` is gone.
+
+**The store** (`crates/undercroft-store/src/lib.rs`): `ChainJudgement::Headless(Headless)` —
+`Empty`, `Erased`, `Orphaned { records }` — produced by `judge_headless`, which `judge_chain` calls for
+an absent table on a version-1 regime and for `HeadState::Unseeded`, in the judgement's own snapshot:
+`EXISTS (SELECT 1 FROM audit)`, whether `writes` is present, and the anchor against
+`Vault::chain_genesis_hex()`; no replay. `answer()` maps `Empty` → `Unseeded`, `Erased` →
+`ManifestTampered`, `Orphaned` → the O303 finding. `refuse_before_effect` asks a staged file beside ANY
+head-less state before `answer()`, and `settle_foreign` maps the whole family to its existing refusal —
+both O296 texts byte for byte. `reconcile_chain` is split into the judgement and `settle_chain`, which
+the read-only report shares. `init_chain` creates no table before judging; on `Unseeded` it calls
+`adopt_empty_chain` — the `Adopting` pause point, `WriteLock::begin`, `CREATE TABLE IF NOT EXISTS
+chain_meta`, `verified_manifest()` (strict), the judgement again in the lock's snapshot, and
+`seed_empty` only for `Empty` beside a manifest at height 0 (a genesis head at a nonzero height is
+`ManifestTampered`); found seeded, the open re-runs the ordinary reconcile. A refused `init_chain`
+closes its connection (`close_refused`). `check_chain_read_only` makes one judgement with the regime
+read in its snapshot (its bare `head_state` is gone): `Inconsistent` and `Orphaned` are reported with
+O233's suffix, `Empty` is `ReadOnlyUnmigrated` (missing `chain_meta.head`), `Erased` is refused in
+`settle_chain`; the "predates the transactional chain head … stays authoritative" note is deleted.
+`refuse_headless_without_table` runs on the read-only posture before `check_read_schema`: records, or
+an erased trail, beside no `chain_meta` table are refused in the judgement's class; the empty chain
+and a version-2 regime with no table fall through to the schema check unchanged (O296's pinned
+`Declines`). `tighten_anchor` refuses an empty chain beneath its open handle as an integrity finding.
+`AnchorState::Unseeded` stays, documented as the empty chain this open seeded.
+
+**Gates.** `headless_tests.rs`, eleven tests, both security levels in every arm, each refusal asserting
+its variant and text fragment and the manifest's bytes, the marker, the `chain_meta` rows or the
+table's absence, and the `audit` count across two writable opens and a read-only one: records with no
+head (a rollback, the same with the marker deleted — the marker stays absent — no rollback, a version-1
+rollback); the partial deletions (the heads deleted with the height left, the height alone with no
+record, the height deleted with the heads left, and a write beneath a live handle whose height was
+deleted, and a height that is not a number beneath it); an erased trail (`ManifestTampered` on both
+postures); the forged tail on an emptied version-1
+chain (refused, not laundered); records with no `chain_meta` table (the table not created; the
+read-only open refuses too); only the empty chain adopted (a fresh vault, the empty chain with its
+table absent and present — read-only `ReadOnlyUnmigrated` — and a genesis head at height 5 refused);
+two first opens seeding one chain (the first held at `Adopting` while the second opens completely: both
+open, one seed, one commitment) and a seed committed between an open's judgement and its lock, not yet
+anchored (judged, never inserted over); a chain seeded by another open and emptied again before this
+open's second judgement (refused, through the `Readopting` pause point); `tighten_anchor` beneath an emptied chain (`ManifestTampered` past
+genesis, the finding at genesis; nothing anchored or seeded; the witness names the erased trail);
+and the source gates, over every production source of the crate. O296's pinned arm
+for the emptied `chain_meta` is inverted — refused with nothing written — and its forged-head half
+stays pinned. The CLI (`open_race_surface_tests.rs`): `open_store_as` exit 2 over a head-less chain and
+a missing height, bytes unchanged, and exit 2 (`ManifestTampered`) over an erased trail; the empty
+chain read-only exit 1 (`ReadOnlyUnmigrated`), then adopted writable; `/v1` `store_for` 409 with the
+integrity class, a read-only server's `stats` 409 where `main` answered 500, and a read-only server over
+the empty chain 409 with no class; `POST …/anchor` beneath a cached handle 409, nothing anchored.
+
+**Counterfactuals**, each applied to the real sources, force-recompiled (two `Compiling
+undercroft-store` lines per log), run, and restored from a snapshot verified by SHA-256
+(`scratchpad/o303/cf303.py`, `run-cf303.sh`): nineteen over four runs. **cf1**, `main`'s adoption (every head-less chain read as
+empty, seeded from the manifest's head and height): every refusal arm, the source gates, both surface
+arms and O296's inverted arm. **cf2**, the classification only in `init_chain`: the no-marker arm alone —
+the rotation reconcile's lock path seeded a marker before the refusal. **cf3**, the family folded into
+`Inconsistent`: O296's pinned texts beside a stage and a foreign marker, and the read-only no-table arm.
+**cf4**, the filing's replayed head: the forged-tail arm (laundered), the no-table, records and partial
+arms, O296's inverted arm and the surface arms. **cf5**, option C (rows ending exactly at the anchor
+adopted): the no-table arm — the writable open served at height 21 — with the forged-tail, records and
+partial arms on their texts. **cf6**, no genesis check: the erased-trail arm on its read-only half and
+`vault anchor`'s — the adoption's height check still refuses the writable half, a diagnostic partial
+fire; **cf6b**, no genesis and no height check: those and the genesis-at-height-5 arm. **cf7**, the
+locked judgement narrowed to the height: in round 1 it failed NOTHING — the first race arm's second open
+anchors before the first resumes, so the manifest's height alone refused the seed and the arm never
+tested the judgement; round 2 added the narrower arm (a seed committed between the judgement and the
+lock, not yet anchored), and cf7 fails it and only it. **cf7b**, a seed on the unlocked judgement's word:
+both race arms, the height arm and the source gate. **cf8**, `CREATE TABLE` before the judgement: the
+no-table arm (the table appears) and the source gate. **cf9**, `head_state` blind to the height: the
+missing-height store arm and `open_store_as`'s; `/v1`'s stays green, because the height read answers 409
+at `stats` with the same fragment — that arm cannot tell a refusal at the open from one at `stats`, and
+is recorded as covering both. **cf10**, `require_head`'s `CorruptRow` kept: every read-only report arm,
+`vault anchor`'s and `/v1`'s never-500 arm. **cf11**, no read-only no-table refusal: the read-only
+source-built arm. **cf12**, no height check at the adoption: the genesis-at-height-5 arm. After the
+review's fixes: **cf13**, the read-only open letting a version-2 regime with no table through to
+`ReadOnlyUnmigrated`: O296's dropped-table arm; **cf14**, a second production seed, in `rotate.rs`: the
+source gate, which now reads every file; **cf15**, a second judgement accepting no head: the `Readopting`
+arm alone; **cf16**, the witness's erased-trail arm removed: the arm that drives the witness; **cf17b**, a
+non-numeric height a `CorruptRow` again: the garbled-height arm. **cf17**, the first attempt at that last
+one, reverted NOTHING — it chained a second `map_err` that re-wrapped the `CorruptRow` into the finding —
+and passed every arm, which is what a counterfactual that fails to apply prints; it is recorded as mine
+and rewritten, never counted.
+
+**A defect of mine in the harness, reported as mine.** The first launch of the counterfactual loop ran
+under a tool timeout; stopping it killed the wrapper and not the loop, so two runners raced on the same
+sources and the same target directory — one applied a counterfactual while the other restored. Their
+logs are set aside (`cf-logs-raced/`), the sources were restored and checked by SHA-256, and every
+figure above is from ONE runner behind a lock directory.
+
+**Real corpus.** The LoCoMo feed mined into 12 wings (1,020 sealed drawers, audit height 1,021),
+this tree's release binary (the O303 text in it and not in `main`'s) against `main` `5fc6171`'s,
+fifteen interleaved runs of each command, every exit code checked (none non-zero); medians in ms,
+this against `main`: writable `stats` 4 / 4, `verify` 8 / 8, `search` 42 / 41, read-only `stats`
+4 / 4, `search` 41 / 41 — the one statement `head_state` gained does not show. Through the release
+binaries, each on its own copy of the vault: a rollback two records behind with `chain_meta` and the
+commitment deleted, the same with no rollback, and an erased trail — `main` opened each writable and
+took a write (exit 0), the write moving `vault.json` and seeding `chain_meta` at height 1,024 over
+1,020, 1,022 and 0 audit rows; this build exits 2 on the read-only open, the writable open and the
+write, every byte as found. A deleted height: `main` exit 1 ("Query returned no rows") on all three,
+this build exit 2. The first-open race across two processes, 200 runs of this build: 197 both open,
+no `UNIQUE` (P-RACE measured one on `main`), one `duplicate column name` (O307) and two `VaultHeld`
+from `journal_mode=WAL` meeting a busy file at the connect's first statement — classified and
+retryable, and seen on `main` too.
+
+**The battery at the final tree**: `test` 1276 run (17 ignored — 1260 before, eleven new store tests and
+five new surface arms), `e2e` 750, `orchestrator-e2e` 185, `e2e-telemetry` 62, `backends-e2e` 157,
+`obs-config` 17, `site` 7, `tls-pins` 31; `lint` and `arch-check` green.
+
+**Found by an independent adversarial review of the build, and each fixed or filed before this
+landed** — no write before a judgement on the ruled path and no legitimate state answered wrongly, and a
+list of mine. (F1) A deleted `vault.db` beside a manifest past genesis is CREATED by the writable open's
+connect before the lock path refuses it as an erased trail, so "nothing written" is false there and later
+opens answer tampering where the read-only one answered `DatabaseMissing` — filed as **O308** (A33 on the
+writable posture, a class choice beside O213), and every claim of "nothing written" scoped. (F3) The
+read-only open answered a version-2 regime with no `chain_meta` table `ReadOnlyUnmigrated`, naming a
+writable open that refuses it, which ruling item 5 covers: refused now as the judgement's finding, moving
+O296's pinned read-only class for its two dropped-table rows (recorded beside O296). (F4) `require_head`'s
+text claimed every open seeds or refuses, false on the read-only posture: made posture-neutral. (F5) The
+source gate's comment said `lib.rs` holds no inline test module (it holds two) and its count saw one file:
+it now scans every production source of the crate with inline test modules cut. (F6) Arms added for an
+erased trail through `open_store_as` (exit 2) and a read-only `/v1` over the empty chain (409, no class);
+the witness driven beneath an emptied chain — and that arm FOUND one more: `witness_emit` answered an
+erased trail beside an anchor past genesis `Invalid` ("no records yet", a 400); it is the finding now,
+and O245's vacuous-witness fixture, which forced exactly that state, puts its anchor at genesis too. (F8)
+UPGRADING's fix implied 1.6.1 checks where rows end, and read as the "open it once with 1.6.1" route the
+residuals reserve for the maintainer: reworded. (F9) Three stale doc comments; `rotate.rs` read the
+height with a fall-back to the MANIFEST's (unreachable behind the rotation's verify, the pattern O303
+removes) — `chain::writes` now; and a non-numeric height was still a `CorruptRow`, a 500 — the finding
+now. (F10) A second judgement meeting no head again, after another open seeded it, returned a handle with
+none — refused, through a new `Readopting` pause point. Left, with reasons: (F2) a genesis head beside a
+nonzero manifest height reads `Empty` in the judgement, so with the marker absent the lock path commits
+the marker before the adoption refuses — a manifest only a key holder writes, outside the guard's threat
+model, stated rather than closed; (F11) a head with no height beside a staged rotation answers the bare
+`Inconsistent` text without "do NOT delete vault.json.next" — O235's wording work, where O296 item 8 put
+that clause for every such text.
+
+**What the gate cannot see.** The cross-process race is gated in-process (two handles, two
+connections): a two-process loop cannot yet assert "both open" because O307's column race fails about
+one run in a hundred; it was measured instead (above). Windows and lock-less mounts, reasoned not
+measured.
 
 ## 1.6.1 — released 2026-09-22
 
@@ -30673,6 +31079,11 @@ so reading it is evidence, not inference.
 **Gate**: P13 (`init`, then `--read-only search x`) exits 0 or 1 as ruled;
 the same after one `remember` with the database removed still exits 2.
 
+**Noted 2026-09-30 by O303's ruling.** A fresh vault's EMPTY chain — a database whose first
+writable open stopped between creating `chain_meta` and seeding it — now answers the read-only
+posture `ReadOnlyUnmigrated` (exit 1), the class its absent-table twin answers. It is the same
+question one step later: whatever this entry rules for a vault with no writes, that state follows.
+
 ### O214 — a search query has no bound, and a refused save still pays for its whole body, on the listener's one request loop
 
 **Filed 2026-09-17 by O198's measurement, taken on the `66337d2` binary.**
@@ -31044,6 +31455,11 @@ mismatch, which the "HMAC mismatch" wording misstates — and every such refusal
 deleted: misleading text there pushes an operator towards the one destructive recovery. O296 kept the
 texts unchanged so both postures stay byte-identical; the change belongs here, for both postures at
 once.
+
+**Amended 2026-09-30 by O303's ruling.** The label guard's refusal (`refuse_unless_authentic`,
+store `chain.rs`) says "its records do not replay to the committed head" for EVERY `chain_ok = false`
+— a chain with no committed head, a head with no height, or a regime that disagrees with its keys
+included, where nothing was replayed against a head at all. It is one more wording this entry owns.
 
 ### O236 — `create_tunnel` appends a chain record for a create that wrote nothing
 
@@ -31917,32 +32333,6 @@ manifest's MAC or keycheck refuses — and the O271 and O284 neighbourhood.
 **Gate**: unlock, delete, create, connect — the open answers the reopen class and the new vault's
 directory is byte-identical.
 
-### O303 — a writable open adopts an emptied `chain_meta` from the manifest without replaying, so a rollback opens Ok
-
-**Filed 2026-09-29 by O296's ruling (its security lens, confirmed by the refuter); measured by the
-integrator.** `init_chain`'s `AnchorState::Unseeded` arm — the adoption of a database older than
-`chain_meta` (0.19.0) — seeds the committed head and height FROM THE MANIFEST (`chain::seed` with the
-handle's `chain_head_hex()` and `writes()`, store `lib.rs`) without replaying the audit rows it then
-vouches for. `head_state` reads `Unseeded` whenever `chain_meta` holds no head and `audit` holds no
-`migrate/chain-v2` commitment, so an offline writer who deletes every `chain_meta` row and that one
-audit row makes any vault read as a legacy one. Measured by O296's probe, both security levels: a
-database rolled back two records behind the anchor, with those rows deleted, OPENS Ok on the writable
-posture at the manifest's height, with only the note that the chain's labels are not
-chain-authenticated, and `verify` fails; with `writes` left in `chain_meta`, the seed's INSERT fails
-as a raw `UNIQUE constraint failed: chain_meta.key` — a 500 on `/v1`; the read-only open serves both
-with its "predates the transactional chain head" note. Beside a staged rotation, O296's ruling now
-refuses before any effect; with no stage the open reaches `init_chain` by the fast path and nothing
-judges.
-
-**Shape, for a ruling**: with a non-empty `audit`, the adoption replays the rows against the manifest's
-anchor — an anchor not seen is `ManifestTampered`, and the head seeded is the REPLAYED one; a partly
-present `chain_meta` is `IntegrityFinding`, never a raw SQLite error; the read-only open's note becomes
-the same verdict. A genuine pre-0.19.0 database replays to its anchor and is adopted as today; a fresh
-vault has no rows. The replay's cost falls on the one open that adopts.
-
-**Gate**: the emptied rollback refused with nothing written, on both postures; the partial deletion
-answering 409 `class: "integrity"`, not a 500; a fresh vault and a genuine legacy database unchanged.
-
 ### O304 — a writable open acts on its licence for a staged rotation's promote one forced replay after asking it
 
 **Filed 2026-09-29 by O296's build (its independent review); pinned by a test.** O296's ruling put the
@@ -31973,6 +32363,70 @@ under `## Unversioned` or `## Open`, so it could not see the misplacement.
 section's release date — an entry closed after a release cannot have shipped in it.
 
 **Gate**: O291 put back under 1.6.1 fails the preflight, naming the entry; the tree passes.
+
+### O306 — the anchor door writes over an anchor its committed head does not descend from, when `chain_meta` is edited beneath a live handle
+
+**Filed 2026-09-30 by O303's ruling (its security lens, narrowed by the refuter).** `VaultStore::anchor()`
+reads the committed head and height under the write lock and hands them to `Vault::anchor_manifest`, whose
+read-modify-write of the MAC-verified `vault.json` checks the HEIGHT (it refuses a manifest ahead of the
+database) and the keycheck — never that the new head descends from the anchor it overwrites (vault
+`lib.rs` ~1407–1420). So a `chain_meta` edited beneath a LIVE handle — a head or height the rows never
+produced — is anchored by that handle's next write, and the anchor that would have exposed the edit is
+overwritten. O303 closes the route through an open (a head-less chain is no longer seeded from the
+manifest); a handle that is already open does not re-judge.
+
+**Excluded, stated**: a forged head EQUAL to the anchor with a forged height opens by the ordinary open's
+O(1) short-circuit, and its first write's head descends from the anchor by one step — a descent check at
+the door cannot see it; that is O237's ruled residual (O296's pinned arm). A descent check that walks the
+rows between the old anchor and the new head is O(lag) and defeatable by padding rows, so the shape needs
+its own ruling.
+
+**Shape, for a ruling**: whether the door may verify lineage (the committed head reached by replaying from
+the anchor's position), at what cost, and what it answers when it cannot.
+
+**Gate**: a live handle whose `chain_meta` head is replaced beneath it refuses to anchor, leaving
+`vault.json` byte-identical; the forged-head-equal-to-anchor route stays pinned as O237's residual.
+
+### O307 — two first opens of a fresh vault race the `ADD COLUMN` migrations and one answers a raw SQLite error
+
+**Filed 2026-09-30 by O303's ruling; measured by its probe P-RACE.** Two processes making a fresh vault's
+first writable open at once, 200 runs on `main` `5fc6171`: two runs answered `sqlite error: duplicate
+column name: supersedes` — `init_manage_schema` (store `manage.rs` ~620) reads `PRAGMA table_info(drawers)`
+and then runs `ALTER TABLE drawers ADD COLUMN …` for each missing column, in autocommit, so both opens see
+the column missing and the second `ALTER` fails. Every `ADD COLUMN` list the initialisers iterate
+(`READ_SCHEMA`'s inventory) has the same check-then-act shape. The same probe also met one O279 moved-file
+refusal answered as `VaultHeld` (classified and retryable), and one raw `UNIQUE constraint failed:
+chain_meta.key` — O303's, closed by O303's locked seed. On O303's build, 200 runs: no `UNIQUE`, one
+`duplicate column name`, and two `VaultHeld` from `journal_mode=WAL` meeting a busy file at the
+connect's first statement — classified and retryable, but a first open of a fresh vault that fails
+for another first open is this entry's question too.
+
+**Shape**: the column migrations under one `BEGIN IMMEDIATE`, re-reading `table_info` inside it, or an
+`ADD COLUMN` whose "duplicate column" failure is re-checked and accepted when the column now exists.
+
+**Gate**: the two-process first-open loop answers no raw SQLite error in ≥200 runs, and an open-pause arm
+places the second open's migration between the first's read and its `ALTER`.
+
+### O308 — a writable open over a deleted `vault.db` beside a manifest past genesis creates the database before it refuses
+
+**Filed 2026-09-30 by O303's independent review (its F1); established by reading.** `connect_writable`
+opens with `SQLITE_OPEN_CREATE` whenever the layout is `DbLayout::Absent`, and the schema batch commits
+`meta`, `drawers`, `audit` and their indexes; the rotation reconcile's lock path (the marker is absent)
+then judges the empty trail `Headless::Erased` and refuses `ManifestTampered` (O303). So the refusal
+leaves an empty database behind, and every later open on either posture answers `ManifestTampered` where
+the read-only open answered A33's `DatabaseMissing` before it — an incident read as tampering rather
+than as a missing file. On `main` `5fc6171` the same writable open seeded `chain_meta` from the manifest
+and served an empty vault at the manifest's height, taking writes; O303 closed that, and this is what
+it leaves. The deleted file is the most ordinary producer of O303's erased trail.
+
+**Shape, for a ruling**: the writable posture refuses an absent database beside a manifest whose head is
+past genesis or whose height is above 0, before it connects, as A33's `DatabaseMissing` (an integrity
+verdict), after O291's `vault_gone` check; a manifest at genesis and height 0 is a fresh vault's first
+open and keeps creating. O213 asks the read-only half of the same question for a manifest at genesis.
+
+**Gate**: a vault with records whose `vault.db` is deleted — a writable open refuses and no `vault.db`
+exists afterwards; a read-only open still answers `DatabaseMissing`; a fresh vault's first open still
+creates it; a delete racing the open still answers the reopen class.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 

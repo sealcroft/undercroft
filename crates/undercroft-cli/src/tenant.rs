@@ -1385,6 +1385,8 @@ impl Tenancy {
         // as the CLI's are, the open first because it gets there first.
         use undercroft_store::AnchorState;
         let behind_by = match (state, at_open) {
+            // Unreached since ROADMAP O303: `tighten_anchor` refuses a chain
+            // with no committed head beneath its open handle.
             (AnchorState::Unseeded, _) => 0,
             (_, Some(AnchorState::Healed { behind_by })) => behind_by,
             (AnchorState::Healed { behind_by }, _) => behind_by,

@@ -1708,7 +1708,24 @@ Consequences that are binding, not advisory:
   database restored exactly AT the anchor is a crash before the commit to
   every value there is, and its stage is discarded (A2's); and the licence
   is acted on one replay after it is asked, a window only an offline edit
-  lands in (O304). `chain_answers_to` is gone. Test pause points live in
+  lands in (O304). `chain_answers_to` is gone. **And no open adopts a chain
+  with no committed head unless it is EMPTY (O303)**: `init_chain` seeded a
+  head-less `chain_meta` FROM THE MANIFEST, replaying nothing, so a rollback
+  with `chain_meta` and the version-2 commitment deleted opened, took writes
+  and moved the anchor over the evidence. `judge_chain` now classifies a
+  head-less chain in its own snapshot with no replay — `Headless::Empty` (no
+  record, no height, the anchor at genesis), `Erased` (`ManifestTampered`),
+  `Orphaned` (records or a height: `IntegrityFinding`) — and `head_state`
+  reads the height, a head without one `Inconsistent`. Only `Empty` is
+  adopted, in `adopt_empty_chain`, under the write lock, judged again there,
+  with `chain::seed_empty`, which takes no value at all; the read-only open
+  answers it `ReadOnlyUnmigrated`. Seeding the REPLAYED head (the filing's
+  shape) was measured worse: the store computed the keyed head over a row a
+  writer without the key appended, and the switch bound its label. A
+  database a source build older than 0.19.0 wrote — this repository's
+  history was rewritten at the rename and derives the same keys — is refused
+  with them (a `vault.db` deleted outright is still created by the
+  writable connect before the refusal, O308). Test pause points live in
   `rotate_pause.rs`, never inline here — an inline `#[cfg(test)]` blinds
   `rotation_names_every_key_derived_artifact`),
   bulk ingest
@@ -2683,8 +2700,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (1260 run,
-                                      # 17 #[ignore]d = 1277 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (1276 run,
+                                      # 17 #[ignore]d = 1293 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote

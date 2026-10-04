@@ -2338,6 +2338,8 @@ fn run(cli: Cli) -> Result<()> {
                 // and never re-opens (A31).
                 let at_open = store.anchor_at_open();
                 match (store.tighten_anchor()?, at_open) {
+                    // Unreached since ROADMAP O303: `tighten_anchor` refuses a
+                    // chain with no committed head beneath its open handle.
                     (AnchorState::Unseeded, _) => {
                         println!(
                             "Vault '{name}' has no committed chain head yet; nothing to anchor."

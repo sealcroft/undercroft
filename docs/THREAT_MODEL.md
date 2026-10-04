@@ -240,6 +240,19 @@ stage is discarded and the vault opens at the older state (A2's pair restore,
 the witness's). And the licence for a promote is read one replay before the
 promote writes on it, so an offline edit of `vault.json` landing in that window
 is overwritten by the staged manifest with no tamper signal (ROADMAP O304).
+And no open vouches for audit rows nothing replayed: a database whose
+`chain_meta` held no committed head was adopted by seeding the MANIFEST's head
+and height, so a rollback with `chain_meta` and the version-2 commitment deleted
+opened, took writes, and its first write moved the anchor over the evidence of
+the rollback. Since 1.7.0 an open adopts only a fresh vault's EMPTY chain — no
+record, no height, the anchor at genesis — seeded with those constants under the
+write lock; records or a height with no head, and a head with no height, are
+integrity findings, and an erased trail beside a later anchor is the rollback
+alarm (ROADMAP O303). Seeding the replayed head instead was measured worse: the
+store computed the keyed head over rows a writer without the key had appended,
+and the version-2 switch bound their labels. A database written by a source
+build of this repository older than 0.19.0, and never opened by a 1.x build, is
+refused with them — 1.0.0 declared nothing before it needs to open.
 
 **Residual (documented)**: an attacker with full disk control who
 restores a **consistent old database + manifest pair together** rewinds

@@ -119,14 +119,16 @@ alarm, a rollback always is one:
 ```mermaid
 stateDiagram-v2
     [*] --> Compare: open — verify the manifest MAC,<br/>compare its anchor vs the chain_meta head
-    Compare --> Unseeded: no chain_meta head yet<br/>(first open) — seeded, then Current
+    Compare --> Unseeded: no chain_meta head, no audit record,<br/>anchor at genesis — a fresh vault
+    Compare --> Headless: no head beside records or a height,<br/>or an erased trail (ROADMAP O303)
     Compare --> Current: anchor == db head<br/>(no replay needed)
     Compare --> Replay: anchor ≠ db head —<br/>replay every audit tag
     Replay --> Healed: anchor appears earlier<br/>in the replayed chain
     Replay --> ChainBroken: replayed chain ≠ db head —<br/>audit rows were edited
     Replay --> Tampered: anchor never appears<br/>in the replayed chain
     Healed --> Current: crash artifact — reported as<br/>anchor_at_open, re-anchored on a writable open
-    Unseeded --> Current
+    Unseeded --> Current: seeded with the genesis head,<br/>height 0, under the write lock
+    Headless --> [*]: a writable open refuses —<br/>IntegrityFinding or ManifestTampered
     ChainBroken --> [*]: Integrity("audit-chain head")
     Tampered --> [*]: ManifestTampered —<br/>rollback or fork detected
     Current --> [*]

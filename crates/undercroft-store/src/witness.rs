@@ -199,6 +199,17 @@ impl VaultStore {
         let anchored_head = self.vault.anchored_head()?;
         let (prefix, head, writes) = self.snapshot(|snap| {
             let prefix = chain::prefix(snap, None)?;
+            // No record beside an anchor past genesis is an erased trail, never
+            // "no records yet" (ROADMAP O303): the open refuses it as tampering,
+            // and a handle it was emptied beneath says so here too.
+            if prefix.rows == 0 && anchored_head != undercroft_vault::Vault::chain_genesis_hex() {
+                return Err(StoreError::IntegrityFinding(
+                    "the audit chain has no records while the manifest's anchor is past \
+                     genesis — the trail was erased. Nothing to witness; run `undercroft \
+                     verify` (ROADMAP O303)"
+                        .into(),
+                ));
+            }
             if prefix.rows == 0 {
                 return Err(StoreError::Invalid(
                     "nothing to witness: the audit chain has no records yet, and a witness \
@@ -602,10 +613,18 @@ mod tests {
     /// A genesis witness is refused at emit and at check.
     #[test]
     fn a_genesis_witness_is_refused() {
-        let (_dir, s) = fresh(SecurityLevel::HmacOnly);
+        let (_dir, mut s) = fresh(SecurityLevel::HmacOnly);
         // A fresh vault holds exactly its switch commitment, so the chain
-        // is never truly empty on a current build; force the vacuous case.
+        // is never truly empty on a current build; force the vacuous case —
+        // the anchor at genesis too, or an empty trail beside the switch's
+        // anchor is an ERASED one, the finding (ROADMAP O303).
         s.conn.execute("DELETE FROM audit", []).unwrap();
+        undercroft_vault::fixture::write_anchor_unchecked(
+            &mut s.vault,
+            &undercroft_vault::Vault::chain_genesis_hex(),
+            0,
+        )
+        .unwrap();
         assert!(matches!(s.witness_emit(), Err(StoreError::Invalid(_))));
         let w = ChainWitness {
             version: WITNESS_VERSION,

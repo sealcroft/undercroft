@@ -173,7 +173,14 @@ well, where only a tampered count fails.
    copy restored exactly AT the anchor is indistinguishable from a rotation
    that crashed before its commit: the open discards the staged file and serves
    the older state, as a crash would — keep a copy of `vault.json.next` before
-   restoring a database by hand beside it. A prefilter loads an index but never builds one. What the open
+   restoring a database by hand beside it. A database whose `chain_meta` holds
+   no committed head while its audit trail holds records — or a head with no
+   committed height — is refused by a writable open with nothing written and
+   reported by a read-only one; an audit trail erased beside a later anchor is
+   the tamper verdict (ROADMAP O303). No release since 1.0.0 writes either
+   state, so treat it as an edit and restore a backup that verifies: before
+   1.7.0 the open adopted it from the manifest and its first write moved the
+   anchor over the evidence. A prefilter loads an index but never builds one. What the open
    declined to repair is printed as a warning and readable afterwards on
    `undercroft stats` (and `GET /v1/vaults/{id}/stats`) as `unhealed` — during
    an incident, read it: "vault.json.next does not authenticate … and was
