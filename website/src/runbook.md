@@ -163,7 +163,13 @@ well, where only a tampered count fails.
    refusal for a too-new one, an I/O error for one it cannot read — and leaves
    both files exactly as found (ROADMAP O290): it used to write the staged
    manifest back from memory, which turned a database restored beneath it into
-   a crash heal and overwrote a forged manifest with no alert. And a writable
+   a crash heal and overwrote a forged manifest with no alert. The same holds
+   for an edit landing while that open replays the audit chain, just before it
+   writes (ROADMAP O304): it asks again, and refuses with both files kept. A
+   manifest of the new key generation put there meanwhile — another promote,
+   or one copied by hand — is followed when it is the staged one; at any other
+   head the open answers `this handle must be reopened`, which the CLI and
+   `/v1` retry once, and the reopen judges it. And a writable
    open whose DATABASE does not answer to the manifest it would adopt — its
    key-generation marker deleted or edited beside a deferred rotation, or an
    older copy of the database restored behind the manifest's anchor — refuses

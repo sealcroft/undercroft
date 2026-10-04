@@ -238,8 +238,15 @@ pre-rotation database restored exactly at the manifest's anchor beside the stage
 file is, to every value there is, a rotation that crashed before its commit: the
 stage is discarded and the vault opens at the older state (A2's pair restore,
 the witness's). And the licence for a promote is read one replay before the
-promote writes on it, so an offline edit of `vault.json` landing in that window
-is overwritten by the staged manifest with no tamper signal (ROADMAP O304).
+promote writes, so the promote asks the manifest rule AGAIN before it writes
+(ROADMAP O304), and that ask can only refuse or withhold the write: an offline
+edit of `vault.json` or `vault.json.next` landing in that window is answered as
+it would be at the licence — a forged file is the tamper verdict and is kept, a
+deleted one or a lost `.next` is refused with nothing written — and a manifest
+of the new key generation at a head nothing judged is reopened and judged. What
+remains is the second ask's distance to the write's rename, about one fsync and
+not growing with the corpus, where an edit is still overwritten by the staged
+manifest the database answers to, with no tamper signal.
 And no open vouches for audit rows nothing replayed: a database whose
 `chain_meta` held no committed head was adopted by seeding the MANIFEST's head
 and height, so a rollback with `chain_meta` and the version-2 commitment deleted

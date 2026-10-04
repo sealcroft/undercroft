@@ -1163,3 +1163,289 @@ fn o303_open_store_as_read_only_declines_the_empty_chain() {
     let s = open_store_as(root, VAULT, Posture::ReadWrite).expect("adopted");
     assert!(s.verify().unwrap().ok());
 }
+
+/// A deferral by hand; another open promotes it and writes past it, to a head
+/// H; then the retired `vault.json` and the staged `.next` are put back (A2's),
+/// with the database at H or rolled back below it. Returns H's bytes.
+fn o304_another_head(root: &std::path::Path, rolled_back: bool) -> Vec<u8> {
+    defer_by_hand(root);
+    let (r, s) = (
+        std::fs::read(vdir(root).join("vault.json")).unwrap(),
+        std::fs::read(vdir(root).join("vault.json.next")).unwrap(),
+    );
+    let save = |n: u32, copy: Option<&std::path::Path>| {
+        let mut st = VaultStore::open(mgr(root).unlock(VAULT).unwrap()).unwrap();
+        for i in 0..n {
+            st.upsert(&Drawer::new(
+                "w1",
+                "r",
+                format!("o304 since the promote {i}"),
+                Some("o304s.md".into()),
+                i,
+                "test",
+            ))
+            .unwrap();
+        }
+        if let Some(copy) = copy {
+            let c = rusqlite::Connection::open(vdir(root).join("vault.db")).unwrap();
+            c.execute("VACUUM INTO ?1", [copy.to_str().unwrap()])
+                .unwrap();
+        }
+    };
+    let mid = root.join("mid.db");
+    save(1, Some(&mid));
+    save(2, None);
+    let h = std::fs::read(vdir(root).join("vault.json")).unwrap();
+    std::fs::write(vdir(root).join("vault.json"), &r).unwrap();
+    std::fs::write(vdir(root).join("vault.json.next"), &s).unwrap();
+    if rolled_back {
+        for f in ["vault.db", "vault.db-wal", "vault.db-shm"] {
+            let _ = std::fs::remove_file(vdir(root).join(f));
+        }
+        std::fs::copy(&mid, vdir(root).join("vault.db")).unwrap();
+    }
+    h
+}
+
+/// Put `edit` in the writable open's licence-to-promote window, once.
+fn o304_in_the_licence_window(
+    root: &std::path::Path,
+    edit: impl FnOnce(&std::path::Path) + 'static,
+) -> Arc<AtomicUsize> {
+    let ran = Arc::new(AtomicUsize::new(0));
+    let (r, ran2) = (root.to_path_buf(), ran.clone());
+    undercroft_vault::fixture::between_licence_and_promote(move || {
+        ran2.fetch_add(1, Ordering::SeqCst);
+        edit(&r);
+    });
+    ran
+}
+
+fn o304_flipped(bytes: &[u8]) -> Vec<u8> {
+    let mut v: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+    let mac = v["manifest_mac_hex"].as_str().unwrap().to_string();
+    let first = if mac.starts_with('0') { "1" } else { "0" };
+    v["manifest_mac_hex"] = serde_json::Value::String(format!("{first}{}", &mac[1..]));
+    serde_json::to_vec_pretty(&v).unwrap()
+}
+
+fn o304_forge(root: &std::path::Path) {
+    let json = vdir(root).join("vault.json");
+    std::fs::write(&json, o304_flipped(&std::fs::read(&json).unwrap())).unwrap();
+}
+
+/// The database's `chain_meta` rows and `audit` count, read with no store.
+fn o304_db(root: &std::path::Path) -> (Vec<(String, String)>, i64) {
+    let c = rusqlite::Connection::open_with_flags(
+        vdir(root).join("vault.db"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let mut st = c
+        .prepare("SELECT key, value FROM chain_meta ORDER BY key")
+        .unwrap();
+    let rows = st
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    let n = c
+        .query_row("SELECT count(*) FROM audit", [], |r| r.get(0))
+        .unwrap();
+    (rows, n)
+}
+
+/// Count the writable opens that reach the layout pause: one, or a retry.
+fn o304_count_writable_opens(root: &std::path::Path) -> Arc<AtomicUsize> {
+    let opens = Arc::new(AtomicUsize::new(0));
+    let o = opens.clone();
+    open_pause::set(
+        &vdir(root),
+        Arc::new(move |here| {
+            if here == Opener::WritableLayout {
+                o.fetch_add(1, Ordering::SeqCst);
+            }
+        }),
+    );
+    opens
+}
+
+/// **ROADMAP O304 through `open_store_as`, writable.** A `vault.json` forged in
+/// the licence-to-promote window — the one forced replay O296 put between the
+/// licence's reads and the write — is the tamper verdict, exit 2, the forged
+/// file and the staged `.next` left for the operator. It was overwritten by the
+/// staged manifest and served.
+#[test]
+fn o304_open_store_as_refuses_a_manifest_forged_after_the_licence() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    fresh_vault(root, 20);
+    defer_by_hand(root);
+    let staged = std::fs::read(vdir(root).join("vault.json.next")).unwrap();
+    let forged = o304_flipped(&std::fs::read(vdir(root).join("vault.json")).unwrap());
+    let before = o304_db(root);
+    let opens = o304_count_writable_opens(root);
+    let ran = o304_in_the_licence_window(root, o304_forge);
+    let opened = open_store_as(root, VAULT, Posture::ReadWrite);
+    open_pause::clear(&vdir(root));
+    assert_eq!(
+        ran.load(Ordering::SeqCst),
+        1,
+        "premise: the window was reached"
+    );
+    assert_eq!(opens.load(Ordering::SeqCst), 1, "not retried");
+    assert_eq!(o304_db(root), before, "nothing committed");
+    assert_eq!(
+        std::fs::read(vdir(root).join("vault.json")).unwrap(),
+        forged,
+        "the forged bytes kept"
+    );
+    let e = opened
+        .err()
+        .expect("O304: a forged vault.json was overwritten and served");
+    assert!(
+        format!("{e:#}").contains("possible tampering"),
+        "the tamper verdict: {e:#}"
+    );
+    assert!(integrity_verdict(&e), "exit 2: {e:#}");
+    assert_eq!(
+        std::fs::read(vdir(root).join("vault.json.next")).unwrap(),
+        staged,
+        "the staged manifest kept"
+    );
+    assert_ne!(
+        std::fs::read(vdir(root).join("vault.json")).unwrap(),
+        staged,
+        "the forged file kept, not overwritten"
+    );
+}
+
+/// **ROADMAP O304 on `/v1`, writable**: the same forged manifest is 409 with
+/// the integrity class.
+#[test]
+fn o304_v1_refuses_a_manifest_forged_after_the_licence() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    fresh_vault(root, 20);
+    defer_by_hand(root);
+    let mut tenancy =
+        tenant::Tenancy::new(mgr(root), embedder_factory(), false).expect("no secret declared");
+    let forged = o304_flipped(&std::fs::read(vdir(root).join("vault.json")).unwrap());
+    let before = o304_db(root);
+    let opens = o304_count_writable_opens(root);
+    let ran = o304_in_the_licence_window(root, o304_forge);
+    let (code, body) = call(&mut tenancy, &format!("/v1/vaults/{VAULT}/stats"));
+    open_pause::clear(&vdir(root));
+    assert_eq!(
+        ran.load(Ordering::SeqCst),
+        1,
+        "premise: the window was reached"
+    );
+    assert_eq!(opens.load(Ordering::SeqCst), 1, "not retried: {body}");
+    assert_eq!(o304_db(root), before, "nothing committed");
+    assert_eq!(
+        std::fs::read(vdir(root).join("vault.json")).unwrap(),
+        forged,
+        "the forged bytes kept"
+    );
+    assert_eq!(code, 409, "{body}");
+    assert!(body.contains("\"class\":\"integrity\""), "{body}");
+    assert!(body.contains("possible tampering"), "{body}");
+    assert!(vdir(root).join("vault.json.next").exists(), "{body}");
+}
+
+/// **ROADMAP O304 through `open_store_as`: a manifest of the new generation at
+/// another head in the window is reopened, once, and the reopen judges it.**
+/// Over the database at that head it is served at that head; over a database
+/// rolled back below it the reopen answers the tamper verdict — where `main`
+/// wrote the staged manifest over it and healed the anchor DOWN to the
+/// rolled-back database. Were the refusal not the reopen class, neither would
+/// be retried and both would answer the refusal's own text.
+#[test]
+fn o304_open_store_as_reopens_over_another_head_after_the_licence() {
+    for rolled_back in [false, true] {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        fresh_vault(root, 20);
+        let h = o304_another_head(root, rolled_back);
+        let staged = std::fs::read(vdir(root).join("vault.json.next")).unwrap();
+        let h2 = h.clone();
+        let ran = o304_in_the_licence_window(root, move |r| {
+            std::fs::write(vdir(r).join("vault.json"), &h2).unwrap()
+        });
+        let opened = open_store_as(root, VAULT, Posture::ReadWrite);
+        assert_eq!(
+            ran.load(Ordering::SeqCst),
+            1,
+            "rolled_back={rolled_back}: premise: the window was reached"
+        );
+        let h_writes = serde_json::from_slice::<serde_json::Value>(&h).unwrap()["writes"]
+            .as_u64()
+            .unwrap();
+        match opened {
+            Ok(s) if !rolled_back => {
+                assert_eq!(s.chain_state().unwrap().1, h_writes, "served at H");
+                assert!(s.verify().unwrap().ok());
+            }
+            Err(e) if rolled_back => {
+                let text = format!("{e:#}");
+                assert!(text.contains("possible tampering"), "{text}");
+                assert!(
+                    !text.contains("changed beneath this open's write lock"),
+                    "{text}"
+                );
+                assert!(integrity_verdict(&e), "exit 2: {text}");
+                assert_eq!(std::fs::read(vdir(root).join("vault.json")).unwrap(), h);
+                // Followed rather than reopened, the promote since's guard
+                // would have removed it before `init_chain` refused (P3).
+                assert_eq!(
+                    std::fs::read(vdir(root).join("vault.json.next")).unwrap(),
+                    staged,
+                    ".next kept"
+                );
+            }
+            Ok(s) => panic!(
+                "rolled back: served at height {:?}",
+                s.chain_state().map(|c| c.1)
+            ),
+            Err(e) => panic!("at H: refused {e:#}"),
+        }
+    }
+}
+
+/// **ROADMAP O304 on `/v1`**: `store_for` reopens over another head in the
+/// window, once — 200 over the database at that head, 409 with the integrity
+/// class over one rolled back below it.
+#[test]
+fn o304_v1_reopens_over_another_head_after_the_licence() {
+    for rolled_back in [false, true] {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        fresh_vault(root, 20);
+        let h = o304_another_head(root, rolled_back);
+        let staged = std::fs::read(vdir(root).join("vault.json.next")).unwrap();
+        let mut tenancy =
+            tenant::Tenancy::new(mgr(root), embedder_factory(), false).expect("no secret declared");
+        let ran = o304_in_the_licence_window(root, move |r| {
+            std::fs::write(vdir(r).join("vault.json"), &h).unwrap()
+        });
+        let (code, body) = call(&mut tenancy, &format!("/v1/vaults/{VAULT}/stats"));
+        assert_eq!(
+            ran.load(Ordering::SeqCst),
+            1,
+            "rolled_back={rolled_back}: premise: the window was reached"
+        );
+        if rolled_back {
+            assert_eq!(code, 409, "{body}");
+            assert!(body.contains("\"class\":\"integrity\""), "{body}");
+            assert!(body.contains("possible tampering"), "{body}");
+            assert_eq!(
+                std::fs::read(vdir(root).join("vault.json.next")).unwrap(),
+                staged,
+                ".next kept"
+            );
+        } else {
+            assert_eq!(code, 200, "{body}");
+        }
+    }
+}

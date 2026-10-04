@@ -60,6 +60,8 @@ pub mod pq;
 mod pqidx;
 #[cfg(test)]
 mod promote_licence_tests;
+#[cfg(test)]
+mod reask_tests;
 pub mod remote;
 mod replay;
 mod restore;
@@ -4313,6 +4315,15 @@ impl VaultStore {
     /// set the same routes destroyed the file and opened Ok. A database with no
     /// committed head beside a staged rotation or a foreign marker refuses too —
     /// no build writes one.
+    ///
+    /// **And the licence is asked again before its write (ROADMAP O304).** The
+    /// judgement sits between the licence's reads and the promote's write, so
+    /// that window is one forced replay long; an offline edit landing in it was
+    /// overwritten by the staged manifest with no page. The promote's re-ask
+    /// ([`undercroft_vault::Licence::promote_licensed`]) refuses in the rule's
+    /// own class, or withholds the write when `vault.json` already holds the
+    /// staged head; a manifest of the new generation at another head is the
+    /// reopen class, mapped here.
     fn reconcile_rotation(
         conn: &Connection,
         mut vault: Vault,
@@ -4379,7 +4390,17 @@ impl VaultStore {
                 // the unlock read, or follows a promote since; a miss was the
                 // manifest rule's own refusal above, with nothing written.
                 let licence = licence.expect("the Committed arm asked the licence");
-                vault = *licence.promote_licensed()?;
+                // RE-ASKED before a write (ROADMAP O304): the judgement above
+                // was one forced replay long, and an offline edit of either
+                // file inside it is answered as the rule answers it at the
+                // ask. A manifest of the new generation at a head nothing
+                // judged is the reopen class — the reopen judges it.
+                vault = *licence.promote_licensed().map_err(|e| match e {
+                    undercroft_vault::VaultError::ManifestMoved(why) => {
+                        StoreError::StaleUnlock(why)
+                    }
+                    e => StoreError::Vault(e),
+                })?;
             }
             RotationVerdict::Abandoned => {
                 let pending = vault.take_pending().expect("verdict saw a pending twin");
