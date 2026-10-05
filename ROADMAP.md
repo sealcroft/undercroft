@@ -3998,7 +3998,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**338** of the **353** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**339** of the **354** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -4176,15 +4176,12 @@ identities.
 ## 1.7.0 — unreleased
 
 MINOR: O245 adds capability the product never had — a witness the engine
-emits and checks — and nine fixes ride with it: O246 (a surface added to
-REPORT an existing silence, the 2026-09-08 ruling), O243 (a latent panic
-removed), O247 (a gate that names which mechanism refuses a copied
-`rotate/` label, and records corrected beside — no behaviour moves), O254
-(one manifest door), O257 (a rotation holds the vault alone), O253 (one
-snapshot per judgement), O255 (a destruction is one write lock), O256 (a
-backup is exactly the state it verified) and O265 (prune by manifest). This
-paragraph said "three fixes" until O256's unit, while O254, O257, O253 and
-O255 sat below it.
+emits and checks — and every other entry under this heading is a fix that
+rides with it; the CHANGELOG's 1.7.0 line carries their count and its
+history. This paragraph said "three fixes" until O256's unit, while O254,
+O257, O253 and O255 sat below it, and then "nine fixes" — listing O246, O243,
+O247, O254, O257, O253, O255, O256 and O265 — from O265's unit until O305,
+eighteen entries behind; a count beside a list rots, so it names none.
 
 ### O245 — CLOSED 2026-09-23: the external witness the threat model called "the planned mitigation" is ruled, escalated, decided (emit + check, no MCP) and built
 
@@ -12446,6 +12443,207 @@ reopen.
 by the re-ask's path through `refusal`, not by a telemetry build. The source gates see text: a re-ask made
 unreachable keeps them green (cf1), and the behavioural arms are what fail. The residual window is pinned,
 not closed. Windows and lock-less mounts, reasoned not measured.
+
+### O305 — CLOSED 2026-10-05: a closed entry may sit only where its status is readable, and never under a release dated before its own heading
+
+**Filed 2026-09-29 by O296's build (its independent review).** O291, closed 2026-09-29 as a fix of the
+unreleased 1.7.0, sat under `## 1.6.1 — released 2026-09-22` on `main` `66dafb3` while its CHANGELOG
+entry sat under 1.7.0; O296's unit moved it. The preflight's placement arm refuses a closed entry only
+under `## Unversioned` or `## Open`, so it could not see the misplacement.
+
+**Shape**: a closed entry under a RELEASED section must carry a closing date no later than that
+section's release date — an entry closed after a release cannot have shipped in it.
+
+**Gate**: O291 put back under 1.6.1 fails the preflight, naming the entry; the tree passes.
+
+#### RULED 2026-10-05 by three lenses — Agentic Memory, Security (gate design) and DevSecOps/CI tooling — and an adversarial refuter
+
+**The question.** What date is an entry's closure, which sections a closed entry may sit under and
+how their status is read, whether the converse (an entry closed before an earlier release, filed under
+a later one) and the CHANGELOG are in scope, and whether a release date is checked against its tag.
+The filing's shape was run over the whole file BEFORE the panel sat, as a hypothesis: 241 closed
+entries, 203 under a `released <date>` section, 28 under `## 1.7.0 — unreleased`, 10 under
+`## Unversioned`; none closes after its release. Over all **222** first-parent `main` versions of this
+file it fires on exactly one version, `66dafb3`, and one entry, O291.
+
+**Prior rulings found and FOLLOWED; none refuted.** O101 placed every migrated entry "by the release
+window its closure date falls in, against the tag times" — this arm enforces that window's upper bound,
+coarser than O101's tag-time practice. O47: a proxy is measured against the tree before it is encoded
+(below). O162: a narrowing that can only add rows, an exact-row fixture over every arm in both
+directions, and every row naming its line. O161: fail closed on the unrecognised case; the fix is the
+file. O171: work a ruling names but does not build gets its own entry.
+
+**Q1, ruled: the closure is the LATEST date anywhere in the entry's HEADING, never a date in its
+body.** The body loses: 22 closed entries under released sections carry a body date after their release,
+each a record corrected beside. The heading's FIRST `CLOSED <date>` (the DevSecOps lens) loses on the
+tree's own evidence: O140 was open under `## Open` at `v1.5.2` (tagged 2026-09-11), its closing commit
+`9caccf6` is dated 2026-09-12, and its heading reads `CLOSED 2026-09-11, completed and corrected
+2026-09-12` — placed under 1.5.2, the first-token reading accepts it and the latest-date reading
+refuses it. That lens's predicate also refused O173's dated form, `CLOSED by doctrine <date>`, as
+undated. Cost, measured: over 222 versions both readings fire only on O291; the latest-date reading is
+a strict superset; no heading anywhere carries a date about something other than its closure that is
+later than its release. A future one would fire loudly, which O162 prefers to a silent miss.
+
+**Q2, ruled: the converse is not built here; it is filed as O309.** Measured: strictly earlier than the
+previous release, 0 entries today and 0 over 222 versions (the scanner probed on a planted early
+closure); 50 close on the previous release's own day under the ruled latest-date reading (51 under a
+first-date reading, O140 the difference), all legitimately later. A date cannot decide it:
+a closure is dated when BUILT on its branch (O303's heading says 2026-09-30, its only commit `3478ee3`
+is dated 2026-10-04), so a release cut between build and merge ships it in the later release. The tag
+snapshot (`git show vR:ROADMAP.md`) decides both directions and was measured sound — 203 of 203
+released entries closed at their own tag, none at the previous one, firing only on O291 over 222
+versions — and it also sees the forward route this arm cannot (below). It needs a CI checkout change,
+an exemption for the newest release during its release PR, an id lookup that tolerates the `MOVED`
+stub repeating O46's id, and a rule for `v1.0.0` (a tag with no section): its own ruling, in O309.
+
+**Q3, ruled: refuse a dateless closure under a released section**, as `closed-undated-under-a-release`,
+firing only for the doctrine form carrying no date at all — every other dateless closure is already
+`closure-without-a-date`. A DATED doctrine closure is judged by its date: M11 (`CLOSED 2026-08-20 by
+doctrine`, under 1.2.0) shows a doctrine closure under a release is legitimate. Zero over 222 versions.
+
+**Q4, ruled: refuse when the latest heading date is AFTER the release date**, at day granularity, so the
+release day passes. A strict comparison loses: 24 entries close on their own release day. Tag TIMES
+lose: a heading carries no time and CI fetches no tags.
+
+**Q5, ruled: no exemption roster.** The population is zero, and a later correction goes in the body or
+in a new entry (the M3 practice; O137 to O144), never as a later date in a closed heading.
+
+**Q6, ruled: no CHANGELOG check.** Seven shipped entries — O8, O61, O87, O88, O89, O98, O104 — are named
+nowhere in `CHANGELOG.md`, and a release section names ids it only references (1.7.0 names O237, O238,
+O244 and the open O305–O308). Named-in-the-same-release is neither necessary nor sufficient; O101 used
+the CHANGELOG to corroborate, never as an oracle.
+
+**Q7, ruled: an ALLOWLIST.** A closed entry may sit only under a release-shaped section whose status
+reads `released <yyyy-mm-dd>` (judged by Q1 and Q4) or `unreleased` (accepted), under `## Open` (refused,
+O101) or under `## Unversioned` (the roster, O101). A release-shaped section with any other status is
+`closed-under-an-unreadable-release`; any other section, or none, is `closed-outside-a-release`. The
+existing arms were a deny-list, so a closed entry under `## 2.0.0 — one item is filed`, `Beyond 2.0.0`,
+`Shipped`, the round-three section or above the first section printed nothing. The status is read by
+POSITION, as the token right after the dash, never anchored at the end of the line: the 1.2.0 release
+prep (`70578b5`) wrote `## 1.2.0 — released 2026-09-01 — three round-four rows…`, and a `$`-anchored
+reader refuses its 27 entries. The release shape is `## ` then a digit then non-blanks — looser than the
+glob O161 already holds every level-2 heading to — so a candidate version such as `1.9.2-rc1` is a
+release. Cost over 222 versions: the unreadable row fires only on `9dfe7cd`, a
+pre-convention `## 1.2.0 — three round-four rows…`; the outside row fires on seven, six of them O161's
+REAL defect (2026-09-12/13, internal `## Gate…` headings re-sectioning `1.6.0 — unreleased`, which the
+deny-list missed for its whole life) and one early `## OPEN after 1.0.0`. Because this arm now fires
+before O161's, its handler names O161.
+
+**Q8, ruled: the release date is not checked against its tag here** — filed with O309. Measured: all 12
+released section dates equal their tags' `%(creatordate:short)`, which keeps the tagger's +02:00 offset
+(all 13 `v*` tags are annotated); under `TZ=UTC` a `short-local` rendering reads `v1.0.0`, `v1.1.0` and
+`v1.4.0` one day early. A ROADMAP-equals-CHANGELOG date check is refused: one edit sets both, so they
+agree while both are wrong.
+
+**And the scan runs under `LC_ALL=C`.** An offset taken past the em dash reads `2026-09-22` under a
+UTF-8 gawk and `d 2026-09-` under mawk. With an exact-row fixture holding a must-fire row it is red
+under mawk and under C-locale gawk, and GREEN under UTF-8 gawk; nobody has measured the hosted runner's
+awk. `LC_ALL=C` gives every awk byte semantics, and over 222 versions the existing rows are
+byte-identical under both locales.
+
+**Claims refuted — the brief's first.** The brief's "silent in CI and green locally" was wrong: it is red
+under mawk with a must-fire fixture row, and silent only where the awk is a UTF-8 gawk. Its 48 same-day
+entries are 51 counting 1.1.0 against `v1.0.0`. It offered O303 as a branch built on 2026-09-30; that
+date exists only in the heading. It asked about release-shaped sections only, missing that the
+placement arm was a deny-list. The DevSecOps lens's first-token reading, its doctrine predicate, its
+quiet identifier note for the new rows (the note is about the blunt status match every placement row
+inherits, so it stays) and its "red in CI anyway" (an unmeasured runner). The Agentic Memory lens's
+end-of-line anchor. The Security lens's unanchored `unreleased` (it read `unreleased;` as unreleased),
+its three-number release shape (it misroutes `1.9.2-rc1`), and its `fetch-depth: 0` (a tag fetch at
+depth 1 is 13.83 MiB against 58.67 MiB for the whole pack, measured on a file clone).
+
+**Dissent, settled by evidence.** The DevSecOps lens ruled the first token (O140 settles it). The
+Security lens ruled the tag snapshot into this unit (O171, the checkout change and the window
+exemption settle the placement; its substance is O309). The Agentic Memory lens anchored the status at
+the end of the line (`70578b5` settles it).
+
+**What fails silently, stated:** an entry merged under a release cut while its branch was open, dated
+on or before the cut (O309's route — the release PR merges `released <date>` and a later clean merge
+lands its hunk under that section); a release-day closure after the tag, and same-day releases
+(1.4.0, 1.5.0 and 1.5.1; 1.2.1 and 1.2.2); a back-dated or mistyped heading date; a release date set
+later than its tag; and a version section inserted among released ones (O162's residual). Two more,
+each with where it goes: an entry that makes no closure claim — open, or headed with another status
+word (`SUPERSEDED`, `REFUTED`, `MOVED`) — sits under a released section judged by no arm (O24a and
+O137 do, as records; an open filing merged there by O309's route would too), and O309's tag snapshot
+is the observable that sees it, since such an id reads unfinished in its own tag's file; and a
+dateless doctrine heading that happens to carry an unrelated earlier date reads as dated, which is
+accepted rather than parsed: telling a closure date from another date in heading prose is the
+inference this file forbids, the mistake can only hold the entry to an EARLIER date than its
+release's, and no such heading exists in any of the 222 versions.
+
+#### BUILT 2026-10-05, to the ruling
+
+**What moved.** `roadmap_scan` in `tests/battery.sh` runs as `LC_ALL=C awk` and judges placement as the
+allowlist ruled, after the two O101 arms: `closed-after-its-release`, `closed-undated-under-a-release`,
+`closed-under-an-unreadable-release` and `closed-outside-a-release`, each with its own handler text
+(the last names O161, because this arm now refuses a closed entry re-sectioned by O161's defect before
+O161's arm runs). The exact-row fixture gains six rows and five pinned silences (O9999 and O9990 on
+their release day; O9992 and O9985 with later dates in their bodies; O9985 the dated doctrine form;
+O9982 under an unreleased section whose heading names a release date later in the line), and a second
+probe holds a closed entry above every section and a status that only begins with `unreleased`. The
+preflight count does not move: this is the same preflight. This entry moved here from `## Open`; the
+1.7.0 paragraph above stopped carrying a count, eighteen entries behind; O309 is filed; O47's gated
+figures moved to 339 of 354 with it.
+
+**Mutations, each confirmed to have landed before it ran** (scratch copies; the tree untouched): the
+comparison loosened to `>=`, the first date instead of the latest, an offset taken past the em dash,
+the same offset with `LC_ALL=C` dropped, an end-of-line anchor, the status read anywhere in the heading,
+`unreleased` as a prefix, each of the four new rows deleted, body dates read, and the status token left
+unclosed. Under Debian mawk 1.3.4 20200120 and Ubuntu mawk 1.3.4 20240123 all thirteen fail the fixture
+and the unmutated script passes the real file; under the local UTF-8 gawk 5.4 twelve fail and one stays
+GREEN — the em-dash offset with `LC_ALL=C` dropped — which is the measured reason the scan pins the
+locale. Each failure was read for the row it moved, never for its exit code alone, and none was an awk
+error.
+
+**The gate's own counterfactuals**, run on the built script under mawk and on `main`'s: O291 put back
+under 1.6.1 — fails naming O291 (`main`: exit 0); `66dafb3`'s real file — fails naming O291 at line
+10856 (`main`: exit 0); a closed entry planted under `## 2.0.0 — one item is filed` — unreadable
+(`main`: exit 0); one planted under `## Beyond 2.0.0` — outside (`main`: exit 0); a level-2 heading
+inside O304 — refused first by this arm, naming O305 as the entry it re-sectioned (`main`: refused by
+O161's arm). The built scanner, sourced out of the script rather than retyped, over all 222
+first-parent versions: a new row on nine — `66dafb3` (O291), six from 2026-09-12/13 whose level-2
+headings inside entries (`## The fix, and the trade it makes`, `## Gates`, `## What shipped`) are
+O161's real defect, `9dfe7cd` (27 entries under the pre-convention `## 1.2.0 — three round-four
+rows…`) and `34ccd9c` (`## OPEN after 1.0.0`) — and on no other.
+
+**The independent review found three defects, mine, each fixed before this landed.** (1) The first
+fixture let NINE of the reviewer's thirteen further mutations through — among them a dated doctrine
+closure after its release going silent, `unreleased` read anywhere in the heading, the three-number
+release shape the ruling refuted, a second `released` date taken for the section's own, a date before
+the status token ignored, and `LC_ALL=C` dropped. The second probe now holds eleven entries, one per
+way the arm could read a heading wrong and stay quiet, plus a bare version; and because every offset the
+arm takes comes from an ASCII pattern, so that no fixture can see the locale pin go, a premise asserts
+that the defined `roadmap_scan` still runs `LC_ALL=C awk`. **Corrected beside the ruling's "And the
+scan runs under `LC_ALL=C`"**: the built arm is locale-independent; the pin is DEFENSIVE, against a
+future offset taken past the em dash, which is what the measured mutant shows. (2) The `Unversioned`
+roster — older than this unit — still fired ahead of every placement row, so O161's defect inside that
+section answered "UNVERSIONED_CLOSED lists O1 … remove the row", an instruction to delete a correct
+exemption, while this record and `CLAUDE.md` said such an entry is refused by a message naming O161.
+The roster's verdict is now a function, `rm_unversioned_rows`, probed on an exact row set, that defers to
+any row naming the entry: the same `## Gates` planted inside O244 reports O244's truncated body and
+every re-sectioned entry under the O161 message, with no roster line (`main`: the misdirection). (3) An
+entry with no closure claim under a released section was stated nowhere; it is in O309 and in the
+residuals above. Also corrected from the review: 50 entries, not 51, close on the previous release's
+day under the ruled reading; the 1.7.0 paragraph was eighteen entries behind, not nineteen; the release
+shape is looser than O161's glob, not the same; and two stale sentences — `CLAUDE.md`'s O161 paragraph
+and two comments and a message in `tests/battery.sh` still said the placement arms go silent under
+O161's defect.
+
+**The mutations, after the review**: twenty-seven, each confirmed to have landed — the thirteen above,
+the reviewer's thirteen, and the roster made to defer to nothing. Under Debian mawk 1.3.4 20200120,
+Ubuntu mawk 1.3.4 20240123 and the local UTF-8 gawk 5.4 alike, twenty-six fail the fixture and the
+unmutated script passes the real file — the locale premise turns the em-dash mutant red on gawk too —
+and one survives BY DESIGN: the dash token spelled as a literal em dash, which only re-routes a
+hyphen-spelled release heading from judged to refused, and O161's arm already refuses that heading, so
+pinning it would pin a heading this file forbids.
+
+**The battery at the final tree** (`bash tests/battery.sh`, BATTERY OK, every suite exit 0): `test` 1288
+run (17 ignored — unchanged, this unit adds no cargo test), `e2e` 750, `orchestrator-e2e` 185,
+`e2e-telemetry` 62, `backends-e2e` 157, `obs-config` 17, `site` 7, `tls-pins` 31, `lint` and `arch-check`
+clean, every preflight ok. This record and the CHANGELOG's matching sentence were written after it; the
+suites carry no `ROADMAP.md` or `CHANGELOG.md`, and the twenty preflights, which read them, were run
+again over the edit. No house-page figure moves, and no `UPGRADING.md` entry is owed: nothing an
+operator runs changes.
 
 ## 1.6.1 — released 2026-09-22
 
@@ -32738,18 +32936,6 @@ manifest's MAC or keycheck refuses — and the O271 and O284 neighbourhood.
 **Gate**: unlock, delete, create, connect — the open answers the reopen class and the new vault's
 directory is byte-identical.
 
-### O305 — the ROADMAP headings preflight cannot see a closed entry placed under a release that shipped before it
-
-**Filed 2026-09-29 by O296's build (its independent review).** O291, closed 2026-09-29 as a fix of the
-unreleased 1.7.0, sat under `## 1.6.1 — released 2026-09-22` on `main` `66dafb3` while its CHANGELOG
-entry sat under 1.7.0; O296's unit moved it. The preflight's placement arm refuses a closed entry only
-under `## Unversioned` or `## Open`, so it could not see the misplacement.
-
-**Shape**: a closed entry under a RELEASED section must carry a closing date no later than that
-section's release date — an entry closed after a release cannot have shipped in it.
-
-**Gate**: O291 put back under 1.6.1 fails the preflight, naming the entry; the tree passes.
-
 ### O306 — the anchor door writes over an anchor its committed head does not descend from, when `chain_meta` is edited beneath a live handle
 
 **Filed 2026-09-30 by O303's ruling (its security lens, narrowed by the refuter).** `VaultStore::anchor()`
@@ -32813,6 +32999,42 @@ open and keeps creating. O213 asks the read-only half of the same question for a
 **Gate**: a vault with records whose `vault.db` is deleted — a writable open refuses and no `vault.db`
 exists afterwards; a read-only open still answers `DatabaseMissing`; a fresh vault's first open still
 creates it; a delete racing the open still answers the reopen class.
+
+### O309 — the ROADMAP placement gate reads dates, so an entry merged under a release cut while its branch was open passes; only the tag's own ROADMAP can say what shipped
+
+**Filed 2026-10-05 by O305's ruling (its Security lens, measured by the refuter).** O305's arm refuses
+a closed entry whose heading carries a date after its section's release date. A closure is dated when it
+is BUILT on its branch, so the arm cannot see the route that matters most: a branch adds its finished
+entry at the end of `## 1.7.0 — unreleased`, the release PR merges `## 1.7.0 — released <date>`, and the
+branch then merges cleanly, landing its hunk under the RELEASED section with a date on or before the cut.
+The converse — an entry finished before an earlier release, filed under a later one — is the same
+question from below, and a date cannot decide it either (0 strictly earlier today and over all 222
+first-parent versions; 50 on the previous release's own day, all legitimately later).
+
+**Measured by the refuter**, on a file clone: every one of the 203 entries under a released section
+reads finished in its own tag's `ROADMAP.md` and in none of the earlier tags', and that check, run over
+all 222 versions, fires only on O291 at `66dafb3`. All 12 released section dates equal their tags'
+`%(creatordate:short)`, which keeps the tagger's +02:00 (every `v*` tag is annotated); under `TZ=UTC` a
+`short-local` rendering reads `v1.0.0`, `v1.1.0` and `v1.4.0` one day early. CI's `preflight` checkout
+fetches no tags: a shallow clone is 7.11 MiB, with the tags at depth 1 13.83 MiB, the whole pack 58.67
+MiB.
+
+**Shape, for a ruling**: for each `v*` tag, every id under `## R — released` reads finished in
+`git show vR:ROADMAP.md` and in no earlier tag's; each released date equals its tag's
+`%(creatordate:short)`; only the NEWEST released section may lack its tag (the release PR's window, which
+is fail-open exactly where it matters and is the ruling's hardest question); zero `v*` tags is a failure,
+never a skip; the preflight checkout takes `fetch-tags: true`. The id lookup must tolerate O46's `MOVED`
+stub, which repeats an id, and must rule `v1.0.0` (a tag with no section) and the non-release tag
+`backup/pre-rename-history`. **The same observable covers an entry that makes no closure claim** under a
+released section — open, or headed with another status word — which O305's arm, judging closed entries
+only, cannot see (its independent review planted an open filing under `## 1.6.1 — released`: exit 0):
+such an id reads unfinished in its own tag's file, so the ruling must name the records that legitimately
+sit there (O24a and O137 today) rather than refuse them. **Alternative**: a diff against the pull
+request's base, refusing an id newly finished under a section already released on the base
+(`fetch-depth: 2`) — it refuses before the merge, and needs a rule for a legitimate correction.
+
+**Gate**: a branch-built entry dated before the 1.7.0 cut and merged under it fails, naming the entry;
+the tree passes; a run with no tags fails.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 

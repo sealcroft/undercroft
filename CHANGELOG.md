@@ -2,7 +2,7 @@
 
 ## 1.7.0 — unreleased
 
-MINOR: one new capability, backward compatible, and twenty-seven fixes. The witness
+MINOR: one new capability, backward compatible, and twenty-eight fixes. The witness
 commands and routes are new; no default moves and no declaration can stop a
 start-up. Five fixes change what a deployment must do: every process writing a
 vault must run the same build, and a server whose vault another process
@@ -21,9 +21,9 @@ O246 were both below it; corrected with O247. It said "nine" until O268,
 "ten" until O266, "eleven" until O276, "twelve" until O278, "thirteen"
 until O279, which closed four entries, "seventeen" until O281, "eighteen" until O284,
 "nineteen" until O288, "twenty" until O289, which closed two entries, and
-"twenty-two" until O290, "twenty-three" until O291, "twenty-four" until O296 and
+"twenty-two" until O290, "twenty-three" until O291, "twenty-four" until O296,
 "twenty-five" until O304 — O303 should have made it twenty-six and did not, which O304 found
-by counting the entries; it said
+by counting the entries — and "twenty-seven" until O305; it said
 "Three fixes change what a deployment must do" until O283 made it four, and
 "Four" until O291 made it five.)
 
@@ -1147,9 +1147,10 @@ offline edit of `vault.json` lands in, which it overwrites with no tamper signal
 **O304**; closed by it, below — the promote now asks again before it writes). The read-only open still serves the forged-head states and the unseeded ones
 beside a stage (it writes nothing); beside a foreign marker it refuses them now too. Filed
 as well: **O303** (a writable open adopts an emptied `chain_meta` from the manifest without
-replaying, so a rollback with those rows deleted opens Ok — no rotation needed) and
-**O305** (the ROADMAP headings preflight cannot see a closed entry under a release that
-shipped before it; O291's entry sat under 1.6.1, and this unit moved it). O235's body
+replaying, so a rollback with those rows deleted opens Ok — no rotation needed; closed below)
+and **O305** (the ROADMAP headings preflight cannot see a closed entry under a release that
+shipped before it; O291's entry sat under 1.6.1, and this unit moved it — closed below: a
+closed entry now sits only where its status is readable). O235's body
 carries this unit's refusal texts, for both postures at once.
 
 Gates: fourteen store tests at both security levels — each route's refusal asserting its
@@ -1354,6 +1355,72 @@ each fixed before this landed.
 PATCH inside the unreleased 1.7.0: the window is O296's, also unreleased. No `UPGRADING.md` entry:
 every newly refused state is an offline edit a fresh open already refuses, and the other head
 reopens.
+
+### A closed ROADMAP entry sits only where its status is readable, and never under a release dated before its own heading (O305)
+
+O291 closed on 2026-09-29, as a fix of this unreleased release, and its ROADMAP entry sat under
+`## 1.6.1 — released 2026-09-22` on `main` while every preflight was green: the `ROADMAP headings`
+preflight refused a closed entry only under `## Open` or `## Unversioned`. That was a deny-list,
+so a closed entry under `## 2.0.0 — one item is filed`, `Beyond 2.0.0` or `Shipped`, or above the
+first section, printed nothing either. Placement is an allowlist now. A closed entry may sit under
+a release whose status — the token right after the dash — reads `released <yyyy-mm-dd>`, and then
+no date in its HEADING may be later than that one; under a release reading `unreleased`; or under
+`Open` and `Unversioned`, which keep their own arms. A release with any other status, and any
+other section, is refused. The latest heading date decides, never a body date: a body carries
+records corrected beside, dated after the release, by design (22 entries do). The release day
+itself passes — 24 entries close on their own release's day.
+
+The status is read by POSITION and never anchored at the end of the line: the 1.2.0 release prep
+wrote `## 1.2.0 — released 2026-09-01 — three round-four rows…`, and an end-anchored reader refuses
+its 27 entries. The scan runs under `LC_ALL=C`, defensively: the arm takes every offset from an
+ASCII pattern and reads the same under any locale, but an offset taken past the em dash reads
+`2026-09-22` in a UTF-8 gawk and `d 2026-09-` in mawk, so a change of that shape would be green
+locally and wrong in CI. In the C locale every awk counts bytes, the existing rows are
+byte-identical under both locales over all 222 first-parent versions of the file, and a premise
+asserts the defined function still carries the pin, since no fixture can see it go.
+
+Ruled by three lenses and an adversarial refuter before the build (ROADMAP O305). The filing's
+remedy — compare the heading's closing date with the release date — was run over the file first:
+0 hits today, and over 222 versions exactly one, `66dafb3`'s O291. The first `CLOSED <date>` in
+the heading lost to the latest date on O140's own history: it was still open at `v1.5.2`, tagged
+the day its heading's first date names, and completed the day after. The converse (an entry
+finished before an earlier release, filed under a later one) was measured at 0 and is not
+decidable by a date, because a closure is dated when it is built on its branch; it is filed as
+**O309**, beside the route this arm cannot see — an entry merged under a release cut while its
+branch was open — and a check of each release date against its tag. No CHANGELOG cross-check:
+seven shipped entries are named nowhere in this file.
+
+Gates: the scanner's exact-row fixture gains six rows and five pinned silences, and a second
+probe of eleven entries holds the rest — a closed entry above every section, statuses that only begin with
+`unreleased` or name it later in the line, a candidate version, a heading naming a second release
+date, a dated doctrine closure after its release, a date written before the status token, the
+doctrine form glued to an identifier, prose sections whose names merely begin with or contain an
+exempt one, and a bare version. Twenty-seven mutations of the arm were run, each confirmed to have
+landed: twenty-six fail the fixture under Debian's and Ubuntu's mawk and under a UTF-8 gawk alike,
+and one survives by design —
+spelling the dash as a literal em dash, which only re-routes a hyphen-spelled release heading from
+judged to refused, a heading O161's arm already refuses. The gate's own counterfactuals: O291 put
+back under 1.6.1 fails naming it, and so does `66dafb3`'s real file; a closed entry planted under
+`## 2.0.0` and under `Beyond 2.0.0` fails; a level-2 heading inside an entry (O161's defect) now
+has every closed entry it re-sections refused by a message that names O161 — `main`'s preflight
+passes the first four. Over 222 versions the arm refuses `66dafb3` (O291), one pre-convention
+1.2.0 heading, six versions holding O161's real defect from 2026-09-12/13, and one early `## OPEN
+after 1.0.0` — and nothing else.
+
+An independent review of the build found three defects, each fixed before this landed: the first
+fixture let nine mutations through (among them a dated doctrine closure after its release going
+silent), now pinned by the second probe and the locale premise; the `Unversioned` roster, older
+than this unit, still fired ahead of every placement row, so O161's defect inside that section
+told the editor to delete a correct exemption ("lists O1 … remove the row") — the roster's verdict
+is now a probed function that defers to any row naming the entry, and the same planted heading is
+reported as what it is; and an entry with no closure status under a released section, which no
+arm judges, was stated nowhere — it is O309's now.
+
+PATCH inside the unreleased 1.7.0: a preflight that now keeps a promise `CLAUDE.md` already made
+("a closed entry lives under the release that shipped it"). Nothing an operator runs changes. Two
+writing constraints follow, recorded in `CLAUDE.md`: a release heading's status word comes right
+after its dash, and a correction made after a release goes in the body or a new entry, never as a
+later date in a closed heading.
 
 ## 1.6.1 — 2026-09-22
 
