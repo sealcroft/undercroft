@@ -2541,9 +2541,11 @@ fn every_manifest_writer_and_anchor_caller_is_the_one_the_ruling_names() {
     assert!(body_of(&vault, "write_manifest_file").contains("fs::rename("));
     // The promote's ONE body writes (ROADMAP O290): the rotation's `promote`
     // and the writable open's licensed promotion both reach it, each having
-    // decided once whether to write, and it reads no `vault.json` itself — a
-    // second read between the licence and the write would let an offline
-    // delete put the unlock's stale anchor back.
+    // decided whether to write, and it reads no `vault.json` to decide — a read
+    // that could ORDER a write between the licence and the write would let an
+    // offline delete put the unlock's stale anchor back. The licence's re-ask
+    // before a write (ROADMAP O304) can only refuse or withhold one, and is
+    // gated below.
     // Exact extents, to the method's own closing brace: `body_of` ends only at
     // a PRIVATE `fn`, so for these it would run on through the public methods
     // after them — `staged_on_disk`'s bare read among them.
@@ -2620,26 +2622,92 @@ fn every_manifest_writer_and_anchor_caller_is_the_one_the_ruling_names() {
         !licensed.contains("fs::read(") && !licensed.contains("read_manifest_file("),
         "the licence reads the files through the rule alone"
     );
-    let (ask, clear) = (
-        licensed
-            .find("twin.verified_manifest()")
-            .expect("the licence asks the rule's strict reader"),
-        licensed
-            .find("twin.deferred_over = None")
-            .expect("the licence clears the retired digest"),
+    assert!(
+        licensed.contains("twin.ask_licence(retired)"),
+        "the licence asks through its one helper (ROADMAP O304)"
+    );
+    let helper = method("ask_licence");
+    let (set, ask, clear) = (
+        helper
+            .find("self.deferred_over = Some(retired)")
+            .expect("the helper sets the retired digest"),
+        helper
+            .find("self.verified_manifest()")
+            .expect("the helper asks the rule's strict reader"),
+        helper
+            .find("self.deferred_over = None")
+            .expect("the helper clears the retired digest"),
     );
     assert!(
-        ask < clear,
-        "asked, then cleared before the twin is returned"
+        set < ask && ask < clear && !helper[ask..clear].contains('?'),
+        "set, asked, then cleared on every exit before the answer is returned"
     );
     assert!(
         licensed.contains("self.manifest_seen"),
         "the retired digest is the unlock-minted handle's, never the twin's own"
     );
+    // ROADMAP O304, refining O290 item 2: the promote asks the rule AGAIN
+    // before a write, and that ask can only refuse or withhold a write — never
+    // order one. Structurally: the window's hook, then the `Skip` arm mapping
+    // to `Skip` (never re-asked, never raised), then the ONE re-ask through the
+    // licence's helper inside the `Write` arm, then the residual's hook, then
+    // the promote on the answer — and no other read in the method.
     let promote_licensed = method("promote_licensed");
+    let once = |needle: &str| {
+        assert_eq!(
+            promote_licensed.matches(needle).count(),
+            1,
+            "exactly one {needle} in promote_licensed"
+        );
+        promote_licensed.find(needle).unwrap()
+    };
+    let (window, skip_arm, write_arm, reask, residual, promote) = (
+        once("fixture::run_between_licence_and_promote()"),
+        once("Promotion::Skip => Promotion::Skip,"),
+        once("Promotion::Write => {"),
+        once("self.twin.ask_licence(self.retired)?"),
+        once("fixture::run_between_reask_and_write()"),
+        once("self.twin.promote_as(how)?"),
+    );
     assert!(
-        promote_licensed.contains("self.twin.promote_as(self.how)"),
-        "the promote makes the licence's own decision"
+        window < skip_arm
+            && skip_arm < write_arm
+            && write_arm < reask
+            && reask < residual
+            && residual < promote,
+        "the window's hook, the Skip arm, the re-ask inside the Write arm, the residual's \
+         hook, then the promote"
+    );
+    assert!(
+        !promote_licensed[write_arm..reask].contains('}'),
+        "the re-ask is inside the Write arm"
+    );
+    assert_eq!(
+        promote_licensed.matches("Promotion::Write").count(),
+        2,
+        "the Write arm's pattern and the staged answer's write: no other route orders one"
+    );
+    assert!(
+        !promote_licensed.contains("promote_as(self.how)"),
+        "the promote acts on the re-ask's answer, never on the licence's alone"
+    );
+    // The licence's decision is read in ONE place — the `match` the re-ask sits
+    // in — and `how` bound once: `let how = self.how;` slipped in before the
+    // promote is today's code with the re-ask left as dead text, and the
+    // ordered scan above passed it (O304's review, under cf1).
+    assert_eq!(
+        promote_licensed.matches("self.how").count(),
+        1,
+        "self.how read once"
+    );
+    assert!(
+        promote_licensed.contains("match self.how {"),
+        "read by the match"
+    );
+    assert_eq!(
+        promote_licensed.matches("let how").count(),
+        1,
+        "how bound once"
     );
     for read in [
         "fs::read(",
@@ -2647,10 +2715,16 @@ fn every_manifest_writer_and_anchor_caller_is_the_one_the_ruling_names() {
         "manifest_in_force(",
         "verified_manifest(",
         "anchored_head(",
+        "deferred_over",
+        "manifest_on_disk_is_mine(",
+        "verified_disk_manifest(",
+        "verified_disk_read(",
+        "staged_on_disk(",
+        "manifest_on_disk_digest(",
     ] {
         assert!(
             !promote_licensed.contains(read),
-            "no second read decides the licensed write: {read}"
+            "the re-ask goes through the licence's one helper, nothing else: {read}"
         );
     }
     assert_eq!(vault.matches(".create_new(true)").count(), 1);

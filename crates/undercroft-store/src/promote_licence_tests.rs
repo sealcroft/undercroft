@@ -570,11 +570,14 @@ fn o290_a_second_rotations_aborted_stage_survives_the_held_open() {
     }
 }
 
-/// **The promote decides on the licence's answer, never a second read**: a
-/// hook between the licence (a promote since: skip the write) and the promote
-/// deletes `vault.json`. Nothing is written, and the open refuses the absent
-/// manifest. Deciding on a second read, it wrote the staged manifest — the
-/// anchor the unlock read — over the gap. And where the promoter's removal had
+/// **A promote since is decided by the licence's answer, never by a read that
+/// could order a write**: a hook between the licence (a promote since: skip the
+/// write) and the promote deletes `vault.json`. Nothing is written, and the open
+/// refuses the absent manifest. Deciding on a second read, it wrote the staged
+/// manifest — the anchor the unlock read — over the gap. (The licence's `Write`
+/// is asked again before it writes, and that ask can only refuse or withhold the
+/// write — ROADMAP O304; this arm is the `Skip` branch, which is never asked
+/// again.) And where the promoter's removal had
 /// failed, the leftover `.next` it left is not removed on the licence's earlier
 /// answer: with `vault.json` gone it is the last copy of the keys (found by
 /// O290's review; the leftover rule of O290 item 3, applied in `promote_as`).

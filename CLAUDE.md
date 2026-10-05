@@ -1670,14 +1670,15 @@ Consequences that are binding, not advisory:
   a rollback (`ManifestTampered`), or an integrity
   verdict — and takes the write lock only when there is something to
   decide; no unlock deletes a staged manifest. **And the open's promote is
-  LICENSED (O290)**: `Vault::license_promotion` asks the manifest rule
-  once, under that lock, with the unlock's `manifest_seen` as the retired
+  LICENSED (O290)**: `Vault::license_promotion` asks the manifest rule,
+  under that lock, with the unlock's `manifest_seen` as the retired
   digest — the staged branch (`.next` still the staged bytes, `vault.json`
   still the retired bytes the unlock verified) writes, a `vault.json`
   verifying under the new key (a promote since, O254's P1) skips the write,
   and anything else is the rule's own refusal with nothing written; one body
-  (`promote_as`) writes on that answer — no read of `vault.json` decides the
-  write — and removes `.next` only while `vault.json` verifies under the new
+  (`promote_as`) writes on that answer — no read of `vault.json` ORDERS the
+  write; the re-ask before it (O304, below) can only refuse or withhold it —
+  and removes `.next` only while `vault.json` verifies under the new
   key (a removal on the earlier answer alone lost the last key copy to a
   `vault.json` deleted in between, found by the unit's review), and the twin
   never keeps the digest. It used to heal whatever `vault.json` had
@@ -1706,9 +1707,14 @@ Consequences that are binding, not advisory:
   every value the reconcile reads name one generation, and the effect runs
   (`verify` fails) — what deleting the salt file achieves; a pre-rotation
   database restored exactly AT the anchor is a crash before the commit to
-  every value there is, and its stage is discarded (A2's); and the licence
-  is acted on one replay after it is asked, a window only an offline edit
-  lands in (O304). `chain_answers_to` is gone. **And no open adopts a chain
+  every value there is, and its stage is discarded (A2's); and the licence,
+  asked one forced replay before its write, is asked AGAIN just before it
+  (O304) — a second ask that can only refuse in the rule's own class or
+  withhold the write (a manifest of the new generation at the staged head is
+  followed with nothing written; at another head it is the reopen class, and
+  the reopen judges it), so an offline edit in that window is answered as at
+  the licence, and what is left is the ask's distance to the rename, about one
+  fsync. `chain_answers_to` is gone. **And no open adopts a chain
   with no committed head unless it is EMPTY (O303)**: `init_chain` seeded a
   head-less `chain_meta` FROM THE MANIFEST, replaying nothing, so a rollback
   with `chain_meta` and the version-2 commitment deleted opened, took writes
@@ -2700,8 +2706,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (1276 run,
-                                      # 17 #[ignore]d = 1293 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (1288 run,
+                                      # 17 #[ignore]d = 1305 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote

@@ -2,7 +2,7 @@
 
 ## 1.7.0 — unreleased
 
-MINOR: one new capability, backward compatible, and twenty-five fixes. The witness
+MINOR: one new capability, backward compatible, and twenty-seven fixes. The witness
 commands and routes are new; no default moves and no declaration can stop a
 start-up. Five fixes change what a deployment must do: every process writing a
 vault must run the same build, and a server whose vault another process
@@ -21,7 +21,9 @@ O246 were both below it; corrected with O247. It said "nine" until O268,
 "ten" until O266, "eleven" until O276, "twelve" until O278, "thirteen"
 until O279, which closed four entries, "seventeen" until O281, "eighteen" until O284,
 "nineteen" until O288, "twenty" until O289, which closed two entries, and
-"twenty-two" until O290, "twenty-three" until O291 and "twenty-four" until O296; it said
+"twenty-two" until O290, "twenty-three" until O291, "twenty-four" until O296 and
+"twenty-five" until O304 — O303 should have made it twenty-six and did not, which O304 found
+by counting the entries; it said
 "Three fixes change what a deployment must do" until O283 made it four, and
 "Four" until O291 made it five.)
 
@@ -1142,7 +1144,7 @@ restored exactly AT the manifest's anchor is, to every value there is, a rotatio
 crashed before its commit: its stage is discarded and the older state served (A2's). The
 licence for a promote is read one replay before the promote writes on it, a window only an
 offline edit of `vault.json` lands in, which it overwrites with no tamper signal (filed as
-**O304**). The read-only open still serves the forged-head states and the unseeded ones
+**O304**; closed by it, below — the promote now asks again before it writes). The read-only open still serves the forged-head states and the unseeded ones
 beside a stage (it writes nothing); beside a foreign marker it refuses them now too. Filed
 as well: **O303** (a writable open adopts an emptied `chain_meta` from the manifest without
 replaying, so a rollback with those rows deleted opens Ok — no rotation needed) and
@@ -1154,7 +1156,8 @@ Gates: fourteen store tests at both security levels — each route's refusal ass
 variant and text and the files' bytes, the marker, `chain_meta` and the `audit` row count
 across two writable opens and a read-only one (the held-window arm makes its one writable
 open; the dropped-table arms assert the read-only open's `ReadOnlyUnmigrated`); every
-legitimate state settling with its note; the costs pinned, O304's window among them — and
+legitimate state settling with its note; the costs pinned, O304's window among them (that
+arm inverted by O304) — and
 two surface arms through `open_store_as` (exit 2) and `/v1` (409 integrity), files
 unchanged. Source gates hold the order: one forced judgement in the reconcile, after the
 lock, the licence's ask and the race check, with nothing that can write before it; the
@@ -1282,6 +1285,75 @@ PATCH inside the unreleased 1.7.0: every newly refused state is an offline edit,
 database from a source build 1.0.0 declared unsupported. **`UPGRADING.md` carries an
 entry**, because unlike O296's these states RUN on 1.6.1 — they take writes, or serve
 reads with `verify` OK.
+
+### A writable open asks the manifest rule again before it writes a staged rotation's manifest (O304)
+
+O296 put a forced replay of the audit chain between the licence's reads of `vault.json.next`
+and `vault.json` and the promote's write, so that window became one replay long — measured on
+`main` `7277b53` at **80–96 ms at 100,002 audit rows** (836 ms at 10⁶ is O237's figure). No
+legitimate writer of either file can land in it; an offline edit can, and on `main`, at both
+security levels, every such edit opened Ok with the staged manifest written over whatever was
+there:
+
+- **a forged `vault.json`** (its MAC flipped) — overwritten, `verify` OK, **no tamper page**;
+- **`vault.json` deleted**, **an older manifest of the retired generation put back**, **the
+  staged manifest copied in** — overwritten silently;
+- **`.next` deleted or overwritten** — the staged manifest written from memory, silently, and an
+  overwritten `.next` left behind;
+- **a directory at `vault.json`** — a raw `Io(IsADirectory)` from the write's rename (exit 1, a
+  500 on `/v1`); **a directory at `.next`** — the same raw error, after the staged manifest was
+  written.
+
+Now `Licence::promote_licensed` asks the rule a second time before it writes — through the same
+helper the licence asks with — and that ask can only refuse or withhold the write, never order
+one:
+
+- every edit the rule refuses at the licence is refused in the window in the same class, with
+  nothing written and both files as found: a forged or older manifest is `ManifestTampered`, with
+  the tamper event; a deleted one, a directory or a FIFO, a torn one, or a lost or changed `.next`
+  the integrity verdict; a too-new one `ManifestTooNew`; an unreadable one an I/O error;
+- the staged manifest put in place by hand — copied, re-serialised or moved — is followed with
+  the write withheld: the forced replay judged exactly that head under exactly those keys;
+- a manifest of the new key generation at **any other head or height** is the reopen class
+  ("this handle must be reopened … changed beneath this open's write lock"), which the CLI and
+  `/v1` retry once — and the reopen forces a judgement against it: served over a database at that
+  head, `ManifestTampered` over one rolled back below it, where `main` wrote the staged manifest
+  over it and healed the anchor DOWN to the rolled-back database. Such a manifest needs no key: a
+  genuine one sits in the vault's own `backups/`.
+
+A promote since (`Skip`) is never asked again: it writes nothing, and the strict reads after it
+already cover its window. **What is left** is the second ask's distance to the write's rename —
+measured at 7.5–11.7 ms (median 8.2) over 25 runs, about one fsync, not growing with the corpus —
+where an edit is still overwritten by the staged manifest the database answers to, with no page;
+pinned by a test. **The cost, stated**: a `.next` deleted in the window used to be rescued by the
+write from memory; it is refused now, as it is at the licence (O290's ruling), and the in-memory
+salt dies with the process — recovery is a backup.
+
+Ruled by three lenses and an adversarial refuter before the build (ROADMAP O304): the filing's
+"same branch" would have refused the staged manifest put in place by hand with no class the rule
+has, and its option (b), judging before asking, was measured unsound — against the staged head a
+database rolled back below the promoted anchor passes. The refuter's three probes ran first: the
+second ask executed against every row, the reopen of another head, and the residual's length. It
+refines O290's "never a second read" (its reason was a read that WRITES) and O296's order to ask →
+judge → re-ask → write.
+
+Gates: seven store tests and a vault-crate arm, at both security levels, each refusal asserting
+its variant, both paths' bytes and the database's marker, `chain_meta` and `audit` count, with a
+fresh open's answer beside it; O296's arm that pinned the window as a cost, inverted and renamed;
+four surface arms through `open_store_as` and `/v1` (the forged manifest exit 2 / 409 integrity,
+not retried, the forged bytes and the database as found; another head served, or the tamper
+verdict over a rollback with `.next` kept); and the O290 source gate over the promote, rewritten
+structurally. Twelve counterfactuals over two rounds, each force-recompiled, each failing its gate — today's code, the re-ask before the window, `Skip` re-asked, another head followed, any answer taken as the licence's, another head as an integrity verdict, the re-ask blind to `.next`, no digest, the digest left set, the variant unmapped, the head alone, and any verifying manifest followed. The LoCoMo feed (1,020 sealed drawers) against `main`: no cost that shows,
+the promote of a deferral 39 / 40 ms (`stats`), 45 / 46 (`verify`), 107 / 100 (`search`). An
+independent review of the build found no defect in the logic and a list of mine — a source gate
+still blind to `let how = self.how;` and to strict reads, the height half of the comparison
+untested, a test whose "the re-ask was made" passed with none made, surface arms that could not
+tell a retry, a deleted-manifest row missing its "do NOT delete" clause, and seven stale comments —
+each fixed before this landed.
+
+PATCH inside the unreleased 1.7.0: the window is O296's, also unreleased. No `UPGRADING.md` entry:
+every newly refused state is an offline edit a fresh open already refuses, and the other head
+reopens.
 
 ## 1.6.1 — 2026-09-22
 

@@ -972,19 +972,17 @@ fn flip_mac(p: &Path) {
     std::fs::write(p, serde_json::to_vec_pretty(&v).unwrap()).unwrap();
 }
 
-/// **The licence is acted on one forced replay after it is asked — a cost this
-/// unit widened, PINNED and filed as ROADMAP O304.** On the staged branch the
-/// licence reads `.next` and `vault.json` and decides to write; the judgement
-/// then replays the chain under the write lock (about 90 ms at 10^5 audit rows,
-/// 836 ms at 10^6); the promote writes on the earlier answer. On `main` the ask
-/// and the write were back to back. No legitimate writer can land in the window
-/// — an anchor needs the lock, a rotation the fence, a restore or a delete O69's
-/// hold — so only an offline edit does, and what it costs is a forged
-/// `vault.json` overwritten by the staged manifest the database answers to, with
-/// no tamper page: no key and no row is lost. The hook stands where the edit
-/// would land.
+/// **The licence was acted on one forced replay after it was asked — a cost
+/// O296 widened and pinned here, now INVERTED by ROADMAP O304.** On the staged
+/// branch the licence reads `.next` and `vault.json` and decides to write; the
+/// judgement then replays the chain under the write lock (80–96 ms at 10^5
+/// audit rows, measured; 836 ms at 10^6); and the promote wrote on the earlier
+/// answer, so a `vault.json` forged in that window was overwritten by the staged
+/// manifest with no tamper page. The promote now asks the rule again before it
+/// writes, and the forged file is the tamper verdict, left where it is, with
+/// `.next` and the database as found. The hook stands where the edit lands.
 #[test]
-fn o296_the_licence_is_acted_on_after_the_judgement_pinned() {
+fn o304_a_manifest_forged_after_the_licence_is_the_tamper_verdict_not_overwritten() {
     for level in LEVELS {
         let dir = TempDir::new().unwrap();
         let root = dir.path();
@@ -993,14 +991,42 @@ fn o296_the_licence_is_acted_on_after_the_judgement_pinned() {
         let staged = std::fs::read(staging(root)).unwrap();
         let held = mgr(root).unlock(VAULT).unwrap();
         let json = manifest(root);
-        fixture::between_licence_and_promote(move || flip_mac(&json));
-        let s = VaultStore::open(held).expect("COST (O304): the forged manifest is overwritten");
-        assert!(s.verify().unwrap().ok(), "{level:?}");
-        assert_eq!(
-            std::fs::read(manifest(root)).unwrap(),
-            staged,
-            "{level:?}: the staged manifest written over the forged one"
+        let forged: std::rc::Rc<std::cell::RefCell<Option<Disk>>> = Default::default();
+        {
+            let (r, forged) = (root.to_path_buf(), forged.clone());
+            fixture::between_licence_and_promote(move || {
+                flip_mac(&json);
+                *forged.borrow_mut() = Some(disk(&r));
+            });
+        }
+        let e = VaultStore::open(held)
+            .err()
+            .expect("O304: the forged manifest was overwritten and served");
+        assert!(
+            matches!(e, StoreError::Vault(VaultError::ManifestTampered)),
+            "{level:?}: the tamper verdict: {e:?}"
         );
-        assert!(!staging(root).exists(), "{level:?}");
+        let forged = forged
+            .borrow_mut()
+            .take()
+            .expect("premise: the window was reached");
+        assert_ne!(forged.manifest, Some(staged.clone()), "{level:?}: premise");
+        assert_eq!(
+            forged.staged,
+            Some(staged),
+            "{level:?}: premise: .next intact"
+        );
+        assert_eq!(
+            disk(root),
+            forged,
+            "{level:?}: the forged bytes, .next and the database as the edit left them"
+        );
+        assert!(
+            matches!(
+                writable(root).err(),
+                Some(StoreError::Vault(VaultError::ManifestTampered))
+            ),
+            "{level:?}: a fresh open answers the same"
+        );
     }
 }
