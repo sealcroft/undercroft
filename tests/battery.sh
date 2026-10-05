@@ -911,12 +911,31 @@ if [ -n "$RM_FENCE_ROWS" ]; then
   echo ""; echo "BATTERY FAILED — preflight"; exit 1
 fi
 # A FUNCTION over a file argument rather than an inline awk over ROADMAP.md,
-# so the fourth arm below can be PROBED on a fixture before the real scan is
-# believed (ROADMAP O101): a closed entry sitting under a section whose header
-# says it holds no releasable work, or open work only, is a drift the three
-# older arms cannot see because they judge each entry alone.
-roadmap_scan() { awk '
-  function flush() {
+# so the placement arms below can be PROBED on a fixture before the real scan
+# is believed (ROADMAP O101): a closed entry sitting under a section whose
+# header says it holds no releasable work, or open work only, is a drift the
+# three arms that judge each entry alone cannot see.
+#
+# **And placement is an ALLOWLIST since ROADMAP O305.** The O101 arms were a
+# deny-list, so O291 (closed 2026-09-29) sat under `## 1.6.1 — released
+# 2026-09-22` with every preflight green, and a closed entry under any section
+# that was not `Open` or `Unversioned` printed nothing. A closed entry may now
+# sit only under a release whose status, the token right after the dash, reads
+# `released <yyyy-mm-dd>` (and then no date in its HEADING may be later) or
+# `unreleased`, or under `Open` or `Unversioned`, which keep their own arms.
+# The LATEST heading date decides, never a body date: bodies carry records
+# corrected beside, dated after the release, by design.
+#
+# `LC_ALL=C` is DEFENSIVE. The arm takes every offset from an ASCII-only
+# pattern, so it reads the same under any locale; but an offset taken past
+# the em dash is one unit in a UTF-8 gawk and three bytes in mawk, so a future
+# change of that shape would read the right date locally and garbage in CI
+# (measured on a mutant). In the C locale every awk counts bytes; the existing
+# rows are byte-identical under both locales over all 222 first-parent
+# versions of the file; and a premise below asserts the defined function
+# still carries the pin, because no fixture can see it go.
+roadmap_scan() { LC_ALL=C awk '
+  function flush(   t, rel, late, s, d) {
     if (sec != "") {
       seen++
       # Every row names a LINE (O162): the heading, or for a body claim the
@@ -932,6 +951,36 @@ roadmap_scan() { awk '
             (" " sec) !~ /[^A-Za-z0-9_]CLOSED by doctrine/) print "closure-without-a-date|" secline "|" sec
         if (top ~ /^## Unversioned/) print "closed-under-unversioned|" secline "|" sec
         if (top ~ /^## Open /) print "closed-under-open|" secline "|" sec
+        # The allowlist (ROADMAP O305). A release is a section heading that
+        # starts with a digit (looser than the shape O161 holds every level-2
+        # heading to, so a candidate version such as 1.9.2-rc1 counts);
+        # its status is the token right after the dash, read by POSITION and
+        # never anchored at the end of the line, because a release heading may
+        # carry a description after its date (the 1.2.0 release prep did, and
+        # an end anchor refused its 27 entries). The space appended to top
+        # makes each status a whole token.
+        t = top " "
+        if (t ~ /^## [0-9][^ ]* [^ ]+ released [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] /) {
+          match(t, /released [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] /)
+          rel = substr(t, RSTART + 9, 10)
+          # The LATEST date anywhere in the heading. A closure completed or
+          # corrected later and written there is later work, which the
+          # release cannot hold (O140 was completed the day after 1.5.2).
+          late = ""
+          s = sec
+          while (match(s, /[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/)) {
+            d = substr(s, RSTART, 10)
+            if ((d "") > (late "")) late = d
+            s = substr(s, RSTART + RLENGTH)
+          }
+          # A heading with no date at all is the date arm above, except the
+          # doctrine form, which that arm accepts and a release cannot judge.
+          if (late == "") {
+            if ((" " sec) ~ /[^A-Za-z0-9_]CLOSED by doctrine/) print "closed-undated-under-a-release|" secline "|" sec
+          } else if ((late "") > (rel "")) print "closed-after-its-release|" secline "|" sec
+        } else if (t ~ /^## [0-9]/) {
+          if (t !~ /^## [0-9][^ ]* [^ ]+ unreleased /) print "closed-under-an-unreadable-release|" secline "|" sec
+        } else if (top !~ /^## Unversioned/ && top !~ /^## Open /) print "closed-outside-a-release|" secline "|" sec
       }
     }
   }
@@ -987,23 +1036,101 @@ printf '%s\n' \
   '### O9996 — CLOSED 2099-01-01: probe' '' 'body with a gate.' '' \
   '### O9989 — an open probe' '' 'plain body.' '' \
   '## Unversioned — decisions and external actions, not code' '' \
-  '### O9998 — CLOSED 2099-01-01: probe' '' 'body with a gate.' > "$RM_FIX"
+  '### O9998 — CLOSED 2099-01-01: probe' '' 'body with a gate.' '' \
+  '## 1.9.8 — released 2099-02-01 — a description' '' \
+  '### O9987 — CLOSED 2099-02-02: probe' '' 'body with a gate.' '' \
+  '### O9986 — CLOSED 2099-01-31, completed and corrected 2099-02-02: probe' '' 'body with a gate.' '' \
+  '### O9985 — CLOSED by doctrine 2099-02-01: probe' '' 'body with a gate, **CLOSED 2099-03-01** beside.' '' \
+  '## 1.9.7 — one item is filed' '' \
+  '### O9984 — CLOSED 2099-01-01: probe' '' 'body with a gate.' '' \
+  '## 1.9.6 — released 2099-1-01' '' \
+  '### O9983 — CLOSED 2099-01-01: probe' '' 'body with a gate.' '' \
+  '## 1.9.5 — unreleased — to be released 2099-05-01' '' \
+  '### O9982 — CLOSED 2099-06-01: probe' '' 'body with a gate.' '' \
+  '## Shipped — a prose probe' '' \
+  '### O9981 — CLOSED 2099-01-01: probe' '' 'body with a gate.' > "$RM_FIX"
+# The O305 rows, and the silences that pin them: O9999 and O9990 close ON
+# their release day and pass; O9992 and O9985 carry later dates in their
+# BODIES, which are never read; O9985 is the dated doctrine form, judged by
+# its date; O9982 sits under an unreleased section whose heading also names
+# a release date later in the line, so the status is read by position.
 RM_SCAN_WANT='closure-without-evidence|7|### O9990 — CLOSED 2099-01-01: probe
 closure-without-a-date|11|### O9991 — CLOSED: probe
 closure-without-a-date|15|### O9992 — UNVERSIONED_CLOSED 2099-01-01: probe
+closed-undated-under-a-release|19|### O9993 — CLOSED by doctrine: probe
 body-closed-heading-open|27|### O9994 — an open probe
 body-closed-heading-open|31|### O9995 — an open probe that names the roster
 body-closed-heading-open|35|### O9988 — an open probe
 closed-under-open|37|### O9996 — CLOSED 2099-01-01: probe
-closed-under-unversioned|47|### O9998 — CLOSED 2099-01-01: probe'
+closed-under-unversioned|47|### O9998 — CLOSED 2099-01-01: probe
+closed-after-its-release|53|### O9987 — CLOSED 2099-02-02: probe
+closed-after-its-release|57|### O9986 — CLOSED 2099-01-31, completed and corrected 2099-02-02: probe
+closed-under-an-unreadable-release|67|### O9984 — CLOSED 2099-01-01: probe
+closed-under-an-unreadable-release|73|### O9983 — CLOSED 2099-01-01: probe
+closed-outside-a-release|85|### O9981 — CLOSED 2099-01-01: probe'
 RM_PROBE=$(roadmap_scan "$RM_FIX")
 printf '%s\n' '## Open — releasable work' '' 'no entry in this section.' > "$RM_FIX"
-RM_PROBE_EMPTY=$(roadmap_scan "$RM_FIX"); rm -f "$RM_FIX"
-if [ "$RM_PROBE" != "$RM_SCAN_WANT" ] || [ "$RM_PROBE_EMPTY" != "PREMISE-FAILED-no-sections-examined" ]; then
+RM_PROBE_EMPTY=$(roadmap_scan "$RM_FIX")
+# The O305 cases the fixture above cannot hold without renumbering it, each
+# the probe for one way the arm could read a heading WRONG and stay quiet
+# (the independent review found nine mutations the first fixture passed):
+# a closed entry above the first section, since no section is not a place;
+# a status that only BEGINS with the word, and one with the word later in the
+# line, since the status is the token right after the dash; a candidate
+# version, which is a release; a heading that names a second release date
+# later in the line, which is not its own; a dated doctrine closure after its
+# release, which is judged like any other; a date written BEFORE the status
+# token, which is still a date in the heading; the doctrine form glued to an
+# identifier, which is no doctrine form at all; and two prose sections that
+# merely begin with, or merely contain, the name of an exempt one; and a
+# bare version with no status at all, which is a release nobody can read.
+printf '%s\n' \
+  '### O9980 — CLOSED 2099-01-01: probe' '' 'body with a gate.' '' \
+  '## 1.9.4 — unreleased; probe' '' \
+  '### O9979 — CLOSED 2099-01-01: probe' '' 'body with a gate.' '' \
+  '## 1.9.3 — filed, unreleased later' '' \
+  '### O9978 — CLOSED 2099-01-01: probe' '' 'body with a gate.' '' \
+  '## 1.9.2-rc1 — released 2099-03-01 — was released 2099-03-09 elsewhere' '' \
+  '### O9977 — CLOSED 2099-03-02: probe' '' 'body with a gate.' '' \
+  '### O9976 — CLOSED by doctrine 2099-03-03: probe' '' 'body with a gate.' '' \
+  '### O9975 — completed 2099-03-04, CLOSED 2099-03-01: probe' '' 'body with a gate.' '' \
+  '### O9974 — X_CLOSED by doctrine: probe' '' 'body with a gate.' '' \
+  '## Openings — a prose probe' '' \
+  '### O9973 — CLOSED 2099-01-01: probe' '' 'body with a gate.' '' \
+  '## Beyond — not Unversioned' '' \
+  '### O9972 — CLOSED 2099-01-01: probe' '' 'body with a gate.' '' \
+  '## 1.9.0' '' \
+  '### O9971 — CLOSED 2099-01-01: probe' '' 'body with a gate.' > "$RM_FIX"
+RM_PROBE_PLACE=$(roadmap_scan "$RM_FIX"); rm -f "$RM_FIX"
+RM_PLACE_WANT='closed-outside-a-release|1|### O9980 — CLOSED 2099-01-01: probe
+closed-under-an-unreadable-release|7|### O9979 — CLOSED 2099-01-01: probe
+closed-under-an-unreadable-release|13|### O9978 — CLOSED 2099-01-01: probe
+closed-after-its-release|19|### O9977 — CLOSED 2099-03-02: probe
+closed-after-its-release|23|### O9976 — CLOSED by doctrine 2099-03-03: probe
+closed-after-its-release|27|### O9975 — completed 2099-03-04, CLOSED 2099-03-01: probe
+closure-without-a-date|31|### O9974 — X_CLOSED by doctrine: probe
+closed-outside-a-release|37|### O9973 — CLOSED 2099-01-01: probe
+closed-outside-a-release|43|### O9972 — CLOSED 2099-01-01: probe
+closed-under-an-unreadable-release|49|### O9971 — CLOSED 2099-01-01: probe'
+# Every offset the arm takes comes from an ASCII pattern, so no fixture can
+# see the locale pin go: its job is to make a FUTURE offset past the em dash
+# read in a local gawk as it reads in mawk. So the defined function itself is
+# asserted to carry it (ROADMAP O305).
+if ! declare -f roadmap_scan | grep -q 'LC_ALL=C awk'; then
+  echo "FAIL  premise: roadmap_scan no longer runs its awk under LC_ALL=C (ROADMAP O305)."
+  echo "      An offset taken past the em dash is one unit in a UTF-8 gawk and three"
+  echo "      bytes in mawk, so without the pin such a change is green locally and"
+  echo "      wrong in CI."
+  echo ""; echo "BATTERY FAILED — preflight"; exit 1
+fi
+if [ "$RM_PROBE" != "$RM_SCAN_WANT" ] || [ "$RM_PROBE_EMPTY" != "PREMISE-FAILED-no-sections-examined" ] ||
+   [ "$RM_PROBE_PLACE" != "$RM_PLACE_WANT" ]; then
   echo "FAIL  premise: the heading scanner did not produce the exact rows its fixture"
-  echo "      requires (ROADMAP O162). Wanted (<) against got (>), then the no-entry probe:"
+  echo "      requires (ROADMAP O162, O305). Wanted (<) against got (>), then the"
+  echo "      no-entry probe, then the placement probe:"
   diff <(printf '%s\n' "$RM_SCAN_WANT") <(printf '%s\n' "$RM_PROBE") | sed 's/^/        /'
   echo "        no-entry probe: ${RM_PROBE_EMPTY:-nothing}"
+  diff <(printf '%s\n' "$RM_PLACE_WANT") <(printf '%s\n' "$RM_PROBE_PLACE") | sed 's/^/        /'
   echo ""; echo "BATTERY FAILED — preflight"; exit 1
 fi
 # **Closed entries that BELONG under `Unversioned`, each with its reason** —
@@ -1038,17 +1165,53 @@ if [ "$ROADMAP_DRIFT" = "PREMISE-FAILED-no-sections-examined" ]; then
   echo "BATTERY FAILED — preflight"
   exit 1
 fi
-RM_UNV_HITS=$(printf '%s\n' "$ROADMAP_DRIFT" | grep '^closed-under-unversioned|' || true)
-for row in "${UNVERSIONED_CLOSED[@]}"; do
-  id="${row%%|*}"
-  if ! printf '%s\n' "$RM_UNV_HITS" | grep -qE "^closed-under-unversioned\|[0-9]+\|### ${id} "; then
-    echo "FAIL  UNVERSIONED_CLOSED lists $id (${row#*|}) but no closed entry"
-    echo "      with that id sits under '## Unversioned' — the list has outlived"
-    echo "      what it exempts; remove the row"
-    echo ""; echo "BATTERY FAILED — preflight"; exit 1
-  fi
-  ROADMAP_DRIFT=$(printf '%s\n' "$ROADMAP_DRIFT" | grep -vE "^closed-under-unversioned\|[0-9]+\|### ${id} " || true)
-done
+# The roster verdict as ROWS, from a function over the drift and the roster,
+# so it can be probed (ROADMAP O305, found by its independent review). A
+# listed id with no closed-under-unversioned row has outlived the list ONLY
+# when no other row names it: a rostered entry that O161's defect has
+# re-sectioned out of `## Unversioned` is named by a placement row, and the
+# handler below reports THAT row. This loop used to fire first and tell the
+# editor to delete a correct exemption, one per run (the O162 shape, one arm
+# over).
+rm_unversioned_rows() { # rm_unversioned_rows <drift rows> <roster row>...
+  local drift="$1" row id hits
+  shift
+  hits=$(printf '%s\n' "$drift" | grep '^closed-under-unversioned|' || true)
+  for row in "$@"; do
+    id="${row%%|*}"
+    if ! printf '%s\n' "$hits" | grep -qE "^closed-under-unversioned\|[0-9]+\|### ${id} " &&
+       ! printf '%s\n' "$drift" | grep -qE "^[a-z-]+\|[0-9]+\|### ${id} "; then
+      printf 'roster-outlived|%s|%s\n' "$id" "${row#*|}"
+    fi
+    drift=$(printf '%s\n' "$drift" | grep -vE "^closed-under-unversioned\|[0-9]+\|### ${id} " || true)
+  done
+  if [ -n "$drift" ]; then printf '%s\n' "$drift"; fi
+}
+# PREMISE, as an exact row set: a rostered row kept and removed, a rostered
+# entry named by another row (deferred to it), a rostered id named by nothing
+# (outlived), and an unrelated row passed through.
+RM_ROSTER_GOT=$(rm_unversioned_rows 'closed-under-unversioned|10|### O9901 — CLOSED 2099-01-01: kept
+closed-outside-a-release|20|### O9902 — CLOSED 2099-01-01: re-sectioned
+closed-under-open|30|### O9904 — CLOSED 2099-01-01: unrelated' 'O9901|reason one' 'O9902|reason two' 'O9903|reason three')
+RM_ROSTER_WANT='roster-outlived|O9903|reason three
+closed-outside-a-release|20|### O9902 — CLOSED 2099-01-01: re-sectioned
+closed-under-open|30|### O9904 — CLOSED 2099-01-01: unrelated'
+if [ "$RM_ROSTER_GOT" != "$RM_ROSTER_WANT" ]; then
+  echo "FAIL  premise: the Unversioned roster check did not produce the exact rows its"
+  echo "      fixture requires (ROADMAP O305). Wanted (<) against got (>):"
+  diff <(printf '%s\n' "$RM_ROSTER_WANT") <(printf '%s\n' "$RM_ROSTER_GOT") | sed 's/^/        /'
+  echo ""; echo "BATTERY FAILED — preflight"; exit 1
+fi
+RM_ROWS=$(rm_unversioned_rows "$ROADMAP_DRIFT" "${UNVERSIONED_CLOSED[@]}")
+RM_OUTLIVED=$(printf '%s\n' "$RM_ROWS" | grep '^roster-outlived|' | head -1 || true)
+if [ -n "$RM_OUTLIVED" ]; then
+  IFS='|' read -r _ rm_oid rm_oreason <<< "$RM_OUTLIVED"
+  echo "FAIL  UNVERSIONED_CLOSED lists $rm_oid ($rm_oreason) but no closed entry"
+  echo "      with that id sits under '## Unversioned', and no other check names it —"
+  echo "      the list has outlived what it exempts; remove the row"
+  echo ""; echo "BATTERY FAILED — preflight"; exit 1
+fi
+ROADMAP_DRIFT=$(printf '%s\n' "$RM_ROWS" | grep -v '^roster-outlived|' || true)
 if [ -n "$ROADMAP_DRIFT" ]; then
   while IFS='|' read -r kind line sec; do
     [ -z "$kind" ] && continue
@@ -1075,6 +1238,29 @@ if [ -n "$ROADMAP_DRIFT" ]; then
       closed-under-open)
         echo "FAIL  this CLOSED entry sits under '## Open', which holds open work"
         echo "      only. Move it under the release that shipped it (ROADMAP O101):" ;;
+      closed-after-its-release)
+        echo "FAIL  this CLOSED entry sits under a release dated before a date in its"
+        echo "      own heading, so that release cannot have shipped it. Move it under"
+        echo "      the release that did, or the unreleased section; a later correction"
+        echo "      goes in the body or a new entry, never as a later date in this"
+        echo "      heading (ROADMAP O305, O101):" ;;
+      closed-undated-under-a-release)
+        echo "FAIL  a CLOSED entry under a release must say when. Write"
+        echo "      'CLOSED <yyyy-mm-dd>' (a ruling: 'CLOSED <yyyy-mm-dd> by doctrine'),"
+        echo "      or list a decision in UNVERSIONED_CLOSED under '## Unversioned'"
+        echo "      (ROADMAP O305):" ;;
+      closed-under-an-unreadable-release)
+        echo "FAIL  this CLOSED entry sits under a release whose status, the text right"
+        echo "      after the dash, reads neither 'released <yyyy-mm-dd>' nor 'unreleased',"
+        echo "      so no window can be judged; refused, never skipped. Write the status"
+        echo "      right after the dash, or move the entry under the release that"
+        echo "      shipped it (ROADMAP O305, O161):" ;;
+      closed-outside-a-release)
+        echo "FAIL  this CLOSED entry sits outside every place a closed entry may live:"
+        echo "      the release that shipped it, the unreleased section, or (a decision)"
+        echo "      '## Unversioned' (ROADMAP O101, O305). If a level-2 heading inside an"
+        echo "      entry above it re-sectioned the file, THAT heading is the defect:"
+        echo "      make it '####' (ROADMAP O161):" ;;
       # A row kind with no arm used to print only its heading, with no cause
       # (ROADMAP O162): the scanner can grow a row this handler never learned.
       *)
@@ -1093,14 +1279,18 @@ if [ -n "$ROADMAP_DRIFT" ]; then
   exit 1
 fi
 echo "ok    every closed ROADMAP entry says so in its heading, with a date and"
-echo "      its evidence (both directions; 'is the work done' stays semantic)"
+echo "      its evidence, and sits where a closed entry may live — never under a"
+echo "      release dated before its heading (both directions; 'is the work done'"
+echo "      stays semantic)"
 
 # **Every `^## ` in ROADMAP.md is a SECTION heading (ROADMAP O161).**
 #
 # `roadmap_scan` takes its enclosing section from any `^## ` line, so a
 # heading written at that level INSIDE an entry silently re-sections the file:
 # every later entry is attributed to `## Gates` rather than to `## Open`, and
-# the two placement arms stop firing for all of them. Measured before the fix:
+# the two placement arms stopped firing for all of them (since ROADMAP O305 a
+# CLOSED entry so re-sectioned is refused first, by the placement allowlist;
+# an open one is still judged by nothing until this arm). Measured before the fix:
 # a closed entry placed after such a sibling produced NO output at all, which
 # is what a clean tree produces. Three more arms were affected — the body is
 # truncated at the heading, so `body-closed-heading-open` goes blind and
@@ -1163,9 +1353,9 @@ $rm_txt"
   if [ "$RM_H2_BAD" -eq 0 ]; then
     echo "FAIL  a level-2 heading inside a ROADMAP entry. It re-sections the"
     echo "      file from that line on: every later entry is attributed to it"
-    echo "      rather than to its real section, and the closed-under-Open and"
-    echo "      closed-under-Unversioned arms stop firing for all of them —"
-    echo "      silently (ROADMAP O161). An entry's subsections are '####'."
+    echo "      rather than to its real section: a closed one is refused by the"
+    echo "      placement allowlist (ROADMAP O305), and an open one is judged by"
+    echo "      nothing but this check (ROADMAP O161). An entry's subsections are '####'."
   fi
   RM_H2_BAD=1
   printf '        ROADMAP.md:%s  %s\n' "$rm_no" "$rm_txt"

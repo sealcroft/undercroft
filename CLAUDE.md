@@ -4378,12 +4378,42 @@ unwritten because a half-correct verdict is worse than a known-wrong one.
   external actions and closures by measurement — are `UNVERSIONED_CLOSED`,
   an inventory with reasons counted
   both ways, because the scanner cannot judge releasability.
+  **And a closed entry sits only where its status is READABLE (O305,
+  2026-10-05).** The two arms above were a deny-list, so O291 — closed
+  2026-09-29 — sat under `## 1.6.1 — released 2026-09-22` with every preflight
+  green, and a closed entry under `## 2.0.0`, `Beyond 2.0.0` or `Shipped`
+  printed nothing. Placement is an allowlist now: a release whose status, the
+  token right after the dash, reads `released <yyyy-mm-dd>` — and then no date
+  in the entry's HEADING may be later, the latest heading date deciding and
+  never a body date, because bodies carry records corrected beside — or
+  `unreleased`, or `Open` and `Unversioned` under their own arms; anything else
+  is refused, and every closed entry re-sectioned by O161's defect below is
+  refused by a message that names O161, ahead of O161's own arm — the
+  `Unversioned` roster now defers to such a row, where it used to fire first
+  and tell the editor to delete a correct exemption. Two writing constraints follow: a
+  release heading's status word comes RIGHT after its dash (a description may
+  follow the date — the 1.2.0 release prep wrote one, and an end-anchored
+  reader refused its 27 entries), and a correction made after a release goes in
+  the body or a new entry, never as a later date in a closed heading. The scan
+  runs under `LC_ALL=C`, defensively: the arm takes every offset from an ASCII
+  pattern, but an offset past the em dash is one unit in a UTF-8 gawk and three
+  bytes in mawk, so a change of that shape would read a date locally and
+  garbage in CI; a premise asserts the pin, since no fixture can see it go.
+  What a date cannot see is filed as O309: a
+  closure is dated when it is BUILT, so an entry merged under a release cut
+  while its branch was open passes, and only the tag's own `ROADMAP.md` can
+  say what shipped. Applied backwards over all 222 first-parent versions of
+  the file, the arm refuses `66dafb3`'s O291, one pre-convention 1.2.0
+  heading, six versions holding O161's real defect and one early
+  `## OPEN after 1.0.0`, and confirms every other version.
   **An entry's SUBSECTIONS are `####`, never `##` (O161, 2026-09-13).** The
   scanner takes its enclosing section from any `^## ` line, so a level-2
   heading written inside an entry re-sections the file from there on: every
   LATER entry is attributed to `## Gates` instead of `## Open`, and both
   placement arms stop firing for all of them — silently, which is what a clean
-  tree looks like. It also truncates the entry's own body at that line, which
+  tree looks like (until O305: a CLOSED entry so re-sectioned is refused now,
+  by the allowlist above, and only an open one still goes unseen before
+  O161's own arm runs). It also truncates the entry's own body at that line, which
   blinded `body-closed-heading-open` and let one entry satisfy
   `closure-without-evidence` on the word "gate" in an unrelated sentence.
   `####` was already the file's convention in nine places; fourteen headings in
