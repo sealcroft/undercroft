@@ -3998,7 +3998,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**343** of the **358** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**344** of the **359** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -33352,6 +33352,75 @@ are present byte-identical at their own tags, so requiring that would cost nothi
 byte-identical in that release's tag snapshot (O309's heading identity, extended), or rule the class out
 of scope with its argument. **Gate**: such a heading planted under `## 1.6.1` fails, naming its line; the
 tree passes.
+
+### O314 — CI's awk is GNU Awk, not mawk: the preflights' comments say CI runs mawk, and nothing runs their awk under mawk
+
+**Filed 2026-10-06, from the step O309 added to CI.** The `preflight` job runs on `ubuntu-latest` with no
+container, which resolved to the image `ubuntu-24.04` version 20260927.320.1. The tag step O309 added,
+whose ruling (D2) had it print git's and awk's versions, printed `GNU Awk 5.2.1, API 3.2, PMA Avon 8-g1,
+(GNU MPFR 4.2.1, GNU MP 6.3.0)` beside git 2.55.0 — on PR #253 (run 37384762945) and again on the
+post-merge `main` run 37395521017. No earlier run printed it, and O305's ruling recorded that nobody
+had measured it. This host's Git Bash runs GNU Awk 5.4.0 under `en_US.UTF-8`. So both hosts that run
+the battery today run gawk, nothing in the tree runs a preflight's awk program under mawk, and no record
+shows CI ever did. The runner's locale is printed nowhere and is unmeasured.
+
+**The claims it contradicts are this project's own**, written between 2026-08-13 and 2026-10-05 by O28,
+M13, O107, O162, the 2026-09-14 drift sweep, O169 with O171, and O305 (per `git blame`). In
+`tests/battery.sh`, eight places: the comments above `declare_suite_counts` ("CI runs this on
+ubuntu-latest, so the gawk form would read empty there"), `roadmap_fences` ("CI runs mawk, so no
+intervals"), `roadmap_scan` ("the right date locally and garbage in CI"), the premise asserting that
+function's locale pin and the message it prints ("green locally and wrong in CI"), `roadmap_relations`
+("CI runs mawk, so no intervals and no IGNORECASE"), `roadmap_heading_status` (which inherits that
+reason), the published-figures preflight about the same reader as the first ("CI runs these preflights
+on ubuntu-latest, so the gawk form would have produced an empty read there") and `handover_para`
+("because ubuntu-latest's awk is mawk").
+`CLAUDE.md`'s O305 paragraph repeats `roadmap_scan`'s. The records: O28 under 1.1.0 and its CHANGELOG
+entry, O107 under 1.4.0 ("mawk 1.3.4 (`ubuntu:24.04`, CI's awk") and its CHANGELOG entry ("mawk, which
+is CI's awk"), O305's CHANGELOG entry under 1.7.0, and O162's residual under 1.6.0, which is the one
+that decided something: "mawk was not run here. CI's `preflight` job runs these on ubuntu-latest and is
+the portability probe." A unit skipped a measurement on that belief.
+
+**Measured, so no verdict moves.** In stock images, `ubuntu:24.04`'s awk is mawk 1.3.4 20240123, which
+accepts interval expressions, and `debian:bookworm-slim`'s is mawk 1.3.4 20200120, which does not; both
+reject the three-argument `match()` as a syntax error, ignore `IGNORECASE` and count bytes (`a—b` has
+length 5). Over a fresh clone of `bbf1b57` holding all 13 release tags, `bash tests/battery.sh
+--preflight-only` exits 0 with 28 `ok` lines in those images under Ubuntu's mawk, Debian's mawk and
+Ubuntu's gawk 5.2.1, the build CI runs; the three outputs are byte-identical, and they differ from CI's
+own output on PR #253 only in the line naming the checkout path's slug. The one container the preflights
+start, the Python no-trace scan, was run directly by a shim, because the probe container had no Docker
+daemon; nothing else was replaced.
+
+**What it changes, and what it does not.** The constraints those comments state still hold, for another
+reason: Ubuntu's and Debian's default `awk` is mawk, so a contributor's stock host runs the preflights
+under it, and "no intervals" holds because of Debian's older mawk, since Ubuntu 24.04's accepts them. The
+`LC_ALL=C` pin stays right, because it makes every awk count bytes. What is false is the assurance. A
+GNU-only construct added to a preflight passes on both hosts that run the battery today, this one's gawk
+5.4 and CI's gawk 5.2.1, and fails only on a stock Debian or Ubuntu host: a gate that only runs on its
+author's machine, which `tests/battery.sh` says the file exists to remove. Portability to mawk has been
+checked by hand, in the units whose records say so (O28, O107, O305, O309), and by nothing else. And
+without the pin, the em-dash offset `roadmap_scan` warns of would read the same date on CI as on this
+host if CI's locale is UTF-8, so neither would show it; only mawk or a C locale does. The pin, not CI, is
+what makes every host see it.
+
+**Shape**: (1) correct the eight places to name the real reason, a host whose `awk` is mawk and Debian's
+mawk for intervals, and correct `CLAUDE.md`'s O305 sentence, which lands only with the maintainer's
+approval; (2) correct the records beside, as `> **Corrected …, ROADMAP O314**` notes under O28, O107,
+O162 and the three CHANGELOG entries, never rewritten, every released heading staying byte-identical as
+O309's arm requires; (3) print the locale, and whether the runner carries `mawk` at all, in the tag step
+beside awk's version; (4) for a ruling, whether anything should RUN the preflights' awk under mawk:
+(a) comments and records only, so portability stays a hand check; (b) CI runs `--preflight-only` a
+second time with `awk` resolved to the runner's mawk, if the image carries one (unmeasured), which on
+Ubuntu 24.04 would be the 20240123 build and so would not hold "no intervals"; (c) a CI step that runs
+the preflights in a `debian:bookworm-slim` container, which holds every stated constraint at the cost
+of a second way to invoke the no-trace scan (this filing's shim) and a package install per run; (d) a
+preflight that runs each awk-bearing reader's fixtures under every awk the host carries, silent where
+there is only one, as on this host. The probes a panel needs are (3)'s two prints and the wall time of (b) and (c).
+
+**Gate**: no comment in `tests/battery.sh` or `.github/workflows/ci.yml`, and no sentence in
+`CLAUDE.md`, states what CI's awk is, because the tag step prints it; each record above carries its
+correction beside it; and if (b), (c) or (d) is ruled in, a three-argument `match()` planted in one
+reader fails that run while the gawk run passes, and under (c) an interval expression fails too. The tree
+passes.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 
