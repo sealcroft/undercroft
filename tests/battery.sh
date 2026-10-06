@@ -115,6 +115,93 @@ fi
 # hazard CLAUDE.md records about a 100-line edit showing as 1,415 lines.
 if [ "$NO_PREFLIGHT" -eq 0 ]; then
 
+# ── the awk recorder (ROADMAP O314) ─────────────────────────────────────────
+# Every awk call the preflight block makes goes through this function. It
+# runs the host's awk unchanged and writes one tab-separated line per call to
+# a record: the exit status, the calling function, the line bash reports, the
+# `LC_ALL` in force, and the program's first characters. The LINE is only
+# approximate and is never the identity: for a multi-line program bash
+# reports the first or the last line by context, the two versions measured
+# (5.3 here, Ubuntu 24.04's 5.2) disagree on the same calls in this file, and
+# in review 5.2 reported one call inside `$(...)` past its last line, at an
+# unrelated `echo`. The function and the program text are what name a call. The LAST preflight fails on any call that did not succeed; an
+# EXIT trap prints them too, because a preflight that fails earlier under a
+# mawk host exits before that one runs. Function and trap are removed when
+# the block ends, and the post-run phase and `--no-preflight` legs never
+# record.
+#
+# It exists because a program one awk cannot run can fail OPEN. These
+# preflights run under whatever awk the host carries, and on 2026-10-06 both
+# hosts that ran them (the maintainer's Git Bash and CI's runner) carried
+# gawk, while a stock Debian or Ubuntu host's awk is mawk — a gap no gate saw
+# until ROADMAP O314. Measured: a three-argument `match()` planted in the §9
+# W-column reader below made mawk print `syntax error`, and the preflight went
+# on to print `ok` and exit 0, because an empty read is that reader's clean
+# answer. The observable such a defect moves is the exit status, and no output
+# shows it.
+#
+# ANY non-zero status fails, not 2 alone: a program that cannot be compiled
+# exits 2 under mawk and BWK awk but 1 under gawk (measured on gawk 5.2.1 and
+# 5.4.0), and no call on the clean tree exits non-zero under any of them. So
+# a reader that needs an answer reads awk's OUTPUT; an `exit 1` used as an
+# answer is refused here by name rather than mistaken for a failure.
+#
+# It lives here and not in CI, so CI and a local battery run the same code
+# (ROADMAP M13), and a contributor's mawk host runs it too. CI's preflight job
+# runs this block twice, under the runner's own awk and then under Debian 12's
+# mawk 1.3.4 20200120 brought in by digest and sha256, and the last preflight
+# requires that step. A call made by a CHILD script (`bash tests/<x>.sh`) is
+# not recorded, because the function is not exported.
+mkdir -p .battery
+AWK_REC="$PWD/.battery/awk-calls.log"
+awk() {
+  command awk "$@"
+  local rc=$? a prog="" skip=0
+  # The program is the first argument that is neither an option nor an
+  # option's value. Builtins only: this runs on every call, and a fork per
+  # call is seconds on Git Bash.
+  for a in "$@"; do
+    if [ "$skip" -eq 1 ]; then skip=0; continue; fi
+    case "$a" in -F|-v|-f) skip=1 ;; -?*) ;; *) prog=$a; break ;; esac
+  done
+  prog=${prog#"${prog%%[![:space:]]*}"}
+  prog=${prog:0:240}; prog=${prog//[$'\t\r\n']/ }
+  while [ "${prog#*  }" != "$prog" ]; do prog=${prog//  / }; done
+  printf '%s\t%s\t%s\t%s\t%s\n' "$rc" "${FUNCNAME[1]:-main}" "${BASH_LINENO[0]:-0}" \
+    "${LC_ALL:-.}" "${prog:0:60}" >> "$AWK_REC"
+  return "$rc"
+}
+# The ONE reader of the record's failures, for the last preflight and the
+# EXIT trap alike: one line per distinct call that did not succeed.
+awk_failures() {
+  grep -v "^0$(printf '\t')" "$AWK_REC" | sort -u |
+    while IFS=$'\t' read -r st fn ln lc pg; do
+      if [ "$lc" = C ]; then lc=", under LC_ALL=C"; else lc=""; fi
+      printf '        exit %s, in %s (near tests/battery.sh:%s%s): %s\n' "$st" "$fn" "$ln" "$lc" "$pg"
+    done
+}
+awk_exit_report() {
+  local f
+  f=$(awk_failures)
+  if [ -n "$f" ]; then
+    echo "      awk calls that did not succeed before this exit (ROADMAP O314):"
+    printf '%s\n' "$f"
+  fi
+}
+# PREMISE: a program no awk can compile must be RECORDED as a failure. A
+# function that never took, or a record nobody can write, otherwise reads
+# exactly like a tree whose every awk call succeeded.
+: > "$AWK_REC"
+awk 'BEGIN {' </dev/null >/dev/null 2>&1
+if ! grep -q '^[1-9]' "$AWK_REC"; then
+  echo "FAIL  premise: the awk recorder did not record a program that cannot be"
+  echo "      compiled (record: $AWK_REC). A recorder that records nothing reads"
+  echo "      as a tree whose every awk call succeeded (ROADMAP O314)."
+  echo ""; echo "BATTERY FAILED — preflight"; exit 1
+fi
+: > "$AWK_REC"
+trap awk_exit_report EXIT
+
 # ── preflight: line endings over the WHOLE tree ─────────────────────────────
 # `.gitattributes` declares `* text=auto eol=lf` and says why: a CRLF shell
 # script breaks in the containers. Nothing enforced it until 2026-08-06, when
@@ -355,8 +442,9 @@ suite_summary() { # suite_summary <log>
 # and was skipped: published, measured, and never compared. ROADMAP M13.
 #
 # `grep -oE` + `sed -E`, deliberately NOT awk's three-argument `match()`:
-# that is a GNU extension and Ubuntu's default awk is mawk, which lacks it.
-# CI runs this on ubuntu-latest, so the gawk form would read empty there.
+# that is a GNU extension, and a stock Debian or Ubuntu host's awk is mawk,
+# which refuses it, so the gawk form would read empty there. CI's preflight
+# job runs these readers under Debian 12's mawk as well (ROADMAP O314).
 declare_suite_counts() {
   # Compose-invoked suites, as CLAUDE.md publishes them.
   grep -oE 'docker compose run --rm [a-z0-9-]+.*\([0-9]+ checks' CLAUDE.md 2>/dev/null \
@@ -804,7 +892,9 @@ echo "═══ preflight: ROADMAP headings ═══"
 # so that it renders but no `^## ` reader sees it (indented, tabbed, bare).
 #
 # Rows are `kind|line|opener|text`. The program sits in a single-quoted shell
-# string, so it may hold no apostrophe, and CI runs mawk, so no intervals.
+# string, so it may hold no apostrophe, and it holds no interval expression:
+# Debian 12's mawk 1.3.4 20200120 reads `{n}` as literal braces, with no
+# error (ROADMAP O314).
 roadmap_fences() { awk '
   function run(s, c,   n) { n = 0; while (substr(s, n + 1, 1) == c) n++; return n }
   {
@@ -929,8 +1019,9 @@ fi
 # `LC_ALL=C` is DEFENSIVE. The arm takes every offset from an ASCII-only
 # pattern, so it reads the same under any locale; but an offset taken past
 # the em dash is one unit in a UTF-8 gawk and three bytes in mawk, so a future
-# change of that shape would read the right date locally and garbage in CI
-# (measured on a mutant). In the C locale every awk counts bytes; the existing
+# change of that shape would read the right date under a UTF-8 gawk and
+# garbage under mawk (measured on a mutant), which CI's second pass runs
+# (ROADMAP O314). In the C locale every awk counts bytes; the existing
 # rows are byte-identical under both locales over all 222 first-parent
 # versions of the file; and a premise below asserts the defined function
 # still carries the pin, because no fixture can see it go.
@@ -1114,13 +1205,13 @@ closed-outside-a-release|43|### O9972 — CLOSED 2099-01-01: probe
 closed-under-an-unreadable-release|49|### O9971 — CLOSED 2099-01-01: probe'
 # Every offset the arm takes comes from an ASCII pattern, so no fixture can
 # see the locale pin go: its job is to make a FUTURE offset past the em dash
-# read in a local gawk as it reads in mawk. So the defined function itself is
+# read under gawk as it reads under mawk. So the defined function itself is
 # asserted to carry it (ROADMAP O305).
 if ! declare -f roadmap_scan | grep -q 'LC_ALL=C awk'; then
   echo "FAIL  premise: roadmap_scan no longer runs its awk under LC_ALL=C (ROADMAP O305)."
   echo "      An offset taken past the em dash is one unit in a UTF-8 gawk and three"
-  echo "      bytes in mawk, so without the pin such a change is green locally and"
-  echo "      wrong in CI."
+  echo "      bytes in mawk, so without the pin such a change is green under gawk"
+  echo "      and wrong under mawk."
   echo ""; echo "BATTERY FAILED — preflight"; exit 1
 fi
 if [ "$RM_PROBE" != "$RM_SCAN_WANT" ] || [ "$RM_PROBE_EMPTY" != "PREMISE-FAILED-no-sections-examined" ] ||
@@ -1470,7 +1561,9 @@ echo "      once; no fence holds a heading; entry subsections stay '####'"
 #
 # Rows are `kind|line|from|to`, then one `premise|<open entries>|<lines>` row.
 # The program sits in a single-quoted shell string: no apostrophe anywhere in
-# it, and CI runs mawk, so no intervals and no IGNORECASE.
+# it. And no interval expression and no IGNORECASE: Debian 12's mawk 1.3.4
+# 20200120 reads the first as literal braces and the second as an ordinary
+# variable, both with no error (ROADMAP O314).
 roadmap_relations() { awk '
   function ids_on(s,   out, rest, at, pre, post, tok) {
     out = ""; rest = s
@@ -1585,7 +1678,7 @@ echo "      open entry that names it back"
 #
 # An id is open when a level-3 heading carries it and no heading for that id
 # starts its title with a finished status: closed, superseded, moved or
-# refuted, in either case. Same apostrophe and mawk rules as above.
+# refuted, in either case. Same apostrophe and Debian 12 mawk rules as above.
 roadmap_heading_status() { awk '
   /^### [A-Z][0-9]+[a-z]? / {
     id = $2; t = $0
@@ -2241,7 +2334,7 @@ if [ -n "$RT_BAD" ]; then
         echo "          git fetch --tags origin  (a full clone), or in a shallow one"
         echo "          git fetch --no-tags --depth=1 origin '+refs/tags/v*:refs/tags/v*'"
         echo "          (shallow: $(git rev-parse --is-shallow-repository 2>/dev/null)). In CI it is the step"
-        echo "          before this one in the preflight job of .github/workflows/ci.yml" ;;
+        echo "          \"Fetch the release tags (ROADMAP O309)\" in the preflight job of .github/workflows/ci.yml" ;;
       head-day-unreadable)       echo "          head-day-unreadable: the day of HEAD (git show -s --format=%cs HEAD) could not be read, so the window bound cannot be judged" ;;
       release-tag-misnamed)      echo "          release-tag-misnamed: release.yml publishes every v* tag, and this one is not v<n>.<n>.<n>; the maintainer deletes or renames it, or rules suffixes first" ;;
       release-tag-lightweight)   echo "          release-tag-lightweight: a release tag is annotated (git tag -a), so its date is the tagger's day; re-cut it annotated" ;;
@@ -2630,12 +2723,13 @@ fi
 # CLAUDE.md publishes them on its `docker compose run --rm <suite>` lines;
 # other docs publish them as `tests/<script>.sh`, N checks`.
 # `grep -oE` + `sed -E`, deliberately NOT awk's three-argument `match()`:
-# that is a GNU extension and Ubuntu's default `awk` is mawk, which does not
-# have it. CI runs these preflights on ubuntu-latest, so the gawk form would
-# have produced an empty read there — caught by the premise arm below, but as
-# a confusing failure on a clean tree rather than as the portability bug it
-# is. A gate that only runs on its author's machine is the shape this whole
-# file exists to remove.
+# that is a GNU extension, and a stock Debian or Ubuntu host's `awk` is mawk,
+# which refuses it. The gawk form would have produced an empty read there —
+# caught by the premise arm below, but as a confusing failure on a clean tree
+# rather than as the portability bug it is. A gate that only runs on its
+# author's machine is the shape this whole file exists to remove, which is
+# why CI's preflight job runs this block under Debian 12's mawk as well as
+# under the runner's own awk (ROADMAP O314).
 # The reader itself is DEFINED ABOVE, beside `suite_summary`, because two
 # phases need it: this preflight (do the surfaces agree with each other?) and
 # the post-run comparison (does the run agree with the surfaces?). It lived
@@ -2743,7 +2837,8 @@ HANDOVER_FILES="SESSION_START.md NEXT_SESSION.md AUDIT_CONTINUATION.md"
 # The ONE reader, used by the probe and by the real arms. `lede` is the first
 # dated paragraph (from the first `**YYYY-MM-DD` line to the next blank line),
 # `row` the first `| **YYYY-MM-DD` table row, `file` the whole file.
-# Repetition is spelled out inside awk because ubuntu-latest's awk is mawk.
+# Repetition is spelled out inside awk because Debian 12's mawk 1.3.4
+# 20200120 reads `{n}` as literal braces, with no error (ROADMAP O314).
 handover_para() {
   case "$2" in
     lede) awk 'f==0 && /^[*][*][0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ {f=1} f==1 { if ($0 ~ /^[ \t\r]*$/) exit; print }' "$1" ;;
@@ -4324,9 +4419,33 @@ pf_word() {
     eleven) echo 11;; twelve) echo 12;; thirteen) echo 13;; fourteen) echo 14;;
     fifteen) echo 15;; sixteen) echo 16;; seventeen) echo 17;;
     eighteen) echo 18;; nineteen) echo 19;; twenty) echo 20;;
+    thirty) echo 30;; forty) echo 40;; fifty) echo 50;; sixty) echo 60;;
+    seventy) echo 70;; eighty) echo 80;; ninety) echo 90;;
+    # A compound tens word, `twenty-one` to `ninety-nine`. The reader stopped
+    # at twenty until the preflight count passed it (ROADMAP O314); any other
+    # hyphenated word (`host-side`, `two-phase`) is not a number and comes back
+    # unchanged, so it is never read as a claim.
+    *-*)
+      local t u
+      t=$(pf_word "${1%%-*}"); u=$(pf_word "${1#*-}")
+      case "$t:$u" in
+        [2-9]0:[1-9]) echo $((t + u));;
+        *) echo "$1";;
+      esac;;
     *) echo "$1";;
   esac
 }
+# PREMISE: the reader is what decides whether a published word is a claim, so
+# it is probed on the words that matter — a plain one, a compound one, and two
+# hyphenated words that must NOT read as numbers.
+for pf_probe in "twenty:20" "twenty-one:21" "ninety-nine:99" "host-side:host-side" \
+                "two-phase:two-phase" "one-two:one-two"; do
+  if [ "$(pf_word "${pf_probe%%:*}")" != "${pf_probe#*:}" ]; then
+    echo "FAIL  premise: pf_word reads '${pf_probe%%:*}' as '$(pf_word "${pf_probe%%:*}")', not"
+    echo "      '${pf_probe#*:}' — every number word the figure gates read goes through it."
+    echo ""; echo "BATTERY FAILED — preflight"; exit 1
+  fi
+done
 
 PF_ARCH="architecture/index.html"
 PF_STORE="crates/undercroft-store/src/lib.rs"
@@ -4506,7 +4625,7 @@ fi
 
 # label|file|sed-with-one-capture|truth
 PROSE_FIGURES=(
-  "host-side preflights|CLAUDE.md|s/.*runs the ([a-z]+) host-side preflights.*/\\1/p|$PF_PREFLIGHTS"
+  "host-side preflights|CLAUDE.md|s/.*runs the ([a-z-]+) host-side preflights.*/\\1/p|$PF_PREFLIGHTS"
   "workspace crates|CLAUDE.md|s/.*workspace root \\(([0-9]+) crates.*/\\1/p|$PF_CRATES"
   "MCP tools|CLAUDE.md|s/.*\\*\\*([0-9]+) tools \\(incl\\..*/\\1/p|$PF_MCP"
   "architecture diagrams|CLAUDE.md|s/.*reference: ([a-z]+) theme-aware.*/\\1/p|$PF_DIAGRAMS"
@@ -4730,7 +4849,19 @@ MCP_FAIL=0
 # The column is a closed vocabulary: `W` or empty. Anything else (a parameter
 # list, a tick, prose) is a cell whose meaning this gate cannot read, and an
 # unreadable cell is where the next drift hides.
-BADMARK=$(printf '%s\n' "$MCP_DOC" | awk '$2=="?"{print $1}')
+#
+# ONE function, so the fixture below runs the code the gate runs. An empty
+# read is this reader's clean answer, so a program the host's awk cannot run
+# read as "no bad rows": planted with a three-argument `match()`, mawk printed
+# `syntax error` here and the gate went on to `ok` (ROADMAP O314). The
+# fixture holds a row that MUST be reported.
+mcp_bad_marks() { awk '$2=="?"{print $1}'; }
+if [ "$(printf 'undercroft_a W\nundercroft_b ?\nundercroft_c .\n' | mcp_bad_marks)" != "undercroft_b" ]; then
+  echo "FAIL  premise: the §9 W-column reader did not report a planted \`?\` row, so"
+  echo "      its empty read below cannot be believed (ROADMAP O314)."
+  echo ""; echo "BATTERY FAILED — preflight"; exit 1
+fi
+BADMARK=$(printf '%s\n' "$MCP_DOC" | mcp_bad_marks)
 if [ -n "$BADMARK" ]; then
   echo "FAIL  docs/AGENTS.md §9: the W column must be \`W\` or empty; these rows"
   echo "      carry something else, so their classification cannot be read:"
@@ -4918,8 +5049,9 @@ PV_FIGURES=(
   # One row covers two of them, because `engine var` is a prefix of both
   # `engine vars` (the subtitle) and `engine variables` (the accessible
   # description) — and the description was respelled from a WORD to a digit
-  # to bring it inside a gate, since `pf_word` stops at twenty and a figure
-  # that cannot be addressed is a figure that rots.
+  # to bring it inside a gate, since `pf_word` stopped at twenty (it reads
+  # compound tens since ROADMAP O314) and a figure that cannot be addressed is
+  # a figure that rots.
   "engine env variables (diagram total)|([0-9]+) engine var|$PF_ENV_TOTAL"
   # The badge, and its pattern is anchored at BOTH ends on purpose: bare
   # `ALL ([0-9]+)` also matches `NEEDS ALL 10` and `ALL 20 OK` on the
@@ -4974,7 +5106,7 @@ done
 # title capitalises the number word that opens it.
 PV_WORD_FIGURES=(
   "crates|[a-z]+ (Rust )?crates|$PF_CRATES"
-  "host-side preflights|[a-z]+ preflights|$PF_PREFLIGHTS"
+  "host-side preflights|[a-z-]+ preflights|$PF_PREFLIGHTS"
   "CI suites-matrix legs|matrix of [a-z]+ suites|$PV_MATRIX"
   "Docker suites|[a-z]+ Docker suites|$PV_SUITES_N"
   "CI jobs|[a-z]+ CI jobs|$CI_N"
@@ -4989,7 +5121,7 @@ for row in "${PV_WORD_FIGURES[@]}"; do
   pv_re=${pv_rest%|*}; pv_truth=${pv_rest##*|}
   pv_word_seen=0
   for pv_w in $(printf '%s' "$PV_TXT" | grep -oiE "$pv_re" | tr 'A-Z' 'a-z' \
-                | tr -cs 'a-z' '\n' | sort -u); do
+                | tr -cs 'a-z-' '\n' | sort -u); do
     pv_n=$(pf_word "$pv_w")
     case $pv_n in ''|*[!0-9]*) continue;; esac   # not a number word — not a claim
     pv_word_seen=$((pv_word_seen + 1))
@@ -5011,6 +5143,116 @@ if [ "$PV_FAIL" -ne 0 ]; then
 fi
 echo "ok    platform-views' $PV_SEEN published figures agree with the tree"
 echo "      (counts only — a relational claim in prose is NOT gated; see O74)"
+
+# ── preflight: awk ran every program it was given (ROADMAP O314) ────────────
+# The awk recorder's verdict (its definition opens this block), read LAST so it
+# sees every call the preflights above made. Its tools are grep, cut and sort,
+# never awk, so the record is closed before it is read; and the EXIT trap is
+# lifted first, because this preflight reports the failures itself.
+#
+# Its second half reads CI's own definition, because the second awk this block
+# promises — Debian 12's mawk 1.3.4 20200120 — is brought in by a STEP of the
+# `preflight` job that no local battery can run. A comment saying "CI runs
+# mawk" was false for as long as it stood; the step's definition is what the
+# claim is about, so that is what is read, and it is read WHOLE: every line
+# the step executes, comments and blank lines aside, must equal the copy
+# below. Its first version checked a list of fragments, and an independent
+# review fooled it four ways — the run commented out, the premises deleted, an
+# `if: false`, an `|| :` — each printing `ok`, because a fragment list names
+# only what its author thought of. Editing the step means editing this copy in
+# the same change; the difference is printed when they disagree.
+trap - EXIT
+echo "═══ preflight: awk ran every program it was given ═══"
+AWK_ID=$({ command awk -W version </dev/null 2>/dev/null || true; } | sed -n 1p)
+[ -n "$AWK_ID" ] || AWK_ID=$({ command awk --version </dev/null 2>/dev/null || true; } | sed -n 1p)
+[ -n "$AWK_ID" ] || AWK_ID="an awk that names no version"
+AWK_N=$(grep -c . "$AWK_REC" || true)
+AWK_C=$(cut -f4 "$AWK_REC" | grep -cx C || true)
+AWK_SITES=$(cut -f2,5 "$AWK_REC" | sort -u | grep -c . || true)
+AWK_BAD=$(awk_failures)
+AWK_FAIL=0
+# PREMISE: the record must hold the block's calls, not only the opening probe.
+# Measured 2026-10-06: 159 calls of 50 distinct programs, 30 calls under
+# LC_ALL=C, on this host and in Linux containers under every awk measured. The
+# floors are set well below that.
+if [ "${AWK_N:-0}" -lt 100 ] || [ "${AWK_SITES:-0}" -lt 30 ] || [ "${AWK_C:-0}" -lt 1 ]; then
+  echo "FAIL  premise: the awk record holds $AWK_N call(s) of $AWK_SITES program(s), $AWK_C under"
+  echo "      LC_ALL=C. The preflights above make well over a hundred calls of dozens of"
+  echo "      programs, so the recorder was not in effect for them ($AWK_REC)."
+  AWK_FAIL=1
+fi
+if [ -n "$AWK_BAD" ]; then
+  echo "FAIL  awk did not run every program it was given — $AWK_ID:"
+  printf '%s\n' "$AWK_BAD"
+  echo "      A program this awk cannot run reads as an empty answer to the reader that"
+  echo "      called it. Every awk program here must run under gawk AND under Debian 12's"
+  echo "      mawk 1.3.4 20200120: no three-argument match(), no gensub, no IGNORECASE, no"
+  echo "      interval expression, and no exit status used as an answer (ROADMAP O314)."
+  AWK_FAIL=1
+fi
+# CI's second awk: the step as it must execute, the ONE copy this gate holds.
+AWK_STEP_WANT=$(cat <<'O314_STEP'
+      - name: The preflights again, under Debian 12's mawk 1.3.4 20200120 (ROADMAP O314)
+        run: |
+          set -euo pipefail
+          floor="$RUNNER_TEMP/awk-floor"
+          mkdir -p "$floor"
+          docker create --name awk-floor debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587 >/dev/null
+          docker cp awk-floor:/usr/bin/mawk "$floor/awk"
+          docker rm awk-floor >/dev/null
+          echo "301315e7e2e964b4e403824b3f6c7ad8db1023e4ce87e6f6c92bf367e047f311  $floor/awk" | sha256sum -c -
+          export PATH="$floor:$PATH"
+          v=$(awk -W version </dev/null 2>&1 | sed -n 1p)
+          if [ "$v" != "mawk 1.3.4 20200120" ]; then
+            echo "::error::awk on PATH reports '$v', not the floor mawk 1.3.4 20200120"; exit 1
+          fi
+          if printf 'aaa\n' | awk '/^a{3}$/ { found = 1 } END { exit !found }'; then
+            echo "::error::the floor awk matched an interval expression, so it is not 20200120"; exit 1
+          fi
+          if awk 'BEGIN { n = match("a", /a/, m) }' </dev/null 2>/dev/null; then
+            echo "::error::the floor awk ran a three-argument match(), so it is not mawk"; exit 1
+          fi
+          echo "awk: $v ($(command -v awk))"
+          bash tests/battery.sh --preflight-only
+O314_STEP
+)
+# The step as ci.yml has it: inside the `preflight` job, from the step named
+# for this entry to the next step or job, every line that is not blank and not
+# a comment.
+AWK_STEP=""; awk_in=0
+while IFS= read -r l; do
+  if [ "$awk_in" -eq 0 ]; then
+    case "$l" in "      - name: "*"(ROADMAP O314)") awk_in=1; AWK_STEP=$l ;; esac
+    continue
+  fi
+  case "$l" in "      - "*|"  "[a-z]*) break ;; esac
+  case "$l" in *[![:space:]]*) ;; *) continue ;; esac
+  case "${l#"${l%%[![:space:]]*}"}" in "#"*) continue ;; esac
+  AWK_STEP=$AWK_STEP$'\n'$l
+done < <(sed -n '/^  preflight:$/,/^  [a-z][a-z0-9_-]*:$/p' .github/workflows/ci.yml)
+if [ -z "$AWK_STEP" ]; then
+  echo "FAIL  .github/workflows/ci.yml: the preflight job has no step named for ROADMAP O314,"
+  echo "      so nothing runs these preflights under Debian 12's mawk 1.3.4 20200120 — the"
+  echo "      second awk this block promises. Restore the step."
+  AWK_FAIL=1
+elif [ "$AWK_STEP" != "$AWK_STEP_WANT" ]; then
+  echo "FAIL  .github/workflows/ci.yml: the ROADMAP O314 step is not the step this preflight"
+  echo "      requires. Every line it executes must equal the copy in tests/battery.sh, so"
+  echo "      an if:, a continue-on-error, an ||, or a premise moved or removed is refused."
+  echo "      Difference (< required, > in ci.yml):"
+  diff <(printf '%s\n' "$AWK_STEP_WANT") <(printf '%s\n' "$AWK_STEP") | sed 's/^/        /'
+  AWK_FAIL=1
+fi
+if [ "$AWK_FAIL" -ne 0 ]; then
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    $AWK_N awk calls of $AWK_SITES programs, $AWK_C under LC_ALL=C, all succeeded under"
+echo "      $AWK_ID"
+echo "ok    CI's preflight job runs this block again under Debian 12's mawk 1.3.4 20200120,"
+echo "      in a step that is exactly the one this preflight holds (image digest, binary sha256)"
+unset -f awk awk_failures awk_exit_report
 
 fi  # end of the host-side preflight block (`--no-preflight` skips it)
 

@@ -3075,7 +3075,7 @@ own teardown was the place it had not been applied. Gated by the
 `destructive compose scope` preflight, which requires every compose teardown
 in `tests/` to name the project it destroys; `tests/tls-pins.sh`'s two scoped
 teardowns are the accepted shape. Logs land in `.battery/` (gitignored).
-**`bash tests/battery.sh --preflight-only` runs the twenty host-side preflights
+**`bash tests/battery.sh --preflight-only` runs the twenty-one host-side preflights
 and no suite**, which is what CI invokes. They read the release tags since
 O309: a `--depth 1` clone fetches them first, as CI's `preflight` job does. **A count the battery cannot trust is never compared to a published figure, and there are TWO ways to earn that (O97/O103): the suite EXITED NON-ZERO — `cargo test` aborts at the first failing target, so a numeric, replay-free count arrives over a fraction of them — or the reader disowned it with a `PREMISE FAILURE` marker. `count_untrustworthy` is the one place that question is answered, because it used to be answered twice and differently: the cargo arm guarded on the marker, the shell arm stripped it with a trailing `.*`, and neither looked at the exit code. It fails either way — a gate that cannot measure must not report clean — and the verdict names WHICH cause, because the message was written for a replay and told the reader to re-run a failure that was deterministic. (This sentence said "seven" while
 the tree ran eight, and nothing could say so — and then "ten" while the tree
@@ -3092,6 +3092,23 @@ Docker, and the preflights read `ROADMAP.md`, the compose files, `ci.yml` and
 Everything a preflight cannot do with git, awk and grep belongs in a
 container it launches, not in a host interpreter: a gate that needs Python on
 the host is a gate that does not run on the next machine.
+**And "awk" there means TWO awks (ROADMAP O314).** The preflights run under
+whatever awk the host carries. On 2026-10-06 both hosts that ran them — the
+maintainer's Git Bash and CI's runner — carried gawk, while eight comments in
+`tests/battery.sh` said CI ran mawk and one unit skipped a mawk measurement on
+that belief. CI's `preflight` job now runs them a second time under Debian 12's
+mawk 1.3.4 20200120, the oldest awk the tree's own images run, brought in by
+image digest and binary sha256 and asserted through the same PATH lookup, in a
+step the last preflight requires to be exactly what it executes; and the
+script records the exit status of every awk call its PREFLIGHT BLOCK makes
+(not the post-run phase, not a child script), its last preflight failing on
+any that did not succeed. That is the general detector for a reader that fails
+OPEN: a mutation planted in one made mawk print `syntax error` while the gate
+printed `ok`, and with the recorder in place the same plant fails the pass and
+names the program. So a program here runs under both:
+no three-argument `match()`, no `gensub`, no `IGNORECASE`, no interval
+expression, and no exit status used as an answer. **No comment states what
+CI's awk IS** — the step prints it, and a runner image moves.
 
 **`--no-preflight` is the mirror image and it is what CI's SUITE legs use**
 (ROADMAP M13). Every matrix leg and the `tls-pins` job run
@@ -3101,8 +3118,8 @@ code — including the post-run comparison of each suite's MEASURED check count
 against the figure `CLAUDE.md` publishes for it. That comparison needs a RUN
 and therefore cannot be a preflight, so until M13 it ran nowhere on a pull
 request and a leg dropping from 370 checks to 3 was green. The flag skips the
-twenty preflights because the dedicated `preflight` job already runs them
-once. **The shared readers — `test_summary`, `suite_summary`,
+twenty-one preflights because the dedicated `preflight` job already runs them
+(twice since O314, the second time under Debian 12's mawk). **The shared readers — `test_summary`, `suite_summary`,
 `declare_suite_counts`, `suite_count` — are deliberately defined OUTSIDE the
 skipped block**, and that is not tidiness: with them inside, `--no-preflight`
 printed `command not found` twice and the battery still exited 0, the
@@ -4398,8 +4415,10 @@ unwritten because a half-correct verdict is worse than a known-wrong one.
   the body or a new entry, never as a later date in a closed heading. The scan
   runs under `LC_ALL=C`, defensively: the arm takes every offset from an ASCII
   pattern, but an offset past the em dash is one unit in a UTF-8 gawk and three
-  bytes in mawk, so a change of that shape would read a date locally and
-  garbage in CI; a premise asserts the pin, since no fixture can see it go.
+  bytes in mawk, so a change of that shape would read a date under gawk and
+  garbage under mawk — which CI's second preflight pass runs since O314, while
+  this sentence said "in CI" until then; a premise asserts the pin, since no
+  fixture can see it go.
   What a date cannot see is O309's, below: a
   closure is dated when it is BUILT, so an entry merged under a release cut
   while its branch was open passes, and only the tag's own `ROADMAP.md` can
