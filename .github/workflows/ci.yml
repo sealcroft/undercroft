@@ -27,15 +27,53 @@ jobs:
       # measured, it fetches no tag at all. This step fetches every `v*` tag at
       # depth 1 (about 6 MiB), and its fetch must never be made to tolerate a
       # failure (the arm refuses a clone with no release tags in any case). The preflight itself never
-      # fetches (ROADMAP O65: a local battery runs offline). The versions are
-      # printed because the hosted runner's git and awk are what the arm runs on.
+      # fetches (ROADMAP O65: a local battery runs offline). Printed: the runner's git, which the arm
+      # reads, and its awk and locale, under which the first pass below runs. The print is the
+      # record of what they are, and no comment states it (ROADMAP O314: comments in
+      # tests/battery.sh said "mawk" until the first reading of this print said otherwise).
       - name: Fetch the release tags (ROADMAP O309)
         run: |
           git fetch --no-tags --depth=1 origin '+refs/tags/v*:refs/tags/v*'
           git --version
           { awk -W version 2>&1 || true; } | sed -n 1p
+          echo "locale: LANG=${LANG-unset} LC_ALL=${LC_ALL-unset} LC_CTYPE=$(locale 2>/dev/null | sed -n 's/^LC_CTYPE=//p')"
           echo "release tags: $(git for-each-ref 'refs/tags/v*' | wc -l)"
       - run: bash tests/battery.sh --preflight-only
+      # The same preflights a second time, under Debian 12's mawk 1.3.4 20200120 (ROADMAP O314). The
+      # first pass runs the runner's own awk; a stock Debian or Ubuntu host runs mawk, and this build is
+      # the oldest awk the tree's own environments run (tests/e2e.sh and tests/obs-config.sh already
+      # run under it, in bookworm images). It refuses a three-argument match() and gensub, gives
+      # IGNORECASE no meaning and reads an interval expression as literal braces, those two with
+      # no error at all. The binary is
+      # copied out of a digest-pinned image and checked against its own sha256, so a different
+      # transport (the bookworm pool .deb holds the same bytes) changes nothing it means; it is
+      # never committed (ROADMAP O134a). Three premises go through the same `awk` lookup the
+      # preflights use, because a PATH entry that did not take is a gawk run that passes. The
+      # recorder in tests/battery.sh fails the pass on any awk call that does not succeed, and its
+      # last preflight requires this step to be EXACTLY what it executes today, comments aside —
+      # an `if:`, a `continue-on-error`, an `|| :` or a premise moved is a different step (O309 D2).
+      - name: The preflights again, under Debian 12's mawk 1.3.4 20200120 (ROADMAP O314)
+        run: |
+          set -euo pipefail
+          floor="$RUNNER_TEMP/awk-floor"
+          mkdir -p "$floor"
+          docker create --name awk-floor debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587 >/dev/null
+          docker cp awk-floor:/usr/bin/mawk "$floor/awk"
+          docker rm awk-floor >/dev/null
+          echo "301315e7e2e964b4e403824b3f6c7ad8db1023e4ce87e6f6c92bf367e047f311  $floor/awk" | sha256sum -c -
+          export PATH="$floor:$PATH"
+          v=$(awk -W version </dev/null 2>&1 | sed -n 1p)
+          if [ "$v" != "mawk 1.3.4 20200120" ]; then
+            echo "::error::awk on PATH reports '$v', not the floor mawk 1.3.4 20200120"; exit 1
+          fi
+          if printf 'aaa\n' | awk '/^a{3}$/ { found = 1 } END { exit !found }'; then
+            echo "::error::the floor awk matched an interval expression, so it is not 20200120"; exit 1
+          fi
+          if awk 'BEGIN { n = match("a", /a/, m) }' </dev/null 2>/dev/null; then
+            echo "::error::the floor awk ran a three-argument match(), so it is not mawk"; exit 1
+          fi
+          echo "awk: $v ($(command -v awk))"
+          bash tests/battery.sh --preflight-only
 
   lint:
     name: Lint (rustfmt + clippy)

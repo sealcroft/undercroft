@@ -2,7 +2,7 @@
 
 ## 1.7.0 — unreleased
 
-MINOR: one new capability, backward compatible, and twenty-nine fixes. The witness
+MINOR: one new capability, backward compatible, and thirty fixes. The witness
 commands and routes are new; no default moves and no declaration can stop a
 start-up. Five fixes change what a deployment must do: every process writing a
 vault must run the same build, and a server whose vault another process
@@ -23,7 +23,8 @@ until O279, which closed four entries, "seventeen" until O281, "eighteen" until 
 "nineteen" until O288, "twenty" until O289, which closed two entries, and
 "twenty-two" until O290, "twenty-three" until O291, "twenty-four" until O296,
 "twenty-five" until O304 — O303 should have made it twenty-six and did not, which O304 found
-by counting the entries — "twenty-seven" until O305 and "twenty-eight" until O309; it said
+by counting the entries — "twenty-seven" until O305, "twenty-eight" until O309 and "twenty-nine"
+until O314; it said
 "Three fixes change what a deployment must do" until O283 made it four, and
 "Four" until O291 made it five.)
 
@@ -1375,7 +1376,9 @@ wrote `## 1.2.0 — released 2026-09-01 — three round-four rows…`, and an en
 its 27 entries. The scan runs under `LC_ALL=C`, defensively: the arm takes every offset from an
 ASCII pattern and reads the same under any locale, but an offset taken past the em dash reads
 `2026-09-22` in a UTF-8 gawk and `d 2026-09-` in mawk, so a change of that shape would be green
-locally and wrong in CI. In the C locale every awk counts bytes, the existing rows are
+under gawk and wrong under mawk. (It said "green locally and wrong in CI" until O314, below: the
+runner's awk printed `GNU Awk 5.2.1` on 2026-10-05, and CI's preflight job runs mawk only since
+O314.) In the C locale every awk counts bytes, the existing rows are
 byte-identical under both locales over all 222 first-parent versions of the file, and a premise
 asserts the defined function still carries the pin, since no fixture can see it go.
 
@@ -1490,6 +1493,71 @@ them; a `--depth 1` clone needs the fetch above), and a checkout older than the 
 fails the arm, so run it with `--no-preflight`. Filed: O310 (a pre-publish guard in `release.yml`),
 O311 (O171's status reader takes the first word of a heading), O312 (an id-less heading under a
 released section) and O313 (two repository settings, escalated to the maintainer).
+
+### The preflights run under Debian 12's mawk as well as the runner's own awk, and an awk call that does not succeed fails them (O314)
+
+Eight comments in `tests/battery.sh` said CI's `preflight` job ran mawk, so the awk programs there
+were held to mawk's rules by CI. Nothing had ever measured it. The first print of the runner's awk —
+the step O309 added — read `GNU Awk 5.2.1`, and this host's Git Bash runs gawk too, so both hosts that
+run the battery ran gawk, while a stock Debian or Ubuntu host runs mawk. One unit had skipped a mawk
+measurement because "CI is the portability probe". No verdict moved: the preflights read the same,
+byte for byte, under Ubuntu 24.04's and 22.04's mawk, Debian 12's and 13's, the original BWK awk and
+gawk. What was false was the assurance — and a ruling panel's probes found it was hiding a reader that
+failed OPEN: a program mawk cannot compile, planted in the `docs/AGENTS.md` §9 W-column reader, made
+mawk print `syntax error` while the gate went on to print `ok` and exit 0, an empty read being that
+reader's clean answer.
+
+Now CI's `preflight` job runs the preflights a second time under Debian 12's mawk 1.3.4 20200120 —
+the oldest awk the tree's own images run, and the one that reads an interval expression `{n}` as
+literal braces with no error. The binary is copied out of a digest-pinned `debian:bookworm-slim`,
+checked against its own sha256, put first on PATH, and asserted three ways through that same lookup
+(its version, an interval that does not match, a three-argument `match()` that fails) before the
+pass. `tests/battery.sh` records every awk call its preflight block makes — exit status, calling
+function, `LC_ALL` and the program's first characters — and its new last preflight fails on any call
+that did not succeed and names the program; an EXIT trap names them too when an earlier preflight
+fails first. A non-zero status fails, not only mawk's 2, because gawk exits 1 on a syntax error. The
+same preflight requires CI's step to be exactly the step it holds — every executed line, comments
+aside — so an `if:`, a `continue-on-error`, an `|| :` or a premise removed is refused rather than
+read past. The §9 reader is one function with a row its fixture must report. The figure reader
+`pf_word` now reads compound tens, because this preflight makes twenty-one. The eight comments, two
+printed messages and `CLAUDE.md`'s O305 sentence are corrected; the records that repeated the claim
+(O28, O107, O162, and the 1.1.0 and 1.4.0 entries here) are corrected beside, and O305's text above
+in place. The runner's locale is printed beside its awk; whether the runner carries a mawk does not
+matter any more, because the floor is brought.
+
+Ruled by three lenses — Agentic Memory, Security and DevSecOps/CI — and an adversarial refuter,
+recorded in ROADMAP O314 before the build: a binary brought rather than a runner relied on, pinned
+by its own sha256 (the bookworm pool `.deb` holds the same bytes); a step, not a job, so no gated CI
+figure moves; the recorder in the script, not in `ci.yml`, so CI and a local battery run the same
+code; no gate on prose about CI's environment, whose spellings are unbounded.
+
+Gates: thirty-three runs in throwaway containers, every one as expected. Clean, under gawk 5.2.1,
+Debian 12's mawk, Ubuntu 24.04's mawk, Debian 12's original-awk and the floor binary run through
+`ci.yml`'s step verbatim: green, 159 awk calls of 50 programs, none failing (this host's gawk 5.4.0
+agrees). The pre-fix fail-open inlined at the real call: red under the floor through the recorder
+alone, green under gawk. An interval in the ROADMAP scanner: red under both 20200120 builds, green
+under gawk and under Ubuntu 24.04's mawk. The recorder silenced or unwritable, an `exit 1` used as an
+answer, the §9 fixture blinded, the compound-tens reader removed, and the CI step renamed, given
+`|| true`, `|| :`, `continue-on-error` or `if: false`, stripped of its sha check, its run commented
+out or its premises deleted: each red, naming what it found. A comment added inside the step: green.
+The floor appended to PATH instead of prepended, or a different sha256: red at the step's own
+premises.
+
+An independent review of the build found nine things, all mine, each fixed before this landed. The
+worst: the CI-step gate first checked a list of fragments, and four plants fooled it — the run
+commented out, the premises deleted, an `if: false`, an `|| :` — each printing `ok`, because the
+step's name line carries the version string and every fragment also matched a comment; it now
+requires the whole executed step. The refusal named a line bash 5.2 reports at unrelated statements
+(now the calling function and the program); one more comment, and four of the corrections beside,
+still stated or inferred CI's awk; the `ci.yml` comment said the floor refuses `IGNORECASE`, which it
+accepts silently; and a preflight failing earlier under mawk exited before the recorder named
+anything, which the EXIT trap now covers.
+
+PATCH inside the unreleased 1.7.0: test tooling and CI only. Nothing an operator runs changes; no
+`UPGRADING.md` entry. What a contributor runs changes in one way: an awk program in a preflight must
+now run under Debian 12's mawk as well as gawk, and the battery says which one did not. Escalated
+to the maintainer: whether the tree should promise any awk beyond those two (BWK or macOS awk,
+busybox).
 
 ## 1.6.1 — 2026-09-22
 
@@ -4090,6 +4158,12 @@ target never reported is a named premise failure now, rather than something
 the next header silently overwrote. Three fixture arms in the reader
 preflight, one of them the CI line byte-for-byte; the reader is verified under
 mawk, which is CI's awk.
+
+> **Corrected 2026-10-06, ROADMAP O314** — the text above is left as it
+> shipped. The reader was verified under mawk; that mawk was CI's awk was never
+> measured, and the first print of CI's (2026-10-05) read `GNU Awk 5.2.1`. Since
+> O314 CI runs the preflights, this reader's fixtures among them, a second time
+> under Debian 12's mawk 1.3.4 20200120.
 
 ### `context-check.sh` proves its slug derivation on every battery (O106 residual)
 
@@ -8556,6 +8630,13 @@ ubuntu-latest, so it would have read empty there. The second: the character
 class `[a-z-]+` excludes digits, so `e2e` truncated to `e` and every suite
 name was wrong — found by looking at the reader's output instead of trusting
 that it ran.
+
+> **Corrected 2026-10-06, ROADMAP O314** — the text above is left as it
+> shipped. mawk does refuse the three-argument `match()`, but nothing measured
+> CI's awk when this was written, and the first print of it (2026-10-05) read
+> `GNU Awk 5.2.1`; what the gawk form would have read in CI then is unknown. It
+> reads empty on a stock Debian or Ubuntu host, whose awk is mawk. Since O314
+> CI runs the preflights a second time under Debian 12's mawk 1.3.4 20200120.
 
 ### the replay detector covered one suite of eight
 
