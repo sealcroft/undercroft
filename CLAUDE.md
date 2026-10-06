@@ -45,7 +45,10 @@ was never tagged as is worse than one reporting the last release. `main` is
 branch protected on both repos: force pushes and deletions blocked — GitHub
 applies both to administrators too — and `CI verdict` is a required check on
 this one; `enforce_admins` is off, which lets an administrator merge past that
-check, not force push.
+check, not force push. Since 2026-10-06 (ROADMAP O313) a branch must also be
+up to date with `main` before it merges, and a ruleset with NO bypass refuses
+a move or a deletion of any `v*` tag — administrators, and so every agent
+session, included.
 Forking cannot be disabled while the repos are public, and they must stay
 public — GitHub Free will not serve Pages from a private repo.
 
@@ -4727,8 +4730,14 @@ unwritten because a half-correct verdict is worse than a known-wrong one.
   which is the argument for making this a step rather than a number someone
   sets once and trusts. A release date is not a fact about the work; it is a
   fact about the tag, and the tag does not exist yet) → PR → CI green →
-  explicit maintainer approval → merge → tag `vX.Y.Z`, annotated (`git tag -a`;
-  the ROADMAP preflight refuses a lightweight release tag, O309) → `gh release
+  explicit maintainer approval → merge (a branch behind `main` is updated first;
+  `gh pr update-branch` gives it a new head, which needs the maintainer's word
+  again before a merge pinned with `--match-head-commit`, O313) → tag `vX.Y.Z`
+  IMMEDIATELY, before any other pull request is updated or merged, annotated
+  (`git tag -a`; the ROADMAP preflight refuses a lightweight release tag, O309),
+  and never moved afterwards: a ruleset refuses a move or a deletion for
+  everyone (O313), so a mis-cut tag is superseded by the next PATCH, or the
+  maintainer lifts the ruleset for one recorded deletion → `gh release
   create` (the tag also fires release.yml: binaries + GHCR image) →
   post-merge CI green → Pages live-verified → **the HOUSE PAGE
   (`sealcroft.com`, a different repo) refreshed and live-verified**, which is

@@ -13068,6 +13068,12 @@ released section). **Fixed in this unit as drift found by the panel**: `ci.yml`'
 over a job that runs `docker run python:3-slim`, and the verification-pipeline diagram's description of
 the preflights.
 
+> **Noted 2026-10-06 by O313** — both settings exist now: `main` requires a branch to be up to date
+> before it merges, and ruleset 24609984 refuses a move or a deletion of any `v*` tag with no bypass,
+> each observed to block (O313's record). "No tag ruleset exists" above was true when written. The route
+> stays narrowed, not closed: inside the seconds between a release merge and its tag an updated stale
+> pull request still passes, and an administrator can still merge past `strict` with `--admin`.
+
 #### BUILT 2026-10-05, to the ruling — with the corrections its independent review earned, recorded beside it
 
 **What moved.** `tests/battery.sh`: the `ROADMAP headings` preflight's last arm, after O171's — `RT_TAG_SHAPE`,
@@ -34248,7 +34254,8 @@ passes it.
 which O313's tag ruleset deliberately leaves open — publishes and moves `:latest` (`release.yml` 316)
 even for a lower version, so the guard also checks that the tag's version is above every released one
 before `:latest` moves. And once O313's ruleset is applied, "deleted and re-cut at no cost" first needs
-the maintainer to lift the ruleset for one recorded deletion.
+the maintainer to lift the ruleset for one recorded deletion — applied 2026-10-06 (O313), so this
+holds now.
 
 ### O311 — O171's status reader takes the FIRST word of a heading, while its ruling says a heading that CARRIES a finished status
 
@@ -36271,7 +36278,7 @@ the fix. The only other `as_f64` on a caller vector is `parse_vector` itself.
 
 ---
 
-### O313 — two repository settings O309's gate cannot replace: up-to-date branches before merge, and protected release tags — the maintainer's
+### O313 — CLOSED 2026-10-06: a branch must be up to date with `main` before it merges, and a ruleset with no bypass keeps a release tag from being moved or deleted — both applied and observed to block
 
 **Filed 2026-10-05 by O309's ruling, escalated to the maintainer.** Both are GitHub settings, which no
 agent changes. **Up-to-date branches**: `main`'s branch protection has `required_status_checks.strict:
@@ -36386,6 +36393,45 @@ beside O9 and O37, once the maintainer has applied both settings and P1 and P3 h
 block. **Filed under `## Open`**: O324 (a settings read-back), O325 (draft-first publishing, then
 Immutable Releases), O326 (action pinning and per-job permissions); a version-order check before
 `:latest` moves is noted beside O310.
+
+#### APPLIED AND OBSERVED 2026-10-06, on the maintainer's word
+
+**Applied** on the maintainer's "apply the O313 settings", and **observed** on their "run both". Before
+either: no pull request was open, and only `release.yml` reacts to a tag push, for `v*` alone. (a) `PATCH
+…/branches/main/protection/required_status_checks` with `strict: true` and the one check restated; read
+back: `strict` true, `CI verdict` (app 15368) still the only check, `enforce_admins` false, force pushes
+and deletions still blocked. (b) Ruleset 24609984, "Release tags are never moved or deleted (ROADMAP
+O313)": target `tag`, enforcement active, `refs/tags/v*` only, rules `update`, `deletion` and
+`non_fast_forward`, an EMPTY bypass list, creation open; read back as created.
+
+**P3, the tag ruleset's negative control — no `v*` tag touched.** `refs/tags/rprobe-*` was added to the
+same ruleset for the probe. A first attempt was refused by the session's permission system as a further
+settings change and changed nothing (the ruleset read back unchanged); the maintainer then authorised it.
+As compufreq — the admin account every agent session holds — creating `rprobe-1` at `d555493` succeeded;
+force-moving it to `8a7d5a2` was refused through the API (HTTP 422, "Cannot update this protected ref.
+Cannot force-push to this tag") and through `git push --force` (GH013, "push declined due to repository
+rule violations"); deleting it was refused through the API (HTTP 422, "Cannot delete this tag") and
+through `git push --delete` (GH013). The tag stayed at `d555493` throughout, and the rule suites recorded
+one pass and four fails, each as compufreq. The pattern was then removed — the ruleset read back as
+`refs/tags/v*` only, active, with an empty bypass — and `rprobe-1` deleted (404; `git ls-remote` lists
+nothing).
+
+**P1, strict on the session's merge path.** Probe pull request #257 — one empty commit, no file changes,
+on `8a7d5a2`, the commit before `main`'s tip `d555493`, so behind by design — read `mergeStateStatus`
+`BEHIND` at once, before its checks finished. Marked ready, `gh pr merge 257 --merge --match-head-commit
+2c1b251…` WITHOUT `--admin` exited 1: "Pull request sealcroft/undercroft#257 is not mergeable: the head
+branch is not up to date with the base branch." It stayed open and unmerged, `main` stayed `d555493`, and
+it was closed, its branch deleted and its CI run cancelled. The refusal is gh's own, on the client: the
+admin account can still merge a behind pull request with `--admin` or the interface's bypass box — the
+ruling's first fails-silently clause — which the doctrine alone stops. P1's `update-branch` half was not
+run, because it would have merged the probe, and a merge pinned with `--match-head-commit` refusing a
+head that moved is the practice every merge here already relies on. P2 (the D3 window) stays the ruling's
+stated residual; P4 is O324's and P5 is O325's.
+
+**Closed under `## Unversioned`**, listed in the battery's roster beside O9 and O37. The ruling's "this
+entry leaves `## Unversioned` through the battery's roster" was my own wording, and wrong: a roster entry
+stays under `## Unversioned`, closed. The release-flow clauses are in `CLAUDE.md` — its opening paragraph
+and its release flow — and notes stand beside O309 and O310.
 
 ## Beyond 2.0.0 — the competitive track
 
