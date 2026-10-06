@@ -13141,6 +13141,12 @@ record quotes the line as well as citing the run. **Escalated to the maintainer*
 should PROMISE any awk beyond gawk and Debian 12's mawk (BWK or macOS awk, busybox) — a scope choice;
 and the `CLAUDE.md` edit.
 
+> **Answered 2026-10-06 by the first two CI runs (quoted under BUILT below)** — the step's wall time
+> and the runner's locale are read. Its SIGPIPE disposition is not: nothing either run prints shows it.
+> Measured in containers instead, the disposition decides the status a call that writes past a closed
+> reader is recorded with (141, or mawk's 2), never whether the recorder fails it. And that pipe is not
+> only a future one: two calls already feed a reader that can stop early.
+
 #### BUILT 2026-10-06
 
 **What landed.** `tests/battery.sh`: the awk recorder at the top of the host-side preflight block — a
@@ -13182,6 +13188,36 @@ from the file; a `docker` shim copied the binary taken earlier from the pinned i
 no-trace scan's python) — sha256 verified, all three premises held, the same 159 calls of 50
 programs, none failing. The step's wall time on the runner and the runner's locale are read off the
 first CI run.
+
+> **Measured 2026-10-06, the first two CI runs of the step** — the sentence above is left as written.
+> Both ran on the image `ubuntu-24.04` version 20260927.320.1: PR #254's run 37469400445 (job
+> 112288624975) over `baed352`, GitHub's merge of `b75b42a` into `bbf1b57`, and the post-merge `main`
+> run 37476280671 (job 112312397390) at `b292b64`. Run logs expire after 90 days, so the lines are
+> quoted. O309's step printed, both times, `GNU Awk 5.2.1, API 3.2, PMA Avon 8-g1, (GNU MPFR 4.2.1, GNU
+> MP 6.3.0)` and `locale: LANG=C.UTF-8 LC_ALL=unset LC_CTYPE="C.UTF-8"`. The new step printed
+> `/home/runner/work/_temp/awk-floor/awk: OK` and `awk: mawk 1.3.4 20200120
+> (/home/runner/work/_temp/awk-floor/awk)`, and its pass ended `ok    159 awk calls of 50 programs, 30
+> under LC_ALL=C, all succeeded under mawk 1.3.4 20200120` — the count the first pass read under the
+> runner's gawk. Wall time, from the runs' step timestamps, which are whole seconds: the first pass 9 s
+> and 11 s; the new step 8 s and 10 s, of which pulling the pinned image, cached on neither runner, took
+> about 2 s and 3 s; the whole job 23 s and 29 s.
+>
+> `C.UTF-8` is a UTF-8 locale, so the filing's "if CI's locale is UTF-8" holds. Measured in containers
+> under `LANG=C.UTF-8` with `LC_ALL` unset: Ubuntu 24.04's gawk (`1:5.2.1-2ubuntu0.1`, the same version
+> string) gives `length("a—b")` 3, and 5 under `LC_ALL=C`; Debian 12's mawk 1.3.4 20200120 gives 5
+> under both. So without `roadmap_scan`'s pin the runner's first pass would read an em-dash offset as
+> this host does, and only the mawk pass would show it.
+>
+> The runner's SIGPIPE disposition is NOT read: nothing either run prints shows it, so it stays
+> unmeasured. What it would decide was measured in the same containers, with an awk writing 200,000
+> lines into `head -1`: under the default disposition both awks exit 141; with SIGPIPE ignored gawk
+> still exits 141, and mawk prints `write failure (Broken pipe)` and exits 2. The recorder fails on any
+> non-zero status, so the disposition decides the status such a call is recorded with, never whether it
+> fails. And the ruling's `awk | head` is not only a future one: two calls in the model-leg-parity
+> preflight already feed a reader that can stop early — `mlp_edges` into `grep -qxF` (84 bytes, one
+> line) and `mlp_block` through `sed` into `grep -qF` (658 bytes, eleven lines) — and both succeeded on
+> both runs. Whether such a call meets a closed reader depends on how much it writes after the reader
+> has gone, under either disposition.
 
 **Gates, thirty-three runs, every one as expected.** Red on the defect and green where the construct
 is legitimate: a three-argument `match()` in `mcp_bad_marks` — red under the floor at the new fixture,
