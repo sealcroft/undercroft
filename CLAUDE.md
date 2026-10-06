@@ -3089,9 +3089,13 @@ count ten while this sentence still said nine.) The script is the one thing that
 runs on the host rather than in a container, and it has to be: it *drives*
 Docker, and the preflights read `ROADMAP.md`, the compose files, `ci.yml` and
 `git ls-files --eol` over the WHOLE tree — none of which any image carries.
-Everything a preflight cannot do with git, awk and grep belongs in a
-container it launches, not in a host interpreter: a gate that needs Python on
-the host is a gate that does not run on the next machine.
+Everything a preflight cannot do with git, bash 4.4 or later, GNU grep, sed
+and xargs, coreutils' `sha256sum` and awk belongs in a container it launches,
+not in a host interpreter — and Docker is required, since the preflights
+launch containers of their own: a gate that needs Python on the host is a gate
+that does not run on the next machine. That contract is also why a stock macOS
+or Alpine host cannot run them, for reasons that are not awk (ROADMAP O314,
+its ruling of 2026-10-06).
 **And "awk" there means TWO awks (ROADMAP O314).** The preflights run under
 whatever awk the host carries. On 2026-10-06 both hosts that ran them — the
 maintainer's Git Bash and CI's runner — carried gawk, while eight comments in

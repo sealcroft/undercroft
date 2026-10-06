@@ -4007,7 +4007,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**344** of the **359** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**360** of the **375** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -6921,6 +6921,9 @@ writable):
    side effect. The new code therefore decides no posture: `/v1` still refuses on a
    read-only server in front of dispatch (`mutates`), the CLI behaves under
    `--read-only` exactly as before, and O212 remains the decision point.
+
+   > **Decided 2026-10-06 by O212's ruling**: refused under `--read-only` before any effect, in this
+   > door, from the handle's own posture.
 8. **The report.** The door returns `BackupReport { name, vault, writes,
    chain_head, anchor_behind_by }` — the archive's identity, which is what a gate
    compares and a runbook records. The CLI prints it and exits 2 on a failed verify
@@ -6950,6 +6953,10 @@ writable):
     whether erasure must reach archives taken before a destruction (they hold the
     drawers as live rows, and a restore resurrects them — O147's class); any
     override on a restore refusal; O212's backup posture.
+
+    > **Answered 2026-10-06**: erasure scope by O267's ruling, the override on a restore refusal by
+    > O268's ruling of that day (none), and O212's backup posture by O212's ruling (refused under
+    > `--read-only`).
 
 **Options that lost, with their cost.** `VACUUM INTO` — cannot share the verified
 snapshot (measured), refuses under `query_only`, rebuilds every table, and would
@@ -7671,6 +7678,77 @@ to every open of a vault's database by path, and the residual "a server still
 serving a moved or unlinked vault anchors by path" is narrowed for an OPEN racing the
 swap, which is now refused.
 
+#### RULED 2026-10-06 by three lenses — Agentic Memory Architecture, Security (privacy, erasure, forensics) and Storage and operations engineering — and an adversarial refuter: no override on a restore refusal
+
+**The question**, escalated by O256's ruling (item 11) and by this entry's ("any override on a refusal is
+escalated to the maintainer"): should `backup restore` — the CLI, `POST /v1/vaults/{id}/backups/restore`
+and the orchestrator's ops alias — offer any override of the refusals item 9 lists? Answered on the
+maintainer's delegation of 2026-10-06 (verbatim: "fanout specialized agents to answer that") and approved
+by them the same day ("approve as recommended"). The brief, the lens answers and the refuter's report are
+in `.handover/rulings-2026-10-06/` — material, never the record.
+
+**Prior rulings found, and their disposition.** O69 (no override on a held vault: "an override would
+exist only to let an operator re-create the defect") — FOLLOWED, its "documentation does not make an exit
+0 honest" carried to every class whose override installs a vault that cannot serve. O232 item 2 ("No
+`--force`: an override that launders is the defect") — FOLLOWED by analogy, and said to be: its text is
+about rotation, and a restore override re-tags nothing, but it makes an unverified state authoritative
+and destroys the live evidence. This entry's items 4, 5, 9, 10 and 13 — FOLLOWED. O283 (the maintainer's:
+links refused) — FOLLOWED. O238 with O241 ruling 4 (`ManifestTooNew` is the age fence) — FOLLOWED. O254
+(no manifest writer lowers an anchor) — FOLLOWED: it rules out "accept the rollback". O113 (a salvage
+names every row it skips) — FOLLOWED for O318.
+
+**Ruled.**
+
+1. **No override on any refusal class: no flag, scoped or not, and no restore "under a new id".** Each
+   override installs a state the tree already classes as broken. Past a MAC, `CorruptManifest` or a
+   tampered anchor: a vault that refuses every later open (O69's "exit 0, then unopenable"), and the
+   planted-manifest-names-a-victim attack this entry's 2026-09-26 record found, handed back over `/v1`
+   and the ops alias. Past `verify` or `integrity_check`: a vault that fails `verify` for good, so
+   `backup create` (`backup.rs` 157-160) and every rotation (O232) refuse it from then on. Past a missing
+   database under recorded writes: an empty vault failing integrity. Past `ManifestTooNew`: O238's fence
+   defeated. Past `VaultHeld`: O69. Past a link: O283. A new id is not a restore at all — the keys and
+   the manifest's MAC bind the id (`restore.rs` 250-252), so it is export and import. `--force` keeps its
+   one CLI meaning, "replace an existing target"; `/v1` always passes it (`tenant.rs` 2409-2410).
+2. **The routes that already exist are documented** (O319). A lost embedder environment is recovered by
+   ONE CLI process run with `UNDERCROFT_EMBEDDER` unset and `UNDERCROFT_FORCE_EMBEDDER=1` — the stage's
+   open re-records the identity (`lib.rs` 3928-3951; item 5, "reported, never refused") — and then
+   `repair`; never by setting the variable on a serving process, where it is read on every open and
+   re-records every mismatched vault that process opens. An archive is proved without touching the live
+   vault by restoring it into a scratch data directory holding the same key: an absent target needs no
+   `--force` and takes no hold (`restore.rs` 222, 330-343; `tests/e2e.sh` 4564-4569 does it). A lost key
+   or passphrase no flag can supply.
+3. **What is genuinely missing is salvage**, and offering it is the maintainer's, approved as
+   recommended: export stops at the first row failing its tag by design (`lib.rs` 11086-11104, 8161-8179;
+   O113), and a torn archive whose manifest is ahead of its rows opens on neither posture. A salvage
+   export or a `backup verify` — never installing in place, naming every omission, running on a minted
+   stage only — is filed as O318 (MINOR).
+
+**Options that lost, with their cost.** A general `--force-unverified` over a live vault: re-creates
+"exit 0, then unopenable" and launders a planted manifest, remotely reachable. An override only into an
+absent id: installs an unopenable vault, or one that can never be backed up or rotated, where a scratch
+root already gives the same placement with no flag. Restore under a new id: the keys and AAD bind the id.
+Per-class overrides for the exit-1 classes: the embedder's already exists, and the rest defeat O238 or
+O69, or are transient.
+
+**Claims refuted, the brief's first.** "What salvage exists without one (export/import of what
+verifies)": none (item 3). "`--force` today means only replace an existing target": of the CLI only. The
+brief's class list omitted the link refusal (O283, `restore.rs` 231-238), an existing aside (220),
+irregular archive entries as integrity (239-246), the post-condition I/O refusals (306-326), the
+addressed-id 400 (213-219), and that `EmbedderMismatch` has a declared override. The storage lens's
+"nothing checks an archive today without restoring it": a scratch-root restore is that check. The
+security lens's "not the maintainer's": true of "no override", not of the salvage surface.
+
+**Dissent**: none on the verdict. **Fails silently if**: the embedder route is documented without "one
+CLI process, then `repair`"; a salvage path goes through `restore_archive`'s swap or unlocks
+`backups/<name>` in place instead of a minted stage; a salvage export drops failing rows without naming
+them; a force-like flag is added on `/v1` or the ops alias only, where the CLI's parity gates do not
+look. **Probes owed before O319 documents a route**: P-Q2a (an archive recorded under an `http` embedder:
+restore with the variable unset exits 1; with `UNDERCROFT_FORCE_EMBEDDER=1` it restores and reports the
+re-recorded identity, and `verify`, then `repair`, answer OK — a refusal means the route is false); P-Q2c
+(a scratch root holding the same `master.key` restores without `--force` and verifies at the reported
+height); P-Q2d (no key: refused before anything is staged). REINDEX on a stage belongs to O269's panel
+and the manifest-only case to O270's; neither moves here.
+
 ### O266 — CLOSED 2026-09-26: a rotation whose promote was deferred opens read-only and verifies against its staged manifest, and its rotating handle stops writing before anything commits
 
 **Filed 2026-09-25 by O256's ruling; measured by the integrator through the vault
@@ -7862,6 +7940,13 @@ and a typed refusal ("open writable once") is ruled out.
    files (item 6 kept); a restore opens the result through the `Settled` path;
    `BackupReport.promote_deferred` records the provenance, a `HAND_PROJECTED` row.
    With `.next` lost the backup refuses and publishes nothing.
+
+   > **Noted 2026-10-06 by O212's ruling.** Once O212's build lands, `--read-only backup create` refuses
+   > before any effect; a rotating handle is kept by no product surface and a writable open promotes
+   > first, so this item is reached from no product surface. The archive's bytes are the same (P-B found
+   > the promoted `vault.json` byte-identical to `.next`); what is lost is `promote_deferred`'s
+   > provenance and the live deferral as evidence, unless O320's `--out` is built. Not refuted: this
+   > entry left O212's posture untouched.
 5. **The rotating handle.** Its reads go through the rule, the field set at the
    deferral. **The deferral is decided by whether `vault.json` verifies under the
    new keys after the attempts, never by `promote`'s error**: a promote that wrote
@@ -11132,6 +11217,10 @@ recommends directory scope, stated in the docs; interim, a stated residual and n
 fleet cannot erase a tenant while a replica serves it — is not re-escalated: O69 settles it, and
 the refusal blocks only a false erasure.
 
+> **Answered 2026-10-06 by O267's ruling** — item (1): neither erasure promises unreachable bytes; the
+> DELETE reply will name the archives and the mirror it leaves (O316); hard links are named, never
+> refused; an archive-removal surface is offered separately (O317), never inside DELETE.
+
 **Owed by the build.** PF6 (cross-process holders — an idle writable store, an idle read-only store,
 `serve-http --read-only`, a paused `backup create` — looped at least ten times), PF9 (the container
 vanishing between `container()` and the rename), PF11 (the cost at about 10⁵ drawers, and a refused
@@ -12076,6 +12165,106 @@ that clause for every such text.
 connections): a two-process loop cannot yet assert "both open" because O307's column race fails about
 one run in a hundred; it was measured instead (above). Windows and lock-less mounts, reasoned not
 measured.
+
+#### RULED 2026-10-06 by three lenses — Agentic Memory Architecture, Security (audit-chain integrity) and Release and compatibility engineering — and an adversarial refuter: option C not taken, and no "open it once with 1.6.1"
+
+**The questions**, put to the maintainer in PR #250: for a database written by a source build of this
+repository older than 0.19.0 and opened by no 1.x build since, keep D′ (refuse) or take option C; and
+should `UPGRADING.md` tell that population to "open it once with 1.6.1". Answered on the maintainer's
+delegation of 2026-10-06 (verbatim: "fanout specialized agents to answer that") and approved by them the
+same day ("approve as recommended"). The brief, the lens answers and the refuter's report are in
+`.handover/rulings-2026-10-06/` — material, never the record.
+
+**Prior rulings found, and their disposition.** This entry's ruling of 2026-09-30 (D′, with C as the
+named alternative) — FOLLOWED; its soundness record for C holds, and its O296 citation is overstated
+(below). The maintainer's 1.0.0 decision, "nothing before this release is installable, and nothing before
+it needs to be" (CHANGELOG `## 1.0.0`) — FOLLOWED: a version reset that withdrew every earlier release is
+where upgrade paths are withdrawn, and P-SRC falsified that entry's RATIONALE sentence for source builds,
+not the support decision. O290 reason (d) — FOLLOWED by analogy only: C serves no crash and no supported
+producer. O237 rulings 1 and 3 (the open stays O(1) in `audit`) — FOLLOWED: D′ adds no replay, C adds one
+per head-less open. O233, A2 and O240 — FOLLOWED: neither D′ nor C changes any of them for an adversary.
+This entry's dissent settlement (an UPGRADING entry is owed, because the refused states RUN on 1.6.1) and
+its F8 — FOLLOWED, F8 found incomplete.
+
+**Ruled.**
+
+1. **D′ stands; option C is not taken.** C is sound against a writer without the key — re-verified in
+   code: a seeded version-1 head equal to the anchor short-circuits to `Current`, and `chain_ok` then
+   needs the replayed head to equal the committed one and the anchor to be seen (`chain.rs` 177-179,
+   234-249, 432-494; `lib.rs` 4609-4611), so the seeded path accepts exactly the rows whose replay ends
+   at the anchor, and a keyless writer can turn C's head-less state into that seeded state with two clear
+   rows, the anchor being readable in `vault.json`. C still loses. It serves no population any release
+   produced. It brings back a seed that takes a VALUE, one relaxed condition from the measured oracle — a
+   replay that merely passes THROUGH the anchor would launder a forged append, as option A did. It
+   silently heals an offline drop of `chain_meta` on any version-1 vault, which D′ reports (cf5 adopted
+   the no-table arm "at height 21"). And its one benefit cannot be gated without a real 0.18.0 fixture:
+   the tree's only fixture of that shape is a modern vault through `to_v1` plus `DROP TABLE`
+   (`headless_tests.rs` 500-519) — exactly the edit C would heal. The decisive ground is the maintainer's
+   1.0.0 decision; O296 is NOT a ground (below).
+2. **If the population is ever to be served** — a revision of 1.0.0, and so the maintainer's — the only
+   acceptable form is C′: no `chain_meta` table, version-1 regime, records present; under the write lock
+   with `verified_manifest()`, never `anchored_head()`'s fall-back; a forced replay requiring head equal
+   to the anchor, `behind_by == 0`, rows equal to the manifest's `writes` and nothing malformed; an
+   `unhealed` note; the same replay on the read-only posture; refused beside a stage.
+3. **No "open it once with 1.6.1" line, and nothing is owed**: 1.0.0 was a version reset that withdrew
+   every earlier release, no release produced the population, and `UPGRADING.md`'s charter is deployments
+   that worked before. The line would also be unsafe. 1.6.1's writable open seeds `chain_meta` from the
+   manifest with no replay, and the refusal gives one text for two causes, so its likelier reader has an
+   edited or rolled-back vault — for whom 1.6.1 turns a clean refusal into a seeded chain at the anchor
+   that 1.7.0 then opens through the O(1) short-circuit (O237's pinned residual), its next write moving
+   the anchor over the rollback. On a sealed vault with a pre-A10 graph, 1.6.1's open itself appends
+   `migrate/kg-blind` and anchors before any verdict prints (`kg.rs` 1544-1566).
+4. **`UPGRADING.md`'s O303 Fix is amended in this unit**, because it already half-invited the route: it
+   named 1.6.1's `undercroft verify`, writable there by default, and called 1.6.1's adoption "sound". It
+   now points any check at this release's `--read-only` posture, warns against running any writable 1.6.1
+   command against such a database to make 1.7.0 accept it, says plainly that a database written by a
+   source build older than 0.19.0 and opened by no 1.x build has no supported path, and drops "1.6.1
+   adopted every head-less database" — false: heads deleted with the height left met a raw `UNIQUE` error
+   on 1.6.1.
+
+**Options that lost, with their cost.** C as recorded (item 1). D″ — D′ plus a classification-only
+replay, so a genuine source-built database is refused as AGE (exit 1) rather than integrity: C's replay
+cost, a third class and new texts, for a population with no known instance, recovering nothing; recorded
+instead as D′'s residual. A and B: the oracle. The "open it once" line, conditional or not. "Verify with
+1.6.1 first": 1.7.0's own refused open has already renamed `palace.db` and run the schema batch (`lib.rs`
+5173-5262), and an editor forges the rest with `DROP TABLE chain_meta`. A copy-first gated recipe:
+operator-executed C, the only acceptable form if the maintainer ever serves the population. Export with
+1.6.1 and import into 1.7.0: the export needs the same writable adoption, and the import starts a new
+chain. Leaving the Fix unchanged.
+
+**Claims refuted, the brief's first.** `UPGRADING.md` has no 1.0.0 section; the sentence and its
+correction are CHANGELOG's `## 1.0.0`. "Measured … opens under 1.6.1": P-SRC ran `main`'s binary at
+`5fc6171`, 51 commits after `v1.6.1`, whose adoption code 1.6.1 shares — inferred, not measured;
+corrected in CHANGELOG 1.7.0's text in place and beside the 1.0.0 correction in this unit. "Such a
+database never reaches the anchor" (a pre-0.19.0 crash between a commit and its manifest save): only
+after a LATER write, which forks the manifest; with none, the replay passes through the anchor and ends
+one past it (`behind_by = 1`), and C refuses both. "C lost on O296's settlement of the same
+evidence-trusting option": O296's option C healed an absent keycheck marker on evidence a transplant can
+copy — a different option, whose transplant ground does not reach a keyed replay against a MAC'd anchor;
+this entry's 2026-09-30 record repeats the citation and is corrected by this one. Q5's framing as whether
+to ADD a line: the Fix already named the route by implication. The memory lens's "C widens A2 for a
+restored pre-0.19.0 pair": D′'s refusal of that pair is bypassed at no cost by the same writer adding two
+clear `chain_meta` rows, so the difference exists only for an accidental restore. Its scoped line ("a
+vault 1.6.1 already adopted needs nothing if `undercroft verify` passes under 1.7.0"): a plain `verify`
+is a writable open on 1.7.0 too.
+
+**Dissent**: none on either verdict. The memory lens preferred scoping the 1.6.1 parenthetical to
+removing it; settled for removal plus a warning, any retained 1.6.1 reference inviting a writable open.
+**D′'s residual, stated**: a genuine source-built database is refused as integrity (exit 2) for what is
+really age (O238's doctrine), and the refusal's remedy, "restore the vault from a backup that verifies",
+cannot work for that cause — any backup of a head-less database is head-less too. **Fails silently if**:
+a later tidy reintroduces a value-taking seed in `init_chain` (only this entry's source gate sees it, and
+only while it matches `chain::seed_empty(` exactly); C is ever taken with `anchor_seen` in place of
+`behind_by == 0`; a future 1.x path writes an audit row before `init_chain` seeds; the Fix regains any
+1.6.1 reference. **Probes, if anyone revisits**: P-1616 (build `5c4e696^`, write five records, open a
+COPY with the `v1.6.1` RELEASE binary — it makes "opened under 1.6.1" a measurement, or refutes the
+CHANGELOG); P-CONVERT (a rolled-back copy with `chain_meta` and the version-2 commitment deleted, through
+1.6.1's plain `verify`, then 1.7.0's `vault status` exits 0 where an untouched copy exits 2); P-SAFECHECK
+(1.7.0's `--read-only verify` on the same copy answers a refusal or a broken chain and changes no byte).
+
+**Filed under `## Open`**: O322 (the head-less refusal's unconditional "Nothing was written.") and O323
+(unmeasured: a genesis manifest put back beside an emptied `audit` table may be adopted as a fresh
+vault's EMPTY chain).
 
 ### O304 — CLOSED 2026-10-05: a writable open asks the manifest rule again before it writes a staged rotation's manifest, and an edit landing in the forced replay before the write is answered as the rule answers it at the licence — refused with the files kept, the write withheld for the staged manifest put in place, a manifest at another head reopened and judged
 
@@ -13262,6 +13451,66 @@ as a pass, and which was re-run on `roadmap_scan`'s own block.
 paragraph was written after it, and the twenty-one preflights, which read `ROADMAP.md`, were run again
 over the edit. No house-page figure moves, and no `UPGRADING.md` entry is owed: nothing an operator runs
 changes.
+
+#### RULED 2026-10-06 by three lenses — Agentic Memory Architecture, DevSecOps and CI tooling, and Supply-chain and release-integrity security — and an adversarial refuter: the awk promise stays as ruled
+
+**The question**, this entry's escalation: should the preflights PROMISE any awk beyond gawk and Debian
+12's mawk 1.3.4 20200120 — BWK ("one true awk", macOS's `/usr/bin/awk`) or busybox (Alpine)? Answered on
+the maintainer's delegation of 2026-10-06 (verbatim: "fanout specialized agents to answer that") and
+approved by them the same day ("approve as recommended"). The brief, the lens answers and the refuter's
+report are in `.handover/rulings-2026-10-06/` — material, never the record. The approval covers the
+host-support half the panel left to the maintainer.
+
+**Prior rulings found, and their disposition.** This entry's item 4 — FOLLOWED unchanged: the promise is
+exactly what a pull request runs, its floor held by binary identity, and the first CI runs confirmed it.
+Its lost options (b), (c) and (e) — FOLLOWED: the same arguments decide BWK, busybox and a macOS leg.
+O102 by analogy, M13, and O189 with O134a — FOLLOWED. `CLAUDE.md`'s portability doctrine — FOLLOWED, and
+corrected (item 3).
+
+**Ruled.**
+
+1. **No awk beyond gawk and Debian 12's mawk 1.3.4 20200120 is promised**; BWK, busybox, Ubuntu 24.04's
+   and Debian 13's mawk stay observations. Nothing runs either on a pull request. macOS's awk cannot be
+   held by identity: the "BWK" that passed on 2026-10-06 was Debian 12's `original-awk` in a Linux
+   container, never macOS's binary, and a pinned BWK build is emulation. And an awk promise cannot be
+   wider than the host contract of the script that runs it, which stock macOS and Alpine fail for reasons
+   that are not awk: `mapfile -d ''` needs bash 4.4 or later (`tests/battery.sh` 4378; macOS's
+   `/bin/bash` is 3.2), GNU `grep -Z` and `xargs -r` (4303), coreutils' `sha256sum` (3787), and Docker is
+   mandatory (785-790). Each fails loudly, and the recorder fails any non-zero awk status on any host and
+   names the program, so an unpromised awk that cannot compile a program goes red and never prints a
+   false `ok`.
+2. **Not supporting stock macOS or Alpine as battery hosts is the maintainer's, and ratified.** Re-open
+   triggers beside item 4's two (2028-06-30, or the Dockerfiles leaving bookworm): the tree starts
+   promising a battery HOST whose awk is something else — a contributing guide or a CI job naming
+   `tests/battery.sh` on macOS or Alpine. The awk promise follows the host promise and is never made
+   before it.
+3. **`CLAUDE.md`'s host contract is corrected in this unit**, with the maintainer's approval: it named
+   "git, awk and grep", and the script needs bash 4.4 or later, GNU grep, sed and xargs, coreutils'
+   `sha256sum`, awk, and Docker. `tests/battery.sh` 34-35's "`--preflight-only` exists so CI can run the
+   host-side preflights without Docker" — false: the block requires Docker, and CI's preflight job runs
+   it twice — is filed with O330 rather than edited here, because an edit to that file owes the full
+   battery.
+
+**Options that lost, with their cost.** A third brought binary for BWK (Debian's `original-awk` or
+onetrue-awk, pinned): about 8-10 s a run, a second held step copy in `battery.sh` and a third dialect,
+emulating a build macOS does not ship and serving no host that can run the script. A pinned static
+busybox: a fourth dialect for no environment the tree runs. A `macos-latest` job: moves the verdict's
+`needs:`, has no Docker, so the no-trace scan needs a shim (against M13), follows a moving alias, and its
+red cannot be laid on awk. "Any POSIX awk": unbounded, a promise with no executor (item 4's (e)).
+
+**Claims refuted, the brief's first.** The brief credited `CLAUDE.md` with the host awks' versions: it
+states none, and by item 5 no sentence there states what CI's awk is. "BWK / one true awk (macOS's
+/usr/bin/awk)" conflated two binaries. The question was framed as awk alone, omitting the host contract
+and the doctrine that names it. The DevSecOps lens's "not the maintainer's": this entry escalated it as a
+scope choice, and the developer host contract is a surface — the awk half is settled by evidence, the
+host half ratified. **Dissent**: the DevSecOps lens held nothing left to escalate. **Fails silently if**:
+a construct BWK or busybox reads differently WITHOUT error runs on an unpromised host in a reader with no
+must-fire fixture (item 4's residual, unchanged); a gawk change with no error passes the gawk pass, the
+floor pass alone able to disagree; a CI job or document later names `tests/battery.sh` for macOS or
+Alpine without re-opening this entry — no gate reads for the trigger. **Probes, observation only**: P5
+(busybox as `awk` first on PATH in a bookworm container, sha256-pinned, the preflights run); P6, in a
+throwaway repository only (`macos-latest`: the expected death is at Docker or at `mapfile -d`, never at
+an awk program — an awk failure first re-opens this).
 
 ## 1.6.1 — released 2026-09-22
 
@@ -32296,6 +32545,91 @@ there: `backup restore` refuses under `--read-only` before any effect, decided i
 restore door from the manager's posture (measured: today it replaced the vault at exit
 0). `backup create` and `bundle keygen` stay this entry's open questions.
 
+#### RULED 2026-10-06 by three lenses — Agentic Memory Architecture, Security (privacy, erasure, forensics) and Storage and operations engineering — and an adversarial refuter
+
+**The question**: what `backup create`, `bundle keygen` and — missed by this entry and by the brief —
+`bundle sign-keygen` (`main.rs` 2209-2225, the same `write_identity` into the data directory) do under
+`--read-only`. O268 ruled the restore half. Answered on the maintainer's delegation of 2026-10-06
+(verbatim: "fanout specialized agents to answer that") and approved by them the same day ("approve as
+recommended"). The brief, the lens answers and the refuter's report are in
+`.handover/rulings-2026-10-06/` — material, never the record.
+
+**Prior rulings found, and their disposition.** This entry's filed shape — FOLLOWED for the keygen half
+and extended to `sign-keygen`; its backup suggestion is not a ruling, and its premise fails (below). O268
+item 10 (refused before any effect, decided in the door) — FOLLOWED. O175 and O204 (the function with the
+effect decides its posture; read-only creates nothing under the palace, key material included) —
+FOLLOWED. O256 item 7 (left this decision here deliberately) — FOLLOWED. O266 item 4 and its lost option
+"Refusing the backup" — FOLLOWED, its reach narrowed and recorded beside it: O266 decided which BYTES a
+backup carries and left the posture untouched, and the option it rejected refused a backup over a
+deferral on EVERY posture. O176 holds no ruling — a built fix whose own record finds none — and is
+distinguished: an export hands its payload to the operator, while `backup create` writes and deletes
+palace state.
+
+**Ruled.**
+
+1. **All three refuse under `--read-only` before any effect**, exit 1, changing nothing. The backup
+   refusal sits in `VaultStore::backup`, decided from the handle's own posture as its FIRST statement —
+   before `kg_secret` (`backup.rs` 122), `verified_manifest` (127) and `Stage::begin` (130), which sweeps
+   stale stages and makes directories before a `Drop` hides the stage — in restore's class,
+   `VaultError::ReadOnly`. The keygen refusals sit in the CLI, from `cli.posture()`, before any directory
+   is made, since they open no vault. `/v1` is unchanged: `mutates` already refuses `POST …/backups` on a
+   read-only server (`tenant.rs` 3647, applied at 421-423).
+2. **Why refuse rather than warn and serve.** Under `--read-only` a backup today also PRUNES this vault's
+   oldest archive once ten exist (`backup.rs` 207; `backups.rs` 258-269) — perhaps the pre-incident one —
+   and sweeps stages (`backups.rs` 142-159); it archives only a vault that verifies (`backup.rs`
+   157-160), so it is never a copy of a tampered vault; and the incident runbook's evidence copy is `cp
+   -a` (`runbook.md` 96-101). Breadth decides the drift's direction: the help text (`main.rs` 47-48),
+   `/v1`'s 403, O204 and O268 item 10 agree, and no user-facing document promises a read-only backup —
+   the only mentions are `tests/e2e.sh` 4555 and the unreleased O266 CHANGELOG bullet — so no documented
+   contract moves.
+3. **The gates that lean on a read-only backup are re-pointed or inverted, never deleted**:
+   `backup_tests.rs` 385-406, `deferral_tests.rs` 466-520, `rotation_state_tests.rs` 139-143 (used at
+   458-466), `manifest_rule_tests.rs` 99-142 and 459-462 (the backup is one of O289's four manifest doors
+   on a read-only adopted handle), and the e2e check "A forensic read-only backup" (`tests/e2e.sh`
+   4553-4563), with the published e2e count kept true.
+4. **O266 item 4 becomes unreachable from every product surface**, recorded beside it: a rotating handle
+   is kept by no surface and a writable open promotes first, so the archive's bytes are the same (P-B
+   found the promoted `vault.json` byte-identical to `.next`), and what is lost is `promote_deferred`'s
+   provenance and the live deferral as evidence. **`BackupReport.promote_deferred` is kept only if O320
+   is built**; if this entry's build lands first, the field leaves the CLI output and its
+   `HAND_PROJECTED` row with it.
+5. **The maintainer's MINOR, approved as recommended**: `backup create --out <dir>` — an archive written
+   outside `backups/`, served under either posture, never pruning or sweeping, refused where it resolves
+   inside the palace — restores the as-found forensic archive. Filed as O320.
+6. **Versioning: PATCH**, the flag keeping its promise. `UPGRADING.md` owes one entry on O257's template:
+   `--read-only backup create`, `bundle keygen` and `bundle sign-keygen` exit 1 and change nothing where
+   they used to write (and `backup create` used to prune the oldest archive); keygen without the flag;
+   for evidence, `cp -a` per the runbook, or a writable `backup create` knowing that a writable open
+   heals the anchor and promotes a deferred rotation. `config check` cannot see it.
+
+**Options that lost, with their cost.** Warn-and-serve into `backups/`: breaks "write nothing", prunes,
+sweeps, and the CLI and `/v1` diverge. Warn-and-serve with prune and sweep suppressed (the storage lens's
+fallback): the read-only archive takes one of the newest ten slots, so the next writable `create` prunes
+the oldest, pre-incident archive — deletion deferred, not avoided (`backups.rs` 258-269). Refusing in the
+CLI only: the door stays posture-free for any future caller (O91: a posture is a property of the path).
+
+**Claims refuted, the brief's first.** `mutates` is in `tenant.rs`, not `http.rs`. "O176's ruling": none
+exists. The brief named `bundle keygen` alone. "`backup create` writes an archive": it also prunes and
+sweeps. The brief and every lens omitted the five test files and the e2e check that lean on a read-only
+backup, and O266 item 4's reach. This entry's "a forensic copy taken read-only is exactly what an
+operator wants": the archive is verify-gated, and the forensic copy is `cp -a`.
+
+**Dissent**: the storage lens kept its fallback; settled against by the slot arithmetic. **Fails silently
+if**: the posture check sits after `kg_secret`, `verified_manifest` or `Stage::begin` (the sweep has run
+and `Drop` removed the stage, so an end-state listing passes — assert that no backup pause point fired);
+the fixture holds fewer than ten archives and no stale stage, so prune and sweep would not have fired on
+today's code either; the read-only tests are deleted rather than re-pointed, silently dropping O289's
+fourth manifest door; `promote_deferred` stays projected while nothing can set it; `sign-keygen` is
+forgotten, or a keygen refusal runs after its directory is made; `/v1`'s `mutates` gains a backups
+exception "for parity". **Probes owed by the build**: P-Q3a (ten archives and a stale stage: today
+`--read-only backup create` exits 0 and prunes one; after, exit 1 and `backups/` byte-identical, hashes
+included); P-Q3b (`--read-only bundle keygen` and `sign-keygen` into an empty data directory create
+nothing); P-Q3c (over O266's deferral recipe a WRITABLE `backup create` reports `promote_deferred` false
+and archives bytes identical to `.next`); P-Q3d (`serve-http --read-only` still answers 403).
+
+**What remains**: this entry's build — items 1 to 3 and 6. Filed under `## Open`: O320 (`--out`) and O321
+(`write_identity`'s check, then write, then chmod).
+
 ### O213 — a vault `init` just created, opened read-only, is reported as tampering
 
 **Filed 2026-09-17 by O204's ruling; measured by its probe P13.** `init`
@@ -33105,6 +33439,124 @@ BEFORE a destruction hold the drawers as live rows and a restore resurrects them
 **Gate**: a byte scan of the database, its `-wal` and a later archive after
 `forget` finds no marker from the destroyed drawer.
 
+#### RULED 2026-10-06 by three lenses — Agentic Memory Architecture, Security (privacy, erasure, forensics) and Storage and operations engineering — and an adversarial refuter: what an erasure promises
+
+**The question**: this entry's product half, escalated by O256's ruling (item 11), O268's ruling and
+O291's ("Escalated to the maintainer", item (1)). A vault DELETE answers `deleted: true`; a drawer
+destruction — `forget`, the retention sweep, `admission deny` — mints an erasure receipt. Does either
+promise that the bytes are unreachable — in `backups/` archives taken before the destruction, through
+hard links, in the remote mirror, in freed pages — or only that the rows and the directory are gone?
+Answered on the maintainer's delegation of 2026-10-06 (verbatim: "fanout specialized agents to answer
+that") and approved by them the same day ("approve as recommended"). The brief, the lens answers and the
+refuter's report are in `.handover/rulings-2026-10-06/` — material, never the record.
+
+**Prior rulings found, and their disposition.** O291 item 14 and its panel's recommendation (directory
+scope, stated in the docs) — FOLLOWED as the floor and extended by disclosure. O237 item 5 with O171(c)
+and O206 (a destruction discloses and never refuses) — FOLLOWED: it excludes refusing on hard links or on
+archives. `forget.rs`'s mirror doctrine (198-217, 244-258: the attestation states its own boundary and
+never certifies a third party's storage) — FOLLOWED as the template. O241 ruling 4 and O238 (an age fence
+before any canonical change) — FOLLOWED, applied to attestations. `retention.rs` 9-15 (no automatic
+destruction reconciling against a restore) — FOLLOWED. O13 (a genuine document must not read as forged) —
+FOLLOWED; it forces item 4's order. O256 item 11, this entry's escalation and O268's are escalations, not
+rulings; this is the analysis they asked for.
+
+**Ruled.**
+
+1. **Neither erasure promises that the bytes are unreachable.** A receipt promises that the named drawers
+   and their derived index rows are gone from this vault's live database and that a keyed tombstone was
+   chained — its vault-side check is a live "gone now" query (`forget.rs` 798-815). `deleted: true`
+   promises O291 item 14, unchanged. Byte scope cannot be kept: the runbook directs operators to keep
+   off-box copies (`runbook.md` 284-287), freed pages are not overwritten (this entry), and a rotation is
+   not crypto-erasure — the master key and an archived salt re-derive the retired keys
+   (`docs/THREAT_MODEL.md` 1041-1046).
+2. **The engine discloses the copies it made or recorded** — PATCH, surface that reports a silent defect
+   (the 2026-09-08 ruling). The DELETE reply names the vault's archives left in `backups/` and its remote
+   mirror (O299), and the orchestrator passes both through. A `backup restore` reports the drawers that
+   the replaced vault's `del/` records say were destroyed and that the archive brings back — read under
+   the hold on the hold's own connection, labelled as found and unauthenticated, "unknown" when no vault
+   was replaced. Knowledge-graph facts distilled from a destroyed drawer survive as `Dangling` (`kg.rs`
+   831-838), and the scope statement says so. The runbook gains a step after every restore: run
+   `verify-forgetting` over each receipt newer than the archive, and re-forget what "still exists". Filed
+   as O316.
+3. **Every surface that over-claims is corrected** with item 2: `website/landing/index.html` 862
+   ("GDPR/RTBF with proof"), `README.md` 349, `crates/undercroft-cli/src/ui.html` 489,
+   `docs/MULTI_TENANCY.md` 543-546, `docs/remote-server.md` 152-153, and the CLI's unqualified "a key
+   rotation destroys it by design" (`main.rs` 2979-2981); `docs/THREAT_MODEL.md` already carries this
+   entry's qualification. Filed with O316.
+4. **No signed extension to the attestation before an age fence.** `verify_forget_attestation` checks the
+   signature before the version (`forget.rs` 650-656, then 684-693; the same in `v1.6.1`) and drops
+   unknown fields (no `deny_unknown_fields`, 179), so a field a newer build signs makes every older build
+   answer `ATTESTATION FAILED`, exit 2, and a version bump does not help. The `mirror` extension shipped
+   that way in `30c560f`, first tagged `v1.1.0`, so every pre-1.1.0 verifier already reads a genuine
+   mirror-bearing receipt as forged. The fence — an unknown version or field refused as "a newer build
+   minted it" BEFORE the signature — lands first (O315); until a later release signs an archive note, the
+   note travels on the forget, sweep and deny REPLY, outside the signature.
+5. **Hard links are named, never refused.** Freed pages, WAL frames and FTS residue stay this entry's
+   engineering half, for its own panel.
+6. **What the product OFFERS beyond that is the maintainer's, and they approved the recommendation**: an
+   explicit archive-removal surface (MINOR), filed as O317, and the public wording of items 1-3. A DELETE
+   does NOT remove archives by default: tenant migration deletes its source through the same route
+   (`crates/undercroft-orchestrator/src/proxy.rs` 2081-2103), and removing archives there would strip a
+   migrated tenant of its only backups. Age-bounded retention, crypto-shredding and a palace erasure
+   ledger joined to O298 are not offered.
+
+**Options that lost, with their cost.** Byte scope — refuse `nlink > 1`, purge or rewrite archives, drop
+the mirror: cannot be kept (off-box copies, copy-on-write and SSD blocks are beyond the engine), a
+rewritten archive fails its own verify, one `forget` would destroy every restore point, and withholding
+an erasure trades it for availability (O237 item 5). Docs-only directory scope, O291's interim: kept as
+the floor and lost as the end state, the receipt, the delete and the restore staying silent about copies
+the engine itself made. A signed archive extension in the next release with only a version bump: every
+existing verifier answers exit 2 on genuine receipts. Archive removal inside DELETE by default: strips a
+migrated tenant's archives, and "keeps the last ten" and restore-from-backup would change — MAJOR.
+Re-applying erasures automatically at a restore: destruction driven by the unauthenticated labels of the
+vault being replaced, and it breaks O268's head-and-height report. Crypto-shredding: a format change
+covering neither hmac-only plaintext nor the clear `meta_json`; left to its own panel if byte scope is
+ever wanted.
+
+**Claims refuted, the brief's first.** "Two erasures exist": a third, the plain drawer delete and
+delete-by-source, is the one an agent drives (`mcp.rs` 959-979), with a bare `del/` tombstone O205 fences
+from the agent. "The orchestrator's tenant delete AND migration read `deleted: true` as erased":
+migration reads it as relocation (`proxy.rs` 2081-2103). The rotation sentence as uncorrected:
+`docs/THREAT_MODEL.md` carries the qualification; the CLI's text does not. "A deleted vault's archives
+live forever" (all three lenses): only while the id is not reused — a vault re-created under the same id
+lists them by their own manifest id, counts them in its ten, prunes them oldest first and can restore
+them (`backups.rs` 233-269), and `key_generation_differs`, comparing salts only (`restores.rs` 165-169),
+then says the replaced vault "was rotated after this backup" (`main.rs` 4555-4560): O298's incarnation
+confusion at the archive level. The memory and storage lenses' "a version bump makes an older verifier
+answer 'newer build'": false for a signed document (item 4). The security lens's "UPGRADING owes nothing,
+on the mirror precedent": the precedent is an unrecorded instance of the defect.
+
+**Dissent.** The security lens held the scope panel-decidable and only the wording and new surfaces the
+maintainer's; the memory and storage lenses held the whole question the maintainer's. Settled: the scope
+is bounded by evidence, and what erasure offers beyond it is the maintainer's, now approved. The storage
+lens would list archive NAMES in a document a data subject holds, which discloses the backup schedule; a
+count and the oldest stamp suffice — left to the build.
+
+**Fails silently if**: the signed extension ships before the fence (the suite verifies with the minting
+build and stays green); the archive listing claims completeness rather than "found at mint time"; the
+restore's reversed-erasure list is read from the archive, the stage or the live vault before the hold, or
+reads empty where it should read "unknown"; it counts receipted destructions only while plain `del/`
+deletes are reversed too, or reports a re-mined deterministic id as resurrected; the docs are narrowed
+while the landing page, README and console still claim RTBF completeness; the scope omits `Dangling`
+facts.
+
+**Probes owed by the builds.** P-Q1a: a sealed vault, save A and B, `backup create`, `forget A --sign`;
+`verify-forgetting` exits 0; restore the archive with `--force`, and it exits 2 "A still exists"; forget
+A again, and the OLD receipt reads Verified although the restored trail lacks its tombstone. P-Q1b:
+`DELETE /v1/vaults/v` answers 200 while `backups/` still holds the vault's archives, and a `/v1` restore
+brings the drawers back. P-Q1c: delete, re-create, eleven backups — the predecessor's archives prune
+first, and restoring one prints "rotated after this backup". P-Q1d: a signed receipt carrying an extra
+extension, verified by the `v1.6.1` binary, exits 2 with and without a version bump. P-Q1e, for this
+entry's engineering half: on an hmac-only vault the standalone `fts5` table (`lib.rs` 6672) is deleted by
+rowid (`manage.rs` 1103), and FTS5 keeps a deleted row's terms in live posting-list pages until a merge,
+which neither `secure_delete` nor `VACUUM` reaches — save a unique token, `forget`, TRUNCATE checkpoint,
+`VACUUM`, byte-scan for the folded token.
+
+**What remains, filed under `## Open`**: O315 (the attestation age fence), O316 (the disclosures and the
+docs sweep, including `forget.rs` 798-799's comment), O317 (an archive-removal surface). This entry stays
+open for its engineering half — `secure_delete`, a TRUNCATE checkpoint after a destruction, and P-Q1e's
+FTS5 residue.
+
 ### O269 — `verify` is blind to storage corruption, and exits 1 on the corruption it trips over
 
 **Filed 2026-09-26 by O268's ruling; measured by the integrator.** `verify` walks
@@ -33352,7 +33804,7 @@ that removes the escalation fails it if the escalation is what it claims.
 ---
 
 
-### O287 — the CLI panics, exit 101, when the reader of its stdout goes away early; twelve e2e checks meet it intermittently
+### O287 — the CLI panics, exit 101, when the reader of its stdout goes away early; seventeen e2e checks and two orchestrator checks pipe it into an early-exiting reader
 
 **Filed 2026-09-27 by O281's battery, which it turned red; measured the same
 day.** Rust ignores `SIGPIPE`, so a write to a closed pipe returns `EPIPE`, and
@@ -33380,6 +33832,146 @@ arm above (output over one pipe buffer into `head -c 1`) exits with a documented
 code and prints no panic, on the CLI — and on the orchestrator binary too if it
 prints through `println!` the same way, which this filing did not measure; and no
 e2e check pipes the binary into `grep -q`.
+
+> **Corrected 2026-10-06 by this entry's ruling, below** — the text above is left as filed. Option (B)'s
+> "quiet exit 0" launders verdicts printed before an exit 2 and reports undelivered products as
+> delivered; the ruled shape is a latching door with a documented reader-left class, and the gate above
+> is superseded by the ruling's three-part gate. "Twelve" e2e checks are seventeen, plus two in the
+> orchestrator's suite.
+
+#### RULED 2026-10-06 by three lenses — Agentic Memory Architecture, Rust systems and CLI engineering, and Security — and an adversarial refuter
+
+**The question**: this entry's shape — which option, what exit status a broken pipe produces and whether
+it is a documented class, what is safe for each command, the servers, Windows, and the gate. Answered on
+the maintainer's delegation of 2026-10-06 (verbatim: "fanout specialized agents to answer that") and
+approved by them the same day ("approve as recommended"). The brief, the lens answers and the refuter's
+report are in `.handover/rulings-2026-10-06/` — material, never the record. The approval covers the two
+parts the panel left to the maintainer: declining a second `unsafe` block, and publishing a fourth exit
+class, 141.
+
+**Prior rulings found, and their disposition.** O279 item 3 and `CLAUDE.md`'s Conventions (one `unsafe`
+block; a second is the maintainer's) — FOLLOWED: the verdict needs none. The exit-class doctrine
+(`main.rs` 1981-1987 and 2033-2082; `docs/AGENTS.md` 991-1030: 2 is integrity only, 1 a failed run a
+script may retry) — FOLLOWED, and it decides the question. O13's third verdict (a class is chosen by what
+the script should do next) — FOLLOWED. O81 (101 is a code the doctrine does not define, fixed rather than
+documented) — FOLLOWED. The clap usage-error ruling (the published doctrine overrides a library default)
+— FOLLOWED: std's panic on `EPIPE` is a library default. M18, M20 and M23 (a listing still lists, the
+verdict raised after the walk) — FOLLOWED. The orchestrator's "no exempt list" doctrine (`main.rs`
+304-321) — FOLLOWED. The 2026-09-08 versioning ruling — FOLLOWED: PATCH. O150 Q3 rules libraries, not a
+binary's `main`. This entry's filed option (B), a quiet exit 0 — REFUTED.
+
+**Ruled.**
+
+1. **A latching door, and no `unsafe`.** Each binary sends every stdout write through one door that never
+   panics — in the CLI, `main.rs`'s 248 `println!`, `config_check.rs`'s 9, export's `write_all`
+   (`main.rs` 3367-3369) and `mcp.rs`'s `write_msg`; in the orchestrator, `main.rs`'s 18 and
+   `config_check.rs`'s 4. On `BrokenPipe` it records that the reader left and discards everything written
+   after; it never returns an error and never exits, so every command still reaches its own verdict. Any
+   other stdout error (`ENOSPC`, `EIO`) is a run failure. The door flushes explicitly, and checks the
+   flush, before the exit status is decided.
+2. **The exit path's stderr writes are in scope**: the CLI's `main.rs` 2123, 2127 and 2136 and the
+   orchestrator's 270, 584-587, 612-615 and 642-647 become best-effort writes that cannot panic, or `cmd
+   2>&1 | reader` — the shape of seven of the e2e sites — still turns exit 2 into 101 at the final error
+   or verdict print.
+3. **The exit status is folded in one place, in the order integrity 2, run failure 1, reader-left, then
+   0.** The existing `process::exit(2)` arms keep working, because printing no longer panics. Reader-left
+   comes ONLY from the door's own latch, never from an `io::ErrorKind::BrokenPipe` found in the error
+   chain, which an outbound socket can raise too. The orchestrator's `fn main() -> Result<()>` becomes an
+   `ExitCode` main.
+4. **Reader-left is its own DOCUMENTED class, 141** — added to `docs/AGENTS.md` §7.3 and the book's copy,
+   `docs/PARITY.md`, `docs/THREAT_MODEL.md`, `docs/security.md` and every other surface that states the
+   exit classes. Never 0: it would launder the verdicts printed before an exit 2 (`main.rs` 2861-2866,
+   2925-2930, 3074-3080, 3227-3240, 3860-3865, 4388-4400, 4423-4428, 4525-4531; `vault list` 2303-2307;
+   the orchestrator's `ops` 578-589 and instance list 463-479) and report undelivered one-shot products
+   as delivered (the forget receipt 2909, the sweep receipt 3227, a witness 3020, `assert-header` 3437,
+   the orchestrator's keygen and tenant tokens). Never 1: `docs/AGENTS.md` 1028-1029 lets a script retry
+   exit 1, and a retry after a committed `remember` files a duplicate under a fresh append index
+   (`main.rs` 2461-2475). 141 is the status a shell already reports for this event, and gawk exits 141
+   even with SIGPIPE ignored (O314's measurement). Its cost, stated: under `set -o pipefail`, `search |
+   head` fails, as it does for every C tool and as it already does at 101.
+5. **The servers.** `serve-mcp` ends with exit 0 on a closed client, as it already does at stdin EOF
+   (`mcp.rs` 387-406) — the same client exit arrives as either, by timing. `serve-http` is unchanged: it
+   writes nothing to stdout. `daemon run` keeps filing with its output discarded.
+6. **(C) lands in the same unit, as a correctness fix.** Every status-consuming pipeline whose producer
+   is a binary and whose consumer may exit early becomes capture-then-match — 17 sites in `tests/e2e.sh`
+   (12 with a literal `$BIN` at 268, 425, 1056, 1098, 1597, 2088, 2099, 2152, 2170, 2200, 2807 and 4112;
+   3 through the `o255`/`o250` wrappers at 1944, 1962 and 4094; 2 inside `sh -c` at 1077 and 1191) and
+   `tests/e2e-orchestrator.sh` 416 and 421 — each converted check asserting the exit code first. Under
+   `set -o pipefail` the negative-sense checks (268, 2200, 2807, 4094, 4112) pass OVER A PRESENT DEFECT
+   whenever the producer exits non-zero after the match, under every non-zero shape: the race gives false
+   greens as well as false reds.
+7. **The gate, in three parts.** A deterministic surface arm on both binaries, with stdout, and
+   separately stderr, bound to a pipe whose reader is dropped BEFORE the spawn: `search` gives 141 with
+   no panic; `verify` on a tampered vault gives 2; `witness check` on a rolled-back vault gives 2; a
+   retention sweep with drift gives 2; `drawer get` of a missing id gives 1; the orchestrator's `ops …
+   verify` on a tampered tenant gives 2; stdout to `/dev/full` gives 1 — each with a premise (the same
+   run into a live reader writes non-empty output) and a counterfactual against the filed quiet-exit-0
+   shape. A lint plus a source count, so no `println!`, `print!` or `std::io::stdout` escapes the door,
+   cfg-gated code included (no lint leg compiles the model features; O153); clap's help and version
+   printing (`let _ = e.print();`, `main.rs` 2095-2097, orchestrator 287-290) goes through the door too.
+   And a host-side preflight refusing any status-consuming pipeline from a binary or a wrapper into an
+   early-exiting reader, with a premise probe for every `grep` spelling and every wrapper.
+8. **Versioning: PATCH**, with an `UPGRADING.md` entry on the exit-class precedent (862-865): a command
+   whose stdout reader closes early now exits 141 with no panic text; an integrity verdict still exits 2
+   through a closed pipe; capture, then match, or accept 141. Two undocumented observables move: an
+   export to a closed stdout goes from 1 to 141, and `serve-mcp`'s mid-response hang-up from 1 to 0.
+   `config check` cannot detect it.
+
+**Options that lost, with their cost.** (A), SIGPIPE's default restored at the start of `main`: a second
+`unsafe` block, every print-then-decide verdict becoming 141 so the integrity class is lost, a
+process-wide change on the servers and every outbound client, and Windows — a shipped target — staying
+at 101. (A′), `-Zon-broken-pipe=kill` (formerly `#[unix_sigpipe]`): unstable — under tracking issue
+97889 in the unstable book of the host's 1.92.0, and ignored on non-Unix — and equal to A if stabilized.
+(A″), A through a crate that wraps `signal(2)`: every cost of A, and G11 (`open_race_tests.rs`
+1585-1633) walks `crates/` only, so the reserved decision would be taken unseen. (B) as filed, a quiet
+exit 0: fail-open, worse than today's 101. A latch with reader-left as exit 1 (the security lens):
+sanctions a duplicating retry. A per-command split, 0 for reports and non-zero for products: the
+exempt-list shape the tree rejects; pipefail-friendly listings, if ever wanted, are a product choice. A
+shadowing `macro_rules! println`: invisible to `clippy::print_stdout`, and its textual scope must
+precede `mod config_check;`. (D), a panic hook mapping the "failed printing to stdout" panic: keys on an
+unstable message, and exiting from the hook skips the post-print exit 2.
+
+**Claims refuted, the brief's first.** "Twelve" e2e checks: seventeen, plus two in the orchestrator's
+suite — the count saw only `-q` and `-qE` beside a literal `$BIN` (this entry's heading is corrected with
+this ruling). "Can go red intermittently": also green, over a present defect (item 6). Option (B)'s
+"costs only print-site edits": it launders verdicts and products (item 4). "A truncated export reported
+as success?": today an export to a closed stdout exits 1 with "Error: Broken pipe" (`main.rs` 3366-3370)
+— 101 only when stderr is the same pipe — and a plaintext export has no file option (`--out` requires
+`--to`, `main.rs` 379). Stderr was omitted entirely. The long-running processes include `daemon run`
+(`main.rs` 3451-3464); `serve-mcp` does not panic today but exits 1. "The tree's pinned 1.90" holds for
+the Docker battery and the CI containers, not the shipped binaries, built on each runner's unpinned
+stable (O294). `libc` is transitive only, and A needs no `libc` crate — its real cost is the `unsafe`
+block. The filing's gate, read as a text scan, misses wrappers, `sh -c`, `$ORCH` and the `-qi`, `-qF` and
+`-qx` spellings. Among the lenses: the security lens's "a missed site can only fail loud", "exit 1 with
+no new class" and "a new code is MINOR"; the Rust lens's "file stderr separately" and "`serve-mcp` exits
+141"; all three lenses' "A needs a new `libc` dependency"; the memory lens's "D contradicts O150 Q3", and
+its negative-sense list, which missed 2200.
+
+**Dissent.** The security lens would use exit 1 with no new class — one fewer contract, the
+duplicate-retry residual already present under 101, and a new code MINOR — answered by the published
+retry licence, O81 and the 2026-09-08 ruling; the maintainer weighed it and approved 141. On `serve-mcp`,
+the Rust lens preferred 141 and the security lens 1; settled at 0, one event, one status. **Fails
+silently if**: the door covers stdout only; reader-left is decided from the error chain; the door returns
+an error or exits at the first broken write; the converted checks drop the exit-code assertion, or the
+negative-sense checks stay piped; the harness preflight matches only `"$BIN"` and `grep -q`; the
+deterministic arm drops the reader after the spawn or writes less than one pipe buffer; a print escapes
+the door through cfg-gated code; Windows maps a closed pipe to another kind; the door does not flush
+explicitly before the fold. Whatever the shape, a producer whose whole output fits in the pipe buffer
+exits 0 if its consumer then dies — only an export's payload digest catches that, at import.
+
+**Probes owed by the build.** P1: today's baseline over 64 KiB of `search` output — 101 and the panic;
+after, 141 and a clean stderr. P2: `undercroft search x 2>/dev/full` on a tampered vault — 101 today
+where 2 is correct; if it already reads 2, the stderr finding is wrong and the scope narrows. P3:
+`verify | head -c 1` over a tampered vault whose findings pass 64 KiB — 101 today, 0 under B, 141 under
+A, 2 under the door, with and without `2>&1`. P4: Windows — does a closed pipe map to `BrokenPipe`? P5:
+the harness false green, independent of the binary. P6: `serve-mcp` today exits 1. P8: whether
+`-Zon-broken-pipe` is still unstable on the host's 1.98.1.
+
+**Filed under `## Open`**: O328 (the long-running servers may die when their stderr closes) and O329 (an
+exit-2 run on a telemetry build skips the flush of its spans and metrics). `docs/AGENTS.md` 1030's stale
+exit-2-is-409 sentence is filed with O330. Command substitutions such as `$("$BIN" admission list | sed
+… | head -1)` meet the same race, but their status is never read: panic noise in a log, not a verdict —
+stated, not filed.
 
 ### O292 — a vault directory holding a database and no manifest reads as no vault at all, and `create` mints a new salt beside it
 
@@ -33652,6 +34244,12 @@ and re-cut at no cost. It changes the release flow, so the maintainer approves i
 release date is the day before its creator day each fail the guard job and publish nothing; `v1.6.1`
 passes it.
 
+**Noted 2026-10-06 by O313's ruling.** Two things join this entry's guard. A NEW `v*` tag — creation,
+which O313's tag ruleset deliberately leaves open — publishes and moves `:latest` (`release.yml` 316)
+even for a lower version, so the guard also checks that the tag's version is above every released one
+before `:latest` moves. And once O313's ruleset is applied, "deleted and re-cut at no cost" first needs
+the maintainer to lift the ruleset for one recorded deletion.
+
 ### O311 — O171's status reader takes the FIRST word of a heading, while its ruling says a heading that CARRIES a finished status
 
 **Filed 2026-10-05 by O309's panel (the Agentic Memory lens; confirmed by the refuter).**
@@ -33683,6 +34281,253 @@ are present byte-identical at their own tags, so requiring that would cost nothi
 byte-identical in that release's tag snapshot (O309's heading identity, extended), or rule the class out
 of scope with its argument. **Gate**: such a heading planted under `## 1.6.1` fails, naming its line; the
 tree passes.
+
+### O315 — a signed erasure receipt is checked for its signature before its version, so a field a newer build adds makes every older build call it forged
+
+**Filed 2026-10-06 by O267's ruling (its refuter; the order read again by the integrator).**
+`verify_forget_attestation` checks the Ed25519 signature over `att.canonical()`
+(`crates/undercroft-store/src/forget.rs` 650-656) before it matches the version (684-693), and the
+attestation type drops unknown fields (no `deny_unknown_fields`, 179). A receipt minted by a build that
+signs one more field is recomputed shorter by an older build, fails the signature, and is reported
+`ATTESTATION FAILED`, exit 2 — the tamper verdict — which the comment at 681-683 ("a document a newer
+build minted is not a forgery") says must not happen, and which a version bump does not prevent. It has
+happened once: the `mirror` extension (256-258) shipped in `30c560f`, first tagged `v1.1.0`, with no
+version change, so every pre-1.1.0 verifier reads a genuine mirror-bearing signed receipt as forged.
+
+**Shape**: an age fence on the O241 ruling 4 and O238 precedent — an unknown version, or a field this
+build does not know, refused as "a newer build minted it" (exit 1) BEFORE the signature is checked —
+landing in a release before any further canonical extension; O316's signed archive note waits for it.
+**Gate**: a signed receipt carrying an extra canonical field is refused with exit 1 by the fenced build,
+and the same document without the field verifies; counterfactual, today's order answers exit 2 (O267's
+P-Q1d).
+
+### O316 — an erasure says nothing of the copies it leaves, and a restore reverses receipted erasures in silence
+
+**Filed 2026-10-06 by O267's ruling (items 2 and 3).** A vault DELETE answers `deleted: true` while the
+vault's archives stay in `backups/` and its remote mirror stays (O299). A `forget`, sweep or deny receipt
+certifies the live database while archives taken before it still hold the drawers, and a `backup restore`
+of such an archive brings them back and reports nothing — after which `verify-forgetting` answers "still
+exists", exit 2, for a receipt the operator holds as genuine (read in code, `forget.rs` 798-815,
+`main.rs` 2927-2929; P-Q1a). Knowledge-graph facts distilled from a destroyed drawer survive as
+`Dangling` (`kg.rs` 831-838). Several surfaces claim more: `website/landing/index.html` 862 ("GDPR/RTBF
+with proof"), `README.md` 349, `crates/undercroft-cli/src/ui.html` 489, `docs/MULTI_TENANCY.md` 543-546,
+`docs/remote-server.md` 152-153, and the CLI's unqualified "a key rotation destroys it by design"
+(`main.rs` 2979-2981). And `forget.rs` 798-799's comment says both verdicts require that "this vault
+named a tombstone for every drawer", while on the keyed path `seen` comes from the document's own records
+(703-723).
+
+**Shape (PATCH)**: the DELETE reply names the archives and the mirror left, and the orchestrator passes
+both through; `RestoreReport` names the drawers the replaced vault's `del/` records say were destroyed
+and the archive brings back — read under the hold on its own connection, as found and unauthenticated,
+"unknown" when no vault was replaced, plain `del/` deletes counted, a re-mined deterministic id not
+reported as resurrected; the forget, sweep and deny replies carry an unsigned archive note (a count and
+the oldest stamp) until O315 lets it be signed; the runbook gains the post-restore `verify-forgetting`
+step; every over-claim above is corrected and the `Dangling` scope stated; the comment is corrected. Each
+new field gets its `HAND_PROJECTED` rows; `ui.html` renders neither, which is written down. **Gate**:
+P-Q1a and P-Q1b driven through the CLI and `/v1`; the new fields asserted present and, with nothing left,
+empty or "unknown" as ruled; a text check over the surfaces above.
+
+### O317 — no surface removes an archive, and a deleted vault's archives stay until a vault of the same id prunes or restores them
+
+**Filed 2026-10-06 by O267's ruling (item 6); the maintainer's MINOR, approved the same day.** No CLI
+command, `/v1` route or ops alias removes an archive; pruning runs only from `backup create` of the SAME
+id (`backup.rs` 207; `backups.rs` 258-269). So a deleted vault's archives stay, restorable without
+`--force` (`restore.rs` 222), until a vault re-created under the same id lists them by their own manifest
+id, counts them in its ten, prunes them oldest first and can restore them over the successor — where
+`key_generation_differs`, comparing salts only (`restores.rs` 165-169), reports that the replaced vault
+"was rotated after this backup" (`main.rs` 4555-4560): O298's incarnation confusion, at the archive
+level.
+
+**Shape (MINOR)**: an explicit `backup delete` on the CLI, `/v1` and the ops alias — by name, checking
+the archive's own manifest id, under O256's staging rules — and, with O298's ruling, whether a successor
+may see a predecessor's archives at all. A DELETE does NOT remove archives by default: tenant migration
+deletes its source through that route. **Gate**: an archive removed by name is gone and every other
+archive is byte-identical; a name outside the vault's own archives is refused; P-Q1c's predecessor
+archives are handled as O298 rules.
+
+### O318 — a damaged archive has no salvage: export stops at the first row that fails its tag, and an archive opens only through restore's stage
+
+**Filed 2026-10-06 by O268's ruling of that day (item 3); the maintainer's MINOR, approved the same
+day.** `export_each` and `export_each_with_vectors` stop at the first row failing its tag by design
+(`crates/undercroft-store/src/lib.rs` 11086-11104, 8161-8179; O113), an archive opens only through
+restore's stage (O268 item 4), and a torn archive whose manifest is ahead of its rows refuses on both
+postures — so a damaged only copy yields nothing, and the same ruling leaves no override.
+
+**Shape (MINOR)**: a salvage export, a `backup verify`, or both — on a stage this crate mints, never
+`backups/<name>` in place and never through the swap; never installing anything; naming every row it
+omits (O113); on every surface at once, or the parity gates do not see it. **Gate**: an archive with one
+tampered drawer tag salvages every other row and names the one (O268's P-Q2b aborts at that row today);
+`backup verify` of a good archive reports what a restore would, and of a torn one names the failure, the
+live vault byte-identical throughout.
+
+### O319 — the runbook says a restore replaces the vault before it knows the archive opens, and names neither recovery route
+
+**Filed 2026-10-06 by O268's ruling of that day (item 2).** `website/src/runbook.md` 290-293 still says a
+restore "replaces the vault before it knows the archive opens", false since O268, while 242-248 of the
+same file says the opposite. Neither the runbook nor `UPGRADING.md`'s O268 entry names the two routes
+that exist: ONE CLI process with `UNDERCROFT_EMBEDDER` unset and `UNDERCROFT_FORCE_EMBEDDER=1`, then
+`repair`, for an archive whose recorded embedder environment is gone (`lib.rs` 3928-3951); and a restore
+into a scratch data directory holding the same key, to prove an archive without touching the live vault
+(`restore.rs` 222, 330-343). And `UNDERCROFT_FORCE_EMBEDDER` is read on every open (`lib.rs` 3933): set
+on a serving process to rescue one restore, it re-records the identity of every mismatched vault that
+process opens, with only one report's `embedder_rerecorded` to show for it.
+
+**Shape (PATCH, documentation)**: correct 290-293; document both routes in the runbook and the O268
+`UPGRADING.md` entry once probes P-Q2a and P-Q2c confirm them — a refusal means the route is false; state
+the serving-process hazard beside the variable's documentation. **Gate**: the probes recorded, and the
+runbook's two passages agreeing.
+
+### O320 — `backup create` cannot write a forensic archive outside the palace
+
+**Filed 2026-10-06 by O212's ruling (item 5); the maintainer's MINOR, approved the same day.** Once
+O212's build lands, `--read-only backup create` refuses before any effect, and the as-found forensic
+archive O266 item 4 describes — a deferral archived with `BackupReport.promote_deferred` as its
+provenance — is reached from no product surface.
+
+**Shape (MINOR)**: `backup create --out <dir>` — an archive written outside `backups/`, served under
+either posture, never pruning or sweeping, refused where the destination resolves inside the palace,
+links and `..` included; `promote_deferred` kept for it, or removed with O212's build if this lands
+later. **Gate**: `--read-only backup create --out <scratch>` writes an archive that restores and
+verifies, the palace byte-identical; a destination inside the palace refuses; over O266's deferral recipe
+the report carries `promote_deferred` true.
+
+### O321 — `bundle keygen` and `bundle sign-keygen` write a secret by a check, then a write, then a chmod
+
+**Filed 2026-10-06 by O212's ruling (its refuter).** `write_identity`
+(`crates/undercroft-cli/src/main.rs` 996-1014) checks for the file, writes it, then restricts its mode:
+it follows a dangling symlink planted at the default path under the data directory, and the secret sits
+under umask permissions until the chmod.
+
+**Shape**: create the file new with mode 0600 at the open (unix), refusing an existing entry, a link
+included, before any byte is written. **Gate**: a dangling symlink at `<data_dir>/bundle.key` makes
+`bundle keygen` refuse with nothing written through it (P-Q3e); a fresh key is 0600 from its creation.
+
+### O322 — the head-less refusal says "Nothing was written." for a database whose open has already renamed and migrated it
+
+**Filed 2026-10-06 by O303's ruling of that day.** The `Orphaned` refusal text
+(`crates/undercroft-store/src/lib.rs` 2680-2685) says "Nothing was written." unconditionally while naming
+"a source build older than 0.19.0" as a cause, and for that population `open_inner` has already run O7's
+`palace.db` to `vault.db` rename (5173) and the schema batch with the fts, kg, manage and retention
+initialisers (5185-5262) before `init_chain` refuses. O303's record admits it among what fails silently
+(its "for the source-built population 'nothing written' is not literal") with no argument for leaving the
+text as it is.
+
+**Shape**: scope the sentence to 1.x databases, or move the judgement ahead of the rename and the schema
+batch for a database with no `chain_meta` table — a ruling, since the second moves O7's order. **Gate**:
+a source-built-shaped database's refusal text and its bytes after the refusal agree.
+
+### O323 — unmeasured: a genesis manifest put back beside an emptied audit table may be adopted as a fresh vault's empty chain
+
+**Filed 2026-10-06 by O303's ruling of that day (its security lens; not verified by the refuter).** D′'s
+`Empty` arm adopts a chain with no records, no height and the anchor at genesis (`lib.rs` 4681-4687,
+6546-6550). A vault's create-time `vault.json` (writes 0), kept and put back beside a database whose
+`audit` rows were deleted and `chain_meta` dropped while its drawers remain, would read that way; whether
+`verify` then answers OK is open — no leg was found requiring each drawer to have an audit record. It is
+an A2- and O241-class pair restore, the same under D′ and C.
+
+**Shape**: measure first — create a vault and keep its create-time `vault.json`, write 20 drawers,
+`DELETE FROM audit`, `DROP TABLE chain_meta`, put the genesis manifest back, open writable, run `verify`
+— then rule whether a verify leg owes each drawer its record. **Gate**: as the measurement rules; until
+then this entry is the record that the case is unmeasured.
+
+### O324 — nothing reads back the repository's protection, so a loosened setting is invisible to CI
+
+**Filed 2026-10-06 by O313's ruling.** The classic branch protection answers 401 to an unauthenticated
+read and is invisible from a workflow holding `contents: read`, while rulesets answer 200. So `strict`,
+once on, and the tag ruleset can be turned off — to delete a mis-cut tag, and never turned back on — with
+no gate noticing.
+
+**Shape**: after O313's probe P4 (what a `contents: read` workflow can read of a ruleset), express
+`strict` as a branch ruleset beside the classic protection, the check context and app id 15368 copied
+exactly, and add a `ci.yml` STEP — not a job, so the verdict's `needs:` and the eleven-jobs figures do
+not move — that fails when either ruleset is missing, inactive, or, where readable, carries a bypass.
+**Gate**: the step fails against a throwaway repository whose ruleset is disabled and passes against this
+one.
+
+### O325 — `release.yml` publishes a release before its assets exist, which rules out Immutable Releases
+
+**Filed 2026-10-06 by O313's ruling (item 3).** `release.yml` creates a placeholder release before any
+asset is built (78-82, 188-190): `v1.6.1` was authored by `github-actions[bot]`, published 21:30:31Z, its
+first asset at 21:30:32Z, while `v1.6.0` and `v1.5.2` were authored by compufreq — the placeholder racing
+the documented `gh release create` step. For that window `releases/latest`, which the landing button and
+`house-figures` read, names a release with no assets and placeholder notes; and Immutable Releases, the
+one control that locks assets, would refuse the uploads after the placeholder publishes.
+
+**Shape**: publish draft-first — create a draft, upload every asset and its `.sha256`, publish last —
+then turn on Immutable Releases (the maintainer's setting, after O313's probe P5 in a throwaway
+repository), the release flow in `CLAUDE.md` following; O310's pre-publish guard runs before any of it.
+**Gate**: a dry run in a throwaway repository publishes no release without its assets, and with Immutable
+Releases on, `--clobber` is refused.
+
+### O326 — the workflows run third-party actions by mutable tag, and `release.yml` hands every job a token that can write the repository and its packages
+
+**Filed 2026-10-06 by O313's ruling (its refuter).** Every third-party action is referenced by a tag that
+can move: `docker/setup-buildx-action@v4`, `docker/login-action@v4` and `docker/build-push-action@v7` in
+`release.yml` and `republish-ort-image.yml`; `aquasecurity/trivy-action@v0.36.0`,
+`dtolnay/rust-toolchain@stable` (O294's unpinned toolchain) and `taiki-e/install-action@v2` in `ci.yml`;
+`peaceiris/actions-mdbook@v2` in `ci.yml` and `pages.yml`. `release.yml` grants `contents: write` and
+`packages: write` at WORKFLOW level (15-17), so jobs that need only packages hand a contents-write token
+to third-party code — the moved-tag class O313 is about, pointed inward, and a route by which assets
+could be replaced with no tag moving.
+
+**Shape**: pin every third-party action by commit SHA, its version in a comment, and move permissions to
+each job at least privilege. **Gate**: a host-side preflight refusing a `uses:` without a 40-hex SHA
+outside `actions/*` (or with a reasoned allowlist), and refusing workflow-level write permissions in
+`release.yml`; counterfactual, today's files.
+
+### O327 — the former-name preflight runs an unpinned `python:3-slim` with the checkout mounted read-write
+
+**Filed 2026-10-06 by O314's ruling of that day (its refuter).** `tests/battery.sh` (791, 808-810,
+817-818) runs the no-trace scan in `python:3-slim`, unpinned by digest, with the working tree mounted
+read-write (`-v "$(pwd):/r"`, no `:ro`). The tag moves upstream routinely, and on the maintainer's host a
+replaced image runs with write access to the checkout, `.git/hooks` included, while `verify.py` only
+reads.
+
+**Shape**: pin the image by digest and mount the tree `:ro`, as O189 and O314 pin what they bring in.
+**Gate**: the preflight's own source check refuses an unpinned image or a writable mount, with a premise
+that the scan still runs and fires on its known positive.
+
+### O328 — the long-running servers may die when their stderr closes
+
+**Filed 2026-10-06 by O287's ruling; unmeasured.** The default build's `_diag` is a bare `eprintln!`
+(`crates/undercroft-obs/src/lib.rs` 44-50), run per request at the store's diagnostic sites and in the
+orchestrator's proxy, and `eprintln!` panics on a closed or full stderr; a panic ends the single-threaded
+`/v1` and MCP loop (`contain.rs` 8-10). So a `serve-http` or `undercroft-orchestrator serve` whose log
+reader goes away may stop at its next diagnostic.
+
+**Shape**: measure first (P7: start the server with its stderr into a reader that exits after one byte,
+provoke a `diag_warn`, then `curl /healthz`), then make the diagnostics best-effort writes that cannot
+panic, as O287's ruling makes the exit path's. **Gate**: P7's server keeps answering `/healthz` after its
+stderr reader is gone, on both binaries.
+
+### O329 — an exit-2 verdict on a telemetry build skips the flush of its spans and metrics
+
+**Filed 2026-10-06 by O287's ruling (its refuter).** The `process::exit(EXIT_INTEGRITY)` arms
+(`crates/undercroft-cli/src/main.rs` 2865, 2929, 3080, 3240, 3865, 4400, 4428, 4531) bypass destructors,
+the `_telemetry` guard (2106) among them, whose comment (2100) says it "flushes providers on any return
+path" — and `process::exit` is not a return path. On a telemetry build the spans and metrics of every
+exit-2 run are never flushed: a silent gap on exactly the runs an operator most needs to see.
+
+**Shape**: fold the exit-2 arms into `main`'s single exit, as O287's ruling (item 3) does for the status,
+so the guard drops before the process ends. **Gate**: on a telemetry build with an OTLP sink, a tampered
+vault's `verify` exits 2 and its span arrives; counterfactual, today's arms.
+
+### O330 — three sentences the 2026-10-06 panels found false: "without Docker", the exit-2 classes "exactly" the 409 set, and "GitHub Free"
+
+**Filed 2026-10-06 by the ruling panels (O314's, O287's and O313's of that day).** (1) `tests/battery.sh`
+34-35: "`--preflight-only` exists so CI can run the host-side preflights without Docker" — the block
+requires Docker and fails without it (785-790), and CI's `preflight` job runs Docker twice; the twin of
+the `ci.yml` comment O309 corrected, not edited with the rulings because an edit to that file owes the
+full battery. (2) `docs/AGENTS.md` 1030: the exit-2 classes "are exactly the ones `/v1` answers **409**
+for" — recorded false in `main.rs` 2007-2012 since 2026-08-10 (`ReadOnlyUnmigrated` and a co-resident
+refusal answer 409 and are not verdicts), and published unchanged for two months. (3) `CLAUDE.md` 49-50:
+the repositories "must stay public — GitHub Free will not serve Pages from a private repo" — the
+organization is on GitHub Team, which can; other reasons may hold, and restating the reason is the
+maintainer's.
+
+**Shape**: correct each in place — the `CLAUDE.md` sentence with the maintainer's restated reason,
+through the pull request they approve. **Gate**: each sentence matches its code or setting, and the
+battery is green over the `battery.sh` edit.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 
@@ -35439,6 +36284,108 @@ account with push rights can move or delete a `v*` tag; `release.yml` republishe
 arm judges whatever the tag now names — a tag moved forward with no closure between its commits, or onto
 a commit off `main`, passes it. A ruleset restricting update and deletion of `refs/tags/v*` to the
 maintainer closes that. The decision, and its cost, are the maintainer's.
+
+#### RULED 2026-10-06 by three lenses — Agentic Memory Architecture, DevSecOps and CI tooling, and Supply-chain and release-integrity security — and an adversarial refuter
+
+**The question**: whether to require up-to-date branches or a merge queue on `main`, and how to protect
+`refs/tags/v*`. Answered on the maintainer's delegation of 2026-10-06 (verbatim: "fanout specialized
+agents to answer that") and approved by them the same day ("approve as recommended"). The brief, the lens
+answers and the refuter's report are in `.handover/rulings-2026-10-06/` — material, never the record.
+APPLYING either setting is the maintainer's action and waits for their word.
+
+**Read back on 2026-10-06 by GET** (the refuter): `required_status_checks.strict` false with one check,
+`CI verdict` (app 15368); `enforce_admins` false; force pushes and deletions blocked; rulesets `[]`,
+parents included, and no branch rules; Immutable Releases disabled; the repository public; auto-merge
+off; the organization on GitHub Team (`plan.name` "team", one seat) with no two-factor requirement; one
+collaborator, compufreq, an admin. Every agent session authenticates as that account (`gh auth status`:
+the `repo` and `workflow` scopes; permissions `admin: true`). Unauthenticated, `rulesets` and `rules`
+answer 200 and the classic protection 401.
+
+**Prior rulings found, and their disposition.** O309's ruling (D1, what fails silently, and the
+escalation) — FOLLOWED: no CI-borne gate sees a stale pull request or a moved tag in time, so the remedy
+is settings. O309 D3 (tags cut 1-77 s after the release merge) — FOLLOWED, and it bounds (a). This
+entry's "restricting update and deletion of `refs/tags/v*` to the maintainer" — REFUTED: a maintainer
+bypass exempts every agent session, the likeliest actor. O9 (read-back plus an announced negative
+control; `enforce_admins` off deliberately; the permanent-pending deadlock) — FOLLOWED: it is this
+entry's closure method, and why a merge queue without `merge_group:` fails. O310, an open filing — noted
+beside it. O65 (network checks are CI steps) and O101 with O171 (this entry leaves `## Unversioned` only
+through the battery's roster of finished Unversioned entries, and work a ruling names gets its own entry)
+— FOLLOWED. `CLAUDE.md`'s "What a panel does not decide" — FOLLOWED.
+
+**Ruled.**
+
+1. **(a) Require branches to be up to date: `required_status_checks.strict: true` on `main`.** `CI
+   verdict` stays the one required check and `enforce_admins` stays off. No merge queue: `ci.yml` 2-5
+   carries no `merge_group:` trigger, so `CI verdict` would never report on a queued merge — O9's
+   permanent pending — and a queue would pay a full CI run on every merge for concurrency the serial
+   practice excludes, while an asynchronous merge can let "merge, then tag" tag the pre-release head. The
+   cost is small: 7 of 237 first-parent merges were behind their base when merged, none after 2026-09-13,
+   and updating merges by default rather than rebasing. Strict NARROWS O309's route and does not close
+   it: inside D3's window an updated stale pull request still passes before the release tag exists.
+2. **(b) One tag ruleset over `refs/tags/v*`, `release.yml`'s trigger set**: restrict updates, restrict
+   deletions, block force pushes, enforcement active, and an EMPTY bypass list; creation stays
+   unrestricted, because creating the tag is the release step. Its cost, stated: a mis-cut tag is
+   superseded by the next PATCH, or the maintainer lifts the ruleset for one recorded deletion. The
+   ruleset stops ACCIDENTS mechanically; a deliberate change by the admin token, which can administer
+   rulesets (inferred from its scope, not executed), is stopped only by the doctrine.
+3. **Not now: Immutable Releases.** `release.yml` publishes a placeholder release before any asset exists
+   (78-82, 188-190; `v1.6.1` was authored by `github-actions[bot]`, published 21:30:31Z, its first asset
+   at 21:30:32Z), so turning it on today would refuse the next release's uploads. Filed with draft-first
+   publishing as O325.
+4. **The release flow gains three clauses when the settings are applied**, approved as recommended and
+   written into `CLAUDE.md` in the unit that observes them: cut the tag immediately after the release
+   merge, before updating or merging any other pull request; a release tag is never moved; and a branch
+   updated by `gh pr update-branch` has a new head, so it needs the maintainer's word again before a
+   merge pinned with `--match-head-commit`. Notes beside O309 ("no tag ruleset exists") and O310
+   ("deleted and re-cut at no cost") land then too.
+
+**Options that lost, with their cost.** Leaving `strict` false: a misplacement is refused only on
+`main`'s post-merge run, and a behind release pull request publishes a tree no CI tested (#84 was one,
+before protection). A merge queue (item 1). `enforce_admins` on: removes O9's deliberate escape hatch. No
+tag ruleset: a mistaken `git push -f` or `--delete` from any agent session rewrites a published release
+and can roll `:latest` back. Update and deletion with a maintainer or admin bypass, this entry's wording:
+exempts every agent session. A second ruleset restricting CREATION with an admin bypass (the supply-chain
+lens's R2): binds only workflow tokens, whose tag pushes start no workflow, and no agent — O326's per-job
+permissions are the better fix. Immutable Releases now (item 3).
+
+**Claims refuted, the brief's first.** "Updating every open pull request after every merge" (this entry:
+"rebasing"): strict requires only the pull request BEING merged to contain the base's tip. "Any account
+with push rights": the population is one admin account plus `release.yml`'s `GITHUB_TOKEN`. "A ruleset …
+closes it": it does not cover assets replaced with `--clobber` beside regenerated `.sha256` sidecars
+(`release.yml` 82, 190), GHCR tags re-pushed (`release.yml` 218, 254, 316; `republish-ort-image.yml` from
+any ref), or a NEW `v*` tag moving `:latest`. The plan is Team, not Free, which also leaves `CLAUDE.md`'s
+"GitHub Free will not serve Pages from a private repo" stale as worded (filed with O330, the maintainer's
+to restate). The DevSecOps lens's "a re-run of a stale run goes green": under strict, mergeability
+follows whether the head contains the base, and a re-run never moves the head. The memory lens's "a tag
+move then needs a GitHub setting no agent changes": partly refuted (item 2). The merge command is not
+documented in `CLAUDE.md`; not load-bearing.
+
+**Dissent**: the supply-chain lens would add R2 now — kept optional, not adopted; the memory lens would
+enable Immutable Releases with this answer — sequenced behind draft-first publishing. **Fails silently
+if**: an admin merges a BEHIND pull request with `gh pr merge --admin` or the interface's bypass box
+(strict binds the admin only through gh's refusal and the doctrine); an updated stale pull request's
+preflight fetches tags inside D3's window; the ruleset gains a bypass, or update and deletion carry
+different bypasses (delete-then-recreate is a two-step move); its pattern drifts from `release.yml`'s
+`tags: ['v*']`; assets or GHCR tags are replaced with no tag moving; a NEW lower-version or misnamed `v*`
+tag is created (O310); either setting is later loosened, which nothing reads back (O324); a mutable-tag
+action holding the workflow-level write token is compromised (O326); the one admin account is
+compromised.
+
+**Probes owed when the settings are applied.** P1: strict binds the session's merge path — a behind pull
+request reads `BEHIND` and `gh pr merge --merge --match-head-commit` WITHOUT `--admin` exits non-zero,
+and after `gh pr update-branch` it merges only with the NEW head (in a throwaway repository, or here only
+after announcing it per O9). P2: the D3 residual. P3: the tag ruleset's negative control, NEVER with a
+`v*` tag in this repository, since `release.yml` fires on any `v*` push — a throwaway repository, or a
+temporary `refs/tags/rprobe-*` pattern added to the ruleset: create `rprobe-1`, fail to force-move and to
+delete it, confirm in the rule suites, then remove the pattern and the tag. P4: what a `contents: read`
+workflow can read back of a ruleset, for O324. P5: Immutable Releases' semantics, in a throwaway
+repository only.
+
+**This entry leaves `## Unversioned`** through the battery's roster of finished Unversioned entries,
+beside O9 and O37, once the maintainer has applied both settings and P1 and P3 have been observed to
+block. **Filed under `## Open`**: O324 (a settings read-back), O325 (draft-first publishing, then
+Immutable Releases), O326 (action pinning and per-job permissions); a version-order check before
+`:latest` moves is noted beside O310.
 
 ## Beyond 2.0.0 — the competitive track
 

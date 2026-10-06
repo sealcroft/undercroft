@@ -365,13 +365,18 @@ it is an offline edit, or a database written by a source build of this
 repository older than 0.19.0 that no 1.x build has opened since — 1.0.0 declared
 nothing before it needs to open.
 
-**Fix:** restore the vault from a backup that verifies. On 1.6.1, `undercroft
-verify` already fails where the rows do not reach the manifest's anchor — a
-rollback, a deleted version-2 commitment, an erased trail — and a missing height
-shows only as every write failing with "Query returned no rows". (1.6.1 adopted
-every head-less database from the manifest; where the rows ended exactly at the
-anchor, that adoption was sound.) `undercroft
-config check` cannot detect it — it opens no database.
+**Fix:** restore the vault from a backup that verifies — the remedy for an
+edited or rolled-back vault. To look before acting, use this release's read-only
+posture, `undercroft --read-only verify`, which writes nothing and answers with
+the refusal or the broken chain described above. **Do not run a writable command
+of 1.6.1 or earlier — `undercroft verify` included, which is writable there by
+default — against such a database to make 1.7.0 accept it**: those releases seed
+the head from the manifest without replaying the rows, and 1.7.0 then opens the
+result through its fast path as if nothing were wrong, its next write moving the
+anchor over a rollback. A database written by a source build of this repository
+older than 0.19.0 and opened by no 1.x build since has no supported path — a
+gap, stated (ROADMAP O303, its ruling of 2026-10-06). `undercroft config check`
+cannot detect it — it opens no database.
 
 ## 1.6.1 (released 2026-09-22)
 
