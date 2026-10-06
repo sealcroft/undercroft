@@ -1236,15 +1236,18 @@ true, labels `Intact` — where 1.6.1 leaves that chain failing for good.
 
 **Disclosed, not closed**: the history in this repository was rewritten when the
 project was renamed, and a source build of it older than 0.19.0 derives the same keys
-as this one. Measured: a vault written by a source build of `5c4e696^` (0.18.0) opened,
-migrated, verified and answered a search under 1.6.1 — the adoption from the manifest
-was live code for that population. 1.7.0 refuses such a database when no 1.x build has
-opened it since, as 1.0.0 declared ("nothing before it needs to be"). The alternative
-the ruling names — replay a head-less chain and adopt it only when its rows end exactly
-at the anchor — is sound and was not chosen, on precedent and cost; it is the
-maintainer's to take instead. The 1.0.0 entry's "a vault written by any earlier build
-cannot be opened by this one" is corrected beside it: true of every released binary,
-not of a source build.
+as this one. Measured with `main` at `5fc6171`, whose adoption code 1.6.1 shares: a
+vault written by a source build of `5c4e696^` (0.18.0) opened, migrated, verified and
+answered a search — the adoption from the manifest was live code for that population.
+(It said "under 1.6.1", an inference stated as a measurement, until O303's ruling of
+2026-10-06.) 1.7.0 refuses such a database when no 1.x build has opened it since, as
+1.0.0 declared ("nothing before it needs to be"). The alternative the ruling names —
+replay a head-less chain and adopt it only when its rows end exactly at the anchor — is
+sound and was not chosen, on precedent and cost; a second ruling, on 2026-10-06 and
+approved by the maintainer, kept the refusal and added no "open it once with 1.6.1"
+line, which would be unsafe: `UPGRADING.md`'s fix now warns against it. The 1.0.0
+entry's "a vault written by any earlier build cannot be opened by this one" is corrected
+beside it: true of every released binary, not of a source build.
 
 Gates: store tests at both levels over two writable opens and a read-only one, each
 asserting the refusal's variant and text and the manifest's bytes, the marker, the
@@ -10955,6 +10958,11 @@ rewritten at the rename, so its commits before 1.0.0 derive the same keys this
 release does; measured, a vault written by a source build of 0.18.0 opened under
 1.6.1. Since 1.7.0 such a database is refused when no 1.x build has opened it
 since — the decision this entry states.*
+
+*Corrected beside, 2026-10-06 (ROADMAP O303, its ruling of that day): that
+measurement ran `main` at `5fc6171`, 51 commits after `v1.6.1`, whose adoption
+code 1.6.1 shares — "opened under 1.6.1" was inferred from that code, not
+measured. The decision stands, and no path for that population is offered.*
 
 ### the project is renamed to Undercroft, under the Sealcroft house
 
