@@ -1702,6 +1702,577 @@ fi
 echo "ok    $FC_TRIG filing comment(s) in crates/ each cite an open ROADMAP entry"
 echo "      (ids read from $FC_HEAD headings)"
 
+# **What a release SHIPPED is read from its tag, never from the section an
+# entry sits under today (ROADMAP O309).** O305's date arm reads the dates a
+# heading carries, and a closure is dated when it is BUILT on its branch, so
+# it cannot see the route that matters most: a branch adds its finished entry
+# at the end of the unreleased section, the release PR marks that section
+# released, and the branch then merges cleanly with its hunk under the
+# RELEASED section, dated on or before the cut. Nor an entry finished before
+# an earlier release and filed under a later one, nor an entry with no
+# closure claim under a released section, nor a release date that is not its
+# tag's day. A release tag's own `ROADMAP.md` is the evidence; the section a
+# tree places an entry under is a claim, checked against it.
+#
+# Ruled 2026-10-05 by three lenses and a refuter (ROADMAP O309, `#### RULED`,
+# with the corrections its independent review earned recorded beside it):
+#   * the tags are release.yml's trigger set, `refs/tags/v*` (for-each-ref,
+#     whose `*` does not cross `/`), each name checked to be a plain
+#     `v<n>.<n>.<n>` before it is used — a tag name is DATA and never enters
+#     this awk program, a pattern or an eval; a suffixed one is refused until
+#     suffixes are ruled, as `version surfaces` already refuses a suffixed
+#     workspace version — and each lightweight one refused, because its creator
+#     date is the commit's and the date row would silently compare something
+#     else;
+#   * every entry under a released section must read finished NOW, and at its
+#     own tag under a byte-identical heading (O305 Q5: a correction goes in
+#     the body); finished at an EARLIER tag is refused, where earlier is version
+#     order under a released section and EVERY tag under an unreleased one,
+#     which has shipped in none of them; never ancestry, which is silently
+#     false in a depth-1 clone (measured), and tag creation order must agree
+#     with version order;
+#   * finished means the token the DATE arm of `roadmap_scan` matches, never
+#     the blunt one, and never SUPERSEDED or REFUTED: here "finished" PASSES,
+#     so the narrow reading is the loud one (O162 Q4); a premise below pins the
+#     predicate byte for byte;
+#   * the release PR runs before its tag exists, so exactly one section may
+#     sit untagged: the newest released one, above every tag, whose version is
+#     the workspace version and whose date HEAD has not passed — and a HEAD
+#     day that cannot be read is a refusal, never a pass;
+#   * the reader reads refs and blobs only — one for-each-ref, one cat-file
+#     batch — under GIT_NO_LAZY_FETCH=1, so a partial clone does not reach the
+#     network from a preflight on a git that honours it (2.55, and Ubuntu 24.04
+#     2.43.0, measured) and a missing object is a refusal; this preflight never
+#     fetches (O65), the `ci.yml` preflight job does;
+#   * every tag in the clone is judged, with no time filter, so a checkout
+#     older than the newest release fails here — run it with --no-preflight.
+#
+# Paths reach awk through ENVIRON, never awk -v (it processes escapes and
+# mangled a Windows path into an empty tag list in the prototype), and the
+# tag table and snapshots are read with getline, never FNR == NR (an empty
+# table made that idiom read the ROADMAP as tags and swallow its stdin). The
+# programs sit in single-quoted shell strings: no apostrophe anywhere in them.
+RT_TAG_SHAPE='^v[0-9]+[.][0-9]+[.][0-9]+$'
+workspace_version() { awk '/^\[workspace\.package\]/{p=1;next} p&&/^\[/{p=0} p&&/^version *=/{gsub(/[^0-9.]/,"");print;exit}' Cargo.toml; }
+roadmap_tag_inputs() { # roadmap_tag_inputs <repo> <dir>: writes <dir>/tags and <dir>/snap
+  GIT_NO_LAZY_FETCH=1 LC_ALL=C git -C "$1" for-each-ref \
+    --format='%(refname) %(objecttype) %(creatordate:short) %(creatordate:unix)' \
+    'refs/tags/v*' > "$2/tags" || return 1
+  awk '{ n = $1; if (substr(n, 1, 10) == "refs/tags/") n = substr(n, 11); if (n ~ ENVIRON["RT_TAG_SHAPE"]) print "refs/tags/" n ":ROADMAP.md" }' \
+    "$2/tags" > "$2/req" || return 1
+  GIT_NO_LAZY_FETCH=1 git -C "$1" cat-file --batch < "$2/req" > "$2/snap" || return 1
+}
+roadmap_tags() { RT_TAGS="$2" RT_SNAP="$3" LC_ALL=C awk '
+  function vcmp(x, y,   a, b, i) {
+    split(x, a, "."); split(y, b, ".")
+    for (i = 1; i <= 3; i++) { if ((a[i] + 0) < (b[i] + 0)) return -1; if ((a[i] + 0) > (b[i] + 0)) return 1 }
+    return 0
+  }
+  # The DATE arm of roadmap_scan, verbatim: the status word not continuing an
+  # identifier, then a date or the doctrine form.
+  function finished(h) {
+    return ((" " h) ~ /[^A-Za-z0-9_]CLOSED [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ ||
+            (" " h) ~ /[^A-Za-z0-9_]CLOSED by doctrine/)
+  }
+  function emit(kind, line, text, rkind, key) {
+    if ((key SUBSEP rkind) in roster) { used[key SUBSEP rkind] = 1; return }
+    print kind "|" line "|" text
+  }
+  function safe(s) { gsub("[^-A-Za-z0-9._/]", "?", s); return s }
+  function snapline(v, s,   t, f, id) {
+    if (substr(s, 1, 3) == "## ") {
+      t = s " "
+      if (substr(t, 1, length(v) + 4) == "## " v " " &&
+          t ~ /^## [0-9][^ ]* [^ ]+ released [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] /) ownrel[v] = 1
+      return
+    }
+    if (s ~ /^### [A-Z][0-9]+/) {
+      split(s, f, " "); id = f[2]
+      shead[v SUBSEP s] = 1; spres[v SUBSEP id] = 1
+      if (finished(s)) sfin[v SUBSEP id] = 1
+    }
+  }
+  BEGIN {
+    shape = ENVIRON["RT_TAG_SHAPE"]; ws = ENVIRON["RT_WS_VERSION"]; hday = ENVIRON["RT_HEAD_DAY"]
+    if (hday !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) print "head-day-unreadable|0|" safe(hday)
+    nr = split(ENVIRON["RT_ENTRY_ROSTER"], rl, " ")
+    for (i = 1; i <= nr; i++) { split(rl[i], p, "@"); roster[p[1] "@" p[2] SUBSEP p[3]] = 1 }
+    ntr = split(ENVIRON["RT_TAG_ROSTER"], trl, " ")
+    for (i = 1; i <= ntr; i++) { roster[trl[i] SUBSEP "tag-section"] = 1; roster[trl[i] SUBSEP "tag-snapshot"] = 1 }
+    tagfile = ENVIRON["RT_TAGS"]; snapfile = ENVIRON["RT_SNAP"]
+    while ((getline row < tagfile) > 0) {
+      split(row, c, " "); name = c[1]
+      if (substr(name, 1, 10) == "refs/tags/") name = substr(name, 11)
+      if (name !~ shape) { print "release-tag-misnamed|0|" safe(name); continue }
+      v = substr(name, 2); nt++; tv[nt] = v; tagset[v] = 1; td[v] = c[3]; tu[v] = c[4] + 0
+      if (c[2] != "tag") print "release-tag-lightweight|0|v" v
+    }
+    close(tagfile)
+    k = 0
+    while ((getline hdr < snapfile) > 0) {
+      k++
+      if (k > nt) { print "snapshot-stream-mismatch|0|more snapshots than tags"; break }
+      v = tv[k]
+      if (hdr ~ / missing$/) { print "snapshot-unreadable|0|v" v; continue }
+      split(hdr, h, " ")
+      if (h[2] != "blob") { print "snapshot-unreadable|0|v" v; continue }
+      size = h[3] + 0; got = 0
+      while (got < size && (getline s < snapfile) > 0) { got += length(s) + 1; snapline(v, s) }
+      if (got == size) getline s < snapfile
+      else if (got != size + 1) { print "snapshot-stream-mismatch|0|v" v " does not end where its header says"; break }
+      readok[v] = 1; nread++
+    }
+    close(snapfile)
+    if (k < nt) print "snapshot-stream-mismatch|0|" k " snapshots for " nt " tags"
+  }
+  /^## / {
+    cur = ""
+    if ($0 ~ /^## [0-9]/) {
+      cur = $2; nsec++; sv[nsec] = cur; sline[cur] = FNR; shd[cur] = $0
+      t = $0 " "
+      if (t ~ /^## [0-9][^ ]* [^ ]+ released [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] /) {
+        st[cur] = "released"; match(t, /released [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] /); rd[cur] = substr(t, RSTART + 9, 10)
+      } else if (t ~ /^## [0-9][^ ]* [^ ]+ unreleased /) st[cur] = "unreleased"
+      else st[cur] = "other"
+    }
+    next
+  }
+  /^### [A-Z][0-9]+/ {
+    id = $2; t = $0; sub(/^### [^ ]+ [^ ]+ /, "", t)
+    if (substr(t, 1, 5) != "MOVED") { if (id in idline) { nd++; dl[nd] = FNR; dh[nd] = $0 } else idline[id] = FNR }
+    if (cur != "" && (st[cur] == "released" || st[cur] == "unreleased")) { ne++; eid[ne] = id; esec[ne] = cur; eline[ne] = FNR; ehd[ne] = $0 }
+    next
+  }
+  END {
+    if (nt == 0) print "no-release-tags|0|"
+    for (i = 1; i <= nt; i++) ord[i] = tv[i]
+    for (i = 2; i <= nt; i++) { x = ord[i]; j = i - 1; while (j > 0 && vcmp(ord[j], x) > 0) { ord[j + 1] = ord[j]; j-- }; ord[j + 1] = x }
+    for (i = 2; i <= nt; i++) if (tu[ord[i]] < tu[ord[i - 1]]) print "tag-order-disagrees|0|v" ord[i] " was created before v" ord[i - 1]
+    for (i = 1; i <= nt; i++) {
+      v = tv[i]
+      if (!(v in sline)) emit("tag-without-section", 0, "v" v, "tag-section", v)
+      if ((v in readok) && !(v in ownrel)) emit("tag-snapshot-not-released", 0, "v" v, "tag-snapshot", v)
+    }
+    newest = ""; maxtag = ""
+    for (i = 1; i <= nsec; i++) if (st[sv[i]] == "released" && (newest == "" || vcmp(sv[i], newest) > 0)) newest = sv[i]
+    for (i = 1; i <= nt; i++) if (maxtag == "" || vcmp(tv[i], maxtag) > 0) maxtag = tv[i]
+    window = ""
+    for (i = 1; i <= nsec; i++) {
+      v = sv[i]
+      if (st[v] == "released") {
+        if (v in tagset) { if (td[v] != rd[v]) print "release-date-not-tag-date|" sline[v] "|" shd[v] " (tag v" v " is " td[v] ")" }
+        else if (nt > 0) {
+          if (v == newest && vcmp(v, maxtag) > 0) {
+            window = v
+            if (v != ws) print "window-not-the-workspace-version|" sline[v] "|" shd[v] " (the workspace is " ws ")"
+            if (hday > rd[v]) print "window-after-its-release-date|" sline[v] "|" shd[v] " (HEAD is dated " hday ")"
+          } else print "released-without-tag|" sline[v] "|" shd[v]
+        }
+      } else if (v in tagset) print "tagged-but-not-released|" sline[v] "|" shd[v]
+    }
+    for (i = 1; i <= nd; i++) print "id-not-unique|" dl[i] "|" dh[i]
+    for (k = 1; k <= ne; k++) {
+      id = eid[k]; v = esec[k]; eh = ehd[k]; key = id "@" v
+      if (st[v] == "released") {
+        if (!finished(eh)) emit("released-entry-unfinished", eline[k], eh, "status", key)
+        if ((v in tagset) && (v in readok)) {
+          if ((v SUBSEP eh) in shead) { if (!finished(eh)) emit("unfinished-at-its-tag", eline[k], eh, "status", key) }
+          else if ((v SUBSEP id) in spres) {
+            emit("heading-differs-at-its-tag", eline[k], eh, "heading", key)
+            if (!((v SUBSEP id) in sfin)) emit("unfinished-at-its-tag", eline[k], eh, "status", key)
+          } else print "absent-at-its-tag|" eline[k] "|" eh
+        }
+      }
+      best = ""
+      for (i = 1; i <= nt; i++) {
+        x = tv[i]
+        if ((st[v] == "unreleased" || vcmp(x, v) < 0) && ((x SUBSEP id) in sfin) && (best == "" || vcmp(x, best) < 0)) best = x
+      }
+      if (best != "") print "finished-at-an-earlier-tag|" eline[k] "|" eh " (finished at v" best ")"
+    }
+    for (i = 1; i <= nr; i++) { split(rl[i], p, "@"); if (!((p[1] "@" p[2] SUBSEP p[3]) in used)) print "entry-roster-outlived|0|" rl[i] }
+    if (nt > 0) for (i = 1; i <= ntr; i++)
+      if (!((trl[i] SUBSEP "tag-section") in used) || !((trl[i] SUBSEP "tag-snapshot") in used)) print "tag-roster-outlived|0|v" trl[i]
+    print "premise|" (nt + 0) "|" (nread + 0) "|" (ne + 0) "|" (window == "" ? "-" : window)
+  }
+' "$1" < /dev/null; }
+# The READER, probed on a throwaway repository with annotated tags at pinned
+# dates. It runs ISOLATED from the caller: a hook in a worktree exports
+# GIT_DIR and GIT_INDEX_FILE, and with them inherited this probe committed
+# into the REAL repository (measured by the independent review), so the
+# subshell unsets every variable that redirects git, keeps the caller global
+# and system configuration out, and runs no template or hook.
+rt_reader_probe() { # rt_reader_probe <dir>: builds <dir>/repo and reads it into <dir>/r
+  (
+    unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR \
+      GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_PREFIX GIT_CEILING_DIRECTORIES \
+      GIT_CONFIG GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT \
+      GIT_TEMPLATE_DIR
+    export HOME="$1" XDG_CONFIG_HOME="$1" GIT_CONFIG_NOSYSTEM=1
+    git init -q --template= "$1/repo" &&
+    printf '%s\n' '## 1.1.0 — released 2099-01-01' '' '### O9070 — CLOSED 2098-12-31: shipped' > "$1/repo/ROADMAP.md" &&
+    git -C "$1/repo" -c core.autocrlf=false -c core.hooksPath=/dev/null add ROADMAP.md &&
+    GIT_AUTHOR_DATE='2099-01-01T00:30:00+0200' GIT_COMMITTER_DATE='2099-01-01T00:30:00+0200' \
+      git -C "$1/repo" -c core.hooksPath=/dev/null -c user.name=probe -c user.email=probe@invalid \
+        -c commit.gpgSign=false commit -q -m probe &&
+    GIT_COMMITTER_DATE='2099-01-01T00:30:00+0200' \
+      git -C "$1/repo" -c core.hooksPath=/dev/null -c user.name=probe -c user.email=probe@invalid \
+        -c tag.gpgSign=false tag -a v1.1.0 -m probe &&
+    git -C "$1/repo" -c core.hooksPath=/dev/null tag v1.1.1 &&
+    git -C "$1/repo" -c core.hooksPath=/dev/null tag vfoo &&
+    mkdir -p "$1/r" &&
+    TZ=UTC RT_TAG_SHAPE="$RT_TAG_SHAPE" roadmap_tag_inputs "$1/repo" "$1/r"
+  )
+}
+# Entries under a released section that are RECORDS, not work, keyed
+# (id, release, kind) with the reason each, counted BOTH ways on the
+# OPERATOR_ONLY precedent: a row that exempts nothing fails. A status row
+# exempts the two status rows only, never absent-at-its-tag; a heading row
+# would exempt heading-differs-at-its-tag, for a scrub of a released heading,
+# and there is none.
+RELEASED_RECORDS=(
+  "O24a@1.1.0@status|a companion record of O24, kept beside it because the reasoning error is the lesson; its heading has never carried a status"
+  "O137@1.5.2@status|superseded on 2026-09-10, before 1.5.2 was tagged: the record of a framing whose remainder is O144"
+)
+# Release tags with no release section, the same way: a row is confirmed only
+# while BOTH hold — no section for the tag here, and none marked released in
+# its own snapshot — so it cannot outlive what it names.
+RELEASE_TAG_RECORDS=(
+  "1.0.0|cut before this file had release sections: its own ROADMAP.md has none, and the versioning doctrine began after it"
+)
+rt_roster() { local r out=""; for r in "$@"; do out="$out ${r%%|*}"; done; printf '%s' "${out# }"; }
+# PREMISES, as source assertions, for what no fixture can see: the locale pin;
+# the finished predicate, byte for byte the two patterns the DATE arm of
+# roadmap_scan carries and nothing else; a reader whose every git call is
+# under GIT_NO_LAZY_FETCH=1 and that never walks history or fetches; and a
+# probe isolated from the caller.
+RT_SRC_BAD=""
+declare -f roadmap_tags | grep -q 'LC_ALL=C awk' || RT_SRC_BAD="$RT_SRC_BAD; roadmap_tags lost its LC_ALL=C"
+for rt_pat in '[^A-Za-z0-9_]CLOSED [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/' '[^A-Za-z0-9_]CLOSED by doctrine/'; do
+  declare -f roadmap_scan | grep -qF "$rt_pat" || RT_SRC_BAD="$RT_SRC_BAD; roadmap_scan no longer carries $rt_pat"
+done
+RT_FIN=$(declare -f roadmap_tags | awk 'index($0, "function finished(h) {") { p = 1; next } p && $0 ~ /^ *}$/ { exit } p' | tr -d ' ')
+RT_FIN_WANT='return(("Z"h)~/[^A-Za-z0-9_]CLOSED[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/||("Z"h)~/[^A-Za-z0-9_]CLOSEDbydoctrine/)'
+RT_FIN_WANT=$(printf '%s' "$RT_FIN_WANT" | sed 's/"Z"/""/g')
+[ "$(printf '%s' "$RT_FIN" | tr -d '\n')" = "$RT_FIN_WANT" ] || RT_SRC_BAD="$RT_SRC_BAD; roadmap_tags finished() is not exactly the DATE arm of roadmap_scan"
+RT_GITS=$(declare -f roadmap_tag_inputs | grep -oE '(^|[^A-Za-z_])git [a-z-]' | grep -c . || true)
+RT_GUARDS=$(declare -f roadmap_tag_inputs | grep -o 'GIT_NO_LAZY_FETCH=1' | grep -c . || true)
+[ "$RT_GITS" -eq 2 ] && [ "$RT_GUARDS" -eq 2 ] || RT_SRC_BAD="$RT_SRC_BAD; roadmap_tag_inputs makes $RT_GITS git call(s) under $RT_GUARDS GIT_NO_LAZY_FETCH=1"
+declare -f roadmap_tag_inputs | grep -qE 'rev-list|merge-base|log |fetch ' && RT_SRC_BAD="$RT_SRC_BAD; roadmap_tag_inputs walks history or fetches"
+declare -f roadmap_tags | grep -qE 'FNR == NR|awk -v' && RT_SRC_BAD="$RT_SRC_BAD; roadmap_tags reads a table with FNR == NR or a path with awk -v"
+for rt_pat in 'unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE' 'GIT_CONFIG_NOSYSTEM=1' 'HOME="$1"' 'init -q --template='; do
+  declare -f rt_reader_probe | grep -qF "$rt_pat" || RT_SRC_BAD="$RT_SRC_BAD; rt_reader_probe is not isolated ($rt_pat)"
+done
+if [ -n "$RT_SRC_BAD" ]; then
+  echo "FAIL  premise: the release-tag arm no longer holds what its ruling requires"
+  echo "      (ROADMAP O309)${RT_SRC_BAD}"
+  echo ""; echo "BATTERY FAILED — preflight"; exit 1
+fi
+# PREMISE, the decision function on files only, as an EXACT row set over every
+# row in both directions. Snapshots are a cat-file batch stream built here,
+# byte-counted, one of them missing. Pinned silences: O9002 and O9050 (no
+# tag says otherwise), O9010 and O9011 (identical and finished at their tags;
+# O9011 under a lightweight tag), O9023 (a status record) and O9026 (a heading
+# record) beside the rows they exempt, O9030 at line 49, the MOVED stub of
+# O9010, v1.0.0 (a confirmed tag record) and v1.3.0 (the release-day date).
+RT_FIX="$(mktemp -d)"
+rt_snap() { # rt_snap <file> <name> <content lines...>: appends one blob, or a missing marker
+  local f="$1" n="$2"; shift 2
+  if [ "$1" = "MISSING" ]; then printf 'refs/tags/%s:ROADMAP.md missing\n' "$n" >> "$f"; return; fi
+  printf '%s\n' "$@" > "$f.blob"
+  printf '%s blob %s\n' 0123456789abcdef0123456789abcdef01234567 "$(wc -c < "$f.blob" | tr -d ' ')" >> "$f"
+  cat "$f.blob" >> "$f"; printf '\n' >> "$f"; rm -f "$f.blob"
+}
+printf '%s\n' \
+  'refs/tags/v1.0.0 tag 2099-01-01 100' 'refs/tags/v1.1.0 tag 2099-02-01 200' \
+  'refs/tags/v1.2.0 tag 2099-03-01 300' 'refs/tags/v1.3.0 commit 2099-04-01 400' \
+  'refs/tags/v1.4.0 tag 2099-05-02 600' 'refs/tags/v1.4.1 tree 2099-05-10 650' \
+  'refs/tags/v1.5.0 tag 2099-06-01 500' 'refs/tags/v1.6.0 tag 2099-06-15 700' \
+  'refs/tags/v1.7.0 tag 2099-07-01 800' 'refs/tags/v1.8.0 tag 2099-08-01 900' \
+  'refs/tags/v1.8.1 tag 2099-08-15 950' 'refs/tags/v1.9.2-rc1 tag 2099-09-02 1100' \
+  'refs/tags/vfoo|x tag 2099-09-01 1000' > "$RT_FIX/tags"
+: > "$RT_FIX/snap"
+rt_snap "$RT_FIX/snap" v1.0.0 '## Residuals — pre-convention' '### U1 · a pre-convention entry'
+rt_snap "$RT_FIX/snap" v1.1.0 '## 1.1.0 — released 2099-02-01' '' \
+  '### O9030 — CLOSED 2099-01-20: shipped in 1.1.0' \
+  '### O9001 — CLOSED 2099-01-01: finished at v1.1.0 but filed under unreleased'
+rt_snap "$RT_FIX/snap" v1.2.0 '## 1.2.0 — released 2099-03-01' \
+  '### O9001 — CLOSED 2099-01-01: finished at v1.1.0 but filed under unreleased' \
+  '### O9021 — CLOSED 2099-02-21: heading as tagged' \
+  '### O9022 — an open entry, open at its tag too' \
+  '### O9023 — a rostered record' \
+  '### O9025 — X_CLOSED 2099-02-23: identifier, not a status' \
+  '### O9026 — an open entry at the tag' \
+  '### O9027 — SUPERSEDED 2099-02-25: superseded is not finished' \
+  '### O9028 — REFUTED 2099-02-26: refuted is not finished'
+rt_snap "$RT_FIX/snap" v1.3.0 '## 1.3.0 — released 2099-04-01' '### O9011 — CLOSED 2099-03-20: shipped'
+rt_snap "$RT_FIX/snap" v1.4.0 '## 1.4.0 — released 2099-05-02' '### O9010 — CLOSED 2099-04-20: shipped, identical'
+rt_snap "$RT_FIX/snap" v1.4.1 '## 1.4.1 — released 2099-05-10'
+rt_snap "$RT_FIX/snap" v1.5.0 '## 1.5.0 — released 2099-06-01'
+rt_snap "$RT_FIX/snap" v1.6.0 MISSING
+rt_snap "$RT_FIX/snap" v1.7.0 '## 1.7.0 — released 2099-07-01'
+rt_snap "$RT_FIX/snap" v1.8.0 '## Open — nothing released here' \
+  '### O9003 — CLOSED 2099-07-15: finished at v1.8.0, filed under an unreleased 1.7.0'
+rt_snap "$RT_FIX/snap" v1.8.1 '## 1.8.10 — released 2099-08-15'
+printf '%s\n' \
+  '## 1.9.0 — unreleased' '' \
+  '### O9001 — CLOSED 2099-01-01: finished at v1.1.0 but filed under unreleased' '' \
+  '### O9002 — CLOSED 2099-09-01: new in 1.9.0' '' \
+  '## 1.7.0 — unreleased' '' \
+  '### O9003 — CLOSED 2099-07-15: finished at v1.8.0, filed under an unreleased 1.7.0' '' \
+  '## 1.6.5 — released 2099-06-20' '' \
+  '## 1.6.0 — released 2099-06-15' '' \
+  '### O9050 — CLOSED 2099-06-10: under a tag whose snapshot is unreadable' '' \
+  '## 1.5.0 — released 2099-06-01' '' \
+  '## 1.4.0 — released 2099-05-01' '' \
+  '### O9010 — CLOSED 2099-04-20: shipped, identical' '' \
+  '## 1.3.0 — released 2099-04-01' '' \
+  '### O9011 — CLOSED 2099-03-20: shipped' '' \
+  '## 1.2.0 — released 2099-03-01' '' \
+  '### O9020 — CLOSED 2099-02-20: absent at its tag' '' \
+  '### O9021 — CLOSED 2099-02-21: heading edited after the tag' '' \
+  '### O9022 — an open entry, open at its tag too' '' \
+  '### O9023 — a rostered record' '' \
+  '### O9025 — X_CLOSED 2099-02-23: identifier, not a status' '' \
+  '### O9026 — CLOSED 2099-02-24: finished now, open at the tag' '' \
+  '### O9027 — SUPERSEDED 2099-02-25: superseded is not finished' '' \
+  '### O9028 — REFUTED 2099-02-26: refuted is not finished' '' \
+  '### M9001 — CLOSED 2099-02-27: an M-series entry absent at its tag' '' \
+  '## 1.1.0 — released 2099-02-01' '' \
+  '### O9030 — CLOSED 2099-01-20: shipped in 1.1.0' '' \
+  '### O9030 — CLOSED 2099-01-21: an id used twice' '' \
+  '## 1.0.5 — released 2099-01-15' '' \
+  '## 1.8.0 — one item is filed' '' \
+  '## Open — releasable work' '' \
+  '### O9010 — MOVED to the 1.4.0 section' '' \
+  '### O9002 — a duplicate id whose title names MOVED later' '' \
+  '### O9060 — an open entry under Open' > "$RT_FIX/roadmap.md"
+RT_GOT=$(RT_TAG_SHAPE="$RT_TAG_SHAPE" RT_WS_VERSION=1.9.0 RT_HEAD_DAY=2099-09-30 \
+  RT_ENTRY_ROSTER='O9023@1.2.0@status O9026@1.2.0@heading O9099@1.2.0@status O9020@1.2.0@status' \
+  RT_TAG_ROSTER='1.0.0 0.9.0 1.8.0' \
+  roadmap_tags "$RT_FIX/roadmap.md" "$RT_FIX/tags" "$RT_FIX/snap")
+RT_WANT='release-tag-lightweight|0|v1.3.0
+release-tag-lightweight|0|v1.4.1
+release-tag-misnamed|0|v1.9.2-rc1
+release-tag-misnamed|0|vfoo?x
+snapshot-unreadable|0|v1.6.0
+tag-order-disagrees|0|v1.5.0 was created before v1.4.1
+tag-without-section|0|v1.4.1
+tag-without-section|0|v1.8.1
+tag-snapshot-not-released|0|v1.8.1
+tagged-but-not-released|7|## 1.7.0 — unreleased
+released-without-tag|11|## 1.6.5 — released 2099-06-20
+release-date-not-tag-date|19|## 1.4.0 — released 2099-05-01 (tag v1.4.0 is 2099-05-02)
+released-without-tag|53|## 1.0.5 — released 2099-01-15
+tagged-but-not-released|55|## 1.8.0 — one item is filed
+id-not-unique|51|### O9030 — CLOSED 2099-01-21: an id used twice
+id-not-unique|61|### O9002 — a duplicate id whose title names MOVED later
+finished-at-an-earlier-tag|3|### O9001 — CLOSED 2099-01-01: finished at v1.1.0 but filed under unreleased (finished at v1.1.0)
+finished-at-an-earlier-tag|9|### O9003 — CLOSED 2099-07-15: finished at v1.8.0, filed under an unreleased 1.7.0 (finished at v1.8.0)
+absent-at-its-tag|29|### O9020 — CLOSED 2099-02-20: absent at its tag
+heading-differs-at-its-tag|31|### O9021 — CLOSED 2099-02-21: heading edited after the tag
+released-entry-unfinished|33|### O9022 — an open entry, open at its tag too
+unfinished-at-its-tag|33|### O9022 — an open entry, open at its tag too
+released-entry-unfinished|37|### O9025 — X_CLOSED 2099-02-23: identifier, not a status
+unfinished-at-its-tag|37|### O9025 — X_CLOSED 2099-02-23: identifier, not a status
+unfinished-at-its-tag|39|### O9026 — CLOSED 2099-02-24: finished now, open at the tag
+released-entry-unfinished|41|### O9027 — SUPERSEDED 2099-02-25: superseded is not finished
+unfinished-at-its-tag|41|### O9027 — SUPERSEDED 2099-02-25: superseded is not finished
+released-entry-unfinished|43|### O9028 — REFUTED 2099-02-26: refuted is not finished
+unfinished-at-its-tag|43|### O9028 — REFUTED 2099-02-26: refuted is not finished
+absent-at-its-tag|45|### M9001 — CLOSED 2099-02-27: an M-series entry absent at its tag
+heading-differs-at-its-tag|51|### O9030 — CLOSED 2099-01-21: an id used twice
+entry-roster-outlived|0|O9099@1.2.0@status
+entry-roster-outlived|0|O9020@1.2.0@status
+tag-roster-outlived|0|v0.9.0
+tag-roster-outlived|0|v1.8.0
+premise|11|10|17|-'
+# The window, on its own fixture: one untagged released section above the only
+# tag, beside a status that is not a release (`3.0.0`), a second untagged
+# released section that is NOT the window (`2.0.10`), and versions that differ
+# only in a two-digit patch component, so a version read as strings or with
+# its patch ignored is caught. Judged by its two bounds, with no tags, and with
+# a HEAD day that could not be read.
+printf '%s\n' 'refs/tags/v2.0.9 tag 2099-08-15 100' > "$RT_FIX/tags2"
+: > "$RT_FIX/snap2"
+rt_snap "$RT_FIX/snap2" v2.0.9 '## 2.0.9 — released 2099-08-15' \
+  '### O9043 — CLOSED 2099-08-10: shipped in 2.0.9' \
+  '### O9042 — CLOSED 2099-08-01: already finished at v2.0.9'
+printf '%s\n' \
+  '## 3.0.0 — one item is filed' '' \
+  '## 2.1.0 — released 2099-09-09' '' \
+  '### O9040 — CLOSED 2099-09-01: in the window, finished' '' \
+  '### O9041 — an open filing in the window' '' \
+  '## 2.0.10 — released 2099-09-01' '' \
+  '### O9042 — CLOSED 2099-08-01: already finished at v2.0.9' '' \
+  '## 2.0.9 — released 2099-08-15' '' \
+  '### O9043 — CLOSED 2099-08-10: shipped in 2.0.9' > "$RT_FIX/roadmap2.md"
+: > "$RT_FIX/empty"
+rt_window() { # rt_window <workspace> <head day> <tags> <snap>
+  RT_TAG_SHAPE="$RT_TAG_SHAPE" RT_WS_VERSION="$1" RT_HEAD_DAY="$2" RT_ENTRY_ROSTER='' RT_TAG_ROSTER='' \
+    roadmap_tags "$RT_FIX/roadmap2.md" "$3" "$4"
+}
+RT_WGOT="$(rt_window 2.1.0 2099-09-09 "$RT_FIX/tags2" "$RT_FIX/snap2")
+--
+$(rt_window 2.0.0 2099-09-09 "$RT_FIX/tags2" "$RT_FIX/snap2")
+--
+$(rt_window 2.1.0 2099-09-10 "$RT_FIX/tags2" "$RT_FIX/snap2")
+--
+$(rt_window 2.1.0 2099-09-09 "$RT_FIX/empty" "$RT_FIX/empty")
+--
+$(rt_window 2.1.0 '' "$RT_FIX/tags2" "$RT_FIX/snap2")"
+RT_WWANT='released-without-tag|9|## 2.0.10 — released 2099-09-01
+released-entry-unfinished|7|### O9041 — an open filing in the window
+finished-at-an-earlier-tag|11|### O9042 — CLOSED 2099-08-01: already finished at v2.0.9 (finished at v2.0.9)
+premise|1|1|4|2.1.0
+--
+window-not-the-workspace-version|3|## 2.1.0 — released 2099-09-09 (the workspace is 2.0.0)
+released-without-tag|9|## 2.0.10 — released 2099-09-01
+released-entry-unfinished|7|### O9041 — an open filing in the window
+finished-at-an-earlier-tag|11|### O9042 — CLOSED 2099-08-01: already finished at v2.0.9 (finished at v2.0.9)
+premise|1|1|4|2.1.0
+--
+window-after-its-release-date|3|## 2.1.0 — released 2099-09-09 (HEAD is dated 2099-09-10)
+released-without-tag|9|## 2.0.10 — released 2099-09-01
+released-entry-unfinished|7|### O9041 — an open filing in the window
+finished-at-an-earlier-tag|11|### O9042 — CLOSED 2099-08-01: already finished at v2.0.9 (finished at v2.0.9)
+premise|1|1|4|2.1.0
+--
+no-release-tags|0|
+released-entry-unfinished|7|### O9041 — an open filing in the window
+premise|0|0|4|-
+--
+head-day-unreadable|0|
+released-without-tag|9|## 2.0.10 — released 2099-09-01
+released-entry-unfinished|7|### O9041 — an open filing in the window
+finished-at-an-earlier-tag|11|### O9042 — CLOSED 2099-08-01: already finished at v2.0.9 (finished at v2.0.9)
+premise|1|1|4|2.1.0'
+# The stream reader, on three streams that do not split into one snapshot per
+# tag: one short, one long, one whose header promises more than follows.
+printf '%s\n' 'refs/tags/v3.0.0 tag 2099-10-01 100' 'refs/tags/v3.1.0 tag 2099-10-02 200' > "$RT_FIX/tags3"
+printf '%s\n' '## 3.1.0 — released 2099-10-02' '' '## 3.0.0 — released 2099-10-01' > "$RT_FIX/roadmap3.md"
+: > "$RT_FIX/short"; rt_snap "$RT_FIX/short" v3.0.0 '## 3.0.0 — released 2099-10-01'
+: > "$RT_FIX/long"; rt_snap "$RT_FIX/long" v3.0.0 '## 3.0.0 — released 2099-10-01'
+rt_snap "$RT_FIX/long" v3.1.0 '## 3.1.0 — released 2099-10-02'; rt_snap "$RT_FIX/long" v3.2.0 '## 3.2.0 — released 2099-10-03'
+printf '%s\n' '0123456789abcdef0123456789abcdef01234567 blob 9999' '## 3.0.0 — released 2099-10-01' '' > "$RT_FIX/torn"
+rt_snap "$RT_FIX/torn" v3.1.0 '## 3.1.0 — released 2099-10-02'
+rt_stream() { # rt_stream <snap>
+  RT_TAG_SHAPE="$RT_TAG_SHAPE" RT_WS_VERSION=3.1.0 RT_HEAD_DAY=2099-10-02 RT_ENTRY_ROSTER='' RT_TAG_ROSTER='' \
+    roadmap_tags "$RT_FIX/roadmap3.md" "$RT_FIX/tags3" "$1"
+}
+RT_SGOT="$(rt_stream "$RT_FIX/short")
+--
+$(rt_stream "$RT_FIX/long")
+--
+$(rt_stream "$RT_FIX/torn")"
+RT_SWANT='snapshot-stream-mismatch|0|1 snapshots for 2 tags
+premise|2|1|0|-
+--
+snapshot-stream-mismatch|0|more snapshots than tags
+premise|2|2|0|-
+--
+snapshot-stream-mismatch|0|v3.0.0 does not end where its header says
+snapshot-stream-mismatch|0|1 snapshots for 2 tags
+premise|2|0|0|-'
+# The READER on its throwaway repository: a tagger date half an hour past
+# midnight at +0200 must read as ITS day under TZ=UTC (creatordate:short keeps
+# the offset; short-local would read the day before), a lightweight tag and a
+# misnamed one must be seen, and the blob must come back through the one
+# cat-file batch.
+RT_READER_OK=1
+rt_reader_probe "$RT_FIX" > "$RT_FIX/reader.log" 2>&1 || RT_READER_OK=0
+RT_RGOT=""
+if [ "$RT_READER_OK" -eq 1 ]; then
+  RT_RGOT=$(RT_TAG_SHAPE="$RT_TAG_SHAPE" RT_WS_VERSION=1.1.0 RT_HEAD_DAY=2099-01-01 RT_ENTRY_ROSTER='' RT_TAG_ROSTER='' \
+    roadmap_tags "$RT_FIX/repo/ROADMAP.md" "$RT_FIX/r/tags" "$RT_FIX/r/snap")
+fi
+RT_RWANT='release-tag-lightweight|0|v1.1.1
+release-tag-misnamed|0|vfoo
+tag-without-section|0|v1.1.1
+tag-snapshot-not-released|0|v1.1.1
+premise|2|2|1|-'
+if [ "$RT_GOT" != "$RT_WANT" ] || [ "$RT_WGOT" != "$RT_WWANT" ] || [ "$RT_SGOT" != "$RT_SWANT" ] ||
+   [ "$RT_RGOT" != "$RT_RWANT" ]; then
+  echo "FAIL  premise: the release-tag arm did not produce the exact rows its fixtures"
+  echo "      require (ROADMAP O309). Wanted (<) against got (>): the rows, the window,"
+  echo "      the stream reader, then the reader on a throwaway repository (setup ok: $RT_READER_OK):"
+  diff <(printf '%s\n' "$RT_WANT") <(printf '%s\n' "$RT_GOT") | sed 's/^/        /'
+  diff <(printf '%s\n' "$RT_WWANT") <(printf '%s\n' "$RT_WGOT") | sed 's/^/        /'
+  diff <(printf '%s\n' "$RT_SWANT") <(printf '%s\n' "$RT_SGOT") | sed 's/^/        /'
+  diff <(printf '%s\n' "$RT_RWANT") <(printf '%s\n' "$RT_RGOT") | sed 's/^/        /'
+  sed 's/^/        reader: /' "$RT_FIX/reader.log"
+  rm -rf "$RT_FIX"
+  echo ""; echo "BATTERY FAILED — preflight"; exit 1
+fi
+rm -rf "$RT_FIX"
+# The real scan: this clone, its tags, this tree.
+RT_DIR="$(mktemp -d)"
+if ! RT_TAG_SHAPE="$RT_TAG_SHAPE" roadmap_tag_inputs . "$RT_DIR"; then
+  rm -rf "$RT_DIR"
+  echo "FAIL  the release tags could not be read with git (ROADMAP O309): this check"
+  echo "      reads refs/tags/v* and each tag's ROADMAP.md, and a reader that cannot run"
+  echo "      reports what a clean tree reports (a partial clone whose blob is not here"
+  echo "      ends here on a git that refuses the lazy fetch outright)"
+  echo ""; echo "BATTERY FAILED — preflight"; exit 1
+fi
+RT_ROWS=$(RT_TAG_SHAPE="$RT_TAG_SHAPE" RT_WS_VERSION="$(workspace_version)" \
+  RT_HEAD_DAY="$(git show -s --format=%cs HEAD)" \
+  RT_ENTRY_ROSTER="$(rt_roster "${RELEASED_RECORDS[@]}")" RT_TAG_ROSTER="$(rt_roster "${RELEASE_TAG_RECORDS[@]}")" \
+  roadmap_tags ROADMAP.md "$RT_DIR/tags" "$RT_DIR/snap")
+rm -rf "$RT_DIR"
+RT_PREMISE=$(printf '%s\n' "$RT_ROWS" | grep '^premise|' || true)
+IFS='|' read -r _ RT_NT RT_NREAD RT_NE RT_WIN <<< "$RT_PREMISE"
+if [ -z "$RT_PREMISE" ] || [ "${RT_NE:-0}" -lt 100 ]; then
+  echo "FAIL  the release-tag arm judged ${RT_NE:-0} entries under release sections."
+  echo "      The file holds hundreds, so the reader failed (ROADMAP O309)."
+  echo ""; echo "BATTERY FAILED — preflight"; exit 1
+fi
+RT_BAD=$(printf '%s\n' "$RT_ROWS" | grep -v '^premise|' | grep . || true)
+if [ -n "$RT_BAD" ]; then
+  echo "FAIL  what a release shipped is read from its tag (ROADMAP O309), and this tree"
+  echo "      disagrees with its tags:"
+  while IFS='|' read -r kind line text; do
+    [ -z "$kind" ] && continue
+    if [ "$line" != 0 ]; then printf '        ROADMAP.md:%s  %s\n' "$line" "$text"
+    elif [ -n "$text" ]; then printf '        %s\n' "$text"; fi
+    case "$kind" in
+      no-release-tags)
+        echo "          no-release-tags: this clone holds no release tag (refs/tags/v<n>.<n>.<n>). Fetch them:"
+        echo "          git fetch --tags origin  (a full clone), or in a shallow one"
+        echo "          git fetch --no-tags --depth=1 origin '+refs/tags/v*:refs/tags/v*'"
+        echo "          (shallow: $(git rev-parse --is-shallow-repository 2>/dev/null)). In CI it is the step"
+        echo "          before this one in the preflight job of .github/workflows/ci.yml" ;;
+      head-day-unreadable)       echo "          head-day-unreadable: the day of HEAD (git show -s --format=%cs HEAD) could not be read, so the window bound cannot be judged" ;;
+      release-tag-misnamed)      echo "          release-tag-misnamed: release.yml publishes every v* tag, and this one is not v<n>.<n>.<n>; the maintainer deletes or renames it, or rules suffixes first" ;;
+      release-tag-lightweight)   echo "          release-tag-lightweight: a release tag is annotated (git tag -a), so its date is the tagger's day; re-cut it annotated" ;;
+      snapshot-unreadable)       echo "          snapshot-unreadable: the tag's ROADMAP.md is not in this clone (a partial clone is never fetched from here); fetch the tag" ;;
+      snapshot-stream-mismatch)  echo "          snapshot-stream-mismatch: the cat-file stream did not split into one snapshot per tag; the reader failed" ;;
+      tag-order-disagrees)       echo "          tag-order-disagrees: tags were created out of version order (a maintenance release?), so earlier is ambiguous; rule it before this check can judge it" ;;
+      tag-without-section)       echo "          tag-without-section: a release tag with no section here; restore the section, or list a pre-convention tag in RELEASE_TAG_RECORDS with its reason" ;;
+      tag-snapshot-not-released) echo "          tag-snapshot-not-released: the tag was cut on a tree that did not mark its section released; that tag is mis-cut, and only the maintainer can re-cut it" ;;
+      tagged-but-not-released)   echo "          tagged-but-not-released: this version is tagged and its section is not marked released here. A branch older than the release: merge origin/main. Otherwise set the status and date as the release did" ;;
+      release-date-not-tag-date) echo "          release-date-not-tag-date: a release date is the day its tag was cut (creatordate:short, the tagger offset); write that day here" ;;
+      released-without-tag)      echo "          released-without-tag: no tag for this release in this clone. Fetch the tags; if origin lacks it too, the release was never cut, or the tag was deleted, which is the maintainer's to restore" ;;
+      window-not-the-workspace-version) echo "          window-not-the-workspace-version: the one untagged released section must be the version Cargo.toml declares, or it is not the release being cut" ;;
+      window-after-its-release-date)    echo "          window-after-its-release-date: this release is untagged past its release day; cut the tag, fetch it, or move the date to the day it will be cut" ;;
+      id-not-unique)             echo "          id-not-unique: an id names one entry; every comment, Relations line and handover that cites it would mean two" ;;
+      released-entry-unfinished) echo "          released-entry-unfinished: an entry under a released section that does not read finished; open work belongs under '## Open', a record goes in RELEASED_RECORDS with its reason" ;;
+      absent-at-its-tag)         echo "          absent-at-its-tag: this release's tag holds no entry with this id, so it did not ship it; move the entry under the release that did, or the unreleased section" ;;
+      heading-differs-at-its-tag) echo "          heading-differs-at-its-tag: a released heading is the record of what shipped; put the correction in the body (ROADMAP O305), or a scrub in RELEASED_RECORDS with the heading kind" ;;
+      unfinished-at-its-tag)     echo "          unfinished-at-its-tag: this entry was not finished when the release was tagged, so the release did not ship it finished; move it to the release that did" ;;
+      finished-at-an-earlier-tag) echo "          finished-at-an-earlier-tag: a release already shipped this entry finished; move it under that release" ;;
+      entry-roster-outlived)     echo "          entry-roster-outlived: RELEASED_RECORDS exempts nothing with this row; remove it" ;;
+      tag-roster-outlived)       echo "          tag-roster-outlived: RELEASE_TAG_RECORDS no longer matches this tag (it has a section here, or its own file marks one released, or it is not here); remove the row" ;;
+      *)                         echo "          $kind: a row kind this handler does not describe; extend it" ;;
+    esac
+  done <<< "$RT_BAD"
+  echo ""; echo "BATTERY FAILED — preflight"; exit 1
+fi
+if [ "$RT_WIN" = "-" ]; then rt_window_note="no release is untagged"
+else rt_window_note="$RT_WIN is released and not yet tagged: its entries are judged on this tree, the converse against every tag"; fi
+echo "ok    the tree agrees with what each release tag shipped ($RT_NT release tag(s),"
+echo "      $RT_NREAD snapshot(s), $RT_NE entries under release sections); $rt_window_note"
+
 # ── preflight: every compose file DECLARES its project name ────────────────
 # Undeclared, Compose derives the project from the DIRECTORY, so every
 # container, image, volume and network inherits whatever the clone is called.
@@ -2468,7 +3039,7 @@ echo "ok    $VERDICT_JOB needs all $CI_NEEDS_N other job(s) of $CI_N"
 # below rather than asserted.
 echo "═══ preflight: version surfaces ═══"
 
-WS_VERSION=$(awk '/^\[workspace\.package\]/{p=1;next} p&&/^\[/{p=0} p&&/^version *=/{gsub(/[^0-9.]/,"");print;exit}' Cargo.toml)
+WS_VERSION=$(workspace_version)  # defined with the ROADMAP release-tag arm (ROADMAP O309)
 if ! printf '%s' "$WS_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
   echo "FAIL  could not read the workspace version from Cargo.toml (got '$WS_VERSION')."
   echo "      Every comparison below is against it, so a broken read would compare"

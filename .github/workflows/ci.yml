@@ -12,13 +12,29 @@ jobs:
   # carries `ROADMAP.md`, the compose files, or `.gitattributes`' whole scope —
   # and until this job existed the script was named in this workflow only
   # inside comments, so every one of them gated a local run and NOTHING on a
-  # pull request. Cheapest job here and the fastest to fail: no Docker, no
-  # cargo, seconds.
+  # pull request. Cheapest job here and the fastest to fail: no cargo and no
+  # build — one preflight runs a stock `python:3-slim` container for the
+  # former-name scan, so Docker is used, never a compose suite.
   preflight:
     name: Host-side preflights (battery.sh --preflight-only)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      # The release tags the ROADMAP release-tag arm reads (ROADMAP O309): what
+      # a release shipped is read from its tag's own ROADMAP.md. The checkout
+      # fetches ONE commit, and its `fetch-tags: true` only drops `--no-tags`
+      # from that fetch, so git's tag auto-follow has nothing to follow:
+      # measured, it fetches no tag at all. This step fetches every `v*` tag at
+      # depth 1 (about 6 MiB), and its fetch must never be made to tolerate a
+      # failure (the arm refuses a clone with no release tags in any case). The preflight itself never
+      # fetches (ROADMAP O65: a local battery runs offline). The versions are
+      # printed because the hosted runner's git and awk are what the arm runs on.
+      - name: Fetch the release tags (ROADMAP O309)
+        run: |
+          git fetch --no-tags --depth=1 origin '+refs/tags/v*:refs/tags/v*'
+          git --version
+          { awk -W version 2>&1 || true; } | sed -n 1p
+          echo "release tags: $(git for-each-ref 'refs/tags/v*' | wc -l)"
       - run: bash tests/battery.sh --preflight-only
 
   lint:

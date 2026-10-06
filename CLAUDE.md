@@ -3076,7 +3076,8 @@ own teardown was the place it had not been applied. Gated by the
 in `tests/` to name the project it destroys; `tests/tls-pins.sh`'s two scoped
 teardowns are the accepted shape. Logs land in `.battery/` (gitignored).
 **`bash tests/battery.sh --preflight-only` runs the twenty host-side preflights
-and no suite**, which is what CI invokes. **A count the battery cannot trust is never compared to a published figure, and there are TWO ways to earn that (O97/O103): the suite EXITED NON-ZERO — `cargo test` aborts at the first failing target, so a numeric, replay-free count arrives over a fraction of them — or the reader disowned it with a `PREMISE FAILURE` marker. `count_untrustworthy` is the one place that question is answered, because it used to be answered twice and differently: the cargo arm guarded on the marker, the shell arm stripped it with a trailing `.*`, and neither looked at the exit code. It fails either way — a gate that cannot measure must not report clean — and the verdict names WHICH cause, because the message was written for a replay and told the reader to re-run a failure that was deterministic. (This sentence said "seven" while
+and no suite**, which is what CI invokes. They read the release tags since
+O309: a `--depth 1` clone fetches them first, as CI's `preflight` job does. **A count the battery cannot trust is never compared to a published figure, and there are TWO ways to earn that (O97/O103): the suite EXITED NON-ZERO — `cargo test` aborts at the first failing target, so a numeric, replay-free count arrives over a fraction of them — or the reader disowned it with a `PREMISE FAILURE` marker. `count_untrustworthy` is the one place that question is answered, because it used to be answered twice and differently: the cargo arm guarded on the marker, the shell arm stripped it with a trailing `.*`, and neither looked at the exit code. It fails either way — a gate that cannot measure must not report clean — and the verdict names WHICH cause, because the message was written for a replay and told the reader to re-run a failure that was deterministic. (This sentence said "seven" while
 the tree ran eight, and nothing could say so — and then "ten" while the tree
 ran eleven, which the gate caught inside the very unit that caused it.
 It caught the twelfth the same way, in the unit that added it.
@@ -4399,13 +4400,44 @@ unwritten because a half-correct verdict is worse than a known-wrong one.
   pattern, but an offset past the em dash is one unit in a UTF-8 gawk and three
   bytes in mawk, so a change of that shape would read a date locally and
   garbage in CI; a premise asserts the pin, since no fixture can see it go.
-  What a date cannot see is filed as O309: a
+  What a date cannot see is O309's, below: a
   closure is dated when it is BUILT, so an entry merged under a release cut
   while its branch was open passes, and only the tag's own `ROADMAP.md` can
   say what shipped. Applied backwards over all 222 first-parent versions of
   the file, the arm refuses `66dafb3`'s O291, one pre-convention 1.2.0
   heading, six versions holding O161's real defect and one early
   `## OPEN after 1.0.0`, and confirms every other version.
+  **And what a release shipped is read from its TAG (O309, 2026-10-05).** The
+  preflight's last arm reads each `v*` tag's own `ROADMAP.md` — one
+  `for-each-ref`, one `cat-file --batch`, under `GIT_NO_LAZY_FETCH=1`, never a
+  history walk, because ancestry is silently false in a depth-1 clone — and
+  refuses an entry under a released section that does not read finished now,
+  or did not ship finished under a byte-identical heading at its own tag; one
+  finished at an EARLIER release (a lower version under a released section,
+  any tag at all under an unreleased one, which has shipped in none); a
+  release date that is not its tag's creator day; an untagged released section
+  other than the one release in its window (the newest, above every tag, at the
+  workspace version, its date not yet passed by a readable HEAD day); a tagged
+  section not marked released; a lightweight `v*` tag, or one that is not a
+  plain `v<n>.<n>.<n>` (suffixes are refused until ruled, as `version
+  surfaces` refuses a suffixed workspace version); and a clone with no release
+  tags. Its reader probe runs isolated from the caller's `GIT_*` environment:
+  inherited from a worktree hook, it committed into the real repository
+  (found by the independent review). Three writing constraints follow: a released HEADING never
+  changes (a correction goes in the body, O305's rule enforced; a scrub needs a
+  `RELEASED_RECORDS` row of the heading kind), a release tag is ANNOTATED
+  (`git tag -a`), and a record that is not work under a released section is
+  listed in `RELEASED_RECORDS` with its reason. Applied backwards they describe
+  what the tree already does — 205 of 205 released headings are byte-identical
+  at their tags, 13 of 13 tags are annotated, two records exist — and over all
+  223 first-parent versions the arm refuses only `66dafb3`'s O291, enforcing
+  O101's placement "by the release window, against the tag times" with the tags
+  themselves. **The preflights now need the release tags**: a plain `git clone`
+  has them; CI's `preflight` job fetches them in a step of its own, because the
+  checkout's `fetch-tags: true` at depth 1 fetches none (measured); a checkout
+  older than the newest release fails this arm, so run it with
+  `--no-preflight`. What it cannot see — a stale pull request under
+  `strict: false`, a tag moved without a ruleset — is O313's, escalated.
   **An entry's SUBSECTIONS are `####`, never `##` (O161, 2026-09-13).** The
   scanner takes its enclosing section from any `^## ` line, so a level-2
   heading written inside an entry re-sections the file from there on: every
@@ -4672,7 +4704,8 @@ unwritten because a half-correct verdict is worse than a known-wrong one.
   which is the argument for making this a step rather than a number someone
   sets once and trusts. A release date is not a fact about the work; it is a
   fact about the tag, and the tag does not exist yet) → PR → CI green →
-  explicit maintainer approval → merge → tag `vX.Y.Z` → `gh release
+  explicit maintainer approval → merge → tag `vX.Y.Z`, annotated (`git tag -a`;
+  the ROADMAP preflight refuses a lightweight release tag, O309) → `gh release
   create` (the tag also fires release.yml: binaries + GHCR image) →
   post-merge CI green → Pages live-verified → **the HOUSE PAGE
   (`sealcroft.com`, a different repo) refreshed and live-verified**, which is

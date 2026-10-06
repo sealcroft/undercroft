@@ -2,7 +2,7 @@
 
 ## 1.7.0 — unreleased
 
-MINOR: one new capability, backward compatible, and twenty-eight fixes. The witness
+MINOR: one new capability, backward compatible, and twenty-nine fixes. The witness
 commands and routes are new; no default moves and no declaration can stop a
 start-up. Five fixes change what a deployment must do: every process writing a
 vault must run the same build, and a server whose vault another process
@@ -23,7 +23,7 @@ until O279, which closed four entries, "seventeen" until O281, "eighteen" until 
 "nineteen" until O288, "twenty" until O289, which closed two entries, and
 "twenty-two" until O290, "twenty-three" until O291, "twenty-four" until O296,
 "twenty-five" until O304 — O303 should have made it twenty-six and did not, which O304 found
-by counting the entries — and "twenty-seven" until O305; it said
+by counting the entries — "twenty-seven" until O305 and "twenty-eight" until O309; it said
 "Three fixes change what a deployment must do" until O283 made it four, and
 "Four" until O291 made it five.)
 
@@ -1421,6 +1421,75 @@ PATCH inside the unreleased 1.7.0: a preflight that now keeps a promise `CLAUDE.
 writing constraints follow, recorded in `CLAUDE.md`: a release heading's status word comes right
 after its dash, and a correction made after a release goes in the body or a new entry, never as a
 later date in a closed heading.
+
+### What a release shipped is read from its tag, and CI now fetches the tags to read it (O309)
+
+O305's arm judges the dates a heading carries, and a closure is dated when it is BUILT on its
+branch, so it could not see the route that matters most: a branch adds its finished entry to the
+unreleased section, the release PR marks that section released, and the branch then merges cleanly
+with its hunk under the RELEASED section, dated on or before the cut. Nor an entry finished before
+an earlier release and filed under a later one, nor an open entry under a released section, nor a
+release date that is not its tag's day. The `ROADMAP headings` preflight now reads each release
+tag's own `ROADMAP.md` — one `git for-each-ref`, one `git cat-file --batch` — and refuses: an entry
+under a released section that does not read finished now, that is absent from its tag, whose
+heading is not byte-identical to its tag's (a correction goes in the body, O305), or that was not
+finished at its tag; an entry finished at an EARLIER release — a lower version under a released
+section, any tag at all under an unreleased one, which has shipped in none; a release date that is
+not its tag's creator day; a released section with no tag, and a tagged section not marked
+released; a tag with no section, or whose own file does not mark its section released; a `v*` tag
+that is not a plain `v<n>.<n>.<n>` (a suffix is refused until suffixes are ruled, as `version
+surfaces` already refuses a suffixed workspace version), or is lightweight; tags created out of
+version order; a duplicated id; and a clone with no release tags at all. Two records, O24a and O137,
+and the pre-convention `v1.0.0` are listed with their reasons, counted both ways.
+
+**The fix the filing prescribed for CI did not work.** `fetch-tags: true` on `actions/checkout@v5`
+only drops `--no-tags` from a fetch of one commit, so git's tag auto-follow has nothing to follow:
+measured against the real remote, it fetches no tag. The `preflight` job now runs
+`git fetch --no-tags --depth=1 origin '+refs/tags/v*:refs/tags/v*'` after its checkout (about 6 MiB);
+the preflight itself never fetches, so a local battery still runs offline, and every read runs
+under `GIT_NO_LAZY_FETCH=1`, so a partial clone missing a snapshot is refused rather than fetched
+from — measured on git 2.55 and on Ubuntu 24.04's 2.43.0, which honours the variable; a git that
+ignores it would fetch the blob. The release PR runs before its tag exists, so exactly one section
+may sit untagged — the newest released one, above every tag — and only while its version is the
+workspace version and HEAD has not passed its release date (a HEAD day that cannot be read is
+refused, never passed); its entries are judged on the tree, and the converse against every tag.
+Version order, never ancestry: ancestry is silently false in a depth-1 clone (measured).
+
+Ruled by three lenses and an adversarial refuter before the build (ROADMAP O309). The pull-request
+base diff the filing offered as the alternative lost on measurement: replayed over history it
+refuses O101's migration (62 legitimate moves) and goes silent once a misplacement is on `main`.
+Over today's tree the arm reads 13 tags, 13 snapshots and 235 entries (205 under released sections, 30 under 1.7.0) and refuses nothing; over all
+223 first-parent versions of the file the snapshot fires only on `66dafb3`'s O291. Gates: four
+exact-row fixtures over every row in both directions — the decision, the window judged five ways, a
+cat-file stream that does not split one snapshot per tag, and the reader on a throwaway repository
+with an annotated tag half an hour past midnight at +0200 read under `TZ=UTC` — and source premises
+for what no fixture can see (the locale pin, the finished predicate byte for byte, one guard per git
+call, no history walk, the probe's isolation). Eighteen gate counterfactuals — the filing's route, an
+open filing, the converse, an edited heading, a moved date, the window's two bounds, a deleted,
+lightweight, misnamed, forward-moved and mis-cut tag, tags out of order, a tagged unreleased section,
+a duplicated id, an outlived roster row, a clone with no tags, and a caller exporting `GIT_DIR` — are
+each refused by the built preflight naming what was planted, while `main`'s passes the first
+seventeen; under the eighteenth the built preflight leaves the repository untouched. Forty-eight
+mutations of the arm each turn it red — forty-one through the fixtures, seven through the source
+premises — byte-identically under Debian's and Ubuntu's mawk and a UTF-8 gawk.
+
+An independent review of the build found thirteen things, all mine, each fixed before this landed.
+The worst: the reader probe ran git with the caller's environment, so under a worktree hook's
+`GIT_DIR` it committed a probe into the REAL repository (reproduced, then closed by isolating it).
+Two mutations that would have turned the next release red survived — the newest release computed
+over any status, which the real `## 2.0.0 — one item is filed` triggers, and a version read with
+its patch ignored; an unreadable HEAD day passed the window's date bound; an unreleased section
+numbered below a tag hid what that tag shipped; and suffixed versions compared as strings. Two of
+those corrected the ruling, beside it: a release tag must be a plain `v<n>.<n>.<n>`, and under an
+unreleased section every tag is earlier.
+
+PATCH inside the unreleased 1.7.0: a preflight that now keeps the promise O101 made ("a closed entry
+lives under the release that shipped it"). Nothing an operator runs changes; no `UPGRADING.md` entry.
+What a contributor runs does: the preflights now need the release tags (a plain `git clone` has
+them; a `--depth 1` clone needs the fetch above), and a checkout older than the newest release
+fails the arm, so run it with `--no-preflight`. Filed: O310 (a pre-publish guard in `release.yml`),
+O311 (O171's status reader takes the first word of a heading), O312 (an id-less heading under a
+released section) and O313 (two repository settings, escalated to the maintainer).
 
 ## 1.6.1 — 2026-09-22
 

@@ -3998,7 +3998,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**339** of the **354** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**343** of the **358** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -12644,6 +12644,308 @@ clean, every preflight ok. This record and the CHANGELOG's matching sentence wer
 suites carry no `ROADMAP.md` or `CHANGELOG.md`, and the twenty preflights, which read them, were run
 again over the edit. No house-page figure moves, and no `UPGRADING.md` entry is owed: nothing an
 operator runs changes.
+
+### O309 — CLOSED 2026-10-05: what a release shipped is read from its tag's own ROADMAP, and CI fetches the tags to read it
+
+**Filed 2026-10-05 by O305's ruling (its Security lens, measured by the refuter).** O305's arm refuses
+a closed entry whose heading carries a date after its section's release date. A closure is dated when it
+is BUILT on its branch, so the arm cannot see the route that matters most: a branch adds its finished
+entry at the end of `## 1.7.0 — unreleased`, the release PR merges `## 1.7.0 — released <date>`, and the
+branch then merges cleanly, landing its hunk under the RELEASED section with a date on or before the cut.
+The converse — an entry finished before an earlier release, filed under a later one — is the same
+question from below, and a date cannot decide it either (0 strictly earlier today and over all 222
+first-parent versions; 50 on the previous release's own day, all legitimately later).
+
+**Measured by the refuter**, on a file clone: every one of the 203 entries under a released section
+reads finished in its own tag's `ROADMAP.md` and in none of the earlier tags', and that check, run over
+all 222 versions, fires only on O291 at `66dafb3`. All 12 released section dates equal their tags'
+`%(creatordate:short)`, which keeps the tagger's +02:00 (every `v*` tag is annotated); under `TZ=UTC` a
+`short-local` rendering reads `v1.0.0`, `v1.1.0` and `v1.4.0` one day early. CI's `preflight` checkout
+fetches no tags: a shallow clone is 7.11 MiB, with the tags at depth 1 13.83 MiB, the whole pack 58.67
+MiB.
+
+**Shape, for a ruling**: for each `v*` tag, every id under `## R — released` reads finished in
+`git show vR:ROADMAP.md` and in no earlier tag's; each released date equals its tag's
+`%(creatordate:short)`; only the NEWEST released section may lack its tag (the release PR's window, which
+is fail-open exactly where it matters and is the ruling's hardest question); zero `v*` tags is a failure,
+never a skip; the preflight checkout takes `fetch-tags: true`. The id lookup must tolerate O46's `MOVED`
+stub, which repeats an id, and must rule `v1.0.0` (a tag with no section) and the non-release tag
+`backup/pre-rename-history`. **The same observable covers an entry that makes no closure claim** under a
+released section — open, or headed with another status word — which O305's arm, judging closed entries
+only, cannot see (its independent review planted an open filing under `## 1.6.1 — released`: exit 0):
+such an id reads unfinished in its own tag's file, so the ruling must name the records that legitimately
+sit there (O24a and O137 today) rather than refuse them. **Alternative**: a diff against the pull
+request's base, refusing an id newly finished under a section already released on the base
+(`fetch-depth: 2`) — it refuses before the merge, and needs a rule for a legitimate correction.
+
+**Gate**: a branch-built entry dated before the 1.7.0 cut and merged under it fails, naming the entry;
+the tree passes; a run with no tags fails.
+
+#### RULED 2026-10-05 by three lenses — Agentic Memory, Security (gate design) and DevSecOps/CI tooling — and an adversarial refuter
+
+**The question.** How a gate learns what a release SHIPPED, so that an entry merged under a release cut
+while its branch was open, an entry finished before an earlier release, an entry with no closure claim
+under a released section, and a release date that is not its tag's day are each refused; what CI must
+fetch for it; what the release PR's own window may pass; and what a run with no tags does. **The
+filing's shape was run as a hypothesis before the panel sat**, by a prototype over today's tree, over all
+223 first-parent versions of this file (each with only the tags that existed at its commit), over
+planted variants and over a real fetch of the remote.
+
+**Prior rulings found and FOLLOWED; none refuted.** O305 Q2 and Q8 (filed here), Q7 (status read by
+position; the release shape pairs a tag with its section), Q5 (a later correction goes in the body,
+never as a later heading date — enforced strictly below) and its defensive `LC_ALL=C`. O101's roster of
+finished entries that belong under `## Unversioned`, an inventory with reasons counted both ways, is the precedent for both rosters
+here; Q5's "no exemption roster" was ruled for the date arm over a population of zero, and this
+population is two entries and one tag. O47: every proposed row was measured for false positives first.
+O161 and O162: fail closed on the unrecognised case, an exact-row fixture over every row in both
+directions, every row naming its line; **O162 Q4's polarity principle decides two questions here**
+(read so that a mistake is loud). O169: a suffix is part of an id. O65: a check that needs the network
+is a CI step, never a preflight. O171: work a ruling names but does not build gets its own entry.
+**Not transferred**: O171's ruled vocabulary for a finished entry (closed, superseded, moved or
+refuted) was ruled for the opposite polarity — there, a wider "finished" fails closed; here it passes.
+**Found divergent and filed, not ruled here**: O171's built reader takes the FIRST word of a heading's
+title while its ruling says "carries", so it reads O2, O3, O4, O5 and O8 as open (latent: no comment
+cites them) — O311.
+
+**D1, ruled: the tag snapshot alone.** For every release tag, `git show vR:ROADMAP.md` is the evidence
+of what shipped; the section an entry sits under today is a claim, checked against it. The pull-request
+base diff loses on measurement: replayed over history it refuses `6553c74`, O101's migration (62
+legitimate ids moved into released sections), and its only true positive, O291 at `66dafb3`, the
+snapshot sees too. It is path-dependent — a misplacement goes red once, on the merge that brings it, and
+then sits green under every later diff, which is `66dafb3`'s shape — it needs `fetch-depth: 2` and a
+correction escape a deliberate editor can use, and with `allow_rebase_merge` on, a push's first parent is
+not the previous `main`. What it alone sees is the window below, which the bounds shrink to the release
+day. Neither can see a stale pull request: `required_status_checks.strict` is `false`, so a branch whose
+last CI ran before the release merged lands green and is refused by `main`'s post-merge run. No such
+merge has ever happened (the Security lens and the refuter: 1,320 merge-and-older-tag pairs, 0 stale).
+
+**D2, ruled: CI fetches the release tags in an explicit step, and the preflight never fetches.**
+`fetch-tags: true`, the filing's change, is REFUTED: in `actions/checkout@v5` a `fetch-depth` above zero
+only drops `--no-tags` from a fetch whose refspec is one commit, so git's tag auto-follow has nothing to
+follow — measured against the real remote in a runner image, 0 tags (one, if the checked-out commit is
+itself a release commit), the same 7,460 KiB as today's checkout; the hosted runner's own log shows git
+2.55.0 running exactly that fetch. The `preflight` job gains one step after its checkout,
+`git fetch --no-tags --depth=1 origin '+refs/tags/v*:refs/tags/v*'` (13 tags, 13,224 KiB, about one
+second), with no `|| true` and no `continue-on-error`, printing git's and awk's versions and the tag
+count. `fetch-depth: 0` loses: 61 MiB of history the arm must never use. The preflight itself never
+fetches — a local battery runs offline, a `+` refspec run by a preflight would clobber the operator's
+own tags, and a blob-less partial clone fetches a missing blob silently on read — so every read runs
+under `GIT_NO_LAZY_FETCH=1`, and a missing object is a refusal.
+
+**D3, ruled: the release window passes, bounded twice and printed.** The release PR's own CI always runs
+before its tag exists, and `main`'s post-merge run races the tag (tags were cut 1–77 s after their
+commits; `main`'s CI started 3–4 s after the merge, so either order happens), so failing the window turns
+every release red. Exactly one section may sit there: the newest released section by version, above
+every tag. Two tag-free bounds hold it, each its own row: its version must equal the workspace
+`Cargo.toml` version (133 of 133 versions with a released section agree), and HEAD's committer day
+(`%cs`) must not be after its release date (12 of 12 window versions agree; GitHub's synthetic merge
+commit was measured at `+0200`). Without them a forgotten or deleted tag would pass until the next
+release. Inside the window the converse runs against every real tag, the tag-free arm (D6) judges its
+entries, O305's date arm runs, and the ok line names the window. A stand-in snapshot from history loses
+(it needs depth, and it is the release commit itself); the CI lens's "the tree stands in" is subsumed by
+the tag-free arm. **Refuted**: the Security lens's "a re-run on a later day fires" — a re-run keeps its
+event's commit, so the date bound fires on a new push or on `main`'s merge commit, never on a re-run. No
+CI-borne bound can stop a mis-dated TAG, because the tag is cut before `main`'s run finishes: that is
+O310's guard.
+
+**D4, ruled: no usable tags is a refusal.** Zero release tags is `no-release-tags`; the message names
+`git fetch --tags origin` for a full clone and the depth-1 command for a shallow one, and in CI the
+`ci.yml` step. A released section other than the window with no tag is `released-without-tag`, naming
+both causes (a clone that lacks it; a release never cut). An unreadable snapshot is
+`snapshot-unreadable`, never a skip — measured, `git show … | awk` exits 0 having read nothing.
+
+**D5, ruled: the tags that count are release.yml's trigger set, and each must be a version.** The universe
+is `git for-each-ref 'refs/tags/v*'` — whose `*` does not cross `/`, as GitHub's `tags: ['v*']` does
+not — read by `%(refname:strip=2)` and addressed by the full ref name. A name not shaped
+`v<n>.<n>.<n>[-suffix]` is `release-tag-misnamed` and is never read (a narrower universe would let a
+published release skip the check; a tag name is data and never enters an awk program, a pattern or an
+`eval`). A lightweight `v*` tag is `release-tag-lightweight` (0 of 13 today): its creator date is the
+commit's, so the date row would silently compare something else. A tag pairs with the section whose
+version is the exact string after the `v`. `v1.0.0`, cut before this file had release sections, sits in a
+tag roster with its reason, counted both ways and confirmed — no `## 1.0.0` section in the tree and none
+in its own snapshot.
+
+**D6, ruled: entries with no closure claim are refused unless rostered by (id, release).** A tag-free arm
+on the current file: every entry under a released section must read finished NOW
+(`released-entry-unfinished`) — it catches an open filing on every run, and an entry reopened after its
+tag. Over 223 versions it fires only on O24a (106 versions) and O137 (83). Those two are records — O24a a
+companion record of O24 whose heading has never carried a status word, O137 superseded on 2026-09-10,
+before 1.5.2 — and sit in an entry roster keyed (id, release) with a reason each, counted both ways; a
+row exempts the two status rows only, never `absent-at-its-tag`. Three rules lose: SUPERSEDED and
+REFUTED read as finished (O162 Q4 — here "finished" passes, so the narrow reading is the loud one, and
+every closure arm in `roadmap_scan` keys on the closed token, so such a heading would ship with no date
+or evidence check at all); a suffix inherits its parent (O169; anyone could add `O291a`); and the status
+at the tag equals the status now (it passes an open entry moved, unchanged, out of `## Open`).
+
+**D7, ruled: finished means `roadmap_scan`'s narrowed DATE-arm token, and the heading itself is pinned.**
+The predicate is the token `roadmap_scan`'s date arm already matches — the status word not continuing
+an identifier, followed by a date or `by doctrine` (`tests/battery.sh:950-951`) — never the blunt match,
+which would pass an open entry naming an identifier that ends in the word. The two agree on all 223
+versions and all 13 snapshots. **Heading identity, ruled IN** (proposed by the Security lens, judged
+sound by the refuter, adopted by the integrator): an entry's heading line must be byte-identical to a
+heading in its tag's snapshot, else `heading-differs-at-its-tag` where the id is present there and
+`absent-at-its-tag` where it is not. It is Q5's own writing rule enforced — no byte of a released
+heading moves — closes an id reused for a different entry, fired zero times over 223 versions, and
+holds 205 of 205 today. What it refuses is a typo fix or a scrub in a released heading; the escape is a
+roster row of the heading kind (none today). One id grammar, `roadmap_scan`'s (`^### [A-Z][0-9]+`, the
+id being the heading's first token), so `### O39-original` is its own id. A non-`MOVED` id appearing
+twice in the tree is `id-not-unique` (0 over history; O46's stub is a pointer, never a status).
+
+**D8, ruled: the rows, all refusals.** `no-release-tags`, `release-tag-misnamed`,
+`release-tag-lightweight`, `snapshot-unreadable`, `tag-order-disagrees`, `tag-without-section`,
+`tag-snapshot-not-released`, `tagged-but-not-released`, `release-date-not-tag-date`,
+`released-without-tag`, `window-not-the-workspace-version`, `window-after-its-release-date`,
+`id-not-unique`, `released-entry-unfinished`, `absent-at-its-tag`, `heading-differs-at-its-tag`,
+`unfinished-at-its-tag` and `finished-at-an-earlier-tag` (under released AND unreleased sections — the
+refuter's moved-tag plant is exposed only through the unreleased half). `tagged-but-not-released`
+generalises the filing's `unreleased-but-tagged` to any status other than `released <date>`, so a
+`v2.0.0` tag beside `## 2.0.0 — one item is filed` is judged. `tag-snapshot-not-released`: a tag's own
+snapshot must mark its section released — the refuter planted `v1.6.1` on `1cf260a`, whose file reads
+`unreleased`, and every other row stayed silent — but its DATE is not checked there, because a one-day
+slip would be permanent red whose only remedy moves a tag; the date is judged by the fixable HEAD row and
+by O310 before anything publishes. **"Earlier" is version order**, with `tag-order-disagrees` as its
+premise (creation order must agree; it does for all 13): ancestry is silently false at depth 1 —
+measured, `merge-base --is-ancestor` answers 1 for true ancestry — and tag time is writer-controlled.
+
+**D9, ruled: the last arm of the `ROADMAP headings` preflight.** After the fence, scan, level-2 and order
+arms have certified the sectioning, so the preflight count stays twenty (O101, O157 and O305's
+precedent; a 21st would move `pf_word`, two `CLAUDE.md` lines and the verification-pipeline diagram for a
+label). A pure decision function over (the file, a tag table, the snapshots, the workspace version,
+HEAD's day, the two rosters) is probed by an exact-row fixture with no git; a thin reader — one
+`git for-each-ref`, one `git cat-file --batch`, split by byte counts under `LC_ALL=C`, paths through
+`ENVIRON`, never `awk -v` (it mangled a Windows path in the prototype) and never `FNR == NR` (an empty
+tag table made it read the ROADMAP as tags and swallow the driver's stdin) — is probed on a throwaway
+repository with annotated tags at pinned dates. The arm reads refs and blobs only: no `rev-list`,
+`merge-base` or `log`.
+
+**D10, ruled: O305's date arm stays as it is.** It needs no tags, judges inside the window and on a clone
+without tags, and enforces heading hygiene the snapshot passes. It is not widened to SUPERSEDED or
+REFUTED (D6).
+
+**D12 (raised by the CI lens), ruled: every tag in the clone, no time filter.** A time filter keyed on a
+committer date is writer-controlled. The benefit is the earliest defence against this entry's route: a
+stale branch with the newest tag present reads `tagged-but-not-released` locally. **The cost, stated**:
+with today's tags only 28 of the 223 versions pass, so the preflight fails on any checkout older than
+1.6.1's merge — run such a checkout with `--no-preflight`.
+
+**Claims refuted — the brief's first.** M1's "none": a release commit's own checkout follows its own tag.
+M5's "each was cut on its release merge commit": `v1.0.0` sits on a non-merge commit. The brief's prior
+rulings omitted O171's vocabulary, O162 Q4's polarity and O169's suffix rule, which decide D6 and D7; its
+row list missed a tag beside a non-released status, lightweight tags and unreadable snapshots; its
+"network-free" preflight job pulls `python:3-slim` on a cold cache. The filing's "203 entries under a
+released section" is 205 (203 finished and two records), and its `fetch-tags: true` fetches nothing.
+The Agentic Memory lens: SUPERSEDED/REFUTED as finished, widening the date arm to them, the
+own-snapshot row kept out of the preflight, the `v[0-9]*` universe, no row for a tag beside a
+non-released status, and nine disagreeing headings (eight ids). The Security lens: the later-day re-run,
+a semver-only universe (it drops `v1.7`, which release.yml would publish), the own-snapshot date as a
+hard refusal, and bound rows named `released-without-tag`. The DevSecOps lens: lightweight tags
+accepted, "one predicate shared with `roadmap_scan`" (there are two, and the blunt one inverts O162 Q4
+here), the own-snapshot check as an unexemptible premise, and an unbounded window. The integrator's own
+first converse plant moved an entry already under 1.6.0 and passed having moved nothing; the refuter's
+first plant anchored on a prose mention and also landed nowhere — the fixtures carry a landing assert.
+
+**Dissent, settled by evidence.** The window (three shapes; the bounds, measured zero over history, and
+the tag-free arm, which subsumes the CI lens's stand-in). The universe (CI's, plus Security's shape as a
+refusal). Lightweight tags (refused: the date row's meaning). O24a and O137 (a roster: O162 Q4). The
+own-snapshot check (a refusal row, date unchecked: the mis-cut plant and the permanent-red argument).
+Heading identity (adopted; zero over history; Q5).
+
+**What fails silently, stated**: a stale pull request under `strict: false`, caught only after its merge;
+a tag moved forward with no closure between its commits, or onto a commit off `main`, or deleted after
+its release day stays loud only through the bounds — no tag ruleset exists (`rulesets` is `[]`); the
+seconds between a release merge and its tag; a local tag a fetch does not clobber; a blob-less partial
+clone on git older than 2.44, which has no `GIT_NO_LAZY_FETCH`; a maintenance release, whose tag order
+the premise refuses until it is ruled; a `###` heading without an id under a released section, judged by
+no arm; text appended to a released entry's body, which is semantic. **Escalated to the maintainer** (two
+repository settings no agent changes, and the release flow): require branches to be up to date or use a
+merge queue; a ruleset restricting update and deletion of `refs/tags/v*`; and the release flow naming an
+annotated tag (`git tag -a`) — O313 records the two settings. **Filed**: O310 (a release.yml
+pre-publish guard: the tag annotated, version-shaped, on `main`, its own snapshot reading
+`released <the tag's day>`), O311 (O171's reader against its ruling), O312 (an id-less `###` heading under a
+released section). **Fixed in this unit as drift found by the panel**: `ci.yml`'s "no Docker" comment
+over a job that runs `docker run python:3-slim`, and the verification-pipeline diagram's description of
+the preflights.
+
+#### BUILT 2026-10-05, to the ruling — with the corrections its independent review earned, recorded beside it
+
+**What moved.** `tests/battery.sh`: the `ROADMAP headings` preflight's last arm, after O171's — `RT_TAG_SHAPE`,
+`roadmap_tag_inputs` (one `git for-each-ref`, one `git cat-file --batch`, both under
+`GIT_NO_LAZY_FETCH=1`), `roadmap_tags` (the decision, an awk program over the file, a tag table and the
+snapshot stream, every path through `ENVIRON`), `rt_reader_probe`, the two rosters (`RELEASED_RECORDS`:
+O24a and O137; `RELEASE_TAG_RECORDS`: `v1.0.0`), source premises, four fixtures and the real scan with a
+handler per row; `workspace_version` is now the one parse `version surfaces` shares. `.github/workflows/ci.yml`:
+the `preflight` job's tag step, and its stale "no Docker" comment. This entry moved here from `## Open`;
+O310, O311, O312 and O313 are filed; O47's figures moved to 343 of 358; `CLAUDE.md` (the ROADMAP-headings
+paragraph, the battery note, the annotated tag in the release flow), the CHANGELOG and the
+verification-pipeline diagram's description moved with it. The preflight count does not move.
+
+**Measured over today's tree**: 13 release tags, 13 snapshots, 235 entries under release sections, no
+row; the tag step's fetch reproduced in a depth-1 clone, and its output byte-identical to a full clone of
+the same commit; without the step, `no-release-tags` with the fetch commands and `shallow: true`. In an
+Ubuntu 24.04 container the whole `ROADMAP headings` block runs in seconds; on the maintainer's Windows
+host, loaded and slow to spawn processes, it measured 3 min 0 s with the arm in it, of which the arm's
+fixtures and reads were about 77 s in a standalone run.
+
+**Gates.** Four fixtures, exact rows in both directions: the decision over thirteen tags (a lightweight
+commit and a lightweight tree, a plain misnamed and a suffixed one, one unreadable, two out of order, a
+rostered pre-convention tag beside an outlived and a half-confirmed tag row) and seventeen entries (each
+row's planted cause, the SUPERSEDED and REFUTED forms, an `M` id, a duplicate under `## Open` that names
+MOVED later in its title, two status records and a heading record, and the silences they pin); the window
+on a patch-only, two-digit version beside a tagged non-release status and a second untagged section,
+judged five ways (clean, wrong workspace version, after its date, no tags, an unreadable HEAD day); three
+streams that do not split one snapshot per tag; and the reader on a throwaway repository, isolated from the
+caller, its annotated tag half an hour past midnight at +0200 read under `TZ=UTC`. Source premises pin the
+locale, the finished predicate byte for byte, one guard per git call, no history walk or fetch, and the
+probe's isolation. **Eighteen gate counterfactuals**, each a whole `ROADMAP headings` block run in a
+throwaway clone carrying this tree: the filing's route (a closed entry dated 2026-09-20 under 1.6.1), an
+open filing there, O121 moved under 1.6.0, O121's heading edited, 1.6.1's date moved, the window's two
+bounds, a deleted, lightweight, misnamed, forward-moved (`66dafb3`), mis-cut (`1cf260a`) and out-of-order
+tag, a tagged unreleased section, a duplicated id, O137 deleted (its record row outlived) and a clone with
+no tags — each refused by the built block naming exactly what was planted, `main`'s passing all
+seventeen — and a caller exporting `GIT_DIR` and `GIT_INDEX_FILE`, under which the built block exits 0 and
+leaves the repository byte for byte as it was, while the pre-review build committed into it. **Forty-eight
+mutations**, each confirmed to have landed — twenty-seven the integrator's, twenty-one from the review —
+each turn the tree red: forty-one through the fixtures, seven through the source premises; the results are
+byte-identical under Ubuntu's mawk 1.3.4 20240123, Debian's 1.3.4 20200120 and gawk 5.2 in a UTF-8 locale.
+
+**The independent review found thirteen things, all mine, each fixed before this landed.** (1) A DEFECT,
+latent and destructive: the reader probe ran git with the caller's environment, so under a worktree hook's
+`GIT_DIR` it committed a probe into the REAL repository — and in a clone without tags it would have created
+`vfoo`, which `release.yml` publishes. It now runs in a subshell that unsets every variable that redirects
+git, points `HOME` at its own directory, reads no system configuration and runs no template or hook. (2)
+Two mutations that would have turned the NEXT release red survived — `newest` over any status, which the
+real `## 2.0.0 — one item is filed` triggers, and a version read with its patch ignored; the window fixture
+now carries both traps, and a two-digit patch. (3) The window's date bound failed open on an unreadable HEAD
+day (`"" > date` is false): `head-day-unreadable` refuses it. (4) An unreleased section numbered below a tag
+hid an entry that tag had shipped — corrected below. (5) The tag roster was confirmed by one of its two
+conditions. (6) `snapshot-stream-mismatch` had no fixture. (7) The source premises checked presence, not
+shape: a third, unguarded git read and REFUTED read as finished both survived. (8) The tree pass was pinned
+for `O` ids only, with 27 `M` entries under released sections today. (9) `id-not-unique` was pinned only
+inside a released section. (10) Suffixes compared as strings — corrected below. (11)–(13) The CHANGELOG
+counted O309 before it closed, the documents claimed every mutant failed a fixture and that a partial clone
+never reaches the network, and four messages and figures read wrong; each corrected.
+
+**Corrected beside the ruling, on the review's evidence.** **D5's shape is narrowed to a plain
+`v<n>.<n>.<n>`**: the ruled `[-suffix]` compared `rc.9` and `rc.10` as strings (a false
+`tag-order-disagrees`), `workspace_version` reads `1.7.0-rc.1` as `1.7.0.1`, and `version surfaces`
+already refuses a suffixed workspace version, so no suffixed release could pass the window anyway; a
+suffixed tag is `release-tag-misnamed` until suffixes are ruled. **D8's "earlier" is version order under a
+RELEASED section and EVERY tag under an unreleased one**: an unreleased section has shipped in no tag, and
+version order let `## 1.0.5 — unreleased` beside `v1.1.0` hold an entry `v1.1.0` shipped with no row. **D3
+refuses an unreadable HEAD day.** **D5's tag roster is confirmed by BOTH its conditions.** **D2's 13,224
+KiB** is the size of `.git` after the step; the step itself adds about 5.6 MiB. **The residual "git older
+than 2.44, which has no `GIT_NO_LAZY_FETCH`" is reworded**: Ubuntu 24.04's git 2.43.0 honours the variable
+(a backport) and refuses the read outright, which the arm reports as a reader that could not run; git 2.55
+reports the object missing; the residual is a git that ignores the variable. **The ruling's D11** is its
+"What fails silently" paragraph, which carries no label.
+
+**The battery at the final tree** (`bash tests/battery.sh`, BATTERY OK, every suite exit 0): `test` 1288
+run (17 ignored — unchanged, this unit adds no cargo test), `e2e` 750, `orchestrator-e2e` 185,
+`e2e-telemetry` 62, `backends-e2e` 157, `obs-config` 17, `site` 7, `tls-pins` 31, `lint` and `arch-check`
+clean, every preflight ok — the new arm reading 13 tags, 13 snapshots and 235 entries — with the six files
+of this unit hashed unchanged across the run. This sentence was written after it, and the twenty
+preflights, which read `ROADMAP.md`, were run again over the edit. No house-page figure moves, and no
+`UPGRADING.md` entry is owed: nothing an operator runs changes.
 
 ## 1.6.1 — released 2026-09-22
 
@@ -33000,41 +33302,56 @@ open and keeps creating. O213 asks the read-only half of the same question for a
 exists afterwards; a read-only open still answers `DatabaseMissing`; a fresh vault's first open still
 creates it; a delete racing the open still answers the reopen class.
 
-### O309 — the ROADMAP placement gate reads dates, so an entry merged under a release cut while its branch was open passes; only the tag's own ROADMAP can say what shipped
+### O310 — a release tag is published before anything checks it: release.yml has no pre-publish guard
 
-**Filed 2026-10-05 by O305's ruling (its Security lens, measured by the refuter).** O305's arm refuses
-a closed entry whose heading carries a date after its section's release date. A closure is dated when it
-is BUILT on its branch, so the arm cannot see the route that matters most: a branch adds its finished
-entry at the end of `## 1.7.0 — unreleased`, the release PR merges `## 1.7.0 — released <date>`, and the
-branch then merges cleanly, landing its hunk under the RELEASED section with a date on or before the cut.
-The converse — an entry finished before an earlier release, filed under a later one — is the same
-question from below, and a date cannot decide it either (0 strictly earlier today and over all 222
-first-parent versions; 50 on the previous release's own day, all legitimately later).
+**Filed 2026-10-05 by O309's ruling.** `release.yml` fires on any `v*` tag push and publishes five
+binaries and a multi-arch image, and nothing it runs checks the tag. O309's preflight judges a tag only
+on the NEXT CI run, after the artifacts exist, and its `tag-snapshot-not-released` row deliberately does
+not compare the snapshot's date, because once a tag is cut a wrong date is permanent red whose only
+remedy moves the tag. Tags were cut 1–77 s after their release commits, before `main`'s CI on that
+commit finished, so no CI-borne check can stop a mis-dated, lightweight or misnamed tag in time.
 
-**Measured by the refuter**, on a file clone: every one of the 203 entries under a released section
-reads finished in its own tag's `ROADMAP.md` and in none of the earlier tags', and that check, run over
-all 222 versions, fires only on O291 at `66dafb3`. All 12 released section dates equal their tags'
-`%(creatordate:short)`, which keeps the tagger's +02:00 (every `v*` tag is annotated); under `TZ=UTC` a
-`short-local` rendering reads `v1.0.0`, `v1.1.0` and `v1.4.0` one day early. CI's `preflight` checkout
-fetches no tags: a shallow clone is 7.11 MiB, with the tags at depth 1 13.83 MiB, the whole pack 58.67
-MiB.
+**Shape**: a first job in `release.yml` that every publishing job needs, which refuses — before anything
+is built or pushed — a tag that is not annotated, not shaped `v<n>.<n>.<n>[-suffix]`, not on `main`'s
+first-parent line (that job can fetch full history), or whose own `ROADMAP.md` does not read
+`## <version> — released <the tag's own creator day>`. A refused tag publishes nothing and can be deleted
+and re-cut at no cost. It changes the release flow, so the maintainer approves it.
 
-**Shape, for a ruling**: for each `v*` tag, every id under `## R — released` reads finished in
-`git show vR:ROADMAP.md` and in no earlier tag's; each released date equals its tag's
-`%(creatordate:short)`; only the NEWEST released section may lack its tag (the release PR's window, which
-is fail-open exactly where it matters and is the ruling's hardest question); zero `v*` tags is a failure,
-never a skip; the preflight checkout takes `fetch-tags: true`. The id lookup must tolerate O46's `MOVED`
-stub, which repeats an id, and must rule `v1.0.0` (a tag with no section) and the non-release tag
-`backup/pre-rename-history`. **The same observable covers an entry that makes no closure claim** under a
-released section — open, or headed with another status word — which O305's arm, judging closed entries
-only, cannot see (its independent review planted an open filing under `## 1.6.1 — released`: exit 0):
-such an id reads unfinished in its own tag's file, so the ruling must name the records that legitimately
-sit there (O24a and O137 today) rather than refuse them. **Alternative**: a diff against the pull
-request's base, refusing an id newly finished under a section already released on the base
-(`fetch-depth: 2`) — it refuses before the merge, and needs a rule for a legitimate correction.
+**Gate**: a lightweight tag, a tag on a commit whose `ROADMAP.md` reads `unreleased`, and a tag whose
+release date is the day before its creator day each fail the guard job and publish nothing; `v1.6.1`
+passes it.
 
-**Gate**: a branch-built entry dated before the 1.7.0 cut and merged under it fails, naming the entry;
-the tree passes; a run with no tags fails.
+### O311 — O171's status reader takes the FIRST word of a heading, while its ruling says a heading that CARRIES a finished status
+
+**Filed 2026-10-05 by O309's panel (the Agentic Memory lens; confirmed by the refuter).**
+`roadmap_heading_status` in `tests/battery.sh` strips the id and the dash, then keeps only the first
+word of the title. O171's ruling says an entry is finished when its heading carries a finished status;
+the build reads "starts its title with". So the five headings that put the status at the END —
+`### O2 — the site loaded three font families from Google — closed 2026-08-09` and its siblings O3, O4,
+O8, and O5's `terminology decision, closed 2026-08-10` (quoted here with the status word in lower case,
+because an open entry's body may not carry it in capitals) — read as OPEN. Latent today: no comment in
+`crates/` cites any of them, so `filing_citations` gives the same verdict either way (measured by
+re-running it with corrected statuses). A future comment calling one of them filed would pass the gate
+wrongly.
+
+**Shape**: one reader of "finished", shared with `roadmap_scan`'s narrowed date-arm token, or the five
+headings rewritten to the leading-status form — a ruling either way, because it moves O171's verdicts.
+**Gate**: a fixture comment citing an entry whose heading ends in the status is refused as citing a
+finished entry; the tree passes.
+
+### O312 — a `###` heading with no id under a released section is judged by no arm
+
+**Filed 2026-10-05 by O309's panel (the Security lens; confirmed by the refuter).** Four non-id `###`
+headings sit under released sections today (prose blocks such as the round-four accounting). Neither
+`roadmap_scan` nor O309's arm judges them: they carry no id, so no snapshot lookup, no status and no
+placement applies. A heading of that shape added after a release, or one rewritten, changes what a
+reader sees under a shipped release with every preflight green. Measured by the Security lens: all four
+are present byte-identical at their own tags, so requiring that would cost nothing today.
+
+**Shape**: for a ruling — require every non-id `###` heading under a released section to appear
+byte-identical in that release's tag snapshot (O309's heading identity, extended), or rule the class out
+of scope with its argument. **Gate**: such a heading planted under `## 1.6.1` fails, naming its line; the
+tree passes.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 
@@ -34777,6 +35094,20 @@ the fix. The only other `as_f64` on a caller vector is `parse_vector` itself.
 </details>
 
 ---
+
+### O313 — two repository settings O309's gate cannot replace: up-to-date branches before merge, and protected release tags — the maintainer's
+
+**Filed 2026-10-05 by O309's ruling, escalated to the maintainer.** Both are GitHub settings, which no
+agent changes. **Up-to-date branches**: `main`'s branch protection has `required_status_checks.strict:
+false`, so a pull request whose last CI ran before a release merged lands green; O309's preflight then
+refuses the misplacement on `main`'s post-merge run, after it is in. Requiring branches to be up to date,
+or a merge queue, moves that refusal before the merge, at the cost of rebasing every open pull request
+after every merge. Measured by O309's panel: no merge has ever crossed a release stale (1,320
+merge-and-older-tag pairs, 0). **Protected release tags**: `GET …/rulesets` returns `[]`, so any
+account with push rights can move or delete a `v*` tag; `release.yml` republishes on the move, and O309's
+arm judges whatever the tag now names — a tag moved forward with no closure between its commits, or onto
+a commit off `main`, passes it. A ruleset restricting update and deletion of `refs/tags/v*` to the
+maintainer closes that. The decision, and its cost, are the maintainer's.
 
 ## Beyond 2.0.0 — the competitive track
 
