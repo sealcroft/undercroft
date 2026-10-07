@@ -382,27 +382,160 @@ fn o256_the_door_refuses_inside_a_snapshot() {
     assert!(!backups(root).join(".staging").exists());
 }
 
-/// A read-only handle can take a backup — the page copy only reads — and a
-/// lagging anchor travels as found and is reported, never healed into the
-/// archive. Whether `--read-only` SHOULD back up is ROADMAP O212's.
+/// Every file under `dir`, by its path relative to `dir`, with its bytes, and
+/// every directory — what "changed nothing" is compared against.
+fn tree(dir: &Path) -> Vec<(String, Option<Vec<u8>>)> {
+    fn walk(base: &Path, at: &Path, out: &mut Vec<(String, Option<Vec<u8>>)>) {
+        for entry in std::fs::read_dir(at).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            let rel = path
+                .strip_prefix(base)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            if entry.file_type().unwrap().is_dir() {
+                out.push((rel, None));
+                walk(base, &path, out);
+            } else {
+                out.push((rel, Some(std::fs::read(&path).unwrap())));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, dir, &mut out);
+    out.sort();
+    out
+}
+
+/// **A read-only handle refuses a backup before any effect** (ROADMAP O212),
+/// in restore's class, changing nothing: not the archive a backup adds, not
+/// the oldest archive its prune removes once ten exist, not the stale stage
+/// of a crashed backup its sweep removes. Until O212 this handle archived,
+/// pruned one and swept the stage — and the CLI under `--read-only` exited 0.
+///
+/// The fixture is what lets the refusal be SEEN (P-Q3a): with fewer than ten
+/// archives and no stale stage, prune and sweep would not fire on the unfixed
+/// door either, and a listing taken afterwards would pass it. So the same
+/// fixture is proved first on a COPY, where a writable backup must prune one
+/// and sweep the stage; and the refusal is asserted by the pause points it
+/// never reached as well as by the bytes it left. The state is the one this
+/// test archived before O212 — an anchor lagging at the open, which only a
+/// read-only open leaves unhealed; carrying a lag as found is held for a
+/// writable handle by the `ManifestRead` arm of the first test above.
 #[test]
-fn o256_a_read_only_handle_archives_the_state_it_verified_and_reports_the_lag() {
+fn o212_a_read_only_handle_refuses_a_backup_before_any_effect() {
     let dir = corpus(SecurityLevel::HmacOnly, 30);
     let root = dir.path();
-    // A lagging anchor, the shape a crash between a commit and its anchor
-    // leaves: the manifest as it stood, then one more commit, then that
-    // manifest back. A read-only open reports the lag and never heals it.
+    {
+        let s = open_at(root);
+        for _ in 0..undercroft_vault::backups::KEEP {
+            created(s.backup(&backups(root)).unwrap());
+        }
+    }
+    assert_eq!(
+        undercroft_vault::backups::archives_of(&backups(root), VAULT)
+            .unwrap()
+            .len(),
+        undercroft_vault::backups::KEEP,
+        "premise: ten archives, so one more makes prune remove the oldest"
+    );
+    // A crashed backup's stage, older than the sweep's threshold.
+    let stage = backups(root).join(".staging").join("ab".repeat(16));
+    std::fs::create_dir_all(&stage).unwrap();
+    std::fs::write(stage.join("vault.db"), b"a crashed backup's partial copy").unwrap();
+    let two_hours_ago = std::time::SystemTime::now() - Duration::from_secs(2 * 60 * 60);
+    std::fs::File::open(&stage)
+        .unwrap()
+        .set_modified(two_hours_ago)
+        .unwrap();
+    assert!(
+        std::fs::metadata(&stage)
+            .unwrap()
+            .modified()
+            .unwrap()
+            .elapsed()
+            .unwrap()
+            > undercroft_vault::backups::STALE_STAGE,
+        "premise: the stage is stale, so a backup's sweep removes it"
+    );
+    // A lagging anchor: the manifest as it stood, one more commit, that
+    // manifest back.
     let manifest = vdir(root).join("vault.json");
     let earlier = std::fs::read(&manifest).unwrap();
     save(&mut open_at(root), 7).unwrap();
     std::fs::write(&manifest, &earlier).unwrap();
+
+    // The positive control: on a copy, a writable backup prunes and sweeps.
+    let copy = TempDir::new().unwrap();
+    copy_tree(root, copy.path());
+    let swept = backups(copy.path())
+        .join(".staging")
+        .join(stage.file_name().unwrap());
+    // A copy is a new directory, so its age is set again.
+    std::fs::File::open(&swept)
+        .unwrap()
+        .set_modified(two_hours_ago)
+        .unwrap();
+    let report = created(open_at(copy.path()).backup(&backups(copy.path())).unwrap());
+    assert_eq!(report.pruned, 1, "control: the fixture makes prune fire");
+    assert!(!swept.exists(), "control: the fixture makes the sweep fire");
+
+    let before = (tree(&backups(root)), std::fs::read(&manifest).unwrap());
     let s = open_read_only_at(root);
-    let report = created(s.backup(&backups(root)).unwrap());
-    assert!(
-        report.anchor_behind_by >= 1,
-        "premise: the anchor lags, and the archive carries it as found: {report:?}"
+    let fired = Arc::new(Mutex::new(Vec::<Phase>::new()));
+    {
+        let fired = fired.clone();
+        pause::set(
+            &vdir(root),
+            Arc::new(move |p| fired.lock().unwrap().push(p)),
+        );
+    }
+    let answer = s.backup(&backups(root));
+    pause::set(&vdir(root), Arc::new(|_| {}));
+    match answer {
+        Err(StoreError::Vault(undercroft_vault::VaultError::ReadOnly(why))) => {
+            assert!(why.contains("--read-only"), "{why}")
+        }
+        other => panic!("a read-only backup must refuse in restore's class: {other:?}"),
+    }
+    assert_eq!(
+        *fired.lock().unwrap(),
+        [],
+        "refused before the manifest read and the stage, not after them"
     );
-    assert_is_the_reported_state(root, &report, "read-only");
+    assert!(
+        (tree(&backups(root)), std::fs::read(&manifest).unwrap()) == before,
+        "nothing was archived, pruned or swept, and the manifest was not touched"
+    );
+    assert!(stage.exists(), "the stale stage is still there");
+}
+
+/// **The posture is the door's FIRST statement** (ROADMAP O212, ruling item
+/// 1). The test above sees a refusal placed after the manifest read (a pause
+/// point fires) or after `Stage::begin` (the sweep has run). It cannot see one
+/// placed after `kg_secret`, which only READS a secret that exists — so the
+/// order is read from the source, against every step the ruling names.
+#[test]
+fn o212_the_read_only_refusal_precedes_every_step_of_the_door() {
+    let src = include_str!("backup.rs");
+    let body = &src[src
+        .find("pub fn backup(&self, backups_dir: &Path)")
+        .expect("premise: the door")..];
+    let at = |needle: &str| {
+        body.find(needle)
+            .unwrap_or_else(|| panic!("premise: the door holds {needle}"))
+    };
+    let refusal = at("if self.read_only {");
+    for step in [
+        "self.owned_snapshots.get()",
+        "self.kg_secret()?",
+        "self.vault.verified_manifest()?",
+        "Stage::begin(backups_dir)",
+        "backups::prune(",
+    ] {
+        assert!(refusal < at(step), "the refusal must precede {step}");
+    }
 }
 
 /// Beside a writer committing as fast as it can, a whole run of backups is

@@ -1048,15 +1048,24 @@ Consequences that are binding, not advisory:
   the pin with no fall-back (`Vault::verified_manifest`, never
   `anchored_head`'s cached-head fall-back) — the manifest the rows answer
   to, which during a deferred rotation promote is `vault.json.next`'s bytes,
-  archived as the archive's `vault.json` and reported on
-  `BackupReport.promote_deferred` (O266, refining O256 item 3); inside ONE snapshot the door
+  archived as the archive's `vault.json` (O266, refining O256 item 3) — on
+  the rotating handle alone since O212, which no surface keeps, so the
+  report says nothing of it (`promote_deferred` left with O212's build, and
+  O320's archive outside the data directory would restore it — open); inside ONE snapshot the door
   compares the key generation, verifies, and copies the pages with SQLite's
   online backup API (`Backup::new(snap.conn(), …).step(-1)`, `Done`
   checked — never `Connection::backup`, whose steps each take a fresh read
   transaction); the copy is synced and its head and height must EQUAL the
   snapshot's (an `immutable=1` reopen, never a second verify); and the
-  vault crate's stage is published by one rename. It refuses nested or
-  inline (`Invalid`), decides no posture (O212 stays open), holds its
+  vault crate's stage is published by one rename. **It refuses on a
+  read-only handle as its FIRST statement, in restore's class
+  (`VaultError::ReadOnly`, exit 1), before `kg_secret`, the manifest read
+  and `Stage::begin` (O212)** — the copy only reads, but the door writes an
+  archive, prunes the oldest once ten exist and sweeps stale stages, and
+  `Stage::begin` sweeps before a `Drop` hides the stage, so a later refusal
+  passes an end-state listing; a source gate holds the order, because a
+  refusal after `kg_secret` moves nothing a test can see. The evidence copy
+  is `cp -a`. It refuses nested or inline (`Invalid`), holds its
   connection so a rotation is refused throughout, and reports `writes`,
   `chain_head` and `anchor_behind_by` — the anchor carried AS FOUND, never
   healed into the archive (A2/O246). `backup_pause.rs` holds its test pause
@@ -2709,8 +2718,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (1288 run,
-                                      # 17 #[ignore]d = 1305 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (1292 run,
+                                      # 17 #[ignore]d = 1309 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2856,7 +2865,7 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (750 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (758 checks)
 docker compose run --rm orchestrator-e2e  # two engines + orchestrator (185 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (62 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (157 checks; weaviate

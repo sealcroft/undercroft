@@ -6924,6 +6924,10 @@ writable):
 
    > **Decided 2026-10-06 by O212's ruling**: refused under `--read-only` before any effect, in this
    > door, from the handle's own posture.
+   >
+   > **Built 2026-10-07 by O212**: the refusal is `VaultStore::backup`'s first statement, ahead of
+   > `kg_secret`, the manifest read and `Stage::begin`, in restore's class (`VaultError::ReadOnly`,
+   > exit 1), held by a behavioural gate over ten archives and a stale stage and by a source gate.
 8. **The report.** The door returns `BackupReport { name, vault, writes,
    chain_head, anchor_behind_by }` — the archive's identity, which is what a gate
    compares and a runbook records. The CLI prints it and exits 2 on a failed verify
@@ -7947,6 +7951,13 @@ and a typed refusal ("open writable once") is ruled out.
    > the promoted `vault.json` byte-identical to `.next`); what is lost is `promote_deferred`'s
    > provenance and the live deferral as evidence, unless O320's `--out` is built. Not refuted: this
    > entry left O212's posture untouched.
+   >
+   > **Built 2026-10-07 by O212.** O320 was not built first, so `BackupReport.promote_deferred` left the
+   > struct, the CLI output and `/v1`'s answer — the `HAND_PROJECTED` row reads the struct's fields, so
+   > it moved with them. This entry's gate (7), its versioning paragraph and its build record name the
+   > field as the tree held it before O212. The item's mechanism is kept, on the rotating handle, by
+   > `o266_a_backup_of_a_deferral_archives_the_staged_manifest_and_restores`, and a writable backup over
+   > a deferral is shown to archive the same bytes by `o212_a_writable_backup_over_a_deferral_archives_the_staged_bytes`.
 5. **The rotating handle.** Its reads go through the rule, the field set at the
    deferral. **The deferral is decided by whether `vault.json` verifies under the
    new keys after the attempts, never by `promote`'s error**: a promote that wrote
@@ -13517,6 +13528,226 @@ Alpine without re-opening this entry — no gate reads for the trigger. **Probes
 (busybox as `awk` first on PATH in a bookworm container, sha256-pinned, the preflights run); P6, in a
 throwaway repository only (`macos-latest`: the expected death is at Docker or at `mapfile -d`, never at
 an awk program — an awk failure first re-opens this).
+
+### O212 — CLOSED 2026-10-07: `--read-only` writes nothing through `backup create`, `bundle keygen` or `bundle sign-keygen` — each refuses before it writes, exit 1, and `BackupReport.promote_deferred` is gone
+
+**Filed 2026-09-17 by O204's ruling; verified by reading, not executed.** O204
+made the manager obey the posture. Three CLI commands write under the palace
+root without going through it: `backup create` copies a vault into `backups/`
+after a read-only verify, `backup restore --force` replaces a vault's
+directory, and `bundle keygen` writes an identity file. `--read-only`'s own
+help says it writes nothing, and O175 says a function with an effect outside
+the database decides its posture itself.
+
+**Shape, for a ruling**: `backup restore` and `bundle keygen` refuse under
+`--read-only` before any effect. `backup create` is the open question: a
+forensic copy taken read-only is exactly what an operator wants during an
+incident, which argues for O176's warn-and-serve shape rather than a refusal.
+
+**Gate**: an e2e that lists the palace before and after each command under
+`--read-only` and finds it unchanged (or, for `backup create`, changed only as
+the ruling allows, with its warning). Counterfactual: today's commands.
+
+**Noted 2026-09-25 by O256's ruling (item 7).** `backup create` is now one store
+door that decides NO posture: the page copy only reads, so a read-only handle
+can take one, and the CLI under `--read-only` still writes the archive into
+`backups/` exactly as before — this entry's backup half stays the decision point,
+deliberately unforeclosed. A forensic read-only backup is impossible over a
+vault whose rotation promote was deferred until O266 is fixed, because that
+open refuses. The CLI's restore now validates the backup NAME (O256).
+
+**Noted 2026-09-26 by O266.** A `--read-only` backup over a vault whose rotation
+promote was deferred is possible now: the open verifies against the staged
+manifest, and the archive carries `vault.json.next`'s bytes as its `vault.json`
+(O256 item 3, refined there). Whether `--read-only` SHOULD write an archive at all
+is still this entry's question.
+
+**Noted 2026-09-26 by O268's ruling.** This entry's RESTORE half is ruled and built
+there: `backup restore` refuses under `--read-only` before any effect, decided in the
+restore door from the manager's posture (measured: today it replaced the vault at exit
+0). `backup create` and `bundle keygen` stay this entry's open questions.
+
+#### RULED 2026-10-06 by three lenses — Agentic Memory Architecture, Security (privacy, erasure, forensics) and Storage and operations engineering — and an adversarial refuter
+
+**The question**: what `backup create`, `bundle keygen` and — missed by this entry and by the brief —
+`bundle sign-keygen` (`main.rs` 2209-2225, the same `write_identity` into the data directory) do under
+`--read-only`. O268 ruled the restore half. Answered on the maintainer's delegation of 2026-10-06
+(verbatim: "fanout specialized agents to answer that") and approved by them the same day ("approve as
+recommended"). The brief, the lens answers and the refuter's report are in
+`.handover/rulings-2026-10-06/` — material, never the record.
+
+**Prior rulings found, and their disposition.** This entry's filed shape — FOLLOWED for the keygen half
+and extended to `sign-keygen`; its backup suggestion is not a ruling, and its premise fails (below). O268
+item 10 (refused before any effect, decided in the door) — FOLLOWED. O175 and O204 (the function with the
+effect decides its posture; read-only creates nothing under the palace, key material included) —
+FOLLOWED. O256 item 7 (left this decision here deliberately) — FOLLOWED. O266 item 4 and its lost option
+"Refusing the backup" — FOLLOWED, its reach narrowed and recorded beside it: O266 decided which BYTES a
+backup carries and left the posture untouched, and the option it rejected refused a backup over a
+deferral on EVERY posture. O176 holds no ruling — a built fix whose own record finds none — and is
+distinguished: an export hands its payload to the operator, while `backup create` writes and deletes
+palace state.
+
+**Ruled.**
+
+1. **All three refuse under `--read-only` before any effect**, exit 1, changing nothing. The backup
+   refusal sits in `VaultStore::backup`, decided from the handle's own posture as its FIRST statement —
+   before `kg_secret` (`backup.rs` 122), `verified_manifest` (127) and `Stage::begin` (130), which sweeps
+   stale stages and makes directories before a `Drop` hides the stage — in restore's class,
+   `VaultError::ReadOnly`. The keygen refusals sit in the CLI, from `cli.posture()`, before any directory
+   is made, since they open no vault. `/v1` is unchanged: `mutates` already refuses `POST …/backups` on a
+   read-only server (`tenant.rs` 3647, applied at 421-423).
+2. **Why refuse rather than warn and serve.** Under `--read-only` a backup today also PRUNES this vault's
+   oldest archive once ten exist (`backup.rs` 207; `backups.rs` 258-269) — perhaps the pre-incident one —
+   and sweeps stages (`backups.rs` 142-159); it archives only a vault that verifies (`backup.rs`
+   157-160), so it is never a copy of a tampered vault; and the incident runbook's evidence copy is `cp
+   -a` (`runbook.md` 96-101). Breadth decides the drift's direction: the help text (`main.rs` 47-48),
+   `/v1`'s 403, O204 and O268 item 10 agree, and no user-facing document promises a read-only backup —
+   the only mentions are `tests/e2e.sh` 4555 and the unreleased O266 CHANGELOG bullet — so no documented
+   contract moves.
+3. **The gates that lean on a read-only backup are re-pointed or inverted, never deleted**:
+   `backup_tests.rs` 385-406, `deferral_tests.rs` 466-520, `rotation_state_tests.rs` 139-143 (used at
+   458-466), `manifest_rule_tests.rs` 99-142 and 459-462 (the backup is one of O289's four manifest doors
+   on a read-only adopted handle), and the e2e check "A forensic read-only backup" (`tests/e2e.sh`
+   4553-4563), with the published e2e count kept true.
+4. **O266 item 4 becomes unreachable from every product surface**, recorded beside it: a rotating handle
+   is kept by no surface and a writable open promotes first, so the archive's bytes are the same (P-B
+   found the promoted `vault.json` byte-identical to `.next`), and what is lost is `promote_deferred`'s
+   provenance and the live deferral as evidence. **`BackupReport.promote_deferred` is kept only if O320
+   is built**; if this entry's build lands first, the field leaves the CLI output and its
+   `HAND_PROJECTED` row with it.
+5. **The maintainer's MINOR, approved as recommended**: `backup create --out <dir>` — an archive written
+   outside `backups/`, served under either posture, never pruning or sweeping, refused where it resolves
+   inside the palace — restores the as-found forensic archive. Filed as O320.
+6. **Versioning: PATCH**, the flag keeping its promise. `UPGRADING.md` owes one entry on O257's template:
+   `--read-only backup create`, `bundle keygen` and `bundle sign-keygen` exit 1 and change nothing where
+   they used to write (and `backup create` used to prune the oldest archive); keygen without the flag;
+   for evidence, `cp -a` per the runbook, or a writable `backup create` knowing that a writable open
+   heals the anchor and promotes a deferred rotation. `config check` cannot see it.
+
+**Options that lost, with their cost.** Warn-and-serve into `backups/`: breaks "write nothing", prunes,
+sweeps, and the CLI and `/v1` diverge. Warn-and-serve with prune and sweep suppressed (the storage lens's
+fallback): the read-only archive takes one of the newest ten slots, so the next writable `create` prunes
+the oldest, pre-incident archive — deletion deferred, not avoided (`backups.rs` 258-269). Refusing in the
+CLI only: the door stays posture-free for any future caller (O91: a posture is a property of the path).
+
+**Claims refuted, the brief's first.** `mutates` is in `tenant.rs`, not `http.rs`. "O176's ruling": none
+exists. The brief named `bundle keygen` alone. "`backup create` writes an archive": it also prunes and
+sweeps. The brief and every lens omitted the five test files and the e2e check that lean on a read-only
+backup, and O266 item 4's reach. This entry's "a forensic copy taken read-only is exactly what an
+operator wants": the archive is verify-gated, and the forensic copy is `cp -a`.
+
+**Dissent**: the storage lens kept its fallback; settled against by the slot arithmetic. **Fails silently
+if**: the posture check sits after `kg_secret`, `verified_manifest` or `Stage::begin` (the sweep has run
+and `Drop` removed the stage, so an end-state listing passes — assert that no backup pause point fired);
+the fixture holds fewer than ten archives and no stale stage, so prune and sweep would not have fired on
+today's code either; the read-only tests are deleted rather than re-pointed, silently dropping O289's
+fourth manifest door; `promote_deferred` stays projected while nothing can set it; `sign-keygen` is
+forgotten, or a keygen refusal runs after its directory is made; `/v1`'s `mutates` gains a backups
+exception "for parity". **Probes owed by the build**: P-Q3a (ten archives and a stale stage: today
+`--read-only backup create` exits 0 and prunes one; after, exit 1 and `backups/` byte-identical, hashes
+included); P-Q3b (`--read-only bundle keygen` and `sign-keygen` into an empty data directory create
+nothing); P-Q3c (over O266's deferral recipe a WRITABLE `backup create` reports `promote_deferred` false
+and archives bytes identical to `.next`); P-Q3d (`serve-http --read-only` still answers 403).
+
+**What remains**: this entry's build — items 1 to 3 and 6. Filed under `## Open`: O320 (`--out`) and O321
+(`write_identity`'s check, then write, then chmod).
+
+#### BUILT 2026-10-07, as ruled — with one reading of item 4, and one gate the ruling's silent-failure list needed
+
+**What landed.** Ruling item 1: `VaultStore::backup` (`crates/undercroft-store/src/backup.rs`) refuses
+on a read-only handle as its FIRST statement — ahead of the snapshot check, `kg_secret`,
+`verified_manifest`, `Stage::begin` and `prune` — as `StoreError::Vault(VaultError::ReadOnly(..))`,
+restore's class, exit 1 through `integrity_verdict`. The CLI's two keygens refuse in a guarded arm at
+the top of `Command::Bundle` (`main.rs`), from `cli.posture()`, before `data_dir`, `write_identity` or
+`--out` is touched, in the same class. `/v1` is untouched: `mutates` still refuses `POST …/backups`
+on a `--read-only` server with 403, and gained no exception. The CLI's `--read-only` help text names
+the three refusals beside O175's.
+
+**Item 4, read as the field leaving the STRUCT.** The ruling's words: kept only if O320 is built, "or it
+becomes a field that is false on every product surface" (the verdict), and "the field leaves the CLI
+output and its `HAND_PROJECTED` row with it". The row's fields are read from the struct, and `/v1`
+serializes the struct whole, so a field kept in the struct would have stayed on `/v1`'s answer reading
+false. It left the struct, the CLI's `manifest:` line, `/v1`'s answer and `docs/AGENTS.md`; nothing
+had shipped it (1.7.0 is unreleased), so no contract moves. `VerifiedManifest::is_staged` stays live
+through the promote licence. Recorded beside O266 item 4 and O320; O256 item 7 carries the build.
+
+**Item 3, the gates that leaned on a read-only backup, re-pointed and none deleted.**
+`backup_tests.rs`: the read-only archive test is INVERTED into
+`o212_a_read_only_handle_refuses_a_backup_before_any_effect` over the same lagging-anchor state plus
+ten archives and a stale stage (P-Q3a at the door), asserting the class, that no backup pause point
+fired, and `backups/` and the manifest byte-identical, after the fixture is proved on a copy where a
+writable backup prunes one and sweeps the stage; carrying a lag as found stays held for a writable
+handle by the `ManifestRead` arm of `o256_a_commit_at_any_pause_point_…`. `deferral_tests.rs`: O266's
+archive of a deferral is taken on the ROTATING handle, the one adopted handle that may still back up
+(the snapshot door refuses only a `Released` retirement), with the read-only refusal asserted first
+and the deferral left as found; P-Q3c is its own test. `rotation_state_tests.rs`: `backup()` takes a
+WRITABLE backup on a copy of the installation, so the vault under test keeps its deferral, and asserts
+the archive's `vault.json` is the staged bytes before O288's restore race uses it.
+`manifest_rule_tests.rs`: O289's fourth door on a read-only handle asserts the refusal and then
+compares `verified_manifest()` — the strict read the door makes on every other handle, which O320's
+archive outside the palace would reach under either posture — so the rule's answer on a read-only
+adopted handle stays pinned; the RuleRead-fault arm also proves the refusal reads nothing, since a
+refusal after the manifest read would consume the fault. `tests/e2e.sh`: "A forensic read-only
+backup" becomes the refusal (exit 1, the three files and `backups/` as found), and the WRITABLE
+command that promotes the deferral is now a backup, whose archive restores and verifies; the block
+stays five checks.
+
+**Item 6.** `UPGRADING.md` carries the entry on O257's template; `CHANGELOG.md` the 1.7.0 section,
+the intro's counts, and the O266 bullet corrected in place.
+
+**One gate the ruling's list needed and did not name.** "Fails silently if the posture check sits after
+`kg_secret`": on a vault whose graph secret exists, `kg_secret` only READS, so no end state and no
+pause point can see a refusal placed after it. `o212_the_read_only_refusal_precedes_every_step_of_the_door`
+reads the order from `backup.rs`, against every step the ruling names plus `prune`.
+
+**Probes.** P-Q3a, at the door before the fix: `Ok(Created(..))` with `pruned: 1` and the lag archived;
+after, refused, nothing changed. Through the CLI (`cli.rs`, `o212_read_only_backup_create_changes_nothing`)
+and the e2e suite: exit 1 over ten archives and a stale stage, `backups/` byte-identical, hashes
+included, beside a writable control on a copy that prunes 1 and sweeps. P-Q3b: both keygens into a
+data directory that does not exist, with and without `--out`, exit 1 creating nothing, beside a
+writable control (`cli.rs` and e2e). P-Q3c: over O266's recipe a writable backup promotes first and
+archives the staged bytes, two files, restored and verified (`deferral_tests.rs`, e2e); the field it
+was to report false on no longer exists. P-Q3d: a `--read-only` server answers `POST …/backups` 403
+with `backups/` unchanged (e2e). **Counterfactuals**, on a copy of the fixed tree in its own target
+directory, each recompiled (`Compiling undercroft-store` seen) and its edit asserted present: the
+refusal moved after `Stage::begin` fails both store gates, the behavioural one at its pause-point
+assertion; moved after `kg_secret`, the behavioural gate PASSES and the source gate alone fails. RED on
+the unfixed tree for all nine refusal-asserting tests (seven store, two CLI), GREEN after.
+**The premise caught the fixture**: the first positive control copied the stale stage with
+`copy_tree`, which gave it a fresh mtime, so the control's sweep correctly left it — the test failed
+at the control, before any refusal was believed.
+
+**A real corpus**: the LoCoMo feed mined into 32 wings of a sealed vault, 2,720 drawers, ten archives
+and a stale stage. A writable backup 53 ms; the read-only refusal 7 ms, with 21 files under
+`backups/`, `vault.json` and `vault.db` hashed unchanged; `--read-only verify` OK and `search` serving;
+neither keygen creating anything; the control on a copy pruning 1 and sweeping.
+
+**The `HAND_PROJECTED` row stays, and that is item 4 kept, not missed.** The row is per STRUCT
+(`BackupReport` → `BackupAction::Create`) and counts the struct's fields against the CLI's projection;
+the field left both, and the row still holds the six fields that remain. "Fails silently if
+`promote_deferred` stays projected" is answered by the field's absence, not by the row's.
+
+**What "changes nothing" means here, measured.** Nothing under `backups/`, no byte of `vault.db` or
+`vault.json`, no identity file or directory. The backup's read-only open leaves the `-shm` (32 KiB)
+and empty `-wal` every read-only open does (R4's stated residue), and on a vault `init` created that
+nothing has written yet that open refuses first as `DatabaseMissing`, exit 2 — O213's, filed and
+untouched. Measured on a fresh home by the review's probe; every surface states it that way.
+
+**An independent review found no defect in the code and seven things around it, all mine, each fixed
+before this landed.** (1) The published test count was one short: the source gate was left out of the
+arithmetic, so 1292 run and 1309 compiled, not 1291 and 1308. (2) The refusal told an operator
+mid-incident to back up without `--read-only`, with no word of what a writable backup heals, promotes
+and prunes — it now says so, beside the `cp -a` advice. (3) "Changing nothing" was claimed without the
+scope above. (4) Two sentences spoke of O320 as built. (5) `/v1`'s `ReadOnly` status arm named restore
+under O212 and omitted the backup. (6) The `docs/AGENTS.md` backup row omitted the `name` field `/v1`
+has always returned beside `backup`. (7) The `HAND_PROJECTED` row, recorded above.
+
+**Full battery GREEN at the built tree** (`BATTERY OK`): `test` 1292 run / 17 ignored, `e2e` 758,
+`orchestrator-e2e` 185, `e2e-telemetry` 62, `backends-e2e` 157, `obs-config` 17, `site` 7, `tls-pins`
+31, `lint` and `arch-check` clean; the working tree hashed unchanged across the run.
+
+**Also corrected**: `docs/AGENTS.md` §10 listed three read-only `POST` exceptions where `mutates`
+names four — `POST …/witness` (O245) was missing.
 
 ## 1.6.1 — released 2026-09-22
 
@@ -32513,129 +32744,6 @@ stays in `SecretKey`, zeroised on drop, and is never written anywhere.
 `vault list` over three vaults and on a `serve-http` start: one each.
 Counterfactual: today's per-open derivation.
 
-### O212 — `--read-only` still writes through `backup create`, `backup restore` and `bundle keygen`
-
-**Filed 2026-09-17 by O204's ruling; verified by reading, not executed.** O204
-made the manager obey the posture. Three CLI commands write under the palace
-root without going through it: `backup create` copies a vault into `backups/`
-after a read-only verify, `backup restore --force` replaces a vault's
-directory, and `bundle keygen` writes an identity file. `--read-only`'s own
-help says it writes nothing, and O175 says a function with an effect outside
-the database decides its posture itself.
-
-**Shape, for a ruling**: `backup restore` and `bundle keygen` refuse under
-`--read-only` before any effect. `backup create` is the open question: a
-forensic copy taken read-only is exactly what an operator wants during an
-incident, which argues for O176's warn-and-serve shape rather than a refusal.
-
-**Gate**: an e2e that lists the palace before and after each command under
-`--read-only` and finds it unchanged (or, for `backup create`, changed only as
-the ruling allows, with its warning). Counterfactual: today's commands.
-
-**Noted 2026-09-25 by O256's ruling (item 7).** `backup create` is now one store
-door that decides NO posture: the page copy only reads, so a read-only handle
-can take one, and the CLI under `--read-only` still writes the archive into
-`backups/` exactly as before — this entry's backup half stays the decision point,
-deliberately unforeclosed. A forensic read-only backup is impossible over a
-vault whose rotation promote was deferred until O266 is fixed, because that
-open refuses. The CLI's restore now validates the backup NAME (O256).
-
-**Noted 2026-09-26 by O266.** A `--read-only` backup over a vault whose rotation
-promote was deferred is possible now: the open verifies against the staged
-manifest, and the archive carries `vault.json.next`'s bytes as its `vault.json`
-(O256 item 3, refined there). Whether `--read-only` SHOULD write an archive at all
-is still this entry's question.
-
-**Noted 2026-09-26 by O268's ruling.** This entry's RESTORE half is ruled and built
-there: `backup restore` refuses under `--read-only` before any effect, decided in the
-restore door from the manager's posture (measured: today it replaced the vault at exit
-0). `backup create` and `bundle keygen` stay this entry's open questions.
-
-#### RULED 2026-10-06 by three lenses — Agentic Memory Architecture, Security (privacy, erasure, forensics) and Storage and operations engineering — and an adversarial refuter
-
-**The question**: what `backup create`, `bundle keygen` and — missed by this entry and by the brief —
-`bundle sign-keygen` (`main.rs` 2209-2225, the same `write_identity` into the data directory) do under
-`--read-only`. O268 ruled the restore half. Answered on the maintainer's delegation of 2026-10-06
-(verbatim: "fanout specialized agents to answer that") and approved by them the same day ("approve as
-recommended"). The brief, the lens answers and the refuter's report are in
-`.handover/rulings-2026-10-06/` — material, never the record.
-
-**Prior rulings found, and their disposition.** This entry's filed shape — FOLLOWED for the keygen half
-and extended to `sign-keygen`; its backup suggestion is not a ruling, and its premise fails (below). O268
-item 10 (refused before any effect, decided in the door) — FOLLOWED. O175 and O204 (the function with the
-effect decides its posture; read-only creates nothing under the palace, key material included) —
-FOLLOWED. O256 item 7 (left this decision here deliberately) — FOLLOWED. O266 item 4 and its lost option
-"Refusing the backup" — FOLLOWED, its reach narrowed and recorded beside it: O266 decided which BYTES a
-backup carries and left the posture untouched, and the option it rejected refused a backup over a
-deferral on EVERY posture. O176 holds no ruling — a built fix whose own record finds none — and is
-distinguished: an export hands its payload to the operator, while `backup create` writes and deletes
-palace state.
-
-**Ruled.**
-
-1. **All three refuse under `--read-only` before any effect**, exit 1, changing nothing. The backup
-   refusal sits in `VaultStore::backup`, decided from the handle's own posture as its FIRST statement —
-   before `kg_secret` (`backup.rs` 122), `verified_manifest` (127) and `Stage::begin` (130), which sweeps
-   stale stages and makes directories before a `Drop` hides the stage — in restore's class,
-   `VaultError::ReadOnly`. The keygen refusals sit in the CLI, from `cli.posture()`, before any directory
-   is made, since they open no vault. `/v1` is unchanged: `mutates` already refuses `POST …/backups` on a
-   read-only server (`tenant.rs` 3647, applied at 421-423).
-2. **Why refuse rather than warn and serve.** Under `--read-only` a backup today also PRUNES this vault's
-   oldest archive once ten exist (`backup.rs` 207; `backups.rs` 258-269) — perhaps the pre-incident one —
-   and sweeps stages (`backups.rs` 142-159); it archives only a vault that verifies (`backup.rs`
-   157-160), so it is never a copy of a tampered vault; and the incident runbook's evidence copy is `cp
-   -a` (`runbook.md` 96-101). Breadth decides the drift's direction: the help text (`main.rs` 47-48),
-   `/v1`'s 403, O204 and O268 item 10 agree, and no user-facing document promises a read-only backup —
-   the only mentions are `tests/e2e.sh` 4555 and the unreleased O266 CHANGELOG bullet — so no documented
-   contract moves.
-3. **The gates that lean on a read-only backup are re-pointed or inverted, never deleted**:
-   `backup_tests.rs` 385-406, `deferral_tests.rs` 466-520, `rotation_state_tests.rs` 139-143 (used at
-   458-466), `manifest_rule_tests.rs` 99-142 and 459-462 (the backup is one of O289's four manifest doors
-   on a read-only adopted handle), and the e2e check "A forensic read-only backup" (`tests/e2e.sh`
-   4553-4563), with the published e2e count kept true.
-4. **O266 item 4 becomes unreachable from every product surface**, recorded beside it: a rotating handle
-   is kept by no surface and a writable open promotes first, so the archive's bytes are the same (P-B
-   found the promoted `vault.json` byte-identical to `.next`), and what is lost is `promote_deferred`'s
-   provenance and the live deferral as evidence. **`BackupReport.promote_deferred` is kept only if O320
-   is built**; if this entry's build lands first, the field leaves the CLI output and its
-   `HAND_PROJECTED` row with it.
-5. **The maintainer's MINOR, approved as recommended**: `backup create --out <dir>` — an archive written
-   outside `backups/`, served under either posture, never pruning or sweeping, refused where it resolves
-   inside the palace — restores the as-found forensic archive. Filed as O320.
-6. **Versioning: PATCH**, the flag keeping its promise. `UPGRADING.md` owes one entry on O257's template:
-   `--read-only backup create`, `bundle keygen` and `bundle sign-keygen` exit 1 and change nothing where
-   they used to write (and `backup create` used to prune the oldest archive); keygen without the flag;
-   for evidence, `cp -a` per the runbook, or a writable `backup create` knowing that a writable open
-   heals the anchor and promotes a deferred rotation. `config check` cannot see it.
-
-**Options that lost, with their cost.** Warn-and-serve into `backups/`: breaks "write nothing", prunes,
-sweeps, and the CLI and `/v1` diverge. Warn-and-serve with prune and sweep suppressed (the storage lens's
-fallback): the read-only archive takes one of the newest ten slots, so the next writable `create` prunes
-the oldest, pre-incident archive — deletion deferred, not avoided (`backups.rs` 258-269). Refusing in the
-CLI only: the door stays posture-free for any future caller (O91: a posture is a property of the path).
-
-**Claims refuted, the brief's first.** `mutates` is in `tenant.rs`, not `http.rs`. "O176's ruling": none
-exists. The brief named `bundle keygen` alone. "`backup create` writes an archive": it also prunes and
-sweeps. The brief and every lens omitted the five test files and the e2e check that lean on a read-only
-backup, and O266 item 4's reach. This entry's "a forensic copy taken read-only is exactly what an
-operator wants": the archive is verify-gated, and the forensic copy is `cp -a`.
-
-**Dissent**: the storage lens kept its fallback; settled against by the slot arithmetic. **Fails silently
-if**: the posture check sits after `kg_secret`, `verified_manifest` or `Stage::begin` (the sweep has run
-and `Drop` removed the stage, so an end-state listing passes — assert that no backup pause point fired);
-the fixture holds fewer than ten archives and no stale stage, so prune and sweep would not have fired on
-today's code either; the read-only tests are deleted rather than re-pointed, silently dropping O289's
-fourth manifest door; `promote_deferred` stays projected while nothing can set it; `sign-keygen` is
-forgotten, or a keygen refusal runs after its directory is made; `/v1`'s `mutates` gains a backups
-exception "for parity". **Probes owed by the build**: P-Q3a (ten archives and a stale stage: today
-`--read-only backup create` exits 0 and prunes one; after, exit 1 and `backups/` byte-identical, hashes
-included); P-Q3b (`--read-only bundle keygen` and `sign-keygen` into an empty data directory create
-nothing); P-Q3c (over O266's deferral recipe a WRITABLE `backup create` reports `promote_deferred` false
-and archives bytes identical to `.next`); P-Q3d (`serve-http --read-only` still answers 403).
-
-**What remains**: this entry's build — items 1 to 3 and 6. Filed under `## Open`: O320 (`--out`) and O321
-(`write_identity`'s check, then write, then chmod).
-
 ### O213 — a vault `init` just created, opened read-only, is reported as tampering
 
 **Filed 2026-09-17 by O204's ruling; measured by its probe P13.** `init`
@@ -34397,6 +34505,13 @@ links and `..` included; `promote_deferred` kept for it, or removed with O212's 
 later. **Gate**: `--read-only backup create --out <scratch>` writes an archive that restores and
 verifies, the palace byte-identical; a destination inside the palace refuses; over O266's deferral recipe
 the report carries `promote_deferred` true.
+
+**Noted 2026-10-07 by O212's build.** O212 landed first, so `BackupReport.promote_deferred` is gone from
+the struct, the CLI output and `/v1`; this entry's build adds it back, with its `HAND_PROJECTED`
+projection, and its gate's last clause stands. The door's read-only refusal is its first statement
+(`backup.rs`), so `--out` needs that refusal narrowed to the `backups/` destination, not removed: the
+source gate `o212_the_read_only_refusal_precedes_every_step_of_the_door` names what it must still
+precede.
 
 ### O321 — `bundle keygen` and `bundle sign-keygen` write a secret by a check, then a write, then a chmod
 

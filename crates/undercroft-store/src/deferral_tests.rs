@@ -457,41 +457,24 @@ fn o266_the_rotating_handle_reads_the_staged_manifest_and_stops_writing_before_a
     }
 }
 
-/// **A backup of a deferral carries the manifest its rows answer to**
-/// (O256 item 3, refined): exactly two files, the archive's `vault.json`
-/// byte-identical to `.next`, and it restores into a fresh root that
-/// verifies. With `.next` lost the backup refuses and publishes nothing.
-#[test]
-fn o266_a_read_only_backup_of_a_deferral_archives_the_staged_manifest_and_restores() {
-    let d = deferred(SecurityLevel::Sealed, false);
-    let root = d.dir.path();
-    drop(d.rotating);
-    let r = read_only(root).unwrap();
-    let staged = bytes(&staging(root)).unwrap();
-    let backups = root.join("backups");
-    let report = match r.backup(&backups).unwrap() {
-        BackupOutcome::Created(report) => report,
-        BackupOutcome::Refused(v) => panic!("a verified deferral was refused: {v:?}"),
-    };
-    assert!(report.promote_deferred);
-    assert_eq!(report.anchor_behind_by, 0);
-    let archive = backups.join(&report.name);
-    let mut names: Vec<String> = std::fs::read_dir(&archive)
+/// An archive's file names, sorted.
+fn archive_files(archive: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(archive)
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     names.sort();
-    assert_eq!(names, ["vault.db", "vault.json"]);
-    assert_eq!(
-        std::fs::read(archive.join("vault.json")).unwrap(),
-        staged,
-        "the archive's manifest IS the staged bytes"
-    );
+    names
+}
+
+/// `archive` restored into a fresh root holding only the master key, then
+/// verified there.
+fn restores_and_verifies(root: &Path, archive: &Path) {
     let fresh = TempDir::new().unwrap();
     std::fs::copy(root.join("master.key"), fresh.path().join("master.key")).unwrap();
     match restore_archive(
         &VaultManager::open(fresh.path(), None).unwrap(),
-        &archive,
+        archive,
         None,
         false,
         &hash,
@@ -502,6 +485,50 @@ fn o266_a_read_only_backup_of_a_deferral_archives_the_staged_manifest_and_restor
         RestoreOutcome::Refused(v) => panic!("the archive of a deferral did not restore: {v:?}"),
     }
     assert!(writable(fresh.path()).verify().unwrap().ok());
+}
+
+/// **A backup of a deferral carries the manifest its rows answer to**
+/// (O256 item 3, refined by O266): exactly two files, the archive's
+/// `vault.json` byte-identical to `.next`, and it restores into a fresh root
+/// that verifies. With `.next` lost the backup refuses and publishes nothing.
+///
+/// Taken on the ROTATING handle, the one handle whose keys came from `.next`
+/// that may still back up: a read-only open over the deferral took it until
+/// ROADMAP O212, and now refuses before any effect, leaving the deferral and
+/// `backups/` exactly as found. No surface keeps a rotating handle, so this
+/// archive is reached from no product surface (O266 item 4, recorded there).
+#[test]
+fn o266_a_backup_of_a_deferral_archives_the_staged_manifest_and_restores() {
+    let d = deferred(SecurityLevel::Sealed, false);
+    let root = d.dir.path();
+    let staged = bytes(&staging(root)).unwrap();
+    let backups = root.join("backups");
+
+    let on_disk = (bytes(&manifest(root)), bytes(&staging(root)));
+    match read_only(root).unwrap().backup(&backups) {
+        Err(StoreError::Vault(VaultError::ReadOnly(_))) => {}
+        other => panic!("a read-only backup of a deferral must refuse (O212): {other:?}"),
+    }
+    assert!(!backups.exists(), "the refusal made nothing under backups/");
+    assert_eq!(
+        (bytes(&manifest(root)), bytes(&staging(root))),
+        on_disk,
+        "the refusal left the deferral as found"
+    );
+
+    let report = match d.rotating.backup(&backups).unwrap() {
+        BackupOutcome::Created(report) => report,
+        BackupOutcome::Refused(v) => panic!("a verified deferral was refused: {v:?}"),
+    };
+    assert_eq!(report.anchor_behind_by, 0);
+    let archive = backups.join(&report.name);
+    assert_eq!(archive_files(&archive), ["vault.db", "vault.json"]);
+    assert_eq!(
+        std::fs::read(archive.join("vault.json")).unwrap(),
+        staged,
+        "the archive's manifest IS the staged bytes"
+    );
+    restores_and_verifies(root, &archive);
 
     let archives = || {
         std::fs::read_dir(&backups)
@@ -511,11 +538,43 @@ fn o266_a_read_only_backup_of_a_deferral_archives_the_staged_manifest_and_restor
     };
     let published = archives();
     std::fs::remove_file(staging(root)).unwrap();
-    match r.backup(&backups) {
+    match d.rotating.backup(&backups) {
         Err(e) => assert_eq!(class(&e), "integrity", "{e}"),
         Ok(o) => panic!("a backup with the staged manifest lost: {o:?}"),
     }
     assert_eq!(archives(), published, "nothing was published");
+}
+
+/// **ROADMAP O212's P-Q3c: what refusing the read-only backup loses is
+/// provenance, never bytes.** Over the same deferral a WRITABLE backup — the
+/// one a product surface can still take — promotes first and archives the
+/// promoted `vault.json`, which is byte for byte the `.next` a read-only
+/// backup carried; it restores and verifies. What is gone is the report's
+/// word that the archive came from a deferral, and the live deferral itself.
+#[test]
+fn o212_a_writable_backup_over_a_deferral_archives_the_staged_bytes() {
+    let d = deferred(SecurityLevel::Sealed, false);
+    let root = d.dir.path();
+    drop(d.rotating);
+    let staged = bytes(&staging(root)).unwrap();
+    let backups = root.join("backups");
+    let w = writable(root);
+    assert!(
+        !staging(root).exists(),
+        "premise: the writable open promoted"
+    );
+    let report = match w.backup(&backups).unwrap() {
+        BackupOutcome::Created(report) => report,
+        BackupOutcome::Refused(v) => panic!("a verified vault was refused: {v:?}"),
+    };
+    let archive = backups.join(&report.name);
+    assert_eq!(archive_files(&archive), ["vault.db", "vault.json"]);
+    assert_eq!(
+        std::fs::read(archive.join("vault.json")).unwrap(),
+        staged,
+        "the archive's manifest is the staged bytes"
+    );
+    restores_and_verifies(root, &archive);
 }
 
 /// **A promote that wrote the manifest is not deferred** when only the

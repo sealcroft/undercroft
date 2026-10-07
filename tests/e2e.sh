@@ -4550,24 +4550,17 @@ if [ "$O266_BEFORE" = "$O266_AFTER" ]; then
 else
   echo "FAIL  O266: the read-only commands changed the vault"; diff <(echo "$O266_BEFORE") <(echo "$O266_AFTER") | sed 's/^/      /'; FAIL=$((FAIL+1))
 fi
-# A forensic read-only backup carries the manifest the rows answer to, and
-# restores into a fresh installation that verifies.
-O266_BK="$(o266 --read-only backup create 2>&1)"
-O266_BD="$(printf '%s\n' "$O266_BK" | sed -n 's/^Backup created: //p')"
-if grep -q "the staged vault.json.next of a committed key rotation" <<<"$O266_BK" \
-   && [ -n "$O266_BD" ] && cmp -s "$O266_BD/vault.json" "$O266_HOME/staged.json" \
-   && [ "$(ls "$O266_BD" | sort | tr '\n' ' ')" = "vault.db vault.json " ]; then
-  echo "ok    O266: a --read-only backup archives the staged manifest, two files"; PASS=$((PASS+1))
+# A --read-only backup refuses before it writes (ROADMAP O212): exit 1, the
+# deferral as found and no backups/ made. Until O212 it archived the staged
+# manifest at exit 0, which a WRITABLE backup still does below.
+O266_BK="$(o266 --read-only backup create 2>&1)"; O266_BKX=$?
+if [ "$O266_BKX" = 1 ] && grep -q "read-only posture" <<<"$O266_BK" \
+   && [ ! -e "$O266_HOME/backups" ] \
+   && [ "$O266_BEFORE" = "$(cd "$O266_V" && md5sum vault.db vault.json vault.json.next | sort)" ]; then
+  echo "ok    O212: a --read-only backup of the deferral exits 1 and changes nothing"; PASS=$((PASS+1))
 else
-  echo "FAIL  O266: a --read-only backup archives the staged manifest, two files"; echo "$O266_BK" | sed 's/^/      /'; FAIL=$((FAIL+1))
+  echo "FAIL  O212: a --read-only backup of the deferral exits 1 and changes nothing (exit $O266_BKX)"; echo "$O266_BK" | sed 's/^/      /'; FAIL=$((FAIL+1))
 fi
-O266_FRESH="$(mktemp -d)"
-cp "$O266_HOME/master.key" "$O266_FRESH/master.key"
-mkdir -p "$O266_FRESH/backups" && cp -r "$O266_BD" "$O266_FRESH/backups/"
-check "O266: the archive of a deferral restores into a fresh installation" 0 "" -- \
-  env UNDERCROFT_HOME="$O266_FRESH" "$BIN" backup restore "$(basename "$O266_BD")"
-check "O266: the restored vault verifies" 0 "VERIFY OK" -- env UNDERCROFT_HOME="$O266_FRESH" "$BIN" verify
-rm -rf "$O266_FRESH"
 # A vault.json no generation's MAC verifies is still the tamper verdict.
 cp "$O266_V/vault.json" "$O266_HOME/intact.json"
 O266_C="$(sed -n 's/.*"manifest_mac_hex": *"\(.\).*/\1/p' "$O266_V/vault.json")"
@@ -4579,15 +4572,96 @@ else
   echo "FAIL  O266 premise: the MAC flip did not land"; FAIL=$((FAIL+1))
 fi
 cp "$O266_HOME/intact.json" "$O266_V/vault.json"
-# A writable command promotes, to exactly the staged bytes.
-check "O266: a writable command promotes the deferral" 0 "" -- o266 stats
+# A writable command promotes, to exactly the staged bytes. That command is a
+# backup here: the archive of a deferral a surface can still take (ROADMAP
+# O212's P-Q3c) — the open promotes first, and the archive's vault.json is byte
+# for byte the staged manifest a read-only backup carried until O212. It
+# restores into a fresh installation that verifies.
+O266_BK="$(o266 backup create 2>&1)"; O266_BKX=$?
+O266_BD="$(printf '%s\n' "$O266_BK" | sed -n 's/^Backup created: //p')"
+if [ "$O266_BKX" = 0 ] && [ -n "$O266_BD" ] && cmp -s "$O266_BD/vault.json" "$O266_HOME/staged.json" \
+   && [ "$(ls "$O266_BD" | sort | tr '\n' ' ')" = "vault.db vault.json " ]; then
+  echo "ok    O212: a writable backup over the deferral archives the staged manifest, two files"; PASS=$((PASS+1))
+else
+  echo "FAIL  O212: a writable backup over the deferral archives the staged manifest, two files (exit $O266_BKX)"; echo "$O266_BK" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
 if [ ! -e "$O266_V/vault.json.next" ] && cmp -s "$O266_V/vault.json" "$O266_HOME/staged.json"; then
   echo "ok    O266: the promoted vault.json is byte-identical to the staged manifest"; PASS=$((PASS+1))
 else
   echo "FAIL  O266: the promoted vault.json is byte-identical to the staged manifest"; FAIL=$((FAIL+1))
 fi
+O266_FRESH="$(mktemp -d)"
+cp "$O266_HOME/master.key" "$O266_FRESH/master.key"
+mkdir -p "$O266_FRESH/backups" && cp -r "$O266_BD" "$O266_FRESH/backups/"
+check "O266: the archive of a deferral restores into a fresh installation" 0 "" -- \
+  env UNDERCROFT_HOME="$O266_FRESH" "$BIN" backup restore "$(basename "$O266_BD")"
+check "O266: the restored vault verifies" 0 "VERIFY OK" -- env UNDERCROFT_HOME="$O266_FRESH" "$BIN" verify
+rm -rf "$O266_FRESH"
 check "O266: --read-only verify after the promote" 0 "VERIFY OK" -- o266 --read-only verify
 rm -rf "$O266_HOME"
+
+echo "== --read-only writes nothing through backup create, bundle keygen or sign-keygen (ROADMAP O212) =="
+# The flag's help says it writes nothing, and three commands wrote anyway: the
+# two keygens open no vault, so the manager's posture never reached them, and a
+# read-only backup archived the vault, PRUNED this vault's oldest archive once
+# ten existed and swept a crashed backup's stage, all at exit 0. The fixture
+# holds ten archives and a stale stage, and a writable backup on a copy proves
+# it: without them an unchanged backups/ would prove nothing (probe P-Q3a).
+O212_HOME="$(mktemp -d)"
+o212() { UNDERCROFT_HOME="$O212_HOME" "$BIN" "$@"; }
+o212 init >/dev/null 2>&1
+o212 remember "the harbour ledger names the cargo" --wing notes >/dev/null 2>&1
+for _ in $(seq 1 10); do o212 backup create >/dev/null 2>&1; done
+O212_STAGE="$O212_HOME/backups/.staging/0123456789abcdef0123456789abcdef"
+mkdir -p "$O212_STAGE" && printf 'a crashed backup' >"$O212_STAGE/vault.db" && touch -d '2 hours ago' "$O212_STAGE"
+O212_N="$(ls "$O212_HOME/backups" | grep -c '^default-')"
+O212_COPY="$(mktemp -d)"
+cp -a "$O212_HOME/." "$O212_COPY/"
+O212_CTL="$(UNDERCROFT_HOME="$O212_COPY" "$BIN" backup create 2>&1)"
+if [ "$O212_N" = 10 ] && grep -q 'older pruned: 1' <<<"$O212_CTL" \
+   && [ ! -e "$O212_COPY/backups/.staging/$(basename "$O212_STAGE")" ]; then
+  echo "ok    O212 premise: ten archives and a stale stage, which a writable backup prunes and sweeps"; PASS=$((PASS+1))
+else
+  echo "FAIL  O212 premise: ten archives and a stale stage (found $O212_N archives)"; echo "$O212_CTL" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+rm -rf "$O212_COPY"
+o212_backups() { (cd "$O212_HOME/backups" && find . | sort && find . -type f -exec sha256sum {} + | sort); }
+O212_BEFORE="$(o212_backups)"
+check "O212: --read-only backup create exits 1 in the read-only class" 1 "read-only posture" -- \
+  o212 --read-only backup create
+if [ -n "$O212_BEFORE" ] && [ "$O212_BEFORE" = "$(o212_backups)" ] && [ -e "$O212_STAGE" ]; then
+  echo "ok    O212: backups/ is byte-identical after it — nothing archived, pruned or swept"; PASS=$((PASS+1))
+else
+  echo "FAIL  O212: --read-only backup create changed backups/"; diff <(echo "$O212_BEFORE") <(o212_backups) | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+# P-Q3d: the read-only SERVER refused the route already, in front of dispatch;
+# it still does, and changes nothing.
+UNDERCROFT_HOME="$O212_HOME" "$BIN" serve-http --host 127.0.0.1 --port 18897 --read-only >/dev/null 2>&1 &
+O212_PID=$!
+for _ in $(seq 1 40); do curl -sf http://127.0.0.1:18897/healthz >/dev/null 2>&1 && break; sleep 0.25; done
+O212_R="$(curl -s -w '\n%{http_code}' -X POST http://127.0.0.1:18897/v1/vaults/default/backups)"
+kill "$O212_PID" 2>/dev/null; wait "$O212_PID" 2>/dev/null
+if [ "$(tail -1 <<<"$O212_R")" = 403 ] && [ "$O212_BEFORE" = "$(o212_backups)" ]; then
+  echo "ok    O212: a --read-only server still answers POST …/backups 403, changing nothing"; PASS=$((PASS+1))
+else
+  echo "FAIL  O212: a --read-only server must answer POST …/backups 403"; echo "$O212_R" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+rm -rf "$O212_HOME"
+# P-Q3b: neither keygen creates a data directory that does not exist yet.
+O212_PARENT="$(mktemp -d)"
+O212_FRESH="$O212_PARENT/installation"
+for kg in keygen sign-keygen; do
+  check "O212: --read-only bundle $kg exits 1 in the read-only class" 1 "read-only posture" -- \
+    env UNDERCROFT_HOME="$O212_FRESH" "$BIN" --read-only bundle "$kg"
+done
+if [ ! -e "$O212_FRESH" ] && [ -z "$(ls -A "$O212_PARENT")" ]; then
+  echo "ok    O212: neither read-only keygen created anything"; PASS=$((PASS+1))
+else
+  echo "FAIL  O212: a read-only keygen created files"; find "$O212_PARENT" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+check "O212: without the flag, bundle keygen writes the identity into the same directory" 0 \
+  "Recipient (shareable)" -- env UNDERCROFT_HOME="$O212_FRESH" "$BIN" bundle keygen
+rm -rf "$O212_PARENT"
 
 echo "== A promote beneath a live read-only server, then vault.json forged or gone (ROADMAP O289, O277) =="
 # A `serve-http --read-only` opened over a deferred promote keeps its deferral

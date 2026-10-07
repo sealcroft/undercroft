@@ -3924,8 +3924,9 @@ fn store_err(e: StoreError) -> RestError {
         // (ROADMAP O268) — `vault_err`'s class for the same variant. A vault
         // delete meets it too (ROADMAP O291).
         StoreError::Vault(undercroft_vault::VaultError::RestoreInterrupted { .. }) => 409,
-        // A door refusing under a read-only posture — a restore (O212) or a
-        // delete (O291) — `vault_err`'s class for the same variant. Reached
+        // A door refusing under a read-only posture — a restore (O268), a
+        // backup (O212) or a delete (O291) — `vault_err`'s class for the same
+        // variant. Reached
         // only beneath `mutates`, which refuses a read-only server's writes in
         // front of dispatch; one decision still answers one class.
         StoreError::Vault(undercroft_vault::VaultError::ReadOnly(_)) => 409,

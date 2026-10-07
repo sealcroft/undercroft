@@ -2,17 +2,18 @@
 
 ## 1.7.0 — unreleased
 
-MINOR: one new capability, backward compatible, and thirty fixes. The witness
+MINOR: one new capability, backward compatible, and thirty-one fixes. The witness
 commands and routes are new; no default moves and no declaration can stop a
-start-up. Five fixes change what a deployment must do: every process writing a
+start-up. Six fixes change what a deployment must do: every process writing a
 vault must run the same build, and a server whose vault another process
 rotated now stops writing rather than destroy the rotated salt (O254); a
 key rotation now refuses while any other process has the vault open (O257);
 and a restore now proves the archive first, so it needs the key and the
 vault's embedder environment and refuses under `--read-only` (O268); a
-restore refuses over a symbolic link (O283); and a vault delete refuses while
-any other process has the vault open, a replica included (O291) — all in
-`UPGRADING.md`, beside
+restore refuses over a symbolic link (O283); a vault delete refuses while
+any other process has the vault open, a replica included (O291); and
+`--read-only backup create`, `bundle keygen` and `bundle sign-keygen` exit 1
+instead of writing (O212) — all in `UPGRADING.md`, beside
 O279's note that a filesystem whose inode numbers are not stable now refuses
 every open (which `config check` pre-flights), O255's note that a destruction now
 holds the write lock for as long as it runs and O256's that an archive taken by an
@@ -23,10 +24,10 @@ until O279, which closed four entries, "seventeen" until O281, "eighteen" until 
 "nineteen" until O288, "twenty" until O289, which closed two entries, and
 "twenty-two" until O290, "twenty-three" until O291, "twenty-four" until O296,
 "twenty-five" until O304 — O303 should have made it twenty-six and did not, which O304 found
-by counting the entries — "twenty-seven" until O305, "twenty-eight" until O309 and "twenty-nine"
-until O314; it said
-"Three fixes change what a deployment must do" until O283 made it four, and
-"Four" until O291 made it five.)
+by counting the entries — "twenty-seven" until O305, "twenty-eight" until O309, "twenty-nine"
+until O314 and "thirty" until O212; it said
+"Three fixes change what a deployment must do" until O283 made it four,
+"Four" until O291 made it five, and "Five" until O212 made it six.)
 
 ### The external witness: `undercroft witness emit` / `check`, `GET`/`POST /v1/…/witness` (O245)
 
@@ -512,8 +513,12 @@ lets a second rotation stage over the only file holding the keys.
 
 - **`backup create` over a deferral** archives the manifest its rows answer to:
   `vault.json.next`'s bytes as the archive's `vault.json`, re-read from disk,
-  two files, restorable; `BackupReport.promote_deferred` says so. With `.next`
-  lost it refuses and publishes nothing.
+  two files, restorable. With `.next` lost it refuses and publishes nothing.
+  (This bullet also said `BackupReport.promote_deferred` reported it, and a
+  `--read-only` backup was how a surface took one; since O212, below, a
+  read-only backup refuses, a writable one promotes first and archives the
+  same bytes, and the field is gone — corrected in place, the release being
+  unpublished.)
 - **The rotating handle** after its own deferral reads and verifies against the
   staged manifest, and stops writing BEFORE anything commits, with the reopen
   class (409 with no class, exit 1) — its first write used to commit past the
@@ -1561,6 +1566,83 @@ PATCH inside the unreleased 1.7.0: test tooling and CI only. Nothing an operator
 now run under Debian 12's mawk as well as gawk, and the battery says which one did not. Escalated
 to the maintainer: whether the tree should promise any awk beyond those two (BWK or macOS awk,
 busybox).
+
+### `--read-only` writes nothing through `backup create`, `bundle keygen` or `bundle sign-keygen` (O212)
+
+`--read-only`'s help says it writes nothing, and three commands wrote under the palace anyway, at
+exit 0. A read-only `backup create` wrote an archive into `backups/`, removed this vault's oldest
+archive once ten existed — perhaps the one taken before an incident — and removed a crashed
+backup's stale stage: its database copy only reads, so nothing refused it, while the archive, the
+prune and the sweep around it are all writes. `bundle keygen` and `bundle sign-keygen` open no vault,
+so the manager's posture (O204) never reached them, and each wrote its identity file — making the
+data directory first if it did not exist. Measured before the fix: over ten archives and a stale
+stage, the read-only backup published an eleventh, pruned one and swept the stage.
+
+Now each refuses before it writes, exit 1, in restore's class (`refused under a read-only
+posture: …`): nothing under `backups/`, no byte of the vault's database or manifest, no identity
+file or directory. The backup's read-only open still leaves the `-shm` and empty `-wal` every
+read-only open does, and on a vault `init` created that nothing has written yet that open refuses
+first, exit 2 (O213, filed). The backup's refusal is the FIRST statement of the store's one door, from the
+handle's own posture, ahead of the graph-secret read, the manifest read and `Stage::begin` — which
+sweeps and makes directories before a `Drop` hides the stage, so a refusal after it would have left
+a listing taken afterwards unchanged while the sweep had already run. The keygens refuse in the CLI,
+from the process's posture, before any path is touched, `--out` included. `/v1` is unchanged: a
+`--read-only` server already answered `POST …/backups` with 403, in front of dispatch. The evidence
+copy during an incident is `cp -a` of the vault's directory, which the runbook now says beside the
+copy step.
+
+`BackupReport.promote_deferred` — added earlier in this unreleased version by O266 — is gone, from
+the struct, the CLI output and `/v1`'s answer: an archive carries a deferred rotation's STAGED
+manifest only when the handle's keys came from `vault.json.next`, which is a read-only open (now
+refused) or the rotating handle (which no surface keeps), so the field read false on every surface.
+A writable backup over a deferral promotes first and archives the promoted `vault.json`, byte for
+byte the staged bytes; what is lost is the report's word on provenance and the live deferral as
+evidence, which O320 (`backup create --out`, filed) restores.
+
+Ruled by three lenses — Agentic Memory Architecture, Security, and Storage and operations — and an
+adversarial refuter, approved by the maintainer and recorded in ROADMAP O212 before the build.
+Refusing won over warn-and-serve, which breaks "write nothing", prunes and sweeps; over
+warn-and-serve with prune and sweep suppressed, whose read-only archive takes one of the newest ten
+slots so the next writable backup prunes the pre-incident one anyway; and over a CLI-only refusal,
+which leaves the door posture-free for its next caller.
+
+Gates. The store door: a read-only handle over ten archives, a stale stage and a lagging anchor
+refuses in restore's class with no backup pause point fired and `backups/` and the manifest
+byte-identical, after the same fixture is proved on a copy, where a writable backup prunes one and
+sweeps the stage — the premise caught its own first version, whose copied stage was too young to
+sweep. A source gate holds the refusal ahead of every step the ruling names, because a refusal after
+the graph-secret read moves nothing a test can see. The CLI: `--read-only backup create` over ten
+archives and a stale stage, and both keygens into a data directory that does not exist, with
+`--out` and without, each exit 1 creating nothing, beside writable controls. The e2e suite re-points
+O266's forensic read-only backup to the refusal, makes a writable backup the command that promotes
+the deferral (its archive's `vault.json` the staged bytes, restored and verified: probe P-Q3c), and
+adds P-Q3a, P-Q3b and P-Q3d (a `--read-only` server still answers 403 and changes nothing) through
+the binary. The tests that leaned on a read-only backup are re-pointed, never deleted: O266's
+deferral archive is taken on the rotating handle, O288's restore race takes its archive with a
+writable backup on a copy of the installation, and O289's fourth manifest door on a read-only
+adopted handle asserts the refusal and then compares the strict manifest read the door makes
+elsewhere. RED on the unfixed tree for every refusal test, GREEN after; a refusal moved after
+`Stage::begin` fails both store gates, and one moved after the graph-secret read fails the source
+gate alone. A real corpus — the LoCoMo feed mined into 32 wings of a sealed vault, 2,720 drawers —
+under ten archives and a stale stage: a writable backup 53 ms, the read-only refusal 7 ms with 21
+files under `backups/`, `vault.json` and `vault.db` hashed unchanged, read-only `verify` and `search`
+still serving, and neither keygen creating anything.
+
+An independent review of the build found no defect in the code and seven things in what surrounds
+it, all mine, each fixed before this landed: the published test count was one short (the source
+gate was left out of the arithmetic); the refusal told an operator mid-incident to "back up without
+--read-only" with no word of what a writable backup heals, promotes and prunes; "changing nothing"
+was claimed where the read-only open's own scaffolding and O213's refusal make it untrue, now scoped
+to what the probe measured; two sentences spoke of O320, which is filed, as built; and `/v1`'s
+`ReadOnly` arm and the backup route's field list named too little.
+
+Also corrected: `docs/AGENTS.md` listed three read-only `POST` exceptions on `/v1` where `mutates`
+names four — `POST …/witness` (O245) was missing — and the backup route's answer without the `name`
+field it has always carried beside `backup`.
+
+PATCH inside the unreleased 1.7.0: the flag keeps the promise its help makes. A script that ran
+`--read-only backup create` or a keygen under `--read-only` now exits 1, so `UPGRADING.md` carries an
+entry; `config check` cannot see it.
 
 ## 1.6.1 — 2026-09-22
 
