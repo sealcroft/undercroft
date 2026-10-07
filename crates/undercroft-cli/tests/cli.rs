@@ -2222,6 +2222,144 @@ fn o204_read_only_writes_nothing_through_the_manager() {
     assert!(!staging.exists());
 }
 
+/// Every entry under `root` with its bytes (directories as `None`) — what
+/// "byte-identical" is compared against, hashes included.
+fn tree_with_bytes(root: &std::path::Path) -> Vec<(String, Option<Vec<u8>>)> {
+    tree(root)
+        .into_iter()
+        .map(|rel| {
+            let p = root.join(&rel);
+            let bytes = (!p.is_dir()).then(|| std::fs::read(&p).unwrap());
+            (rel, bytes)
+        })
+        .collect()
+}
+
+/// **`--read-only` writes nothing through `bundle keygen` or `bundle
+/// sign-keygen`** (ROADMAP O212, probe P-Q3b). Neither opens a vault, so the
+/// manager's posture never reached them: each wrote an identity file — and
+/// made the directory for it — into a data directory nothing else had
+/// created, at exit 0. Each now exits 1 in the read-only class, with the
+/// default path and with `--out`, and creates nothing; the writable control
+/// writes the identity.
+#[test]
+fn o212_read_only_keygen_and_sign_keygen_create_nothing() {
+    let parent = TempDir::new().unwrap();
+    let fresh = parent.path().join("installation");
+    let out = parent.path().join("elsewhere").join("identity.key");
+    let out_arg = out.to_str().unwrap().to_string();
+    let run = |args: &[&str]| {
+        let mut c = Command::cargo_bin("undercroft").unwrap();
+        c.env("UNDERCROFT_HOME", &fresh)
+            .env_remove("UNDERCROFT_PASSPHRASE")
+            .args(args);
+        c
+    };
+    for keygen in ["keygen", "sign-keygen"] {
+        for args in [
+            vec!["--read-only", "bundle", keygen],
+            vec!["--read-only", "bundle", keygen, "--out", out_arg.as_str()],
+        ] {
+            run(&args)
+                .assert()
+                .failure()
+                .code(1)
+                .stderr(predicate::str::contains("read-only posture"));
+            assert!(!fresh.exists(), "{args:?} created the data directory");
+            assert!(
+                !out.parent().unwrap().exists(),
+                "{args:?} created the --out directory"
+            );
+        }
+    }
+    // The control: the same commands without the flag write the identities.
+    run(&["bundle", "keygen"]).assert().success();
+    run(&["bundle", "sign-keygen"]).assert().success();
+    assert!(fresh.join("bundle.key").is_file());
+    assert!(fresh.join("bundle-sign.key").is_file());
+}
+
+/// **`--read-only backup create` refuses before any effect** (ROADMAP O212,
+/// probe P-Q3a). It used to archive the vault, PRUNE this vault's oldest
+/// archive once ten existed — perhaps the one taken before an incident — and
+/// sweep a crashed backup's stage, all at exit 0. The fixture holds ten
+/// archives and a stale stage, which the writable control on a copy proves:
+/// without them prune and sweep would not fire on the unfixed command either,
+/// and an unchanged `backups/` would prove nothing.
+#[test]
+fn o212_read_only_backup_create_changes_nothing() {
+    let home = TempDir::new().unwrap();
+    cmd(&home).args(["init"]).assert().success();
+    cmd(&home)
+        .args(["remember", "the harbour ledger names the cargo"])
+        .assert()
+        .success();
+    for _ in 0..10 {
+        cmd(&home).args(["backup", "create"]).assert().success();
+    }
+    let backups = home.path().join("backups");
+    let stage = backups.join(".staging").join("cd".repeat(16));
+    std::fs::create_dir_all(&stage).unwrap();
+    std::fs::write(stage.join("vault.db"), b"a crashed backup's partial copy").unwrap();
+    let two_hours_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
+    std::fs::File::open(&stage)
+        .unwrap()
+        .set_modified(two_hours_ago)
+        .unwrap();
+    assert!(
+        std::fs::metadata(&stage)
+            .unwrap()
+            .modified()
+            .unwrap()
+            .elapsed()
+            .unwrap()
+            > std::time::Duration::from_secs(3600),
+        "premise: the stage is older than the sweep's hour"
+    );
+
+    // The positive control, on a copy: a writable backup prunes and sweeps.
+    let copy = TempDir::new().unwrap();
+    for rel in tree(home.path()) {
+        let (from, to) = (home.path().join(&rel), copy.path().join(&rel));
+        if from.is_dir() {
+            std::fs::create_dir_all(&to).unwrap();
+        } else {
+            std::fs::copy(&from, &to).unwrap();
+        }
+    }
+    std::fs::File::open(copy.path().join("backups/.staging").join("cd".repeat(16)))
+        .unwrap()
+        .set_modified(two_hours_ago)
+        .unwrap();
+    cmd(&copy)
+        .args(["backup", "create"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("older pruned: 1"));
+    assert!(
+        !copy
+            .path()
+            .join("backups/.staging")
+            .join("cd".repeat(16))
+            .exists(),
+        "control: the sweep removed the stale stage"
+    );
+
+    let before = tree_with_bytes(&backups);
+    cmd(&home)
+        .args(["--read-only", "backup", "create"])
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("read-only posture"))
+        .stdout(predicate::str::contains("Backup created").not());
+    assert!(
+        tree_with_bytes(&backups) == before,
+        "backups/ is byte-identical: nothing archived, pruned or swept"
+    );
+    assert!(stage.exists());
+}
+
 /// `config check` sees the O204 refusals before a restart does, on a
 /// DECLARED data directory, and only there.
 #[test]

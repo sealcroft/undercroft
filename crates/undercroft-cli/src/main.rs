@@ -73,7 +73,11 @@ struct Cli {
     /// `index push` and `forget --backend` change a remote mirror, so the
     /// store function that has the effect refuses it on a read-only open
     /// before it calls the backend — a decision inside that one function,
-    /// not a list of commands.
+    /// not a list of commands. `backup create` writes under `backups/` and
+    /// `backup restore` replaces a vault, so each door refuses under this
+    /// flag before any effect, and `bundle keygen` and `bundle sign-keygen`,
+    /// which open no vault, refuse before they write an identity (ROADMAP
+    /// O212, O268).
     #[arg(long, global = true)]
     read_only: bool,
 
@@ -2182,6 +2186,20 @@ fn run(cli: Cli) -> Result<()> {
             }
         }
         Command::Bundle { action } => match action {
+            // ROADMAP O212: the two keygens open no vault, so the manager's
+            // posture (O204) never reached them, and `--read-only` wrote an
+            // identity — and made the directory for it — into a data
+            // directory nothing else had created. Refused here, from the
+            // process's posture, before any path is touched.
+            BundleAction::Keygen { .. } | BundleAction::SignKeygen { .. }
+                if cli.posture() == Posture::ReadOnly =>
+            {
+                return Err(undercroft_vault::VaultError::ReadOnly(
+                    "generating an identity writes a secret key file, so it is refused under \
+                     --read-only; nothing was written",
+                )
+                .into());
+            }
             BundleAction::Keygen { out } => {
                 let path = out
                     .clone()
@@ -4415,7 +4433,9 @@ fn run(cli: Cli) -> Result<()> {
                     // like `verify` and `repair` rather than 1: a script that
                     // treats 1 as "retry the run" must not retry a vault that
                     // failed its HMACs. Anything failing after the verify
-                    // passed exits 1 — the vault verified.
+                    // passed exits 1 — the vault verified. Under `--read-only`
+                    // the door refuses before any effect, exit 1 (ROADMAP
+                    // O212): it writes, prunes and sweeps under `backups/`.
                     let store = open_store(&cli, vault)?;
                     let backups = root.join(undercroft_vault::BACKUPS_DIR);
                     let report = match store.backup(&backups)? {
@@ -4438,18 +4458,6 @@ fn run(cli: Cli) -> Result<()> {
                         "  anchor lag:   {} record(s) — a restore fast-forwards it",
                         report.anchor_behind_by
                     );
-                    // ROADMAP O266: an archive of a vault whose rotation
-                    // promote was deferred carries the STAGED manifest, the
-                    // one its rows answer to.
-                    if report.promote_deferred {
-                        println!(
-                            "  manifest:     the staged vault.json.next of a committed key \
-                             rotation (its promote was deferred) — the manifest these rows \
-                             answer to"
-                        );
-                    } else {
-                        println!("  manifest:     vault.json");
-                    }
                     println!("  older pruned: {}", report.pruned);
                 }
                 BackupAction::List => {

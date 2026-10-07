@@ -136,14 +136,49 @@ fn promote(root: &Path, removal_fails: bool) {
     );
 }
 
-/// A read-only backup, which over a deferral archives the staged bytes as its
-/// `vault.json` (O266 item 4).
-fn backup(root: &Path) -> PathBuf {
-    let s = open(unlock(root, true), true).unwrap();
-    match s.backup(&root.join("backups")).unwrap() {
-        BackupOutcome::Created(r) => root.join("backups").join(r.name),
-        BackupOutcome::Refused(r) => panic!("premise: the vault verifies ({r:?})"),
+fn copy_tree(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let dest = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_tree(&entry.path(), &dest);
+        } else {
+            std::fs::copy(entry.path(), &dest).unwrap();
+        }
     }
+}
+
+/// An archive of the vault as it stands, published under `root`'s `backups/`.
+///
+/// Taken by a WRITABLE open of a COPY of the installation, so the vault under
+/// test is left as found — what a read-only backup did until ROADMAP O212
+/// refused it before any effect. Over a deferral that open promotes first, and
+/// the archive's `vault.json` is still byte for byte the staged manifest
+/// (O212's P-Q3c), which is asserted: it is the archive the read-only backup
+/// took (O266 item 4).
+fn backup(root: &Path) -> PathBuf {
+    let copy = TempDir::new().unwrap();
+    copy_tree(root, copy.path());
+    let staged = std::fs::read(staging(root)).ok();
+    let name = {
+        let s = open(unlock(copy.path(), false), false).unwrap();
+        match s.backup(&copy.path().join("backups")).unwrap() {
+            BackupOutcome::Created(r) => r.name,
+            BackupOutcome::Refused(r) => panic!("premise: the vault verifies ({r:?})"),
+        }
+    };
+    let taken = copy.path().join("backups").join(&name);
+    if let Some(staged) = staged {
+        assert_eq!(
+            std::fs::read(taken.join("vault.json")).unwrap(),
+            staged,
+            "premise: the archive of a deferral carries the staged manifest"
+        );
+    }
+    let archive = root.join("backups").join(&name);
+    copy_tree(&taken, &archive);
+    archive
 }
 
 fn restore(root: &Path, arch: &Path) {
@@ -447,8 +482,9 @@ fn o288_an_ordinary_rotation_beneath_a_read_only_open_is_not_a_deferral() {
 /// **R3 — a restore after the unlock sets aside a vault whose staging file
 /// was VALID** (O284 compares only one it could not authenticate). An archive
 /// older than the rotation made the read-only open say an uncommitted rotation
-/// was kept on disk; a read-only backup of the deferral made it say the
-/// promotion was deferred; the restored vault holds no staging file either way.
+/// was kept on disk; an archive of the deferral (its staged manifest as its
+/// `vault.json`, [`backup`]) made it say the promotion was deferred; the
+/// restored vault holds no staging file either way.
 #[test]
 fn o288_a_restore_after_the_unlock_refuses_the_set_aside_rotation() {
     for level in LEVELS {

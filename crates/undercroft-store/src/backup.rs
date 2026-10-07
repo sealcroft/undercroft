@@ -49,12 +49,12 @@ pub struct BackupReport {
     /// is carried as found, because on a vault whose anchor was lowered it is
     /// the one observable left (A2).
     pub anchor_behind_by: u64,
-    /// Whether the archive's `vault.json` is the STAGED manifest of a
-    /// committed key rotation whose promote was deferred (ROADMAP O266): the
-    /// manifest the archived rows answer to, byte for byte `vault.json.next`,
-    /// while the live `vault.json` still names the previous key generation. A
-    /// restore opens the archive as an ordinary vault; this is its provenance.
-    pub promote_deferred: bool,
+    // No `promote_deferred` (ROADMAP O212, ruling item 4). It said the archive
+    // carried the STAGED manifest of a deferred rotation (O266), which only a
+    // read-only handle or the rotating handle ever archives: the first now
+    // refuses, and no surface keeps the second, so it read false on every
+    // surface. An archive written outside the data directory under either
+    // posture would restore it (O320, open).
     /// This vault's older archives removed to keep the newest ten.
     pub pruned: usize,
 }
@@ -107,9 +107,27 @@ impl VaultStore {
     /// copy, its sync, the post-condition, the publish — is an I/O-class
     /// error, never an integrity verdict: the live vault verified.
     ///
-    /// It decides no posture: a read-only handle can take one (the page copy
-    /// only reads), and whether `--read-only` SHOULD is ROADMAP O212's.
+    /// **Refused on a read-only handle before any effect** (ROADMAP O212), in
+    /// restore's class, [`undercroft_vault::VaultError::ReadOnly`]: the page
+    /// copy only reads, but the door writes and deletes the installation's
+    /// state around it — an archive, the prune of this vault's oldest archive once ten
+    /// exist, and the sweep of a crashed backup's stage. The handle's own
+    /// posture decides, as the FIRST statement: `kg_secret` may write, the
+    /// manifest read is the first pause point, and `Stage::begin` sweeps and
+    /// makes directories before a `Drop` hides the stage, so a refusal after
+    /// any of them would leave a listing taken afterwards unchanged while the
+    /// sweep had already run. The evidence copy during an incident is `cp -a`
+    /// of the vault's directory, as the runbook says.
     pub fn backup(&self, backups_dir: &Path) -> Result<BackupOutcome, StoreError> {
+        if self.read_only {
+            return Err(StoreError::Vault(undercroft_vault::VaultError::ReadOnly(
+                "a backup writes an archive into backups/ and prunes and sweeps there, so it is \
+                 refused under --read-only; nothing was written. For an evidence copy, copy the \
+                 vault's directory with `cp -a`. A backup without --read-only first heals a \
+                 lagging manifest anchor and promotes a deferred key rotation, and once ten \
+                 archives exist it removes this vault's oldest",
+            )));
+        }
         if self.owned_snapshots.get() > 0 || !self.conn.is_autocommit() {
             return Err(StoreError::Invalid(
                 "a backup opens its own snapshot and cannot run inside a transaction or \
@@ -209,7 +227,6 @@ impl VaultStore {
             name,
             vault: self.vault.id().to_string(),
             anchor_behind_by: writes.saturating_sub(manifest.writes()),
-            promote_deferred: manifest.is_staged(),
             writes,
             chain_head,
             pruned,

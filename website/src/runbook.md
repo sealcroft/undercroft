@@ -109,7 +109,14 @@ well, where only a tampered count fails.
    writer's hot `-wal` into it (ROADMAP O91), so on those versions the copy has
    to come before any process opens the vault. Take the copy on every version:
    it is the only thing that survives a *writable* process someone else
-   starts, and a forensic copy costs seconds.
+   starts, and a forensic copy costs seconds. **`backup create` is not this
+   copy**: it archives only a vault that verifies, prunes the vault's oldest
+   archive once ten exist — perhaps the one taken before the incident — and a
+   writable one first heals a lagging anchor and promotes a deferred key
+   rotation. Since 1.7.0 `--read-only backup create` refuses before it writes
+   anything under `backups/` or into the vault's database or manifest (ROADMAP
+   O212) — its read-only open, like every one, may still leave the scaffolding
+   described above, which is why the copy comes first.
 2. **Freeze writes.** Restart the server read-only so nothing new is written on
    top of a compromised store while you investigate:
    ```bash

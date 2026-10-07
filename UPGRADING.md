@@ -378,6 +378,38 @@ older than 0.19.0 and opened by no 1.x build since has no supported path — a
 gap, stated (ROADMAP O303, its ruling of 2026-10-06). `undercroft config check`
 cannot detect it — it opens no database.
 
+### `--read-only backup create`, `bundle keygen` and `bundle sign-keygen` exit 1 instead of writing (O212)
+
+**Symptom:** `undercroft --read-only backup create` exits 1 with *"refused under
+a read-only posture: a backup writes an archive into backups/ and prunes and
+sweeps there, so it is refused under --read-only; nothing was changed …"*, and
+`undercroft --read-only bundle keygen` or `bundle sign-keygen` exits 1 with
+*"refused under a read-only posture: generating an identity writes a secret key
+file …"*. Before 1.7.0 all three exited 0: the backup wrote an archive into
+`backups/`, removed this vault's oldest archive once ten existed and removed a
+crashed backup's stage, and each keygen wrote its identity file — creating the
+data directory if it did not exist.
+
+**Cause:** `--read-only` says it writes nothing, and these three wrote under the
+palace anyway (ROADMAP O212). The keygens open no vault, so the read-only
+posture never reached them; a backup's database copy only reads, so nothing
+refused it, while the archive, the prune and the sweep around it are all
+writes. Each now refuses before it writes: nothing under `backups/`, no byte of
+the vault's database or manifest, no identity file or directory. The backup's
+read-only open still leaves the `-shm` and empty `-wal` every read-only open
+does, and on a vault `init` created that nothing has written yet that open
+refuses first, exit 2 (ROADMAP O213). `POST /v1/vaults/{id}/backups` on a
+`--read-only` server is unchanged: it was already refused with 403.
+
+**Fix:** run `bundle keygen` and `bundle sign-keygen` without `--read-only`. For
+an evidence copy during an incident, copy the vault's directory with `cp -a`,
+as the runbook says — a backup is not that copy: it archives only a vault that
+verifies, and it may prune the archive taken before the incident. For an
+ordinary backup, run `backup create` without `--read-only`, knowing that a
+writable open first fast-forwards a lagging manifest anchor (and says so) and
+promotes a key rotation whose promote was deferred. `undercroft config check`
+cannot detect this: it is a flag on one command, not a declaration.
+
 ## 1.6.1 (released 2026-09-22)
 
 ### The manifest carries a version fence from this release on (O238)

@@ -96,9 +96,26 @@ fn verify_class(s: &VaultStore) -> &'static str {
     }
 }
 
+/// The backup door's class. On a read-only handle the door refuses before it
+/// reads anything (ROADMAP O212), so the refusal is asserted and what is
+/// compared is the STRICT manifest read the door makes on every other
+/// handle — `verified_manifest`, the rule's one reader with no fall-back,
+/// which an archive written outside the data directory (O320) would reach under
+/// either posture. Asked of the handle that read the manifest, so the rule's
+/// answer on a read-only adopted handle stays pinned, as O289 made it.
 fn backup_class(s: &VaultStore, root: &Path) -> &'static str {
     let dir = root.join("o289-backups");
     std::fs::create_dir_all(&dir).unwrap();
+    if s.is_read_only() {
+        assert!(
+            matches!(
+                s.backup(&dir),
+                Err(StoreError::Vault(VaultError::ReadOnly(_)))
+            ),
+            "a read-only backup refuses before any effect (O212)"
+        );
+        return class(&s.vault.verified_manifest().map_err(StoreError::Vault));
+    }
     match s.backup(&dir) {
         Ok(BackupOutcome::Created(_)) => "served",
         Ok(BackupOutcome::Refused(_)) => "failed-verify",
@@ -133,7 +150,8 @@ fn search_class(s: &VaultStore) -> &'static str {
 }
 
 /// Every door a manifest reaches, on one handle: `verify`, a guarded search,
-/// the witness and a backup.
+/// the witness and a backup (on a read-only handle, the backup's strict
+/// manifest read, behind its refusal — [`backup_class`]).
 fn doors(s: &VaultStore, root: &Path) -> [&'static str; 4] {
     [
         verify_class(s),
