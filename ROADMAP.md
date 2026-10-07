@@ -4007,7 +4007,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**360** of the **375** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**361** of the **376** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -34650,6 +34650,74 @@ maintainer's.
 **Shape**: correct each in place — the `CLAUDE.md` sentence with the maintainer's restated reason,
 through the pull request they approve. **Gate**: each sentence matches its code or setting, and the
 battery is green over the `battery.sh` edit.
+
+### O331 — the house-figures job reads the latest release unauthenticated and throws away why it failed, so a rate limit fails CI as a stale page
+
+**Filed 2026-10-07, from PR sealcroft/undercroft#259's first CI run.** Run 37555908483's job `House page
+figures match the tree` failed with `FAIL  could not read the latest release tag` / `unreachable is a
+failure, not a skip`, while its other three arms passed — the tests tile read 1292 in CI too. Minutes
+later the same request from the maintainer's machine answered HTTP 200 with `v1.6.1`, and a re-run of
+the failed jobs passed (attempt 2). This PR touched none of it.
+
+**Measured over 300 `ci` runs, 2026-08-30 to 2026-10-07**: 314 attempts of the job, 8 failures. Five were
+the gate working — three stale test tiles, two release claims stale across a release window — and
+**three were this arm and nothing else** (runs 34117215716 on 2026-09-07, 34229405353 on 2026-09-08 and
+37555908483 on 2026-10-07): one attempt in a hundred, and three of the eight times the job went red.
+The window is what the API's run listing returned; the job is older (O65, 2026-08-21).
+
+**The mechanism, read from `tests/house-figures.sh` 148-156.** `REL=$(curl -sS --max-time 30
+https://api.github.com/repos/sealcroft/undercroft/releases/latest 2>/dev/null | sed … | head -1)`, and an
+empty `REL` is the failure. Three things are thrown away, and together they leave the log unable to say
+what happened:
+
+1. **The call is unauthenticated** from a hosted runner. Measured: `X-RateLimit-Limit: 60`
+   (`X-RateLimit-Resource: core`) unauthenticated, per IP; the same call through `gh` reads 5000, and the
+   job's `GITHUB_TOKEN` gets 1,000 an hour per repository (GitHub's documented figure, not measured
+   here — gate (2) below measures it). A runner's IP is shared, so another tenant's
+   requests can spend the 60 before this job asks — a cause outside this repository AND outside the
+   house page, which the gate exists to read.
+2. **The response BODY is discarded.** With `-sS` and no `-f`, an HTTP error exits **0** — measured with
+   these exact flags against a release that does not exist: exit 0, body `{"message": "Not Found", …}`.
+   A 403 rate-limit answer is the same shape, so its cause sits in a body the `sed` turns into an empty
+   string. **The task card that started this said the cause was the discarded stderr, and that was mine
+   and wrong**: for an HTTP error stderr is empty anyway.
+3. **curl's exit status is lost** inside the pipeline (the page fetch at 60-61 captures `CURL_RC`; this
+   read does not), and `2>/dev/null` discards the one place a DNS failure or a timeout would be named.
+
+So a rate limit, an API outage, a DNS failure and a malformed answer all print the same line, and that
+line is the one O65 wrote for an unreachable page. The likeliest cause of the three is the rate limit,
+and it is **unproven**: nothing in any of the three logs can say.
+
+**What does not move.** O65's premise rule — an unreachable source and an accurate page never produce the
+same verdict — and its ruled semantics: the release claims follow the latest PUBLISHED RELEASE, not the
+workspace version and not a tag, because the tree carries the next version during release prep. The
+`--update` re-check loop (`bash "$0"` up to ten times) makes the same unauthenticated call, which is fine
+for a person and is noted only because a fix should cover both.
+
+**Shape, to be confirmed at the build.** Two halves, both small:
+
+- **Report the cause.** Keep the body and the status: `curl -sS -w '%{http_code}'` (or `-D`), capture
+  curl's exit status the way the page fetch does, and on any failure print the HTTP status, the API's
+  `message` and curl's exit code beside the existing line. Uncontroversial, and it is what would settle
+  the question the next time it fires.
+- **Authenticate where a token exists.** Pass the job its own token (`env: GH_TOKEN: ${{ github.token
+  }}` under the workflow's existing `contents: read`) and send it when set — `gh api` or an
+  `Authorization` header — falling back to the unauthenticated call for a person running the script
+  locally. The token is read-only for this repository; it adds no credential for the house repository,
+  so O65's reason for never running `--update` in CI is untouched.
+
+**Rejected, with their cost.** A retry: the unauthenticated window is an hour, so a retry within a job's
+minutes cannot outlast it, and a retry that happens to pass hides the cause again. Treating a 403 as a
+skip: O65's premise rule, verbatim — an unreachable source must not read as an accurate page. Reading the
+tags instead (`git ls-remote --tags`, or the checkout's own): it answers a different question, a tag
+rather than a published release, and moving O65's ruled semantics owes a ruling of its own. Scraping
+`github.com/…/releases/latest`'s redirect: it keeps the semantics through an undocumented interface
+whose throttling is just as unstated.
+
+**Gate.** (1) An override for the release URL, beside `HOUSE_PAGE_URL`, pointed at a release that does
+not exist: exit 1, and the FAIL line names `HTTP 404` and `Not Found` — counterfactual, today's script
+prints neither. (2) The CI job's step carries the token, and its log shows the authenticated limit (not
+60) on a green run. (3) The script run locally with no token still reads the release and passes.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 
