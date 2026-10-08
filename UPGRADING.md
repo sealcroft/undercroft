@@ -452,6 +452,29 @@ reader left": it is not a failed run to retry, because a retry of a write that
 committed files it again. `undercroft config check` cannot detect this:
 nothing in an environment predicts a reader closing.
 
+### creating a tunnel the vault already holds over a row edited offline exits 2, and an import meeting one stops there (O236)
+
+**Symptom:** `undercroft tunnel create`, `undercroft_create_tunnel` over MCP,
+`POST /v1/vaults/{id}/tunnels`, and the tunnel records inside `undercroft
+import` / `POST …/import` answer *"integrity failure on record tunnel/{id}"* —
+exit 2, 409 `class: "integrity"` — for a tunnel the vault already holds whose
+stored row no longer verifies. Before 1.7.0 the same call succeeded: it wrote no
+row, appended a chain record anyway, and said it had created the tunnel; an
+import counted it among its tunnels and exited 0. Only a vault whose tunnel row
+was edited outside the engine meets this; `verify` already fails on such a
+vault.
+
+**Cause:** a repeated create now appends nothing and says it was a no-op
+(ROADMAP O236), and "it already exists" is a claim about the stored row, so the
+row is verified before the claim is made. An import stops at that record, after
+the drawers and graph records before it have landed: it does not yet repair a
+tampered tunnel row as it repairs a tampered drawer (ROADMAP O-NEW-O236-3).
+
+**Fix:** run `undercroft verify`, then `undercroft tunnel delete <id>` for the
+tunnel it names — the delete does not read the row and records the deletion —
+and create the tunnel again or re-run the import. `undercroft config check`
+cannot detect this: it opens no vault.
+
 ## 1.6.1 (released 2026-09-22)
 
 ### The manifest carries a version fence from this release on (O238)

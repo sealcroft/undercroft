@@ -437,8 +437,10 @@ pub struct TunnelOutcome {
     /// The tunnel's id, whether this call wrote the row or found it stored.
     pub id: String,
     /// `true` when this call inserted the row and appended `tunnel/{id}`;
-    /// `false` when a tunnel with this id was already stored and nothing was
-    /// written — no row, no chain record, no anchor.
+    /// `false` when a tunnel with this id was already stored, its row verified
+    /// under the vault's key, and nothing was written — no row, no chain
+    /// record, no anchor. A stored row that fails its tag is never `false`: the
+    /// create answers [`StoreError::Integrity`] instead.
     pub created: bool,
 }
 
@@ -632,6 +634,32 @@ pub(crate) fn tunnel_canonical(
     created: &str,
 ) -> Vec<u8> {
     format!("tunnel\x1f{id}\x1f{from}\x1f{to}\x1f{label}\x1f{created}").into_bytes()
+}
+
+/// A tunnel row's tag, verified under the handle's key — the ONE decision
+/// [`VaultStore::list_tunnels`], [`VaultStore::follow_tunnel`] and a repeated
+/// [`VaultStore::create_tunnel`] share. A row that fails it is the integrity
+/// class, counted and signalled as a tamper event on every one of the three.
+fn verify_tunnel_tag(
+    vault: &undercroft_vault::Vault,
+    id: &str,
+    from: &str,
+    to: &str,
+    label: &str,
+    created: &str,
+    tag: &[u8],
+) -> Result<(), StoreError> {
+    vault
+        .verify_tag(&tunnel_canonical(id, from, to, label, created), tag)
+        .map_err(|_| {
+            undercroft_obs::hmac_verify_failed("tunnel");
+            undercroft_obs::event_hmac_fail(
+                vault.id(),
+                "tunnel",
+                undercroft_obs::TamperSite::default(),
+            );
+            StoreError::Integrity(format!("tunnel/{id}"))
+        })
 }
 
 impl VaultStore {
@@ -2002,7 +2030,9 @@ impl VaultStore {
     /// Declare a tunnel between two wings — both names validated, the label
     /// screened — appended to the chain as `tunnel/{id}` and anchored when
     /// this call wrote it. A tunnel already stored under the same id is a
-    /// no-op that appends nothing, and [`TunnelOutcome::created`] says which.
+    /// no-op that appends nothing, and [`TunnelOutcome::created`] says which —
+    /// once the stored row verifies; one that fails its tag is
+    /// [`StoreError::Integrity`], with nothing written.
     pub fn create_tunnel(
         &mut self,
         from_wing: &str,
@@ -2101,6 +2131,22 @@ impl VaultStore {
         )? > 0;
         if inserted {
             chain_append(&tx, &self.vault, Namespace::Tunnel, &id, &tag, &created)?;
+        } else {
+            // **"It already exists" is a claim about the row the id names, so
+            // that row is read and its tag verified before the claim is made**
+            // (O236's review). Decided by the id alone, a row whose `to_wing`
+            // was edited offline answered "nothing was written" to the agent
+            // and "already present" to an import, while every read of it
+            // refused as tampered. The read is inside the transaction that
+            // found the conflict, so the row judged is the row that blocked the
+            // insert; a failure is the integrity class, with nothing written.
+            let (from, to, lbl, stored, at): (String, String, String, Vec<u8>, String) = tx
+                .query_row(
+                    "SELECT from_wing, to_wing, label, tag, created_at FROM tunnels WHERE id = ?1",
+                    params![id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+                )?;
+            verify_tunnel_tag(&self.vault, &id, &from, &to, &lbl, &at, &stored)?;
         }
         tx.commit()?;
         if inserted {
@@ -2131,17 +2177,7 @@ impl VaultStore {
             .collect::<Result<_, _>>()?;
         let mut out = Vec::new();
         for (id, from, to, label, tag, created) in rows {
-            self.vault
-                .verify_tag(&tunnel_canonical(&id, &from, &to, &label, &created), &tag)
-                .map_err(|_| {
-                    undercroft_obs::hmac_verify_failed("tunnel");
-                    undercroft_obs::event_hmac_fail(
-                        self.vault.id(),
-                        "tunnel",
-                        undercroft_obs::TamperSite::default(),
-                    );
-                    StoreError::Integrity(format!("tunnel/{id}"))
-                })?;
+            verify_tunnel_tag(&self.vault, &id, &from, &to, &label, &created, &tag)?;
             if wing.map(|w| from == w || to == w).unwrap_or(true) {
                 out.push(Tunnel {
                     id,
@@ -2202,17 +2238,7 @@ impl VaultStore {
         let to = match row {
             None => None,
             Some((from, to, label, tag, created)) => {
-                self.vault
-                    .verify_tag(&tunnel_canonical(id, &from, &to, &label, &created), &tag)
-                    .map_err(|_| {
-                        undercroft_obs::hmac_verify_failed("tunnel");
-                        undercroft_obs::event_hmac_fail(
-                            self.vault.id(),
-                            "tunnel",
-                            undercroft_obs::TamperSite::default(),
-                        );
-                        StoreError::Integrity(format!("tunnel/{id}"))
-                    })?;
+                verify_tunnel_tag(&self.vault, id, &from, &to, &label, &created, &tag)?;
                 Some(to)
             }
         };
@@ -5455,6 +5481,114 @@ mod tests {
 
         let r = s.verify().unwrap();
         assert!(r.ok() && r.version_replay.is_empty(), "{r:?}");
+    }
+
+    /// **ROADMAP O236's security half, found by its independent review: a
+    /// repeated create used to SILENCE O234's destruction check.** A tunnel
+    /// deleted and written back offline is a resurrection `verify` reports
+    /// (arm 3: the row is present after its `del/tunnel/{id}` record). A 1.6.x
+    /// repeat then appended a `tunnel/{id}` record ABOVE that tombstone, and
+    /// arm 3 read it as a newer write — `verify` went from failed to OK, with
+    /// the resurrected row still served. Measured by the review on a copy with
+    /// the old append: `ok=false replay=1` before the repeat, `ok=true
+    /// replay=0` after. Now the repeat appends nothing and the finding stands.
+    #[test]
+    fn o236_a_repeat_cannot_hide_a_resurrected_tunnel() {
+        let (_d, mut s) = store();
+        let first = s.create_tunnel("notes", "archive", "see also").unwrap();
+        let (from, to, label, tag, at): (String, String, String, Vec<u8>, String) = s
+            .conn
+            .query_row(
+                "SELECT from_wing, to_wing, label, tag, created_at FROM tunnels WHERE id = ?1",
+                params![first.id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .unwrap();
+        assert!(s.delete_tunnel(&first.id).unwrap());
+        // The offline writer: the genuine row, bytes as they were, put back.
+        s.conn
+            .execute(
+                "INSERT INTO tunnels (id, from_wing, to_wing, label, tag, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![first.id, from, to, label, tag, at],
+            )
+            .unwrap();
+        let before = s.verify().unwrap();
+        assert!(
+            !before.ok() && before.version_replay.len() == 1,
+            "premise: the resurrection is found before any repeat: {:?}",
+            before.version_replay
+        );
+        // The row is genuine, so its tag verifies and the repeat is a no-op —
+        // which is exactly why it must not append.
+        let again = s.create_tunnel("notes", "archive", "see also").unwrap();
+        assert!(
+            !again.created,
+            "premise: the repeat met the written-back row"
+        );
+        let after = s.verify().unwrap();
+        assert!(
+            !after.ok() && after.version_replay.len() == 1,
+            "a repeated create laundered a resurrected tunnel: {:?}",
+            after.version_replay
+        );
+    }
+
+    /// **ROADMAP O236's review, the gap: "already exists" was decided by the
+    /// id alone.** A row whose `to_wing` was edited offline still answered
+    /// `created: false` — "nothing was written" on MCP and the CLI, "already
+    /// present" on an import — while `list_tunnels` refused it and `verify`
+    /// failed. The no-op now verifies the row that blocked the insert and
+    /// answers the integrity class, writing nothing; an untouched tunnel's
+    /// repeat is the control.
+    #[test]
+    fn o236_a_repeat_over_a_tampered_tunnel_row_is_the_integrity_class() {
+        let (_d, mut s) = store();
+        let clean = s.create_tunnel("notes", "field", "control").unwrap();
+        let first = s.create_tunnel("notes", "archive", "see also").unwrap();
+        s.conn
+            .execute(
+                "UPDATE tunnels SET to_wing = 'elsewhere' WHERE id = ?1",
+                params![first.id],
+            )
+            .unwrap();
+        assert!(
+            matches!(s.list_tunnels(None), Err(StoreError::Integrity(_))),
+            "premise: every read of the edited row refuses"
+        );
+        let audit_rows = |s: &VaultStore| -> i64 {
+            s.conn
+                .query_row("SELECT COUNT(*) FROM audit", [], |r| r.get(0))
+                .unwrap()
+        };
+        let height = audit_rows(&s);
+
+        let again = s.create_tunnel("notes", "archive", "see also");
+        assert!(
+            matches!(&again, Err(StoreError::Integrity(id)) if id == &format!("tunnel/{}", first.id)),
+            "a repeat over a tampered row must not answer 'already exists': {again:?}"
+        );
+        assert_eq!(audit_rows(&s), height, "and it wrote nothing");
+        let to: String = s
+            .conn
+            .query_row(
+                "SELECT to_wing FROM tunnels WHERE id = ?1",
+                params![first.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(to, "elsewhere", "the evidence is left as found");
+
+        // The control: a row that verifies is still the plain no-op.
+        let control = s.create_tunnel("notes", "field", "control").unwrap();
+        assert_eq!(
+            control,
+            TunnelOutcome {
+                id: clean.id,
+                created: false
+            }
+        );
+        assert!(!s.verify().unwrap().ok(), "verify still reports the edit");
     }
 
     #[test]

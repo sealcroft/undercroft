@@ -647,6 +647,30 @@ fn o236_a_repeated_tunnel_create_and_a_restored_tunnel_write_nothing_and_say_so(
             .success()
             .stdout(predicate::str::contains("VERIFY OK"));
     }
+
+    // O236's review: "already exists" is a claim about the stored row, so a
+    // row edited offline is the integrity verdict (exit 2), never "nothing
+    // was written" — through the create and through the import alike.
+    rusqlite_open(&fresh.path().join("vaults/default/vault.db"))
+        .execute("UPDATE tunnels SET to_wing = 'elsewhere'", [])
+        .unwrap();
+    cmd(&fresh)
+        .args(["verify"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("VERIFY FAILED"));
+    cmd(&fresh)
+        .args(["tunnel", "create", "a", "b", "--label", "see also"])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("already exists").not())
+        .stderr(predicate::str::contains("integrity"));
+    cmd(&fresh)
+        .args(["import", export.to_str().unwrap()])
+        .assert()
+        .code(2)
+        .stdout(predicate::str::contains("already present").not());
+    assert_eq!(tunnel_records(&fresh), 1, "the refusals wrote nothing");
 }
 
 // Tiny local shim so this test file does not depend on rusqlite directly

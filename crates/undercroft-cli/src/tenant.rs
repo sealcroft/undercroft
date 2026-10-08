@@ -2709,10 +2709,11 @@ impl Tenancy {
         let store = self.store_for(id)?;
         let out = store.create_tunnel(&from, &to, &label).map_err(store_err)?;
         // `created` is additive (ROADMAP O236): `false` when this vault
-        // already held the tunnel, so nothing was written and no chain record
-        // appended. The status stays the documented 201 either way; whether a
-        // no-op should answer 200 instead is ROADMAP O-NEW-O236-1, not decided
-        // here.
+        // already held the tunnel and its row verified, so nothing was written
+        // and no chain record appended; a held row that fails its tag is 409
+        // `integrity` through `store_err`. The status stays the documented 201
+        // either way — any other status for a repeat moves a documented
+        // contract, so it is a 2.0.0 question, ROADMAP O-NEW-O236-1.
         Ok((
             201,
             Body::Json(json!({

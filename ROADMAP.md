@@ -4141,7 +4141,7 @@ once (it cited `tenant.rs:1930` for what is now `:2041`).
 
 </details>
 
-## 2.0.0 — one item is filed
+## 2.0.0 — two items are filed
 
 ### O163 — derive a model embedder's identity from the model, not from a constant
 
@@ -4181,6 +4181,34 @@ touching anyone's existing corpus.
 **Gate:** a vault written under the old constant must still open without an
 integrity verdict, and two different model files must produce two different
 identities.
+
+### O-NEW-O236-1 — `POST /v1/vaults/{id}/tunnels` answers 201 for a create that created nothing
+
+**Filed 2026-10-08 by O236; placed under 2.0.0 by that unit's independent review.** O236 makes a
+repeated tunnel create write nothing and say so: `create_tunnel` returns `TunnelOutcome { id,
+created }`, MCP and the CLI word a repeat `already exists — nothing was written`, and `POST …/tunnels`
+answers `"created": false` in its body. Its STATUS stays 201 either way (`tenant.rs` `tunnel_create`).
+
+**Why 2.0.0, which the doctrine settles.** `docs/AGENTS.md` documents the route as "**201** with the
+tunnel id". Any other status for a repeat moves that documented answer for some of the route's
+requests — MAJOR by this file's own test, a documented contract that changes — so no patch or minor
+release may do it. What stays open is whether 2.0.0 should. RFC 9110 gives 201 to a request that "has
+resulted in one or more new resources being created", so a 201 over a no-op is the HTTP form of the
+claim O236 removed from the chain and from the body; against it, a client that asserts 201 on an
+idempotent retry starts failing.
+
+**Options, with their cost.** (a) Keep 201 and the body's `created` (what O236 built): breaks no
+client; the status still claims a creation. (b) 200 with `created: false` on a repeat, 201 on a
+create: the status tells the truth, and the drawer save route already answers 200 with a `created`
+boolean (`tenant.rs` `save_drawer`); a client keyed on 201 for a retry breaks. (c) 409 on a repeat —
+the in-tree precedent for "this already exists" on a create route is `POST /v1/vaults`, which answers
+409 for a vault that exists (`vault_err` on `VaultError::AlreadyExists`); its cost here is that MCP
+and the CLI answer a repeat as a success, and both import surfaces, which reach the same store door,
+would need to keep doing so.
+
+**Gate**, once ruled: the e2e arm `/v1 repeated tunnel create says it wrote nothing` asserts the
+status the ruling picks beside the body, with a create's 201 as its control. The orchestrator forwards
+`POST /t/tunnels` unchanged (`proxy.rs`'s data allowlist), so a tenant sees what the engine answers.
 
 ## 1.7.0 — unreleased
 
@@ -13777,12 +13805,22 @@ transaction that would append, so two creates racing for one id cannot both say 
 `chain_append` and the post-commit `anchor()` run only when it inserted — `delete_tunnel`'s shape
 since it existed. The name guards and the tier-1 label screen still run before the insert, so a
 repeat whose label the screen now flags is still refused (`a_tunnel_label_is_guarded_…` drives exactly
-that order: the poisoned tunnel exists, and the screened repeat refuses). **One consequence, found by
-reading and not driven by a test**: on a handle whose keys are retired or stale (O254, O257), a repeat
-now answers the no-op where `chain_append`'s retirement and keycheck refusals used to answer it with
-the reopen class. It writes nothing, `delete_tunnel` of an absent id has always answered such a handle
-the same way, and a create that inserts still reaches those refusals and rolls back; a `Released`
-handle's placeholder connection still fails the insert itself, loudly.
+that order: the poisoned tunnel exists, and the screened repeat refuses). **One consequence for a
+handle that no longer writes** (O254, O257, O266, O278): a repeat used to reach `chain_append`'s
+refusals and now does not. By class — corrected here, because this record first said all of them
+were "the reopen class", which two are not: a handle retired by `Retirement::Integrity` and one whose
+keycheck is stale answered `IntegrityFinding` (exit 2, 409 `integrity`); one retired by
+`PromotionDeferred` answered `StaleUnlock`, the reopen class; a `Released` handle's placeholder
+connection fails the insert itself, loudly, as before. Now a repeat on a handle retired by
+`Retirement::Integrity` or by `PromotionDeferred` is the no-op (measured by the review for
+`Retirement::Integrity`, before the row check below existed: `Ok(created: false)`, while a new create
+on the same handle still refused `IntegrityFinding`; both handles hold the vault's keys, so the row
+check passes — by reading). On a stale-keys handle,
+by reading and not driven by a test, the row's tag was computed under the keys the vault moved to, so
+the row check fails and the repeat answers `Integrity` — the same exit class, worded as the HMAC
+failure the handle sees. Judged safe by the review: nothing is written,
+`delete_tunnel` of an absent id has always answered such a handle the same way, and a create that
+inserts still reaches the refusals and rolls back.
 
 **Every surface that reaches it**, read: MCP `undercroft_create_tunnel` (`tunnel {id} already exists —
 nothing was written`, `isError: false`); CLI `tunnel create` (the creation line plus `already exists —
@@ -13838,9 +13876,48 @@ of writes that never happened — and `verify` OK all the same, which is why the
 The self-import's other 2,720 `audit` rows on both binaries are O215's: the import re-stamps
 `added_by`, so every drawer is `replaced`, not this entry's.
 
-**What remains**: O-NEW-O236-1 (under `## Open`) — whether `POST …/tunnels` should answer 200 rather
-than 201 for a repeat. This unit kept the documented 201 and added the body field; it changed no
-status, because what a documented route answers is not this entry's to decide.
+**What remains**: O-NEW-O236-1 (under `## 2.0.0`, moved there by the review below) — whether
+`POST …/tunnels` should answer something other than 201 for a repeat, which moves a documented
+answer; O-NEW-O236-2 and O-NEW-O236-3 (under `## Open`) — finding the resurrections 1.6.x's surplus
+records already hide, and an import repairing a tampered tunnel row.
+
+#### REVIEWED 2026-10-08 by an independent reviewer — the code correct; four findings in what it claimed and recorded and one gap, all mine, each fixed
+
+**1 (medium) — the security effect, which this record did not state.** The surplus record was not
+only a false claim: after a tunnel was deleted and its row written back offline, a 1.6.x repeat
+appended `tunnel/{id}` ABOVE the `del/tunnel/{id}` record, and arm 3 — "present after a newer
+destruction" — read it as a newer write. Measured by the review on a copy with the old append:
+`verify` `ok=false`, one `version_replay` finding, before the repeat; `ok=true`, none, after. On this
+fix it stays failed. Now `o236_a_repeat_cannot_hide_a_resurrected_tunnel` holds it: on a copy of
+this tree with the repeat's append put back (recompiled, the edit counted present) it fails at
+"a repeated create laundered a resurrected tunnel", the finding list empty, while the row-check test
+stays green; GREEN here. **The residual**: a vault a 1.6.0 or 1.6.1 binary wrote may
+already hold such a laundered resurrection, and today's `verify` cannot see it, the trail being
+append-only. It is not beyond reach — the laundered row's tag sits only in a write record BELOW the
+tombstone — so it is filed as work, O-NEW-O236-2, not stated as permanent.
+
+**2 (low) — the gap: "already exists" was decided by the id alone.** A row whose `to_wing` was edited
+offline answered `created: false` — "nothing was written" to an agent, "already present" to an import
+— while `list_tunnels` refused it and `verify` failed. The no-op now reads the row that blocked the
+insert, inside the same transaction, and verifies its tag through `verify_tunnel_tag`, the one check
+`list_tunnels` and `follow_tunnel` now share with it (they carried two copies of it); a failure is
+`StoreError::Integrity("tunnel/{id}")` — exit 2, 409 `integrity` — with nothing written and the row
+left as found. Tests: `o236_a_repeat_over_a_tampered_tunnel_row_is_the_integrity_class` (store, with
+an untouched tunnel's repeat as the control) and a CLI arm added to
+`o236_a_repeated_tunnel_create_and_a_restored_tunnel_write_nothing_and_say_so` (`tunnel create` and
+`import` exit 2 over an edited row, writing nothing). With the row check removed on the same copy,
+both fail — the store test on `Ok(created: false)` over the edited row, the CLI arm on `tunnel
+create`'s exit code — and the resurrection test stays green. **Not done, filed with its argument**: an import repairing such a row on O215's
+precedent (O-NEW-O236-3).
+
+**3 (low)** — this record named the retired-handle classes wrongly; corrected in place above.
+**4 (low)** — O-NEW-O236-1 was filed under `## Open` as though a patch could answer it: `docs/AGENTS.md`
+documents the route as "201 with the tunnel id", so any other status for a repeat moves a documented
+contract, MAJOR by this file's test. Moved under `## 2.0.0`, citing `POST /v1/vaults` answering 409
+for a vault that exists. **5 (nit)** — the note beside O234 said a 1.7.0 vault's newest `tunnel/`
+record carries the row's tag; a key rotation re-tags tunnel rows (`rotate.rs`) and preserves audit
+tags, so it is true only until the first rotation. Corrected there; the conclusion stands on arm 1's
+rotation boundary.
 
 ### O287 — CLOSED 2026-10-07: a reader that leaves early never turns a verdict into a panic — every stdout write of both binaries goes through one door, the reader leaving is exit 141, an integrity verdict still exits 2, and the nineteen piped checks capture, then match
 
@@ -15773,11 +15850,20 @@ can be simulated; the e2e drives the two halves an operator meets.
 **Figures**: cargo 1008/4 (1012 compiled), e2e 585; landing tiles 1008 and 997.
 
 **Noted 2026-10-08 by O236.** A tunnel create that inserts nothing appends nothing since O236, so
-on a vault 1.7.0 alone has written a tunnel's newest `tunnel/` record carries the row's tag. Tunnels
-still take arm 3 only, and that is unchanged on purpose: the surplus records 1.6.x appended for a
-no-op create stay in every vault it wrote (the trail is append-only), and above S arm 1 would read
-one as a newer version that never landed. `a_repeated_tunnel_create_is_clean_and_a_restored_one_is_not`
-now plants such a record and holds the tunnel row clean over it.
+on a vault 1.7.0 alone has written a tunnel's newest `tunnel/` record carries the row's tag — until
+the first key rotation, which re-tags tunnel rows (`rotate.rs`) and preserves audit tags, so after
+it no record holds the row's tag; arm 1's rotation boundary is what would absorb that. Tunnels still
+take arm 3 only, and that is unchanged on purpose: the surplus records 1.6.x appended for a no-op
+create stay in every vault it wrote (the trail is append-only), and above S arm 1 would read one as a
+newer version that never landed. `a_repeated_tunnel_create_is_clean_and_a_restored_one_is_not` now
+plants such a record and holds the tunnel row clean over it.
+
+**And those surplus records weakened arm 3 itself, found by O236's independent review.** A tunnel
+deleted and written back offline is exactly arm 3's finding; a 1.6.x repeat create then appended
+`tunnel/{id}` ABOVE the tombstone, arm 3 read it as a newer write, and `verify` went from
+`ok=false` with one finding to `ok=true` with none (measured on a copy with the old append). A
+1.7.0 repeat appends nothing, so the finding stands. A vault 1.6.0 or 1.6.1 wrote may already hold
+such a laundered resurrection; finding it is filed as O-NEW-O236-2.
 
 ### O233 — CLOSED 2026-09-19: the audit chain binds each record's label and time, so a relabelled audit row no longer passes `verify`
 
@@ -35050,6 +35136,58 @@ gains a writer arm that sees a tracing fmt layer with no `with_writer` or a stdo
 telemetry build under `UNDERCROFT_LOG_FORMAT=json`, `serve-mcp`'s stdout carries the JSON-RPC frames
 alone and an export's stdout is the payload alone (e2e-telemetry), each with the premise that the log
 line is emitted; counterfactual, today's layer.
+
+### O-NEW-O236-2 — a vault 1.6.0 or 1.6.1 wrote may hold a resurrected tunnel that a surplus repeat record hides from `verify`
+
+**Filed 2026-10-08 by O236's independent review; measured for the mechanism, not for any real vault.**
+O234's arm 3 reports a row present after a newer destruction record. A 1.6.x repeat tunnel create
+appended `tunnel/{id}` whether or not it inserted, so the sequence create → delete (`del/tunnel/{id}`)
+→ the genuine row written back offline → any repeat create through MCP, the CLI, `/v1` or an import
+left a write record ABOVE the tombstone, and arm 3 read the row as written after its destruction.
+Measured on a copy with the old append: `verify` `ok=false` with one finding before the repeat,
+`ok=true` with none after. O236 stops new repeats appending, so the finding now stands; the records
+1.6.x already appended stay, the trail being append-only, and a vault that met the sequence verifies
+clean today while serving the resurrected tunnel.
+
+**Shape, by reading — not built, because it changes a verify leg.** The laundered row has a tell: its
+tag sits only in a write record BELOW the tombstone (the original create), while every record above
+it carries a tag no row holds. A legitimate history never looks like that: create → delete →
+re-create puts the row's own tag in a record above the tombstone, and a 1.6.x repeat after a
+re-create adds a surplus record beside it. So for tunnels, arm 3 would also fire when the newest
+destruction record D lies above `max(the last rotate/, S)` and no `tunnel/{id}` record above D
+carries the row's tag. Its boundaries are arm 1's, for arm 1's reason: a key rotation after D
+re-tags the row and records nothing per row, so below the boundary the row's tag is in no record
+whatever happened. **Residual of the residual, stated**: a vault rotated after the laundering is
+past this shape's reach — O232 refused no such rotation, the finding having been hidden already.
+
+**Gate**: the four-step 1.6.x sequence planted (the surplus record appended directly, as 1.6.x wrote
+it) fails `verify` and blocks a rotation; create → delete → re-create, with and without a surplus
+record, before and after a rotation, stays clean — the false-alarm sweep O234's ruling required,
+repeated for this arm.
+
+### O-NEW-O236-3 — an import over a tampered tunnel row refuses rather than repairing it, as it repairs a drawer
+
+**Filed 2026-10-08 by O236's independent review, with the argument for not building it there.**
+Since O236's review a create over a stored tunnel row that fails its tag answers the integrity class
+and writes nothing. That is right for the agent-facing creates (MCP, the CLI, `POST …/tunnels`):
+they must not overwrite the evidence. For an IMPORT it is a step short of O215's precedent, where a
+restore is the remedy for a tampered drawer row — written and counted `replaced`. Today an import
+meeting such a tunnel stops at that record, exit 2 or 409 `integrity` naming `tunnel/{id}`, after
+the drawers and graph records before it have landed (an import is not one transaction across its
+stages); the remedy is `tunnel delete <id>` — which deletes without reading the row and records
+`del/tunnel/{id}` — and the import again.
+
+**Why not in O236.** The import's tunnel door IS `create_tunnel`, shared with the agent-facing
+creates, so a repair needs a mode the agent surfaces cannot reach, a third outcome (`replaced`)
+reported on both import surfaces (the CLI summary and a `/v1` key beside `tunnels_new`), and the docs
+that state both — a unit of its own, and an outcome contract worth ruling rather than adding in a
+review fix.
+
+**Shape**: the import mode replaces a row that fails its tag in place — the declared fields, a fresh
+tag and `created_at` — and appends `tunnel/{id}`, counted `replaced`; a row that verifies stays the
+no-op. **Gate**: an edited tunnel row, then an import of the vault's own export → the row repaired,
+`verify` OK, the import reporting one replaced; the same repeat through MCP → the integrity class,
+the row untouched. Counterfactual: today's refusal.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 
