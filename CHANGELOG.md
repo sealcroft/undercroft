@@ -2,18 +2,19 @@
 
 ## 1.7.0 — unreleased
 
-MINOR: one new capability, backward compatible, and thirty-one fixes. The witness
+MINOR: one new capability, backward compatible, and thirty-three fixes. The witness
 commands and routes are new; no default moves and no declaration can stop a
-start-up. Six fixes change what a deployment must do: every process writing a
+start-up. Seven fixes change what a deployment must do: every process writing a
 vault must run the same build, and a server whose vault another process
 rotated now stops writing rather than destroy the rotated salt (O254); a
 key rotation now refuses while any other process has the vault open (O257);
 and a restore now proves the archive first, so it needs the key and the
 vault's embedder environment and refuses under `--read-only` (O268); a
 restore refuses over a symbolic link (O283); a vault delete refuses while
-any other process has the vault open, a replica included (O291); and
+any other process has the vault open, a replica included (O291);
 `--read-only backup create`, `bundle keygen` and `bundle sign-keygen` exit 1
-instead of writing (O212) — all in `UPGRADING.md`, beside
+instead of writing (O212); and a command whose stdout reader leaves early
+exits 141 where it panicked with 101 (O287) — all in `UPGRADING.md`, beside
 O279's note that a filesystem whose inode numbers are not stable now refuses
 every open (which `config check` pre-flights), O255's note that a destruction now
 holds the write lock for as long as it runs and O256's that an archive taken by an
@@ -25,9 +26,10 @@ until O279, which closed four entries, "seventeen" until O281, "eighteen" until 
 "twenty-two" until O290, "twenty-three" until O291, "twenty-four" until O296,
 "twenty-five" until O304 — O303 should have made it twenty-six and did not, which O304 found
 by counting the entries — "twenty-seven" until O305, "twenty-eight" until O309, "twenty-nine"
-until O314 and "thirty" until O212; it said
+until O314, "thirty" until O212 and "thirty-one" until O287, which closed two entries; it said
 "Three fixes change what a deployment must do" until O283 made it four,
-"Four" until O291 made it five, and "Five" until O212 made it six.)
+"Four" until O291 made it five, "Five" until O212 made it six, and "Six"
+until O287 made it seven.)
 
 ### The external witness: `undercroft witness emit` / `check`, `GET`/`POST /v1/…/witness` (O245)
 
@@ -1643,6 +1645,117 @@ field it has always carried beside `backup`.
 PATCH inside the unreleased 1.7.0: the flag keeps the promise its help makes. A script that ran
 `--read-only backup create` or a keygen under `--read-only` now exits 1, so `UPGRADING.md` carries an
 entry; `config check` cannot see it.
+
+### A reader that leaves never turns a verdict into a panic: exit 141, an integrity verdict still exits 2, and no diagnostic can kill a server (O287, O328)
+
+Rust ignores `SIGPIPE`, so a write to a pipe whose reader has gone fails with `EPIPE`, and `println!`
+panics on it: exit 101, a status no document defines, and a panic text on stderr. Worse, most
+verdicts here are printed BEFORE they are decided, so the panic took the verdict with it. Measured on
+the LoCoMo feed mined into three wings (255 drawers): `undercroft search the --limit 500 | head -c 1`,
+81,962 bytes into a one-byte reader, exited 101 with the panic on 5 runs of 5; `verify | head -c 1`
+over a tampered vault of 1,700 drawers, whose findings run to 76,678 bytes, exited 101 where the
+doctrine promises 2 — with `2>&1` too; `search x 2>/dev/full` on that vault exited 101, because the
+final `Error:` line panicked on stderr; `drawer get` of a missing id into a closed reader exited 101.
+
+Now every stdout write the code of `undercroft` and `undercroft-orchestrator` makes goes through ONE
+door, in `undercroft-obs` (`stdio.rs`, `outln!`), which never panics, never returns an error and never
+exits — the one stdout write that does not is a telemetry build's `UNDERCROFT_LOG_FORMAT=json` log
+layer, which tracing points at stdout and a published diagram labels stdout (O333, filed by this
+unit's independent review, which measured it in the MCP stream and in an export's payload).
+On `BrokenPipe` it latches that the reader left and discards what is written after, so the command
+runs on to its own verdict; any other stdout error (`ENOSPC`, `EIO`) is a run failure, named on
+stderr. Each binary's `main` flushes the door explicitly and folds the exit status in one place, in
+one order: **an integrity verdict 2, a failed run 1, the reader leaving 141, then 0**. Reader-left
+comes from the door's latch alone, never from a `BrokenPipe` in the error chain, which an outbound
+socket raises too. The lines a binary prints on stderr on its way out — the final `Error:` line, the
+orchestrator's `INTEGRITY VERDICT` notices — are best-effort writes (`errln!`), so `cmd 2>&1 | head`
+keeps the verdict too. The same runs after: `search … | head -c 1` exits 141 on 5 runs of 5 with
+nothing on stderr; the tampered `verify | head -c 1` exits 2, with `2>&1` too; `search x
+2>/dev/full` exits 2; stdout to `/dev/full` exits 1 with `Error: writing to standard output: No space
+left on device`. The orchestrator's `fn main() -> Result` became an `ExitCode` main.
+
+**141 is a fourth documented exit class** (`docs/AGENTS.md` §7.3 and the book, `docs/PARITY.md`,
+`docs/THREAT_MODEL.md`, `docs/security.md`). Never 0, which would launder the verdicts printed before
+an exit 2 and report an undelivered export, receipt or once-shown token as delivered; never 1, which a
+script may retry, and a retry after a committed `remember` files a duplicate. The converse is not
+promised and no exit code can promise it: output that fits in a pipe's buffer is accepted in full, so a
+reader that dies after the last write leaves the run at 0 — only an export's payload digest, checked at
+import, sees that. It is the status a POSIX shell already reports for this event, returned as an
+ordinary exit code, so the same number on Windows. Its cost, stated: under `set -o pipefail`, `search | head` fails, as
+it does for every C tool and as it already did at 101. Two observables that were not panics move:
+`export` into a closed reader exits 141 where it exited 1 with `Error: Broken pipe`, and `serve-mcp`
+whose client hung up mid-response ends with 0 where it exited 1 — the status the same client leaving
+by closing stdin already gave. `--help` or `--version` into a closed reader is 141, where it was a
+quiet 0 over text nobody received. `serve-http` writes nothing to stdout and is unchanged; `daemon run` keeps filing with
+its output discarded.
+
+**The harness half, as a correctness fix.** Nineteen checks — seventeen in `tests/e2e.sh` (twelve
+with a literal `$BIN`, three through the `o255`/`o250` wrappers, two inside `sh -c`) and two in
+`tests/e2e-orchestrator.sh` — piped a binary into `grep -q`, whose status `set -o pipefail` reads as
+the producer's whenever grep leaves first: red at random over a correct tree, and GREEN over a present
+defect in the five negative-sense checks whenever the producer exited non-zero after the match. Each
+now captures, then matches, asserting the exit code first. A new host-side preflight, `checks capture
+the binary, then match`, refuses the shape — a status-consuming pipeline from `$BIN`, `$ORCH` (in any
+quoting, in a `{ …; }` or `( … )` group, in an `sh -c` string) or a function that runs one, into any
+later stage that may leave first: `grep`, `egrep` or `fgrep` (by any path, after `command`, in a
+group) with `-q`, `-l` or `-m` in any cluster and position or a long spelling, `head`, `sed` with a `q`,
+`awk` with `exit`, over `|` or `|&`; and an assignment of such a substitution whose status is read. A
+small depth-aware parser splits the pipelines, and a probe line per spelling and shape — 39 refused,
+15 exempt — holds it; run over the unfixed harness it names exactly those nineteen sites. Its first
+version matched `grep` right after the pipe with `-q`/`-l`/`-m` before the pattern and read
+`; … }` as a statement end, so ten spellings the independent review planted passed it while its
+comment and this entry said "any spelling" — mine, widened before this landed. Substitutions whose
+status nothing reads (`ID="$("$BIN" … | head -1)"`) stay outside it, as the ruling says; curl and
+printf producers are filed as O332.
+
+Ruled by three lenses — Agentic Memory Architecture, Rust systems and CLI engineering, and Security —
+and an adversarial refuter, approved by the maintainer and recorded in ROADMAP O287 before the build.
+Restoring the default `SIGPIPE` lost: a second `unsafe` block, the integrity class gone with the
+process, a process-wide change on the servers and every outbound client, and Windows left at 101. The
+filed quiet exit 0 lost because it launders verdicts and products.
+
+Gates. `undercroft-obs`: the latch, step by step, asserting which writes were reached; the first loss
+winning; the fold, every cell; a client leaving a session without latching; and two source counts over
+text with every comment removed and every string and char literal blanked (a print after a URL in a
+string is seen, a needle inside a literal is not — its own premise test) — no `println!`, `print!`,
+`eprintln!`, `eprint!`, `dbg!` or raw stdout/stderr handle in any file under either binary's `src/`,
+recursively, cfg-gated and test code included, beside `#![deny(clippy::print_stdout,
+clippy::print_stderr)]` at both roots; and no print macro in the PRODUCTION text of any crate but the
+bench harness, the raw handles living in `undercroft-obs` alone. The first version of the binaries'
+count read one directory level and cut each line at `//`, string or not — mine, found by the review.
+`tests/cli.rs`: seven arms with one stream bound to a
+`std::io::pipe()` whose reader is dropped BEFORE the spawn — `search` 141 with no panic, `verify` on a
+tampered vault 2 with either stream closed, `witness check` on a rolled-back vault 2, a retention
+sweep with drift 2, `drawer get` of a missing id 1, stdout to `/dev/full` 1, and `export` 141,
+`--help` 141 and `serve-mcp` 0 — each with its premise, the same run into a live reader. RED on the
+unfixed tree (101 throughout, 1 for the export), GREEN after; against the filed quiet-exit-0 shape six
+of the seven fail (0 everywhere), and the `/dev/full` arm, which tests a failure that is not a broken
+pipe, fails only on the unfixed tree. The e2e suite (seven checks) and the orchestrator's (three) drive
+the same through the release binaries with a FIFO whose only reader closed before the spawn:
+`ops … verify` on a tampered tenant 2 with either stream closed, and `keygen` 141.
+
+Windows maps a closed pipe to `BrokenPipe` in the toolchain the battery pins (`sys/pal/windows/mod.rs`:
+`ERROR_BROKEN_PIPE` and `ERROR_NO_DATA`), read, not executed: no CI leg runs a Windows binary
+(O275's residual, restated). An exit-2 run on a telemetry build still skips its flush: O329.
+
+**O328 closes with it: no diagnostic can kill a server or lose a verdict.** The default build's
+`diag_*!` were bare `eprintln!`s, and so were an FDE tuning warning and the opt-in search trace in
+`undercroft-store`; each panicked on a closed or full stderr. They write `errln!`'s best-effort line
+now. Measured, before (`781b5b9` and this unit's first build) → after: a tampered vault's `verify`
+beside one unreadable tuning knob (`UNDERCROFT_SEMANTIC_FLOOR=lots`) with stderr on `/dev/full` or a
+closed reader, 101 → 2; `serve-mcp` with a closed stderr, 101 → 0; probe P7 — `serve-http` started
+with its stderr reader already gone died at its start-up line (101) and never served, and now serves
+two unasserted requests (401, each a diagnostic) and answers `/healthz` 200, alive; the orchestrator's
+`serve`, 101 at start before O287, serves and answers `/healthz`. A telemetry build's diagnostics go
+through tracing, whose writer drops a failed write (`log_internal_errors` is off by default), and
+measured the same way on a telemetry build of both binaries: 2, 0, a `serve-http` that keeps serving
+and an orchestrator that answers `/healthz`. Gated by the
+production source count above, two `tests/cli.rs` arms (`o328_*`, RED at 101 and a server that never
+came up on the unfixed tree), and three e2e checks across the two suites.
+
+PATCH inside the unreleased 1.7.0, by the 2026-09-08 versioning ruling: the defect removed is an
+undefined panic status, and the new class reports a condition that was undefined; 0, 1 and 2 keep
+their meanings. `UPGRADING.md` carries the entry; `config check` cannot detect it.
 
 ## 1.6.1 — 2026-09-22
 

@@ -4,6 +4,12 @@
 //! memories live in isolated vaults with per-vault derived keys, AEAD
 //! encryption, and HMAC integrity verification.
 
+// Every print goes through the stdout door (ROADMAP O287): `println!` panics
+// on a closed reader and turned a verdict into exit 101. `outln!` and
+// `errln!` are the door; a source count in `undercroft-obs` covers the code
+// these lints never compile (the model features, O153).
+#![deny(clippy::print_stdout, clippy::print_stderr)]
+
 mod assertion;
 mod config_check;
 mod http;
@@ -24,6 +30,8 @@ use std::path::{Path, PathBuf};
 use i18n::{fill, tr};
 use undercroft_core::normalize::mode_for_path;
 use undercroft_core::{chunk_text, normalize_content, ChunkOptions, Drawer};
+use undercroft_obs::stdio::{Delivery, Run};
+use undercroft_obs::{errln, outln};
 use undercroft_store::{SearchOptions, VaultStore};
 use undercroft_vault::{SecurityLevel, Vault, VaultManager};
 
@@ -1309,7 +1317,7 @@ fn import_batched(
 /// default (screening off) output is byte-identical.
 fn report_quarantined(quarantined: usize) {
     if quarantined > 0 {
-        println!(
+        outln!(
             "{quarantined} of these tripped the admission screen and were quarantined \
              pending review — they are NOT retrievable where they were filed. \
              Review with `undercroft admission list`."
@@ -1985,10 +1993,14 @@ impl undercroft_core::rerank::Reranker for SharedReranker {
 /// Exit 2 — an INTEGRITY VERDICT: the engine detected that stored evidence
 /// does not verify. Reserved for that and nothing else, because a compliance
 /// script keys its retry logic on the class.
-const EXIT_INTEGRITY: u8 = 2;
+///
+/// The numbers are the stdout door's (ROADMAP O287), whose fold both binaries
+/// share, so the two cannot state different values for one class. The fourth
+/// class, 141 — the reader of stdout went away — is decided there alone.
+const EXIT_INTEGRITY: u8 = undercroft_obs::stdio::EXIT_INTEGRITY;
 /// Exit 1 — the run itself failed: bad arguments, a missing file, an
 /// unreadable vault. Retryable in the sense that a retry might succeed.
-const EXIT_FAILURE: u8 = 1;
+const EXIT_FAILURE: u8 = undercroft_obs::stdio::EXIT_FAILURE;
 
 /// Is this error an integrity verdict, or an ordinary run failure?
 ///
@@ -2095,11 +2107,20 @@ fn main() -> std::process::ExitCode {
     // file" — and clap's `USAGE_CODE` is 2, so a typo or a renamed flag
     // reached a compliance script as a TAMPER VERDICT. The doctrine and the
     // parser disagreed, and the doctrine is the one that is published.
-    // `--help`/`--version` still exit 0, which is what `use_stderr` decides.
-    let parsed = <Cli as clap::Parser>::try_parse().unwrap_or_else(|e| {
-        let _ = e.print();
-        std::process::exit(if e.use_stderr() { 1 } else { 0 });
-    });
+    // `--help`/`--version` still exit 0, which is what `use_stderr` decides —
+    // through the stdout door (ROADMAP O287), so help into a closed reader is
+    // 141 like any other output rather than a quiet 0 over truncated text.
+    let parsed = match <Cli as clap::Parser>::try_parse() {
+        Ok(parsed) => parsed,
+        Err(e) if e.use_stderr() => {
+            let _ = e.print();
+            return std::process::ExitCode::from(EXIT_FAILURE);
+        }
+        Err(e) => {
+            undercroft_obs::stdio::write_with(|| e.print());
+            return exit(Run::Completed);
+        }
+    };
     // Telemetry is a no-op unless built with `--features telemetry`. The
     // guard flushes providers on any return path (including `?` out of `run`).
     //
@@ -2124,27 +2145,53 @@ fn main() -> std::process::ExitCode {
                 Command::ConfigCheck { .. } | Command::Config { .. }
             ) =>
         {
-            eprintln!("warning: telemetry disabled — {e}");
+            errln!("warning: telemetry disabled — {e}");
             None
         }
         Err(e) => {
-            eprintln!("Error: {e}");
-            return std::process::ExitCode::from(EXIT_FAILURE);
+            errln!("Error: {e}");
+            return exit(Run::Failed);
         }
     };
-    match run(parsed) {
-        Ok(()) => std::process::ExitCode::SUCCESS,
+    let run_class = match run(parsed) {
+        Ok(()) => Run::Completed,
         Err(e) => {
             // Byte-for-byte what `Termination` printed before, so no
-            // operator's grep changes meaning along with the exit code.
-            eprintln!("Error: {e:?}");
-            std::process::ExitCode::from(if integrity_verdict(&e) {
-                EXIT_INTEGRITY
+            // operator's grep changes meaning along with the exit code — and
+            // a best-effort write since O287: `eprintln!` panicked on a
+            // closed stderr, so `cmd 2>&1 | head` turned the very verdict
+            // printed here into 101.
+            errln!("Error: {e:?}");
+            if integrity_verdict(&e) {
+                Run::Integrity
             } else {
-                EXIT_FAILURE
-            })
+                Run::Failed
+            }
         }
+    };
+    exit(run_class)
+}
+
+/// The exit status, folded in ONE place (ROADMAP O287).
+///
+/// Every stdout write this binary's code makes goes through the door in
+/// `undercroft-obs` (a telemetry build's JSON log layer does not: ROADMAP
+/// O333), which never panics: on `BrokenPipe` it latches that the reader left
+/// and discards the
+/// rest, so the command runs on to its own verdict. Here the door is flushed
+/// EXPLICITLY — never left to the flush at process exit, whose error std
+/// discards — and its fate is folded with the run's: an integrity verdict 2,
+/// then a run failure 1 (a stdout that failed for any reason but its reader
+/// leaving is one), then the reader leaving 141, then 0. Reader-left comes
+/// from the door's own latch alone, never from a `BrokenPipe` in the error
+/// chain, which an outbound socket raises too. The `process::exit(2)` arms
+/// inside `run` keep working, because printing no longer panics.
+fn exit(run: Run) -> std::process::ExitCode {
+    let delivery = undercroft_obs::stdio::finish();
+    if let Delivery::Failed(why) = &delivery {
+        errln!("Error: writing to standard output: {why}");
     }
+    std::process::ExitCode::from(undercroft_obs::stdio::exit_status(run, &delivery))
 }
 
 fn run(cli: Cli) -> Result<()> {
@@ -2152,7 +2199,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Init { level } => {
             let mgr = manager(&cli, cli.posture())?;
             if mgr.exists("default") {
-                println!(
+                outln!(
                     "{}",
                     fill(
                         tr("palace-already"),
@@ -2161,14 +2208,14 @@ fn run(cli: Cli) -> Result<()> {
                 );
             } else {
                 mgr.create("default", (*level).into())?;
-                println!(
+                outln!(
                     "{}",
                     fill(
                         tr("palace-initialized"),
                         &[("path", mgr.root().display().to_string())]
                     )
                 );
-                println!(
+                outln!(
                     "{}",
                     fill(
                         tr("vault-created"),
@@ -2179,9 +2226,9 @@ fn run(cli: Cli) -> Result<()> {
                     )
                 );
                 if passphrase()?.is_some() {
-                    println!("Master key: derived from UNDERCROFT_PASSPHRASE (Argon2id)");
+                    outln!("Master key: derived from UNDERCROFT_PASSPHRASE (Argon2id)");
                 } else {
-                    println!("Master key: {}/master.key (0600)", mgr.root().display());
+                    outln!("Master key: {}/master.key (0600)", mgr.root().display());
                 }
             }
         }
@@ -2206,23 +2253,23 @@ fn run(cli: Cli) -> Result<()> {
                     .unwrap_or_else(|| data_dir(&cli).join("bundle.key"));
                 let (secret_hex, recipient_hex) = undercroft_vault::bundle::keygen();
                 write_identity(&path, &secret_hex)?;
-                println!(
+                outln!(
                     "Identity key written to {} (keep it private).",
                     path.display()
                 );
-                println!(
+                outln!(
                     "Hybrid post-quantum identity (X25519 + ML-KEM-768). Legacy \
                      X25519 identities and their bundles keep working."
                 );
-                println!("Recipient (shareable): {recipient_hex}");
-                println!("Seal an export with: undercroft export --to {recipient_hex} --out vault.bundle");
+                outln!("Recipient (shareable): {recipient_hex}");
+                outln!("Seal an export with: undercroft export --to {recipient_hex} --out vault.bundle");
             }
             BundleAction::Recipient { identity } => {
                 let secret = std::fs::read_to_string(identity)
                     .with_context(|| format!("reading identity {}", identity.display()))?;
                 let recipient = undercroft_vault::bundle::recipient_of(&secret)
                     .map_err(|e| anyhow::anyhow!("{e}"))?;
-                println!("{recipient}");
+                outln!("{recipient}");
             }
             BundleAction::SignKeygen { out } => {
                 let path = out
@@ -2230,12 +2277,12 @@ fn run(cli: Cli) -> Result<()> {
                     .unwrap_or_else(|| data_dir(&cli).join("bundle-sign.key"));
                 let (secret_hex, sender_hex) = undercroft_vault::bundle::sign_keygen();
                 write_identity(&path, &secret_hex)?;
-                println!(
+                outln!(
                     "Signing key written to {} (keep it private).",
                     path.display()
                 );
-                println!("Sender (importers pin this): {sender_hex}");
-                println!(
+                outln!("Sender (importers pin this): {sender_hex}");
+                outln!(
                     "Sign an export with: undercroft export --sign {} …; \
                      verify with: undercroft import --sender {sender_hex} …",
                     path.display()
@@ -2246,14 +2293,14 @@ fn run(cli: Cli) -> Result<()> {
                     .with_context(|| format!("reading signing identity {}", identity.display()))?;
                 let sender = undercroft_vault::bundle::signer_of(&secret)
                     .map_err(|e| anyhow::anyhow!("{e}"))?;
-                println!("{sender}");
+                outln!("{sender}");
             }
         },
         Command::Vault { action } => match action {
             VaultAction::Create { name, level } => {
                 let mgr = manager(&cli, cli.posture())?;
                 let v = mgr.create(name, (*level).into())?;
-                println!(
+                outln!(
                     "{}",
                     fill(
                         tr("vault-created"),
@@ -2272,7 +2319,7 @@ fn run(cli: Cli) -> Result<()> {
                 // completes, then raised so the exit code is true (M23).
                 let mut integrity: Vec<String> = Vec::new();
                 if vaults.is_empty() {
-                    println!("No vaults. Run: undercroft init");
+                    outln!("No vaults. Run: undercroft init");
                 }
                 // **This loop BYPASSED the posture entirely** (ROADMAP M18).
                 // It called `mgr.unlock` and `VaultStore::open` directly
@@ -2307,11 +2354,11 @@ fn run(cli: Cli) -> Result<()> {
                             if integrity_verdict(&e) {
                                 integrity.push(name.clone());
                             }
-                            println!("{name:<20} unavailable: {e}");
+                            outln!("{name:<20} unavailable: {e}");
                             continue;
                         }
                     };
-                    println!(
+                    outln!(
                         "{:<20} level={:<10} records={}",
                         name,
                         store.vault().level().to_string(),
@@ -2337,12 +2384,12 @@ fn run(cli: Cli) -> Result<()> {
                 // (ROADMAP A21).
                 let (chain_head, writes) = store.chain_state()?;
                 let v = store.vault();
-                println!("vault:      {}", v.id());
-                println!("level:      {}", v.level());
-                println!("records:    {}", store.count()?);
-                println!("writes:     {writes}");
-                println!("chain head: {chain_head}");
-                println!("db:         {}", v.db_path().display());
+                outln!("vault:      {}", v.id());
+                outln!("level:      {}", v.level());
+                outln!("records:    {}", store.count()?);
+                outln!("writes:     {writes}");
+                outln!("chain head: {chain_head}");
+                outln!("db:         {}", v.db_path().display());
             }
             VaultAction::Anchor { name } => {
                 use undercroft_store::AnchorState;
@@ -2359,25 +2406,25 @@ fn run(cli: Cli) -> Result<()> {
                     // Unreached since ROADMAP O303: `tighten_anchor` refuses a
                     // chain with no committed head beneath its open handle.
                     (AnchorState::Unseeded, _) => {
-                        println!(
+                        outln!(
                             "Vault '{name}' has no committed chain head yet; nothing to anchor."
                         );
                     }
                     (_, AnchorState::Healed { behind_by }) => {
-                        println!(
+                        outln!(
                             "Anchored '{name}': the manifest was {behind_by} record(s) behind \
                              the committed chain head and now names it (the open did the \
                              fast-forward — on this surface it always gets there first)."
                         );
                     }
                     (AnchorState::Healed { behind_by }, _) => {
-                        println!(
+                        outln!(
                             "Anchored '{name}': the manifest was {behind_by} record(s) behind \
                              and now names the committed chain head."
                         );
                     }
                     (AnchorState::Current, _) => {
-                        println!("Anchor for '{name}' already names the committed chain head.");
+                        outln!("Anchor for '{name}' already names the committed chain head.");
                     }
                 }
             }
@@ -2386,13 +2433,14 @@ fn run(cli: Cli) -> Result<()> {
                 let candidate = mgr.rotation_candidate(name)?;
                 let mut store = open_store(&cli, name)?;
                 let report = store.rotate_keys(candidate)?;
-                println!("Rotated vault '{name}' onto fresh keys.");
-                println!("  drawers re-sealed:   {}", report.drawers);
-                println!(
+                outln!("Rotated vault '{name}' onto fresh keys.");
+                outln!("  drawers re-sealed:   {}", report.drawers);
+                outln!(
                     "  kg entities/triples: {}/{}",
-                    report.kg_entities, report.kg_triples
+                    report.kg_entities,
+                    report.kg_triples
                 );
-                println!("  tunnels:             {}", report.tunnels);
+                outln!("  tunnels:             {}", report.tunnels);
                 // Re-tagged, not re-sealed, and level-independent. Printed
                 // because a rotation that silently skipped these is what
                 // broke the trust floor and retention enforcement outright —
@@ -2402,11 +2450,12 @@ fn run(cli: Cli) -> Result<()> {
                 // hand-written, which is the trap CLAUDE.md records and
                 // `every_hand_projected_report_field_reaches_the_cli` now
                 // fails on.
-                println!(
+                outln!(
                     "  policy tags re-keyed: {} wing trust, {} retention",
-                    report.wing_trusts, report.retention_policies
+                    report.wing_trusts,
+                    report.retention_policies
                 );
-                println!(
+                outln!(
                     "  derived artifacts:   {} token, {} pq (+{} pages, +{} wing rows), {} fde, {} meta",
                     report.token_matrices,
                     report.pq_rows,
@@ -2415,7 +2464,7 @@ fn run(cli: Cli) -> Result<()> {
                     report.fde_rows,
                     report.meta_artifacts
                 );
-                println!(
+                outln!(
                     "  chain re-keyed over: {} audit entries",
                     report.audit_entries
                 );
@@ -2425,18 +2474,18 @@ fn run(cli: Cli) -> Result<()> {
                 // afterwards (ROADMAP O278): a handle that let go of the vault
                 // on its way out answers the reopen class, and an error after
                 // a committed rotation invites a second one.
-                println!("  new chain head:      {}", report.chain_head);
-                println!("  chain height:        {}", report.writes);
+                outln!("  new chain head:      {}", report.chain_head);
+                outln!("  chain height:        {}", report.writes);
                 // ROADMAP O257: a committed rotation whose new manifest could
                 // not be written is Ok — an error would invite a second
                 // rotation — and says so here rather than only in a log.
                 match &report.promote_deferred {
-                    None => println!("  manifest promoted:   yes"),
+                    None => outln!("  manifest promoted:   yes"),
                     // ROADMAP O266: "the next command promotes it" was false
                     // for every read-only command — `witness` included, which
                     // always opens read-only. They serve the vault against
                     // the staged manifest and promote nothing.
-                    Some(why) => println!(
+                    Some(why) => outln!(
                         "  manifest promoted:   DEFERRED ({why}) — the rotation committed; \
                          vault.json.next is intact and the next WRITABLE command on this \
                          vault promotes it, while read-only commands serve the vault against \
@@ -2444,9 +2493,7 @@ fn run(cli: Cli) -> Result<()> {
                          vault's keys: do NOT delete it."
                     ),
                 }
-                println!(
-                    "If this vault was pushed to a remote index, re-run: undercroft index push"
-                );
+                outln!("If this vault was pushed to a remote index, re-run: undercroft index push");
             }
         },
         Command::Remember {
@@ -2500,7 +2547,7 @@ fn run(cli: Cli) -> Result<()> {
                 // most expensive artifact this project produces, so it says
                 // "this save" and lets `admission list` — which carries the
                 // per-signal codes — name what actually fired.
-                println!(
+                outln!(
                     "Quarantined pending review: this save tripped the admission \
                      screen and is NOT retrievable in {wing}/{room}. \
                      Review with `undercroft admission list`, which names the \
@@ -2508,7 +2555,7 @@ fn run(cli: Cli) -> Result<()> {
                      name tripped rather than the text."
                 );
             } else {
-                println!(
+                outln!(
                     "{}",
                     fill(
                         tr("drawer-filed"),
@@ -2535,7 +2582,7 @@ fn run(cli: Cli) -> Result<()> {
                 "convos" => mine_convos(&mut store, path, wing)?,
                 other => bail!("unknown mine mode {other:?} (expected: files, convos)"),
             };
-            println!(
+            outln!(
                 "{}",
                 fill(
                     tr("mined-summary"),
@@ -2552,7 +2599,7 @@ fn run(cli: Cli) -> Result<()> {
             undercroft_core::validate_name(wing, "wing")?;
             let mut store = open_store(&cli, vault)?;
             let (files, filed, skipped) = sweep_path(&mut store, path, wing, true)?;
-            println!(
+            outln!(
                 "{}",
                 fill(
                     tr("swept-summary"),
@@ -2665,17 +2712,17 @@ fn run(cli: Cli) -> Result<()> {
                 store.search_with_index(index.as_mut(), query, &opts)?
             };
             if hits.is_empty() {
-                println!("{}", tr("no-matches"));
+                outln!("{}", tr("no-matches"));
             }
             // What this request's own filters kept out of the competition
             // (docs/LABELS.md): a thin answer under a `kind` filter or a trust
             // floor must not be mistaken for a thin corpus. Counted by the same
             // helper every surface uses.
             for note in search::Exclusions::measure(&store, &opts)?.notes() {
-                println!("{note}");
+                outln!("{note}");
             }
             if let Some(note) = search::window_note(query, &opts) {
-                println!("{note}");
+                outln!("{note}");
             }
             // The remote path has no `lexical_morph` channel at all:
             // `lexical_score`'s exact leg counts whole-word containment as
@@ -2684,12 +2731,10 @@ fn run(cli: Cli) -> Result<()> {
             // said once, because the evidence lines below otherwise read
             // exactly as the local ones do.
             if backend != "local" && !hits.is_empty() {
-                println!(
-                    "(remote backend: morphological evidence is folded into the exact channel)"
-                );
+                outln!("(remote backend: morphological evidence is folded into the exact channel)");
             }
             for (i, hit) in hits.iter().enumerate() {
-                println!(
+                outln!(
                     "{}. [{:.3}] {}/{} — {} ({})",
                     // Absolute rank: on a page past the first, "1." would
                     // claim a rank the hit does not hold.
@@ -2706,9 +2751,10 @@ fn run(cli: Cli) -> Result<()> {
                 // result meant hunting for it through `drawer list`. The line
                 // also names the door back to the verbatim text, which the
                 // 100-character snippet above is not.
-                println!(
+                outln!(
                     "   id {} — undercroft drawer get {}",
-                    hit.drawer.id, hit.drawer.id
+                    hit.drawer.id,
+                    hit.drawer.id
                 );
                 // Why this hit is here, in the channels that decided it —
                 // rendered by the one function `/v1`'s neighbours use. A
@@ -2716,7 +2762,7 @@ fn run(cli: Cli) -> Result<()> {
                 // word, holds a word built on it, or merely embedded near it,
                 // so a surprising hit was reproducible on `/v1` and nowhere
                 // else. See `search::evidence`.
-                println!("   {}", search::evidence(hit));
+                outln!("   {}", search::evidence(hit));
             }
             // ROADMAP O73. `page_deeper` is the engine's own verdict, taken
             // before the cut against the ADMITTED ranking; `hits.len() ==
@@ -2737,7 +2783,7 @@ fn run(cli: Cli) -> Result<()> {
                     Some(n) => format!(" (this scope holds {n} drawers)"),
                     None => String::new(),
                 };
-                println!(
+                outln!(
                     "— deeper results {}: repeat with --offset {} --ranked-at {echo}{}",
                     certainty,
                     offset + hits.len(),
@@ -2748,12 +2794,12 @@ fn run(cli: Cli) -> Result<()> {
         Command::WakeUp { vault, wing } => {
             let dir = data_dir(&cli);
             let identity_path = dir.join("identity.txt");
-            println!("## L0 — IDENTITY");
+            outln!("## L0 — IDENTITY");
             match std::fs::read_to_string(&identity_path) {
-                Ok(text) => println!("{}", text.trim()),
-                Err(_) => println!("No identity configured. Create {}", identity_path.display()),
+                Ok(text) => outln!("{}", text.trim()),
+                Err(_) => outln!("No identity configured. Create {}", identity_path.display()),
             }
-            println!("\n## L1 — ESSENTIAL STORY (vault '{vault}')");
+            outln!("\n## L1 — ESSENTIAL STORY (vault '{vault}')");
             let store = open_store(&cli, vault)?;
             let recent = store.recent(
                 wing.as_deref(),
@@ -2766,18 +2812,18 @@ fn run(cli: Cli) -> Result<()> {
                 // this read entirely, and saying "empty" over an intact
                 // corpus is a false statement the caller cannot see through.
                 match store.trust_floor() {
-                    Some(f) => println!(
+                    Some(f) => outln!(
                         "No drawers meet the declared trust floor '{f}' — the vault is NOT \
                          empty. Assign wing trust with `undercroft trust set`, or lower \
                          UNDERCROFT_TRUST_FLOOR."
                     ),
                     None => {
-                        println!("Vault is empty. File memories with: undercroft remember / mine")
+                        outln!("Vault is empty. File memories with: undercroft remember / mine")
                     }
                 }
             }
             for d in recent {
-                println!(
+                outln!(
                     "- [{}/{}] {}",
                     d.meta.wing,
                     d.meta.room,
@@ -2788,46 +2834,46 @@ fn run(cli: Cli) -> Result<()> {
         Command::Verify { vault } => {
             let store = open_store(&cli, vault)?;
             let report = store.verify()?;
-            println!("records checked: {}", report.records_checked);
-            println!("hmac failures:   {}", report.bad_records.len());
+            outln!("records checked: {}", report.records_checked);
+            outln!("hmac failures:   {}", report.bad_records.len());
             for id in &report.bad_records {
-                println!("  TAMPERED: {id}");
+                outln!("  TAMPERED: {id}");
             }
-            println!(
+            outln!(
                 "audit chain:     {}",
                 if report.chain_ok { "ok" } else { "BROKEN" }
             );
             // ROADMAP O233: the labels the chain held when it switched to the
             // labelled step, against the commitment that bound them. A
             // mismatch fails the verdict and does not block a rotation.
-            println!("audit labels:    {}", report.label_commitment.as_str());
+            outln!("audit labels:    {}", report.label_commitment.as_str());
             // The fourth leg: a graph or drawer label naming a record that
             // is not there — on a switched chain, a row deleted with no
             // destruction record; on an unswitched one, a relabel too.
-            println!("orphan labels:   {}", report.orphan_labels.len());
+            outln!("orphan labels:   {}", report.orphan_labels.len());
             for l in &report.orphan_labels {
-                println!("  ORPHANED: {l} — names no live record");
+                outln!("  ORPHANED: {l} — names no live record");
             }
             // A28: an indexed mirror that disagrees with the covered meta.
             // The record is intact; the COLUMN was edited offline.
-            println!("mirror drift:    {}", report.mirror_drift.len());
+            outln!("mirror drift:    {}", report.mirror_drift.len());
             for m in &report.mirror_drift {
-                println!("  MIRROR: {m}");
+                outln!("  MIRROR: {m}");
             }
             // O94: a declared policy that no longer matches the chain record
             // that assigned it. A flipped trust column fails closed on the
             // retrieval path; a DELETED row does not — the floor simply stops
             // applying — so this is the only place either becomes visible.
-            println!("policy drift:    {}", report.policy_drift.len());
+            outln!("policy drift:    {}", report.policy_drift.len());
             for p in &report.policy_drift {
-                println!("  POLICY: {p}");
+                outln!("  POLICY: {p}");
             }
             // O234: a row that verifies, and is not the version the chain
             // last recorded — an older drawer, fact or entity written back
             // over the current one, or a row restored after its destruction.
-            println!("version replay:  {}", report.version_replay.len());
+            outln!("version replay:  {}", report.version_replay.len());
             for v in &report.version_replay {
-                println!("  REPLAYED: {v}");
+                outln!("  REPLAYED: {v}");
             }
             // Drawer supersession links are part of the vault's integrity
             // story: a receipted link that fails its HMAC is tampering,
@@ -2838,7 +2884,7 @@ fn run(cli: Cli) -> Result<()> {
             if !links.is_empty() {
                 use undercroft_store::ReceiptVerdict as V;
                 let count = |v: V| links.iter().filter(|l| l.verdict == v).count();
-                println!(
+                outln!(
                     "supersessions:   {} verified · {} source-changed · {} dangling · \
                      {} unreceipted · {} tampered",
                     count(V::Verified),
@@ -2848,7 +2894,7 @@ fn run(cli: Cli) -> Result<()> {
                     report.tampered_supersessions()
                 );
                 for l in links.iter().filter(|l| l.verdict == V::Tampered) {
-                    println!("  TAMPERED LINK: {} → {}", l.drawer_id, l.supersedes);
+                    outln!("  TAMPERED LINK: {} → {}", l.drawer_id, l.supersedes);
                 }
             }
             // The sixth leg, and the same story one level up: a fact's
@@ -2860,7 +2906,7 @@ fn run(cli: Cli) -> Result<()> {
             if !receipts.is_empty() {
                 use undercroft_store::ReceiptVerdict as V;
                 let count = |v: V| receipts.iter().filter(|r| r.verdict == v).count();
-                println!(
+                outln!(
                     "fact receipts:   {} verified · {} source-changed · {} dangling · \
                      {} unreceipted · {} tampered",
                     count(V::Verified),
@@ -2870,16 +2916,17 @@ fn run(cli: Cli) -> Result<()> {
                     report.tampered_receipts()
                 );
                 for r in receipts.iter().filter(|r| r.verdict == V::Tampered) {
-                    println!(
+                    outln!(
                         "  TAMPERED RECEIPT: {} ← {}",
-                        r.triple_id, r.source_drawer_id
+                        r.triple_id,
+                        r.source_drawer_id
                     );
                 }
             }
             if report.ok() {
-                println!("{}", tr("verify-ok"));
+                outln!("{}", tr("verify-ok"));
             } else {
-                println!("{}", tr("verify-failed"));
+                outln!("{}", tr("verify-failed"));
                 std::process::exit(EXIT_INTEGRITY.into());
             }
         }
@@ -2905,7 +2952,7 @@ fn run(cli: Cli) -> Result<()> {
                 None => store.forget_with_proof(ids)?,
             };
             if let Some(note) = &att.mirror {
-                eprintln!("warning: {note}");
+                errln!("warning: {note}");
             }
             if let Some(path) = sign {
                 let secret = std::fs::read_to_string(path)
@@ -2916,7 +2963,7 @@ fn run(cli: Cli) -> Result<()> {
             match out {
                 Some(path) => {
                     std::fs::write(path, &json)?;
-                    println!(
+                    outln!(
                         "{} drawer(s) destroyed; attestation written to {} \
                          (verify with: undercroft verify-forgetting {})",
                         att.drawers.len(),
@@ -2924,7 +2971,7 @@ fn run(cli: Cli) -> Result<()> {
                         path.display()
                     );
                 }
-                None => println!("{json}"),
+                None => outln!("{json}"),
             }
         }
         Command::VerifyForgetting { file, vault } => {
@@ -2943,7 +2990,7 @@ fn run(cli: Cli) -> Result<()> {
             let verdict = match store.verify_forget_attestation(&att) {
                 Ok(v) => v,
                 Err(undercroft_store::StoreError::Attestation(why)) => {
-                    println!("ATTESTATION FAILED: {why}");
+                    outln!("ATTESTATION FAILED: {why}");
                     std::process::exit(EXIT_INTEGRITY.into());
                 }
                 Err(other) => return Err(other.into()),
@@ -2969,7 +3016,7 @@ fn run(cli: Cli) -> Result<()> {
                 _ => "; unsigned".to_string(),
             };
             match verdict {
-                undercroft_store::AttestationVerdict::Verified => println!(
+                undercroft_store::AttestationVerdict::Verified => outln!(
                     "ATTESTATION VERIFIED: {} drawer(s) destroyed between heads \
                      {before}… and {after}…, nothing else changed{signature}",
                     att.drawers.len()
@@ -2990,7 +3037,7 @@ fn run(cli: Cli) -> Result<()> {
                              attested interval."
                         ),
                     };
-                    println!(
+                    outln!(
                         "ATTESTATION RECORDED (keyed replay unavailable): {} drawer(s) \
                          destroyed; this vault's audit trail holds exactly these \
                          tombstones, contiguously and in order, and the drawers are \
@@ -3027,7 +3074,7 @@ fn run(cli: Cli) -> Result<()> {
                         Some(path) => {
                             std::fs::write(path, format!("{json}\n"))
                                 .with_context(|| format!("writing {}", path.display()))?;
-                            eprintln!(
+                            errln!(
                                 "Witness of vault '{}' at {} audit record(s) written to {} — \
                                  keep it off this machine.",
                                 w.vault,
@@ -3035,7 +3082,7 @@ fn run(cli: Cli) -> Result<()> {
                                 path.display()
                             );
                         }
-                        None => println!("{json}"),
+                        None => outln!("{json}"),
                     }
                 }
                 WitnessAction::Check { file } => {
@@ -3069,7 +3116,7 @@ fn run(cli: Cli) -> Result<()> {
                                      binds"
                                 )
                             };
-                            println!(
+                            outln!(
                                 "WITNESS OK: the audit chain extends the witness taken at {} \
                                  record(s) by {rows_since} record(s); {corroboration}{signature}",
                                 w.rows
@@ -3089,7 +3136,7 @@ fn run(cli: Cli) -> Result<()> {
                             } else {
                                 "the chain is shorter than the witness"
                             };
-                            println!(
+                            outln!(
                                 "WITNESS FAILED: the vault was rolled back — the witness names \
                                  {rows_witnessed} audit record(s), the chain now holds {rows_now}, \
                                  and {how}{signature}. `verify` cannot see this; restore a backup \
@@ -3107,14 +3154,14 @@ fn run(cli: Cli) -> Result<()> {
                 AdmissionAction::List => {
                     let pending = store.admission_pending()?;
                     if pending.is_empty() {
-                        println!("Nothing awaits review.");
+                        outln!("Nothing awaits review.");
                     }
                     for p in pending {
                         let codes: Vec<&str> = p.signals.iter().map(|s| s.code.as_str()).collect();
                         // The destination state goes LAST, so the id stays the
                         // first field scripts read (ROADMAP O224): it says,
                         // before anyone rules, whether an allow would proceed.
-                        println!(
+                        outln!(
                             "  {}  → {}/{}  [{}]  filed {}  from {}#{}  destination {} {}",
                             p.id,
                             p.intended_wing,
@@ -3130,7 +3177,7 @@ fn run(cli: Cli) -> Result<()> {
                 }
                 AdmissionAction::Allow { id } => {
                     let restored = store.admission_allow(id)?;
-                    println!("Allowed: re-filed as {restored} (ruling audited).");
+                    outln!("Allowed: re-filed as {restored} (ruling audited).");
                 }
                 AdmissionAction::Deny { id, out, sign } => {
                     let mut att = store.admission_deny(id)?;
@@ -3144,7 +3191,7 @@ fn run(cli: Cli) -> Result<()> {
                     match out {
                         Some(path) => {
                             std::fs::write(path, &json)?;
-                            println!(
+                            outln!(
                                 "Denied: content destroyed, ruling audited; attestation \
                                  written to {} (verify with: undercroft verify-forgetting {})",
                                 path.display(),
@@ -3152,8 +3199,8 @@ fn run(cli: Cli) -> Result<()> {
                             );
                         }
                         None => {
-                            println!("Denied: content destroyed, ruling audited.");
-                            println!("{json}");
+                            outln!("Denied: content destroyed, ruling audited.");
+                            outln!("{json}");
                         }
                     }
                 }
@@ -3165,22 +3212,22 @@ fn run(cli: Cli) -> Result<()> {
                 RetentionAction::Set { wing, room, days } => {
                     store.set_retention(wing, room.as_deref(), *days)?;
                     match room {
-                        Some(r) => println!(
+                        Some(r) => outln!(
                             "Retention declared: {wing}/{r} keeps drawers {days} day(s) (audited)."
                         ),
-                        None => println!(
+                        None => outln!(
                             "Retention declared: {wing} keeps drawers {days} day(s) (audited)."
                         ),
                     }
                 }
                 RetentionAction::Clear { wing, room } => {
                     store.clear_retention(wing, room.as_deref())?;
-                    println!("Retention policy cleared (audited).");
+                    outln!("Retention policy cleared (audited).");
                 }
                 RetentionAction::List => {
                     let rows = store.retention_policies()?;
                     if rows.is_empty() {
-                        println!("No retention policies declared.");
+                        outln!("No retention policies declared.");
                     }
                     for p in rows {
                         let scope = if p.room.is_empty() {
@@ -3188,9 +3235,10 @@ fn run(cli: Cli) -> Result<()> {
                         } else {
                             format!("{}/{}", p.wing, p.room)
                         };
-                        println!(
+                        outln!(
                             "  {scope}: {} day(s), declared {}",
-                            p.max_age_days, p.assigned_at
+                            p.max_age_days,
+                            p.assigned_at
                         );
                     }
                 }
@@ -3203,7 +3251,7 @@ fn run(cli: Cli) -> Result<()> {
                         att.sign(&secret)?;
                     }
                     if sweep.dry_run {
-                        println!("DRY RUN — nothing destroyed.");
+                        outln!("DRY RUN — nothing destroyed.");
                     }
                     for e in &sweep.policies {
                         let scope = if e.room.is_empty() {
@@ -3211,38 +3259,41 @@ fn run(cli: Cli) -> Result<()> {
                         } else {
                             format!("{}/{}", e.wing, e.room)
                         };
-                        println!(
+                        outln!(
                             "  {scope} (> {} day(s)): {} expired",
                             e.max_age_days,
                             e.expired.len()
                         );
                     }
-                    println!("Destroyed: {} drawer(s).", sweep.destroyed);
+                    outln!("Destroyed: {} drawer(s).", sweep.destroyed);
                     // What the sweep could not decide or would not destroy
                     // (ROADMAP O206). Each is named, because a sweep that
                     // skipped a row silently is the defect O206 closed.
                     for u in &sweep.unverifiable {
-                        println!("  UNVERIFIABLE: {} — {}", u.id, u.reason);
+                        outln!("  UNVERIFIABLE: {} — {}", u.id, u.reason);
                     }
                     for w in &sweep.withheld {
-                        println!(
+                        outln!(
                             "  WITHHELD: {} ({}/{}) — {}",
-                            w.id, w.wing, w.room, w.reason
+                            w.id,
+                            w.wing,
+                            w.room,
+                            w.reason
                         );
                     }
                     for m in &sweep.mirror_drift {
-                        println!("  MIRROR: {m}");
+                        outln!("  MIRROR: {m}");
                     }
                     for p in &sweep.policy_drift {
-                        println!("  POLICY: {p}");
+                        outln!("  POLICY: {p}");
                     }
                     let json = serde_json::to_string_pretty(&sweep)?;
                     match out {
                         Some(path) => {
                             std::fs::write(path, &json)?;
-                            println!("Sweep report written to {}", path.display());
+                            outln!("Sweep report written to {}", path.display());
                         }
-                        None if sweep.attestation.is_some() => println!("{json}"),
+                        None if sweep.attestation.is_some() => outln!("{json}"),
                         None => {}
                     }
                     // The integrity verdict exits 2 AFTER the report and the
@@ -3251,7 +3302,7 @@ fn run(cli: Cli) -> Result<()> {
                     // A dry run answers the same way, so a scheduled preview
                     // reports drift before anything is destroyed.
                     if !sweep.ok {
-                        println!(
+                        outln!(
                             "RETENTION SWEEP NOT CLEAN — the rows named above were not \
                              destroyed or were destroyed over drift. Run `undercroft verify`."
                         );
@@ -3274,7 +3325,7 @@ fn run(cli: Cli) -> Result<()> {
                 *offset,
             )?;
             if rows.is_empty() {
-                println!("No audit records match.");
+                outln!("No audit records match.");
             }
             for r in &rows {
                 // The label leads and the tag is abbreviated — an operator
@@ -3282,7 +3333,7 @@ fn run(cli: Cli) -> Result<()> {
                 // the full value off `/v1` or a forgetting attestation. Both
                 // are evidence since ROADMAP O233 (the chain step folds the
                 // label); this is a reading order, not a ranking.
-                println!(
+                outln!(
                     "  #{:<6} {}  {:<40} {}…",
                     r.seq,
                     r.at,
@@ -3290,22 +3341,22 @@ fn run(cli: Cli) -> Result<()> {
                     &r.tag[..16.min(r.tag.len())]
                 );
             }
-            println!("{} record(s).", rows.len());
+            outln!("{} record(s).", rows.len());
         }
         Command::Trust { action, vault } => {
             let mut store = open_store(&cli, vault)?;
             match action {
                 TrustAction::Set { wing, class } => {
                     store.set_wing_trust(wing, class)?;
-                    println!("Wing '{wing}' assigned trust class '{class}' (audited).");
+                    outln!("Wing '{wing}' assigned trust class '{class}' (audited).");
                 }
                 TrustAction::List => {
                     let rows = store.wing_trusts()?;
                     if rows.is_empty() {
-                        println!("No wing carries an assignment — every wing reads as 'standard'.");
+                        outln!("No wing carries an assignment — every wing reads as 'standard'.");
                     }
                     for (wing, class) in rows {
-                        println!("  {wing:<24} {class}");
+                        outln!("  {wing:<24} {class}");
                     }
                 }
             }
@@ -3368,7 +3419,7 @@ fn run(cli: Cli) -> Result<()> {
                         undercroft_vault::bundle::encrypt_for_into(recipient, payload, &mut sink)
                             .map_err(|e| anyhow::anyhow!("sealing bundle: {e}"))?;
                     sink.flush()?;
-                    println!(
+                    outln!(
                         "Sealed bundle written to {} ({} drawers, {} bytes{}) — only the \
                          matching identity key can open it.",
                         path.display(),
@@ -3381,11 +3432,11 @@ fn run(cli: Cli) -> Result<()> {
                         }
                     );
                 }
-                None => {
-                    let stdout = std::io::stdout();
-                    let mut out = stdout.lock();
-                    out.write_all(&payload)?;
-                }
+                // Through the stdout door (ROADMAP O287). A plaintext export
+                // has no file option (`--out` requires `--to`), so the exit
+                // status is its only delivery signal: a reader that left is
+                // 141, any other write failure 1 — never a quiet 0.
+                None => undercroft_obs::stdio::write_bytes(&payload),
             }
         }
         Command::ServeMcp { vault, read_only } => {
@@ -3452,7 +3503,7 @@ fn run(cli: Cli) -> Result<()> {
             )?
             .ok_or_else(|| anyhow::anyhow!("UNDERCROFT_ASSERTION_SECRET is not set"))?;
             let now = time::OffsetDateTime::now_utc().unix_timestamp();
-            println!("{}", assertion::header_value(secret.as_bytes(), vault, now));
+            outln!("{}", assertion::header_value(secret.as_bytes(), vault, now));
         }
         Command::Daemon { action } => match action {
             DaemonAction::Run {
@@ -3469,7 +3520,7 @@ fn run(cli: Cli) -> Result<()> {
                 loop {
                     match sweep_path(&mut store, &watch_path, wing, false) {
                         Ok((files, filed, skipped)) => {
-                            println!(
+                            outln!(
                                 "[daemon] swept {files} transcript(s): {filed} filed, {skipped} present"
                             );
                         }
@@ -3501,11 +3552,11 @@ fn run(cli: Cli) -> Result<()> {
                     } else {
                         "Assistant"
                     };
-                    println!("── {who} (line {}) ──", msg.line);
-                    println!("{}\n", msg.text);
+                    outln!("── {who} (line {}) ──", msg.line);
+                    outln!("{}\n", msg.text);
                 }
                 if shown < messages.len() {
-                    println!("… {} more message(s)", messages.len() - shown);
+                    outln!("… {} more message(s)", messages.len() - shown);
                 }
             }
         },
@@ -3594,7 +3645,7 @@ fn run(cli: Cli) -> Result<()> {
             )
             .map_err(|e| anyhow::anyhow!("manifest attestation failed: {e}"))?;
             if let Some(m) = &manifest {
-                println!(
+                outln!(
                     "manifest: vault={} level={} created={}{}{}{}",
                     m.vault,
                     m.level,
@@ -3697,7 +3748,7 @@ fn run(cli: Cli) -> Result<()> {
                 store.create_tunnel(f, t, l)?;
                 tunnels += 1;
             }
-            println!(
+            outln!(
                 "{}",
                 fill(
                     tr("imported-summary"),
@@ -3739,7 +3790,7 @@ fn run(cli: Cli) -> Result<()> {
                 }
             }
             if kg_facts + kg_entities + tunnels > 0 {
-                println!(
+                outln!(
                     "knowledge graph: {kg_facts} fact(s) (receipts re-keyed), \
                      {kg_entities} entit(y/ies), {tunnels} tunnel(s)"
                 );
@@ -3765,7 +3816,7 @@ fn run(cli: Cli) -> Result<()> {
                         *confidence,
                         None,
                     )?;
-                    println!("Added fact {id}: {subject} --{predicate}--> {object}");
+                    outln!("Added fact {id}: {subject} --{predicate}--> {object}");
                 }
                 KgAction::Query {
                     entity,
@@ -3800,7 +3851,7 @@ fn run(cli: Cli) -> Result<()> {
                         object.as_deref(),
                         ended.as_deref(),
                     )?;
-                    println!("Invalidated {n} fact(s)");
+                    outln!("Invalidated {n} fact(s)");
                 }
                 KgAction::Supersede {
                     subject,
@@ -3809,7 +3860,7 @@ fn run(cli: Cli) -> Result<()> {
                     at,
                 } => {
                     let id = store.kg_supersede(subject, predicate, new_object, at.as_deref())?;
-                    println!("Superseded: {subject} --{predicate}--> {new_object} ({id})");
+                    outln!("Superseded: {subject} --{predicate}--> {new_object} ({id})");
                 }
                 KgAction::Timeline { entity } => {
                     let facts = store.kg_timeline(
@@ -3820,16 +3871,19 @@ fn run(cli: Cli) -> Result<()> {
                 }
                 KgAction::Stats => {
                     let st = store.kg_stats()?;
-                    println!(
+                    outln!(
                         "entities: {}  triples: {}  active: {}  closed: {}",
-                        st.entities, st.triples, st.active, st.closed
+                        st.entities,
+                        st.triples,
+                        st.active,
+                        st.closed
                     );
                 }
                 KgAction::Receipts { problems_only } => {
                     use undercroft_store::ReceiptVerdict;
                     let receipts = store.kg_verify_receipts()?;
                     if receipts.is_empty() {
-                        println!("No facts carry a receipt yet (run `refine` to distill some).");
+                        outln!("No facts carry a receipt yet (run `refine` to distill some).");
                     }
                     let mut counts = [0usize; 5];
                     let mut shown = 0usize;
@@ -3850,21 +3904,25 @@ fn run(cli: Cli) -> Result<()> {
                         counts[idx] += 1;
                         let ok = matches!(r.verdict, ReceiptVerdict::Verified);
                         if !(*problems_only && ok) {
-                            println!("  [{label}] {} ← {}", r.triple_id, r.source_drawer_id);
+                            outln!("  [{label}] {} ← {}", r.triple_id, r.source_drawer_id);
                             shown += 1;
                         }
                     }
                     if *problems_only && shown == 0 {
-                        println!("All {} receipt(s) verified.", receipts.len());
+                        outln!("All {} receipt(s) verified.", receipts.len());
                     }
                     // `unreceipted` is printed, not merely counted: the
                     // bucket was written and never read, so a fact citing a
                     // drawer it has no binding for was tallied into a number
                     // no surface showed. It became reachable with U12.
-                    println!(
+                    outln!(
                         "receipts: {} verified · {} source-changed · {} dangling · \
                          {} unreceipted · {} tampered",
-                        counts[0], counts[1], counts[2], counts[4], counts[3]
+                        counts[0],
+                        counts[1],
+                        counts[2],
+                        counts[4],
+                        counts[3]
                     );
                     // A tampered receipt is a hard integrity failure, and it
                     // exits 2 — the code `verify`, `repair`, `backup create`
@@ -3876,7 +3934,7 @@ fn run(cli: Cli) -> Result<()> {
                     // on. Exactly the defect `verify-forgetting` records
                     // fixing in its own arm, on the same class of artifact.
                     if counts[3] > 0 {
-                        println!(
+                        outln!(
                             "{} fact receipt(s) failed integrity — vault tampering",
                             counts[3]
                         );
@@ -3890,7 +3948,7 @@ fn run(cli: Cli) -> Result<()> {
                     key,
                 } => {
                     store.kg_set_authority(triple_id, class, review, key.as_deref())?;
-                    println!(
+                    outln!(
                         "Fact {triple_id}: authority_class={class} review_state={review}{}",
                         key.as_deref()
                             .map(|k| format!(" canonical_key={k}"))
@@ -3902,15 +3960,15 @@ fn run(cli: Cli) -> Result<()> {
                     undercroft_store::Read::Returned(undercroft_store::ReadOp::KgCanonical),
                 )? {
                     Some(t) => {
-                        println!("{} --{}--> {}", t.subject, t.predicate, t.object);
-                        println!(
+                        outln!("{} --{}--> {}", t.subject, t.predicate, t.object);
+                        outln!(
                             "id: {}  key: {}  since: {}",
                             t.id,
                             t.canonical_key.as_deref().unwrap_or("-"),
                             t.valid_from.as_deref().unwrap_or("-")
                         );
                     }
-                    None => println!("No approved canonical fact holds key {key:?}."),
+                    None => outln!("No approved canonical fact holds key {key:?}."),
                 },
             }
         }
@@ -3922,16 +3980,16 @@ fn run(cli: Cli) -> Result<()> {
                     undercroft_store::Read::Returned(undercroft_store::ReadOp::Get),
                 )? {
                     Some(d) => {
-                        println!("id:     {}", d.id);
-                        println!("wing:   {}/{}", d.meta.wing, d.meta.room);
-                        println!("filed:  {}", d.meta.filed_at);
+                        outln!("id:     {}", d.id);
+                        outln!("wing:   {}/{}", d.meta.wing, d.meta.room);
+                        outln!("filed:  {}", d.meta.filed_at);
                         if let Some(src) = &d.meta.source_file {
-                            println!("source: {src}");
+                            outln!("source: {src}");
                         }
-                        println!("---\n{}", d.content);
+                        outln!("---\n{}", d.content);
                     }
                     None => {
-                        println!("No drawer with id {id}");
+                        outln!("No drawer with id {id}");
                         std::process::exit(EXIT_FAILURE.into());
                     }
                 },
@@ -3944,7 +4002,7 @@ fn run(cli: Cli) -> Result<()> {
                     let rows =
                         store.list_drawers(wing.as_deref(), room.as_deref(), *limit, *offset)?;
                     if rows.is_empty() {
-                        println!("No drawers.");
+                        outln!("No drawers.");
                     }
                     for d in rows {
                         // `source_file` reached `/v1` and MCP (both
@@ -3959,7 +4017,7 @@ fn run(cli: Cli) -> Result<()> {
                             .as_deref()
                             .map(|f| format!("  <- {f}"))
                             .unwrap_or_default();
-                        println!(
+                        outln!(
                             "{}  {}/{}  {}  {}{src}",
                             d.id,
                             d.wing,
@@ -3971,8 +4029,8 @@ fn run(cli: Cli) -> Result<()> {
                 }
                 DrawerAction::Update { id, content } => {
                     match store.update_drawer(id, content, "cli")? {
-                        undercroft_store::UpdateOutcome::Updated => println!("Updated drawer {id}"),
-                        undercroft_store::UpdateOutcome::Quarantined => println!(
+                        undercroft_store::UpdateOutcome::Updated => outln!("Updated drawer {id}"),
+                        undercroft_store::UpdateOutcome::Quarantined => outln!(
                             "Update to {id} quarantined pending review — the drawer \
                              keeps its previous content (see `undercroft admission list`)."
                         ),
@@ -3983,19 +4041,19 @@ fn run(cli: Cli) -> Result<()> {
                 }
                 DrawerAction::Delete { id } => {
                     if store.delete_drawer(id)? {
-                        println!("Deleted drawer {id}");
+                        outln!("Deleted drawer {id}");
                     } else {
                         bail!("no drawer with id {id}");
                     }
                 }
                 DrawerAction::DeleteBySource { source } => {
                     let n = store.delete_by_source(source)?;
-                    println!("Deleted {n} drawer(s) from {source}");
+                    outln!("Deleted {n} drawer(s) from {source}");
                 }
                 DrawerAction::CheckDup { content } => {
                     match store.check_duplicate(&normalize_content(content))? {
-                        Some(id) => println!("duplicate of {id}"),
-                        None => println!("not filed"),
+                        Some(id) => outln!("duplicate of {id}"),
+                        None => outln!("not filed"),
                     }
                 }
             }
@@ -4009,7 +4067,7 @@ fn run(cli: Cli) -> Result<()> {
                     // `diary read` will not find it.
                     let out = store.diary_write(agent, entry, "cli")?;
                     if out.quarantined {
-                        println!(
+                        outln!(
                             // Not "the entry tripped": a diary's wing is
                             // `agent-{agent}`, so since O32 a clean entry
                             // diverts when the AGENT NAME trips the screen.
@@ -4023,21 +4081,21 @@ fn run(cli: Cli) -> Result<()> {
                              tripped rather than the entry text."
                         );
                     } else {
-                        println!("Diary entry {} written for agent '{agent}'", out.id);
+                        outln!("Diary entry {} written for agent '{agent}'", out.id);
                     }
                 }
                 DiaryAction::Read { agent, limit } => {
                     let entries = store.diary_read(agent, *limit)?;
                     if entries.is_empty() {
-                        println!("No diary entries for agent '{agent}'.");
+                        outln!("No diary entries for agent '{agent}'.");
                     }
                     for e in entries {
-                        println!("[{}] {}", e.meta.filed_at, e.content);
+                        outln!("[{}] {}", e.meta.filed_at, e.content);
                     }
                 }
                 DiaryAction::Agents => {
                     for a in store.list_agents()? {
-                        println!("{a}");
+                        outln!("{a}");
                     }
                 }
             }
@@ -4047,21 +4105,21 @@ fn run(cli: Cli) -> Result<()> {
             match action {
                 TunnelAction::Create { from, to, label } => {
                     let id = store.create_tunnel(from, to, label)?;
-                    println!("Tunnel {id}: {from} <-> {to} ({label})");
+                    outln!("Tunnel {id}: {from} <-> {to} ({label})");
                 }
                 TunnelAction::List { wing } => {
                     let tunnels = store.list_tunnels(wing.as_deref())?;
                     if tunnels.is_empty() {
-                        println!("No tunnels.");
+                        outln!("No tunnels.");
                     }
                     for t in tunnels {
-                        println!("{}  {} <-> {}  ({})", t.id, t.from_wing, t.to_wing, t.label);
+                        outln!("{}  {} <-> {}  ({})", t.id, t.from_wing, t.to_wing, t.label);
                     }
                 }
                 TunnelAction::Follow { id, limit } => {
                     let drawers = store.follow_tunnel(id, *limit)?;
                     for d in drawers {
-                        println!(
+                        outln!(
                             "- [{}/{}] {}",
                             d.meta.wing,
                             d.meta.room,
@@ -4071,14 +4129,14 @@ fn run(cli: Cli) -> Result<()> {
                 }
                 TunnelAction::Delete { id } => {
                     if store.delete_tunnel(id)? {
-                        println!("Deleted tunnel {id}");
+                        outln!("Deleted tunnel {id}");
                     } else {
                         bail!("no tunnel with id {id}");
                     }
                 }
                 TunnelAction::Traverse { start, depth } => {
                     for (wing, d) in store.traverse(start, *depth)? {
-                        println!("{}{}", "  ".repeat(d), wing);
+                        outln!("{}{}", "  ".repeat(d), wing);
                     }
                 }
             }
@@ -4087,10 +4145,10 @@ fn run(cli: Cli) -> Result<()> {
             let store = open_store(&cli, vault)?;
             let lines = store.closet_index(wing.as_deref())?;
             if lines.is_empty() {
-                println!("Vault is empty — nothing to index.");
+                outln!("Vault is empty — nothing to index.");
             }
             for line in lines {
-                println!("{line}");
+                outln!("{line}");
             }
         }
         Command::Refine {
@@ -4132,11 +4190,11 @@ fn run(cli: Cli) -> Result<()> {
             if rep.sources == 0 {
                 bail!("no drawers to refine");
             }
-            println!("Refined {} drawer(s) with {} …", rep.sources, llm.model());
+            outln!("Refined {} drawer(s) with {} …", rep.sources, llm.model());
             for (s, p, o) in &rep.preview {
-                println!("  would add: {s} --{p}--> {o}");
+                outln!("  would add: {s} --{p}--> {o}");
             }
-            println!(
+            outln!(
                 "Refinement {}: {} fact(s) into the knowledge graph",
                 if *dry_run { "dry run" } else { "complete" },
                 rep.facts
@@ -4147,26 +4205,30 @@ fn run(cli: Cli) -> Result<()> {
                 // words support; `dated_from_text` is how often the extractor
                 // pointed at a real span instead of the note's date. Both are
                 // how you tell a working extractor from one that is inventing.
-                println!(
+                outln!(
                     "  mirrored into room '{}' · {} stated / {} background",
                     fact_room,
                     rep.stated,
                     rep.facts.saturating_sub(rep.stated)
                 );
-                println!(
+                outln!(
                     "  {} dated from the text · {} duplicate(s), {} skipped, {} failed",
-                    rep.dated_from_text, rep.duplicates, rep.skipped, rep.failed
+                    rep.dated_from_text,
+                    rep.duplicates,
+                    rep.skipped,
+                    rep.failed
                 );
                 // The line above claims the mirrors are in `fact_room`. When
                 // the screen diverted some, they are not — the fact is in the
                 // graph, the mirror is not retrievable, and saying nothing
                 // makes the previous line false.
                 if rep.quarantined > 0 {
-                    println!(
+                    outln!(
                         "  {} of these mirrors tripped the admission screen and are NOT \
                          retrievable in '{}' — the facts are in the graph, the drawers are \
                          in review. See `undercroft admission list`.",
-                        rep.quarantined, fact_room
+                        rep.quarantined,
+                        fact_room
                     );
                 }
             }
@@ -4175,37 +4237,38 @@ fn run(cli: Cli) -> Result<()> {
             let store = open_store(&cli, vault)?;
             let halls = store.hallways(wing, *top)?;
             if halls.is_empty() {
-                println!(
-                    "No hallways in wing '{wing}' (need entities co-occurring in 2+ drawers)."
-                );
+                outln!("No hallways in wing '{wing}' (need entities co-occurring in 2+ drawers).");
             }
             for h in halls {
-                println!(
+                outln!(
                     "{} <-> {}  (strength {})",
-                    h.entity_a, h.entity_b, h.strength
+                    h.entity_a,
+                    h.entity_b,
+                    h.strength
                 );
             }
         }
         Command::Stats { vault } => {
             let store = open_store(&cli, vault)?;
             let st = store.stats()?;
-            println!("vault:   {} (level: {})", store.vault().id(), st.level);
-            println!("records: {}", st.records);
+            outln!("vault:   {} (level: {})", store.vault().id(), st.level);
+            outln!("records: {}", st.records);
             // M4: printed right under `records` and only when non-zero,
             // because it exists to explain a discrepancy. `records` is the
             // whole file; the wing list below excludes the review queue, so
             // without this line the two disagree and nothing says why.
             if st.quarantined > 0 {
-                println!(
+                outln!(
                     "  of which quarantined: {} (excluded from the wing list below)",
                     st.quarantined
                 );
             }
-            println!("rooms:   {}", st.rooms);
-            println!("tunnels: {}", st.tunnels);
-            println!(
+            outln!("rooms:   {}", st.rooms);
+            outln!("tunnels: {}", st.tunnels);
+            outln!(
                 "kg:      {} triples ({} active)",
-                st.kg.triples, st.kg.active
+                st.kg.triples,
+                st.kg.active
             );
             // **`writes` is the chain HEIGHT and has never counted writes
             // alone** (M1): an export appends a record, and so does every
@@ -4214,15 +4277,15 @@ fn run(cli: Cli) -> Result<()> {
             // `writes` is not going away; the label says which is which so
             // an operator reading this output does not have to know the
             // history to interpret the number.
-            println!("writes:  {} (audit-chain height)", st.writes);
-            println!("chain records: {}", st.chain_records);
+            outln!("writes:  {} (audit-chain height)", st.writes);
+            outln!("chain records: {}", st.chain_records);
             // The committed audit-chain head. `/v1` and MCP have always
             // carried it and the CLI silently did not — the hand-projection
             // drift, on the struct CLAUDE.md names as the first one it bit.
             // It is what an operator compares against a receipt or a
             // colleague's copy, so a surface that omits it is the surface
             // that cannot answer "are we looking at the same chain?".
-            println!("chain:   {}", st.chain_head);
+            outln!("chain:   {}", st.chain_head);
             // ROADMAP O250. Printed whenever a ceiling is DECLARED, not only
             // when it is passed: `gate_source` below is on this same struct
             // because a value alone cannot tell an operator whether anything
@@ -4232,13 +4295,13 @@ fn run(cli: Cli) -> Result<()> {
             // every guarded read on a fresh handle walks these rows.
             if let Some(ceiling) = st.chain_ceiling {
                 if st.chain_over_ceiling {
-                    println!(
+                    outln!(
                         "audit ceiling: {ceiling} — EXCEEDED ({} records; nothing is deleted, \
                          but each handle's first guarded read walks all of them)",
                         st.chain_records
                     );
                 } else {
-                    println!("audit ceiling: {ceiling} (declared; within it)");
+                    outln!("audit ceiling: {ceiling} (declared; within it)");
                 }
             }
             // ROADMAP O250, and printed only when non-zero on the rule the
@@ -4246,7 +4309,7 @@ fn run(cli: Cli) -> Result<()> {
             // performs no guarded read, so on the CLI it is 0 by
             // construction. It is a served process's number.
             if st.chain_replays > 0 {
-                println!(
+                outln!(
                     "chain replays: {} (full audit-chain walks by this handle's label guard)",
                     st.chain_replays
                 );
@@ -4256,23 +4319,23 @@ fn run(cli: Cli) -> Result<()> {
             // and this handle's failed anchors only when there were any, on
             // the rule the lines around it follow.
             match st.anchor_lag {
-                Some(lag) => println!("anchor lag: {lag} committed record(s) not yet anchored"),
-                None => println!(
+                Some(lag) => outln!("anchor lag: {lag} committed record(s) not yet anchored"),
+                None => outln!(
                     "anchor lag: unknown (vault.json does not verify under this handle's key)"
                 ),
             }
             if st.anchor_failures > 0 {
-                println!(
+                outln!(
                     "anchor failures: {} (post-commit manifest anchors this handle could not \
                      complete; a handle that stopped writing says why under unhealed)",
                     st.anchor_failures
                 );
             }
-            println!("db size: {} bytes", st.db_bytes);
+            outln!("db size: {} bytes", st.db_bytes);
             // The posture this handle was opened under. Silence here read as
             // "writable" on a replica.
             if st.read_only {
-                println!("posture: read-only");
+                outln!("posture: read-only");
             }
             // Trained index artifacts, but only the ones that exist: a
             // generation of 0 means this vault never trained that codebook,
@@ -4285,7 +4348,7 @@ fn run(cli: Cli) -> Result<()> {
                 .map(|(a, gen)| format!("{a} gen {gen}"))
                 .collect();
             if !trained.is_empty() {
-                println!("codebooks: {}", trained.join(", "));
+                outln!("codebooks: {}", trained.join(", "));
             }
             // R4: a read-only open detects instead of healing, and this is
             // where it says what it left. **No longer empty by construction on
@@ -4295,13 +4358,13 @@ fn run(cli: Cli) -> Result<()> {
             // tampered row. That exposure is a state to READ, not a warning
             // someone had to be watching stderr to catch.
             for note in &st.unhealed {
-                println!("unhealed: {note}");
+                outln!("unhealed: {note}");
             }
             // ROADMAP O72. What the semantic half is actually set to, and
             // whether anything measured it — an operator reading a gate value
             // alone cannot tell a probed floor from a shipped constant, and
             // only one of those means this vault's vector space was examined.
-            println!(
+            outln!(
                 "semantic: gate {} · floor {:.3} · {}",
                 match st.semantic.gate {
                     Some(g) => format!("{g:.3}"),
@@ -4318,7 +4381,7 @@ fn run(cli: Cli) -> Result<()> {
             // open (its calibration probes, then its one query or write),
             // so a non-zero here means the endpoint is failing right now.
             if st.embed_failures > 0 {
-                println!(
+                outln!(
                     "embed failures: {} (zero vectors — lexically findable, semantically \
                      invisible until re-embedded with UNDERCROFT_FORCE_EMBEDDER=1 + repair)",
                     st.embed_failures
@@ -4328,38 +4391,38 @@ fn run(cli: Cli) -> Result<()> {
             // the default vault attaches neither stage and three reassuring
             // zeroes would bury the one line that means something.
             if st.rerank_failures > 0 {
-                println!(
+                outln!(
                     "rerank failures: {} (scored 0.0 — those candidates sank to the bottom \
                      of the reranked window and cannot be told from irrelevant passages)",
                     st.rerank_failures
                 );
             }
             if st.late_failures > 0 {
-                println!(
+                outln!(
                     "late-interaction failures: {} (empty matrices — a doc failure leaves a \
                      drawer with no tokens at rest, a query failure retires the late stage \
                      for that search)",
                     st.late_failures
                 );
             }
-            println!("wings:");
+            outln!("wings:");
             for (w, n) in st.wings {
-                println!("  {w:<24} {n}");
+                outln!("  {w:<24} {n}");
             }
         }
         Command::Taxonomy { vault } => {
             let store = open_store(&cli, vault)?;
             for (wing, rooms) in store.taxonomy()? {
-                println!("{wing}/");
+                outln!("{wing}/");
                 for (room, n) in rooms {
-                    println!("  {room} ({n})");
+                    outln!("  {room} ({n})");
                 }
             }
         }
         Command::Dedup { vault, apply } => {
             let mut store = open_store(&cli, vault)?;
             let report = store.dedup(*apply, "cli")?;
-            println!(
+            outln!(
                 "{} duplicate group(s), {} extra drawer(s) {}",
                 report.duplicate_groups,
                 report.removed.len(),
@@ -4375,13 +4438,13 @@ fn run(cli: Cli) -> Result<()> {
             // deleted. MCP has always shown it (it serializes the report
             // whole) and the CLI silently did not.
             if report.dates_kept > 0 {
-                println!(
+                outln!(
                     "{} occurrence date(s) absorbed into the surviving drawer(s)",
                     report.dates_kept
                 );
             }
             if report.quarantined > 0 {
-                println!(
+                outln!(
                     "{} group(s) LEFT INTACT — the surviving drawer's rewrite tripped the \
                      admission screen, so nothing was deleted and no dates were absorbed \
                      for them. Review with `undercroft admission list`.",
@@ -4396,7 +4459,7 @@ fn run(cli: Cli) -> Result<()> {
                 loop {
                     let (encoded, remaining) = store.late_backfill(64)?;
                     done += encoded;
-                    println!("token matrices encoded: {done} (remaining: {remaining})");
+                    outln!("token matrices encoded: {done} (remaining: {remaining})");
                     if remaining == 0 || encoded == 0 {
                         break;
                     }
@@ -4404,9 +4467,9 @@ fn run(cli: Cli) -> Result<()> {
                 return Ok(());
             }
             let (report, backfilled) = store.repair("cli")?;
-            println!("fingerprints backfilled: {backfilled}");
-            println!("records checked: {}", report.records_checked);
-            println!(
+            outln!("fingerprints backfilled: {backfilled}");
+            outln!("records checked: {}", report.records_checked);
+            outln!(
                 "integrity: {}",
                 if report.ok() {
                     "ok"
@@ -4441,24 +4504,24 @@ fn run(cli: Cli) -> Result<()> {
                     let report = match store.backup(&backups)? {
                         undercroft_store::BackupOutcome::Created(report) => report,
                         undercroft_store::BackupOutcome::Refused(_) => {
-                            println!(
+                            outln!(
                                 "refusing to back up vault '{vault}': integrity verification \
                                  failed (run `undercroft verify --vault {vault}` for the detail)"
                             );
                             std::process::exit(EXIT_INTEGRITY.into());
                         }
                     };
-                    println!("Backup created: {}", backups.join(&report.name).display());
-                    println!("  vault:        {}", report.vault);
-                    println!("  chain height: {}", report.writes);
-                    println!("  chain head:   {}", report.chain_head);
+                    outln!("Backup created: {}", backups.join(&report.name).display());
+                    outln!("  vault:        {}", report.vault);
+                    outln!("  chain height: {}", report.writes);
+                    outln!("  chain head:   {}", report.chain_head);
                     // The anchor travels as found (O246/A2): a lag here is
                     // what a restore heals, and says it healed.
-                    println!(
+                    outln!(
                         "  anchor lag:   {} record(s) — a restore fast-forwards it",
                         report.anchor_behind_by
                     );
-                    println!("  older pruned: {}", report.pruned);
+                    outln!("  older pruned: {}", report.pruned);
                 }
                 BackupAction::List => {
                     // Every entry but the stage an archive is built in
@@ -4467,10 +4530,10 @@ fn run(cli: Cli) -> Result<()> {
                         &root.join(undercroft_vault::BACKUPS_DIR),
                     )?;
                     if names.is_empty() {
-                        println!("No backups.");
+                        outln!("No backups.");
                     }
                     for n in names {
-                        println!("{n}");
+                        outln!("{n}");
                     }
                 }
                 BackupAction::Restore { name, force } => {
@@ -4531,7 +4594,7 @@ fn run(cli: Cli) -> Result<()> {
                     let report = match outcome {
                         undercroft_store::RestoreOutcome::Restored(report) => report,
                         undercroft_store::RestoreOutcome::Refused(_) => {
-                            println!(
+                            outln!(
                                 "refusing to restore backup '{name}': it fails integrity \
                                  verification, so nothing was restored and the live vault was \
                                  not changed"
@@ -4539,8 +4602,8 @@ fn run(cli: Cli) -> Result<()> {
                             std::process::exit(EXIT_INTEGRITY.into());
                         }
                     };
-                    println!("Restored {} -> vault '{}'", report.archive, report.vault);
-                    println!(
+                    outln!("Restored {} -> vault '{}'", report.archive, report.vault);
+                    outln!(
                         "  chain height: {} (the archive held {})",
                         report.writes,
                         report.archived_writes.map_or_else(
@@ -4548,11 +4611,11 @@ fn run(cli: Cli) -> Result<()> {
                             |w| w.to_string()
                         )
                     );
-                    println!("  chain head:   {}", report.chain_head);
+                    outln!("  chain head:   {}", report.chain_head);
                     if let Some(head) = &report.archived_chain_head {
-                        println!("  archive head: {head}");
+                        outln!("  archive head: {head}");
                     }
-                    println!(
+                    outln!(
                         "  replaced:     {}",
                         if report.replaced {
                             "the vault that stood there"
@@ -4561,20 +4624,20 @@ fn run(cli: Cli) -> Result<()> {
                         }
                     );
                     if report.key_generation_differs == Some(true) {
-                        println!(
+                        outln!(
                             "  key generation: the replaced vault was rotated after this backup \
                              was taken, and the restore brings the older keys back — rotate \
                              again if that rotation answered a compromise"
                         );
                     }
                     if let Some(moved) = &report.embedder_rerecorded {
-                        println!("  embedder re-recorded: {moved}");
+                        outln!("  embedder re-recorded: {moved}");
                     }
                     for note in &report.unhealed {
-                        println!("  note: {note}");
+                        outln!("  note: {note}");
                     }
                     for entry in &report.skipped {
-                        println!("  not copied: {entry}");
+                        outln!("  not copied: {entry}");
                     }
                 }
             }
@@ -4605,7 +4668,7 @@ fn run(cli: Cli) -> Result<()> {
                     } else {
                         "PLAINTEXT"
                     };
-                    println!(
+                    outln!(
                         "Pushed {n} {kind} record(s) from vault '{vault}' to {backend} \
                          (collection {})",
                         store.index_collection()
@@ -4614,20 +4677,20 @@ fn run(cli: Cli) -> Result<()> {
                 IndexAction::Status { backend } => {
                     let mut index = open_index(backend)?;
                     let (name, count) = store.index_status(index.as_mut())?;
-                    println!("backend:    {name}");
-                    println!("collection: {}", store.index_collection());
+                    outln!("backend:    {name}");
+                    outln!("collection: {}", store.index_collection());
                     // ROADMAP O83: absent and empty are different answers.
                     // They were both `0` while this call ran `ensure` first,
                     // which CREATED the collection it then counted — so the
                     // command could not report "there is no mirror" because
                     // asking made one.
                     match count {
-                        Some(n) => println!("records:    {n}"),
-                        None => println!(
+                        Some(n) => outln!("records:    {n}"),
+                        None => outln!(
                             "records:    no mirror — nothing has been pushed to this backend"
                         ),
                     }
-                    println!("local:      {}", store.count()?);
+                    outln!("local:      {}", store.count()?);
                 }
             }
         }
@@ -4640,8 +4703,8 @@ fn run(cli: Cli) -> Result<()> {
             action: ConfigAction::Check { verbose },
         }
         | Command::ConfigCheck { verbose } => {
-            println!("Checking every UNDERCROFT_* declaration in this environment.");
-            println!(
+            outln!("Checking every UNDERCROFT_* declaration in this environment.");
+            outln!(
                 "Nothing is opened: no vault, no database, no socket, no outbound call.
 A declared data directory is stat'ed for its key material, never read.
 "
@@ -4649,32 +4712,30 @@ A declared data directory is stat'ed for its key material, never read.
             let (fatal, warned, validated, accepted) =
                 config_check::run(*verbose, cli.data_dir.as_deref());
             if validated + accepted == 0 {
-                println!("  (no UNDERCROFT_* variables are declared here)");
+                outln!("  (no UNDERCROFT_* variables are declared here)");
             }
-            println!();
-            println!(
+            outln!();
+            outln!(
                 "{validated} declaration(s) validated against the resolver that runs at start-up."
             );
-            println!(
-                "{accepted} more are declared Opaque — no parse exists to run, so this command"
-            );
-            println!("has NOT checked those: a path, model name, key or setting is validated");
-            println!("by the thing that consumes it, and claiming otherwise would be a stronger");
-            println!("statement than the truth. Which declarations are Opaque is DECLARED in the");
-            println!("inventory and counted against this command in both directions, so the");
-            println!("number cannot grow by somebody forgetting to wire a parse up.");
-            println!("{fatal} would REFUSE to start. {warned} would warn and keep the default.");
+            outln!("{accepted} more are declared Opaque — no parse exists to run, so this command");
+            outln!("has NOT checked those: a path, model name, key or setting is validated");
+            outln!("by the thing that consumes it, and claiming otherwise would be a stronger");
+            outln!("statement than the truth. Which declarations are Opaque is DECLARED in the");
+            outln!("inventory and counted against this command in both directions, so the");
+            outln!("number cannot grow by somebody forgetting to wire a parse up.");
+            outln!("{fatal} would REFUSE to start. {warned} would warn and keep the default.");
             if fatal > 0 {
                 // Exit 1, deliberately, and not the integrity code: a
                 // configuration that will not start is a run failure, not a
                 // verdict about stored evidence.
                 bail!("this environment would not start");
             }
-            println!("This environment starts.");
+            outln!("This environment starts.");
         }
         Command::Hooks { client } => match client.as_str() {
             "claude-code" => {
-                println!("{}", claude_code_hooks_json());
+                outln!("{}", claude_code_hooks_json());
             }
             other => bail!("unknown client {other:?} (supported: claude-code)"),
         },
@@ -4684,7 +4745,7 @@ A declared data directory is stat'ed for its key material, never read.
 
 fn print_triples(facts: &[undercroft_store::Triple]) {
     if facts.is_empty() {
-        println!("No facts.");
+        outln!("No facts.");
     }
     for t in facts {
         let window = match (&t.valid_from, &t.valid_to) {
@@ -4693,7 +4754,7 @@ fn print_triples(facts: &[undercroft_store::Triple]) {
             (None, Some(u)) => format!(" [.. {u}]"),
             (None, None) => String::new(),
         };
-        println!("{} --{}--> {}{}", t.subject, t.predicate, t.object, window);
+        outln!("{} --{}--> {}{}", t.subject, t.predicate, t.object, window);
     }
 }
 
