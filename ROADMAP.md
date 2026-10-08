@@ -14018,6 +14018,208 @@ has always returned beside `backup`. (7) The `HAND_PROJECTED` row, recorded abov
 **Also corrected**: `docs/AGENTS.md` §10 listed three read-only `POST` exceptions where `mutates`
 names four — `POST …/witness` (O245) was missing.
 
+### O177 — CLOSED 2026-10-08: one loopback predicate — `host_is_loopback` holds the literals, `addr_is_loopback` and the engine's refuse-to-bind rule both ask it, and `--host ::1` still starts without a token
+
+**Filed 2026-09-14 as item (b) of O171's ruling, which rules it owed an
+entry.**
+
+**Mechanism, read 2026-09-14.** `serve_http`
+(`crates/undercroft-cli/src/http.rs:229`) compares the bare `--host` with
+three literals: `host == "127.0.0.1" || host == "localhost" || host == "::1"`.
+`addr_is_loopback` (`crates/undercroft-config/src/lib.rs`) takes a
+`host:port` listen address, splits it at the LAST colon (unwrapping
+`[::1]:<port>`) and compares the left side with the same three literals. For
+`"::1"` the split yields host `":"`, so it answers false where the engine
+answers true. One takes a host and the other an address; neither is a copy of
+the other. O160's residual calls the engine's check "a byte-identical inline
+copy", and `addr_is_loopback`'s doc comment said the same until the 2026-09-14
+drift sweep corrected it to name this entry.
+
+**Why it matters.** Two implementations of one security predicate is the
+class O90 and O92 record. The recorded claim invites the obvious unification —
+call `addr_is_loopback(host)` from `serve_http` — which would refuse
+`serve-http --host ::1` without a token: a working loopback deployment would
+stop, and nothing in the tree would say why the two had ever differed.
+
+**Fix shape** (O171 (b)). `host_is_loopback(host)` in `undercroft-config`
+holding the literals once; `addr_is_loopback` splits and then calls it;
+`serve_http` calls `host_is_loopback` through a new
+`undercroft-cli → undercroft-config` dependency edge, which does not exist
+today. `addr_is_loopback`'s doc comment, which already names this entry, is
+rewritten in the same unit to describe the shared predicate.
+
+**Gate.** A table test in `undercroft-config` drives each host row through
+`host_is_loopback` and the same host with a port through `addr_is_loopback`,
+requiring equal answers: `127.0.0.1`, `localhost`, `::1` (bracketed with a
+port), `0.0.0.0` and a look-alike such as `127.0.0.1.example`. A source gate
+requires the three literals to be compared in one function only, because a
+second copy is the observable this class moves. Counterfactual: make
+`serve_http` call `addr_is_loopback(host)` directly and the `::1` row fails —
+the drop-in the recorded claim invited. Premise arm: with the literal set
+duplicated back into `http.rs`, the source gate fails.
+
+#### BUILT 2026-10-08, as ruled by O171 (b)
+
+**The prior ruling was found and followed.** O171's ruling (2026-09-14, three
+lenses and a refuter) gave the shape above, and the reading answered every
+design question; no panel was convened.
+
+**What shipped.**
+- `undercroft_config::host_is_loopback(host)` holds the three literals, the
+  only place in the workspace they are compared for a listen host.
+  `addr_is_loopback` keeps its split and asks it. Its doc now says it is an
+  ADDRESS predicate and that handing it a bare host is this defect.
+- `http.rs` gains `refuse_to_bind(host, port, token)`, which `serve_http`
+  calls and which asks `host_is_loopback` with the bare `--host`. It is a
+  function rather than an inline line so a unit test can drive the rule
+  `serve_http` runs, which needs a `Tenancy` to reach otherwise.
+- The new `undercroft-cli → undercroft-config` edge compiles no new crate:
+  `undercroft-config` was already linked through `undercroft-store`.
+  `Cargo.lock` gains one line.
+
+**Which addresses bind without a bearer did not move — measured, not
+argued.** The two pre-O177 expressions, copied from `main` at `781b5b9` into
+a scratch program, against the crate's new functions over 434 generated
+inputs: hosts and addresses, bracketed and bare, ports valid, empty and
+invalid, whitespace-padded, case-varied, `127.0.0.2`, `0:0:0:0:0:0:0:1`,
+`::ffff:127.0.0.1`, `fe80::1` and a lookalike `localhost` with a Unicode
+first letter. Old engine against `host_is_loopback`: **0 differences**. Old
+`addr_is_loopback` against new: **0 differences**. So no `UPGRADING.md`
+entry is owed and `config check` has nothing new to detect: no deployment
+that started before can stop.
+
+**Gates.**
+- `a_host_and_its_listen_address_answer_alike` (`undercroft-config`), 9 rows:
+  the ruling's five, plus `::`, `10.1.2.3`, `localhost.example`, and
+  `127.0.0.2`. The last is loopback and answers false, pinned so that
+  widening the predicate has to be a decision rather than a side effect of a
+  refactor. It also pins the counterfactual's premise: `addr_is_loopback("::1")`
+  is false, and `[::1]` is an address spelling, not a host.
+- `the_loopback_literals_live_in_one_function`
+  (`undercroft-config/src/loopback_tests.rs`) walks every `.rs` under
+  `crates/` (more than 60 files required). A small lexer blanks comments and
+  reads every string literal, raw and byte strings included. The gate fails
+  on any literal whose contents are exactly `127.0.0.1`, `localhost` or `::1`
+  in code compiled outside tests, whatever surrounds it.
+  **What counts as test code is read from the module tree, never from a file
+  name.** It covers every crate's `tests/` and `benches/` targets, every file
+  that a `mod` under a `cfg` naming `test` brings in (and every file below it),
+  and every item under such a `cfg`; `cfg(not(test))` is production. A file no
+  module tree reaches is scanned as production; the current tree has none.
+  Premises: eight known files are classified correctly, among them
+  `anchor_tests.rs` and `fixture.rs` as test and `parity.rs` and `http.rs` as
+  production. Test code holding the literals must be found and excluded.
+  `the_loopback_gate_sees_every_spelling_of_a_copy` drives the lexer, the
+  region reader and the module reader on planted text, and requires:
+  - each of 13 copy spellings to be seen, the review's six among them;
+  - comments, nested block comments, `"[::1]:9900"`, escaped quotes and a
+    continued string to stay silent;
+  - five test-only shapes to be excluded;
+  - a test region to end with its item.
+  **How it reads "one function", stated because it is a judgement.** Four
+  sites are allowed, each REQUIRED to be reached with exact counts:
+  - `host_is_loopback`, each literal once.
+  - `"localhost"` once in `undercroft-net`'s `is_loopback`, and once in
+    `undercroft-index`'s `dsn_is_loopback`. These are the outbound
+    predicates. Each compares the literal against a parser's typed host
+    (`url::Host::Domain`, `tokio_postgres` `Host::Tcp`) and reads a parsed
+    address through its own `is_loopback`, the O90/O92 rule. `CLAUDE.md`
+    already says they cannot share the listen-host predicate. Refusing them
+    would have demanded a refactor no ruling asked for; ignoring
+    `"localhost"` would have let a second listen-host copy built on it
+    through.
+  - `"127.0.0.1"` once inside the `ServeHttp` arguments in `main.rs`: the
+    default `--host`, a value bound, not a decision about one.
+  **This is the gate's second version, and the first was mine and too
+  narrow.** It recognised `==`, `!=`, a match arm, a pattern alternative and
+  a line naming two literals. O177's independent review then planted six
+  single-literal copies in a file outside the module tree, and every one was
+  invisible to it: `host.eq("::1")`, `matches!(host, "localhost")`,
+  `host.eq_ignore_ascii_case("localhost")`, a `const` holding `"::1"`,
+  `if let "127.0.0.1" = host` and a `Some("localhost") =>` arm. The same
+  plant against the second version fails it with all six named, as recorded
+  below.
+- `the_refuse_to_bind_rule_lets_every_loopback_host_through_without_a_token`
+  (`http.rs`), 9 hosts, with and without a token, the refusal's words checked.
+- `serve_http_binds_ipv6_loopback_without_a_token` (`tests/cli.rs`) drives
+  the binary. A `0.0.0.0` premise proves the refusal's words. With no token,
+  `--host ::1` must not be refused, and must either answer on `[::1]` with its
+  banner or fail at the bind itself; whether the environment has IPv6 is not
+  the question.
+- `tests/e2e.sh`, one check, "http lets a tokenless ::1 through", the same
+  property through the shipped binary under `timeout`, beside the existing
+  `0.0.0.0` refusal that is its premise. Its logic was replayed by hand
+  against this unit's release binary (`ok`, exit 124: it bound). The suite
+  itself was not run in this unit.
+
+**RED → GREEN and counterfactuals, all run.**
+- The source gate at the tree with only the config change applied: FAILED,
+  naming exactly `crates/undercroft-cli/src/http.rs:232`, the inline copy, and
+  nothing else. That is the premise arm, run on the literal pre-fix line.
+- CF-A, the drop-in O160's record invited, is `refuse_to_bind` calling
+  `addr_is_loopback(host)`. The unit test failed at `--host ::1 with no
+  token`, and the integration test failed on `refusing to bind ::1:44099`.
+  Each edit was proved landed with `grep -c` and recompiled (`Compiling
+  undercroft-cli` required), then restored and checked with `cmp`.
+- CF-C, the FIX widened, is `host_is_loopback` parsing any loopback IP. The
+  table test failed at `127.0.0.2`, the source gate failed on the body's
+  comparison count, and the http unit test failed. All three refuse a silent
+  widening. (Run against the gate's first version.)
+- The gate's second version, three plants:
+  - The review's six spellings in a file no module tree reaches: FAILED,
+    naming all six lines, and reporting that one file no tree reaches was
+    scanned as production. So the real tree has none.
+  - `host.eq("::1")` in a function appended to `http.rs`, a production
+    module: FAILED, naming it.
+  - The original inline copy restored in `refuse_to_bind`: FAILED, naming
+    `http.rs:232` once per literal.
+  Each plant was proved landed, recompiled, and then removed or restored and
+  checked with `cmp`.
+
+**Real corpus.** The release binary was built in this unit's private target
+dir. The LoCoMo feed was mined into four wings, 340 drawers. Each host was
+started tokenless under `timeout 4`:
+- `127.0.0.1`, `localhost` and `::1` bound, exit 124, banner "loopback, no
+  auth".
+- `0.0.0.0`, `::`, `127.0.0.2`, `[::1]` and `127.0.0.1.example` were refused
+  in 6–10 ms.
+- With a token, `[::1]` failed at the bind ("failed to lookup address
+  information"), which confirms a bracketed host binds nothing.
+- A tokenless `::1` server answered `/v1` search over `[::1]`: three queries,
+  HTTP 200, five hits each spanning all four wings, 25–38 ms. The container
+  has an IPv6 loopback (`/proc/net/if_inet6` lists `lo`).
+
+**Surfaces.** The engine's `serve-http` is the only caller of the
+refuse-to-bind rule. MCP stdio binds nothing. `/v1` is served by the same
+listener. The orchestrator and both `config check`s reach `addr_is_loopback`
+only, whose answers did not move. The consoles render no part of it.
+Documents: `CLAUDE.md`'s `undercroft-config` bullet, `docs/architecture.md`'s
+crate graph and table (`cli --> config`, with `docs/diagrams/src/
+architecture-components.mmd` and its SVG re-rendered with the pinned
+`mermaid-cli` image, one edge added), the platform-views crate map
+("links 10 workspace crates"), and `docs/remote-server.md`, which now names
+the three hosts.
+
+**Residuals, stated.**
+- `127.0.0.2` and `0:0:0:0:0:0:0:1` are loopback and still need a token, the
+  conservative direction every release has taken.
+- The source gate reads tokens. These copies escape it: one that never writes
+  the literal as one token (`concat!`, `Ipv6Addr::LOCALHOST`, a byte-by-byte
+  comparison); one outside `crates/`; and production code compiled through a
+  `cfg(any(test, feature = …))` item under that feature, which the gate counts
+  as test code.
+
+**Found while building it, filed:**
+- O-NEW-O177-1: the banner and the refusal print an IPv6 `--host`
+  unbracketed, and so does the orchestrator's banner for an unbracketed
+  address. `http://::1:18811` is what an operator copies, and `curl` refuses
+  it, exit 3. Three of the assertions above pin today's text and must invert
+  with that fix.
+- O-NEW-O177-2: a bare `::1` passes both listen-address pre-flights as host
+  `":"` and dies at the orchestrator's bind.
+- O-NEW-O177-3: `serve-http` resolves its bearer and its bind rule only after
+  opening the vault.
+
 ### O287 — CLOSED 2026-10-07: a reader that leaves early never turns a verdict into a panic — every stdout write of both binaries goes through one door, the reader leaving is exit 141, an integrity verdict still exits 2, and the nineteen piped checks capture, then match
 
 **Filed 2026-09-27 by O281's battery, which it turned red; measured the same
@@ -19893,7 +20095,8 @@ unit ran, so five entries were added:**
 - **O208** — (e), FDE recall at scale;
 - **O209** — (g), the hand-written `Shared*` wrappers.
 
-Item (b) is O177 and item (f) is O174, both filed on 2026-09-14.
+Item (b) is O177 and item (f) is O174, both filed on 2026-09-14. (Item (b)
+was built to this ruling's shape on 2026-10-08; O177 records it.)
 
 **Comment citations rewritten.**
 - `manage.rs`'s `Namespace::Del` arm now names O205.
@@ -23678,6 +23881,14 @@ engine's check at `http.rs:229` compares the bare `--host` with three literals;
 `::1` it answers false where the engine answers true, and a drop-in replacement
 would refuse `serve-http --host ::1` without a token. "Filed rather than done"
 named no entry either; the unification is O177.
+
+**Built 2026-10-08 (O177), recorded beside the residual above rather than in
+place of it.** One predicate now: `undercroft_config::host_is_loopback`
+holds the literals, `addr_is_loopback` splits and asks it, and the engine's
+refuse-to-bind rule asks it with the bare `--host`. Over 434 generated
+inputs, neither predicate's answers moved from what this residual's two copies
+answered. The drop-in the "byte-identical" wording invited is pinned as a
+counterfactual: it refuses `serve-http --host ::1`.
 
 
 ### O161 — CLOSED 2026-09-13: the file states its own structure, and a level-2 heading inside an entry is refused
@@ -35580,46 +35791,6 @@ moves O79's and O95's tag tests, so it is its own unit. **Gate**: a non-dry-run
 `refine` against a loopback extractor stub, under a served embedder pointed at a
 counting loopback stub, records that endpoint with the number of mirror drawers
 it sent.
-
-### O177 — the engine's refuse-to-bind check and `undercroft_config::addr_is_loopback` disagree on `::1`, and O160 recorded them as byte-identical
-
-**Filed 2026-09-14 as item (b) of O171's ruling, which rules it owed an
-entry.**
-
-**Mechanism, read 2026-09-14.** `serve_http`
-(`crates/undercroft-cli/src/http.rs:229`) compares the bare `--host` with
-three literals: `host == "127.0.0.1" || host == "localhost" || host == "::1"`.
-`addr_is_loopback` (`crates/undercroft-config/src/lib.rs`) takes a
-`host:port` listen address, splits it at the LAST colon (unwrapping
-`[::1]:<port>`) and compares the left side with the same three literals. For
-`"::1"` the split yields host `":"`, so it answers false where the engine
-answers true. One takes a host and the other an address; neither is a copy of
-the other. O160's residual calls the engine's check "a byte-identical inline
-copy", and `addr_is_loopback`'s doc comment said the same until the 2026-09-14
-drift sweep corrected it to name this entry.
-
-**Why it matters.** Two implementations of one security predicate is the
-class O90 and O92 record. The recorded claim invites the obvious unification —
-call `addr_is_loopback(host)` from `serve_http` — which would refuse
-`serve-http --host ::1` without a token: a working loopback deployment would
-stop, and nothing in the tree would say why the two had ever differed.
-
-**Fix shape** (O171 (b)). `host_is_loopback(host)` in `undercroft-config`
-holding the literals once; `addr_is_loopback` splits and then calls it;
-`serve_http` calls `host_is_loopback` through a new
-`undercroft-cli → undercroft-config` dependency edge, which does not exist
-today. `addr_is_loopback`'s doc comment, which already names this entry, is
-rewritten in the same unit to describe the shared predicate.
-
-**Gate.** A table test in `undercroft-config` drives each host row through
-`host_is_loopback` and the same host with a port through `addr_is_loopback`,
-requiring equal answers: `127.0.0.1`, `localhost`, `::1` (bracketed with a
-port), `0.0.0.0` and a look-alike such as `127.0.0.1.example`. A source gate
-requires the three literals to be compared in one function only, because a
-second copy is the observable this class moves. Counterfactual: make
-`serve_http` call `addr_is_loopback(host)` directly and the `::1` row fails —
-the drop-in the recorded claim invited. Premise arm: with the literal set
-duplicated back into `http.rs`, the source gate fails.
 
 ### O178 — the platform-views figure gate reads no total of engine variables, so four published 81s are ungated, and `= 10 binaries` counts archives
 
@@ -47686,6 +47857,108 @@ restated reason gets this file's backwards test.
 
 **Version class.** None for the recommended answer: governance text. The rejected option would change
 documented install contracts and owe `UPGRADING.md` and every install document.
+
+### O-NEW-O177-1 — `serve-http` prints an IPv6 `--host` unbracketed, so the URL its banner gives an operator is not a URL
+
+**Filed 2026-10-08 by O177's unit, which found it driving `--host ::1`
+through the release binary.**
+
+**Mechanism, measured.** `serve_http` formats `http://{host}:{port}` in its
+banner and `{host}:{port}` in the refuse-to-bind refusal and the bind error.
+With `--host ::1` the banner reads `http://::1:18811`. Run against O177's
+release binary:
+- `curl http://::1:18811/healthz` exits 3, a malformed URL.
+- `curl -g http://[::1]:18811/healthz` answers 200.
+- The refusal for `--host ::` reads `refusing to bind :::18800`.
+
+The orchestrator has the same defect. Its banner prints the address as
+declared, so `UNDERCROFT_ORCH_ADDR=[::1]:18890` prints
+`http://[::1]:18890`, but `UNDERCROFT_ORCH_ADDR=::1:18899` binds and prints
+`http://::1:18899` (measured by O177's independent review). The banner is the
+line `docs/remote-server.md`'s `claude mcp add … http://HOST:8765/mcp` recipe
+has an operator copy.
+
+**Fix shape.** One formatter that brackets a host containing `:` wherever a
+host and a port are printed together: the engine's banner, refusal and bind
+error, and the orchestrator's banner. Only the printed text changes, never the
+host that is bound. It is a PATCH: the output changes, and no surface parses
+it.
+
+**Gate.** A unit test on the formatter: `::1` prints `[::1]:8765`, and
+`127.0.0.1` and `localhost` print unchanged. An e2e arm `curl`s the URL the
+banner printed. Counterfactual: drop the brackets, and `curl` exits 3.
+**Three assertions O177 added PIN today's unbracketed text, and must invert
+with the fix**: `tests/cli.rs`'s `serve_http_binds_ipv6_loopback_without_a_token`
+(it matches `listening on http://::1:{port}` and `binding ::1:{port}`), the
+`tests/e2e.sh` check "http lets a tokenless ::1 through" (the same two
+strings), and `http.rs`'s
+`the_refuse_to_bind_rule_lets_every_loopback_host_through_without_a_token`,
+whose `::` row asserts `refusing to bind :::8765`.
+
+### O-NEW-O177-2 — a bare `::1` passes both listen-address pre-flights as host `":"` and dies at the orchestrator's bind
+
+**Filed 2026-10-08 by O177's unit.**
+
+**Mechanism, measured.** `parse_listen_addr` (`undercroft-config`) splits at
+the last colon, so `::1` is host `":"` and port `1`. It is accepted: the host
+is not empty and the port is a `u16`. `ToSocketAddrs` takes the same split,
+and no resolver reads a name containing a colon. Run against O177's release
+binaries:
+- `UNDERCROFT_ORCH_ADDR=::1` passes the engine's `config check` (exit 0)
+  and the orchestrator's `config-check` (exit 0).
+- `undercroft-orchestrator serve` then exits 1 with `bind ::1: failed to
+  lookup address information: Name or service not known`.
+- `UNDERCROFT_ORCH_METRICS_ADDR=::1` is refused, but with the wrong
+  diagnosis: "is not loopback, so UNDERCROFT_ORCH_METRICS_TOKEN is required".
+  The value cannot bind at all.
+
+This is O160's own class, *a pre-flight looser than the bind*, on a spelling
+O160's test rows did not include. It is not O177's defect: the address
+predicate answering false for a bare `::1` is correct, because a bare `::1` is
+not an address.
+
+**Fix shape.** Refuse a host that is not bracketed, contains `:`, and does
+not parse as an `Ipv6Addr`; `":"` is one. Name the bracketed form in the
+refusal. Probe one thing first: whether an unbracketed `::1:9900` binds today.
+Std's `ToSocketAddrs` splits at the last colon and should resolve `::1`. If it
+binds, refusing every unbracketed host that contains a colon would refuse a
+value that binds, which breaks O160's strict-subset rule.
+
+**Gate.** Add `::1` to
+`a_listen_address_that_cannot_bind_is_refused_on_both_listeners`. If
+`::1:9900` binds, add it to `a_listen_address_that_binds_today_still_resolves`.
+Add an `e2e-orchestrator` arm in which the pre-flight and `serve` agree on
+`::1`. Counterfactual: drop the new refusal, and the first test names `::1`.
+
+### O-NEW-O177-3 — `serve-http` opens the vault before it resolves its bearer or applies its refuse-to-bind rule
+
+**Filed 2026-10-08 by O177's unit.**
+
+**Mechanism, read and measured.** In `main.rs`'s `ServeHttp` arm, four
+steps run before `http::serve_http`: `open_store_as` (writable unless
+`--read-only`), `warm_embedding_cache`, `Tenancy::new` and the reranker
+factory. Only then does `serve_http` resolve `UNDERCROFT_MCP_HTTP_TOKEN` and
+call `refuse_to_bind`. Measured on O177's release binary:
+- On an empty `UNDERCROFT_HOME`, `serve-http --host 0.0.0.0` with no token
+  exits 1 with `vault "default" not found`, never the bind refusal. An empty
+  token declaration on an empty home answers the same. The operator is sent
+  to create a vault for a start that would then be refused.
+- On an initialised, healthy vault, the refused start left `vault.db`'s mtime
+  unchanged. It still opened the vault writable first, so whatever a writable
+  open performs runs for a process that cannot serve.
+
+O160 fixed this shape for the orchestrator, which resolves its address before
+`Orch::open`. The master key an empty home gains is not this entry's defect:
+`search` creates it the same way, as measured.
+
+**Fix shape.** Resolve the token and apply `refuse_to_bind` at the top of the
+`ServeHttp` arm, before `open_store_as`, and hand `serve_http` the resolved
+token.
+
+**Gate.** A `tests/cli.rs` test on an empty home: `--host 0.0.0.0` with no
+token must name the bind refusal, and the home must hold no `vaults/`, which
+asserts which steps were reached. Counterfactual: move the check back, and the
+test fails on "vault not found".
 
 ### O332 — the harness's curl and printf producers meet O287's race: fifteen status-consuming pipelines from a producer that is not one of the binaries into a reader that may leave first
 

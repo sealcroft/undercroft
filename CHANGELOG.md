@@ -1861,6 +1861,43 @@ the new template: a data-directory mount that fails at boot now leaves the unit 
 looping until the directory appears. Filed from the measurement: init's error over a `vaults/default` it
 cannot create names no path (O-NEW-O199-1).
 
+### One loopback predicate for a listen host, and `--host ::1` still starts without a token (O177)
+
+`serve-http` decides whether a bind needs a bearer with its own inline comparison against
+`127.0.0.1`, `localhost` and `::1`. `undercroft_config::addr_is_loopback` held a second copy of the
+same three literals behind a `host:port` split. O160's record called the two byte-identical, and they
+were not: the address predicate reads a bare `::1` as host `":"` and port `1`. So the unification
+that record invited, the engine calling `addr_is_loopback(--host)`, would have refused a working
+`serve-http --host ::1` with no token.
+
+The literals now live once, in `undercroft_config::host_is_loopback`. `addr_is_loopback` splits the
+address and asks it. The engine's rule, now `http::refuse_to_bind`, asks it with the bare `--host`,
+through a new `undercroft-cli → undercroft-config` dependency that compiles no new crate.
+
+A source gate walks every `.rs` under `crates/`. It refuses any string literal reading exactly
+`127.0.0.1`, `localhost` or `::1` in code compiled outside tests, whatever surrounds it: `==`,
+`.eq`, `matches!`, a `const`, an `if let`, a match arm, a raw or a byte string. Test code is read
+from the module tree, never from a file name. It allows, with exact counts, three other sites:
+`"localhost"` once in each of the two outbound predicates, which compare it against a parser's
+typed host, and the `127.0.0.1` default of `serve-http --host`.
+
+The gate's first version caught only `==`, `!=` and lines naming two of the literals. O177's
+independent review got six single-literal copies past it; all six now fail it.
+
+Nothing an operator can observe moved, and that was measured: over 434 generated hosts and
+addresses, neither predicate answers differently from the two copies it replaces. `127.0.0.2` still
+needs a token, and that answer is now pinned. Through the release binary over a 340-drawer LoCoMo
+vault, a tokenless `--host ::1` server answered `/v1` search over `[::1]`, while `0.0.0.0`, `::`,
+`127.0.0.2`, `[::1]` and `127.0.0.1.example` were refused. The ruling's drop-in is a counterfactual:
+`refuse_to_bind` calling `addr_is_loopback` fails the unit test and the binary test at `::1`.
+`docs/architecture.md`'s crate graph gains the edge.
+
+PATCH inside the unreleased 1.7.0: no surface's answer changed, so `UPGRADING.md` owes nothing and
+`config check` has nothing new to detect. Three defects found on the way are filed rather than fixed:
+the banner prints `http://::1:<port>`, which no client accepts; a bare `::1` passes both
+listen-address pre-flights and then dies at the orchestrator's bind; and `serve-http` opens the vault
+before it applies its bind rule.
+
 ## 1.6.1 — 2026-09-22
 
 PATCH: fixes only. Each adds a surface that REPORTS an existing silence, and

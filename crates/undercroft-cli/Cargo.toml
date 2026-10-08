@@ -38,6 +38,10 @@ undercroft-obs = { path = "../undercroft-obs" }
 # For the one request-body ceiling every listener shares (ROADMAP O111);
 # already linked through undercroft-llm and undercroft-index.
 undercroft-net = { path = "../undercroft-net" }
+# For the one listen-host loopback predicate the refuse-to-bind rule asks
+# (ROADMAP O177); already linked through undercroft-store, so this compiles
+# no new crate.
+undercroft-config = { path = "../undercroft-config" }
 undercroft-embed-onnx = { path = "../undercroft-embed-onnx", optional = true }
 undercroft-embed-ort = { path = "../undercroft-embed-ort", optional = true }
 anyhow = { workspace = true }

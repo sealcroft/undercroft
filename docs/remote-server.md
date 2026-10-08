@@ -38,7 +38,10 @@ claude mcp add --transport http undercroft http://HOST:8765/mcp \
   --header "Authorization: Bearer $UNDERCROFT_MCP_HTTP_TOKEN"
 ```
 
-- The server refuses non-loopback binds without the token.
+- The server refuses non-loopback binds without the token. Loopback means a
+  `--host` of exactly `127.0.0.1`, `localhost` or `::1`. Any other host
+  needs the token, including `127.0.0.2` and the bracketed `[::1]`, which
+  `--host` does not take. An unrecognised spelling counts as exposed.
 - It also refuses a token that is **empty** or ends in **whitespace**. The
   second is the one that bites: `UNDERCROFT_MCP_HTTP_TOKEN=$(cat
   /run/secrets/token)` over a file ending in a newline used to start a server

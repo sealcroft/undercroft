@@ -2635,6 +2635,91 @@ fn a_replayed_policy_row_is_named_and_a_rotation_over_it_refuses() {
         .success();
 }
 
+/// **ROADMAP O177, through the binary: `serve-http --host ::1` with no token
+/// is a loopback bind and starts.**
+///
+/// The refuse-to-bind rule and `undercroft_config::addr_is_loopback` were two
+/// copies of one predicate, recorded as byte-identical and differing on
+/// exactly this host: the address predicate reads a bare `::1` as host `":"`
+/// and port `1`. The rule asks the one host predicate now, and this drives the
+/// surface an operator types. Whether the environment HAS an IPv6 loopback is
+/// not the question, so either outcome after the rule is accepted — the
+/// server answering on `[::1]`, or the bind itself failing — and the one
+/// outcome refused is the refusal.
+#[test]
+fn serve_http_binds_ipv6_loopback_without_a_token() {
+    let home = TempDir::new().unwrap();
+    cmd(&home).args(["init"]).assert().success();
+
+    // Premise: a non-loopback host IS refused with no token, in the words the
+    // negative assertion below looks for — or its silence would mean nothing.
+    cmd(&home)
+        .env_remove("UNDERCROFT_MCP_HTTP_TOKEN")
+        .args(["serve-http", "--host", "0.0.0.0", "--port", "1"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("refusing to bind 0.0.0.0:1"));
+
+    // A port free on `[::1]` where the environment has one, else any number.
+    let port = std::net::TcpListener::bind("[::1]:0")
+        .or_else(|_| std::net::TcpListener::bind("127.0.0.1:0"))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let log = home.path().join("serve-http.log");
+    let mut server = std::process::Command::new(assert_cmd::cargo::cargo_bin("undercroft"))
+        .env("UNDERCROFT_HOME", home.path())
+        .env_remove("UNDERCROFT_PASSPHRASE")
+        .env_remove("UNDERCROFT_MCP_HTTP_TOKEN")
+        .args(["serve-http", "--host", "::1", "--port", &port.to_string()])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::fs::File::create(&log).unwrap())
+        .spawn()
+        .expect("serve-http spawns");
+    let mut answered = false;
+    let mut exited = false;
+    for _ in 0..150 {
+        if server.try_wait().expect("the child is waitable").is_some() {
+            exited = true;
+            break;
+        }
+        if std::net::TcpStream::connect(("::1", port)).is_ok() {
+            answered = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    // The banner follows the bind, so a connect can win the race to it:
+    // bounded wait for the line before the process is stopped.
+    let banner = format!("listening on http://::1:{port}");
+    for _ in 0..50 {
+        if !answered || std::fs::read_to_string(&log).unwrap().contains(&banner) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let _ = server.kill();
+    let _ = server.wait();
+    let said = std::fs::read_to_string(&log).unwrap();
+    assert!(
+        !said.contains("refusing to bind"),
+        "--host ::1 is loopback and needs no token: {said}"
+    );
+    if answered {
+        assert!(
+            said.contains(&banner),
+            "the server answered on [::1], so its banner says where: {said}"
+        );
+    } else {
+        assert!(
+            exited && said.contains(&format!("binding ::1:{port}")),
+            "neither answered on [::1] within 15 s nor failed at the bind \
+             itself, so the rule was not shown to let it through: {said}"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // ROADMAP O287: a reader that leaves never turns a run into a panic, and never
 // hides the verdict the run reached.
