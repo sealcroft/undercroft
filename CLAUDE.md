@@ -1866,7 +1866,24 @@ Consequences that are binding, not advisory:
   Third instance of *ask what a gate can SEE, not what it asserts.*
 - `crates/undercroft-obs` — observability shim: no-op + **zero deps** by default;
   under `--features telemetry` brings up `tracing` logs, Prometheus `/metrics`,
-  OTLP traces (metadata-only spans), and the live SSE broker. Two contracts
+  OTLP traces (metadata-only spans), and the live SSE broker. **And on every
+  build `stdio.rs`, the one door the two binaries' own code writes stdout
+  through (ROADMAP O287)**: `outln!` never panics — on `BrokenPipe` it latches
+  that the reader left and discards the rest, so a command runs on to its own
+  verdict — and `errln!` is a best-effort stderr line; each binary's `main`
+  flushes the door explicitly and folds the exit status in one order, an
+  integrity verdict 2, a failed run 1, the reader leaving 141, then 0
+  (`exit_status`). `println!` panicked on a closed reader, so `verify | head`
+  over a tampered vault was 101. Both binaries' roots
+  `#![deny(clippy::print_stdout, clippy::print_stderr)]`, and two source
+  counts in `stdio.rs` cover the code no lint leg compiles (O153): no print
+  escapes the door in either binary, and NO production code in any crate
+  holds a print macro — the default build's `diag_*!` write through `errln!`'s
+  line since O328, so a server whose log reader went away keeps serving.
+  `serve-mcp`'s closed client is a session end, exit 0. Exit 0 is no proof of
+  delivery: output that fits in a pipe's buffer can be lost to a reader that
+  dies after the last write. The one stdout write outside the door is a
+  telemetry build's `UNDERCROFT_LOG_FORMAT=json` log layer (O333). Two contracts
   worth knowing: `chain_commit(records)` counts audit-chain **records**, not
   manifest anchors (a 256-drawer batch anchors once and advances it by 256;
   records appended without an anchor — read audits — are counted by the next
@@ -2113,9 +2130,11 @@ Consequences that are binding, not advisory:
   machine-oriented output stay English);
   receipt.rs: the ONE place `forget`, `admission deny` and `retention sweep`
   deliver a destruction's receipt (ROADMAP O262) — `--sign` read and parsed
-  before the vault is opened, and once the drawers are gone the receipt reaches
-  stdout before any failure, an unwritable `--out` included, because its
-  fingerprints are stored nowhere and it can never be minted again;
+  before the vault is opened, and once the drawers are gone the receipt's
+  delivery is attempted before anything else is written: `--out` first and
+  durably, stdout through the door's flushed write (O287) as its fallback, and
+  a delivery that fails says where the receipt went or that it is lost, because
+  its fingerprints are stored nowhere and it can never be minted again;
   refine.rs: the ONE LLM-distillation implementation both `undercroft refine`
   and `POST /v1/…/refine` drive — same `UNDERCROFT_LLM_*` config used to
   build two different vaults, the CLI's facts carrying no date resolved from
@@ -2723,8 +2742,8 @@ docs/PARITY.md. Never reintroduce Python code here.
 Build and test **inside containers**, not on the host (project policy):
 
 ```bash
-docker compose run --rm test          # cargo unit + integration tests (1292 run,
-                                      # 17 #[ignore]d = 1309 compiled. Counted from
+docker compose run --rm test          # cargo unit + integration tests (1308 run,
+                                      # 17 #[ignore]d = 1325 compiled. Counted from
                                       # a battery run at the INTEGRATED tree,
                                       # never inherited and never from one
                                       # agent's own slice — a fleet member wrote
@@ -2870,8 +2889,8 @@ docker compose run --rm lint          # rustfmt --check + clippy -D warnings, on
                                       # TELEMETRY build, which the default check
                                       # never compiles. It sees an orphan, never a doc on
                                       # the wrong item; that half stays by eye
-docker compose run --rm e2e           # e2e UI/UX suite against the release binary (758 checks)
-docker compose run --rm orchestrator-e2e  # two engines + orchestrator (185 checks)
+docker compose run --rm e2e           # e2e UI/UX suite against the release binary (767 checks)
+docker compose run --rm orchestrator-e2e  # two engines + orchestrator (189 checks)
 docker compose run --rm e2e-telemetry # telemetry build + /metrics gating (62 checks)
 docker compose run --rm backends-e2e  # five live vector DBs over TLS (157 checks; weaviate
                                       # readiness gates on /v1/schema==200 — it
@@ -3092,7 +3111,7 @@ own teardown was the place it had not been applied. Gated by the
 `destructive compose scope` preflight, which requires every compose teardown
 in `tests/` to name the project it destroys; `tests/tls-pins.sh`'s two scoped
 teardowns are the accepted shape. Logs land in `.battery/` (gitignored).
-**`bash tests/battery.sh --preflight-only` runs the twenty-one host-side preflights
+**`bash tests/battery.sh --preflight-only` runs the twenty-two host-side preflights
 and no suite**, which is what CI invokes. They read the release tags since
 O309: a `--depth 1` clone fetches them first, as CI's `preflight` job does. **A count the battery cannot trust is never compared to a published figure, and there are TWO ways to earn that (O97/O103): the suite EXITED NON-ZERO — `cargo test` aborts at the first failing target, so a numeric, replay-free count arrives over a fraction of them — or the reader disowned it with a `PREMISE FAILURE` marker. `count_untrustworthy` is the one place that question is answered, because it used to be answered twice and differently: the cargo arm guarded on the marker, the shell arm stripped it with a trailing `.*`, and neither looked at the exit code. It fails either way — a gate that cannot measure must not report clean — and the verdict names WHICH cause, because the message was written for a replay and told the reader to re-run a failure that was deterministic. (This sentence said "seven" while
 the tree ran eight, and nothing could say so — and then "ten" while the tree
@@ -3139,7 +3158,7 @@ code — including the post-run comparison of each suite's MEASURED check count
 against the figure `CLAUDE.md` publishes for it. That comparison needs a RUN
 and therefore cannot be a preflight, so until M13 it ran nowhere on a pull
 request and a leg dropping from 370 checks to 3 was green. The flag skips the
-twenty-one preflights because the dedicated `preflight` job already runs them
+twenty-two preflights because the dedicated `preflight` job already runs them
 (twice since O314, the second time under Debian 12's mawk). **The shared readers — `test_summary`, `suite_summary`,
 `declare_suite_counts`, `suite_count` — are deliberately defined OUTSIDE the
 skipped block**, and that is not tidiness: with them inside, `--no-preflight`

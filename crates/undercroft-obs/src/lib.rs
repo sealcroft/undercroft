@@ -7,13 +7,17 @@
 //! only under `telemetry`, and its callers are gated the same way.
 //!
 //! * **Without** the `telemetry` feature (the default): every function is
-//!   an inlined no-op, the diagnostic macros expand to `eprintln!`, and
-//!   this crate has **zero dependencies**. Default builds are byte-for-byte
-//!   unaffected beyond routing the handful of pre-existing `eprintln!`
-//!   diagnostics through one macro.
+//!   an inlined no-op, the diagnostic macros write one best-effort line to
+//!   stderr (never `eprintln!`, which panics on a closed stderr — ROADMAP
+//!   O328), and this crate has **zero dependencies**.
 //! * **With** `telemetry`: structured logs (`tracing`), a Prometheus
 //!   registry (metrics are PULL-only, scraped at `/metrics`), and OTLP
 //!   export of traces come online. See the [`imp`] module.
+//!
+//! * **On every build**, the [`stdio`] door: the one way both binaries write
+//!   to stdout, which never panics on a closed reader and folds the stream's
+//!   fate into the exit status (ROADMAP O287). Not telemetry, and no
+//!   dependency.
 //!
 //! Everything reported here is **metadata and counts only** — never drawer
 //! content or key material — matching Undercroft's local-first, opt-in
@@ -22,6 +26,11 @@
 
 #[cfg(feature = "telemetry")]
 mod imp;
+
+/// The binaries' stdout door and best-effort stderr, and the exit-status fold
+/// they share (ROADMAP O287). Compiled on every build: it is not telemetry,
+/// and it pulls no dependency.
+pub mod stdio;
 
 // ---------------------------------------------------------------------------
 // Diagnostics
@@ -39,13 +48,20 @@ pub enum DiagLevel {
 
 /// Backing function for the `diag_*!` macros. Compiled once here so it picks
 /// up *this* crate's feature flag rather than the caller's.
+///
+/// **A best-effort line that cannot panic** (ROADMAP O328, with O287's
+/// `errln!`). It was a bare `eprintln!`, which panics on a closed or full
+/// stderr: a server whose log reader went away died at its next diagnostic,
+/// and a one-shot command printing a warning beside a verdict — a tampered
+/// vault's `verify` with one unreadable tuning knob — exited 101 where the
+/// doctrine promises 2.
 #[doc(hidden)]
 #[cfg(not(feature = "telemetry"))]
 pub fn _diag(level: DiagLevel, args: std::fmt::Arguments<'_>) {
     match level {
-        DiagLevel::Info => eprintln!("{args}"),
-        DiagLevel::Warn => eprintln!("warning: {args}"),
-        DiagLevel::Error => eprintln!("error: {args}"),
+        DiagLevel::Info => stdio::_err_line(format_args!("{args}")),
+        DiagLevel::Warn => stdio::_err_line(format_args!("warning: {args}")),
+        DiagLevel::Error => stdio::_err_line(format_args!("error: {args}")),
     }
 }
 

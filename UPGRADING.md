@@ -410,26 +410,76 @@ writable open first fast-forwards a lagging manifest anchor (and says so) and
 promotes a key rotation whose promote was deferred. `undercroft config check`
 cannot detect this: it is a flag on one command, not a declaration.
 
+### a command whose stdout reader leaves early exits 141, quietly, where it panicked with 101 (O287)
+
+**Symptom:** `undercroft search … | head`, or any `undercroft` or
+`undercroft-orchestrator` command whose standard output is read by something
+that exits before the output is complete, now exits **141** with nothing on
+stderr. Before 1.7.0 the same pipeline usually ended in a panic — `thread
+'main' panicked … failed printing to stdout: Broken pipe`, exit 101 — whenever
+the output was larger than a pipe's buffer (measured: a `search` writing 81,962
+bytes into `head -c 1` exited 101 on 5 runs of 5). Two observables that were
+not panics move as well: `undercroft export` into a closed reader exits 141
+where it exited 1 with `Error: Broken pipe`, and `serve-mcp` whose client hung
+up mid-response exits 0 where it exited 1 — the status the same client
+leaving by closing stdin already gave. And `--help` or `--version` into a
+reader that has already gone exits 141 where it exited 0 over text nobody
+received.
+
+**Cause:** Rust ignores `SIGPIPE`, so a write to a pipe whose reader has gone
+fails, and `println!` panics on the failure (ROADMAP O287). Every stdout write
+the two binaries' own code makes now goes through one door that records the
+reader leaving, discards what is written after, and lets the command run on to
+its own verdict (on a telemetry build, `UNDERCROFT_LOG_FORMAT=json` log lines
+still reach stdout directly — ROADMAP O333); the exit status is folded in one
+order — an integrity verdict 2, a
+failed run 1, the reader leaving 141, success 0. **An integrity verdict still
+exits 2 through a closed pipe**: `verify | head` over a tampered vault answered
+101 before and answers 2 now. A write to standard output that fails for any
+other reason (a full disk, an I/O error) exits 1 and says `Error: writing to
+standard output: …`. The lines a binary prints on stderr on its way out — the
+final `Error:` line, the orchestrator's `INTEGRITY VERDICT` notice, and every
+diagnostic (ROADMAP O328) — are best-effort writes too, so `2>&1 | head` keeps
+the verdict as well. Exit 0 is not proof of delivery: output small enough to
+fit in a pipe's buffer is accepted in full, so a reader that dies after the
+last write leaves the run at 0.
+
+**Fix:** a script that pipes a command into a reader that may stop early
+(`grep -q`, `head`) under `set -o pipefail` sees 141 instead of 101 — both
+non-zero, so a pipeline that failed still fails. Capture the output, then
+match it (`out=$(undercroft verify 2>&1); rc=$?`), or treat 141 as "completed,
+reader left": it is not a failed run to retry, because a retry of a write that
+committed files it again. `undercroft config check` cannot detect this:
+nothing in an environment predicts a reader closing.
+
 ### a destruction with a bad `--sign` refuses before it destroys, and one whose `--out` cannot be written prints its receipt (O262)
 
 **Symptom:** `undercroft forget`, `admission deny` or `retention sweep` with a
 `--sign` file that is missing or is not a signing identity exits 1 (*"reading
 signing identity …"*, or *"… is not a signing identity"*) with nothing
-destroyed — and so does `retention sweep --dry-run` with one, which used to
-exit 0 without reading the file. One whose `--out` cannot be written still
-exits 1, but prints the receipt's JSON on stdout first and says *"the drawers
-ARE destroyed, so their receipt is printed on stdout instead"*. A retention
-sweep that is NOT clean and whose `--out` cannot be written now exits 2, the
-integrity verdict, where it exited 1.
+destroyed. **So does a `retention sweep` that has nothing to destroy** — a
+`--dry-run`, and an ordinary sweep with nothing aged out, which is the usual
+daily scheduled run: both used to exit 0 without reading the file, and the
+first sweep that did destroy something then failed over the destruction. One
+whose `--out` cannot be written still exits 1, but prints the receipt's JSON on
+stdout first and says *"the drawers ARE destroyed, so their receipt is printed
+on stdout instead"* — or, when stdout cannot take it either, *"the receipt is
+lost"*. A retention sweep that is NOT clean and whose `--out` cannot be written
+now exits 2, the integrity verdict, where it exited 1. When `--out` fails, the
+receipt's JSON comes first on stdout, ahead of the sweep's summary lines, since
+the file is now written before anything is printed.
 
 **Cause:** ROADMAP O262. All three read `--sign` and wrote `--out` only after
 the store had destroyed the drawers and committed, so a bad signing path, a
 file that was not a signing identity or an unwritable output path exited 1
 over drawers already gone and lost their receipt — whose content fingerprints
-are stored nowhere, so it can never be minted again.
+are stored nowhere, so it can never be minted again. The sweep read `--sign`
+only when it had a receipt to sign, which is why a sweep with nothing to
+destroy never noticed a bad path.
 
 **Fix:** none for a correct invocation; correct the `--sign` path a scheduled
-dry-run sweep names. A script that retries these three commands on exit 1
+sweep names before upgrading — run it once with `--dry-run`, which now reads
+the file. A script that retries these three commands on exit 1
 must not retry once stdout carries a receipt: the drawers are destroyed, a
 retry answers *not found*, and the receipt on stdout is the only copy — so
 capture stdout on every exit. `undercroft config check` cannot detect this: it
