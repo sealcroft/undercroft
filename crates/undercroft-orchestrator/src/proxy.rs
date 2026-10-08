@@ -40,6 +40,7 @@ use crate::engine;
 use crate::state::{Orch, StateError};
 use subtle_ct::ct_eq;
 use tiny_http::{Header, Method, Response, Server};
+use undercroft_obs::errln;
 
 /// Constant-time string compare — a second implementation of one compare:
 /// `subtle` IS a dependency of this crate (`bytes_eq`, the metrics-bearer
@@ -723,7 +724,7 @@ fn spawn_metrics_listener() -> anyhow::Result<()> {
     .map_err(|e| anyhow::anyhow!("{e}"))?;
     let server =
         Server::http(&addr).map_err(|e| anyhow::anyhow!("bind metrics listener {addr}: {e}"))?;
-    eprintln!("undercroft-orchestrator metrics listening on http://{addr}/metrics");
+    errln!("undercroft-orchestrator metrics listening on http://{addr}/metrics");
     std::thread::spawn(move || {
         for request in server.incoming_requests() {
             let authed = match &token {
@@ -807,7 +808,7 @@ pub fn serve(orch: &Orch, addr: &str, role: Role<'_>) -> anyhow::Result<()> {
         Role::Writer { .. } => "writer",
         Role::ReadReplica => "read replica",
     };
-    eprintln!("undercroft-orchestrator ({mode}) listening on http://{addr}");
+    errln!("undercroft-orchestrator ({mode}) listening on http://{addr}");
     for mut request in server.incoming_requests() {
         let method = request.method().clone();
         let url = request.url().to_string();

@@ -586,6 +586,29 @@ rotation reseals it — not by `verify`. That asymmetry is deliberate:
 index artifacts are recomputable from content, so a failure there costs
 a rebuild, while a failure in the walked set costs evidence.
 
+**The verdict reaches the exit status whatever happens to the output
+(1.7.0, ROADMAP O287).** `verify` prints its legs and only then decides,
+and so do `witness check`, `verify-forgetting`, a retention sweep and the
+orchestrator's `ops`. Until 1.7.0 a reader that left early — `verify |
+head`, a log shipper that died, a harness that truncates — made the print
+panic: exit 101, a status no document defines, and the verdict never
+reached the exit code. Every stdout write the two binaries' own code makes
+now goes through one door that records the reader leaving and lets the
+command finish (a telemetry build's `UNDERCROFT_LOG_FORMAT=json` log lines
+are the one write that does not — ROADMAP O333), and
+the exit status is folded in one order: an integrity verdict **2**, then a
+failed run 1, then the reader leaving **141**, then 0. So a truncating
+consumer cannot turn a tamper verdict into a pass: the obvious repair, a
+quiet exit 0 on a broken pipe, would have done exactly that, and was
+refused for it. A diagnostic printed beside a verdict cannot cost it either:
+every diagnostic is a best-effort line since ROADMAP O328, where a warning
+from one unreadable tuning knob, on a closed stderr, turned a tampered
+vault's 2 into 101. What no exit code can carry stays the caller's: a consumer
+that reads only the first lines of `verify` without reading its status can
+miss a verdict printed last, and exit 0 is no proof of delivery — output that
+fits in a pipe's buffer is accepted in full before a reader that dies later
+can refuse it.
+
 **Rotation must re-key every tag, and that is now enforced rather than
 reviewed.** A `tag` column is by definition keyed with the vault MAC, which
 rotation replaces — so a tagged table with no sweep in the rotation path

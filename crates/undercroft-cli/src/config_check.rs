@@ -31,6 +31,7 @@
 
 use crate::parity::{ConfigClass, ENGINE_ENV_VARS};
 use std::path::Path;
+use undercroft_obs::outln;
 
 /// What checking one declaration found.
 enum Finding {
@@ -75,7 +76,7 @@ pub fn run(verbose: bool, data_dir: Option<&Path>) -> (usize, usize, usize, usiz
             Finding::Ok(what) => {
                 validated += 1;
                 if verbose {
-                    println!("  ok      {name}={raw:?} — {what}");
+                    outln!("  ok      {name}={raw:?} — {what}");
                 }
             }
             Finding::Accepted => {
@@ -86,7 +87,7 @@ pub fn run(verbose: bool, data_dir: Option<&Path>) -> (usize, usize, usize, usiz
                     // parse and for a knob whose parse nobody had wired up,
                     // so the honest half of the message was carrying the
                     // dishonest half.
-                    println!(
+                    outln!(
                         "  seen    {name}={raw:?} — declared Opaque: no parse exists, so its \
                          consumer is the only real validation"
                     );
@@ -95,7 +96,7 @@ pub fn run(verbose: bool, data_dir: Option<&Path>) -> (usize, usize, usize, usiz
             Finding::Warn(why) => {
                 validated += 1;
                 warned += 1;
-                println!("  warn    {name}={raw:?} — {why}");
+                outln!("  warn    {name}={raw:?} — {why}");
             }
             Finding::Fatal(why) => {
                 // A refusal IS a validation — running the parse is how we
@@ -103,7 +104,7 @@ pub fn run(verbose: bool, data_dir: Option<&Path>) -> (usize, usize, usize, usiz
                 // totals fail to add up for the operator reading them.
                 validated += 1;
                 fatal += 1;
-                println!("  REFUSES {name}={raw:?} — {why}");
+                outln!("  REFUSES {name}={raw:?} — {why}");
             }
         }
     }
@@ -119,16 +120,16 @@ pub fn run(verbose: bool, data_dir: Option<&Path>) -> (usize, usize, usize, usiz
     .chain(identity_line(data_dir));
     for line in lines {
         match line {
-            DataDirLine::Ok(what) => println!("  ok      {what}"),
-            DataDirLine::Absent(what) => println!("  absent  {what}"),
-            DataDirLine::Skipped(why) => println!("  skipped {why}"),
+            DataDirLine::Ok(what) => outln!("  ok      {what}"),
+            DataDirLine::Absent(what) => outln!("  absent  {what}"),
+            DataDirLine::Skipped(why) => outln!("  skipped {why}"),
             DataDirLine::Warn(why) => {
                 warned += 1;
-                println!("  warn    {why}");
+                outln!("  warn    {why}");
             }
             DataDirLine::Refuses(why) => {
                 fatal += 1;
-                println!("  REFUSES {why}");
+                outln!("  REFUSES {why}");
             }
         }
     }

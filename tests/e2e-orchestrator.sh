@@ -412,16 +412,20 @@ fi
 code_is  "ops refuses key rotation" 404 -- -X POST "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/rotate"
 code_is  "ops refuses drawer reads" 404 -- "${ADMIN[@]}" "$O/admin/tenants/$OPS_ID/ops/drawers"
 
-# The CLI mirrors it — the half docs promised and nothing shipped.
-if "$ORCH" --db "$UNDERCROFT_ORCH_DB" ops "$OPS_ID" verify 2>&1 | grep -q '"ok":true'; then
+# The CLI mirrors it — the half docs promised and nothing shipped. Captured,
+# then matched, exit code first (ROADMAP O287): piped into `grep -q` under
+# `set -o pipefail`, the status was the producer's whenever grep left first.
+CAP="$("$ORCH" --db "$UNDERCROFT_ORCH_DB" ops "$OPS_ID" verify 2>&1)"; CAP_RC=$?
+if [ "$CAP_RC" -eq 0 ] && grep -q '"ok":true' <<<"$CAP"; then
   ok "orchestrator CLI ops verify"
 else
-  fail "orchestrator CLI ops verify"
+  fail "orchestrator CLI ops verify" "exit $CAP_RC" "$CAP"
 fi
-if "$ORCH" --db "$UNDERCROFT_ORCH_DB" ops "$OPS_ID" trust 2>&1 | grep -q 'assignments'; then
+CAP="$("$ORCH" --db "$UNDERCROFT_ORCH_DB" ops "$OPS_ID" trust 2>&1)"; CAP_RC=$?
+if [ "$CAP_RC" -eq 0 ] && grep -q 'assignments' <<<"$CAP"; then
   ok "orchestrator CLI ops trust"
 else
-  fail "orchestrator CLI ops trust"
+  fail "orchestrator CLI ops trust" "exit $CAP_RC" "$CAP"
 fi
 # Captured rather than piped: `set -o pipefail` makes an `if cmd | grep`
 # see the FAILING command's status, so a refusal that greps correctly still
@@ -622,6 +626,58 @@ if [ "$CODE" -eq 2 ] && grep -q '"ok":false' <<<"$OUT"; then
 else
   fail "tampered vault: ops verify exits 2 on a 200 + ok:false" "exit $CODE" "$OUT"
 fi
+# ROADMAP O287: the engine's body is relayed with a print BEFORE the verdict
+# is decided, and that print panicked on a closed reader — exit 101 where the
+# doctrine promises 2. `o287_closed` binds one stream to a FIFO whose only
+# reader closed BEFORE the spawn, so every write to it fails, with no race.
+o287_closed() { # <1|2> cmd... — the other stream in $O287_OTHER, the status in $O287_RC
+  local which="$1" fifo; shift
+  fifo="$(mktemp -u)"; mkfifo "$fifo"
+  exec 8<>"$fifo"; exec 9>"$fifo"; exec 8<&-
+  if [ "$which" = 1 ]; then O287_OTHER="$("$@" 2>&1 >&9)"; O287_RC=$?
+  else O287_OTHER="$("$@" 2>&9)"; O287_RC=$?; fi
+  exec 9>&-; rm -f "$fifo"
+}
+o287_closed 1 "$ORCH" --db "$UNDERCROFT_ORCH_DB" ops "$HOT_ID" verify
+if [ "$O287_RC" -eq 2 ] && grep -q 'INTEGRITY VERDICT' <<<"$O287_OTHER" \
+   && ! grep -q panicked <<<"$O287_OTHER"; then
+  ok "O287: ops verify on a tampered vault into a closed reader still exits 2"
+else
+  fail "O287: ops verify on a tampered vault into a closed reader must exit 2" "exit $O287_RC" "$O287_OTHER"
+fi
+o287_closed 2 "$ORCH" --db "$UNDERCROFT_ORCH_DB" ops "$HOT_ID" verify
+if [ "$O287_RC" -eq 2 ] && grep -q '"ok":false' <<<"$O287_OTHER"; then
+  ok "O287: and with its stderr closed, still 2"
+else
+  fail "O287: ops verify with a closed stderr must exit 2" "exit $O287_RC" "$O287_OTHER"
+fi
+# A once-shown product into a closed reader: 141, never the quiet 0 that
+# would claim a key nobody received was delivered.
+KG_LIVE="$("$ORCH" keygen 2>&1)"; KG_RC=$?
+o287_closed 1 "$ORCH" keygen
+if [ "$KG_RC" -eq 0 ] && grep -q '^UNDERCROFT_ORCH_KEY=' <<<"$KG_LIVE" && [ "$O287_RC" -eq 141 ] \
+   && [ -z "$O287_OTHER" ]; then
+  ok "O287: keygen into a closed reader exits 141, quietly"
+else
+  fail "O287: keygen into a closed reader must exit 141" "live exit $KG_RC, closed exit $O287_RC" "$O287_OTHER"
+fi
+# ROADMAP O328's P7 on the control plane: started with its stderr reader
+# already gone, it serves through its start-up lines and answers /healthz.
+# Its start-up line was a bare `eprintln!`, and it died there (101).
+O328_FIFO="$(mktemp -u)"; mkfifo "$O328_FIFO"
+exec 8<>"$O328_FIFO"; exec 9>"$O328_FIFO"; exec 8<&-
+UNDERCROFT_ORCH_DB="$(mktemp -d)/o328.db" "$ORCH" serve --addr 127.0.0.1:18932 >/dev/null 2>&9 &
+O328_P=$!; exec 9>&-
+O328_UP=0
+for _ in $(seq 1 50); do curl -s -o /dev/null http://127.0.0.1:18932/healthz && { O328_UP=1; break; }; sleep 0.2; done
+O328_A="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18932/admin/instances)"
+O328_H="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18932/healthz)"
+if [ "$O328_UP" = 1 ] && [ "$O328_A" = 401 ] && [ "$O328_H" = 200 ] && kill -0 "$O328_P" 2>/dev/null; then
+  ok "O328: the orchestrator whose stderr reader is gone serves and answers /healthz (P7)"
+else
+  fail "O328: the orchestrator with its stderr reader gone" "up $O328_UP, admin $O328_A, healthz $O328_H"
+fi
+kill "$O328_P" 2>/dev/null; wait "$O328_P" 2>/dev/null; rm -f "$O328_FIFO"
 # ROADMAP O206: a retention sweep over the same forged tenant still runs,
 # names the row it cannot verify wherever it sits, and answers 200 carrying
 # `ok:false` — which this plane turns into exit 2 with no code of its own.

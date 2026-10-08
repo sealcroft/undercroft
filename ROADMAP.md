@@ -4007,7 +4007,7 @@ not done. That is the direction a session *writing* closures gets wrong.
 
 **#36's filing was half right, and the half that was wrong is instructive.**
 It said the gate "examines 7 of ~25 `###` sections". Measured, it examines
-**361** of the **376** — the rest are prose sections with no `[A-Z][0-9]+` id and
+**363** of the **378** — the rest are prose sections with no `[A-Z][0-9]+` id and
 are correctly out of scope. The coverage complaint was stale; the
 one-directional complaint was exact.
 **Those two figures read `47 of 60` until 2026-08-20 and had gone stale by
@@ -13748,6 +13748,379 @@ has always returned beside `backup`. (7) The `HAND_PROJECTED` row, recorded abov
 
 **Also corrected**: `docs/AGENTS.md` §10 listed three read-only `POST` exceptions where `mutates`
 names four — `POST …/witness` (O245) was missing.
+
+### O287 — CLOSED 2026-10-07: a reader that leaves early never turns a verdict into a panic — every stdout write of both binaries goes through one door, the reader leaving is exit 141, an integrity verdict still exits 2, and the nineteen piped checks capture, then match
+
+**Filed 2026-09-27 by O281's battery, which it turned red; measured the same
+day.** Rust ignores `SIGPIPE`, so a write to a closed pipe returns `EPIPE`, and
+`println!` panics on it: `thread 'main' panicked at library/std/src/io/stdio.rs:
+failed printing to stdout: Broken pipe (os error 32)`, exit **101**. Measured
+through the release binary on three wings of the LoCoMo feed: `undercroft search
+"the" --limit 500 | head -c 1` — 83,653 bytes of output against a 65,536-byte
+pipe — exited 101 with that panic on 5 of 5 runs. Exit 101 is none of the
+documented exit classes, and an operator's `| head` prints a panic. When the
+output fits one pipe buffer the binary usually finishes before the reader exits:
+the e2e pattern `"$BIN" … | grep -q …` under `set -o pipefail` failed 0 of 300
+times unloaded, and once inside a loaded battery ("mempalace-format import",
+whose search writes 270 bytes). `tests/e2e.sh` carries twelve such checks, so
+any of them can go red on a pull request that touched nothing near it.
+
+**Shape** (to be ruled; the options differ in what they cost): restoring the
+default `SIGPIPE` disposition at the start of `main` makes the process end
+quietly the way C tools do, but needs a second `unsafe` block, which CLAUDE.md's
+convention makes a decision for the maintainer; routing the CLI's stdout through
+one writer that answers `BrokenPipe` with a quiet exit 0 needs no `unsafe` but
+touches every print site, and an inventory gate would have to count them; either
+way the e2e checks should stop piping into `grep -q` — capture, then match — so
+a harness race is never read as a product verdict. **Gate**: the deterministic
+arm above (output over one pipe buffer into `head -c 1`) exits with a documented
+code and prints no panic, on the CLI — and on the orchestrator binary too if it
+prints through `println!` the same way, which this filing did not measure; and no
+e2e check pipes the binary into `grep -q`.
+
+> **Corrected 2026-10-06 by this entry's ruling, below** — the text above is left as filed. Option (B)'s
+> "quiet exit 0" launders verdicts printed before an exit 2 and reports undelivered products as
+> delivered; the ruled shape is a latching door with a documented reader-left class, and the gate above
+> is superseded by the ruling's three-part gate. "Twelve" e2e checks are seventeen, plus two in the
+> orchestrator's suite.
+
+#### RULED 2026-10-06 by three lenses — Agentic Memory Architecture, Rust systems and CLI engineering, and Security — and an adversarial refuter
+
+**The question**: this entry's shape — which option, what exit status a broken pipe produces and whether
+it is a documented class, what is safe for each command, the servers, Windows, and the gate. Answered on
+the maintainer's delegation of 2026-10-06 (verbatim: "fanout specialized agents to answer that") and
+approved by them the same day ("approve as recommended"). The brief, the lens answers and the refuter's
+report are in `.handover/rulings-2026-10-06/` — material, never the record. The approval covers the two
+parts the panel left to the maintainer: declining a second `unsafe` block, and publishing a fourth exit
+class, 141.
+
+**Prior rulings found, and their disposition.** O279 item 3 and `CLAUDE.md`'s Conventions (one `unsafe`
+block; a second is the maintainer's) — FOLLOWED: the verdict needs none. The exit-class doctrine
+(`main.rs` 1981-1987 and 2033-2082; `docs/AGENTS.md` 991-1030: 2 is integrity only, 1 a failed run a
+script may retry) — FOLLOWED, and it decides the question. O13's third verdict (a class is chosen by what
+the script should do next) — FOLLOWED. O81 (101 is a code the doctrine does not define, fixed rather than
+documented) — FOLLOWED. The clap usage-error ruling (the published doctrine overrides a library default)
+— FOLLOWED: std's panic on `EPIPE` is a library default. M18, M20 and M23 (a listing still lists, the
+verdict raised after the walk) — FOLLOWED. The orchestrator's "no exempt list" doctrine (`main.rs`
+304-321) — FOLLOWED. The 2026-09-08 versioning ruling — FOLLOWED: PATCH. O150 Q3 rules libraries, not a
+binary's `main`. This entry's filed option (B), a quiet exit 0 — REFUTED.
+
+**Ruled.**
+
+1. **A latching door, and no `unsafe`.** Each binary sends every stdout write through one door that never
+   panics — in the CLI, `main.rs`'s 248 `println!`, `config_check.rs`'s 9, export's `write_all`
+   (`main.rs` 3367-3369) and `mcp.rs`'s `write_msg`; in the orchestrator, `main.rs`'s 18 and
+   `config_check.rs`'s 4. On `BrokenPipe` it records that the reader left and discards everything written
+   after; it never returns an error and never exits, so every command still reaches its own verdict. Any
+   other stdout error (`ENOSPC`, `EIO`) is a run failure. The door flushes explicitly, and checks the
+   flush, before the exit status is decided.
+2. **The exit path's stderr writes are in scope**: the CLI's `main.rs` 2123, 2127 and 2136 and the
+   orchestrator's 270, 584-587, 612-615 and 642-647 become best-effort writes that cannot panic, or `cmd
+   2>&1 | reader` — the shape of seven of the e2e sites — still turns exit 2 into 101 at the final error
+   or verdict print.
+3. **The exit status is folded in one place, in the order integrity 2, run failure 1, reader-left, then
+   0.** The existing `process::exit(2)` arms keep working, because printing no longer panics. Reader-left
+   comes ONLY from the door's own latch, never from an `io::ErrorKind::BrokenPipe` found in the error
+   chain, which an outbound socket can raise too. The orchestrator's `fn main() -> Result<()>` becomes an
+   `ExitCode` main.
+4. **Reader-left is its own DOCUMENTED class, 141** — added to `docs/AGENTS.md` §7.3 and the book's copy,
+   `docs/PARITY.md`, `docs/THREAT_MODEL.md`, `docs/security.md` and every other surface that states the
+   exit classes. Never 0: it would launder the verdicts printed before an exit 2 (`main.rs` 2861-2866,
+   2925-2930, 3074-3080, 3227-3240, 3860-3865, 4388-4400, 4423-4428, 4525-4531; `vault list` 2303-2307;
+   the orchestrator's `ops` 578-589 and instance list 463-479) and report undelivered one-shot products
+   as delivered (the forget receipt 2909, the sweep receipt 3227, a witness 3020, `assert-header` 3437,
+   the orchestrator's keygen and tenant tokens). Never 1: `docs/AGENTS.md` 1028-1029 lets a script retry
+   exit 1, and a retry after a committed `remember` files a duplicate under a fresh append index
+   (`main.rs` 2461-2475). 141 is the status a shell already reports for this event, and gawk exits 141
+   even with SIGPIPE ignored (O314's measurement). Its cost, stated: under `set -o pipefail`, `search |
+   head` fails, as it does for every C tool and as it already does at 101.
+5. **The servers.** `serve-mcp` ends with exit 0 on a closed client, as it already does at stdin EOF
+   (`mcp.rs` 387-406) — the same client exit arrives as either, by timing. `serve-http` is unchanged: it
+   writes nothing to stdout. `daemon run` keeps filing with its output discarded.
+6. **(C) lands in the same unit, as a correctness fix.** Every status-consuming pipeline whose producer
+   is a binary and whose consumer may exit early becomes capture-then-match — 17 sites in `tests/e2e.sh`
+   (12 with a literal `$BIN` at 268, 425, 1056, 1098, 1597, 2088, 2099, 2152, 2170, 2200, 2807 and 4112;
+   3 through the `o255`/`o250` wrappers at 1944, 1962 and 4094; 2 inside `sh -c` at 1077 and 1191) and
+   `tests/e2e-orchestrator.sh` 416 and 421 — each converted check asserting the exit code first. Under
+   `set -o pipefail` the negative-sense checks (268, 2200, 2807, 4094, 4112) pass OVER A PRESENT DEFECT
+   whenever the producer exits non-zero after the match, under every non-zero shape: the race gives false
+   greens as well as false reds.
+7. **The gate, in three parts.** A deterministic surface arm on both binaries, with stdout, and
+   separately stderr, bound to a pipe whose reader is dropped BEFORE the spawn: `search` gives 141 with
+   no panic; `verify` on a tampered vault gives 2; `witness check` on a rolled-back vault gives 2; a
+   retention sweep with drift gives 2; `drawer get` of a missing id gives 1; the orchestrator's `ops …
+   verify` on a tampered tenant gives 2; stdout to `/dev/full` gives 1 — each with a premise (the same
+   run into a live reader writes non-empty output) and a counterfactual against the filed quiet-exit-0
+   shape. A lint plus a source count, so no `println!`, `print!` or `std::io::stdout` escapes the door,
+   cfg-gated code included (no lint leg compiles the model features; O153); clap's help and version
+   printing (`let _ = e.print();`, `main.rs` 2095-2097, orchestrator 287-290) goes through the door too.
+   And a host-side preflight refusing any status-consuming pipeline from a binary or a wrapper into an
+   early-exiting reader, with a premise probe for every `grep` spelling and every wrapper.
+8. **Versioning: PATCH**, with an `UPGRADING.md` entry on the exit-class precedent (862-865): a command
+   whose stdout reader closes early now exits 141 with no panic text; an integrity verdict still exits 2
+   through a closed pipe; capture, then match, or accept 141. Two undocumented observables move: an
+   export to a closed stdout goes from 1 to 141, and `serve-mcp`'s mid-response hang-up from 1 to 0.
+   `config check` cannot detect it.
+
+**Options that lost, with their cost.** (A), SIGPIPE's default restored at the start of `main`: a second
+`unsafe` block, every print-then-decide verdict becoming 141 so the integrity class is lost, a
+process-wide change on the servers and every outbound client, and Windows — a shipped target — staying
+at 101. (A′), `-Zon-broken-pipe=kill` (formerly `#[unix_sigpipe]`): unstable — under tracking issue
+97889 in the unstable book of the host's 1.92.0, and ignored on non-Unix — and equal to A if stabilized.
+(A″), A through a crate that wraps `signal(2)`: every cost of A, and G11 (`open_race_tests.rs`
+1585-1633) walks `crates/` only, so the reserved decision would be taken unseen. (B) as filed, a quiet
+exit 0: fail-open, worse than today's 101. A latch with reader-left as exit 1 (the security lens):
+sanctions a duplicating retry. A per-command split, 0 for reports and non-zero for products: the
+exempt-list shape the tree rejects; pipefail-friendly listings, if ever wanted, are a product choice. A
+shadowing `macro_rules! println`: invisible to `clippy::print_stdout`, and its textual scope must
+precede `mod config_check;`. (D), a panic hook mapping the "failed printing to stdout" panic: keys on an
+unstable message, and exiting from the hook skips the post-print exit 2.
+
+**Claims refuted, the brief's first.** "Twelve" e2e checks: seventeen, plus two in the orchestrator's
+suite — the count saw only `-q` and `-qE` beside a literal `$BIN` (this entry's heading is corrected with
+this ruling). "Can go red intermittently": also green, over a present defect (item 6). Option (B)'s
+"costs only print-site edits": it launders verdicts and products (item 4). "A truncated export reported
+as success?": today an export to a closed stdout exits 1 with "Error: Broken pipe" (`main.rs` 3366-3370)
+— 101 only when stderr is the same pipe — and a plaintext export has no file option (`--out` requires
+`--to`, `main.rs` 379). Stderr was omitted entirely. The long-running processes include `daemon run`
+(`main.rs` 3451-3464); `serve-mcp` does not panic today but exits 1. "The tree's pinned 1.90" holds for
+the Docker battery and the CI containers, not the shipped binaries, built on each runner's unpinned
+stable (O294). `libc` is transitive only, and A needs no `libc` crate — its real cost is the `unsafe`
+block. The filing's gate, read as a text scan, misses wrappers, `sh -c`, `$ORCH` and the `-qi`, `-qF` and
+`-qx` spellings. Among the lenses: the security lens's "a missed site can only fail loud", "exit 1 with
+no new class" and "a new code is MINOR"; the Rust lens's "file stderr separately" and "`serve-mcp` exits
+141"; all three lenses' "A needs a new `libc` dependency"; the memory lens's "D contradicts O150 Q3", and
+its negative-sense list, which missed 2200.
+
+**Dissent.** The security lens would use exit 1 with no new class — one fewer contract, the
+duplicate-retry residual already present under 101, and a new code MINOR — answered by the published
+retry licence, O81 and the 2026-09-08 ruling; the maintainer weighed it and approved 141. On `serve-mcp`,
+the Rust lens preferred 141 and the security lens 1; settled at 0, one event, one status. **Fails
+silently if**: the door covers stdout only; reader-left is decided from the error chain; the door returns
+an error or exits at the first broken write; the converted checks drop the exit-code assertion, or the
+negative-sense checks stay piped; the harness preflight matches only `"$BIN"` and `grep -q`; the
+deterministic arm drops the reader after the spawn or writes less than one pipe buffer; a print escapes
+the door through cfg-gated code; Windows maps a closed pipe to another kind; the door does not flush
+explicitly before the fold. Whatever the shape, a producer whose whole output fits in the pipe buffer
+exits 0 if its consumer then dies — only an export's payload digest catches that, at import.
+
+**Probes owed by the build.** P1: today's baseline over 64 KiB of `search` output — 101 and the panic;
+after, 141 and a clean stderr. P2: `undercroft search x 2>/dev/full` on a tampered vault — 101 today
+where 2 is correct; if it already reads 2, the stderr finding is wrong and the scope narrows. P3:
+`verify | head -c 1` over a tampered vault whose findings pass 64 KiB — 101 today, 0 under B, 141 under
+A, 2 under the door, with and without `2>&1`. P4: Windows — does a closed pipe map to `BrokenPipe`? P5:
+the harness false green, independent of the binary. P6: `serve-mcp` today exits 1. P8: whether
+`-Zon-broken-pipe` is still unstable on the host's 1.98.1.
+
+**Filed under `## Open`**: O328 (the long-running servers may die when their stderr closes) and O329 (an
+exit-2 run on a telemetry build skips the flush of its spans and metrics). `docs/AGENTS.md` 1030's stale
+exit-2-is-409 sentence is filed with O330. Command substitutions such as `$("$BIN" admission list | sed
+… | head -1)` meet the same race, but their status is never read: panic noise in a log, not a verdict —
+stated, not filed.
+
+#### BUILT 2026-10-07, to the ruling — with the door's home taken from the Rust lens, and one probe the ruling owed that stays read rather than run
+
+**The door (items 1 and 3).** `crates/undercroft-obs/src/stdio.rs`, compiled on every build with no
+dependency: `outln!` formats a line BEFORE taking the door's lock (so a `Display` that printed could
+never re-enter it), `write_bytes` carries `export`'s payload, `write_with` classifies clap's own
+help/version write (`clap::Error::print`, which keeps clap's colour decision rather than a second copy
+of it), `send_frame` carries the MCP frames, and `finish` flushes explicitly. A pure `Latch` decides:
+the first loss wins, `BrokenPipe` is reader-left, anything else a run failure carrying its text, and
+every write after either is not attempted. `exit_status(Run, &Delivery)` is the fold, in the ruled
+order, and both binaries' `main` call it once after `finish`; `EXIT_INTEGRITY`/`EXIT_FAILURE` in both
+binaries are aliases of its constants, so no second definition of a class number exists. **Its home is
+the Rust lens's, unrefuted**: both binaries already link `undercroft-obs`, it has no dependency by
+default, and it already owns the diagnostic path to stderr — one implementation of the decision rather
+than one per binary (the verdict says "one door" per binary and names no home). The CLI's 246
+`println!` in `main.rs` and 9 in `config_check.rs`, the orchestrator's 18 and 4, and the 16 bare
+`eprintln!` of both (5 in the CLI, 9 in the orchestrator's `main.rs`, 2 start-up lines in its
+`proxy.rs`) were renamed by a token-bounded script that refused a match inside a comment (there were
+none) — 246, not the ruling's 248, because O212 had landed between the count and the build.
+
+**Item 2, the exit path's stderr.** Every bare `eprintln!` in both binaries is `errln!`, a best-effort
+line that cannot panic and latches nothing — the CLI's three on `main`'s exit path, the warning beside
+a forget receipt and the line beside a witness emit; the orchestrator's seven exit-path lines, its two
+pre-flight warnings and its proxy's two start-up lines. Converting all of them,
+rather than the listed ones, is what lets `#![deny(clippy::print_stderr)]` sit at both roots with no
+exception. The diagnostic macros (`diag_*!`) are NOT converted: that is O328, by the ruling.
+
+**Items 4 and 5.** 141 documented in `docs/AGENTS.md` §7.3 (the book includes it), with the
+orchestrator section's `case $?` example given a 141 arm, `docs/PARITY.md`, `docs/THREAT_MODEL.md` §5
+and `docs/security.md`. `serve-mcp`: a frame whose client has gone ends the session without latching,
+exit 0; any other frame error is the door's run failure, exit 1. `serve-http` writes nothing to stdout;
+`daemon run` keeps filing with its lines discarded once the reader leaves.
+
+**Item 6.** The nineteen sites — e2e.sh 268, 425, 1056, 1077, 1098, 1191, 1597, 1944, 1962, 2088,
+2099, 2152, 2170, 2200, 2807, 4094 and 4112, and e2e-orchestrator.sh 416 and 421 — capture, then
+match, each asserting the exit code first; the two `sh -c` checks became plain captures. The five
+negative-sense checks now fail on a non-zero producer instead of reading it as "absent".
+
+**Item 7, the gate.** (1) The deterministic surface arms: seven in `crates/undercroft-cli/tests/cli.rs`
+(`o287_*`), one stream bound to a `std::io::pipe()` whose reader was dropped before the spawn, each
+with its premise into a live reader — `search` 141 with nothing on stderr (and 0 with stderr closed);
+`verify` on a tampered vault 2 with either stream closed, and `search` on it 2 with stderr closed;
+`witness check` on a rolled-back vault 2; a retention sweep with mirror drift 2 (the O206 fixture,
+extracted into one helper both tests use); `drawer get` of a missing id 1; stdout to `/dev/full` 1,
+naming stdout; `export` 141, `--help` 141, `serve-mcp` 0. Seven e2e checks and three orchestrator
+checks drive the release binaries the same way with a FIFO whose only reader closed before the spawn
+(`ops … verify` on the tampered tenant 2 with either stream closed, `keygen` 141). (2) The lint
+`#![deny(clippy::print_stdout, clippy::print_stderr)]` at both roots, and the source count
+`no_print_in_either_binary_escapes_the_door` in `stdio.rs`: no `println!`, `print!`, `eprintln!`,
+`eprint!`, `dbg!` or raw handle in any source file of either binary, cfg-gated and test code
+included, with a planted-file premise and a premise that the binaries do print through the door; and
+the stdout handle in `undercroft-obs`'s production code lives in `stdio.rs` alone. (3) The preflight
+`checks capture the binary, then match`: a status-consuming pipeline (`if`, `elif`, `while`, `until`,
+`!`, `&&`, `||`, `$?`, `PIPESTATUS`) from `$BIN`/`$ORCH` in any quoting, `sh -c` strings included, or
+from a function whose body runs one (to a fixed point), into `grep` with `-q`, `-l` or `-m` in any
+spelling, `--quiet`, or `head`. Its premise refuses 22 probe lines covering every spelling and
+producer shape and exempts a capture, a substitution, a plain statement, `grep -c`, a curl producer,
+`$BINARY` and a comment. **Run over the unfixed harness it named exactly the ruling's nineteen
+sites**, no more and no fewer — the count the filing had as twelve. Stated: a substitution's status
+read on the same line, and any status read on a later line, are not seen; curl and printf producers
+are O332.
+
+**Item 8.** `UPGRADING.md` carries the entry; `CHANGELOG.md` the section and the intro's counts.
+
+**Probes.** Built at `781b5b9` (base) and at this tree (fixed), on the LoCoMo feed. P1: three wings,
+255 sealed drawers; `search the --limit 500` writes 81,962 bytes; into `head -c 1`, base 101 with the
+panic on 5 of 5, fixed 141 with an empty stderr on 5 of 5; the reader dropped before the spawn, base
+101, fixed 141. P2: `search x 2>/dev/full` on a tampered vault — base 101, fixed 2, so the stderr
+finding stands and the scope did not narrow. P3: twenty wings, 1,700 hmac-only drawers, all tampered;
+`verify` writes 76,678 bytes and exits 2; `verify | head -c 1` base 101 (the panic), fixed 2, and
+`verify 2>&1 | head -c 1` base 101, fixed 2; `verify >/dev/full` base 101, fixed 2. P4, READ and not
+run: rustc 1.90's `std/src/sys/pal/windows/mod.rs` maps both `ERROR_BROKEN_PIPE` and `ERROR_NO_DATA`
+to `ErrorKind::BrokenPipe`, which is the kind the latch keys on; no CI leg executes a Windows binary,
+so this stays the residual O275 states for its own Windows path. P5: `if ( echo BAD; exit 3 ) | grep
+-q BAD` under pipefail takes the else branch — the false green, with no binary involved. P6:
+`serve-mcp` whose client closed before the first response — base 1 (`Error: Broken pipe`), fixed 0.
+P8: rustc 1.90 refuses `-Zon-broken-pipe` (`the option Z is only accepted on the nightly compiler`);
+1.98.1 was not probed, and the verdict does not rest on it. Also measured: `export` into a closed
+reader base 1, fixed 141, and with stderr on the same closed pipe base 101, fixed 141; `--help` base
+0, fixed 141; `drawer get` of a missing id base 101, fixed 1; `search >/dev/full` base 101, fixed 1
+with `Error: writing to standard output: No space left on device (os error 28)`.
+
+**Counterfactuals.** The seven CLI arms on the unfixed tree: all seven RED (101, and 1 for the
+export). On a copy of the fixed tree, in its own target directory, with the filed quiet-exit-0 shape
+planted (`std::process::exit(0)` at the latch's broken-pipe arm, the plant asserted present): six of
+seven RED with 0 throughout, and the `/dev/full` arm GREEN — it tests a failure that is not a broken
+pipe, and its counterfactual is the unfixed tree, where it is RED at 101. That green is read as what it
+measures, not as coverage. The preflight's counterfactual is the unfixed harness (nineteen hits).
+
+**Suites at the built tree** (`bash tests/battery.sh --no-preflight test lint e2e orchestrator-e2e`,
+`BATTERY OK`): `test` 1304 run / 17 ignored over 20 targets (was 1292; 1321 compiled), `lint` clean,
+`e2e` 765 (was 758), `orchestrator-e2e` 188 (was 185) — each compared by the battery against the
+figure `CLAUDE.md` publishes — and `arch-check`, `site` 7 and `e2e-telemetry` 62 green over the
+touched diagram, landing page and telemetry build. The landing tiles move with them (cargo tests 1292
+→ 1304, e2e checks 1193 → 1203), and the preflights are twenty-two now. Three of those surfaces were
+mine to miss and the preflights caught each: the landing's e2e tile, the platform-views index card
+and the diagram's `ALL N OK` arrow label, alongside this file's own `362 of the 377`.
+
+**What stays open, by the ruling.** O328: `serve-mcp` with a closed stderr still exits 101, before and
+after, at its start-up `diag_info!` (measured), and the store's diagnostics are the same `eprintln!`.
+O329: the `process::exit(2)` arms still skip the telemetry flush — item 3 keeps them. A producer whose
+whole output fits in a pipe buffer still exits 0 if its consumer dies afterwards; only an export's
+payload digest catches that, at import.
+
+#### REVIEWED 2026-10-08 — an independent adversarial review, seven findings, each fixed or stopped in this unit
+
+1. **MEDIUM, stopped on a contract and filed as O333.** On a telemetry build,
+   `UNDERCROFT_LOG_FORMAT=json` builds tracing's JSON layer with no writer, so its lines reach STDOUT —
+   re-measured: before the JSON-RPC reply in `serve-mcp`'s stream, and inside `--read-only export`'s
+   payload. Older than this unit, and it made the "one door for every stdout write" claim false. A
+   published diagram (`website/src/observability.md`, `docs/diagrams/observability-pipeline.*`) labels
+   that edge `stdout`, so moving it is a question for the maintainer: every surface stating the claim
+   now names the exception and O333, and the writer arm of the source gate waits with it.
+2. **MEDIUM, fixed, and O328 closes with it.** The default build's `_diag` was a bare `eprintln!`:
+   a tampered vault's `verify` beside one unreadable tuning knob, stderr on `/dev/full` or a closed
+   reader, exited 101. `_diag` writes `stdio::_err_line`'s best-effort line; so do an FDE tuning warning
+   and the search trace in `undercroft-store`, the last print macros in any crate's production text.
+   Measured 101 → 2; P7 on both binaries passes (O328's BUILT).
+3. **LOW-MED, fixed.** "Never 0" was stated without its converse: output that fits in a pipe's buffer
+   is accepted in full, so a reader dying after the last write leaves the run at 0. Stated now on
+   `EXIT_SUCCESS`/`Delivered`, `docs/AGENTS.md`, `CHANGELOG.md`, `UPGRADING.md`, `THREAT_MODEL.md`
+   and `security.md`.
+4. **LOW, fixed by widening.** The preflight's "any spelling" was false: ten spellings passed it
+   (`|& grep -q`, `grep -e y -q`, `grep y -q`, `egrep -q`, `/usr/bin/grep -q`, `command grep -q`,
+   `{ "$BIN" x; } | grep -q`, `| (grep -q y)`, `sed …q`, `awk …exit`), and a consumed
+   `x=$(… | head -1) &&` too. A depth-aware splitter (quotes, `$(…)`, groups) replaces the cut at the
+   first `;`; the probe is 39 refused lines and 15 exempt, and over the unfixed harness it still names
+   exactly the ruling's nineteen.
+5. **LOW, fixed.** The binaries' source count read one directory level and cut a line at `//` inside
+   a string. It walks `src/` recursively and counts over text with comments removed and literals
+   blanked, with a premise test of its own (a print after a URL counted, needles in a comment, a
+   string, a raw string and a char literal not).
+6. **LOW wording, fixed.** 141 is the POSIX shell's number, returned as an ordinary exit code — the
+   same number on Windows, which has no `SIGPIPE`; and `UPGRADING.md` names `--help`/`--version`
+   moving 0 → 141 into a closed reader.
+7. **Process, done.** Every suite whose inputs changed ran again at the final tree, after the last
+   source edit (`--no-preflight test lint e2e orchestrator-e2e e2e-telemetry site arch-check`,
+   `BATTERY OK`, each count compared with its published figure): `test` 1308 run / 17 ignored (1325
+   compiled), `e2e` 767, `orchestrator-e2e` 189, `e2e-telemetry` 62, `site` 7, `lint` and `arch-check`
+   clean; the landing tiles read 1308 and 1206. `backends-e2e`, `tls-pins` and `obs-config` were not
+   re-run here: their only changed input is the rebuilt binary, and the full battery that follows
+   runs them. The counterfactual for item 2, on a copy with `_diag`'s `eprintln!` put back, is RED on
+   the production gate and on both `o328_*` tests (101, and a server that never came up).
+
+All seven were mine to catch; the review found them. The prose figure in O47's record moves to
+`363 of the 378` with O333.
+
+### O328 — CLOSED 2026-10-08: no diagnostic can kill a server or lose a verdict — the default build's diagnostics, an FDE warning and the search trace write a best-effort line, and a server whose stderr reader is gone keeps serving
+
+**Filed 2026-10-06 by O287's ruling; unmeasured.** The default build's `_diag` is a bare `eprintln!`
+(`crates/undercroft-obs/src/lib.rs` 44-50), run per request at the store's diagnostic sites and in the
+orchestrator's proxy, and `eprintln!` panics on a closed or full stderr; a panic ends the single-threaded
+`/v1` and MCP loop (`contain.rs` 8-10). So a `serve-http` or `undercroft-orchestrator serve` whose log
+reader goes away may stop at its next diagnostic.
+
+**Shape**: measure first (P7: start the server with its stderr into a reader that exits after one byte,
+provoke a `diag_warn`, then `curl /healthz`), then make the diagnostics best-effort writes that cannot
+panic, as O287's ruling makes the exit path's. **Gate**: P7's server keeps answering `/healthz` after its
+stderr reader is gone, on both binaries.
+
+**Note 2026-10-07, from O287's build.** Measured with the release binary: `serve-mcp` whose stderr is
+a pipe whose reader closed before the spawn exits **101** at its start-up `diag_info!` (`warmed
+embedding cache: 255 vector(s)`), before O287 and after it — the panic is `_diag`'s `eprintln!`, which
+O287's ruling left here. O287 made every BARE `eprintln!` in both binaries a best-effort `errln!`
+(`crates/undercroft-obs/src/stdio.rs`), the shape this entry names, so the fix here is `_diag`'s
+default arms writing through `stdio::_err_line`. The orchestrator's proxy holds no `diag_*!` call
+(read), and its two start-up lines are among those O287 converted; what remains on that binary is the
+telemetry build's tracing writer, unread and unmeasured. P7 is still owed. A one-shot command reaches
+`_diag` too — a read-only open's notes, a warm-up line — and by reading it panics there the same way
+when stderr is closed (not measured); that is this entry's mechanism on a command's exit path, and
+none of O287's gate arms reached it.
+
+#### BUILT 2026-10-08, in O287's unit, on its independent review's finding — the entry's shape, P7 run on both binaries
+
+**What landed.** `undercroft-obs`'s default `_diag` writes `stdio::_err_line`'s best-effort line
+(O287's `errln!`) instead of `eprintln!`, prefixes unchanged; `undercroft-store`'s FDE tuning warning
+(`fdeidx.rs`) became a `diag_warn!` and its three `UNDERCROFT_SEARCH_TRACE` lines `errln!`s — the last
+print macros in any crate's production text. A telemetry build's diagnostics go through tracing, whose
+fmt layer drops a failed write: `log_internal_errors` is off unless asked for (tracing-subscriber
+0.3.23's `Layer::default`, read), so nothing there `eprintln!`s either.
+
+**P7, measured on the release binaries** — before at `781b5b9` and at O287's first build, after at
+this tree, each server started with its stderr bound to a FIFO whose only reader closed before the
+spawn. `serve-http` (with `UNDERCROFT_ASSERTION_SECRET`, so an unasserted request is a per-request
+`diag_warn!`): before, it died at its start-up `diag_info!`, exit 101, and never answered; after, it
+answers two unasserted requests 401 and `/healthz` 200, alive. The orchestrator's `serve`: 101 at its
+start-up line at `781b5b9`; serving and `/healthz` 200 since O287 made its start-up lines `errln!`.
+`serve-mcp` with a closed stderr: 101 → 0, its reply delivered. On a one-shot command, a tampered
+vault's `verify` beside `UNDERCROFT_SEMANTIC_FLOOR=lots` with stderr on `/dev/full` or a closed reader:
+101 → 2. A telemetry build of this tree, both binaries: 2, 0, a `serve-http` that keeps serving, and
+an orchestrator that answers `/healthz`.
+
+**Gates.** `stdio.rs`'s `no_production_code_prints_a_line_that_can_panic`: no print macro in the
+production text of any crate but the bench harness, recursively, comments and literals stripped, the
+raw stdout/stderr handles in `undercroft-obs` alone — RED with `_diag`'s `eprintln!` put back.
+`tests/cli.rs`: `o328_a_diagnostic_beside_a_verdict_never_loses_it` and
+`o328_serve_http_whose_stderr_reader_is_gone_keeps_serving`, RED on O287's first build (101, and a
+server that never came up). e2e: the tampered `verify` beside the warning on a closed stderr exits 2,
+and `serve-http` with its stderr reader gone serves through its diagnostics; e2e-orchestrator: the
+orchestrator likewise answers `/healthz`.
+
+**What stays outside it, stated.** A third-party library writing to stderr on its own (ONNX Runtime's
+C++ logger in a model build) is not a Rust print and is not counted; a telemetry build's JSON log
+layer writes STDOUT, which is O333's.
 
 ## 1.6.1 — released 2026-09-22
 
@@ -33918,175 +34291,6 @@ that removes the escalation fails it if the escalation is what it claims.
 ---
 
 
-### O287 — the CLI panics, exit 101, when the reader of its stdout goes away early; seventeen e2e checks and two orchestrator checks pipe it into an early-exiting reader
-
-**Filed 2026-09-27 by O281's battery, which it turned red; measured the same
-day.** Rust ignores `SIGPIPE`, so a write to a closed pipe returns `EPIPE`, and
-`println!` panics on it: `thread 'main' panicked at library/std/src/io/stdio.rs:
-failed printing to stdout: Broken pipe (os error 32)`, exit **101**. Measured
-through the release binary on three wings of the LoCoMo feed: `undercroft search
-"the" --limit 500 | head -c 1` — 83,653 bytes of output against a 65,536-byte
-pipe — exited 101 with that panic on 5 of 5 runs. Exit 101 is none of the
-documented exit classes, and an operator's `| head` prints a panic. When the
-output fits one pipe buffer the binary usually finishes before the reader exits:
-the e2e pattern `"$BIN" … | grep -q …` under `set -o pipefail` failed 0 of 300
-times unloaded, and once inside a loaded battery ("mempalace-format import",
-whose search writes 270 bytes). `tests/e2e.sh` carries twelve such checks, so
-any of them can go red on a pull request that touched nothing near it.
-
-**Shape** (to be ruled; the options differ in what they cost): restoring the
-default `SIGPIPE` disposition at the start of `main` makes the process end
-quietly the way C tools do, but needs a second `unsafe` block, which CLAUDE.md's
-convention makes a decision for the maintainer; routing the CLI's stdout through
-one writer that answers `BrokenPipe` with a quiet exit 0 needs no `unsafe` but
-touches every print site, and an inventory gate would have to count them; either
-way the e2e checks should stop piping into `grep -q` — capture, then match — so
-a harness race is never read as a product verdict. **Gate**: the deterministic
-arm above (output over one pipe buffer into `head -c 1`) exits with a documented
-code and prints no panic, on the CLI — and on the orchestrator binary too if it
-prints through `println!` the same way, which this filing did not measure; and no
-e2e check pipes the binary into `grep -q`.
-
-> **Corrected 2026-10-06 by this entry's ruling, below** — the text above is left as filed. Option (B)'s
-> "quiet exit 0" launders verdicts printed before an exit 2 and reports undelivered products as
-> delivered; the ruled shape is a latching door with a documented reader-left class, and the gate above
-> is superseded by the ruling's three-part gate. "Twelve" e2e checks are seventeen, plus two in the
-> orchestrator's suite.
-
-#### RULED 2026-10-06 by three lenses — Agentic Memory Architecture, Rust systems and CLI engineering, and Security — and an adversarial refuter
-
-**The question**: this entry's shape — which option, what exit status a broken pipe produces and whether
-it is a documented class, what is safe for each command, the servers, Windows, and the gate. Answered on
-the maintainer's delegation of 2026-10-06 (verbatim: "fanout specialized agents to answer that") and
-approved by them the same day ("approve as recommended"). The brief, the lens answers and the refuter's
-report are in `.handover/rulings-2026-10-06/` — material, never the record. The approval covers the two
-parts the panel left to the maintainer: declining a second `unsafe` block, and publishing a fourth exit
-class, 141.
-
-**Prior rulings found, and their disposition.** O279 item 3 and `CLAUDE.md`'s Conventions (one `unsafe`
-block; a second is the maintainer's) — FOLLOWED: the verdict needs none. The exit-class doctrine
-(`main.rs` 1981-1987 and 2033-2082; `docs/AGENTS.md` 991-1030: 2 is integrity only, 1 a failed run a
-script may retry) — FOLLOWED, and it decides the question. O13's third verdict (a class is chosen by what
-the script should do next) — FOLLOWED. O81 (101 is a code the doctrine does not define, fixed rather than
-documented) — FOLLOWED. The clap usage-error ruling (the published doctrine overrides a library default)
-— FOLLOWED: std's panic on `EPIPE` is a library default. M18, M20 and M23 (a listing still lists, the
-verdict raised after the walk) — FOLLOWED. The orchestrator's "no exempt list" doctrine (`main.rs`
-304-321) — FOLLOWED. The 2026-09-08 versioning ruling — FOLLOWED: PATCH. O150 Q3 rules libraries, not a
-binary's `main`. This entry's filed option (B), a quiet exit 0 — REFUTED.
-
-**Ruled.**
-
-1. **A latching door, and no `unsafe`.** Each binary sends every stdout write through one door that never
-   panics — in the CLI, `main.rs`'s 248 `println!`, `config_check.rs`'s 9, export's `write_all`
-   (`main.rs` 3367-3369) and `mcp.rs`'s `write_msg`; in the orchestrator, `main.rs`'s 18 and
-   `config_check.rs`'s 4. On `BrokenPipe` it records that the reader left and discards everything written
-   after; it never returns an error and never exits, so every command still reaches its own verdict. Any
-   other stdout error (`ENOSPC`, `EIO`) is a run failure. The door flushes explicitly, and checks the
-   flush, before the exit status is decided.
-2. **The exit path's stderr writes are in scope**: the CLI's `main.rs` 2123, 2127 and 2136 and the
-   orchestrator's 270, 584-587, 612-615 and 642-647 become best-effort writes that cannot panic, or `cmd
-   2>&1 | reader` — the shape of seven of the e2e sites — still turns exit 2 into 101 at the final error
-   or verdict print.
-3. **The exit status is folded in one place, in the order integrity 2, run failure 1, reader-left, then
-   0.** The existing `process::exit(2)` arms keep working, because printing no longer panics. Reader-left
-   comes ONLY from the door's own latch, never from an `io::ErrorKind::BrokenPipe` found in the error
-   chain, which an outbound socket can raise too. The orchestrator's `fn main() -> Result<()>` becomes an
-   `ExitCode` main.
-4. **Reader-left is its own DOCUMENTED class, 141** — added to `docs/AGENTS.md` §7.3 and the book's copy,
-   `docs/PARITY.md`, `docs/THREAT_MODEL.md`, `docs/security.md` and every other surface that states the
-   exit classes. Never 0: it would launder the verdicts printed before an exit 2 (`main.rs` 2861-2866,
-   2925-2930, 3074-3080, 3227-3240, 3860-3865, 4388-4400, 4423-4428, 4525-4531; `vault list` 2303-2307;
-   the orchestrator's `ops` 578-589 and instance list 463-479) and report undelivered one-shot products
-   as delivered (the forget receipt 2909, the sweep receipt 3227, a witness 3020, `assert-header` 3437,
-   the orchestrator's keygen and tenant tokens). Never 1: `docs/AGENTS.md` 1028-1029 lets a script retry
-   exit 1, and a retry after a committed `remember` files a duplicate under a fresh append index
-   (`main.rs` 2461-2475). 141 is the status a shell already reports for this event, and gawk exits 141
-   even with SIGPIPE ignored (O314's measurement). Its cost, stated: under `set -o pipefail`, `search |
-   head` fails, as it does for every C tool and as it already does at 101.
-5. **The servers.** `serve-mcp` ends with exit 0 on a closed client, as it already does at stdin EOF
-   (`mcp.rs` 387-406) — the same client exit arrives as either, by timing. `serve-http` is unchanged: it
-   writes nothing to stdout. `daemon run` keeps filing with its output discarded.
-6. **(C) lands in the same unit, as a correctness fix.** Every status-consuming pipeline whose producer
-   is a binary and whose consumer may exit early becomes capture-then-match — 17 sites in `tests/e2e.sh`
-   (12 with a literal `$BIN` at 268, 425, 1056, 1098, 1597, 2088, 2099, 2152, 2170, 2200, 2807 and 4112;
-   3 through the `o255`/`o250` wrappers at 1944, 1962 and 4094; 2 inside `sh -c` at 1077 and 1191) and
-   `tests/e2e-orchestrator.sh` 416 and 421 — each converted check asserting the exit code first. Under
-   `set -o pipefail` the negative-sense checks (268, 2200, 2807, 4094, 4112) pass OVER A PRESENT DEFECT
-   whenever the producer exits non-zero after the match, under every non-zero shape: the race gives false
-   greens as well as false reds.
-7. **The gate, in three parts.** A deterministic surface arm on both binaries, with stdout, and
-   separately stderr, bound to a pipe whose reader is dropped BEFORE the spawn: `search` gives 141 with
-   no panic; `verify` on a tampered vault gives 2; `witness check` on a rolled-back vault gives 2; a
-   retention sweep with drift gives 2; `drawer get` of a missing id gives 1; the orchestrator's `ops …
-   verify` on a tampered tenant gives 2; stdout to `/dev/full` gives 1 — each with a premise (the same
-   run into a live reader writes non-empty output) and a counterfactual against the filed quiet-exit-0
-   shape. A lint plus a source count, so no `println!`, `print!` or `std::io::stdout` escapes the door,
-   cfg-gated code included (no lint leg compiles the model features; O153); clap's help and version
-   printing (`let _ = e.print();`, `main.rs` 2095-2097, orchestrator 287-290) goes through the door too.
-   And a host-side preflight refusing any status-consuming pipeline from a binary or a wrapper into an
-   early-exiting reader, with a premise probe for every `grep` spelling and every wrapper.
-8. **Versioning: PATCH**, with an `UPGRADING.md` entry on the exit-class precedent (862-865): a command
-   whose stdout reader closes early now exits 141 with no panic text; an integrity verdict still exits 2
-   through a closed pipe; capture, then match, or accept 141. Two undocumented observables move: an
-   export to a closed stdout goes from 1 to 141, and `serve-mcp`'s mid-response hang-up from 1 to 0.
-   `config check` cannot detect it.
-
-**Options that lost, with their cost.** (A), SIGPIPE's default restored at the start of `main`: a second
-`unsafe` block, every print-then-decide verdict becoming 141 so the integrity class is lost, a
-process-wide change on the servers and every outbound client, and Windows — a shipped target — staying
-at 101. (A′), `-Zon-broken-pipe=kill` (formerly `#[unix_sigpipe]`): unstable — under tracking issue
-97889 in the unstable book of the host's 1.92.0, and ignored on non-Unix — and equal to A if stabilized.
-(A″), A through a crate that wraps `signal(2)`: every cost of A, and G11 (`open_race_tests.rs`
-1585-1633) walks `crates/` only, so the reserved decision would be taken unseen. (B) as filed, a quiet
-exit 0: fail-open, worse than today's 101. A latch with reader-left as exit 1 (the security lens):
-sanctions a duplicating retry. A per-command split, 0 for reports and non-zero for products: the
-exempt-list shape the tree rejects; pipefail-friendly listings, if ever wanted, are a product choice. A
-shadowing `macro_rules! println`: invisible to `clippy::print_stdout`, and its textual scope must
-precede `mod config_check;`. (D), a panic hook mapping the "failed printing to stdout" panic: keys on an
-unstable message, and exiting from the hook skips the post-print exit 2.
-
-**Claims refuted, the brief's first.** "Twelve" e2e checks: seventeen, plus two in the orchestrator's
-suite — the count saw only `-q` and `-qE` beside a literal `$BIN` (this entry's heading is corrected with
-this ruling). "Can go red intermittently": also green, over a present defect (item 6). Option (B)'s
-"costs only print-site edits": it launders verdicts and products (item 4). "A truncated export reported
-as success?": today an export to a closed stdout exits 1 with "Error: Broken pipe" (`main.rs` 3366-3370)
-— 101 only when stderr is the same pipe — and a plaintext export has no file option (`--out` requires
-`--to`, `main.rs` 379). Stderr was omitted entirely. The long-running processes include `daemon run`
-(`main.rs` 3451-3464); `serve-mcp` does not panic today but exits 1. "The tree's pinned 1.90" holds for
-the Docker battery and the CI containers, not the shipped binaries, built on each runner's unpinned
-stable (O294). `libc` is transitive only, and A needs no `libc` crate — its real cost is the `unsafe`
-block. The filing's gate, read as a text scan, misses wrappers, `sh -c`, `$ORCH` and the `-qi`, `-qF` and
-`-qx` spellings. Among the lenses: the security lens's "a missed site can only fail loud", "exit 1 with
-no new class" and "a new code is MINOR"; the Rust lens's "file stderr separately" and "`serve-mcp` exits
-141"; all three lenses' "A needs a new `libc` dependency"; the memory lens's "D contradicts O150 Q3", and
-its negative-sense list, which missed 2200.
-
-**Dissent.** The security lens would use exit 1 with no new class — one fewer contract, the
-duplicate-retry residual already present under 101, and a new code MINOR — answered by the published
-retry licence, O81 and the 2026-09-08 ruling; the maintainer weighed it and approved 141. On `serve-mcp`,
-the Rust lens preferred 141 and the security lens 1; settled at 0, one event, one status. **Fails
-silently if**: the door covers stdout only; reader-left is decided from the error chain; the door returns
-an error or exits at the first broken write; the converted checks drop the exit-code assertion, or the
-negative-sense checks stay piped; the harness preflight matches only `"$BIN"` and `grep -q`; the
-deterministic arm drops the reader after the spawn or writes less than one pipe buffer; a print escapes
-the door through cfg-gated code; Windows maps a closed pipe to another kind; the door does not flush
-explicitly before the fold. Whatever the shape, a producer whose whole output fits in the pipe buffer
-exits 0 if its consumer then dies — only an export's payload digest catches that, at import.
-
-**Probes owed by the build.** P1: today's baseline over 64 KiB of `search` output — 101 and the panic;
-after, 141 and a clean stderr. P2: `undercroft search x 2>/dev/full` on a tampered vault — 101 today
-where 2 is correct; if it already reads 2, the stderr finding is wrong and the scope narrows. P3:
-`verify | head -c 1` over a tampered vault whose findings pass 64 KiB — 101 today, 0 under B, 141 under
-A, 2 under the door, with and without `2>&1`. P4: Windows — does a closed pipe map to `BrokenPipe`? P5:
-the harness false green, independent of the binary. P6: `serve-mcp` today exits 1. P8: whether
-`-Zon-broken-pipe` is still unstable on the host's 1.98.1.
-
-**Filed under `## Open`**: O328 (the long-running servers may die when their stderr closes) and O329 (an
-exit-2 run on a telemetry build skips the flush of its spans and metrics). `docs/AGENTS.md` 1030's stale
-exit-2-is-409 sentence is filed with O330. Command substitutions such as `$("$BIN" admission list | sed
-… | head -1)` meet the same race, but their status is never read: panic noise in a log, not a verdict —
-stated, not filed.
-
 ### O292 — a vault directory holding a database and no manifest reads as no vault at all, and `create` mints a new salt beside it
 
 **Filed 2026-09-28 by O289's ruling (its refuter); read in code, unmeasured.** A33's converse: a
@@ -34609,19 +34813,6 @@ reads.
 **Gate**: the preflight's own source check refuses an unpinned image or a writable mount, with a premise
 that the scan still runs and fires on its known positive.
 
-### O328 — the long-running servers may die when their stderr closes
-
-**Filed 2026-10-06 by O287's ruling; unmeasured.** The default build's `_diag` is a bare `eprintln!`
-(`crates/undercroft-obs/src/lib.rs` 44-50), run per request at the store's diagnostic sites and in the
-orchestrator's proxy, and `eprintln!` panics on a closed or full stderr; a panic ends the single-threaded
-`/v1` and MCP loop (`contain.rs` 8-10). So a `serve-http` or `undercroft-orchestrator serve` whose log
-reader goes away may stop at its next diagnostic.
-
-**Shape**: measure first (P7: start the server with its stderr into a reader that exits after one byte,
-provoke a `diag_warn`, then `curl /healthz`), then make the diagnostics best-effort writes that cannot
-panic, as O287's ruling makes the exit path's. **Gate**: P7's server keeps answering `/healthz` after its
-stderr reader is gone, on both binaries.
-
 ### O329 — an exit-2 verdict on a telemetry build skips the flush of its spans and metrics
 
 **Filed 2026-10-06 by O287's ruling (its refuter).** The `process::exit(EXIT_INTEGRITY)` arms
@@ -34633,6 +34824,13 @@ exit-2 run are never flushed: a silent gap on exactly the runs an operator most 
 **Shape**: fold the exit-2 arms into `main`'s single exit, as O287's ruling (item 3) does for the status,
 so the guard drops before the process ends. **Gate**: on a telemetry build with an OTLP sink, a tampered
 vault's `verify` exits 2 and its span arrives; counterfactual, today's arms.
+
+**Note 2026-10-07, from O287's build.** O287 kept the `process::exit(EXIT_INTEGRITY)` arms, as its
+ruling's item 3 says, so this entry is untouched by it. The single exit it asks the arms to fold into
+now exists: `exit` in `crates/undercroft-cli/src/main.rs`, over `undercroft_obs::stdio::exit_status`,
+which ranks an integrity verdict first — and `main` returns through it, so `_telemetry` drops on every
+path that reaches it. An arm folded there owes the same printing it does today (its verdict on stdout,
+no extra `Error:` line), which is the part a build has to decide.
 
 ### O330 — three sentences the 2026-10-06 panels found false: "without Docker", the exit-2 classes "exactly" the 409 set, and "GitHub Free"
 
@@ -34718,6 +34916,56 @@ whose throttling is just as unstated.
 not exist: exit 1, and the FAIL line names `HTTP 404` and `Not Found` — counterfactual, today's script
 prints neither. (2) The CI job's step carries the token, and its log shows the authenticated limit (not
 60) on a green run. (3) The script run locally with no token still reads the release and passes.
+
+### O332 — the harness's curl and printf producers meet O287's race: fifteen status-consuming pipelines from a producer that is not one of the binaries into a reader that may leave first
+
+**Filed 2026-10-07 by O287's build; counted, not measured.** O287's ruling scoped its harness half to
+pipelines whose producer is one of the binaries or a function that runs one, and the preflight it
+built (`checks capture the binary, then match`, `tests/battery.sh`) says so in its scope. The race
+does not care what the producer is: under `set -o pipefail`, a status-consuming `producer | grep -q …`
+reads the PRODUCER's status whenever grep leaves first — for curl its exit 23 (it could not write),
+for bash's builtin printf in a pipeline subshell a death by `SIGPIPE`, 141. A false red over a correct
+tree, and a false green in a negative-sense check (`if curl … | grep -q X; then fail`). It needs the
+producer to still be writing when grep leaves, so on today's small bodies it is improbable rather than
+impossible.
+
+**Counted** with O287's scanner, its producer swapped for curl and printf, over `tests/*.sh` but
+`battery.sh`: curl at `e2e-orchestrator.sh` 108 and 452 (both negative-sense) and `tls-pins.sh` 401;
+printf of a captured string at `context-check.sh` 172, 191 and 201, `e2e-backends.sh` 234,
+`e2e-telemetry.sh` 576, 594, 617 and 625, `house-figures.sh` 132, 164 and 171, and `tls-pins.sh` 486.
+
+**Shape**: capture, then match, as O287 converted its nineteen — `grep -q … <<<"$x"` for a string
+already captured, and a captured body for curl; then widen the preflight's producer set to curl and
+printf, with a probe for each. **Gate**: the preflight refuses a status-consuming curl or printf
+pipeline into an early reader, its premise refusing a probe line per producer.
+
+### O333 — on a telemetry build, `UNDERCROFT_LOG_FORMAT=json` writes its log lines to STDOUT, into the MCP stream and an export's payload, and a published diagram says stdout is where they go
+
+**Filed 2026-10-08 by the independent review of O287's build; measured by that review and again by
+the build, and unresolved by the build because a document states the behaviour.** `crates/undercroft-obs/src/imp.rs` builds the
+JSON fmt layer with no writer — `tracing_subscriber::fmt::layer().json()` — and tracing-subscriber
+0.3.23's default writer is `io::stdout`; the text layer beside it names `std::io::stderr`. Measured by
+the review on a telemetry build of this tree: `serve-mcp` under `UNDERCROFT_LOG_FORMAT=json` emitted
+`{"level":"INFO",…"warmed embedding cache"…}` on stdout BEFORE its JSON-RPC reply, which an MCP client
+reads as a malformed frame, and `--read-only export` put a `WARN` line inside the export payload. It is
+older than O287, and it makes O287's claim — one door for every stdout write the binaries make —
+false on that configuration, which every surface stating the claim now says beside it. Nothing
+panics: the layer's `log_internal_errors` is off by default, so a failed write is dropped.
+
+**Why the build stopped here.** `website/src/observability.md`'s pipeline diagram and its rendered
+copy `docs/diagrams/observability-pipeline.svg` (source `docs/diagrams/src/observability-pipeline.mmd`)
+label the edge to promtail `UNDERCROFT_LOG_FORMAT=json<br/>stdout`. A published statement that the
+JSON logs go to stdout is a contract question, and the coordinator's instruction was to stop on one.
+The shipped stack would not notice the move — promtail's `docker_sd_configs` read a container's
+stdout and stderr alike (`deploy/observability/promtail/promtail-config.yml`) — but an operator piping
+`serve-http`'s stdout alone into a log shipper would.
+
+**Shape, once ruled**: the JSON layer writes to stderr (`.with_writer(std::io::stderr)`, as the text
+layer does), the diagram's label moves with it, `UPGRADING.md` says so, and the `stdio.rs` source gate
+gains a writer arm that sees a tracing fmt layer with no `with_writer` or a stdout one. **Gate**: on a
+telemetry build under `UNDERCROFT_LOG_FORMAT=json`, `serve-mcp`'s stdout carries the JSON-RPC frames
+alone and an export's stdout is the payload alone (e2e-telemetry), each with the premise that the log
+line is emitted; counterfactual, today's layer.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 

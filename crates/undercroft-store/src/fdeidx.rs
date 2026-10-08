@@ -225,8 +225,10 @@ fn params_from_env(tokdim: usize) -> FdeParams {
         return p;
     }
     let d = FdeParams::default();
-    eprintln!(
-        "warning: UNDERCROFT_FDE_REPS/_KSIM/_DPROJ = {}/{}/{} build a {}-float FDE at token \
+    // A diagnostic, never a bare `eprintln!`, which panics on a closed stderr
+    // (ROADMAP O328).
+    undercroft_obs::diag_warn!(
+        "UNDERCROFT_FDE_REPS/_KSIM/_DPROJ = {}/{}/{} build a {}-float FDE at token \
          dim {tokdim}, above the {}-float ceiling; using the defaults {}/{}/{}",
         p.reps,
         p.ksim,
