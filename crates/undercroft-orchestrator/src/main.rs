@@ -19,6 +19,11 @@
 //! The rest — `_ENGINE_CA`, `_RATE_LIMIT`, `_METRICS_ADDR`, `_METRICS_TOKEN`
 //! — are documented on their resolvers.
 
+// Every print goes through the stdout door (ROADMAP O287), as on the
+// engine's CLI: `println!` panics on a closed reader, and this binary prints
+// once-shown tokens and integrity verdicts.
+#![deny(clippy::print_stdout, clippy::print_stderr)]
+
 mod config_check;
 mod engine;
 mod proxy;
@@ -28,6 +33,8 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use rand::RngCore;
 use state::Orch;
+use undercroft_obs::stdio::{self, Run};
+use undercroft_obs::{errln, outln};
 
 #[derive(Parser)]
 #[command(name = "undercroft-orchestrator", version, about)]
@@ -199,7 +206,10 @@ fn orch_key() -> Result<String> {
 /// `"ok": false` in the body, correctly). So a scripted fleet check over a
 /// tampered vault printed `"ok":false` and exited 0. That is engine defect
 /// A22 verbatim, one plane out.
-const EXIT_INTEGRITY: u8 = 2;
+///
+/// The number is the one the stdout door's fold uses (ROADMAP O287), so the
+/// two binaries cannot state different values for one class.
+const EXIT_INTEGRITY: u8 = stdio::EXIT_INTEGRITY;
 
 /// Classify an engine reply for the scripted operator door.
 ///
@@ -258,37 +268,73 @@ fn state_is_integrity(e: &anyhow::Error) -> bool {
     )
 }
 
-fn main() -> Result<()> {
-    // Exit 2 for an integrity verdict raised anywhere in this binary, not
-    // only on the two doors that were given one by hand. `Unsealable` is the
-    // control plane's own tamper verdict and reached `?` on `ops`,
-    // `tenant-create`, `tenant-delete` and `tenant-rotate` as an ordinary
-    // error.
-    let out = run();
-    if let Err(e) = &out {
-        if state_is_integrity(e) {
-            eprintln!(
-                "INTEGRITY VERDICT: {e}. This is the orchestrator's own state, not an engine's — a credential blob that will not open under the declared key is a tamper verdict or a wrong key, never a transient condition."
-            );
-            std::process::exit(EXIT_INTEGRITY.into());
-        }
-    }
-    out
-}
-
-fn run() -> Result<()> {
+/// **An `ExitCode` main, and the status is folded in ONE place** (ROADMAP
+/// O287). It was `fn main() -> Result<()>`, whose `Termination` knows one
+/// failure, 1, and every print before it was a `println!` that panics on a
+/// closed reader — so `ops … verify | head` over a tampered vault answered
+/// 101 where the doctrine promises 2, and a once-shown token sent into a
+/// closed pipe answered 101 and no class at all. Every stdout write this
+/// binary's code makes now goes through the door in `undercroft-obs` (a
+/// telemetry build's JSON log layer does not: ROADMAP O333), which latches a
+/// reader leaving
+/// rather than panicking, and the fold below reads it last: an integrity
+/// verdict 2, then a run failure 1, then the reader leaving 141, then 0. The
+/// `process::exit(2)` arms inside `run` keep working, because printing no
+/// longer panics; 2 outranks everything the fold could add.
+fn main() -> std::process::ExitCode {
     // **Exit 1 for a usage error, not clap's default 2.** `docs/AGENTS.md`
     // states the doctrine without qualification — exit 2 means an integrity
     // verdict, exit 1 means the run itself failed, "bad arguments, a missing
     // file" — and clap's `USAGE_CODE` is 2, so a typo or a renamed flag
     // reached a compliance script as a TAMPER VERDICT. The doctrine and the
     // parser disagreed, and the doctrine is the one that is published.
-    // `--help`/`--version` still exit 0, which is what `use_stderr` decides.
-    let parsed = <Cli as clap::Parser>::try_parse().unwrap_or_else(|e| {
-        let _ = e.print();
-        std::process::exit(if e.use_stderr() { 1 } else { 0 });
-    });
-    let cli = parsed;
+    // `--help`/`--version` still exit 0 — through the door, so help into a
+    // closed reader is 141 like any other output, never a quiet 0 over
+    // truncated text.
+    let cli = match <Cli as clap::Parser>::try_parse() {
+        Ok(cli) => cli,
+        Err(e) if e.use_stderr() => {
+            let _ = e.print();
+            return std::process::ExitCode::from(stdio::EXIT_FAILURE);
+        }
+        Err(e) => {
+            stdio::write_with(|| e.print());
+            return exit(Run::Completed);
+        }
+    };
+    // Exit 2 for an integrity verdict raised anywhere in this binary, not
+    // only on the two doors that were given one by hand. `Unsealable` is the
+    // control plane's own tamper verdict and reached `?` on `ops`,
+    // `tenant-create`, `tenant-delete` and `tenant-rotate` as an ordinary
+    // error.
+    let run_class = match run(cli) {
+        Ok(()) => Run::Completed,
+        Err(e) if state_is_integrity(&e) => {
+            errln!(
+                "INTEGRITY VERDICT: {e}. This is the orchestrator's own state, not an engine's — a credential blob that will not open under the declared key is a tamper verdict or a wrong key, never a transient condition."
+            );
+            Run::Integrity
+        }
+        Err(e) => {
+            // Byte for byte what `Termination` printed for `main -> Result`.
+            errln!("Error: {e:?}");
+            Run::Failed
+        }
+    };
+    exit(run_class)
+}
+
+/// Flush the door explicitly, then fold the run and the stream into the one
+/// exit status (ROADMAP O287).
+fn exit(run: Run) -> std::process::ExitCode {
+    let delivery = stdio::finish();
+    if let stdio::Delivery::Failed(why) = &delivery {
+        errln!("Error: writing to standard output: {why}");
+    }
+    std::process::ExitCode::from(stdio::exit_status(run, &delivery))
+}
+
+fn run(cli: Cli) -> Result<()> {
     // The engine hop's TLS pin, resolved and VALIDATED before anything is
     // served or sent — the rule `RateLimiter::from_env` already states in
     // front of the bind, applied to the other declaration this process
@@ -339,12 +385,12 @@ fn run() -> Result<()> {
     // start in one.
     match undercroft_obs::init_as("undercroft-orchestrator") {
         Ok(guard) => std::mem::forget(guard),
-        Err(e) if preflight => eprintln!("warning: telemetry disabled — {e}"),
+        Err(e) if preflight => errln!("warning: telemetry disabled — {e}"),
         Err(e) => return Err(anyhow::anyhow!(e)),
     }
     match engine::init_transport() {
         Ok(()) => {}
-        Err(e) if preflight => eprintln!("warning: engine hop unusable — {e}"),
+        Err(e) if preflight => errln!("warning: engine hop unusable — {e}"),
         Err(e) => return Err(anyhow::anyhow!(e)),
     }
     match cli.command {
@@ -353,14 +399,14 @@ fn run() -> Result<()> {
         }
         | Command::ConfigCheck { verbose } => {
             let (fatal, warned, validated, accepted) = config_check::run(verbose);
-            println!(
+            outln!(
                 "checked {validated} declaration(s) of the control plane: \
                  {fatal} refusing, {warned} warning, {accepted} seen but not validated"
             );
             if fatal > 0 {
                 bail!("this environment would refuse to start");
             }
-            println!(
+            outln!(
                 "`undercroft-orchestrator serve` would start in this environment. \
                  Note this covers the CONTROL PLANE only — run `undercroft config check` \
                  on each engine as well."
@@ -372,8 +418,8 @@ fn run() -> Result<()> {
             rand::thread_rng().fill_bytes(&mut key);
             let mut admin = [0u8; 24];
             rand::thread_rng().fill_bytes(&mut admin);
-            println!("UNDERCROFT_ORCH_KEY={}", hex::encode(key));
-            println!("UNDERCROFT_ORCH_ADMIN_TOKEN={}", hex::encode(admin));
+            outln!("UNDERCROFT_ORCH_KEY={}", hex::encode(key));
+            outln!("UNDERCROFT_ORCH_ADMIN_TOKEN={}", hex::encode(admin));
             Ok(())
         }
         Command::Serve { addr, read_replica } => {
@@ -413,7 +459,7 @@ fn run() -> Result<()> {
         } => {
             let orch = Orch::open(&cli.db, &orch_key()?)?;
             orch.instance_add(&name, &url, &bearer, &assertion_secret)?;
-            println!("registered instance {name} -> {url}");
+            outln!("registered instance {name} -> {url}");
             Ok(())
         }
         Command::InstanceList => {
@@ -460,7 +506,7 @@ fn run() -> Result<()> {
                     Some(why) => format!("\trefused={why}"),
                     None => String::new(),
                 };
-                println!(
+                outln!(
                     "{}\t{}\ttenants={}\thealthy={}{note}",
                     i.name,
                     i.url,
@@ -472,7 +518,7 @@ fn run() -> Result<()> {
             // so `main`'s existing exit-2 hook classifies it — one
             // classifier, not a second exit path spelled differently here.
             if !integrity.is_empty() {
-                eprintln!(
+                errln!(
                     "credential blob(s) that would not open: {}",
                     integrity.join(", ")
                 );
@@ -489,7 +535,7 @@ fn run() -> Result<()> {
             // "not found" and exited 0, so a decommission script read it as
             // done. Two doors, opposite answers, on one call.
             if orch.instance_remove(&name)? {
-                println!("removed");
+                outln!("removed");
                 Ok(())
             } else {
                 bail!("no instance {name:?}")
@@ -513,10 +559,10 @@ fn run() -> Result<()> {
                 let _ = orch.tenant_delete(&tenant.id);
                 bail!("engine vault create failed: {e}");
             }
-            println!("tenant  {}", tenant.id);
-            println!("vault   {} on {}", tenant.vault, tenant.instance);
-            println!("token   {token}");
-            println!("(the token is shown once and stored only as a MAC)");
+            outln!("tenant  {}", tenant.id);
+            outln!("vault   {} on {}", tenant.vault, tenant.instance);
+            outln!("token   {token}");
+            outln!("(the token is shown once and stored only as a MAC)");
             Ok(())
         }
         Command::TenantList => {
@@ -528,9 +574,14 @@ fn run() -> Result<()> {
                 // recreate the vault on the destination and had no way to
                 // ask". The surface an operator reads BEFORE a migration was
                 // the one that could not show it.
-                println!(
+                outln!(
                     "{}	{}	{} @ {}	{}	{}",
-                    t.id, t.name, t.vault, t.instance, t.level, t.created_at
+                    t.id,
+                    t.name,
+                    t.vault,
+                    t.instance,
+                    t.level,
+                    t.created_at
                 );
             }
             Ok(())
@@ -541,17 +592,18 @@ fn run() -> Result<()> {
             let creds = orch.instance_creds(&tenant.instance)?;
             engine::delete_vault(&creds, &tenant.vault).map_err(|e| anyhow::anyhow!(e))?;
             orch.tenant_delete(&id)?;
-            println!(
+            outln!(
                 "deleted {id} (vault {} on {})",
-                tenant.vault, tenant.instance
+                tenant.vault,
+                tenant.instance
             );
             Ok(())
         }
         Command::TenantRotate { id } => {
             let orch = Orch::open(&cli.db, &orch_key()?)?;
             let token = orch.tenant_rotate_token(&id)?;
-            println!("token   {token}");
-            println!("(the old token is revoked; this one is shown once)");
+            outln!("token   {token}");
+            outln!("(the old token is revoked; this one is shown once)");
             Ok(())
         }
         Command::Ops { id, op, body } => {
@@ -575,13 +627,13 @@ fn run() -> Result<()> {
             .map_err(|e| anyhow::anyhow!("{e}"))?;
             // The engine's own body, verbatim — the admin plane relays it
             // rather than re-summarising, and so does this.
-            println!("{}", String::from_utf8_lossy(&r.body));
+            outln!("{}", String::from_utf8_lossy(&r.body));
             // An integrity verdict exits 2 BEFORE the status check, because
             // the verdict that matters most arrives on a 200: `verify`
             // answers `{"ok": false}` with a perfectly successful HTTP
             // status, and this door used to exit 0 on it.
             if is_integrity_verdict(r.status, &r.body) {
-                eprintln!(
+                errln!(
                     "INTEGRITY VERDICT from vault '{}' — this is not a failed run to retry. \
                      Follow the tamper runbook.",
                     tenant.vault
@@ -597,7 +649,7 @@ fn run() -> Result<()> {
             let orch = Orch::open(&cli.db, &orch_key()?)?;
             match proxy::repoint_tenant(&orch, &id, &instance) {
                 Ok(summary) => {
-                    println!("{}", serde_json::to_string_pretty(&summary)?);
+                    outln!("{}", serde_json::to_string_pretty(&summary)?);
                     Ok(())
                 }
                 Err(e) => {
@@ -609,10 +661,10 @@ fn run() -> Result<()> {
                     // tampered vault because the failure looked like an
                     // ordinary config error is the outcome this prevents.
                     if migrate_is_integrity(&e) {
-                        eprintln!(
+                        errln!(
                             "INTEGRITY VERDICT from instance '{instance}' while checking that it holds tenant '{id}' — the mapping was NOT changed. This is not a failed run to retry. Follow the tamper runbook."
                         );
-                        eprintln!("{e}");
+                        errln!("{e}");
                         std::process::exit(EXIT_INTEGRITY.into());
                     }
                     Err(anyhow::anyhow!(e))
@@ -634,17 +686,17 @@ fn run() -> Result<()> {
             // transient will keep asking a tampered vault to export itself.
             match proxy::migrate_tenant(&orch, &id, &to, keep_source) {
                 Ok(summary) => {
-                    println!("{}", serde_json::to_string_pretty(&summary)?);
+                    outln!("{}", serde_json::to_string_pretty(&summary)?);
                     Ok(())
                 }
                 Err(e) => {
                     if migrate_is_integrity(&e) {
-                        eprintln!(
+                        errln!(
                             "INTEGRITY VERDICT from the engine during migration of tenant '{id}' — the \
                              source is left authoritative and untouched. This is not a failed run to \
                              retry. Follow the tamper runbook."
                         );
-                        eprintln!("{e}");
+                        errln!("{e}");
                         std::process::exit(EXIT_INTEGRITY.into());
                     }
                     Err(anyhow::anyhow!(e))

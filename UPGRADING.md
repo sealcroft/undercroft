@@ -410,6 +410,48 @@ writable open first fast-forwards a lagging manifest anchor (and says so) and
 promotes a key rotation whose promote was deferred. `undercroft config check`
 cannot detect this: it is a flag on one command, not a declaration.
 
+### a command whose stdout reader leaves early exits 141, quietly, where it panicked with 101 (O287)
+
+**Symptom:** `undercroft search … | head`, or any `undercroft` or
+`undercroft-orchestrator` command whose standard output is read by something
+that exits before the output is complete, now exits **141** with nothing on
+stderr. Before 1.7.0 the same pipeline usually ended in a panic — `thread
+'main' panicked … failed printing to stdout: Broken pipe`, exit 101 — whenever
+the output was larger than a pipe's buffer (measured: a `search` writing 81,962
+bytes into `head -c 1` exited 101 on 5 runs of 5). Two observables that were
+not panics move as well: `undercroft export` into a closed reader exits 141
+where it exited 1 with `Error: Broken pipe`, and `serve-mcp` whose client hung
+up mid-response exits 0 where it exited 1 — the status the same client
+leaving by closing stdin already gave. And `--help` or `--version` into a
+reader that has already gone exits 141 where it exited 0 over text nobody
+received.
+
+**Cause:** Rust ignores `SIGPIPE`, so a write to a pipe whose reader has gone
+fails, and `println!` panics on the failure (ROADMAP O287). Every stdout write
+the two binaries' own code makes now goes through one door that records the
+reader leaving, discards what is written after, and lets the command run on to
+its own verdict (on a telemetry build, `UNDERCROFT_LOG_FORMAT=json` log lines
+still reach stdout directly — ROADMAP O333); the exit status is folded in one
+order — an integrity verdict 2, a
+failed run 1, the reader leaving 141, success 0. **An integrity verdict still
+exits 2 through a closed pipe**: `verify | head` over a tampered vault answered
+101 before and answers 2 now. A write to standard output that fails for any
+other reason (a full disk, an I/O error) exits 1 and says `Error: writing to
+standard output: …`. The lines a binary prints on stderr on its way out — the
+final `Error:` line, the orchestrator's `INTEGRITY VERDICT` notice, and every
+diagnostic (ROADMAP O328) — are best-effort writes too, so `2>&1 | head` keeps
+the verdict as well. Exit 0 is not proof of delivery: output small enough to
+fit in a pipe's buffer is accepted in full, so a reader that dies after the
+last write leaves the run at 0.
+
+**Fix:** a script that pipes a command into a reader that may stop early
+(`grep -q`, `head`) under `set -o pipefail` sees 141 instead of 101 — both
+non-zero, so a pipeline that failed still fails. Capture the output, then
+match it (`out=$(undercroft verify 2>&1); rc=$?`), or treat 141 as "completed,
+reader left": it is not a failed run to retry, because a retry of a write that
+committed files it again. `undercroft config check` cannot detect this:
+nothing in an environment predicts a reader closing.
+
 ## 1.6.1 (released 2026-09-22)
 
 ### The manifest carries a version fence from this release on (O238)

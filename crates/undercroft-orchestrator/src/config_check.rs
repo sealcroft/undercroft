@@ -23,6 +23,7 @@ use undercroft_config::{
     addr_is_loopback, resolve_admin_token, resolve_metrics_addr, resolve_metrics_token,
     resolve_orch_addr, resolve_orch_key, resolve_rate_limit,
 };
+use undercroft_obs::outln;
 
 /// What a bad value does, per `CLAUDE.md`'s configuration doctrine.
 ///
@@ -271,13 +272,13 @@ pub(crate) fn run(verbose: bool) -> (usize, usize, usize, usize) {
             Finding::Ok(what) => {
                 validated += 1;
                 if verbose {
-                    println!("  ok      {name}={raw:?} — {what}");
+                    outln!("  ok      {name}={raw:?} — {what}");
                 }
             }
             Finding::Accepted => {
                 accepted += 1;
                 if verbose {
-                    println!(
+                    outln!(
                         "  seen    {name}={raw:?} — declared Opaque: no parse exists, so its consumer is the only real validation"
                     );
                 }
@@ -285,12 +286,12 @@ pub(crate) fn run(verbose: bool) -> (usize, usize, usize, usize) {
             Finding::Warn(why) => {
                 validated += 1;
                 warned += 1;
-                println!("  warn    {name}={raw:?} — {why}");
+                outln!("  warn    {name}={raw:?} — {why}");
             }
             Finding::Fatal(why) => {
                 validated += 1;
                 fatal += 1;
-                println!("  REFUSES {name}={raw:?} — {why}");
+                outln!("  REFUSES {name}={raw:?} — {why}");
             }
         }
     }

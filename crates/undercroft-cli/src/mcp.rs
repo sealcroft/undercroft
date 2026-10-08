@@ -9,7 +9,7 @@
 
 use anyhow::Result;
 use serde_json::{json, Value};
-use std::io::{BufRead, Write};
+use std::io::BufRead;
 
 use undercroft_core::{normalize_content, Drawer};
 use undercroft_store::{SearchOptions, VaultStore};
@@ -381,8 +381,6 @@ pub fn serve(store: VaultStore, read_only: bool) -> Result<()> {
     let mut store = store;
     let mut handler = McpHandler::new(store.vault().id().to_string(), read_only);
     let stdin = std::io::stdin();
-    let stdout = std::io::stdout();
-    let mut out = stdout.lock();
 
     for line in stdin.lock().lines() {
         let line = line?;
@@ -392,25 +390,31 @@ pub fn serve(store: VaultStore, read_only: bool) -> Result<()> {
         let msg: Value = match serde_json::from_str(&line) {
             Ok(v) => v,
             Err(e) => {
-                write_msg(
-                    &mut out,
-                    &error_response(Value::Null, -32700, &format!("parse error: {e}")),
-                )?;
+                let parse_error = error_response(Value::Null, -32700, &format!("parse error: {e}"));
+                if !write_msg(&parse_error)? {
+                    return Ok(());
+                }
                 continue;
             }
         };
         if let Some(response) = handler.handle(&mut store, &msg) {
-            write_msg(&mut out, &response)?;
+            if !write_msg(&response)? {
+                return Ok(());
+            }
         }
     }
     Ok(())
 }
 
-fn write_msg(out: &mut impl Write, msg: &Value) -> Result<()> {
-    serde_json::to_writer(&mut *out, msg)?;
-    out.write_all(b"\n")?;
-    out.flush()?;
-    Ok(())
+/// One JSON-RPC frame through the stdout door (ROADMAP O287). `false` means
+/// the session is over: a client that closed its end has left exactly as one
+/// that closed stdin has, and the server ends with exit 0 either way — the
+/// same client exit arrives as EOF or as a broken pipe depending on timing.
+/// Any other write error is recorded by the door as a run failure (exit 1).
+fn write_msg(msg: &Value) -> Result<bool> {
+    let mut frame = serde_json::to_vec(msg)?;
+    frame.push(b'\n');
+    Ok(undercroft_obs::stdio::send_frame(&frame) == undercroft_obs::stdio::Frame::Sent)
 }
 
 fn error_response(id: Value, code: i64, message: &str) -> Value {

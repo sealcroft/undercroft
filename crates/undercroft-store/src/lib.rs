@@ -9147,7 +9147,9 @@ impl VaultStore {
         let mut t_phase = std::time::Instant::now();
         let phase_ms = |label: &str, t: &mut std::time::Instant| {
             if trace {
-                eprintln!(
+                // Best-effort, never `eprintln!`: a trace is not worth a
+                // panic on a closed stderr (ROADMAP O328).
+                undercroft_obs::errln!(
                     "search-trace {label}: {:.2} ms",
                     t.elapsed().as_secs_f64() * 1e3
                 );
@@ -9320,7 +9322,7 @@ impl VaultStore {
         // every scope-geometry claim in this tree turns on and what no
         // instrument could read from outside the process (ROADMAP O53).
         if trace {
-            eprintln!(
+            undercroft_obs::errln!(
                 "search-trace pool: {} candidate(s){}",
                 candidates.as_ref().map_or(0, Vec::len),
                 match (&scope, scope_live) {
@@ -9374,7 +9376,7 @@ impl VaultStore {
                     hydrate_k,
                 )?;
                 if trace {
-                    eprintln!(
+                    undercroft_obs::errln!(
                         "search-trace window: {}..{} ({:?}) tops the pool up by {}",
                         w.start,
                         w.end,

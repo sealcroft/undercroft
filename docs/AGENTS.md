@@ -425,6 +425,7 @@ wrong", and both are 409.
 undercroft-orchestrator ops acme verify; case $? in
   0) echo "clean" ;;
   2) echo "TAMPER — runbook, not retry" ;;
+  141) echo "the run completed, its stdout reader left (1.7.0) — not a retry" ;;
   *) echo "the run failed; retry is reasonable" ;;
 esac
 undercroft-orchestrator ops acme anchor
@@ -1041,6 +1042,30 @@ holding `master.key` and no `kdf.salt`, the reverse, or key material missing
 under existing vaults — each names both readings and writes nothing. A
 `vault create` (or `POST /v1/vaults`) whose key opens none of the installation's
 vaults is exit 2 / 409 `integrity`, the same finding a search reports.
+
+**Exit 141 means the reader of standard output went away** before the output
+was complete (1.7.0, ROADMAP O287) — `undercroft search … | head`, a pager
+closed early, an export piped into a consumer that died. The command ran to
+its own end and found no integrity verdict and no failure; what it printed after
+the reader left was discarded. It is **not a failed run to retry** — a retry of
+a write that committed (`remember`, a save) files it again under a fresh
+append index — and it is **never 0**, which would claim an export, a forget
+receipt or a once-shown token was delivered when it was not. The converse is
+NOT promised, and no exit code can promise it: output that fits in a pipe's
+buffer is accepted in full by the pipe, so a reader that dies after the last
+write leaves the run at **0** with the output undelivered — only an export's
+payload digest, checked at import, catches that. The four classes
+fold in one order: **an integrity verdict 2, then a run failure 1, then 141,
+then 0** — so a tamper verdict still exits 2 through a closed pipe, and a write
+to standard output that fails for any other reason (a full disk, an I/O error)
+is a run failure, exit 1, named on stderr. Before 1.7.0 the same event
+panicked with exit 101, a status no document defined, and lost the verdict the
+command had not printed yet. 141 is the status a shell already reports for this
+event, so under `set -o pipefail` a `cmd | head` fails as it does for any C
+tool: capture the output, then match it. One door is exempt by design:
+`serve-mcp` whose client has gone ends the session with **exit 0**, the status
+the same client leaving by closing stdin already gave. The orchestrator's
+command line keeps the same four classes.
 
 - A **crash is never a tamper alarm** (open-time reconciliation
   fast-forwards a lagging manifest anchor); a **rollback or forged record
