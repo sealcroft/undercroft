@@ -1765,7 +1765,13 @@ Consequences that are binding, not advisory:
 - `crates/undercroft-config` — the declaration resolvers the engine and the
   control plane SHARE (`resolve_orch_key`, `resolve_admin_token`,
   `resolve_rate_limit`, `resolve_orch_addr`, `resolve_metrics_addr`,
-  `resolve_metrics_token`, and the `addr_is_loopback` predicate). Its own
+  `resolve_metrics_token`, and the listen-host loopback predicate
+  `host_is_loopback`, which `addr_is_loopback` and the engine's
+  refuse-to-bind rule both ask — ROADMAP O177: they were two copies of the
+  literals, recorded as byte-identical, and an address predicate handed a
+  bare `::1` reads host `":"`, so the drop-in would have refused
+  `serve-http --host ::1`; a source gate here holds the literals to one
+  function). Its own
   crate on `undercroft-net`'s precedent: a
   policy several crates need has one implementation, and when the crates that
   need it cannot link each other it gets a home neither owns. Six surfaces

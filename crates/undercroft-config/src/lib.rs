@@ -128,25 +128,49 @@ pub fn resolve_admin_token(declared: Option<&str>) -> Result<String, ConfigError
     Ok(raw.to_string())
 }
 
-/// Whether a listen address is loopback.
+/// Whether a listen HOST is loopback — the one place the loopback literals
+/// live (ROADMAP O177).
 ///
-/// `pub` since O160, because the `UNDERCROFT_ORCH_ADDR` pre-flight names the
-/// exposure in its success line. **The ENGINE's refuse-to-bind rule in
-/// `undercroft-cli`'s `http.rs` does not call this and does not agree with
-/// it**, though this line called it a byte-identical copy until 2026-09-14.
-/// That check compares the bare `--host` with the same three literals; this
-/// splits a `host:port` at the last colon, so given `"::1"` it takes host `":"`
-/// and answers false where the engine's check answers true. A drop-in would
-/// therefore refuse `--host ::1` without a token. Unifying them behind one
-/// host-only predicate is ROADMAP O177, not done here: it changes a different
-/// listener's security gate and wants its own counterfactual.
+/// It takes a bare host: `127.0.0.1`, `localhost` or `::1`, which is what
+/// `undercroft serve-http --host` takes and what the engine's refuse-to-bind
+/// rule asks about. [`addr_is_loopback`] takes a `host:port` listen address,
+/// splits it, and asks this. They were two implementations of one security
+/// predicate until O177, and they did not agree: the engine compared the bare
+/// `--host` with the three literals while `addr_is_loopback` split first, so
+/// the obvious unification — the engine calling `addr_is_loopback(host)` —
+/// reads `"::1"` as host `":"` and port `1`, answers false, and refuses a
+/// working `serve-http --host ::1` without a token. O160's record called the
+/// two "byte-identical", which is the claim that invited that drop-in. A
+/// caller holding a HOST calls this; a caller holding an ADDRESS calls
+/// [`addr_is_loopback`]; neither compares the literals itself, and a source
+/// gate in this crate's tests holds that.
 ///
 /// Deliberately conservative and deliberately NOT a hand-rolled host parse:
 /// anything this cannot positively identify as loopback counts as exposed, so
-/// the refusal errs toward telling the operator their endpoint is reachable.
+/// a refusal errs toward telling the operator their endpoint is reachable.
+/// `127.0.0.2` and `0:0:0:0:0:0:0:1` are loopback and answer false here —
+/// a bearer is then required where none was needed, the safe direction, and
+/// the answer every release has given. A bracketed `[::1]` is an address
+/// spelling, not a host, and answers false too.
 /// `undercroft-net::is_loopback` answers the same question for outbound URLs
-/// by delegating to a URL parser; this is a bare `host:port` listen address,
-/// which has no scheme to parse, so the two cannot share an implementation.
+/// by delegating to a URL parser; a listen host has no scheme to parse, so the
+/// two cannot share an implementation.
+pub fn host_is_loopback(host: &str) -> bool {
+    host == "127.0.0.1" || host == "localhost" || host == "::1"
+}
+
+/// Whether a `host:port` listen address is loopback.
+///
+/// `pub` since O160, because the `UNDERCROFT_ORCH_ADDR` pre-flight names the
+/// exposure in its success line. It splits the address at the last colon —
+/// unwrapping `[::1]:9900` — and hands the host to [`host_is_loopback`], which
+/// holds the literals (ROADMAP O177). It answers exactly what it answered
+/// before O177, for every input.
+///
+/// **It is not a host predicate, and handing it a bare host is the O177
+/// defect**: given `"::1"` it splits off port `1` and asks about host `":"`,
+/// so it answers false. The engine's refuse-to-bind rule therefore calls
+/// [`host_is_loopback`] with `--host`, never this.
 pub fn addr_is_loopback(addr: &str) -> bool {
     let host = match addr.rsplit_once(':') {
         // `[::1]:9900`
@@ -154,7 +178,7 @@ pub fn addr_is_loopback(addr: &str) -> bool {
         Some((h, _)) => h,
         None => addr,
     };
-    host == "127.0.0.1" || host == "localhost" || host == "::1"
+    host_is_loopback(host)
 }
 
 /// `UNDERCROFT_ORCH_METRICS_ADDR` — the control plane's **separate** metrics
@@ -573,6 +597,281 @@ mod tests {
         assert_eq!(
             resolve_metrics_token("0.0.0.0:9900", Some(" scrape token")).unwrap(),
             Some(" scrape token".to_string())
+        );
+    }
+
+    /// **ROADMAP O177 — one predicate, asked as a host and as an address.**
+    ///
+    /// Each row is a host and the same host as a listen address, and the two
+    /// doors must agree with each other and with the expected answer. `::1` is
+    /// the row the two implementations disagreed on: the engine compared the
+    /// bare `--host` with the literals while `addr_is_loopback` split at the
+    /// last colon first. The look-alike rows hold the predicate to EQUALITY —
+    /// a prefix or suffix test would admit `127.0.0.1.example` and
+    /// `localhost.example`, both of which resolve wherever their owner says.
+    #[test]
+    fn a_host_and_its_listen_address_answer_alike() {
+        // (host, the same host as a listen address, loopback?)
+        let rows: [(&str, &str, bool); 9] = [
+            ("127.0.0.1", "127.0.0.1:8765", true),
+            ("localhost", "localhost:8765", true),
+            ("::1", "[::1]:8765", true),
+            ("0.0.0.0", "0.0.0.0:8765", false),
+            ("::", "[::]:8765", false),
+            ("10.1.2.3", "10.1.2.3:8765", false),
+            ("127.0.0.1.example", "127.0.0.1.example:8765", false),
+            ("localhost.example", "localhost.example:8765", false),
+            // Loopback, and still refused a tokenless bind: the conservative
+            // direction, and the answer every release has given (pinned so a
+            // widening is a decision, never a side effect of a refactor).
+            ("127.0.0.2", "127.0.0.2:8765", false),
+        ];
+        for (host, addr, want) in rows {
+            assert_eq!(host_is_loopback(host), want, "host {host:?}");
+            assert_eq!(addr_is_loopback(addr), want, "address {addr:?}");
+        }
+        // The premise of the counterfactual, pinned: an ADDRESS predicate
+        // handed a bare `::1` reads host `":"` and port `1`, so it is no
+        // drop-in for the host predicate. This is the call O160's record
+        // invited, and it would have refused `serve-http --host ::1`.
+        assert!(host_is_loopback("::1"));
+        assert!(
+            !addr_is_loopback("::1"),
+            "premise: addr_is_loopback must not be mistaken for a host predicate"
+        );
+        // A bracketed host is an address spelling, not a host.
+        assert!(!host_is_loopback("[::1]"));
+    }
+
+    /// **ROADMAP O177's source gate: the loopback literals are compared in
+    /// ONE function in the whole workspace.**
+    ///
+    /// Two implementations of one security predicate drifted apart once
+    /// already, and a second copy is the observable this class moves — a test
+    /// that only calls the function cannot see a copy that never calls it. So
+    /// this reads every `.rs` under `crates/` and finds each comparison
+    /// against `"127.0.0.1"`, `"localhost"` or `"::1"` (`==`, `!=`, a match
+    /// arm, a pattern alternative) and each code line naming two of them at
+    /// once (an array, a `matches!`). Outside the allowed bodies there must be
+    /// none.
+    ///
+    /// Three bodies are allowed, each REQUIRED to be reached with exactly the
+    /// comparisons named, so a rename or a rewrite cannot silently widen it:
+    /// - `undercroft-config`'s `host_is_loopback` — the three literals, once
+    ///   each. This is the listen-host predicate.
+    /// - `undercroft-net`'s `is_loopback` — `"localhost"` only, against a
+    ///   parsed `url::Host::Domain`: an OUTBOUND URL predicate that asks the
+    ///   transport's own parser and reads a parsed address through its own
+    ///   `is_loopback` (O92's rule). It cannot share this crate's predicate: a
+    ///   URL has a scheme, userinfo and a typed host.
+    /// - `undercroft-index`'s `dsn_is_loopback` — `"localhost"` only, against
+    ///   the connector's own parsed `Host::Tcp` (O90's rule), for the same
+    ///   reason one protocol over.
+    #[test]
+    fn the_loopback_literals_are_compared_in_one_function() {
+        // Spelled in pieces, so this file — which the walk reads — holds no
+        // quoted literal of its own here: `parity.rs` splits its needle with
+        // `concat!` for the same reason.
+        let q = '"';
+        let lit = |s: &str| format!("{q}{s}{q}");
+        let literals = [
+            lit(concat!("127.0.0", ".1")),
+            lit(concat!("local", "host")),
+            lit(concat!("::", "1")),
+        ];
+
+        fn is_comment(line: &str) -> bool {
+            line.trim_start().starts_with("//")
+        }
+        // Comparisons against one literal on one code line.
+        fn compared(line: &str, literal: &str) -> usize {
+            let mut n = 0;
+            for (at, _) in line.match_indices(literal) {
+                let before = line[..at].trim_end();
+                let after = line[at + literal.len()..].trim_start();
+                let alternative_before = before.ends_with('|')
+                    && before[..before.len() - 1]
+                        .chars()
+                        .next_back()
+                        .is_some_and(char::is_whitespace);
+                if before.ends_with("==")
+                    || before.ends_with("!=")
+                    || alternative_before
+                    || after.starts_with("==")
+                    || after.starts_with("!=")
+                    || after.starts_with("=>")
+                    || (after.starts_with('|') && !after.starts_with("||"))
+                {
+                    n += 1;
+                }
+            }
+            n
+        }
+        let set_on = |line: &str| {
+            literals
+                .iter()
+                .filter(|l| line.contains(l.as_str()))
+                .count()
+        };
+
+        // Premise: the detector fires on every shape a copy could take and
+        // stays silent on the shapes the tree uses the literals for otherwise.
+        // Built at run time, so this file's own source holds none of them.
+        let planted_copies = [
+            format!(
+                "    let loopback = host == {} || host == {} || host == {};",
+                literals[0], literals[1], literals[2]
+            ),
+            format!("    matches!(host, {} | {})", literals[2], literals[1]),
+            format!("    if {} != host {{", literals[2]),
+            format!("        {} => true,", literals[0]),
+        ];
+        for copy in &planted_copies {
+            assert!(
+                literals.iter().map(|l| compared(copy, l)).sum::<usize>() > 0,
+                "premise: the detector must see the copy {copy:?}"
+            );
+        }
+        let planted_set = format!("    [{}, {}].contains(&host)", literals[0], literals[2]);
+        assert!(set_on(&planted_set) >= 2, "premise: the set detector");
+        let planted_silent = [
+            format!("    #[arg(long, default_value = {})]", literals[0]),
+            format!("    assert!(e.contains({}));", literals[0]),
+            format!("    .map(|_| {})", literals[1]),
+            format!("    // host == {}", literals[2]),
+            "    let a = \"[::1]:9900\";".to_string(),
+        ];
+        for line in &planted_silent {
+            let hits = if is_comment(line) {
+                0
+            } else {
+                literals.iter().map(|l| compared(line, l)).sum::<usize>()
+            };
+            assert_eq!(hits, 0, "premise: {line:?} is not a comparison");
+        }
+
+        // (crate dir, file, fn, the comparisons its body must hold)
+        let allowed: [(&str, &str, &str, [usize; 3]); 3] = [
+            (
+                "undercroft-config",
+                "src/lib.rs",
+                "host_is_loopback",
+                [1, 1, 1],
+            ),
+            ("undercroft-net", "src/lib.rs", "is_loopback", [0, 1, 0]),
+            (
+                "undercroft-index",
+                "src/lib.rs",
+                "dsn_is_loopback",
+                [0, 1, 0],
+            ),
+        ];
+        let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("crates/ is this crate's parent")
+            .to_path_buf();
+        let mut files = Vec::new();
+        let mut stack = vec![crates.clone()];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("crates/ is readable") {
+                let path = entry.expect("a readable entry").path();
+                if path.is_dir() {
+                    if !path.ends_with("target") {
+                        stack.push(path);
+                    }
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    files.push(path);
+                }
+            }
+        }
+        assert!(
+            files.len() > 60,
+            "the walk found {} files — the scan, not the tree, is broken",
+            files.len()
+        );
+
+        let mut offenders = Vec::new();
+        let mut reached = Vec::new();
+        for path in &files {
+            let text = std::fs::read_to_string(path).expect("a readable source");
+            let lines: Vec<&str> = text.lines().collect();
+            // The allowed body in this file, as a line range, if any.
+            let mut body: Option<(usize, usize, usize)> = None;
+            for (k, (krate, file, func, _)) in allowed.iter().enumerate() {
+                if !path.ends_with(std::path::Path::new(krate).join(file)) {
+                    continue;
+                }
+                let head = format!("fn {func}(");
+                let start = lines
+                    .iter()
+                    .position(|l| !is_comment(l) && l.contains(&head))
+                    .unwrap_or_else(|| panic!("{krate}/{file} no longer defines {func}"));
+                let mut depth = 0i64;
+                let mut opened = false;
+                let mut end = start;
+                for (i, l) in lines.iter().enumerate().skip(start) {
+                    if is_comment(l) {
+                        continue;
+                    }
+                    for c in l.chars() {
+                        match c {
+                            '{' => {
+                                depth += 1;
+                                opened = true;
+                            }
+                            '}' => depth -= 1,
+                            _ => {}
+                        }
+                    }
+                    if opened && depth == 0 {
+                        end = i;
+                        break;
+                    }
+                }
+                assert!(opened && end > start, "{func}'s body was not delimited");
+                body = Some((k, start, end));
+            }
+            let mut inside = [0usize; 3];
+            for (i, line) in lines.iter().enumerate() {
+                if is_comment(line) {
+                    continue;
+                }
+                let counts: Vec<usize> = literals.iter().map(|l| compared(line, l)).collect();
+                let in_body = body.is_some_and(|(_, s, e)| (s..=e).contains(&i));
+                if in_body {
+                    for (slot, n) in inside.iter_mut().zip(&counts) {
+                        *slot += n;
+                    }
+                    continue;
+                }
+                if counts.iter().sum::<usize>() > 0 || set_on(line) >= 2 {
+                    offenders.push(format!("{}:{}: {}", path.display(), i + 1, line.trim()));
+                }
+            }
+            if let Some((k, _, _)) = body {
+                let (krate, _, func, want) = allowed[k];
+                assert_eq!(
+                    inside, want,
+                    "{krate}'s {func} must hold exactly these comparisons of \
+                     [127.0.0.1, localhost, ::1] — a rewrite that adds one widens \
+                     the exemption, and one that drops one moved a literal elsewhere"
+                );
+                reached.push(func);
+            }
+        }
+        reached.sort_unstable();
+        let mut want: Vec<&str> = allowed.iter().map(|a| a.2).collect();
+        want.sort_unstable();
+        assert_eq!(
+            reached, want,
+            "the walk must reach each allowed body exactly once"
+        );
+        assert!(
+            offenders.is_empty(),
+            "the loopback literals are compared outside the one predicate — call \
+             `undercroft_config::host_is_loopback` (a host) or `addr_is_loopback` \
+             (an address) instead (ROADMAP O177):\n{}",
+            offenders.join("\n")
         );
     }
 

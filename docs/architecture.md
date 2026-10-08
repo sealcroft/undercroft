@@ -60,6 +60,7 @@ flowchart TB
     cli --> llm
     cli --> obs
     cli --> net
+    cli --> config
     cli -. "features onnx / ort" .-> onnx
     cli -. "features onnx / ort" .-> ort
     onnx --> core
@@ -87,7 +88,7 @@ flowchart TB
 | `undercroft-index` | Qdrant / Chroma / pgvector / Milvus / Weaviate clients — untrusted accelerators. A sealed vault pushes sealed content; an hmac-only vault, whose stored content is plaintext, is refused unless `index push --allow-plaintext`. Every candidate is re-verified locally, and a push appends an `egress/index-push` chain record, a partly failed one included |
 | `undercroft-llm` | Local LLM runtimes (Ollama / OpenAI-compatible) for `refine` → KG extraction and the tier-2 admission advisor, plus the served embedder (`UNDERCROFT_EMBEDDER=http`) |
 | `undercroft-net` | The outbound transport policy, in one place: **TLS or loopback, nothing else, no override**, refused at construction; plus CA pinning, where a declared root *replaces* the public roots and a file that pins nothing refuses rather than falling back. Every outbound hop is built by it — the served embedder, the LLM runtimes, the remote index backends (pgvector through a rustls config rather than an HTTP agent), the orchestrator's hop to its engines, and the OTLP trace exporter — and it holds the one request-body ceiling every listener and every hop reads through |
-| `undercroft-config` | The declaration resolvers the engine and the control plane share (`resolve_orch_key`, `resolve_admin_token`, `resolve_rate_limit`, …) — a leaf crate both link and neither owns, depending on `thiserror` and `hex` alone |
+| `undercroft-config` | The declaration resolvers the engine and the control plane share (`resolve_orch_key`, `resolve_admin_token`, `resolve_rate_limit`, …) and the one listen-host loopback predicate, `host_is_loopback`, which `serve-http`'s refuse-to-bind rule and the orchestrator's metrics listener both ask — a leaf crate both link and neither owns, depending on `thiserror` and `hex` alone |
 | `undercroft-obs` | Observability shim: zero-dep no-op by default; logs, `/metrics`, OTLP, SSE under `--features telemetry` |
 | `undercroft-cli` | `undercroft` binary: CLI + MCP stdio + HTTP (MCP `/mcp` + multi-tenant `/v1`) |
 | `undercroft-embed-onnx` | Feature-gated tract backend: sentence embedder, cross-encoder reranker, ColBERT encoder |

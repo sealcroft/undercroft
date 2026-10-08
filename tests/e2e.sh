@@ -2333,6 +2333,25 @@ fi
 echo "== HTTP MCP server =="
 # Non-loopback bind without token must be refused.
 check "http refuses tokenless 0.0.0.0" 1 "UNDERCROFT_MCP_HTTP_TOKEN" -- "$BIN" serve-http --host 0.0.0.0 --port 18765
+# ROADMAP O177: `::1` is loopback to the refuse-to-bind rule, so a tokenless
+# server on it STARTS. The rule and `undercroft_config::addr_is_loopback` were
+# two copies of one predicate, recorded as byte-identical, and the address
+# predicate reads a bare `::1` as host ":" and port 1 — the drop-in that
+# record invited would refuse this. Whether this container has an IPv6
+# loopback is not the question, so the bind itself failing is accepted; the
+# refusal is not. The 0.0.0.0 check above is the premise: it proves the
+# refusal's words are the ones this one looks for.
+O177_OUT="$(timeout 5 "$BIN" serve-http --host ::1 --port 18768 2>&1)"; O177_CODE=$?
+if grep -qF "refusing to bind" <<<"$O177_OUT"; then
+  echo "FAIL  http lets a tokenless ::1 through — it was refused"
+  echo "$O177_OUT" | sed 's/^/      /'; FAIL=$((FAIL+1))
+elif { [ "$O177_CODE" -eq 124 ] && grep -qF "listening on http://::1:18768" <<<"$O177_OUT"; } \
+  || grep -qF "binding ::1:18768" <<<"$O177_OUT"; then
+  echo "ok    http lets a tokenless ::1 through"; PASS=$((PASS+1))
+else
+  echo "FAIL  http lets a tokenless ::1 through — neither bound nor failed at the bind (exit $O177_CODE)"
+  echo "$O177_OUT" | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
 # ROADMAP O22, asserted at the RUN rather than only at the pre-flight — the
 # BIND is where this gate was lost. An empty declaration used to read as "no
 # token", and a LOOPBACK bind does not refuse a tokenless server, so /mcp and

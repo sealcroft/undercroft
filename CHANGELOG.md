@@ -1644,6 +1644,36 @@ PATCH inside the unreleased 1.7.0: the flag keeps the promise its help makes. A 
 `--read-only backup create` or a keygen under `--read-only` now exits 1, so `UPGRADING.md` carries an
 entry; `config check` cannot see it.
 
+### One loopback predicate for a listen host, and `--host ::1` still starts without a token (O177)
+
+`serve-http` decides whether a bind needs a bearer with its own inline comparison against
+`127.0.0.1`, `localhost` and `::1`. `undercroft_config::addr_is_loopback` held a second copy of the
+same three literals behind a `host:port` split. O160's record called the two byte-identical, and they
+were not: the address predicate reads a bare `::1` as host `":"` and port `1`. So the unification
+that record invited, the engine calling `addr_is_loopback(--host)`, would have refused a working
+`serve-http --host ::1` with no token.
+
+The literals now live once, in `undercroft_config::host_is_loopback`. `addr_is_loopback` splits the
+address and asks it. The engine's rule, now `http::refuse_to_bind`, asks it with the bare `--host`,
+through a new `undercroft-cli → undercroft-config` dependency that compiles no new crate. A source
+gate walks every `.rs` under `crates/` and refuses a comparison against any of the three literals
+outside that one function. It names, with exact counts, the two outbound predicates that compare
+`"localhost"` against a parser's typed host.
+
+Nothing an operator can observe moved, and that was measured: over 434 generated hosts and
+addresses, neither predicate answers differently from the two copies it replaces. `127.0.0.2` still
+needs a token, and that answer is now pinned. Through the release binary over a 340-drawer LoCoMo
+vault, a tokenless `--host ::1` server answered `/v1` search over `[::1]`, while `0.0.0.0`, `::`,
+`127.0.0.2`, `[::1]` and `127.0.0.1.example` were refused. The ruling's drop-in is a counterfactual:
+`refuse_to_bind` calling `addr_is_loopback` fails the unit test and the binary test at `::1`.
+`docs/architecture.md`'s crate graph gains the edge.
+
+PATCH inside the unreleased 1.7.0: no surface's answer changed, so `UPGRADING.md` owes nothing and
+`config check` has nothing new to detect. Three defects found on the way are filed rather than fixed:
+the banner prints `http://::1:<port>`, which no client accepts; a bare `::1` passes both
+listen-address pre-flights and then dies at the orchestrator's bind; and `serve-http` opens the vault
+before it applies its bind rule.
+
 ## 1.6.1 — 2026-09-22
 
 PATCH: fixes only. Each adds a surface that REPORTS an existing silence, and
