@@ -424,6 +424,24 @@ pub struct Tunnel {
     pub created_at: String,
 }
 
+/// What a tunnel create did (ROADMAP O236).
+///
+/// A tunnel's id is a function of its three declared fields, so a second
+/// create of the same tunnel names the row the first one wrote — and writes
+/// nothing, appending no chain record. The outcome is a type rather than a
+/// bare id because a caller that cannot tell the two apart reports a write
+/// that never happened, which is what every surface did until O236.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[must_use = "a tunnel create may have written nothing; say which"]
+pub struct TunnelOutcome {
+    /// The tunnel's id, whether this call wrote the row or found it stored.
+    pub id: String,
+    /// `true` when this call inserted the row and appended `tunnel/{id}`;
+    /// `false` when a tunnel with this id was already stored and nothing was
+    /// written — no row, no chain record, no anchor.
+    pub created: bool,
+}
+
 /// Two entities that co-occur across drawers, with how often.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Hallway {
@@ -1981,13 +1999,16 @@ impl VaultStore {
     // Tunnels — cross-wing connections
     // ------------------------------------------------------------------
 
-    /// Declare a tunnel between two wings — both names validated, the label screened — appended to the chain as `tunnel/{id}` and anchored.
+    /// Declare a tunnel between two wings — both names validated, the label
+    /// screened — appended to the chain as `tunnel/{id}` and anchored when
+    /// this call wrote it. A tunnel already stored under the same id is a
+    /// no-op that appends nothing, and [`TunnelOutcome::created`] says which.
     pub fn create_tunnel(
         &mut self,
         from_wing: &str,
         to_wing: &str,
         label: &str,
-    ) -> Result<String, StoreError> {
+    ) -> Result<TunnelOutcome, StoreError> {
         // Wing names go through the traversal guard here, at the tunnel's own
         // choke point — CLAUDE.md states that as an invariant and this path
         // honoured none of it, on any surface (`/v1` import, CLI import and
@@ -2061,16 +2082,34 @@ impl VaultStore {
             .vault
             .tag(&tunnel_canonical(&id, from_wing, to_wing, label, &created));
         let tx = self.conn.transaction()?;
-        tx.execute(
+        // **A create that inserted nothing records nothing** (ROADMAP O236).
+        // The id is a function of the three declared fields, so a repeated
+        // create — an agent calling `undercroft_create_tunnel` twice, an
+        // import restoring a vault's own export — conflicts and writes no
+        // row. This appended `tunnel/{id}` regardless, with a tag computed
+        // over a fresh `created_at` that no row carries: a record claiming a
+        // write that never happened, which is why O234's version check can
+        // ask a tunnel only whether it was destroyed (`replay.rs`). The
+        // insert's own row count decides, inside the transaction that would
+        // append, so two creates racing for one id cannot both say they wrote
+        // it — `delete_tunnel` below has always had this shape.
+        let inserted = tx.execute(
             "INSERT INTO tunnels (id, from_wing, to_wing, label, tag, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(id) DO NOTHING",
             params![id, from_wing, to_wing, label, tag.as_slice(), created],
-        )?;
-        chain_append(&tx, &self.vault, Namespace::Tunnel, &id, &tag, &created)?;
+        )? > 0;
+        if inserted {
+            chain_append(&tx, &self.vault, Namespace::Tunnel, &id, &tag, &created)?;
+        }
         tx.commit()?;
-        self.anchor()?;
-        Ok(id)
+        if inserted {
+            self.anchor()?;
+        }
+        Ok(TunnelOutcome {
+            id,
+            created: inserted,
+        })
     }
 
     /// Every tunnel, or those touching one wing, tag-verified on the way out.
@@ -3052,7 +3091,8 @@ mod history_tests {
             .unwrap();
         let tunnel = s
             .create_tunnel("notes", "field", "both about the marsh")
-            .unwrap();
+            .unwrap()
+            .id;
         s.set_wing_trust("notes", "trusted").unwrap();
         s.set_retention("notes", None, 3650).unwrap();
         s.clear_retention("notes", None).unwrap();
@@ -3831,7 +3871,7 @@ mod tests {
         // PREMISE 1: a clean label still works, and the READ hands it back
         // verbatim. Without this the refusals below could be a tunnel path
         // that simply stopped working.
-        let id = s.create_tunnel("notes", "archive", "see also").unwrap();
+        let id = s.create_tunnel("notes", "archive", "see also").unwrap().id;
         let listed = s.list_tunnels(None).unwrap();
         assert!(
             listed.iter().any(|t| t.id == id && t.label == "see also"),
@@ -3897,7 +3937,7 @@ mod tests {
         let (_d, mut s) = store();
         s.upsert(&drawer("notes", "r", "an ordinary drawer", 0))
             .unwrap();
-        let good = s.create_tunnel("notes", "archive", "see also").unwrap();
+        let good = s.create_tunnel("notes", "archive", "see also").unwrap().id;
         assert!(
             s.follow_tunnel(&good, 5).is_ok(),
             "premise: an honest tunnel follows"
@@ -5291,15 +5331,130 @@ mod tests {
         let (_d, mut s) = store();
         s.upsert(&drawer("wing-b", "r", "destination memory", 0))
             .unwrap();
-        let id = s.create_tunnel("wing-a", "wing-b", "related work").unwrap();
+        let id = s
+            .create_tunnel("wing-a", "wing-b", "related work")
+            .unwrap()
+            .id;
         assert_eq!(s.list_tunnels(Some("wing-a")).unwrap().len(), 1);
         let dest = s.follow_tunnel(&id, 5).unwrap();
         assert_eq!(dest.len(), 1);
-        s.create_tunnel("wing-b", "wing-c", "next hop").unwrap();
+        assert!(
+            s.create_tunnel("wing-b", "wing-c", "next hop")
+                .unwrap()
+                .created
+        );
         let reach = s.traverse("wing-a", 3).unwrap();
         assert!(reach.iter().any(|(w, d)| w == "wing-c" && *d == 2));
         assert!(s.delete_tunnel(&id).unwrap());
         assert!(s.verify().unwrap().ok());
+    }
+
+    /// **ROADMAP O236: a create that wrote nothing appends nothing, and says
+    /// so.** `create_tunnel` inserted with `ON CONFLICT DO NOTHING` and then
+    /// appended `tunnel/{id}` unconditionally, with a tag over a fresh
+    /// `created_at` that no row carries — so a repeated create left a record
+    /// claiming a write that never happened, and every surface reported it as
+    /// a creation.
+    ///
+    /// The fix's own behaviour is counterfactualled too, not only the
+    /// defect's: a re-create AFTER a delete is a real write and must still
+    /// append (a fix keyed on "a `tunnel/{id}` record exists" would refuse
+    /// it), and a different label is a different tunnel (a fix keyed on the
+    /// two wings alone would swallow it).
+    #[test]
+    fn o236_a_repeated_tunnel_create_appends_nothing_and_says_so() {
+        let (_d, mut s) = store();
+        let records = |s: &VaultStore, id: &str| -> i64 {
+            s.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM audit WHERE record_id = ?1",
+                    params![format!("tunnel/{id}")],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        let all_records = |s: &VaultStore| -> i64 {
+            s.conn
+                .query_row("SELECT COUNT(*) FROM audit", [], |r| r.get(0))
+                .unwrap()
+        };
+        let row = |s: &VaultStore, id: &str| -> (Vec<u8>, String) {
+            s.conn
+                .query_row(
+                    "SELECT tag, created_at FROM tunnels WHERE id = ?1",
+                    params![id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap()
+        };
+        // The gate the entry names: the tunnel's NEWEST record carries the
+        // tag the row holds.
+        let newest_tag = |s: &VaultStore, id: &str| -> Vec<u8> {
+            s.conn
+                .query_row(
+                    "SELECT tag FROM audit WHERE record_id = ?1 ORDER BY seq DESC LIMIT 1",
+                    params![format!("tunnel/{id}")],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+
+        let first = s.create_tunnel("notes", "archive", "see also").unwrap();
+        assert!(first.created, "premise: the first create writes the row");
+        assert_eq!(records(&s, &first.id), 1, "premise: and records it once");
+        let (tag, created_at) = row(&s, &first.id);
+        assert_eq!(newest_tag(&s, &first.id), tag);
+        let height = all_records(&s);
+        let chain = s.chain_state().unwrap();
+
+        let again = s.create_tunnel("notes", "archive", "see also").unwrap();
+        assert_eq!(
+            again,
+            TunnelOutcome {
+                id: first.id.clone(),
+                created: false
+            },
+            "the same tunnel, and the reply says nothing was written"
+        );
+        assert_eq!(
+            records(&s, &first.id),
+            1,
+            "a repeated create appended a record for a write that never happened"
+        );
+        assert_eq!(all_records(&s), height, "nothing else was appended");
+        assert_eq!(
+            s.chain_state().unwrap(),
+            chain,
+            "the committed head and height did not move"
+        );
+        assert_eq!(
+            row(&s, &first.id),
+            (tag.clone(), created_at),
+            "the row is untouched"
+        );
+        assert_eq!(
+            newest_tag(&s, &first.id),
+            tag,
+            "the newest record carries the row's tag"
+        );
+
+        // A different label is a different tunnel, and a real write.
+        let other = s.create_tunnel("notes", "archive", "contrast").unwrap();
+        assert!(other.created && other.id != first.id);
+        assert_eq!(records(&s, &other.id), 1);
+
+        // Destroy, then create again: a real write above the tombstone, so it
+        // records — and its record is the one carrying the NEW row's tag.
+        assert!(s.delete_tunnel(&first.id).unwrap());
+        let back = s.create_tunnel("notes", "archive", "see also").unwrap();
+        assert_eq!(back.id, first.id);
+        assert!(back.created, "a re-create after a delete is a write");
+        assert_eq!(records(&s, &first.id), 2);
+        let (tag_back, _) = row(&s, &first.id);
+        assert_eq!(newest_tag(&s, &first.id), tag_back);
+
+        let r = s.verify().unwrap();
+        assert!(r.ok() && r.version_replay.is_empty(), "{r:?}");
     }
 
     #[test]

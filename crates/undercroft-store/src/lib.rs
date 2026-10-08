@@ -87,8 +87,8 @@ pub use delete::{delete_vault, Deleted};
 pub use forget::{AttestationVerdict, ForgetAttestation, MirrorDelete};
 pub use kg::{KgStats, ReceiptStatus, ReceiptVerdict, SupersessionStatus, Triple, TripleExport};
 pub use manage::{
-    effective_trust_floor, DedupReport, DrawerSummary, Hallway, Namespace, Tunnel, UpdateOutcome,
-    VaultStats,
+    effective_trust_floor, DedupReport, DrawerSummary, Hallway, Namespace, Tunnel, TunnelOutcome,
+    UpdateOutcome, VaultStats,
 };
 pub use pqidx::WING_PQ_MIN_DEFAULT;
 pub use remote::PlaintextPush;
@@ -17887,7 +17887,7 @@ mod tests {
         let (_d, mut s) = store(SecurityLevel::Sealed);
 
         // Premise: ordinary tunnels still work.
-        let ok = s.create_tunnel("notes", "eng", "related").unwrap();
+        let ok = s.create_tunnel("notes", "eng", "related").unwrap().id;
         assert!(s.follow_tunnel(&ok, 5).is_ok(), "premise: tunnels work");
 
         for (from, to) in [
@@ -18309,7 +18309,7 @@ mod tests {
             .iter()
             .map(|d| d.id.clone())
             .collect();
-        let tunnel = s.create_tunnel("w", "w2", "related").unwrap();
+        let tunnel = s.create_tunnel("w", "w2", "related").unwrap().id;
         s.upsert(&drawer("w2", "r", "the other wing", 1)).unwrap();
         // ROADMAP O51: the second funnel. Its four doors return words
         // distilled out of the drawers above, so they belong to the same

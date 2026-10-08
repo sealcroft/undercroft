@@ -1107,7 +1107,12 @@ mod tests {
         store
             .kg_add("heron", "nests-in", "the reeds", None, None, 0.9, None)
             .unwrap();
-        store.create_tunnel("wing", "wing", "self-link").unwrap();
+        assert!(
+            store
+                .create_tunnel("wing", "wing", "self-link")
+                .unwrap()
+                .created
+        );
         (dir, store)
     }
 
@@ -1443,7 +1448,7 @@ mod tests {
         store
             .kg_add("heron", "nests-in", "the reeds", None, None, 0.9, None)
             .unwrap();
-        let tunnel_id = store.create_tunnel("wing", "wing", "self-link").unwrap();
+        let tunnel_id = store.create_tunnel("wing", "wing", "self-link").unwrap().id;
         // An audit label carrying a NAME rather than an id — the shape A10's
         // unit 2 has to keep stable when wing names stop being clear. Both
         // of these also carry a tag that is verified ON READ, which is the
@@ -1578,9 +1583,15 @@ mod tests {
             .kg_add("heron", "nests-in", "the reeds", None, None, 0.9, None)
             .unwrap();
         store.upsert(&src).unwrap();
+        // Landing ON the existing row, which since ROADMAP O236 the create
+        // says itself: an id that moved would insert a second row and answer
+        // `created`.
         assert_eq!(
             store.create_tunnel("wing", "wing", "self-link").unwrap(),
-            tunnel_id,
+            crate::TunnelOutcome {
+                id: tunnel_id,
+                created: false
+            },
             "a tunnel id moved after rotation"
         );
         let counts_after = {

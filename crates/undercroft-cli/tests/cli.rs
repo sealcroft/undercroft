@@ -569,6 +569,86 @@ fn diary_and_tunnel_flow() {
         .stdout(predicate::str::contains("VERIFY OK"));
 }
 
+/// **ROADMAP O236 through the CLI: a repeated `tunnel create`, and an import
+/// restoring a tunnel the vault already holds, write nothing and say so.**
+/// Both used to print what a creation prints and append a `tunnel/{id}`
+/// record for a row they never inserted — restoring a vault's own export
+/// into it appended one per tunnel.
+#[test]
+fn o236_a_repeated_tunnel_create_and_a_restored_tunnel_write_nothing_and_say_so() {
+    let home = TempDir::new().unwrap();
+    cmd(&home).args(["init"]).assert().success();
+    cmd(&home)
+        .args(["remember", "the far wing holds this", "--wing", "b"])
+        .assert()
+        .success();
+    let tunnel_records = |home: &TempDir| -> i64 {
+        rusqlite_open(&home.path().join("vaults/default/vault.db"))
+            .query_row(
+                "SELECT COUNT(*) FROM audit WHERE record_id LIKE 'tunnel/%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+    };
+
+    cmd(&home)
+        .args(["tunnel", "create", "a", "b", "--label", "see also"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("a <-> b (see also)"))
+        .stdout(predicate::str::contains("already exists").not());
+    assert_eq!(tunnel_records(&home), 1, "premise: a create records itself");
+
+    cmd(&home)
+        .args(["tunnel", "create", "a", "b", "--label", "see also"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "already exists — nothing was written",
+        ));
+    assert_eq!(
+        tunnel_records(&home),
+        1,
+        "a repeated create appended a record for a write that never happened"
+    );
+
+    // The vault's own export, restored into it: the tunnel is already held.
+    let export = home.path().join("o236-export.ndjson");
+    let out = cmd(&home).args(["export"]).output().unwrap();
+    assert!(out.status.success());
+    std::fs::write(&export, &out.stdout).unwrap();
+    cmd(&home)
+        .args(["import", export.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "1 tunnel(s) (0 new, 1 already present)",
+        ));
+    assert_eq!(tunnel_records(&home), 1, "the restore appended nothing");
+
+    // The control: the same file into a fresh installation's empty vault is
+    // a creation.
+    let fresh = TempDir::new().unwrap();
+    cmd(&fresh).args(["init"]).assert().success();
+    cmd(&fresh)
+        .args(["import", export.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "1 tunnel(s) (1 new, 0 already present)",
+        ));
+    assert_eq!(tunnel_records(&fresh), 1);
+
+    for h in [&home, &fresh] {
+        cmd(h)
+            .args(["verify"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("VERIFY OK"));
+    }
+}
+
 // Tiny local shim so this test file does not depend on rusqlite directly
 // through the workspace: reuse the store crate's re-exported connection.
 fn rusqlite_open(path: &std::path::Path) -> rusqlite::Connection {

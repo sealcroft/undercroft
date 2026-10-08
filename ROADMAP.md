@@ -13749,6 +13749,99 @@ has always returned beside `backup`. (7) The `HAND_PROJECTED` row, recorded abov
 **Also corrected**: `docs/AGENTS.md` §10 listed three read-only `POST` exceptions where `mutates`
 names four — `POST …/witness` (O245) was missing.
 
+### O236 — CLOSED 2026-10-08: a tunnel create that inserted nothing appends nothing, and every surface that reaches it says the create was a no-op
+
+**Filed 2026-09-19 by O233/O234's ruling; established by reading.**
+`create_tunnel` (`crates/undercroft-store/src/manage.rs` ~1720-1745) derives the
+id from `(from, to, label)`, inserts with `ON CONFLICT DO NOTHING`, and then
+appends `tunnel/{id}` with a freshly computed tag unconditionally. A repeated
+create — an agent calling `undercroft_create_tunnel` twice — therefore writes a
+record claiming a write that did not happen, carrying a tag no row holds. That
+is why O234 compares tunnels by the destruction arm only.
+
+**Shape**: append only when the insert inserted, and answer the caller whether
+the tunnel was new. Existing surplus records stay (the trail is append-only).
+
+**Gate**: a repeated create appends nothing and the tunnel's newest record
+carries the row's tag. **Counterfactual**: today, two records.
+
+#### BUILT 2026-10-08, as filed — and one question the shape did not settle, filed rather than decided
+
+**The ruling looked for.** This entry's shape is O233/O234's panel's (2026-09-19), and nothing in it,
+in O234's record or in the entries they name rules more than the filed shape; it was followed as
+written. The one thing it does not settle is filed below.
+
+**The store** (`manage.rs`). `create_tunnel` returns `TunnelOutcome { id, created }`, `#[must_use]`
+and re-exported beside `Tunnel`; `created` is the INSERT's own row count, read inside the
+transaction that would append, so two creates racing for one id cannot both say they wrote it.
+`chain_append` and the post-commit `anchor()` run only when it inserted — `delete_tunnel`'s shape
+since it existed. The name guards and the tier-1 label screen still run before the insert, so a
+repeat whose label the screen now flags is still refused (`a_tunnel_label_is_guarded_…` drives exactly
+that order: the poisoned tunnel exists, and the screened repeat refuses). **One consequence, found by
+reading and not driven by a test**: on a handle whose keys are retired or stale (O254, O257), a repeat
+now answers the no-op where `chain_append`'s retirement and keycheck refusals used to answer it with
+the reopen class. It writes nothing, `delete_tunnel` of an absent id has always answered such a handle
+the same way, and a create that inserts still reaches those refusals and rolls back; a `Released`
+handle's placeholder connection still fails the insert itself, loudly.
+
+**Every surface that reaches it**, read: MCP `undercroft_create_tunnel` (`tunnel {id} already exists —
+nothing was written`, `isError: false`); CLI `tunnel create` (the creation line plus `already exists —
+nothing was written`, exit 0); `POST /v1/vaults/{id}/tunnels` (`"created"` added to the 201 body); the
+CLI import (`N tunnel(s) (k new, m already present)`); and `POST …/import` (`tunnels_new` added beside
+`tunnels`, which still counts records processed because the orchestrator's migration compares it
+with the export's declared count, `proxy.rs`). The orchestrator forwards `/t/tunnels` unchanged. The
+admin console creates no tunnel and its import toast never rendered tunnel counts, nor the drawers'
+`new`/`unchanged` — a summary by construction, left as it is and stated here rather than as a missing
+row. No `HAND_PROJECTED` row: `TunnelOutcome`'s two fields are both rendered on every surface above.
+
+**The version leg keeps arm 3 only for tunnels**, deliberately, and `replay.rs` says why: the surplus
+records 1.6.x appended stay in every vault it wrote, and above S arm 1 would read one as a newer
+version that never landed. Noted beside O234.
+
+**Tests, each GREEN here and RED under the counterfactuals below** — on the unfixed tree the new ones
+do not compile, `TunnelOutcome` being new, so the restored behaviours are what they were run against.
+Store: `o236_a_repeated_tunnel_create_appends_nothing_and_says_so`
+(the entry's gate — a repeat appends nothing, moves neither the head nor the row, and the tunnel's
+newest record carries the row's tag; a new label is a new tunnel; a re-create after a delete records,
+its newest record carrying the new row's tag; `verify` clean). `a_repeated_tunnel_create_is_clean_and_a_restored_one_is_not`
+now plants a 1.6.x-shaped surplus record (fresh `created_at`, a tag no row holds, above S) and holds
+the row clean over it, and `no_durable_reference_moves_on_a_key_rotation` now requires the re-derived
+tunnel id to land ON the existing row (`created: false`), which an id that moved would not. CLI crate:
+`o236_a_repeated_tunnel_create_over_mcp_writes_nothing_and_says_so` and
+`o236_a_repeated_tunnel_create_on_v1_writes_nothing_and_says_so` (the chain height through `/v1`'s
+stats, and an import of one held and one new tunnel: `tunnels` 2, `tunnels_new` 1, one record), and in
+`tests/cli.rs` `o236_a_repeated_tunnel_create_and_a_restored_tunnel_write_nothing_and_say_so` (the
+binary, the `audit` rows read with SQLite, a self-restore and a fresh import as its control). `e2e`:
+four arms — the CLI repeat, the MCP repeat, `history --subject` counting the tunnel's one record, and
+`/v1`'s `"created":false`. The e2e SUITE was not run by this unit (the integrator's battery runs it);
+the four arms' text was run verbatim against both release binaries, the `/v1` arm without the
+suite's assertion header: all four pass on this tree's, and all four fail on the build with the old
+behaviour restored (`3 record(s).` for one tunnel created once and repeated twice).
+
+**Counterfactuals**, on a copy of the tree in its own target directory, each edit asserted present and
+each run showing `Compiling undercroft-store`: (1) the append made unconditional again fails the five
+record-asserting tests, each at its record or height assertion, while the two that assert no count
+stay green; (2) an outcome that always says `created` fails all seven reply-asserting tests, the
+rotation gate's included; (3) a plausible wrong fix — append only when no `tunnel/{id}` record exists
+yet — fails the store gate alone, at the re-create after a delete, which is the fix's own behaviour
+counterfactualled rather than the defect's.
+
+**A real corpus**: the LoCoMo feed mined into 32 wings of a sealed vault, 2,720 drawers and 2,753
+audit rows after a ring of 32 tunnels (32 `tunnel/` records). Then, through the release binary: the
+whole ring again on the CLI (32 replies naming the no-op), again over one `serve-mcp` (32, none
+`isError`), the vault's own export imported back (`32 tunnel(s) (0 new, 32 already present)`), and
+`/v1` repeating one ring tunnel (`created: false`, 201) and adding a new chord (`created: true`, 201).
+`tunnel/` records 32 → 32 → 32 → 32 → 33 and `verify` OK with `version replay: 0` throughout. The same
+script over a binary built from this tree with the unconditional append and the always-`created`
+reply restored: 0 replies naming a no-op, `tunnel/` records 32 → 64 → 96 → 128 → 130 — 97 records
+of writes that never happened — and `verify` OK all the same, which is why the leg never saw them.
+The self-import's other 2,720 `audit` rows on both binaries are O215's: the import re-stamps
+`added_by`, so every drawer is `replaced`, not this entry's.
+
+**What remains**: O-NEW-O236-1 (under `## Open`) — whether `POST …/tunnels` should answer 200 rather
+than 201 for a repeat. This unit kept the documented 201 and added the body field; it changed no
+status, because what a documented route answers is not this entry's to decide.
+
 ## 1.6.1 — released 2026-09-22
 
 Fixes only. Each makes an existing silence visible — a surface added to
@@ -15305,6 +15398,13 @@ positive direction therefore lives in the store's own tests, where that writer
 can be simulated; the e2e drives the two halves an operator meets.
 
 **Figures**: cargo 1008/4 (1012 compiled), e2e 585; landing tiles 1008 and 997.
+
+**Noted 2026-10-08 by O236.** A tunnel create that inserts nothing appends nothing since O236, so
+on a vault 1.7.0 alone has written a tunnel's newest `tunnel/` record carries the row's tag. Tunnels
+still take arm 3 only, and that is unchanged on purpose: the surplus records 1.6.x appended for a
+no-op create stay in every vault it wrote (the trail is append-only), and above S arm 1 would read
+one as a newer version that never landed. `a_repeated_tunnel_create_is_clean_and_a_restored_one_is_not`
+now plants such a record and holds the tunnel row clean over it.
 
 ### O233 — CLOSED 2026-09-19: the audit chain binds each record's label and time, so a relabelled audit row no longer passes `verify`
 
@@ -33145,22 +33245,6 @@ store `chain.rs`) says "its records do not replay to the committed head" for EVE
 — a chain with no committed head, a head with no height, or a regime that disagrees with its keys
 included, where nothing was replayed against a head at all. It is one more wording this entry owns.
 
-### O236 — `create_tunnel` appends a chain record for a create that wrote nothing
-
-**Filed 2026-09-19 by O233/O234's ruling; established by reading.**
-`create_tunnel` (`crates/undercroft-store/src/manage.rs` ~1720-1745) derives the
-id from `(from, to, label)`, inserts with `ON CONFLICT DO NOTHING`, and then
-appends `tunnel/{id}` with a freshly computed tag unconditionally. A repeated
-create — an agent calling `undercroft_create_tunnel` twice — therefore writes a
-record claiming a write that did not happen, carrying a tag no row holds. That
-is why O234 compares tunnels by the destruction arm only.
-
-**Shape**: append only when the insert inserted, and answer the caller whether
-the tunnel was new. Existing surplus records stay (the trail is append-only).
-
-**Gate**: a repeated create appends nothing and the tunnel's newest record
-carries the row's tag. **Counterfactual**: today, two records.
-
 ### O248 — an append-only refusal on a legacy chain names a remedy that reports nothing, and its evidence dies with the handle
 
 **Filed 2026-09-21 by O242's ruling panel (the agentic-memory lens).** O237's
@@ -34718,6 +34802,32 @@ whose throttling is just as unstated.
 not exist: exit 1, and the FAIL line names `HTTP 404` and `Not Found` — counterfactual, today's script
 prints neither. (2) The CI job's step carries the token, and its log shows the authenticated limit (not
 60) on a green run. (3) The script run locally with no token still reads the release and passes.
+
+### O-NEW-O236-1 — `POST /v1/vaults/{id}/tunnels` answers 201 for a create that created nothing
+
+**Filed 2026-10-08 by O236; a question that entry's shape did not settle.** O236 makes a repeated
+tunnel create write nothing and say so: `create_tunnel` returns `TunnelOutcome { id, created }`, MCP
+and the CLI word a repeat as `already exists — nothing was written`, and `POST …/tunnels` answers
+`"created": false` in its body. Its STATUS stays 201 either way (`tenant.rs` `tunnel_create`), because
+`docs/AGENTS.md` documents that route as "**201** with the tunnel id" and changing what a documented
+route answers for some of its requests was not O236's to decide.
+
+**The question**: should a repeat answer 200? RFC 9110 gives 201 to a request that "has resulted in
+one or more new resources being created", so a 201 over a no-op is the HTTP form of the claim O236
+removed from the chain and from the body. Against it: a client that asserts 201 on an idempotent retry
+starts failing, and the versioning doctrine's MAJOR test asks whether a documented contract moves.
+
+**Options, with their cost.** (a) Keep 201 and the body's `created`, which is what O236 built:
+additive, breaks no client, and the status still claims a creation. (b) 200 with `created: false` on a
+repeat, 201 on a create: the status tells the truth, and the drawer save route already answers 200
+with a `created` boolean (`tenant.rs` `save_drawer`), but a client keyed on 201 for a retry breaks — whether
+that moves a documented contract (MAJOR) or removes a defect (PATCH, on the 2026-09-08 ruling's
+reading of a surface that reports) is the panel's to settle. (c) 409 on a repeat: refuses, on one
+surface, an idempotent operation MCP and the CLI answer as a success.
+
+**Gate**, once ruled: the e2e arm `/v1 repeated tunnel create says it wrote nothing` asserts the
+status the ruling picks beside the body, with a create's 201 as its control. The orchestrator forwards
+`POST /t/tunnels` unchanged (`proxy.rs`'s data allowlist), so a tenant sees what the engine answers.
 
 ## What `A12`, `C8`, `R4`, `U12` mean — the identifier scheme
 

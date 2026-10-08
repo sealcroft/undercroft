@@ -1644,6 +1644,52 @@ PATCH inside the unreleased 1.7.0: the flag keeps the promise its help makes. A 
 `--read-only backup create` or a keygen under `--read-only` now exits 1, so `UPGRADING.md` carries an
 entry; `config check` cannot see it.
 
+### A tunnel create that wrote nothing no longer records a write, and every surface says it was a no-op (O236)
+
+A tunnel's id is derived from its two wings and its label, so creating a tunnel the vault already
+holds inserts nothing — the store's `ON CONFLICT DO NOTHING` — and then appended a `tunnel/{id}`
+audit-chain record anyway, tagged over a fresh `created_at` that no row carries: a record claiming a
+write that never happened. Every surface answered it as a creation — `tunnel {id} created` over MCP,
+the creation line on the CLI, the same 201 body on `/v1` — and restoring a vault's own export into it
+appended one such record per tunnel. It is why `verify`'s version leg (O234) can ask a tunnel only
+whether it was destroyed.
+
+Now the insert's own row count decides, inside the transaction that would append: a create that
+inserted nothing appends nothing and anchors nothing, and `create_tunnel` returns
+`TunnelOutcome { id, created }` so a caller can tell the two apart. MCP's `undercroft_create_tunnel`
+and `undercroft tunnel create` answer a repeat with `already exists — nothing was written` (still a
+success: exit 0, `isError: false`); `POST /v1/vaults/{id}/tunnels` adds `"created"` to its body and
+keeps its documented 201 — whether a repeat should answer 200 is filed as O-NEW-O236-1; and both
+imports say how many tunnels were new — `N tunnel(s) (k new, m already present)` on the CLI, an
+additive `tunnels_new` beside an unchanged `tunnels` on `/v1`, whose record count the orchestrator's
+migration still compares with the export's. The name guard and the label screen still run first, so a
+repeat whose label the screen now flags is refused as before. The records 1.6.x appended stay where
+they are, because the trail is append-only, which is also why tunnels keep the version leg's
+destruction arm only.
+
+Gates. The store: a repeat appends nothing, moves neither the committed head nor the row, and leaves
+the tunnel's newest record carrying the row's tag (the entry's gate); a different label is a new
+tunnel, and a re-create after a delete is a real write that records — the arm a fix keyed on "a
+record already exists" fails. The version leg's tunnel test now plants a 1.6.x-shaped surplus record
+and holds the row clean over it. Through each surface: MCP and `/v1` unit tests over the chain height,
+the CLI binary over the `audit` rows, a self-restore and a fresh import, and four e2e arms (CLI, MCP,
+`history --subject` counting the tunnel's one record, `/v1`). Counterfactuals on a copy of the tree,
+each recompiled: restoring the unconditional append fails all five record-asserting tests; restoring
+an outcome that always says `created` fails the seven reply-asserting ones, the rotation gate's
+re-derived id included; the record-keyed wrong fix fails the store gate alone, at the re-create.
+**A real corpus**: the LoCoMo feed mined into 32 wings of a sealed vault (2,720 drawers), a ring of 32
+tunnels, then the whole ring again on the CLI and over one `serve-mcp`: 64 repeats, 64 replies naming
+the no-op, `tunnel/` records 32 → 32 and the `audit` table unchanged; the vault's own export restored
+into it, `32 tunnel(s) (0 new, 32 already present)` with no `tunnel/` record added; `/v1` answering
+`created: false` then `true` for a new chord; `verify` OK with `version replay: 0`. The same drive
+over a build with the old behaviour restored appended 97 records of writes that never happened
+(`tunnel/` records 32 → 130), and `verify` answered OK over every one of them.
+
+PATCH inside the unreleased 1.7.0: the only observable change is that a defect is gone — a record of
+a write that never happened, and a reply that called a no-op a creation. No documented contract moves
+(the `/v1` status is unchanged and both new fields are additive), and nothing can stop a running
+deployment, so `UPGRADING.md` carries no entry.
+
 ## 1.6.1 — 2026-09-22
 
 PATCH: fixes only. Each adds a surface that REPORTS an existing silence, and
