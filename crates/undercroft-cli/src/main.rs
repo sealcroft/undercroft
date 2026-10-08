@@ -12,6 +12,7 @@ mod mcp;
 #[cfg(test)]
 mod open_race_surface_tests;
 mod parity;
+mod receipt;
 mod refine;
 mod search;
 mod tenant;
@@ -290,11 +291,15 @@ enum Command {
         ids: Vec<String>,
         #[arg(long, default_value = "default")]
         vault: String,
-        /// Write the attestation JSON here (default: stdout)
+        /// Write the attestation JSON here (default: stdout). If it cannot
+        /// be written, the attestation is printed on stdout instead and the
+        /// command exits 1 — the drawers are destroyed by then, and the
+        /// receipt is the only copy
         #[arg(long)]
         out: Option<PathBuf>,
         /// Signing identity file (`bundle sign-keygen`) — attests the
-        /// operator as sender, which is what a third party verifies
+        /// operator as sender, which is what a third party verifies. Read
+        /// and checked before anything is destroyed
         #[arg(long)]
         sign: Option<PathBuf>,
         /// Also delete these drawers from a remote index this vault was
@@ -912,14 +917,31 @@ enum AdmissionAction {
     /// receipt (the trail remains, the content does not)
     Deny {
         id: String,
-        /// Write the attestation JSON here (default: stdout)
+        /// Write the attestation JSON here (default: stdout). If it cannot
+        /// be written, the attestation is printed on stdout instead and the
+        /// command exits 1 — the row is destroyed by then, and the receipt
+        /// is the only copy
         #[arg(long)]
         out: Option<PathBuf>,
         /// Signing identity file (`bundle sign-keygen`) — attests the
-        /// operator as sender on the deny receipt
+        /// operator as sender on the deny receipt. Read and checked before
+        /// anything is destroyed
         #[arg(long)]
         sign: Option<PathBuf>,
     },
+}
+
+impl AdmissionAction {
+    /// The `--sign` identity a deny reads before the vault is opened
+    /// (ROADMAP O262). Spelled through `Self::` on purpose: `parity.rs`
+    /// windows a report's CLI projection from the FIRST place its action's
+    /// arm is named in this file.
+    fn sign(&self) -> Option<&Path> {
+        match self {
+            Self::Deny { sign, .. } => sign.as_deref(),
+            _ => None,
+        }
+    }
 }
 
 #[derive(clap::Subcommand)]
@@ -948,14 +970,31 @@ enum RetentionAction {
         /// Report what would be destroyed without destroying anything
         #[arg(long)]
         dry_run: bool,
-        /// Write the sweep report (with attestation) here (default: stdout)
+        /// Write the sweep report (with attestation) here (default: stdout).
+        /// If it cannot be written after the sweep destroyed anything, the
+        /// report is printed on stdout instead and the command fails — the
+        /// receipt in it is the only copy
         #[arg(long)]
         out: Option<PathBuf>,
         /// Signing identity file — attests the operator on the sweep's
-        /// destruction receipt
+        /// destruction receipt. Read and checked before anything is
+        /// destroyed, on a dry run too
         #[arg(long)]
         sign: Option<PathBuf>,
     },
+}
+
+impl RetentionAction {
+    /// The `--sign` identity a sweep reads before the vault is opened
+    /// (ROADMAP O262). Spelled through `Self::` for the reason
+    /// [`AdmissionAction::sign`] gives: `parity.rs` windows the sweep
+    /// report's projection from the first place its arm is named.
+    fn sign(&self) -> Option<&Path> {
+        match self {
+            Self::Sweep { sign, .. } => sign.as_deref(),
+            _ => None,
+        }
+    }
 }
 
 #[derive(clap::Subcommand)]
@@ -1987,7 +2026,10 @@ impl undercroft_core::rerank::Reranker for SharedReranker {
 /// script keys its retry logic on the class.
 const EXIT_INTEGRITY: u8 = 2;
 /// Exit 1 — the run itself failed: bad arguments, a missing file, an
-/// unreadable vault. Retryable in the sense that a retry might succeed.
+/// unreadable vault. Retryable in the sense that a retry might succeed — with
+/// one exception a script must know: a destruction whose `--out` failed after
+/// the drawers were gone, whose receipt went to stdout instead (ROADMAP O262).
+/// Its retry answers not found, and that stdout is the only copy.
 const EXIT_FAILURE: u8 = 1;
 
 /// Is this error an integrity verdict, or an ordinary run failure?
@@ -2890,6 +2932,11 @@ fn run(cli: Cli) -> Result<()> {
             sign,
             backend,
         } => {
+            // ROADMAP O262: the signing identity is read and checked before
+            // the vault is opened or a mirror is reached. Read after the
+            // destruction, a bad one exited 1 over drawers already gone, and
+            // their receipt — whose fingerprints are stored nowhere — with them.
+            let identity = receipt::signing_identity(sign.as_deref())?;
             let mut store = open_store(&cli, vault)?;
             // Named backend: the remote delete goes first, so a failure
             // there leaves the vault intact and the operator can retry.
@@ -2907,24 +2954,21 @@ fn run(cli: Cli) -> Result<()> {
             if let Some(note) = &att.mirror {
                 eprintln!("warning: {note}");
             }
-            if let Some(path) = sign {
-                let secret = std::fs::read_to_string(path)
-                    .with_context(|| format!("reading signing identity {}", path.display()))?;
-                att.sign(&secret)?;
-            }
+            // The drawers are gone: nothing returns before the receipt is
+            // delivered (O262). Serializing cannot fail — every field is a
+            // string, a number or a list of them.
+            let signed = receipt::sign(&mut att, identity.as_ref());
             let json = serde_json::to_string_pretty(&att)?;
-            match out {
-                Some(path) => {
-                    std::fs::write(path, &json)?;
-                    println!(
-                        "{} drawer(s) destroyed; attestation written to {} \
-                         (verify with: undercroft verify-forgetting {})",
-                        att.drawers.len(),
-                        path.display(),
-                        path.display()
-                    );
-                }
-                None => println!("{json}"),
+            if let receipt::Delivered::File(path) =
+                receipt::deliver(&json, out.as_deref(), signed, &mut std::io::stdout())?
+            {
+                println!(
+                    "{} drawer(s) destroyed; attestation written to {} \
+                     (verify with: undercroft verify-forgetting {})",
+                    att.drawers.len(),
+                    path.display(),
+                    path.display()
+                );
             }
         }
         Command::VerifyForgetting { file, vault } => {
@@ -3102,6 +3146,9 @@ fn run(cli: Cli) -> Result<()> {
             }
         }
         Command::Admission { action, vault } => {
+            // ROADMAP O262: a deny's signing identity is checked before the
+            // vault is opened, never after the row is destroyed.
+            let identity = receipt::signing_identity(action.sign())?;
             let mut store = open_store(&cli, vault)?;
             match action {
                 AdmissionAction::List => {
@@ -3132,34 +3179,33 @@ fn run(cli: Cli) -> Result<()> {
                     let restored = store.admission_allow(id)?;
                     println!("Allowed: re-filed as {restored} (ruling audited).");
                 }
-                AdmissionAction::Deny { id, out, sign } => {
+                AdmissionAction::Deny { id, out, .. } => {
                     let mut att = store.admission_deny(id)?;
-                    if let Some(path) = sign {
-                        let secret = std::fs::read_to_string(path).with_context(|| {
-                            format!("reading signing identity {}", path.display())
-                        })?;
-                        att.sign(&secret)?;
-                    }
+                    // The row is gone: nothing returns before the receipt is
+                    // delivered (O262).
+                    let signed = receipt::sign(&mut att, identity.as_ref());
                     let json = serde_json::to_string_pretty(&att)?;
-                    match out {
-                        Some(path) => {
-                            std::fs::write(path, &json)?;
-                            println!(
-                                "Denied: content destroyed, ruling audited; attestation \
-                                 written to {} (verify with: undercroft verify-forgetting {})",
-                                path.display(),
-                                path.display()
-                            );
-                        }
-                        None => {
-                            println!("Denied: content destroyed, ruling audited.");
-                            println!("{json}");
-                        }
+                    if out.is_none() {
+                        println!("Denied: content destroyed, ruling audited.");
+                    }
+                    if let receipt::Delivered::File(path) =
+                        receipt::deliver(&json, out.as_deref(), signed, &mut std::io::stdout())?
+                    {
+                        println!(
+                            "Denied: content destroyed, ruling audited; attestation \
+                             written to {} (verify with: undercroft verify-forgetting {})",
+                            path.display(),
+                            path.display()
+                        );
                     }
                 }
             }
         }
         Command::Retention { action, vault } => {
+            // ROADMAP O262: a sweep's signing identity is checked before the
+            // vault is opened — the dry run's too, so a scheduled preview
+            // meets the identity the real run will need.
+            let identity = receipt::signing_identity(action.sign())?;
             let mut store = open_store(&cli, vault)?;
             match action {
                 RetentionAction::Set { wing, room, days } => {
@@ -3194,14 +3240,14 @@ fn run(cli: Cli) -> Result<()> {
                         );
                     }
                 }
-                RetentionAction::Sweep { dry_run, out, sign } => {
+                RetentionAction::Sweep { dry_run, out, .. } => {
                     let mut sweep = store.retention_sweep(*dry_run)?;
-                    if let (Some(path), Some(att)) = (sign, sweep.attestation.as_mut()) {
-                        let secret = std::fs::read_to_string(path).with_context(|| {
-                            format!("reading signing identity {}", path.display())
-                        })?;
-                        att.sign(&secret)?;
-                    }
+                    // What it destroyed is gone: nothing returns before the
+                    // report and its receipt are delivered (O262).
+                    let signed = match sweep.attestation.as_mut() {
+                        Some(att) => receipt::sign(att, identity.as_ref()),
+                        None => Ok(()),
+                    };
                     if sweep.dry_run {
                         println!("DRY RUN — nothing destroyed.");
                     }
@@ -3237,26 +3283,44 @@ fn run(cli: Cli) -> Result<()> {
                         println!("  POLICY: {p}");
                     }
                     let json = serde_json::to_string_pretty(&sweep)?;
-                    match out {
-                        Some(path) => {
-                            std::fs::write(path, &json)?;
-                            println!("Sweep report written to {}", path.display());
-                        }
-                        None if sweep.attestation.is_some() => println!("{json}"),
-                        None => {}
-                    }
+                    // A receipt exists exactly when something was destroyed.
+                    // Without one — a dry run, or nothing aged out — the report
+                    // is no receipt: a failed `--out` loses nothing a re-run
+                    // cannot say again, and must not claim a destruction.
+                    let delivered = match (out.as_deref(), sweep.attestation.is_some()) {
+                        (None, false) => Ok(()),
+                        (Some(path), false) => std::fs::write(path, &json)
+                            .with_context(|| {
+                                format!("writing the sweep report to {}", path.display())
+                            })
+                            .map(|()| println!("Sweep report written to {}", path.display())),
+                        (out, true) => receipt::deliver(&json, out, signed, &mut std::io::stdout())
+                            .map(|d| {
+                                if let receipt::Delivered::File(path) = d {
+                                    println!("Sweep report written to {}", path.display());
+                                }
+                            }),
+                    };
                     // The integrity verdict exits 2 AFTER the report and the
                     // receipt are out: a sweep that destroyed the clean set
                     // must still hand over the attestation for what it did.
                     // A dry run answers the same way, so a scheduled preview
-                    // reports drift before anything is destroyed.
+                    // reports drift before anything is destroyed. It also
+                    // OUTRANKS a failed delivery (O262): exit 1 would tell a
+                    // script to retry a run whose answer is a tamper verdict,
+                    // so the failure is printed beside it rather than in place
+                    // of it.
                     if !sweep.ok {
+                        if let Err(e) = &delivered {
+                            eprintln!("Error: {e:?}");
+                        }
                         println!(
                             "RETENTION SWEEP NOT CLEAN — the rows named above were not \
                              destroyed or were destroyed over drift. Run `undercroft verify`."
                         );
                         std::process::exit(EXIT_INTEGRITY.into());
                     }
+                    delivered?;
                 }
             }
         }

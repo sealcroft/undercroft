@@ -410,6 +410,31 @@ writable open first fast-forwards a lagging manifest anchor (and says so) and
 promotes a key rotation whose promote was deferred. `undercroft config check`
 cannot detect this: it is a flag on one command, not a declaration.
 
+### a destruction with a bad `--sign` refuses before it destroys, and one whose `--out` cannot be written prints its receipt (O262)
+
+**Symptom:** `undercroft forget`, `admission deny` or `retention sweep` with a
+`--sign` file that is missing or is not a signing identity exits 1 (*"reading
+signing identity …"*, or *"… is not a signing identity"*) with nothing
+destroyed — and so does `retention sweep --dry-run` with one, which used to
+exit 0 without reading the file. One whose `--out` cannot be written still
+exits 1, but prints the receipt's JSON on stdout first and says *"the drawers
+ARE destroyed, so their receipt is printed on stdout instead"*. A retention
+sweep that is NOT clean and whose `--out` cannot be written now exits 2, the
+integrity verdict, where it exited 1.
+
+**Cause:** ROADMAP O262. All three read `--sign` and wrote `--out` only after
+the store had destroyed the drawers and committed, so a bad signing path, a
+file that was not a signing identity or an unwritable output path exited 1
+over drawers already gone and lost their receipt — whose content fingerprints
+are stored nowhere, so it can never be minted again.
+
+**Fix:** none for a correct invocation; correct the `--sign` path a scheduled
+dry-run sweep names. A script that retries these three commands on exit 1
+must not retry once stdout carries a receipt: the drawers are destroyed, a
+retry answers *not found*, and the receipt on stdout is the only copy — so
+capture stdout on every exit. `undercroft config check` cannot detect this: it
+is a flag on a command, not a declaration.
+
 ## 1.6.1 (released 2026-09-22)
 
 ### The manifest carries a version fence from this release on (O238)

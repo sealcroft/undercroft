@@ -1088,8 +1088,10 @@ straight, each carrying what it actually is.
   the label guard and the lock is not seen by that destruction (the guard
   stays outside, where it replays in a read snapshot); a crash after the
   COMMIT and before the receipt reaches its caller loses the receipt (its
-  fingerprints are persisted nowhere, by design), and the CLI can still lose
-  it to a bad `--sign` or `--out` (O262); `forget --backend` deletes from
+  fingerprints are persisted nowhere, by design) — the CLI no longer loses
+  it to a bad `--sign` or `--out` (O262, 1.7.0: the identity is checked
+  before anything is opened or destroyed, and an `--out` that cannot be
+  written puts the receipt on stdout before the command fails); `forget --backend` deletes from
   the mirror before the lock (O175's order); a sweep's membership is as of
   its walk; the lock is held for the whole destruction — 2.5 s at 40,000
   drawers with the retrieval tiers built — so other writers wait, and past

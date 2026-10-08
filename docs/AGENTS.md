@@ -1042,6 +1042,20 @@ under existing vaults — each names both readings and writes nothing. A
 `vault create` (or `POST /v1/vaults`) whose key opens none of the installation's
 vaults is exit 2 / 409 `integrity`, the same finding a search reports.
 
+**One exit 1 must NOT be retried: a destruction's receipt delivered on
+stdout** (ROADMAP O262, 1.7.0). `forget`, `admission deny` and `retention
+sweep` read and check `--sign` before the vault is opened — a missing file or
+one that is not a signing identity exits 1 with nothing destroyed, a dry-run
+sweep included — and once the drawers are destroyed nothing ends the command
+before the receipt is delivered. An `--out` that cannot be written puts the
+receipt's JSON on stdout, the bytes the file would have held, and exits 1
+saying *the drawers ARE destroyed*; a sweep that is not clean still exits 2.
+Retrying that run answers *not found*, and the receipt on stdout is the only
+copy that will ever exist — its content fingerprints are stored nowhere, by
+design — so capture stdout on every exit. Until 1.7.0 both failures came after
+the destruction and the receipt was lost. `/v1`'s three destructions return
+the receipt in the response body and take neither flag.
+
 - A **crash is never a tamper alarm** (open-time reconciliation
   fast-forwards a lagging manifest anchor); a **rollback or forged record
   always is**. On `VERIFY FAILED`, follow the
