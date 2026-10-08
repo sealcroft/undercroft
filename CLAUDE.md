@@ -3326,8 +3326,14 @@ oldest lesson, and the reason the check exists at all is that the same figure
 sat stale for eleven days with nothing able to notice. Consequence, stated
 rather than discovered: it can go red on a pull request that touched nothing,
 because the house page is state this repo does not own. That is the signal,
-not a defect in the gate.
-This sentence said "one job each" while also saying the matrix is one job,
+not a defect in the gate. **One cause WAS a defect in the gate (ROADMAP
+O331)**: its release read was an unauthenticated call from a hosted runner's
+shared IP, and three of the job's eight red runs to 2026-10-07 were that read
+alone, its cause thrown away — most likely the 60-an-hour limit, which nothing
+logged could prove. It reads with the job's own `GH_TOKEN` now, sent only
+under `https://api.github.com/`, fails inside Actions without one, and a
+failed read names its HTTP status, the API's message and curl's exit code.
+The matrix sentence above said "one job each" while also saying the matrix is one job,
 which cannot both be true: a matrix expands to one check RUN per leg under a
 single job id, which is why adding a leg does not move `verdict`'s `needs:`
 and adding a job does. Corrected 2026-08-20; the count was stale too. Two

@@ -1644,6 +1644,61 @@ PATCH inside the unreleased 1.7.0: the flag keeps the promise its help makes. A 
 `--read-only backup create` or a keygen under `--read-only` now exits 1, so `UPGRADING.md` carries an
 entry; `config check` cannot see it.
 
+### The house-figures job reads the latest release with its own token, and a failed read says why (O331)
+
+The CI job that checks the house page against this tree reads the latest published release from
+GitHub's API, and it read it unauthenticated, from a hosted runner whose IP — and with it the 60
+requests an hour GitHub gives an unauthenticated caller — is shared with every other tenant of that
+IP. Three of the job's eight red runs between 2026-08-30 and 2026-10-07 were that read alone, and
+each printed the one line written for an unreachable page: `-sS` without `-f` exits 0 on an HTTP
+error and left the cause in a body the parser emptied, `2>/dev/null` discarded the line naming a DNS
+failure or a timeout, and the pipeline lost curl's exit status. A rate limit, an API outage, a DNS
+failure and a malformed answer could not be told apart, so the likeliest cause, the rate limit, is
+still unproven.
+
+Now `tests/house-figures.sh` has one reader for both of its network reads, keeping curl's exit
+status, the HTTP status, the headers and curl's own line. A failed release read names its cause on
+the FAIL line — `HTTP 404 "Not Found" (curl exit 0, without a token)` — and every run that reaches
+the read prints the rate limit the answer carried. CI passes the job's own token as `GH_TOKEN` on that
+one step; it is the workflow's `contents: read` token, which the checkout step already leaves in the
+job's git configuration. The script sends it only to a URL beginning `https://api.github.com/`, on
+curl's stdin rather than its command line, with a caller's `~/.curlrc` ignored, and never to the
+house page. A person with no token still reads without one; inside GitHub Actions a read with no
+token fails, so a workflow that stopped passing it cannot quietly bring the shared limit back; and an
+empty `GH_TOKEN`, `HOUSE_PAGE_URL`, `HOUSE_RELEASE_URL` or `HOUSE_REPO` fails everywhere, as a failed
+interpolation, where an empty override used to read as the default. The same file's siblings are
+fixed with it: the page fetch took a 404 or a 503 as a page and failed it as "the markup moved", and
+now names the status and curl's line; `--update`'s re-check loop threw away every re-check's output,
+so its timeout said "not serving the new figures" over whatever had failed, and now prints the last
+check; its "nothing derivable" refusal now names the release read beside the tiles; and the strings
+quoted from the page go through the same log-safe filter as the API's message. O65's ruled semantics
+are unchanged: the latest PUBLISHED RELEASE is the truth, and an unreachable source is a failure,
+never a skip. A retry, a skip on a 403, reading tags instead and scraping the release page's redirect
+were rejected in the filing.
+
+Gates, executed: against the real API, a release that does not exist fails with `HTTP 404 "Not
+Found"` on the FAIL line, where the script before this printed neither (its URL made overridable,
+nothing else changed); with no token, the real read passes, on Linux and on this Windows host, there
+also under `MSYS_NO_PATHCONV=1`. A stub matrix of 27 cases a tree, run against both scripts (ad hoc,
+not in the tree), names each of the eight release causes the old script printed as the same two
+lines — a 403 rate limit, 404, 401, 301, a 200 with no tag, DNS, refused and timeout — and a page 404
+and 503 the old one read as moved markup, and shows the token sent exactly where it belongs and
+nowhere else. With the token in the environment alone, a scan of every process's command line
+through an authenticated read never saw it, six runs of six (its premise did); a hostile API answer
+and a page label carrying escape bytes, a lone carriage return and `::` workflow commands reached no
+log line; a dummy token reaches the real API as a 401 on both curls; and `--update` was driven
+through a fake `gh`, deploying, timing out and finding nothing to derive. The authenticated limit on
+a green CI run is the gate still to read, off this change's first CI run; the closure stands on it.
+An independent review of the build found ten things, all mine, each fixed before this landed; two
+more were caught by my own premises (ROADMAP O331 lists them).
+
+PATCH inside the unreleased 1.7.0: test tooling and CI only. Nothing an operator runs changes; no
+`UPGRADING.md` entry. What a contributor runs changes: the script fails with an empty `GH_TOKEN` or
+an empty override, inside any GitHub Actions workflow that runs it without a token, and with an
+expired `GH_TOKEN` exported (a 401 where it used to pass unauthenticated) — and since `gh` already
+prefers an exported `GH_TOKEN` to its stored login, one exported for this read is also what
+`--update`'s write uses.
+
 ## 1.6.1 — 2026-09-22
 
 PATCH: fixes only. Each adds a surface that REPORTS an existing silence, and

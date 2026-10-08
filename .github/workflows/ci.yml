@@ -298,7 +298,21 @@ jobs:
       # house page is state this repo does not own. That is the point. A red
       # tick naming a stale published figure is the signal; the alternative is
       # the eleven days.
+      #
+      # The release read authenticates with the job's own token (ROADMAP
+      # O331). Unauthenticated, it shared the 60 requests an hour GitHub gives
+      # one IP with every other tenant of a hosted runner's IP, and three of
+      # this job's eight red runs between 2026-08-30 and 2026-10-07 were that
+      # read alone, with nothing in the log able to say why. The token is the
+      # workflow's `contents: read` one, which the checkout step already
+      # leaves in the job's git configuration, so this step holds nothing it
+      # did not; the script sends it only under https://api.github.com/, and
+      # inside Actions it FAILS without one rather than fall back to the
+      # shared limit. Never a credential for the house repository: `--update`
+      # stays a person's command (O65).
       - run: bash tests/house-figures.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
 
   # THE VERDICT. This is the one context the required status check on `main`
   # is configured against (ROADMAP O9 — branch protection reads back
