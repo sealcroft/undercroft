@@ -4891,6 +4891,92 @@ fi
 kill "$O291_A" 2>/dev/null; wait "$O291_A" 2>/dev/null
 rm -rf "$O291_HOME"
 
+# ── the systemd unit runs init before it serves (ROADMAP O200) ─────────────
+# systemd cannot run in this container, so the unit's own `ExecStartPre=` and
+# `ExecStart=` lines are read OUT OF THE FILE and run in systemd's order: this
+# binary in place of the installed path, a fresh data directory in place of
+# /var/lib/undercroft, a free port, and a bearer as the unit's environment
+# file supplies one — every other word as the unit has it. The battery's
+# `every shipped serve-http recipe runs init first` preflight holds the unit's
+# text; this holds what that text does. Before O200 the unit had no
+# `ExecStartPre=`, so a fresh install exited `vault "default" not found` and
+# systemd restarted it every three seconds — the first check is that unit, as
+# a premise. Run over the pre-O200 unit, the three checks after it fail.
+echo "== the systemd unit's command lines on a fresh install (O200) =="
+O200_UNIT=/src/deploy/undercroft-server.service
+O200_TOKEN="e2e-o200-bearer-0123456789abcdef0123456789"
+O200_PRE="$(sed -n 's/^ExecStartPre=//p' "$O200_UNIT")"
+O200_START="$(sed -n 's/^ExecStart=//p' "$O200_UNIT")"
+# o200_argv <unit command line>: its words, one per line, with the installed
+# executable replaced by $BIN and `--port`'s value by a free port. A line that
+# is absent, or runs anything but the installed path, prints nothing.
+o200_argv() {
+  local w next=""
+  set -f; set -- $1; set +f
+  [ "${1:-}" = /usr/local/bin/undercroft ] || return 0
+  shift
+  printf '%s\n' "$BIN"
+  for w in "$@"; do
+    if [ -n "$next" ]; then printf '18861\n'; next=""; continue; fi
+    [ "$w" = --port ] && next=1
+    printf '%s\n' "$w"
+  done
+}
+mapfile -t O200_PRE_ARGV < <(o200_argv "$O200_PRE")
+mapfile -t O200_START_ARGV < <(o200_argv "$O200_START")
+# o200_pre <home>: the unit's ExecStartPre, or a refusal naming its absence —
+# never a command that happens to succeed in its place.
+o200_pre() {
+  if [ "${#O200_PRE_ARGV[@]}" -eq 0 ]; then
+    echo "the unit has no ExecStartPre running /usr/local/bin/undercroft"; return 3
+  fi
+  env UNDERCROFT_HOME="$1" UNDERCROFT_MCP_HTTP_TOKEN="$O200_TOKEN" "${O200_PRE_ARGV[@]}"
+}
+O200_BARE="$(mktemp -d)"
+check "O200: premise — the unit's ExecStart alone exits on a fresh install" 1 'vault "default" not found' \
+  -- timeout 20 env UNDERCROFT_HOME="$O200_BARE" UNDERCROFT_MCP_HTTP_TOKEN="$O200_TOKEN" \
+       "${O200_START_ARGV[@]:-false}"
+rm -rf "$O200_BARE"
+O200_HOME="$(mktemp -d)"
+check "O200: the unit's ExecStartPre initializes a fresh install" 0 "Palace initialized" \
+  -- o200_pre "$O200_HOME"
+# `env … &` directly, never a function: `$!` must be the server, which env
+# execs, or the kill below leaves it running.
+env UNDERCROFT_HOME="$O200_HOME" UNDERCROFT_MCP_HTTP_TOKEN="$O200_TOKEN" \
+  "${O200_START_ARGV[@]:-false}" >"$O200_HOME.log" 2>&1 &
+O200_PID=$!
+O200_C=""
+for _ in $(seq 1 100); do
+  O200_C="$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $O200_TOKEN" \
+              http://127.0.0.1:18861/v1/vaults/default/stats 2>/dev/null)"
+  [ "$O200_C" = 200 ] && break
+  sleep 0.1
+done
+if [ "$O200_C" = 200 ]; then
+  echo "ok    O200: then the unit's ExecStart serves the default vault"; PASS=$((PASS+1))
+else
+  echo "FAIL  O200: the unit's ExecStart must serve once ExecStartPre has run (stats $O200_C)"
+  sed 's/^/      /' "$O200_HOME.log"; FAIL=$((FAIL+1))
+fi
+kill "$O200_PID" 2>/dev/null; wait "$O200_PID" 2>/dev/null
+# Every start runs ExecStartPre, so a restart's init must find the vault and
+# write nothing: one check, because "nothing changed" is only evidence beside
+# a vault the served start wrote and an init that really ran. Split in two,
+# the hash half stayed green over the pre-O200 unit, where nothing ran at all.
+O200_SUM1="$(cd "$O200_HOME" && find . -type f | sort | xargs sha256sum)"
+O200_OUT="$(o200_pre "$O200_HOME" 2>&1)"; O200_RC=$?
+O200_SUM2="$(cd "$O200_HOME" && find . -type f | sort | xargs sha256sum)"
+if [ "$O200_RC" -eq 0 ] && grep -qF 'already initialized' <<<"$O200_OUT" \
+   && grep -q ' \./vaults/default/vault\.db$' <<<"$O200_SUM1" \
+   && [ "$O200_SUM1" = "$O200_SUM2" ]; then
+  echo "ok    O200: a restart's ExecStartPre finds the vault and writes nothing"; PASS=$((PASS+1))
+else
+  echo "FAIL  O200: a restart's ExecStartPre must find the served vault and change nothing (exit $O200_RC)"
+  printf '%s\n' "$O200_OUT" | sed 's/^/      /'
+  diff <(printf '%s\n' "$O200_SUM1") <(printf '%s\n' "$O200_SUM2") | sed 's/^/      /'; FAIL=$((FAIL+1))
+fi
+rm -rf "$O200_HOME" "$O200_HOME.log"
+
 echo "== A reader that leaves never turns a verdict into a panic (ROADMAP O287) =="
 # Rust ignores SIGPIPE, so a write to a pipe with no reader returns EPIPE, and
 # `println!` panicked on it: exit 101, a status no document defines, and every

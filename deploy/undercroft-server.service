@@ -10,11 +10,38 @@
 #
 # Binds 0.0.0.0:8765 and requires UNDERCROFT_MCP_HTTP_TOKEN (set in the
 # EnvironmentFile). Front it with a TLS-terminating reverse proxy.
+#
+# Every start runs `undercroft init` first (ExecStartPre, ROADMAP O200), as
+# the unit's user, with its data directory and its environment file, the
+# passphrase among them. The first start sets up the master key and creates a
+# SEALED `default` vault; later starts find that vault, and `init` exits 0
+# without writing. A failed init stops the start, and its own error is in
+# `journalctl -u undercroft-server`. Without it, a fresh install exited
+# `vault "default" not found` and restarted every three seconds.
+# For another level, create the vault before the first start;
+# docs/remote-server.md has the command. If you change ExecStart to serve a
+# vault other than `default` (`--vault`), remove ExecStartPre: it would create
+# an empty `default` beside it.
+#
+# RequiresMountsFor= is what keeps that init from minting a SECOND
+# installation. If /var/lib/undercroft is its own mount and that mount is not
+# there yet, init would find an empty directory, write a new master.key and
+# an empty `default` vault into the directory beneath the mount point, and the
+# server would serve that instead of yours. With it, systemd starts the mount
+# first, or does not start the unit. It covers mounts systemd knows of (an
+# fstab entry or a .mount unit); a directory mounted by hand after boot is not
+# one, so mount it before you start the unit. The data directory is the one
+# UNDERCROFT_HOME names below: set it here, not in the environment file, or
+# the mount this requires is not the one the server writes to.
+#
+# With UNDERCROFT_PASSPHRASE set, every start derives the master key twice,
+# once for init and once for the server (Argon2id, 64 MiB).
 
 [Unit]
 Description=Undercroft remote MCP server
 After=network-online.target
 Wants=network-online.target
+RequiresMountsFor=/var/lib/undercroft
 
 [Service]
 Type=simple
@@ -22,6 +49,7 @@ User=undercroft
 Group=undercroft
 EnvironmentFile=/etc/undercroft/server.env
 Environment=UNDERCROFT_HOME=/var/lib/undercroft
+ExecStartPre=/usr/local/bin/undercroft init
 ExecStart=/usr/local/bin/undercroft serve-http --host 0.0.0.0 --port 8765
 Restart=on-failure
 RestartSec=3

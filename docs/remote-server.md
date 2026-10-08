@@ -56,22 +56,39 @@ claude mcp add --transport http undercroft http://HOST:8765/mcp \
 - Backing store: the `undercroft-data` volume is the system of record. MCP and
   `/v1` recall search the vault directly and never consult Qdrant.
 
-Systemd alternative: `deploy/undercroft-server.service`. It does not run
-`init` yet, so run it once before enabling the unit, as the unit's user, with
-the unit's data directory and environment file — otherwise `init` creates a
+Systemd alternative: `deploy/undercroft-server.service`. Every start runs
+`undercroft init` first (`ExecStartPre`), as the unit's user, with the unit's
+data directory and environment file, so the first start creates a **sealed**
+`default` vault and later starts find it; `init` then exits 0 without writing.
+A failed `init` stops the start, with its own error in
+`journalctl -u undercroft-server`. Until 1.7.0 the unit served without `init`,
+so a fresh install exited `vault "default" not found` and systemd restarted it
+every three seconds. For another level, create the vault before the first
+start, in the same identity and environment — otherwise `init` creates a
 different installation, or one keyed differently from the one the unit opens:
 
 ```bash
 sudo systemd-run --wait --pipe --uid=undercroft --gid=undercroft \
   -p EnvironmentFile=/etc/undercroft/server.env \
   -E UNDERCROFT_HOME=/var/lib/undercroft \
-  /usr/local/bin/undercroft init
+  /usr/local/bin/undercroft init --level hmac-only
 ```
 
 `systemd-run` reads the environment file as root, as the unit does; the file
-is root-owned `0600`, so `sudo -u undercroft` could not source it.
+is root-owned `0600`, so `sudo -u undercroft` could not source it. A unit
+edited to serve a vault other than `default` (`--vault`) should drop its
+`ExecStartPre`, which would otherwise create an empty `default` beside it.
 
-ROADMAP O200 tracks running it from the unit.
+The unit also declares `RequiresMountsFor=/var/lib/undercroft`. If the data
+directory is its own mount, an `init` that ran before it would find the
+directory empty and create a second installation beneath the mount point — a
+new `master.key` and an empty `default` vault — and the server would serve
+that one. With the directive, systemd mounts the directory first, or does not
+start the unit. It knows only mounts it manages (an fstab entry or a `.mount`
+unit), so a directory mounted by hand must be mounted before the unit starts.
+Set `UNDERCROFT_HOME` in the unit, never in the environment file, so the
+directory the unit requires is the one it writes to. Under a passphrase every
+start derives the master key twice, once for `init` and once for the server.
 
 ## The optional Qdrant mirror
 
