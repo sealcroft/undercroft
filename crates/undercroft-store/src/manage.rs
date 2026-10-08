@@ -109,8 +109,10 @@ pub(crate) enum PendingEvidence {
     /// ruling behind it leaves an audit trail that cannot tell an
     /// admission decision from routine housekeeping.
     Protect,
-    /// The caller IS the ruling path (`admission allow`/`deny`), which has
-    /// already appended its `admission/<id>/<verdict>` record.
+    /// The caller IS the ruling path (`admission deny`), which has already
+    /// appended its `admission/<id>/<verdict>` record in the same lock.
+    /// (`admission allow` destroys its queue row through `destroy_in`
+    /// directly since ROADMAP O260, its verdict appended in its own lock.)
     Ruled,
 }
 
@@ -991,15 +993,21 @@ impl VaultStore {
     /// destroy pending review evidence, so a new delete path does not compile
     /// until its author decides — the same shape the write choke point uses
     /// for the admission screen. `delete_drawer` states `Protect` and inherits
-    /// the fence; `admission allow` states `Ruled` for the queue row it has
-    /// just re-filed.
+    /// the fence; the rulings destroy the queue row inside their own locks —
+    /// `admission deny` through `attest_in`, stating `Ruled`, and `admission
+    /// allow` through [`VaultStore::destroy_in`] directly, its verdict already
+    /// appended in the same lock (ROADMAP O260).
     ///
     /// **One write lock, one body** (ROADMAP O255): the fence, the existence
     /// check and the destruction run inside the lock, through
     /// [`VaultStore::destroy_in`], which holds the crate's only
     /// `DELETE FROM drawers WHERE id`. The attested paths — `forget`, the
     /// retention sweep, `admission deny` — run the same body for every drawer
-    /// of a destruction inside ONE lock (`forget.rs`).
+    /// of a destruction inside ONE lock (`forget.rs`), and so do the two
+    /// unattested ones that destroy as part of something larger:
+    /// `delete_by_source`, the whole source in one lock (ROADMAP O259), and
+    /// `admission allow`, whose re-filed write, ruling and queue-row removal
+    /// are one lock (ROADMAP O260).
     pub(crate) fn delete_drawer_ruled(
         &mut self,
         id: &str,
@@ -1212,40 +1220,57 @@ impl VaultStore {
     /// review evidence. The whole call is refused BEFORE anything is
     /// deleted rather than half-way through: failing mid-loop would destroy
     /// part of a source and then report an error, leaving the operator
-    /// unsure what survived. That holds for pending evidence only: each drawer
-    /// is still its own write lock, so a busy lock or a failing statement at
-    /// drawer k leaves k−1 deleted, and the fence query below reads a failure
-    /// as "not pending" — ROADMAP O259.
+    /// unsure what survived.
+    ///
+    /// **The whole source is ONE write lock** (ROADMAP O259, O255's body).
+    /// The promise above held for pending evidence alone: each drawer was
+    /// deleted in its own write lock, so a busy lock or a failing statement
+    /// at drawer k left k−1 deleted and returned an error, and the
+    /// pending-evidence pre-flight read a failed fence query as "not pending"
+    /// (`unwrap_or(false)`), letting the loop reach a pending drawer the
+    /// choke point then refused mid-loop. Now the source's members, the fence
+    /// over every one of them and the destruction are read and done inside
+    /// one lock, every error propagates, and a refusal anywhere — the fence,
+    /// a busy `BEGIN`, a failing statement — deletes nothing. Unattested, as
+    /// before: this path mints no receipt.
     pub fn delete_by_source(&mut self, source_file: &str) -> Result<u64, StoreError> {
-        let ids: Vec<String> = self
-            .conn
-            .prepare("SELECT id FROM drawers WHERE json_extract(meta_json, '$.source_file') = ?1")?
-            .query_map(params![source_file], |r| r.get(0))?
-            .collect::<Result<_, _>>()?;
-        let pending: Vec<&String> = ids
-            .iter()
-            .filter(|id| self.is_quarantine_pending(id).unwrap_or(false))
-            .collect();
-        if !pending.is_empty() {
-            return Err(StoreError::Invalid(format!(
-                "{source_file} has {} drawer(s) awaiting admission review \
-                 ({}) — rule on them with `admission allow`/`deny` first; \
-                 nothing was deleted",
-                pending.len(),
-                pending
-                    .iter()
-                    .map(|s| s.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )));
-        }
-        let mut count = 0u64;
-        for id in ids {
-            if self.delete_drawer(&id)? {
-                count += 1;
+        self.under_destruction_lock(|s, snap| {
+            let ids: Vec<String> = snap
+                .conn()
+                .prepare(
+                    "SELECT id FROM drawers WHERE json_extract(meta_json, '$.source_file') = ?1",
+                )?
+                .query_map(params![source_file], |r| r.get(0))?
+                .collect::<Result<_, _>>()?;
+            // The fence over EVERY member before any is destroyed, and a
+            // fence query that fails refuses the call — it used to count as
+            // "not pending".
+            let mut pending: Vec<&str> = Vec::new();
+            for id in &ids {
+                if s.is_quarantine_pending(id)? {
+                    pending.push(id);
+                }
             }
-        }
-        Ok(count)
+            if !pending.is_empty() {
+                return Err(StoreError::Invalid(format!(
+                    "{source_file} has {} drawer(s) awaiting admission review \
+                     ({}) — rule on them with `admission allow`/`deny` first; \
+                     nothing was deleted",
+                    pending.len(),
+                    pending.join(", ")
+                )));
+            }
+            if ids.is_empty() {
+                return Ok((0, Vec::new()));
+            }
+            let tables = DerivedTables::read(s)?;
+            let mut gone = Vec::with_capacity(ids.len());
+            for id in &ids {
+                gone.push(s.destroy_in(snap, &tables, id)?);
+            }
+            s.settle_derived(snap, &tables, &gone)?;
+            Ok((gone.len() as u64, gone))
+        })
     }
 
     /// Whether `id` names a drawer currently awaiting an admission ruling.

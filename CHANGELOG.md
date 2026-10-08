@@ -371,6 +371,47 @@ PATCH-class inside the unreleased 1.7.0: receipts that verify and a sweep that
 honours the declarations in force; the one behaviour a deployment can notice is
 in `UPGRADING.md`.
 
+### A source delete and an allow change everything or nothing (O259, O260)
+
+**`drawer delete-by-source` promised to refuse "before anything is deleted
+rather than half-way through", and kept that promise only for pending review
+evidence.** Each drawer of the source was deleted in its own write lock, so a
+busy lock or a failing statement at drawer k left k−1 deleted and returned an
+error; and the pending-evidence pre-flight read a FAILED fence query as "not
+pending", so the loop reached a pending drawer and the choke point refused it
+half-way through. Measured on the tree before this release's fix: a failure
+injected on the fourth of six drawers left three; a fence query made to fail
+left two of three; a second connection taking the lock at a step of the delete
+left part of the source deleted in 49 of 51 refusals. Now the whole source is
+one write lock — its members, the fence over every one of them with its error
+propagated, and the destruction — so any refusal deletes nothing, through the
+CLI, MCP's `undercroft_delete_by_source` and `/v1`'s `DELETE …/drawers?source=`
+alike.
+
+**`admission allow` committed its re-filed drawer, its ruling and the queue
+row's removal as three transactions**, so a `deny` of the same row from another
+process could land between them: the trail then held both `allowed` and
+`denied`, and the deny's receipt attested the destruction of text that survived,
+re-filed at its destination. Measured: a deny driven at every step of an allow
+broke 14 of 143 runs that way; an allow thread and a deny thread ruling on the
+same rows, 31 to 36 rows of 96. The allow is now one write lock, as a deny has
+been since O255. Inside it the queue row is read again and must be byte for byte
+the row the allow's door judged — content and declaration, not existence alone,
+as O225's ruling asked — so a row a deny took refuses the allow with `not found`
+and nothing written, and a text that re-occupied the row in between is never
+destroyed unread under "allowed" (the tree before this fix did that in 39 of 143
+runs). The destination's precondition is still checked inside the same
+transaction (O224), and the expectation still travels on the operator's
+ruling, where a compare-and-swap (O229) would carry its own.
+
+Gated by store tests that commit from a second connection at every step of each
+door, and a real second thread, looped ten times; by e2e checks that plant a
+failure with `sqlite3` and race CLI denies against `/v1` allows; and on the
+LoCoMo feed mined into seven wings beside a `/v1` writer. The one behaviour a
+script can notice is in `UPGRADING.md`. Filed beside it: `/v1` hands most query
+values to the store still percent-encoded, so a source path a URL must encode
+answers `deleted: 0` (O-NEW-o259-1). PATCH-class inside the unreleased 1.7.0.
+
 ### A backup is exactly the state its verify judged (O256), and pruning one vault's backups never touches another's (O265)
 
 **`backup create` verified one state of the vault and archived another.** Both
