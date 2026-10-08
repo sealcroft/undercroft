@@ -2324,7 +2324,15 @@ Consequences that are binding, not advisory:
   `${…:-}` would pass an empty payload and refuse to start. The recipe had not
   named it at all, so a declared passphrase was dropped. MCP and `/v1` recall
   never consult the mirror, which
-  `parity::no_served_surface_searches_through_a_remote_mirror` holds
+  `parity::no_served_surface_searches_through_a_remote_mirror` holds.
+  **Every shipped `serve-http` recipe runs `init` first since O199/O200**:
+  the observability engine had `init 2>/dev/null || true; exec …`, which hid
+  a failed init behind serve-http's `vault "default" not found`, and
+  `deploy/undercroft-server.service` had no `init` at all, so a fresh install
+  restarted forever. The compose files use `init && exec`, the unit an
+  unprefixed `ExecStartPre=` on the same executable, and the
+  `every shipped serve-http recipe runs init first` preflight holds all three
+  with a probe of the shipped broken lines
 - `architecture/DIAGRAM_LESSONS.md` — **read it before changing any diagram, in
   any of the three sets**: which file is each set's source, the standards a change
   keeps (text fit included, O188), how width is estimated and measured, the fix
@@ -2917,7 +2925,11 @@ bash tests/tls-pins.sh                # CA pins readable + both stacks start (31
                                       # measured by counterfactual. The whole suite
                                       # measured 104 s locally with both engine images
                                       # already built; a cold CI run pays two builds,
-                                      # measured 12 min 2 s against 5 min 15 s with one
+                                      # measured 12 min 2 s against 5 min 15 s with one.
+                                      # **Since ROADMAP O199** it also replaces the
+                                      # observability engine over a volume whose
+                                      # `vaults/default` is a regular file, and requires
+                                      # init's own error in the log, not serve-http's
 docker compose run --rm arch-check    # TWO verifications, one service: the
                                       # architecture reference is what
                                       # diagrams/ and its own headings derive

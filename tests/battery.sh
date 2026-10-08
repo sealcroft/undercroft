@@ -2552,6 +2552,174 @@ fi
 echo "ok    $CA_SEEN declared CA pin(s) on engine services, none inside a"
 echo "      root-only PKI tree, across:$CA_FILES"
 
+# ── preflight: every shipped serve-http recipe runs init first ─────────────
+# ROADMAP O199 and O200, the class O172 closed for one recipe. `serve-http`
+# does not create the vault it serves, so on a fresh data directory a recipe
+# that starts it alone exits `vault "default" not found`, and its restart
+# policy repeats that forever: the team-server recipe until O172, the systemd
+# unit until O200. A recipe that runs init and DISCARDS its failure is the
+# same defect once removed: the observability stack ran
+# `undercroft init 2>/dev/null || true; exec …` until O199, so a failed init
+# said nothing and the log named serve-http's symptom instead of the cause.
+#
+# What running init first means, by kind:
+#   compose  the line that runs `serve-http` runs `undercroft init`, then
+#            `undercroft serve-http` behind `&&` (an `exec` between them is
+#            fine), with no `;`, `|`, `&` or `>` before the `&&` — so a failed
+#            init stops the command and its error reaches the log. A command
+#            written as a YAML list (`- serve-http`, the pre-O172 recipe) has
+#            no init on its line and fails.
+#   systemd  the unit has an `ExecStartPre=` that runs `init` through the SAME
+#            executable its `ExecStart=` runs, with no prefix: `-` ignores
+#            init's failure (systemd's spelling of `|| true`), and `+` or `!`
+#            would run it with privileges the server does not have, writing a
+#            key file the unit's user might not read. `--level <word>` is
+#            allowed after `init`, nothing else.
+#
+# SCOPE, stated rather than implied: tracked `.yml`, `.yaml` and `.service`
+# files under `deploy/` whose active lines (comments aside) run `serve-http`,
+# which are the recipes this repo ships. Not a snippet in the docs
+# (`docs/remote-server.md`'s orchestrated example carries the same command by
+# hand), and not `serve-mcp`, which only the root `docker-compose.yml` test
+# harness runs. A compose command split across a block scalar's lines is
+# refused rather than read: a false refusal by design, never a false pass.
+# Host-side beside the CA-pin preflight, because it asks `git ls-files`.
+echo "═══ preflight: every shipped serve-http recipe runs init first ═══"
+# init_first_findings <file> — one line per command in <file> that starts
+# `serve-http`: `ok|<line>` or `bad|<line>|<why>`. Prints nothing for a file
+# that runs no `serve-http`, which is how the selector below tells a recipe.
+init_first_findings() {
+  local f="$1" n=0 line exe pre lvl found
+  case "$f" in
+    *.service)
+      while IFS= read -r line; do
+        n=$((n + 1))
+        line="${line%$'\r'}"
+        case "$line" in ExecStart=*serve-http*) ;; *) continue ;; esac
+        exe="${line#ExecStart=}"
+        while :; do case "$exe" in [-+!@:]*) exe="${exe#?}" ;; *) break ;; esac; done
+        exe="${exe%%[[:space:]]*}"
+        found=""
+        while IFS= read -r pre; do
+          pre="${pre%$'\r'}"
+          if [ "$pre" = "ExecStartPre=$exe init" ]; then found=1; fi
+          case "$pre" in
+            "ExecStartPre=$exe init --level "?*)
+              lvl="${pre#"ExecStartPre=$exe init --level "}"
+              case "$lvl" in *[!a-z-]*) ;; *) found=1 ;; esac ;;
+          esac
+        done < "$f"
+        if [ -n "$found" ]; then
+          echo "ok|$n"
+        else
+          echo "bad|$n|no unprefixed 'ExecStartPre=$exe init' runs before it"
+        fi
+      done < "$f" ;;
+    *)
+      while IFS= read -r line; do
+        n=$((n + 1))
+        line="${line%$'\r'}"
+        case "${line#"${line%%[![:space:]]*}"}" in "#"*) continue ;; esac
+        case "$line" in *serve-http*) ;; *) continue ;; esac
+        if printf '%s\n' "$line" |
+             grep -qE 'undercroft[[:space:]]+init[^;|&>]*&&[[:space:]]*(exec[[:space:]]+)?undercroft[[:space:]]+serve-http'; then
+          echo "ok|$n"
+        else
+          echo "bad|$n|serve-http does not run behind 'undercroft init &&' on this line"
+        fi
+      done < "$f" ;;
+  esac
+}
+# PREMISE PROBE, both directions, before any file is believed: the judge must
+# refuse the shapes that shipped broken and accept the shapes that fixed them.
+# A judge that refuses everything and one that accepts everything are both
+# caught here, and the fixtures are the shipped lines verbatim — the pre-O172
+# compose command, O199's command, and O200's unit without its init.
+IF_TMP="$(mktemp -d 2>/dev/null || { mkdir -p "${TMPDIR:-/tmp}/initfirst.$$" && echo "${TMPDIR:-/tmp}/initfirst.$$"; })"
+printf 'services:\n  undercroft:\n    command:\n      - serve-http\n      - --host\n      - "0.0.0.0"\n' \
+  > "$IF_TMP/bad-pre-o172.yml"
+printf '    command: ["undercroft init 2>/dev/null || true; exec undercroft serve-http --host 0.0.0.0 --port 8765"]\n' \
+  > "$IF_TMP/bad-o199.yml"
+printf 'ExecStart=/usr/local/bin/undercroft serve-http --host 0.0.0.0 --port 8765\n' \
+  > "$IF_TMP/bad-pre-o200.service"
+printf 'ExecStartPre=-/usr/local/bin/undercroft init\nExecStart=/usr/local/bin/undercroft serve-http --port 8765\n' \
+  > "$IF_TMP/bad-ignored-init.service"
+printf 'ExecStartPre=/opt/other/undercroft init\nExecStart=/usr/local/bin/undercroft serve-http --port 8765\n' \
+  > "$IF_TMP/bad-other-binary.service"
+printf '    command: ["undercroft init && exec undercroft serve-http --host 0.0.0.0 --port 8765"]\n' \
+  > "$IF_TMP/good.yml"
+printf 'ExecStartPre=/usr/local/bin/undercroft init\nExecStart=/usr/local/bin/undercroft serve-http --port 8765\n' \
+  > "$IF_TMP/good.service"
+IF_PROBE=""
+for f in "$IF_TMP"/bad-*; do
+  r="$(init_first_findings "$f")"
+  case "$r" in *"bad|"*) ;; *) IF_PROBE="$IF_PROBE\n        $(basename "$f") was not refused (got: ${r:-nothing})" ;; esac
+done
+for f in "$IF_TMP"/good.*; do
+  r="$(init_first_findings "$f")"
+  case "$r" in
+    *"bad|"*|"") IF_PROBE="$IF_PROBE\n        $(basename "$f") was not accepted (got: ${r:-nothing})" ;;
+  esac
+done
+rm -rf "$IF_TMP"
+if [ -n "$IF_PROBE" ]; then
+  echo "FAIL  premise: the init-first judge does not tell the shipped broken shapes"
+  echo "      from the fixed ones, so a clean scan below would mean nothing:"
+  # `%b`, never the text as the format: an executable path may carry `%`
+  # (systemd's `%h`), which a format string would read as a conversion.
+  printf '%b\n' "${IF_PROBE#\\n}"
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+IF_FILES=""
+IF_SEEN=0
+IF_BAD=""
+# `git grep -l` names the tracked candidates in one process, and the judge
+# reads those alone rather than forking once per file under `deploy/`, which
+# is the expensive operation on Git Bash. A file that mentions `serve-http`
+# only in a comment is read and prints nothing, so it is not selected.
+for f in $(git grep -l -F -e serve-http -- 'deploy/*.yml' 'deploy/*.yaml' 'deploy/*.service' 2>/dev/null); do
+  [ -f "$f" ] || continue
+  r="$(init_first_findings "$f")"
+  [ -n "$r" ] || continue
+  IF_FILES="$IF_FILES $f"
+  while IFS='|' read -r verdict ln why; do
+    [ -n "$verdict" ] || continue
+    IF_SEEN=$((IF_SEEN + 1))
+    [ "$verdict" = ok ] || IF_BAD="$IF_BAD\n        $f:$ln — $why"
+  done <<< "$r"
+done
+# PREMISE, on the FILE SET: every recipe this repo ships that serves must be
+# among those judged, so a selector that loses one fails here instead of
+# reporting clean over the rest — the CA-pin preflight's lesson (O172).
+for IF_WANT in deploy/docker-compose.server.yml \
+               deploy/observability/docker-compose.observability.yml \
+               deploy/undercroft-server.service; do
+  case " $IF_FILES " in
+    *" $IF_WANT "*) ;;
+    *)
+      echo "FAIL  the serve-http recipe selector did not select $IF_WANT, which"
+      echo "      runs serve-http, so this scan did not judge it."
+      echo "      Selected:${IF_FILES:- nothing}"
+      echo ""
+      echo "BATTERY FAILED — preflight"
+      exit 1 ;;
+  esac
+done
+if [ -n "$IF_BAD" ]; then
+  echo "FAIL  a shipped recipe starts serve-http without running init first, or"
+  echo "      runs init in a way that hides its failure (ROADMAP O199, O200):"
+  printf '%b\n' "${IF_BAD#\\n}"
+  echo "      Compose: 'undercroft init && exec undercroft serve-http …'."
+  echo "      systemd: 'ExecStartPre=<the ExecStart executable> init', unprefixed."
+  echo ""
+  echo "BATTERY FAILED — preflight"
+  exit 1
+fi
+echo "ok    $IF_SEEN serve-http command(s) run init first, its failure stopping"
+echo "      the start, across:$IF_FILES"
+
 # ── preflight: a destructive compose teardown names the project it destroys ─
 # ROADMAP M12. A compose teardown carrying the volumes flag removes every
 # NAMED volume in the project it resolves to. With no `-p` and no `-f` that
@@ -3920,7 +4088,6 @@ HIER_ALLOW=(
   "P${HIER_W#p} already initialized::the init message, localized in nine languages"
   "${HIER_W} tab::the console tab that hosts the monitor"
   "drawer wing room mnemonic memory ${HIER_W}::the trace verifier CLEAN control string"
-  "Create the ${HIER_W}::compose: bootstrap the installation on first run"
   "P${HIER_W#p} lives on::compose: the installation lives on a named volume"
   "2014 P${HIER_W#p}::the Grafana dashboard title, JSON-escaped em dash"
   "— P${HIER_W#p}::the same title with a literal em dash, in the console"

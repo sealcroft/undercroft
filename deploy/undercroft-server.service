@@ -10,6 +10,18 @@
 #
 # Binds 0.0.0.0:8765 and requires UNDERCROFT_MCP_HTTP_TOKEN (set in the
 # EnvironmentFile). Front it with a TLS-terminating reverse proxy.
+#
+# Every start runs `undercroft init` first (ExecStartPre, ROADMAP O200), as
+# the unit's user, with its data directory and its environment file, the
+# passphrase among them. The first start sets up the master key and creates a
+# SEALED `default` vault; later starts find that vault, and `init` exits 0
+# without writing. A failed init stops the start, and its own error is in
+# `journalctl -u undercroft-server`. Without it, a fresh install exited
+# `vault "default" not found` and restarted every three seconds.
+# For another level, create the vault before the first start;
+# docs/remote-server.md has the command. If you change ExecStart to serve a
+# vault other than `default` (`--vault`), remove ExecStartPre: it would create
+# an empty `default` beside it.
 
 [Unit]
 Description=Undercroft remote MCP server
@@ -22,6 +34,7 @@ User=undercroft
 Group=undercroft
 EnvironmentFile=/etc/undercroft/server.env
 Environment=UNDERCROFT_HOME=/var/lib/undercroft
+ExecStartPre=/usr/local/bin/undercroft init
 ExecStart=/usr/local/bin/undercroft serve-http --host 0.0.0.0 --port 8765
 Restart=on-failure
 RestartSec=3

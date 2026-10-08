@@ -56,22 +56,28 @@ claude mcp add --transport http undercroft http://HOST:8765/mcp \
 - Backing store: the `undercroft-data` volume is the system of record. MCP and
   `/v1` recall search the vault directly and never consult Qdrant.
 
-Systemd alternative: `deploy/undercroft-server.service`. It does not run
-`init` yet, so run it once before enabling the unit, as the unit's user, with
-the unit's data directory and environment file — otherwise `init` creates a
+Systemd alternative: `deploy/undercroft-server.service`. Every start runs
+`undercroft init` first (`ExecStartPre`), as the unit's user, with the unit's
+data directory and environment file, so the first start creates a **sealed**
+`default` vault and later starts find it; `init` then exits 0 without writing.
+A failed `init` stops the start, with its own error in
+`journalctl -u undercroft-server`. Until 1.7.0 the unit served without `init`,
+so a fresh install exited `vault "default" not found` and systemd restarted it
+every three seconds. For another level, create the vault before the first
+start, in the same identity and environment — otherwise `init` creates a
 different installation, or one keyed differently from the one the unit opens:
 
 ```bash
 sudo systemd-run --wait --pipe --uid=undercroft --gid=undercroft \
   -p EnvironmentFile=/etc/undercroft/server.env \
   -E UNDERCROFT_HOME=/var/lib/undercroft \
-  /usr/local/bin/undercroft init
+  /usr/local/bin/undercroft init --level hmac-only
 ```
 
 `systemd-run` reads the environment file as root, as the unit does; the file
-is root-owned `0600`, so `sudo -u undercroft` could not source it.
-
-ROADMAP O200 tracks running it from the unit.
+is root-owned `0600`, so `sudo -u undercroft` could not source it. A unit
+edited to serve a vault other than `default` (`--vault`) should drop its
+`ExecStartPre`, which would otherwise create an empty `default` beside it.
 
 ## The optional Qdrant mirror
 

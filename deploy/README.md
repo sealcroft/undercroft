@@ -13,12 +13,12 @@
   `qdrant-tls-export` one-shot copies Caddy's public CA root to a path the
   engine can read, and the engine pins it with `UNDERCROFT_INDEX_CA`.
 - `undercroft-server.service` — the same server as a hardened systemd unit.
-  It does not run `init` yet (ROADMAP O200): run `undercroft init` once
-  before enabling it, as the `undercroft` user with
-  `UNDERCROFT_HOME=/var/lib/undercroft` and the variables from
-  `/etc/undercroft/server.env` (the passphrase among them), or it initialises
-  a different palace, or one keyed differently (`docs/remote-server.md` has
-  the command).
+  Every start runs `undercroft init` first (`ExecStartPre`), as the unit's
+  user with its data directory and environment file, so the first start
+  creates a sealed `default` vault and a failed init stops the start with its
+  own error in the journal. For another level, create the vault before the
+  first start in that same identity and environment (`docs/remote-server.md`
+  has the command).
 - `undercroft-daemon.service` — per-user auto-save daemon (periodic
   `undercroft daemon run` sweep of `~/.claude/projects`).
 - `server.env.example` — environment template; copy to `.env` / 

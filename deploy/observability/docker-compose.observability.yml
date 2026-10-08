@@ -47,9 +47,15 @@ services:
       # condition means the root exists AND the engine can read it.
       tls-export:
         condition: service_completed_successfully
-    # Create the palace + default vault on first run, then serve.
+    # `init` first, then serve: the first start sets up the master key and
+    # creates a sealed `default` vault, and later starts find it, where `init`
+    # exits 0. `&&` means a failed init stops here and prints its own error
+    # (ROADMAP O199, the team-server recipe's O172 shape). This read
+    # `init 2>/dev/null || true; exec …`, which discarded init's message and
+    # served anyway, so the log named serve-http's symptom,
+    # `vault "default" not found`, instead of the cause.
     entrypoint: ["/bin/sh", "-c"]
-    command: ["undercroft init 2>/dev/null || true; exec undercroft serve-http --host 0.0.0.0 --port 8765"]
+    command: ["undercroft init && exec undercroft serve-http --host 0.0.0.0 --port 8765"]
     environment:
       # Palace lives on the named volume.
       UNDERCROFT_HOME: /data

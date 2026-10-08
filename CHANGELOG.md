@@ -1644,6 +1644,44 @@ PATCH inside the unreleased 1.7.0: the flag keeps the promise its help makes. A 
 `--read-only backup create` or a keygen under `--read-only` now exits 1, so `UPGRADING.md` carries an
 entry; `config check` cannot see it.
 
+### The observability stack and the systemd unit run `init` before they serve, and a failed init says why (O199, O200)
+
+Two of the three shipped `serve-http` recipes still carried the defect O172 fixed in the team-server
+recipe. The observability stack started its engine with `undercroft init 2>/dev/null || true; exec
+undercroft serve-http …`, so an init that failed printed nothing and the engine stopped on
+serve-http's symptom, `vault "default" not found`, instead of the cause. `deploy/undercroft-server.service`
+ran `serve-http` with no `init` at all, so a fresh install exited `vault "default" not found` and
+systemd restarted it every three seconds; the docs told operators to run `init` by hand first.
+
+Now the observability engine runs `undercroft init && exec undercroft serve-http …`, and the unit runs
+`ExecStartPre=/usr/local/bin/undercroft init`, as its own user with its data directory and environment
+file, the passphrase included. The first start creates a sealed `default` vault, later starts find it
+and `init` exits 0 writing nothing, and a failed init stops the start with its own error in the log or
+the journal. For another level, create the vault before the first start (`docs/remote-server.md`).
+
+Gates. A new host-side preflight, `every shipped serve-http recipe runs init first`, judges every
+command under `deploy/` that runs `serve-http`: on a compose line, `init` joined to `serve-http` by
+`&&` and nothing that discards its failure; in a unit, an unprefixed `ExecStartPre=` running `init`
+through the `ExecStart` executable. A probe refuses the shipped broken lines verbatim and accepts the
+fixed ones, and a premise requires all three recipes to be selected. The e2e suite reads the unit's own
+`ExecStartPre=` and `ExecStart=` lines out of the file and runs them in systemd's order on a fresh
+install — init, serve, and a restart's init that changes no byte of the data directory (four checks).
+`tests/tls-pins.sh` replaces the observability engine over a volume whose `vaults/default` is a regular
+file and requires init's error in its log rather than serve-http's (one check). Counterfactuals: each
+broken shape fails the preflight by file and line, a judge broken either way fails its probe, and the e2e
+arm over the pre-O200 unit fails three of its four checks, the fourth being its premise — its first
+version passed one check over that unit, because nothing ran there at all, and was rebuilt. A real
+corpus: the LoCoMo feed mined into eight wings, 680 drawers, served through each recipe's own command,
+with a restart's init leaving the data directory hashed unchanged and `verify` OK. `systemd-analyze
+verify` (systemd 252) accepts the unit and refuses a copy whose `ExecStartPre` names a missing
+executable; no container here runs systemd itself, so its restart and sandbox behaviour are argued from
+its documentation.
+
+PATCH inside the unreleased 1.7.0, and no `UPGRADING.md` entry: `init` opens the installation exactly as
+`serve-http` does, exits 0 writing nothing where the default vault exists, and fails only where
+`serve-http`'s own open would, so no start that served before refuses now. Filed from the measurement:
+init's error over a `vaults/default` it cannot create names no path (O-NEW-O199-1).
+
 ## 1.6.1 — 2026-09-22
 
 PATCH: fixes only. Each adds a surface that REPORTS an existing silence, and

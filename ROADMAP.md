@@ -13749,6 +13749,176 @@ has always returned beside `backup`. (7) The `HAND_PROJECTED` row, recorded abov
 **Also corrected**: `docs/AGENTS.md` §10 listed three read-only `POST` exceptions where `mutates`
 names four — `POST …/witness` (O245) was missing.
 
+### O199 — CLOSED 2026-10-08: the observability engine runs `undercroft init && exec …`, so a failed init stops it with init's own error
+
+**Filed 2026-09-17 by O172, whose ruling named it; verified by reading.**
+`deploy/observability/docker-compose.observability.yml` starts the engine with
+`undercroft init 2>/dev/null || true; exec undercroft serve-http …`. An init
+that fails prints nothing, and the engine then stops on `serve-http`'s error
+instead, which names a symptom (`vault "default" not found`) rather than the
+cause. O172 moved the team-server recipe to `undercroft init && exec …`, which
+stops on init's own message. **Shape**: the same command in the observability
+recipe. **Gate**: an arm in `tests/tls-pins.sh` that makes init fail for a
+reason only init meets — a volume where `vaults/default` is a regular file, so
+`VaultManager::create` cannot make the directory — and requires the engine's
+log to carry init's error rather than `serve-http`'s.
+
+#### BUILT 2026-10-08
+
+**Built as filed, with O200, in one unit.** The shape and the gate are O172's
+ruling of 2026-09-14: its rejected list owed this convergence "separately", and
+its residuals named the gate. A case-insensitive search for `rul(ed|ing)` in
+O199, O200 and O172 found no other ruling, and nothing was left for a panel.
+
+- `deploy/observability/docker-compose.observability.yml`: the command is
+  `undercroft init && exec undercroft serve-http --host 0.0.0.0 --port 8765`,
+  its comment saying why.
+- `tests/tls-pins.sh`, the gate as filed, one check
+  (`observability: a failed init stops the engine with init's own error`).
+  After the observability boot and its scrape check, the engine is replaced —
+  `rm -sf`, then `up -d --no-deps` — over its own volume with `vaults/default`
+  turned into a regular file, and its log must carry `File exists` and no
+  `not found`. Premise: the boot's `vaults/default/vault.json` exists before it
+  is replaced, or the arm fails as a premise. **Not run by this unit**: it
+  drives compose, which the parallel train leaves to the integrator's battery.
+- The preflight O200 owns holds this command too.
+
+**Why the arm keeps the master key, measured: without it the gate as filed
+measures nothing.** With no `master.key`, a `vaults/default` entry makes
+O204's classifier refuse BOTH commands first with the same
+`master.key is missing …` message, so old and new read alike. With the key in
+place, measured with the release binary over such a data directory as uid
+10001: `init` alone exits 1 with `Error: io error: File exists (os error 17)`;
+`serve-http` alone exits 1 with `Error: vault "default" not found (create it
+with …)`; the old command exits 1 with serve-http's line alone, init's
+discarded; the new command exits 1 with init's alone. Repeated with the
+TELEMETRY build under the recipe's environment (`UNDERCROFT_METRICS=1`,
+`UNDERCROFT_LOG_FORMAT=json`, the demo bearer; the OTLP hop aside, which needs
+Tempo): the same lines, and the arm's own predicate fails the old command and
+passes the new. Its negative half matches `not found` alone, never the quoted
+message, so a log line that escapes the quotes cannot slip past it.
+
+**A real corpus.** The LoCoMo feed mined into eight wings — 680 drawers, 681
+audit records — with the telemetry binary, then the recipe's command read out
+of the compose file and run by `/bin/sh -c` as its entrypoint does: init
+reported the installation already initialized, 680 vectors warmed,
+`/v1/…/stats` answered 200 with 680 drawers 138 ms after the start, `/metrics`
+200, and `verify` OK afterwards.
+
+**No `UPGRADING.md` entry, argued from the code.** `init` opens the
+installation through the same `manager_at` as `serve-http`'s
+`open_store_once`, in the same environment. When the default vault exists it
+prints and exits 0 writing nothing (O200's e2e arm hashes the data directory
+across it); when it does not, `serve-http`'s unlock fails anyway. So
+`init && exec serve-http` refuses no start `serve-http` alone would have
+served, only the message changes, and `config check` has nothing to detect.
+
+**Found by the measurement and filed**: init's error names no path
+(O-NEW-O199-1).
+
+### O200 — CLOSED 2026-10-08: `deploy/undercroft-server.service` runs `init` as its `ExecStartPre`, so a fresh install serves on its first start
+
+**Filed 2026-09-17 by O172, whose ruling named it; verified by reading.** The
+systemd unit's `ExecStart` is `undercroft serve-http --host 0.0.0.0 --port
+8765` with `Restart=on-failure`, and nothing in the unit or its install recipe
+runs `init`. On a fresh `/var/lib/undercroft` the unlock returns
+`VaultError::NotFound`, the process exits, and systemd restarts it every three
+seconds — the team-server recipe's defect before O172. `docs/remote-server.md`
+tells operators to run `undercroft init` once by hand until this lands. **Shape**:
+`ExecStartPre=/usr/local/bin/undercroft init`, which exits 0 once the default
+vault exists; `EnvironmentFile` already hands it the passphrase. **Gate**: none
+can run the unit in a container without systemd, so the gate is the unit file
+itself: a preflight that every shipped server unit or recipe running
+`serve-http` runs `init` before it, with a probe that the pre-O172 compose
+command fails it.
+
+#### BUILT 2026-10-08
+
+**Built as filed, with O199.** The shape is this entry's, named by O172's
+ruling.
+
+- `deploy/undercroft-server.service`: `ExecStartPre=/usr/local/bin/undercroft
+  init`, unprefixed and on the same executable as `ExecStart`, so it runs as
+  `User=undercroft` with `EnvironmentFile` and `UNDERCROFT_HOME`, the
+  passphrase included, and its failure stops the start. The header says what
+  every start does, how to choose another level, and that a unit edited to
+  serve a vault other than `default` should drop the line, which would
+  otherwise create an empty `default` beside it.
+- **The preflight `every shipped serve-http recipe runs init first`**
+  (`tests/battery.sh`, beside the CA-pin preflight). It selects the tracked
+  `.yml`, `.yaml` and `.service` files under `deploy/` whose active lines run
+  `serve-http` — three today — and judges each command. On a compose line:
+  `undercroft init`, then `undercroft serve-http` behind `&&`, with no `;`,
+  `|`, `&` or `>` before the `&&`. In a unit: an `ExecStartPre=` running
+  `init` through the `ExecStart` executable with no prefix, because `-`
+  ignores the failure and `+` or `!` would write the key file with privileges
+  the server lacks. Two premises. A probe refuses the shipped broken lines
+  verbatim — the pre-O172 compose list, O199's command, the pre-O200 unit —
+  plus a `-`-prefixed init and an init on another executable, and accepts the
+  fixed compose line and unit. A file-set premise requires all three recipes
+  to be selected. Scope, stated in the preflight: no docs snippet, no
+  `serve-mcp`, and a block-scalar command is refused rather than read.
+- `tests/e2e.sh`, four checks: the unit's own `ExecStartPre=` and `ExecStart=`
+  lines, read out of `/src/deploy/undercroft-server.service`, run in systemd's
+  order against the release binary, with the installed path, the data
+  directory and the port rewritten and every other word the unit's. A
+  premise: `ExecStart` alone exits `vault "default" not found` on a fresh
+  install. Then `ExecStartPre` prints `Palace initialized`, `ExecStart` serves
+  `/v1/vaults/default/stats` 200, and a restart's `ExecStartPre` prints
+  `already initialized` with the data directory, a served `vault.db` among it,
+  hashed unchanged.
+- Surfaces: `docs/remote-server.md` and `deploy/README.md`, whose hand-run
+  `init` step is now the level-choosing one; `CHANGELOG.md`; `CLAUDE.md`'s
+  deploy layout and `tls-pins` lines.
+
+**Counterfactuals.**
+- The e2e arm over the pre-O200 unit, its HEAD bytes mounted over the shipped
+  file: 1 passed, 3 failed, the premise staying green by design. **Its first
+  version split the last check in two, and the hash half passed over the
+  pre-O200 unit**, because the "init" that ran there was nothing at all, so
+  nothing changed. The check now requires init's own line and a served
+  `vault.db` in the hashed set, and fails there. Mine, found by the
+  counterfactual.
+- The preflight, its block copied out of `tests/battery.sh` and run against
+  the tree. Baseline: 3 commands across the three recipes, exit 0. The
+  observability command put back to O199's form fails, naming
+  `docker-compose.observability.yml:58`. The unit without `ExecStartPre` fails
+  naming its line 37, and with `ExecStartPre=-…` naming line 38. A judge that
+  accepts every compose line fails the probe on `bad-o199.yml` and
+  `bad-pre-o172.yml`; one that refuses every unit fails it on `good.service`.
+  A selector without `.service` fails the file-set premise, naming the unit.
+  Both mutated tree files were restored and compared byte for byte.
+
+**Measured on the artifact, never by systemd.** `systemd-analyze verify`
+(systemd 252, Debian 12) accepts the shipped unit with no diagnostic, and
+refuses a copy whose `ExecStartPre` names a missing executable (exit 1), so it
+does read the line. No container here runs systemd as PID 1, so two things are
+argued from systemd's documented semantics rather than measured: that
+`Restart=on-failure` restarts after a failed `ExecStartPre`, the journal then
+repeating init's error as compose's `restart:` repeats it in a log; and that
+`ProtectSystem=strict` with `ReadWritePaths=/var/lib/undercroft` lets the
+pre-start write there, since the sandbox applies to every `Exec*` line alike.
+
+**A real corpus, through the unit's own lines.** `ExecStartPre` on a fresh
+install, 21 ms; the LoCoMo feed mined into eight wings, 680 drawers and 681
+audit records; `ExecStart` serving 680 warmed vectors, `/v1` stats 200 and a
+search returning 3 hits; stopped, then a restart's `ExecStartPre` in 4 ms with
+the data directory's five files hashed unchanged; served again with the same
+counts; `verify` OK. **My first run of this drive measured the wrong server**:
+it backgrounded a shell function, so `kill` reached the function's subshell
+and not the server, and the "restart" figures came from the first server,
+still bound to the port. The run recorded here starts the server directly and
+checks the port is free after each stop.
+
+**No `UPGRADING.md` entry.** The unit is a template an operator copies at
+install, so an installed unit changes only when it is copied again. Then
+`init` reports the installation already initialized and writes nothing on an
+existing one (the e2e arm's hash), and fails only where `serve-http`'s own
+open would (O199's argument). The one behavioural difference is the one
+O172's recipe has had since 1.6.0: a start that finds no `default` vault
+creates one rather than failing, which the unit's header and
+`docs/remote-server.md` state for a unit edited to serve another vault.
+
 ## 1.6.1 — released 2026-09-22
 
 Fixes only. Each makes an existing silence visible — a surface added to
@@ -32515,35 +32685,24 @@ restore id move TOGETHER — the destination digest binds the id, so a fix that
 restores to a declared id while the record describes the recipe id refuses
 rather than passes, which is safe and would be a new trap.
 
-### O199 — the observability recipe's `undercroft init 2>/dev/null || true` hides why an init failed
+### O-NEW-O199-1 — an `undercroft init` that cannot make the default vault's directory says `File exists (os error 17)` and names no path
 
-**Filed 2026-09-17 by O172, whose ruling named it; verified by reading.**
-`deploy/observability/docker-compose.observability.yml` starts the engine with
-`undercroft init 2>/dev/null || true; exec undercroft serve-http …`. An init
-that fails prints nothing, and the engine then stops on `serve-http`'s error
-instead, which names a symptom (`vault "default" not found`) rather than the
-cause. O172 moved the team-server recipe to `undercroft init && exec …`, which
-stops on init's own message. **Shape**: the same command in the observability
-recipe. **Gate**: an arm in `tests/tls-pins.sh` that makes init fail for a
-reason only init meets — a volume where `vaults/default` is a regular file, so
-`VaultManager::create` cannot make the directory — and requires the engine's
-log to carry init's error rather than `serve-http`'s.
-
-### O200 — `deploy/undercroft-server.service` serves with no `init`, so a fresh install restarts forever
-
-**Filed 2026-09-17 by O172, whose ruling named it; verified by reading.** The
-systemd unit's `ExecStart` is `undercroft serve-http --host 0.0.0.0 --port
-8765` with `Restart=on-failure`, and nothing in the unit or its install recipe
-runs `init`. On a fresh `/var/lib/undercroft` the unlock returns
-`VaultError::NotFound`, the process exits, and systemd restarts it every three
-seconds — the team-server recipe's defect before O172. `docs/remote-server.md`
-tells operators to run `undercroft init` once by hand until this lands. **Shape**:
-`ExecStartPre=/usr/local/bin/undercroft init`, which exits 0 once the default
-vault exists; `EnvironmentFile` already hands it the passphrase. **Gate**: none
-can run the unit in a container without systemd, so the gate is the unit file
-itself: a preflight that every shipped server unit or recipe running
-`serve-http` runs `init` before it, with a probe that the pre-O172 compose
-command fails it.
+**Filed 2026-10-08 by O199, from its gate's own measurement.** With
+`vaults/default` a regular file, `init` exits 1 with
+`Error: io error: File exists (os error 17)`, the cause chain repeating the
+same line, and nothing in it names a path. O199 made the observability
+engine's log carry init's own error instead of serve-http's
+`vault "default" not found`, so that line is now an operator's only clue, and
+it says what went wrong without saying where. `VaultManager::create` passes
+`fs::create_dir_all(&dir)` through `VaultError::Io`, which keeps the
+`std::io::Error` and drops the path. The class is wider — every
+`VaultError::Io` raised on a path drops it — and this entry is scoped to the
+one a recipe's first start meets. **Shape**: the error names the vault
+directory (for instance `creating vault "default" at <root>/vaults/default:
+File exists`), in `create` or in the CLI's `init` arm; no exit code moves, so
+PATCH. **Gate**: an e2e check that `init` over a `vaults/default` regular file
+exits 1 naming `vaults/default`; premise: the same check fails on the
+unchanged binary for the missing path.
 
 ### O201 — `serve-http` resolves a declared CA pin on first use, so an unreadable pin starts a healthy server that refuses every call
 
